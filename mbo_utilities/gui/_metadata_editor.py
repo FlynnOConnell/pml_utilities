@@ -15,6 +15,70 @@ from imgui_bundle import imgui, hello_imgui
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.metadata import parse_filename_metadata, get_filename_suggestions
 
+_COL_SET = imgui.ImVec4(0.5, 0.8, 0.5, 1.0)
+_COL_UNSET = imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
+_COL_EMPTY = imgui.ImVec4(0.5, 0.5, 0.5, 1.0)
+_COL_DETECTED = imgui.ImVec4(0.4, 0.8, 0.9, 1.0)
+_COL_CUSTOM_HDR = imgui.ImVec4(0.8, 0.8, 0.2, 1.0)
+
+
+def _field_tooltip(field: dict) -> str:
+    tooltip = field.get("description", "")
+    examples = field.get("examples", [])
+    if examples:
+        tooltip += f"\n\nExamples: {', '.join(examples[:5])}"
+    return tooltip
+
+
+def _input_tooltip(dtype) -> str:
+    tip = "Type a value and click Set to save"
+    if dtype == str:
+        tip += " (text)"
+    elif dtype == float:
+        tip += " (number)"
+    return tip
+
+
+def _push_wrap_at_edge() -> None:
+    # explicit visible-edge wrap; 0.0 would track the scrollable content
+    # edge inside a horizontal-scrollbar child
+    imgui.push_text_wrap_pos(
+        imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x
+    )
+
+
+def _apply_set(parent: Any, current_data: Any, canonical: str, dtype, input_key: str) -> None:
+    input_val = getattr(parent, input_key).strip()
+    if not input_val:
+        return
+    try:
+        parsed = dtype(input_val)
+        parent._custom_metadata[canonical] = parsed
+        if current_data and hasattr(current_data, "metadata"):
+            if isinstance(current_data.metadata, dict):
+                current_data.metadata[canonical] = parsed
+        setattr(parent, input_key, "")
+    except (ValueError, TypeError):
+        pass
+
+
+def _apply_clear(parent: Any, current_data: Any, canonical: str) -> None:
+    del parent._custom_metadata[canonical]
+    if (current_data and hasattr(current_data, "metadata")
+            and isinstance(current_data.metadata, dict)
+            and canonical in current_data.metadata):
+        del current_data.metadata[canonical]
+
+
+def _apply_custom_add(parent: Any) -> None:
+    val = parent._custom_value
+    with contextlib.suppress(ValueError):
+        val = float(val) if "." in val else int(val)
+    parent._custom_metadata[parent._custom_key.strip()] = val
+    parent._custom_key = ""
+    parent._custom_value = ""
+
+
 def _get_suggested_metadata(parent: Any) -> list:
     """Get suggested metadata fields from array."""
     try:
@@ -153,6 +217,13 @@ def draw_metadata_editor_content(parent: Any):
     col_btn = hello_imgui.em_size(6)  # widened to fit Set + delete-X
     input_w = hello_imgui.em_size(7.5)
 
+    # narrow container (docked side panel): stacked rows instead of the
+    # fixed-width table, which would clip past the right edge
+    table_w = col_label + col_value + col_input + col_btn
+    if imgui.get_content_region_avail().x < table_w + hello_imgui.em_size(1):
+        _draw_editor_narrow(parent, current_data, suggested_fields)
+        return
+
     # draw suggested fields in a table
     if suggested_fields:
         if imgui.begin_table("suggested_meta", 4, table_flags):
@@ -166,8 +237,6 @@ def draw_metadata_editor_content(parent: Any):
                 label = field["label"]
                 unit = field.get("unit", "")
                 dtype = field.get("dtype", str)
-                desc = field.get("description", "")
-                examples = field.get("examples", [])
                 detected = field.get("detected", False)
 
                 # get current value (custom overrides source)
@@ -180,29 +249,22 @@ def draw_metadata_editor_content(parent: Any):
 
                 # label column
                 imgui.table_next_column()
-                if is_set:
-                    color = imgui.ImVec4(0.5, 0.8, 0.5, 1.0)
-                else:
-                    color = imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
-                imgui.text_colored(color, label)
+                imgui.text_colored(_COL_SET if is_set else _COL_UNSET, label)
                 if imgui.is_item_hovered():
-                    tooltip = desc
-                    if examples:
-                        tooltip += f"\n\nExamples: {', '.join(examples[:5])}"
-                    imgui.set_tooltip(tooltip)
+                    imgui.set_tooltip(_field_tooltip(field))
 
                 # value column
                 imgui.table_next_column()
                 if is_set:
                     val_str = f"{value} {unit}".strip()
                     if detected and custom_val is None:
-                        imgui.text_colored(imgui.ImVec4(0.4, 0.8, 0.9, 1.0), val_str)
+                        imgui.text_colored(_COL_DETECTED, val_str)
                         if imgui.is_item_hovered():
                             imgui.set_tooltip("Detected from filename")
                     else:
-                        imgui.text_colored(imgui.ImVec4(0.5, 0.8, 0.5, 1.0), val_str)
+                        imgui.text_colored(_COL_SET, val_str)
                 else:
-                    imgui.text_colored(imgui.ImVec4(0.5, 0.5, 0.5, 1.0), "-")
+                    imgui.text_colored(_COL_EMPTY, "-")
 
                 # input column
                 imgui.table_next_column()
@@ -215,35 +277,16 @@ def draw_metadata_editor_content(parent: Any):
                 _, new_val = imgui.input_text(f"##{canonical}", getattr(parent, input_key), flags=flags)
                 setattr(parent, input_key, new_val)
                 if imgui.is_item_hovered():
-                    tip = "Type a value and click Set to save"
-                    if dtype == str:
-                        tip += " (text)"
-                    elif dtype == float:
-                        tip += " (number)"
-                    imgui.set_tooltip(tip)
+                    imgui.set_tooltip(_input_tooltip(dtype))
 
                 # button column: Set (always) + X delete (only when user has overridden)
                 imgui.table_next_column()
                 if imgui.small_button(f"Set##{canonical}"):
-                    input_val = getattr(parent, input_key).strip()
-                    if input_val:
-                        try:
-                            parsed = dtype(input_val)
-                            parent._custom_metadata[canonical] = parsed
-                            if current_data and hasattr(current_data, "metadata"):
-                                if isinstance(current_data.metadata, dict):
-                                    current_data.metadata[canonical] = parsed
-                            setattr(parent, input_key, "")
-                        except (ValueError, TypeError):
-                            pass
+                    _apply_set(parent, current_data, canonical, dtype, input_key)
                 if custom_val is not None:
                     imgui.same_line()
                     if imgui.small_button(f"X##del_{canonical}"):
-                        del parent._custom_metadata[canonical]
-                        if (current_data and hasattr(current_data, "metadata")
-                                and isinstance(current_data.metadata, dict)
-                                and canonical in current_data.metadata):
-                            del current_data.metadata[canonical]
+                        _apply_clear(parent, current_data, canonical)
                     if imgui.is_item_hovered():
                         imgui.set_tooltip("Clear this override")
 
@@ -257,7 +300,7 @@ def draw_metadata_editor_content(parent: Any):
 
     imgui.spacing()
     imgui.separator()
-    imgui.text_colored(imgui.ImVec4(0.8, 0.8, 0.2, 1.0), "Custom")
+    imgui.text_colored(_COL_CUSTOM_HDR, "Custom")
     imgui.dummy(imgui.ImVec2(0, 2))
 
     if imgui.begin_table("custom_meta", 4, table_flags):
@@ -271,9 +314,9 @@ def draw_metadata_editor_content(parent: Any):
         for key, value in custom_entries:
             imgui.table_next_row()
             imgui.table_next_column()
-            imgui.text_colored(imgui.ImVec4(0.5, 0.8, 0.5, 1.0), key)
+            imgui.text_colored(_COL_SET, key)
             imgui.table_next_column()
-            imgui.text_colored(imgui.ImVec4(0.5, 0.8, 0.5, 1.0), str(value))
+            imgui.text_colored(_COL_SET, str(value))
             imgui.table_next_column()  # input col left blank
             imgui.table_next_column()
             if imgui.small_button(f"X##custom_del_{key}"):
@@ -300,14 +343,108 @@ def draw_metadata_editor_content(parent: Any):
 
         imgui.table_next_column()
         if imgui.small_button("Set##custom_add") and parent._custom_key.strip():
-            val = parent._custom_value
-            with contextlib.suppress(ValueError):
-                val = float(val) if "." in val else int(val)
-            parent._custom_metadata[parent._custom_key.strip()] = val
-            parent._custom_key = ""
-            parent._custom_value = ""
+            _apply_custom_add(parent)
 
         imgui.end_table()
+
+
+def _draw_editor_narrow(parent: Any, current_data: Any, suggested_fields: list[dict]) -> None:
+    """Stacked per-field layout: label/value line, then input + buttons.
+
+    Fits any panel width — text wraps and the input shrinks to leave room
+    for its buttons, so nothing crosses the right edge.
+    """
+    style = imgui.get_style()
+    set_w = imgui.calc_text_size("Set").x + style.frame_padding.x * 2
+    x_w = imgui.calc_text_size("X").x + style.frame_padding.x * 2
+
+    for field in suggested_fields:
+        canonical = field["canonical"]
+        dtype = field.get("dtype", str)
+        custom_val = parent._custom_metadata.get(canonical)
+        source_val = field.get("value")
+        value = custom_val if custom_val is not None else source_val
+        is_set = value is not None
+
+        _push_wrap_at_edge()
+        imgui.text_colored(_COL_SET if is_set else _COL_UNSET, field["label"])
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(_field_tooltip(field))
+        imgui.same_line()
+        if is_set:
+            val_str = f"{value} {field.get('unit', '')}".strip()
+            if field.get("detected", False) and custom_val is None:
+                imgui.text_colored(_COL_DETECTED, val_str)
+                if imgui.is_item_hovered():
+                    imgui.set_tooltip("Detected from filename")
+            else:
+                imgui.text_colored(_COL_SET, val_str)
+        else:
+            imgui.text_colored(_COL_EMPTY, "-")
+        imgui.pop_text_wrap_pos()
+
+        input_key = f"_meta_input_{canonical}"
+        if not hasattr(parent, input_key):
+            setattr(parent, input_key, "")
+        reserve = set_w + style.item_spacing.x
+        if custom_val is not None:
+            reserve += x_w + style.item_spacing.x
+        imgui.set_next_item_width(-reserve)
+        flags = imgui.InputTextFlags_.chars_decimal if dtype in (float, int) else 0
+        _, new_val = imgui.input_text(
+            f"##{canonical}", getattr(parent, input_key), flags=flags
+        )
+        setattr(parent, input_key, new_val)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(_input_tooltip(dtype))
+        imgui.same_line()
+        if imgui.button(f"Set##{canonical}"):
+            _apply_set(parent, current_data, canonical, dtype, input_key)
+        if custom_val is not None:
+            imgui.same_line()
+            if imgui.button(f"X##del_{canonical}"):
+                _apply_clear(parent, current_data, canonical)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("Clear this override")
+        imgui.spacing()
+
+    imgui.spacing()
+    imgui.separator()
+    imgui.text_colored(_COL_CUSTOM_HDR, "Custom")
+    imgui.dummy(imgui.ImVec2(0, 2))
+
+    suggested_keys = {f["canonical"] for f in suggested_fields}
+    custom_entries = [
+        (k, v) for k, v in parent._custom_metadata.items() if k not in suggested_keys
+    ]
+    to_remove = None
+    for key, value in custom_entries:
+        if imgui.small_button(f"X##custom_del_{key}"):
+            to_remove = key
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Delete this custom entry")
+        imgui.same_line()
+        _push_wrap_at_edge()
+        imgui.text_colored(_COL_SET, f"{key}: {value}")
+        imgui.pop_text_wrap_pos()
+    if to_remove:
+        del parent._custom_metadata[to_remove]
+
+    imgui.set_next_item_width(-1)
+    _, parent._custom_key = imgui.input_text_with_hint(
+        "##custom_key", "key", parent._custom_key
+    )
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Custom key name")
+    imgui.set_next_item_width(-(set_w + style.item_spacing.x))
+    _, parent._custom_value = imgui.input_text_with_hint(
+        "##custom_val", "value", parent._custom_value
+    )
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Custom value (numbers auto-detected)")
+    imgui.same_line()
+    if imgui.button("Set##custom_add") and parent._custom_key.strip():
+        _apply_custom_add(parent)
 
 
 def draw_metadata_popup(parent: Any) -> None:

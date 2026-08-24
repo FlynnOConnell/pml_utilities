@@ -691,6 +691,130 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
         raise
 
 
+def task_masknmf(args: dict, logger: logging.Logger) -> None:
+    """
+    masknmf pipeline task.
+
+    Runs mbo_utilities.masknmf.runner per selected plane: stage-gated
+    registration -> PMD compression -> demixing, suite2p-shaped outputs,
+    shared QC figures. Stage Skip/Run/Force tri-states travel inside
+    args["settings"].
+    """
+    monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
+    monitor.update(0.01, "Initializing masknmf pipeline...")
+
+    input_path = args["input_path"]
+    output_dir = Path(args["output_dir"])
+    planes = args.get("planes")
+    settings = args.get("settings") or {}
+    custom_metadata = args.get("custom_metadata") or {}
+    tp_indices = args.get("tp_indices")
+    selected_planes_0based = args.get("selected_planes_0based")
+    channel = args.get("channel")
+
+    try:
+        src_arr = imread(input_path)
+    except Exception as e:
+        monitor.fail(str(e), details={"traceback": traceback.format_exc()})
+        logger.exception(f"masknmf: cannot open input {input_path!r}: {e}")
+        raise
+
+    # source metadata -> ops, with fs/dz reactively scaled on stride selections
+    metadata = dict(getattr(src_arr, "metadata", {}) or {})
+    metadata.update(custom_metadata)
+    src_shape = tuple(src_arr._shape5d()) if hasattr(src_arr, "_shape5d") else None
+    if src_shape is not None and (
+        tp_indices is not None or selected_planes_0based is not None
+    ):
+        try:
+            from mbo_utilities.metadata import OutputMetadata
+
+            selections = {}
+            if tp_indices is not None:
+                selections["T"] = list(tp_indices)
+            if selected_planes_0based is not None:
+                selections["Z"] = list(selected_planes_0based)
+            scaled = OutputMetadata(
+                source=metadata,
+                source_shape=src_shape,
+                source_dims=("T", "C", "Z", "Y", "X"),
+                selections=selections,
+            ).to_dict()
+            # fs deliberately NOT copied: the per-plane imwrite scales it
+            # once from its timepoints= stride; pre-scaling here would
+            # divide by the stride twice. The bin write can't see the
+            # z-stride, so dz (and dx/dy) must be pre-scaled.
+            for key in ("dz", "dx", "dy"):
+                if scaled.get(key) is not None:
+                    metadata[key] = scaled[key]
+            logger.info(
+                f"task_masknmf: reactive metadata -> dz={metadata.get('dz')}"
+            )
+        except Exception as e:
+            logger.warning(f"task_masknmf: reactive dz/dx/dy scaling failed: {e}")
+
+    writer_kwargs = {
+        "fix_phase": args.get("fix_phase", True),
+        "use_fft": args.get("use_fft", True),
+    }
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Input: {input_path}")
+    logger.info(f"Output: {output_dir}")
+    logger.info(f"Planes: {planes}")
+
+    # periodic log line keeps the worker's stall watchdog fed through long
+    # silent GPU stages (PMD / HALS)
+    _stop_heartbeat = threading.Event()
+
+    def _heartbeat():
+        while not _stop_heartbeat.wait(600):
+            logger.info("masknmf: still running")
+
+    threading.Thread(target=_heartbeat, daemon=True).start()
+
+    try:
+        monitor.update(0.05, "Running masknmf pipeline...")
+
+        def _progress(plane=0, total_planes=1, step="", message="", **kw):
+            slot = 0.85 / max(total_planes, 1)
+            offsets = {
+                "writing_binary": 0.02,
+                "registration": 0.10,
+                "compression": 0.35,
+                "demixing": 0.55,
+                "exports": 0.85,
+                "figures": 0.92,
+            }
+            frac = 0.1 + slot * plane + slot * offsets.get(step, 0.0)
+            monitor.update(min(frac, 0.95), message)
+
+        from mbo_utilities.masknmf import run_volume
+
+        run_volume(
+            src_arr,
+            output_dir,
+            planes=planes,
+            settings=settings,
+            metadata=metadata,
+            frame_indices=tp_indices,
+            channel=channel,
+            writer_kwargs=writer_kwargs,
+            logger=logger,
+            progress_callback=_progress,
+        )
+
+        monitor.finish("masknmf pipeline completed.")
+        logger.info("masknmf completed successfully")
+
+    except Exception as e:
+        monitor.fail(str(e), details={"traceback": traceback.format_exc()})
+        logger.exception(f"masknmf failed: {e}")
+        raise
+    finally:
+        _stop_heartbeat.set()
+
+
 def _bridge_consolidate_logging(worker_logger: logging.Logger) -> None:
     """Attach the worker's handlers to the consolidator's mbo logger.
 
@@ -1328,6 +1452,7 @@ def task_generate_bigstitcher(args: dict, logger: logging.Logger) -> None:
 TASKS = {
     "save_as": task_save_as,
     "suite2p": task_suite2p,
+    "masknmf": task_masknmf,
     "isoview": task_isoview,
     "isoview_correct": task_correct_stack,
     "isoview_raw_projections": task_isoview_raw_projections,

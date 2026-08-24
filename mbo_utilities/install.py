@@ -46,6 +46,9 @@ HAS_TORCH: bool = _get_cached_flag(
 HAS_RASTERMAP: bool = _get_cached_flag(
     "rastermap", lambda: _check_import("rastermap")
 )
+HAS_MASKNMF: bool = _get_cached_flag(
+    "masknmf", lambda: _check_import("masknmf")
+)
 HAS_IMGUI: bool = _get_cached_flag(
     "imgui_bundle", lambda: _check_import("imgui_bundle")
 )
@@ -524,6 +527,16 @@ def check_installation(callback: type[object] | None = None) -> InstallStatus:
     _proc_hint = "pip install 'mbo_utilities[suite2p]'"
     status.features.append(_check_pkg_version("suite2p", "suite2p", "Suite2p", _proc_hint))
     status.features.append(_check_pkg_version("cellpose", "cellpose", "Cellpose", _proc_hint))
+
+    _update(0.8, "Checking MaskNMF...")
+    status.features.append(
+        _check_pkg_version(
+            "masknmf",
+            "masknmf",
+            "MaskNMF",
+            "pip install git+https://github.com/apasarkar/masknmf-toolbox.git",
+        )
+    )
 
     _update(0.85, "Checking Rastermap...")
     status.features.append(_check_rastermap())

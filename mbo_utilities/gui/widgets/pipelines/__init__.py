@@ -60,9 +60,13 @@ def _register_pipelines_sync() -> None:
         except Exception:
             pass
 
+        try:
+            from mbo_utilities.gui.widgets.pipelines.masknmf import MaskNMFPipelineWidget
+            _PIPELINE_CLASSES.append(MaskNMFPipelineWidget)
+        except Exception:
+            pass
+
         # future: add more pipelines here
-        # from .masknmf import MaskNMFPipelineWidget
-        # _PIPELINE_CLASSES.append(MaskNMFPipelineWidget)
 
         _REGISTRATION_COMPLETE = True
 
@@ -226,45 +230,54 @@ def draw_run_tab(parent: Any) -> None:
     # order). Stable: only Isoview is hoisted; the rest keep their order.
     applicable.sort(key=lambda c: 0 if c.name == "Isoview" else 1)
 
-    if not applicable:
+    # selector lists EVERY registered pipeline — runnable ones first,
+    # then installed-but-not-applicable, then not-installed. Selecting a
+    # non-runnable entry explains why instead of drawing a config UI.
+    entries: list[tuple[type[PipelineWidget], str, str]] = []
+    for cls in applicable:
+        entries.append((cls, cls.name, "ok"))
+    for cls in not_applicable:
+        entries.append((cls, f"{cls.name} (not applicable)", "na"))
+    for cls in not_installed:
+        entries.append((cls, f"{cls.name} (not installed)", "missing"))
+
+    if not entries:
         imgui.text_colored(
             imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
-            "No pipeline applies to the loaded data.",
+            "No pipelines registered.",
         )
-        imgui.spacing()
-        if not_applicable:
-            imgui.text("Installed but not applicable to this data:")
-            for cls in not_applicable:
-                imgui.bullet_text(f"{cls.name}")
-        if not_installed:
-            imgui.spacing()
-            imgui.text("Not installed:")
-            for cls in not_installed:
-                imgui.bullet_text(cls.name)
-                imgui.indent(16)
-                imgui.text_colored(
-                    imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
-                    cls.install_command,
-                )
-                imgui.unindent(16)
         return
 
-    # selector — combo when more than one option. Resolve persisted
-    # name → list index each frame so a user's choice survives switching
-    # between datasets where the applicable set changes.
-    labels = [c.name for c in applicable]
-    try:
-        idx = labels.index(parent._selected_pipeline_name)
-    except (ValueError, TypeError):
-        idx = 0
-    if len(applicable) > 1:
+    # Resolve persisted name → index each frame so a user's choice
+    # survives switching between datasets where the runnable set changes.
+    idx = 0
+    for i, (cls, _label, _state) in enumerate(entries):
+        if cls.name == parent._selected_pipeline_name:
+            idx = i
+            break
+    if len(entries) > 1:
+        labels = [e[1] for e in entries]
         imgui.set_next_item_width(220)
         changed, new_idx = imgui.combo("Pipeline##run_tab", idx, labels)
         if changed:
             idx = new_idx
         imgui.separator()
-    pipeline_cls = applicable[idx]
+    pipeline_cls, _label, state = entries[idx]
     parent._selected_pipeline_name = pipeline_cls.name
+
+    if state == "missing":
+        imgui.text(f"{pipeline_cls.name} is not installed.")
+        imgui.text_colored(
+            imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
+            pipeline_cls.install_command,
+        )
+        return
+    if state == "na":
+        imgui.text_colored(
+            imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
+            f"{pipeline_cls.name} does not apply to the loaded data.",
+        )
+        return
 
     pipeline_key = pipeline_cls.name
     if pipeline_key not in parent._pipeline_instances:

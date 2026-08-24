@@ -3,7 +3,7 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mbo_utilities"
+name = "utilities"
 version = "3.3.4"
 description = "Various utilities for the Miller Brain Observatory"
 readme = "README.md"
@@ -71,7 +71,7 @@ isoview = "mbo_utilities.arrays.isoview.array:IsoviewArray"
 [project.urls]
 Homepage = "https://github.com/millerbrainobservatory/mbo_utilities"
 Documentation = "https://millerbrainobservatory.github.io/mbo_utilities/index.html"
-Repository = "https://github.com/millerbrainobservatory/mbo_utilities"
+Repository = "https://github.com/FlynnOConnell/utilities"
 Issues = "https://github.com/MillerBrainObservatory/mbo_utilities/issues"
 
 [project.optional-dependencies]
@@ -128,7 +128,7 @@ docs = [
     "myst_nb",
     "pygfx>=0.14.0",
 ]
-all = ["mbo_utilities[suite2p,napari,notebooks,isoview]"]
+all = ["utilities[suite2p,napari,notebooks,isoview]"]
 
 [tool.uv]
 # repo dev env keeps the full stack so `uv run mbo` is unchanged.

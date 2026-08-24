@@ -199,6 +199,8 @@ _DIR_KEYS = {
     "suite2p_diagnostics": "last_suite2p_diagnostics_dir",  # Load plane folder for diagnostics
     # Grid search
     "grid_search": "last_grid_search_dir",  # Grid search results folder
+    # MaskNMF pipeline
+    "masknmf_outdir": "last_masknmf_outdir_dir",  # Run tab > Browse for output
 }
 
 

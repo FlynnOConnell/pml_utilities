@@ -4248,10 +4248,8 @@ def _build_channel_dirname(self, channel: int) -> str:
 def run_process(self):
     """Runs the selected processing pipeline."""
     if self._current_pipeline != "suite2p":
-        if self._current_pipeline == "masknmf":
-            self.logger.info("Running MaskNMF pipeline (not yet implemented).")
-        else:
-            self.logger.error(f"Unknown pipeline selected: {self._current_pipeline}")
+        # masknmf owns its own Run button (MaskNMFPipelineWidget._submit)
+        self.logger.error(f"Unknown pipeline selected: {self._current_pipeline}")
         return
 
     self.logger.debug(f"suite2p settings: {self.s2p}")

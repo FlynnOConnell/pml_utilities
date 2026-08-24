@@ -321,6 +321,7 @@ def _check_all_packages() -> dict:
     # package definitions: (cache_key, module_to_check, package_name_for_version)
     checks = [
         ("suite2p", "lbm_suite2p_python", "lbm-suite2p-python"),
+        ("masknmf", "masknmf", "masknmf"),
         ("cupy", "cupy", None),  # variant dist names handled below
         ("torch", "torch", "torch"),
         ("rastermap", "rastermap", "rastermap"),
