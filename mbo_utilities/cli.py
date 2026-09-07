@@ -563,6 +563,12 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
     help="Phase correction: FFT-based 2D correction.",
 )
 @click.option(
+    "--frame-average",
+    type=int,
+    default=None,
+    help="Average every N consecutive timepoints into one (temporal binning).",
+)
+@click.option(
     "--reg-max-frames",
     type=int,
     default=None,
@@ -616,6 +622,7 @@ def convert(
     border,
     max_offset,
     use_fft,
+    frame_average,
     reg_max_frames,
     reg_chunk_frames,
     reg_max_xy,
@@ -681,6 +688,8 @@ def convert(
         imread_kwargs["max_offset"] = max_offset
     if use_fft is not None:
         imread_kwargs["use_fft"] = use_fft
+    if frame_average is not None and frame_average > 1:
+        imread_kwargs["frame_average"] = frame_average
     if parsed_roi is not None and parsed_roi != 0:
         imread_kwargs["roi"] = parsed_roi
 

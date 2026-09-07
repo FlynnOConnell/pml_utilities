@@ -726,7 +726,7 @@ def register(
     if method == "none":
         return _find_plane_dirs(input_data)
 
-    from mbo_utilities.reader import imread
+    from mbo_utilities.reader import imread, source_reader_kwargs
 
     arr = input_data if hasattr(input_data, "shape") else imread(input_data)
     nz = _source_nz(arr)
@@ -753,7 +753,13 @@ def register(
             force_reg=force,
             replot=False,
             frame_indices=frame_indices,
-            reader_kwargs={"channel": channel} if channel is not None else None,
+            # a binned (frame_average) source carries its factor here, so
+            # the plane workers re-open the same averaged movie
+            reader_kwargs={
+                **source_reader_kwargs(arr),
+                **({"channel": channel} if channel is not None else {}),
+            }
+            or None,
             workers=1,
         )
     elif method == "masknmf":

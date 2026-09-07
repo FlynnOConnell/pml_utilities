@@ -997,6 +997,15 @@ class PreviewDataWidget(EdgeWindow):
             return
         self._apply_frame_average(source, value)
 
+    def _sync_frame_average_options(self, factor: int) -> None:
+        """"Apply to dataset" is the default for every run started from
+        here: the save-as, suite2p and masknmf option menus pick up the
+        factor the way their Fix Phase defaults track the data, and each can
+        still be changed per run in its own Options."""
+        self._saveas_frame_average = factor
+        self._s2p_frame_average = factor
+        self._masknmf_frame_average = factor
+
     def _apply_frame_average(self, source, factor: int) -> None:
         """Swap the viewer onto (or off) a ``FrameAveragedView`` of ``source``.
 
@@ -1035,6 +1044,7 @@ class PreviewDataWidget(EdgeWindow):
 
         self._frame_average = factor
         self._frame_average_source = source if factor > 1 else None
+        self._sync_frame_average_options(factor)
         self.shape = wrapped.shape
         if len(self.shape) == 5:
             self.nc, self.nz = self.shape[1], self.shape[2]

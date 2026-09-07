@@ -243,7 +243,12 @@ def _ghost_button():
         yield
     finally:
         imgui.pop_style_color(3)
-from mbo_utilities.gui._selection_ui import draw_selection_table, resolve_dim_labels
+from mbo_utilities.gui._selection_ui import (
+    draw_frame_average_input,
+    draw_selection_table,
+    resolve_dim_labels,
+    source_timepoints,
+)
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
 from mbo_utilities._writers import _convert_paths_to_strings
@@ -1380,8 +1385,10 @@ def _draw_data_options_content(self):
 
     is_raw = getattr(self, "is_mbo_scan", False)
     has_z_reg = nz > 1 and is_raw
+    source_nt = source_timepoints(self)
+    has_frame_average = source_nt > 1
 
-    has_any_options = has_phase_support or has_z_reg
+    has_any_options = has_phase_support or has_z_reg or has_frame_average
 
     # ensure s2p phase attributes exist with defaults
     if not hasattr(self, "_s2p_fix_phase"):
@@ -1426,9 +1433,26 @@ def _draw_data_options_content(self):
         for i, ofs in enumerate(self.current_offset):
             imgui.text(f"  Array {i + 1}: {ofs:.3f} px")
 
+    # temporal binning, applied to the data the run reads (like fix phase)
+    if has_frame_average:
+        if has_phase_support:
+            imgui.spacing()
+            imgui.separator()
+            imgui.spacing()
+        imgui.text("Temporal Binning")
+        imgui.spacing()
+        if not hasattr(self, "_s2p_frame_average"):
+            self._s2p_frame_average = int(getattr(self, "frame_average", 1) or 1)
+        self._s2p_frame_average = draw_frame_average_input(
+            "Frame Average##s2p_frame_average",
+            self._s2p_frame_average,
+            viewer_factor=int(getattr(self, "frame_average", 1) or 1),
+            max_frames=source_nt,
+        )
+
     # axial z-registration - only for raw scanimage data
     if has_z_reg:
-        if has_phase_support:
+        if has_phase_support or has_frame_average:
             imgui.spacing()
             imgui.separator()
             imgui.spacing()
@@ -3514,8 +3538,11 @@ def _draw_section_suite2p_content(self):
     _nz = getattr(self, "nz", 1)
     _is_raw = getattr(self, "is_mbo_scan", False)
     _has_z_reg = _nz > 1 and _is_raw
-    if _has_phase_support or _has_z_reg:
+    _frame_avg = int(getattr(self, "_s2p_frame_average", 1) or 1)
+    if _has_phase_support or _has_z_reg or _frame_avg > 1:
         imgui.indent(12)
+        if _frame_avg > 1:
+            imgui.text(f"Frame Average: {_frame_avg}")
         if _has_phase_support:
             imgui.text(f"Fix Phase: {getattr(self, '_s2p_fix_phase', True)}")
             imgui.text(f"Sub-Pixel (FFT): {getattr(self, '_s2p_use_fft', True)}")
@@ -4346,6 +4373,7 @@ def run_process(self):
                     "db": self.s2p_db.to_dict(),
                     "fix_phase": self._s2p_fix_phase,
                     "use_fft": self._s2p_use_fft,
+                    "frame_average": int(getattr(self, "_s2p_frame_average", 1) or 1),
                     "channel": channel if (multi_channel or has_channels) else None,
                     "custom_metadata": dict(getattr(self, "_custom_metadata", {})),
                     "tp_indices": (
@@ -4470,6 +4498,7 @@ def run_process(self):
             force_rastermap = (self.s2p_extras.rastermap_mode == 2)
             fix_phase = getattr(self, "_s2p_fix_phase", False)
             use_fft = getattr(self, "_s2p_use_fft", False)
+            frame_average = int(getattr(self, "_s2p_frame_average", 1) or 1)
 
             if not s2p_path:
                 from mbo_utilities.preferences import get_mbo_dirs
@@ -4547,6 +4576,7 @@ def run_process(self):
                             "force_rastermap": force_rastermap,
                             "fix_phase": fix_phase,
                             "use_fft": use_fft,
+                            "frame_average": frame_average,
                             # User-set metadata (e.g. dz from the metadata
                             # editor) lives on parent._custom_metadata, NOT
                             # on arr.metadata. Snapshot it here so the
@@ -4805,6 +4835,7 @@ def _run_plane_worker_thread(config):
         num_frames=config["target_timepoints"] if frames_arg is None else None,
         fix_phase=config["fix_phase"],
         use_fft=config["use_fft"],
+        frame_average=config.get("frame_average", 1),
     )
 
     from lbm_suite2p_python import run_plane
