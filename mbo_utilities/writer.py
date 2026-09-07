@@ -16,6 +16,7 @@ from pathlib import Path
 
 from mbo_utilities import log
 from mbo_utilities._writers import _try_generic_writers, add_processing_step
+from mbo_utilities.arrays.features._frame_average import apply_read_features
 from mbo_utilities.arrays._registration import (
     compute_axial_shifts,
     validate_axial_shifts,
@@ -286,6 +287,12 @@ def imwrite(
     elif dim_order is not None:
         logger.debug("dim_order ignored: lazy_array is not a raw numpy array")
 
+    # read-time features travel as kwargs from the save-as dialog, the
+    # pipeline tasks and the CLI: phase settings are set on the reader, and
+    # frame_average wraps it in a FrameAveragedView so the binning is baked
+    # into what gets written.
+    lazy_array, kwargs = apply_read_features(lazy_array, kwargs)
+
     # handle roi based on roi_mode
     # ROI support detected via duck typing: hasattr(arr, 'roi_mode')
     if roi_mode == RoiMode.separate:
@@ -455,6 +462,10 @@ def imwrite(
     # Add scan-phase correction info if present
     if scan_phase_params:
         processing_extra["scan_phase_correction"] = scan_phase_params
+
+    frame_average = int(getattr(lazy_array, "frame_average", 1) or 1)
+    if frame_average > 1:
+        processing_extra["frame_average"] = frame_average
 
     if register_z:
         processing_extra["z_registration"] = {
