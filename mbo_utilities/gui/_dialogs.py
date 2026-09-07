@@ -448,6 +448,10 @@ def _reset_per_data_state(parent: Any) -> None:
     # the old file's, so it goes too
     parent._frame_average = 1
     parent._frame_average_source = None
+    # the per-run binning options follow the viewer; a new file starts raw
+    parent._saveas_frame_average = 1
+    parent._s2p_frame_average = 1
+    parent._masknmf_frame_average = 1
     # contrast / z-tracking
     parent._auto_contrast_on_z = False
     parent._last_z_idx = 0

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from mbo_utilities import imread, log
 from mbo_utilities.writer import imwrite
+from mbo_utilities.arrays.features import apply_read_features
 from mbo_utilities.arrays._registration import (
     compute_axial_shifts,
     validate_axial_shifts,
@@ -142,11 +143,15 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
     logger.info(f"Loading {input_path}")
     arr = imread(input_path, **(args.get("reader_kwargs") or {}))
 
-    # Apply on-the-fly settings if supported
-    if hasattr(arr, "fix_phase"):
-        arr.fix_phase = args.get("fix_phase", True)
-    if hasattr(arr, "use_fft"):
-        arr.use_fft = args.get("use_fft", True)
+    # read-time features: phase settings land on the reader, frame_average
+    # wraps it so the binning is baked into the output. reader_kwargs may
+    # already carry frame_average from the viewer; the explicit arg wins.
+    arr, _ = apply_read_features(
+        arr,
+        fix_phase=args.get("fix_phase", True),
+        use_fft=args.get("use_fft", True),
+        frame_average=args.get("frame_average", None),
+    )
 
     # Handle Z-Registration
     register_z = args.get("register_z", False)
@@ -582,10 +587,11 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             s2p_settings = dict(s2p_settings)
             s2p_settings["workers"] = resolved
 
-    # build writer_kwargs for phase correction settings
+    # build writer_kwargs for the read-time features (phase, temporal binning)
     writer_kwargs = {
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
+        "frame_average": int(args.get("frame_average") or 1),
     }
 
     # a detection-only re-run copies the source ops.npy rather than writing
@@ -773,6 +779,7 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
     writer_kwargs = {
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
+        "frame_average": int(args.get("frame_average") or 1),
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)

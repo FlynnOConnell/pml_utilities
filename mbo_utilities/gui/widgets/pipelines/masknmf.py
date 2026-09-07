@@ -20,7 +20,12 @@ from mbo_utilities.gui._imgui_helpers import (
     draw_boxed_label,
     set_tooltip,
 )
-from mbo_utilities.gui._selection_ui import draw_selection_table, resolve_dim_labels
+from mbo_utilities.gui._selection_ui import (
+    draw_frame_average_input,
+    draw_selection_table,
+    resolve_dim_labels,
+    source_timepoints,
+)
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 from mbo_utilities.gui.widgets.pipelines.settings import (
     _dataset_size_bytes,
@@ -418,6 +423,14 @@ class MaskNMFPipelineWidget(PipelineWidget):
             if self._fix_phase:
                 imgui.same_line()
                 _, self._use_fft = imgui.checkbox("FFT##masknmf_fft", self._use_fft)
+            # temporal binning lives on the parent so "Apply to dataset" in
+            # Window Functions seeds it, the same way the save-as menu is
+            self.parent._masknmf_frame_average = draw_frame_average_input(
+                "Frame average##masknmf_frame_average",
+                getattr(self.parent, "_masknmf_frame_average", 1),
+                viewer_factor=int(getattr(self.parent, "frame_average", 1) or 1),
+                max_frames=source_timepoints(self.parent),
+            )
             imgui.spacing()
             if imgui.button("Close##masknmf_slice_close", imgui.ImVec2(_BTN_W, 0)):
                 imgui.close_current_popup()
@@ -857,6 +870,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 "settings": self.settings.to_dict(),
                 "fix_phase": self._fix_phase,
                 "use_fft": self._use_fft,
+                "frame_average": int(
+                    getattr(self.parent, "_masknmf_frame_average", 1) or 1
+                ),
                 "tp_indices": tp_indices,
                 "selected_planes_0based": [p - 1 for p in planes],
                 "channel": channel if (multi_channel or has_channels) else None,
