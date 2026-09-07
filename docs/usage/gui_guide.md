@@ -181,8 +181,11 @@ Apply temporal projections over a sliding window of frames.
 **Parameters:**
 
 - **Window Size**: number of frames to include (3-20 recommended)
+- **Apply to dataset**: turn the window size into temporal binning of the data itself. Every `N` consecutive frames become one averaged frame, the frame rate is divided by `N`, and the window size resets to 1 so it applies on top of the binned frames.
 - **Gaussian Sigma**: spatial gaussian filter (0 = disabled)
 - **Mean Subtraction**: subtract per-z-plane mean image to highlight activity. requires z-stats to finish computing first.
+
+Like scan-phase correction, binning applied here is a pipeline step, not a display effect. The ROI traces, Save As, Suite2p and MaskNMF all pick up the factor as their default: it shows up as **Frame Average** in each Options menu, where it can be changed per run. Programmatically the same thing is `imread(path, frame_average=N)` or `imwrite(arr, out, frame_average=N)`.
 
 ### Scan-Phase Correction
 
@@ -206,7 +209,9 @@ Preview bidirectional raster-scan phase correction before saving. Only available
 
 ### Frame Averaging
 
-Available for piezo z-stack data. When `frames_per_slice > 1`, toggle averaging based on ScanImage's `logAverageFactor`. This changes the effective shape of the data.
+Readout for the temporal binning set with **Apply to dataset** above: frames per averaged frame, the frame count and frame rate before and after.
+
+Also hosts piezo z-stack averaging. When `frames_per_slice > 1`, toggle averaging based on ScanImage's `logAverageFactor`. This changes the effective shape of the data.
 
 (gui-metadata)=
 ## Metadata Viewer
@@ -295,6 +300,7 @@ General write options (`.tiff` shown). Format-specific sections appear below as 
 | Overwrite | replace existing output files |
 | Fix Scan Phase | apply phase correction on write |
 | Subpixel Correction | FFT-based phase correction on write |
+| Frame Average | average every N frames into one on write; defaults to the viewer's "Apply to dataset" factor |
 | Register Z-Planes | axial (plane-to-plane) phase-correlation registration |
 | Chunk Size (MB) | memory chunk size for writing |
 
