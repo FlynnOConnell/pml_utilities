@@ -231,6 +231,20 @@ class TestViewerLock:
         finally:
             iw.close()
 
+    def test_run_menus_follow_the_lock(self):
+        """Save As, suite2p and masknmf pick up the factor as their default,
+        the way scan-phase is on by default for a run."""
+        iw, gui = self._gui()
+        try:
+            gui.frame_average = 10
+            assert gui._saveas_frame_average == 10
+            assert gui._s2p_frame_average == 10
+            assert gui._masknmf_frame_average == 10
+            gui.frame_average = 1
+            assert gui._saveas_frame_average == 1
+        finally:
+            iw.close()
+
     def test_relocking_does_not_compound(self):
         iw, gui = self._gui()
         try:
@@ -306,3 +320,172 @@ class TestViewerLock:
             assert smoothed[23:28].tolist() == [10.0] * 5, "max spreads the peak"
         finally:
             iw.close()
+
+
+class TestReadFeatures:
+    """The features API: ``frame_average`` as an imread / imwrite kwarg, the
+    reader_kwargs round-trip a worker uses to re-open the same binned array,
+    and the shared applier every save / run path goes through."""
+
+    def test_imread_kwarg_and_reader_kwargs_roundtrip(self, source, tmp_path):
+        from mbo_utilities.reader import imread, source_reader_kwargs
+        from mbo_utilities.writer import imwrite
+
+        imwrite(source, tmp_path, ext=".tiff", overwrite=True)
+        path = next(tmp_path.rglob("*.tif*"))
+        view = imread(path, frame_average=4)
+        assert isinstance(view, FrameAveragedView)
+        assert view.shape[0] == 5
+        assert source_reader_kwargs(view) == {"frame_average": 4}
+        again = imread(path, **source_reader_kwargs(view))
+        assert again.shape == view.shape
+
+    def test_imread_factor_one_is_the_plain_reader(self, source, tmp_path):
+        from mbo_utilities.reader import imread, source_reader_kwargs
+        from mbo_utilities.writer import imwrite
+
+        imwrite(source, tmp_path, ext=".tiff", overwrite=True)
+        arr = imread(next(tmp_path.rglob("*.tif*")), frame_average=1)
+        assert not isinstance(arr, FrameAveragedView)
+        assert source_reader_kwargs(arr) == {}
+
+    def test_imwrite_kwarg_bakes_the_binning_in(self, source, raw, tmp_path):
+        from mbo_utilities.reader import imread
+        from mbo_utilities.writer import imwrite
+
+        imwrite(source, tmp_path, ext=".tiff", overwrite=True, frame_average=4)
+        back = imread(next(tmp_path.rglob("*.tif*")))
+        assert back.shape[0] == 5
+        np.testing.assert_allclose(
+            np.asarray(back[:]).squeeze().reshape(5, -1),
+            reference(raw, 4).squeeze().reshape(5, -1),
+            atol=1,
+        )
+        assert back.metadata["frame_average"] == 4
+        assert back.metadata["fs"] == pytest.approx(7.5)
+
+    def test_apply_read_features_pops_and_wraps(self, source):
+        from mbo_utilities.arrays.features import apply_read_features
+
+        arr, rest = apply_read_features(
+            source, {"frame_average": 4, "fix_phase": True, "sharded": False}
+        )
+        assert isinstance(arr, FrameAveragedView) and arr.factor == 4
+        assert rest == {"sharded": False}, "writer kwargs pass through untouched"
+        back, _ = apply_read_features(arr, frame_average=1)
+        assert back is source, "factor 1 unwraps"
+        same, _ = apply_read_features(arr, frame_average=None)
+        assert same is arr, "None leaves the array alone"
+
+    def test_feature_object(self):
+        from mbo_utilities.arrays.features import FrameAverageFeature
+
+        fa = FrameAverageFeature(4)
+        assert fa.enabled and fa.to_reader_kwargs() == {"frame_average": 4}
+        seen = []
+        fa.add_event_handler(seen.append)
+        fa.factor = 2
+        assert seen and seen[0].info == {"value": 2, "old_value": 4}
+        assert FrameAverageFeature().to_reader_kwargs() == {}
+        with pytest.raises(ValueError):
+            FrameAverageFeature(0)
+
+
+class TestWriterContract:
+    """The writers mutate the array they are handed (roi per split, fix_phase
+    from the save options) and reassign its metadata; the view has to let all
+    of that through to the source without corrupting its own scaling."""
+
+    def test_setting_reader_attributes_reaches_the_source(self, source):
+        view = average_frames(source, 4)
+        view.some_setting = "x"
+        assert source.some_setting == "x"
+        assert view.some_setting == "x"
+
+    def test_metadata_assignment_does_not_double_scale(self, source):
+        view = average_frames(source, 4)
+        meta = dict(view.metadata)
+        meta["custom"] = 1
+        view.metadata = meta
+        assert view.metadata["fs"] == pytest.approx(7.5)
+        assert view.metadata["custom"] == 1
+        assert view.metadata["num_frames"] == 5
+        assert source.metadata["fs"] == pytest.approx(30.0)
+        assert source.metadata["num_frames"] == 22
+        assert "frame_average" not in source.metadata
+        history = view.metadata["processing_history"]
+        assert history.count({"step": "frame_average", "factor": 4}) == 1
+
+    def test_offsets_map_to_the_first_source_frame(self, source):
+        source.get_offset_at = lambda t, c, z: float(t)
+        view = average_frames(source, 4)
+        assert view.get_offset_at(3, 0, 0) == 12.0
+
+    def test_frame_average_reads_on_any_array(self, source):
+        assert getattr(source, "frame_average", 1) == 1
+        assert average_frames(source, 4).frame_average == 4
+
+
+class TestWorkerPaths:
+    """The subprocess paths re-open the dataset from its path; the option has
+    to survive that round trip the way fix_phase does."""
+
+    def test_task_save_as_bins_the_output(self, source, raw, tmp_path):
+        import logging
+
+        from mbo_utilities.gui.tasks import task_save_as
+        from mbo_utilities.reader import imread
+        from mbo_utilities.writer import imwrite
+
+        src_dir = tmp_path / "src"
+        imwrite(source, src_dir, ext=".tiff", overwrite=True)
+        out_dir = tmp_path / "out"
+        task_save_as(
+            {
+                "input_path": str(next(src_dir.rglob("*.tif*"))),
+                "output_path": str(out_dir),
+                "ext": ".tiff",
+                "frame_average": 4,
+                "fix_phase": False,
+                "use_fft": False,
+            },
+            logging.getLogger("test"),
+        )
+        back = imread(next(out_dir.rglob("*.tif*")))
+        assert back.shape[0] == 5
+        assert back.metadata["frame_average"] == 4
+
+    def test_save_as_worker_forwards_the_option(self, source, tmp_path):
+        from mbo_utilities.gui._save_as import _save_as_worker
+        from mbo_utilities.reader import imread
+        from mbo_utilities.writer import imwrite
+
+        src_dir = tmp_path / "src"
+        imwrite(source, src_dir, ext=".tiff", overwrite=True)
+        out_dir = tmp_path / "out"
+        _save_as_worker(
+            str(next(src_dir.rglob("*.tif*"))),
+            outpath=out_dir,
+            ext=".tiff",
+            overwrite=True,
+            fix_phase=False,
+            use_fft=False,
+            border=10,
+            max_offset=4,
+            mean_subtraction=False,
+            frame_average=2,
+        )
+        assert imread(next(out_dir.rglob("*.tif*"))).shape[0] == 11
+
+    def test_imwrite_phase_kwargs_reach_the_array(self, raw, tmp_path):
+        """fix_phase= used to fall through imwrite's **kwargs unread; the
+        pipeline menus rely on it landing on the reader."""
+        from mbo_utilities.arrays._phasecorr_view import with_phasecorr
+        from mbo_utilities.writer import imwrite
+
+        rng = np.random.default_rng(1)
+        movie = (rng.random((6, 1, 1, 64, 128)) * 500).astype(np.int16)
+        view = with_phasecorr(NumpyArray(movie, dims="TCZYX"))
+        assert view.fix_phase is False
+        imwrite(view, tmp_path, ext=".tiff", overwrite=True, fix_phase=True, use_fft=True)
+        assert view.fix_phase is True and view.use_fft is True
