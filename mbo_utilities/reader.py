@@ -158,6 +158,11 @@ def imread(
         feeding multi-channel sources into pipelines that expect TZYX
         input. Subprocess workers can re-create the same view by passing
         ``reader_kwargs={"channel": N}`` to ``imread``.
+    frame_average : int, optional
+        Average every N consecutive timepoints into one (temporal binning).
+        The returned array is a ``FrameAveragedView`` with ``T // N`` frames
+        and a frame rate divided by N. Round-trips through
+        ``source_reader_kwargs(arr)`` like ``channel`` does.
     dataset : str, optional
         HDF5 dataset to open (``.h5`` inputs only), nested paths accepted
         (e.g. ``"imaging/data"``). When omitted, common names are probed
@@ -191,7 +196,15 @@ def imread(
     # so subprocess workers can re-create the wrap after their own imread.
     channel = kwargs.pop("channel", None)
     squeeze = kwargs.pop("squeeze", False)
+    # temporal binning is a read-time view too, and like ``channel`` it
+    # round-trips through reader_kwargs so a worker re-opening the path gets
+    # the binned array the user was looking at. Wrapped before the channel
+    # view so that view keeps its 4D surface on top.
+    frame_average = kwargs.pop("frame_average", None)
     arr = _imread_impl(inputs, **kwargs)
+    if frame_average is not None and int(frame_average) > 1:
+        from mbo_utilities.arrays._average_view import average_frames
+        arr = average_frames(arr, int(frame_average))
     if channel is not None:
         from mbo_utilities.arrays._channel_view import _ChannelView
         if not hasattr(arr, "shape") or len(arr.shape) < 5:
