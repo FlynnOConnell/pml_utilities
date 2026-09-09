@@ -19,13 +19,19 @@ from mbo_utilities.metadata import get_param
 from mbo_utilities.arrays import _sanitize_suffix
 from mbo_utilities.arrays.features import DimensionTag, TAG_REGISTRY, parse_timepoint_selection, TimeSelection
 from mbo_utilities.preferences import get_last_dir, set_last_dir
+from mbo_utilities.gui._files import NATIVE_DIALOGS, no_dialog_hint
 from mbo_utilities.gui._imgui_helpers import (
     PopupAutoSize,
     set_tooltip,
     checkbox_with_tooltip,
     draw_checkbox_grid,
 )
-from mbo_utilities.gui._selection_ui import draw_selection_table, resolve_dim_labels
+from mbo_utilities.gui._selection_ui import (
+    draw_frame_average_input,
+    draw_selection_table,
+    resolve_dim_labels,
+    source_timepoints,
+)
 from mbo_utilities.gui._metadata_editor import _check_missing_metadata
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.gui.widgets.progress_bar import reset_progress_state
@@ -73,6 +79,9 @@ def _get_array_features(widget: Any) -> dict[str, bool]:
         "multi_roi": getattr(data, "num_rois", 1) > 1,
         # Frame averaging: piezo arrays with multiple frames per slice
         "frame_averaging": hasattr(data, "can_average") and getattr(data, "can_average", False),
+        # Temporal binning: anything with more than one timepoint (the viewer
+        # may already be binned down to a single frame, so count the source)
+        "frame_average": source_timepoints(widget) > 1,
     }
 
 
@@ -82,25 +91,9 @@ def _save_as_worker(path, **imwrite_kwargs):
     # Then imwrite will handle splitting/filtering based on roi parameter
     data = imread(path)
 
-    # Apply scan-phase correction settings to the array before writing
-    # These must be set on the array object for ScanImageArray phase correction
-    fix_phase = imwrite_kwargs.pop("fix_phase", False)
-    use_fft = imwrite_kwargs.pop("use_fft", False)
-    border = imwrite_kwargs.pop("border", 10)
-    max_offset = imwrite_kwargs.pop("max_offset", 4)
-    mean_subtraction = imwrite_kwargs.pop("mean_subtraction", False)
-
-    if hasattr(data, "fix_phase"):
-        data.fix_phase = fix_phase
-    if hasattr(data, "use_fft"):
-        data.use_fft = use_fft
-    if hasattr(data, "border"):
-        data.border = border
-    if hasattr(data, "max_offset"):
-        data.max_offset = max_offset
-    if hasattr(data, "mean_subtraction"):
-        data.mean_subtraction = mean_subtraction
-
+    # read-time features (fix_phase, use_fft, border, max_offset,
+    # mean_subtraction, frame_average) ride along in imwrite_kwargs; imwrite
+    # applies them to the array before writing
     imwrite(data, **imwrite_kwargs)
 
 
@@ -137,6 +130,8 @@ def draw_saveas_popup(parent: Any):
         parent._saveas_fix_phase = True
     if not hasattr(parent, "_saveas_use_fft"):
         parent._saveas_use_fft = True
+    if not hasattr(parent, "_saveas_frame_average"):
+        parent._saveas_frame_average = int(getattr(parent, "frame_average", 1) or 1)
 
     # modal_open is a bool, so we handle the 'X' button manually
     # by checking the second return value of begin_popup_modal.
@@ -190,9 +185,15 @@ def draw_saveas_popup(parent: Any):
                     parent._saveas_outdir = new_str
 
                 imgui.same_line()
+                if not NATIVE_DIALOGS:
+                    imgui.begin_disabled()
                 if imgui.button("Browse"):
                     default_dir = parent._saveas_outdir or str(get_last_dir("save_as") or Path.home())
                     parent._saveas_folder_dialog = pfd.select_folder("Select output folder", default_dir)
+                if not NATIVE_DIALOGS:
+                    imgui.end_disabled()
+                    if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+                        imgui.set_tooltip(no_dialog_hint())
 
                 # Check if async folder dialog has a result
                 if parent._saveas_folder_dialog is not None and parent._saveas_folder_dialog.ready():
@@ -425,6 +426,14 @@ def _draw_options_popup(parent: Any):
                 imgui.end_tooltip()
             if use_fft_changed:
                 parent._saveas_use_fft = use_fft_value
+
+        if features.get("frame_average", False):
+            parent._saveas_frame_average = draw_frame_average_input(
+                "Frame Average##saveas",
+                parent._saveas_frame_average,
+                viewer_factor=int(getattr(parent, "frame_average", 1) or 1),
+                max_frames=source_timepoints(parent),
+            )
 
         parent._debug = checkbox_with_tooltip(
             "Debug",
@@ -1217,6 +1226,17 @@ def _draw_save_button(parent: Any):
     # get num_channels from parent state (set in _draw_selection_section)
     num_channels = getattr(parent, "_saveas_last_num_channels", 1)
 
+    averaged = int(getattr(parent, "_saveas_frame_average", 1) or 1)
+    if averaged > 1:
+        imgui.text_colored(
+            imgui.ImVec4(0.6, 0.8, 0.6, 1.0),
+            f"Frame average: {averaged} frames per saved frame",
+        )
+        set_tooltip(
+            "The output is temporally binned by this factor (change it under"
+            " Options). Timepoints above are counted in averaged frames."
+        )
+
     if no_planes:
         imgui.begin_disabled()
         imgui.button("Save", imgui.ImVec2(100, 0))
@@ -1328,6 +1348,8 @@ def _draw_save_button(parent: Any):
                     "use_fft": parent._saveas_use_fft,
                     "border": parent.border,
                     "max_offset": parent.max_offset,
+                    # temporal binning, seeded from the viewer's "Apply to dataset"
+                    "frame_average": parent._saveas_frame_average,
                     "register_z": parent._register_z,
                     "max_frames": parent._axial_max_frames,
                     "max_reg_xy": parent._axial_max_reg_xy,
@@ -1400,7 +1422,14 @@ def _draw_save_button(parent: Any):
                 else:
                     roi_msg = ""
                 channels_msg = f", channels {save_channels}" if len(save_channels) < num_channels else ""
-                parent.logger.info(f"Saving planes {save_planes}{channels_msg} ({frames_msg}){roi_msg}")
+                avg_msg = (
+                    f", {parent._saveas_frame_average} frames averaged"
+                    if parent._saveas_frame_average > 1
+                    else ""
+                )
+                parent.logger.info(
+                    f"Saving planes {save_planes}{channels_msg} ({frames_msg}){roi_msg}{avg_msg}"
+                )
                 parent.logger.info(
                     f"Saving to {parent._saveas_outdir} as {parent._ext}"
                 )
@@ -1457,6 +1486,7 @@ def _draw_save_button(parent: Any):
                         "rois": rois,
                         "fix_phase": parent._saveas_fix_phase,
                         "use_fft": parent._saveas_use_fft,
+                        "frame_average": parent._saveas_frame_average,
                         "register_z": parent._register_z,
                         "max_frames": parent._axial_max_frames,
                         "max_reg_xy": parent._axial_max_reg_xy,

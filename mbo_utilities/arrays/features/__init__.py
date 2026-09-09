@@ -9,6 +9,9 @@ Available features:
 - DimensionSpecs: dimension structure (names, roles, scales) + OME axes
 - RoiFeatureMixin: multi-ROI handling
 - PhaseCorrectionFeature: bidirectional scan correction
+- FrameAverageFeature: temporal binning, plus apply_read_features() which
+  turns read-option kwargs (fix_phase, use_fft, frame_average, ...) into the
+  array a worker should read from
 """
 
 from __future__ import annotations
@@ -50,6 +53,13 @@ from mbo_utilities.arrays.features._dim_spec import (
     DimRole,
     DimensionSpec,
     DimensionSpecs,
+)
+from mbo_utilities.arrays.features._frame_average import (
+    FRAME_AVERAGE_KEY,
+    PHASE_FEATURE_KEYS,
+    READ_FEATURE_KEYS,
+    FrameAverageFeature,
+    apply_read_features,
 )
 from mbo_utilities.arrays.features._phase_correction import (
     PhaseCorrectionFeature,
@@ -132,6 +142,12 @@ __all__ = [
     # phase correction
     "PhaseCorrectionFeature",
     "PhaseCorrectionMixin",
+    # frame averaging / read-time features
+    "FRAME_AVERAGE_KEY",
+    "PHASE_FEATURE_KEYS",
+    "READ_FEATURE_KEYS",
+    "FrameAverageFeature",
+    "apply_read_features",
     # stats
     "PlaneStats",
     "SliceStats",

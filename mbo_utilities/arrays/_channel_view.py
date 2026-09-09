@@ -60,6 +60,12 @@ class _ChannelView(LazyArray):
         return getattr(self._arr, "filenames", [])
 
     @property
+    def reader_kwargs(self) -> dict:
+        """The source's selectors (``frame_average``, ``unit``, ``dataset``);
+        ``channel`` itself is added by the task that builds the view."""
+        return dict(getattr(self._arr, "reader_kwargs", None) or {})
+
+    @property
     def num_planes(self):
         return self._arr.shape[2]
 

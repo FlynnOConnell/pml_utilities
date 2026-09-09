@@ -12,6 +12,75 @@ from mbo_utilities.arrays.features._slicing import parse_timepoint_selection
 from mbo_utilities.arrays.features._dim_labels import find_slider_name
 
 
+def source_timepoints(widget) -> int:
+    """Timepoints of the un-binned dataset behind a viewer widget.
+
+    The viewer may already be showing a ``FrameAveragedView`` (possibly binned
+    down to a single frame and squeezed), so count the array the binning was
+    applied to when there is one.
+    """
+    source = getattr(widget, "_frame_average_source", None)
+    if source is None:
+        try:
+            source = widget.image_widget.data[0]
+        except (IndexError, AttributeError, TypeError):
+            return 1
+    if hasattr(source, "_shape5d"):
+        shape = tuple(source._shape5d())
+    else:
+        shape = tuple(getattr(source, "shape", None) or ())
+    if len(shape) < 3:
+        return 1
+    return int(shape[0])
+
+
+def draw_frame_average_input(
+    label: str,
+    value: int,
+    *,
+    viewer_factor: int = 1,
+    max_frames: int | None = None,
+    width_em: float = 6.0,
+) -> int:
+    """The "Frame Average" option every run/save menu shows, next to Fix Phase.
+
+    Draws an integer input for the temporal binning factor applied to the data
+    a task reads (``imread(..., frame_average=N)``), clamps it to
+    ``[1, max_frames]`` and returns the new value. ``viewer_factor`` is what
+    the viewer's own "Apply to dataset" is currently doing, shown beside the
+    input when the two differ so the user can see a run will not match the
+    screen.
+    """
+    value = max(1, int(value or 1))
+    imgui.set_next_item_width(hello_imgui.em_size(width_em))
+    changed, new_value = imgui.input_int(label, value, step=1, step_fast=5)
+    if imgui.is_item_hovered():
+        imgui.begin_tooltip()
+        imgui.push_text_wrap_pos(imgui.get_font_size() * 35.0)
+        imgui.text_unformatted(
+            "Average this many consecutive frames into one before processing"
+            " (temporal binning). 1 = off. The frame rate is divided by the"
+            " same factor, so downstream windows stay in seconds."
+        )
+        imgui.pop_text_wrap_pos()
+        imgui.end_tooltip()
+    if changed:
+        value = max(1, int(new_value))
+        if max_frames is not None and max_frames >= 1:
+            value = min(value, int(max_frames))
+    viewer_factor = max(1, int(viewer_factor or 1))
+    if value != viewer_factor:
+        imgui.same_line()
+        shown = "raw" if viewer_factor == 1 else f"{viewer_factor}x"
+        imgui.text_disabled(f"(viewer: {shown})")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "The viewer is showing something else; this value is what"
+                " the run will use."
+            )
+    return value
+
+
 # friendly fallbacks when a slider name is just the bare axis letter (t/c/z)
 # or the axis has no slider for the loaded array.
 _DEFAULT_DIM_LABELS = {"t": "Timepoints", "z": "Z-Planes", "c": "Channels"}
