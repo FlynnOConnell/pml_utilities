@@ -82,6 +82,8 @@ __all__ = [
     "discover_rois",
     "extract_linescan_traces",
     "extract_linescan_units",
+    "linescan_roi_read",
+    "linescan_roi_means",
     "feather_mask",
     "pmd_crop",
     "run",
@@ -1698,18 +1700,18 @@ def discover_rois(
 # ---------------------------------------------------------------------------
 
 
-def _dfof_maxmin(
+def _maxmin_baseline(
     F: np.ndarray, fs: float, window_s: float = 5.0, sigma_s: float = 0.05
 ) -> np.ndarray:
-    """Rolling max-min baseline dF/F, no neuropil term.
+    """Rolling max-min baseline, sized in seconds via ``fs``.
 
     Same two-pass smooth -> rolling-max -> rolling-min baseline as a
-    suite2p-style dF/F, but sized in seconds via ``fs`` rather than a fixed
-    frame count: a line-scan's frame rate (~1-2.5 kHz) is one to two orders
-    of magnitude higher than a raster-scanned movie's (~10-30 Hz), so a
-    fixed frame-count window would be the wrong number of seconds here.
-    Uses ``scipy.ndimage``'s O(T) sliding max/min filters rather than a
-    per-frame python loop, since a line-scan run has far more timepoints.
+    suite2p-style dF/F, but sized in seconds rather than a fixed frame
+    count: a line-scan's frame rate (~1-2.5 kHz) is one to two orders of
+    magnitude higher than a raster-scanned movie's (~10-30 Hz), so a fixed
+    frame-count window would be the wrong number of seconds here. Uses
+    ``scipy.ndimage``'s O(T) sliding max/min filters rather than a per-frame
+    python loop, since a line-scan run has far more timepoints.
     """
     from scipy.ndimage import gaussian_filter1d, maximum_filter1d, minimum_filter1d
 
@@ -1718,8 +1720,110 @@ def _dfof_maxmin(
     sigma = max(0.5, sigma_s * fs)
     smoothed = gaussian_filter1d(F, sigma=sigma, axis=1)
     rolled_max = maximum_filter1d(smoothed, size=window, axis=1, mode="nearest")
-    baseline = minimum_filter1d(rolled_max, size=window, axis=1, mode="nearest")
+    return minimum_filter1d(rolled_max, size=window, axis=1, mode="nearest")
+
+
+def _dfof_maxmin(
+    F: np.ndarray, fs: float, window_s: float = 5.0, sigma_s: float = 0.05
+) -> np.ndarray:
+    """Rolling max-min baseline dF/F, no neuropil term (see :func:`_maxmin_baseline`)."""
+    baseline = _maxmin_baseline(F, fs, window_s, sigma_s)
     return ((F - baseline) / baseline).astype(np.float32)
+
+
+def _bridge_frames(F: np.ndarray, frames: np.ndarray) -> np.ndarray:
+    """Copy of ``F`` with the listed frames replaced by linear interpolation
+    between their nearest untouched neighbours (edges hold the neighbour)."""
+    frames = np.asarray(frames, dtype=int)
+    if frames.size == 0:
+        return F
+    T = F.shape[1]
+    keep = np.ones(T, bool)
+    keep[frames[(frames >= 0) & (frames < T)]] = False
+    if keep.sum() < 2:
+        return F
+    t = np.arange(T)
+    out = F.copy()
+    for i in range(F.shape[0]):
+        out[i, ~keep] = np.interp(t[~keep], t[keep], F[i, keep])
+    return out
+
+
+def linescan_roi_read(
+    arr,
+    *,
+    channel: int = 0,
+    batch_size: int = 5000,
+    bin_frames: int | None = None,
+    convert: bool = True,
+    progress=None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """One pass over a linescan unit: ``(K, T)`` per-ROI means and, when
+    ``bin_frames`` is set, ``(K, ceil(T / bin_frames), W)`` kymographs.
+
+    With ``convert`` (default) the file's own linear conversion for the
+    channel (``metadata["mesc_channel_conversion"]``, ``raw * scale +
+    offset``) is applied, so zero means no photons. MESc's raw uint16 sit
+    about 1000 counts above that zero on the AOD rigs; left in, that
+    offset makes every dF/F several times too small.
+
+    Each ROI (its own Z-index of ``arr``) is cropped back to its true,
+    unpadded ``height x width`` from ``arr.metadata["mesc_roi_extents"]``
+    before averaging - the array pads ragged ROIs to a shared frame with
+    zeros, which would pull the mean down. The kymograph averages over the
+    ROI's lines (its height) and over ``bin_frames`` consecutive frames;
+    ``W`` is the widest ROI and narrower ROIs are NaN beyond their width.
+    Reads ``batch_size`` frames at a time. ``progress(i, K, seconds)`` is
+    called after each ROI when given.
+    """
+    md = arr.metadata
+    extents = md["mesc_roi_extents"]
+    K = len(extents)
+    scale, offset = 1.0, 0.0
+    conv = md.get("mesc_channel_conversion") or []
+    if convert and channel < len(conv):
+        scale, offset = float(conv[channel]["scale"]), float(conv[channel]["offset"])
+    movies = [as_movie(arr, z=i, c=channel) for i in range(K)]
+    T = movies[0].shape[0]
+    F = np.zeros((K, T), np.float32)
+    kymo = None
+    if bin_frames:
+        bin_frames = int(bin_frames)
+        batch_size = max(bin_frames, (batch_size // bin_frames) * bin_frames)
+        nb = int(np.ceil(T / bin_frames))
+        W = max(int(e["width"]) for e in extents)
+        kymo = np.full((K, nb, W), np.nan, np.float32)
+    t0 = time.time()
+    for i, (movie, ext) in enumerate(zip(movies, extents)):
+        h, w = int(ext["height"]), int(ext["width"])
+        for tt0 in range(0, T, batch_size):
+            tt1 = min(T, tt0 + batch_size)
+            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(np.float32, copy=False)
+            if scale != 1.0 or offset != 0.0:
+                blk = blk * scale + offset
+            F[i, tt0:tt1] = blk.reshape(blk.shape[0], -1).mean(axis=1)
+            if kymo is not None:
+                prof = blk.mean(axis=1)  # (n, w): mean over the ROI's lines
+                b0 = tt0 // bin_frames
+                nfull = prof.shape[0] // bin_frames
+                if nfull:
+                    kymo[i, b0 : b0 + nfull, :w] = (
+                        prof[: nfull * bin_frames].reshape(nfull, bin_frames, w).mean(axis=1)
+                    )
+                if prof.shape[0] > nfull * bin_frames:
+                    kymo[i, b0 + nfull, :w] = prof[nfull * bin_frames :].mean(axis=0)
+        if progress is not None:
+            progress(i, K, time.time() - t0)
+    return F, kymo
+
+
+def linescan_roi_means(
+    arr, *, channel: int = 0, batch_size: int = 5000, progress=None
+) -> np.ndarray:
+    """``(K, T)`` mean fluorescence per ROI per timepoint of a linescan unit
+    (:func:`linescan_roi_read` without the kymograph)."""
+    F, _ = linescan_roi_read(arr, channel=channel, batch_size=batch_size, progress=progress)
+    return F
 
 
 def extract_linescan_traces(
@@ -1731,6 +1835,10 @@ def extract_linescan_traces(
     dfof_window_s: float = 5.0,
     batch_size: int = 5000,
     tag: str = "linescan",
+    all_channels: bool = True,
+    kymograph_bin_s: float | None = 0.01,
+    figures: bool = True,
+    flip_y: bool = False,
     logger=None,
 ) -> Path:
     """Per-ROI kymograph traces from a linescan ``.mesc`` unit.
@@ -1749,9 +1857,26 @@ def extract_linescan_traces(
     Ribbon-scan (``"boxes"``) and chessboard (``"tiled"``, real 2D tiles
     that belong in masknmf/suite2p instead) raise ``ValueError``.
 
-    Returns the output dir (``out_dir`` or ``rois_<tag>/`` beside the
-    source), with the usual store-less sidecars (:func:`_write_discovery_outputs`)
-    plus ``dfof.npy`` when ``compute_dfof`` is set.
+    Returns the output dir (``out_dir`` or ``rois_<tag>/<MUnit_n>/`` beside
+    the source), with the usual store-less sidecars
+    (:func:`_write_discovery_outputs`) plus:
+
+    - ``dfof.npy`` (rolling max-min baseline, ``dfof_window_s``) when
+      ``compute_dfof`` is set;
+    - ``kymographs.npy`` ``(K, T / bin, W)``: each ROI's position x time
+      image averaged over ``kymograph_bin_s`` (NaN beyond a narrower ROI's
+      width), and, with ``all_channels`` on a multi-channel unit,
+      ``F_chan<c>.npy`` / ``kymographs_chan<c>.npy`` for every other channel
+      (a red structural channel next to the green functional one);
+    - ``stim_frames.npy``: frames acquired while a photostimulation pattern
+      was active (:func:`analysis.linescan.stim_events`), when the unit has
+      any, with the train onsets in ``ops["roi_workflow"]``;
+    - per-ROI response metrics (``f0``, ``peak_dfof``, ``time_to_peak_s``,
+      ``response_auc``, ``noise_dfof``, ``snr``) in ``stat.npy``, stimulus-
+      aligned when there is a stimulus;
+    - the numbered figure set of :func:`analysis.linescan.plot_linescan_figures`
+      when ``figures`` is set (``flip_y`` mirrors the lines on the reference
+      Z-stack figure).
     """
     logger = logger or log.get("roi_workflow")
     arr = source
@@ -1770,19 +1895,51 @@ def extract_linescan_traces(
     K = len(extents)
     fs = float(md["fs"])
     t0 = time.time()
-    logger.info(f"roi_workflow: extracting {K} linescan ROIs, channel={channel}")
+    from mbo_utilities.analysis.linescan import (
+        pair_reference_zstack,
+        plot_linescan_figures,
+        response_metrics,
+        stim_events,
+    )
 
-    movies = [as_movie(arr, z=i, c=channel) for i in range(K)]
-    T = movies[0].shape[0]
-    F = np.zeros((K, T), np.float32)
-    for i, (movie, ext) in enumerate(zip(movies, extents)):
-        h, w = int(ext["height"]), int(ext["width"])
-        for tt0 in range(0, T, batch_size):
-            tt1 = min(T, tt0 + batch_size)
-            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(np.float32, copy=False)
-            F[i, tt0:tt1] = blk.reshape(blk.shape[0], -1).mean(axis=1)
-
+    nchannels = int(md.get("nchannels") or 1)
+    channels = list(range(nchannels)) if all_channels else [int(channel)]
+    if int(channel) not in channels:
+        channels.append(int(channel))
+    bin_frames = max(1, int(round(kymograph_bin_s * fs))) if kymograph_bin_s else None
+    logger.info(
+        f"roi_workflow: extracting {K} linescan ROIs, channel={channel}"
+        + (f" (+{len(channels) - 1} more)" if len(channels) > 1 else "")
+    )
+    F_by: dict[int, np.ndarray] = {}
+    kymo_by: dict[int, np.ndarray] = {}
+    for c in channels:
+        F_c, kymo_c = linescan_roi_read(arr, channel=c, batch_size=batch_size, bin_frames=bin_frames)
+        F_by[c] = F_c
+        if kymo_c is not None:
+            kymo_by[c] = kymo_c
+    F = F_by[int(channel)]
+    T = F.shape[1]
     Fneu = np.zeros_like(F)
+
+    mesc_file = md.get("mesc_file")
+    unit_key = md.get("mesc_unit")
+    stim = None
+    if mesc_file and unit_key:
+        try:
+            stim = stim_events(mesc_file, unit_key, fs, T)
+        except Exception as e:
+            logger.warning(f"roi_workflow: could not read stimulus timing: {e}")
+    if stim:
+        logger.info(
+            f"roi_workflow: {len(stim['pulses_s'])} stim pulse(s) in {len(stim['onsets_s'])} train(s), "
+            f"first onset {stim['onsets_s'][0]:.3f}s"
+        )
+    # the scanner is on the stimulation pattern during stim frames, so those
+    # frames hold no fluorescence (they read low); F.npy keeps them as
+    # recorded and everything derived from F bridges them linearly
+    F_clean = _bridge_frames(F, stim["frames"]) if stim else F
+    metrics = response_metrics(F_clean, fs, stim)
     stat = np.array(
         [
             {
@@ -1792,12 +1949,13 @@ def extract_linescan_traces(
                 "width": int(ext["width"]),
                 "npix": int(ext["height"]) * int(ext["width"]),
                 "comment": md.get("comment", ""),
+                **m,
             }
-            for ext in extents
+            for ext, m in zip(extents, metrics)
         ],
         dtype=object,
     )
-    ops = _ops_for(source, movies[0])
+    ops = _ops_for(source, as_movie(arr, z=0, c=channel))
     info = {
         "process": "extract_linescan",
         "engine": "linescan",
@@ -1808,17 +1966,91 @@ def extract_linescan_traces(
         # shared plane - _write_discovery_outputs's rois.json wants a value
         # here regardless, so 0 is a placeholder, not a meaningful plane.
         "plane": 0,
+        "fs": fs,
+        "channels": channels,
+        "channel_names": list(md.get("channel_names") or []),
+        "kymograph_bin_s": kymograph_bin_s if bin_frames else None,
+        "channel_conversion": md.get("mesc_channel_conversion"),
+        "stim_onsets_s": list(stim["onsets_s"]) if stim else [],
+        "stim_durations_s": list(stim["durations_s"]) if stim else [],
+        "stim_n_pulses": len(stim["pulses_s"]) if stim else 0,
+        "stim_patterns": list(stim["patterns"]) if stim else [],
         "seconds": round(time.time() - t0, 3),
     }
-    out_dir = Path(out_dir) if out_dir is not None else _default_out_dir(source, tag)
+    if out_dir is not None:
+        out_dir = Path(out_dir)
+    else:
+        # one .mesc holds many units, so rois_<tag>/ alone would make every
+        # linescan unit of the file overwrite the last: nest by unit
+        out_dir = _default_out_dir(source, tag) / md["mesc_unit"].rsplit("/", 1)[-1]
     out = _write_discovery_outputs(
         out_dir, source=source, ops=ops, stat=stat, F=F, Fneu=Fneu, info=info,
     )
+    for c, F_c in F_by.items():
+        if c != int(channel):
+            np.save(out / f"F_chan{c}.npy", F_c)
+    for c, kymo_c in kymo_by.items():
+        np.save(out / ("kymographs.npy" if c == int(channel) else f"kymographs_chan{c}.npy"), kymo_c)
+    if stim:
+        np.save(out / "stim_frames.npy", stim["frames"])
+    dfof = None
     if compute_dfof:
-        dfof = _dfof_maxmin(F, fs=fs, window_s=dfof_window_s)
+        baseline = _maxmin_baseline(F_clean, fs=fs, window_s=dfof_window_s)
+        low = np.flatnonzero((baseline <= 0).any(axis=1))
+        if low.size:
+            # a non-positive baseline flips or blows up dF/F; typical of a
+            # dark ROI or a detector offset that leaves F near or below zero
+            logger.warning(
+                f"roi_workflow: baseline <= 0 for ROI(s) {low.tolist()}; their dF/F "
+                "is unreliable (check the ROI is on signal, or subtract the offset)"
+            )
+        dfof = ((F_clean - baseline) / baseline).astype(np.float32)
         np.save(out / "dfof.npy", dfof)
+
+    # a stale figure set next to fresh arrays would mislead: clear it even
+    # when this run draws none
+    for old_fig in out.glob("[0-9][0-9]*_*.png"):
+        old_fig.unlink()
+    if figures and mesc_file and unit_key:
+        reference = None
+        try:
+            reference = pair_reference_zstack(mesc_file, unit_key)
+        except Exception as e:
+            logger.warning(f"roi_workflow: reference z-stack pairing failed: {e}")
+        try:
+            from mbo_utilities.analysis.linescan import background_image
+
+            info["background_image"] = background_image(mesc_file, unit_key)
+        except Exception as e:
+            logger.warning(f"roi_workflow: background image lookup failed: {e}")
+        if reference is not None:
+            info["reference_zstack"] = reference
+        if reference is not None or info.get("background_image"):
+            from mbo_utilities.masknmf.outputs import merge_ops
+
+            merge_ops(out, {"roi_workflow": info})
+        written = plot_linescan_figures(
+            out,
+            mesc_path=mesc_file,
+            unit_key=unit_key,
+            F_by_channel={**F_by, int(channel): F_clean},
+            kymo_by_channel=kymo_by,
+            kymo_bin_s=(bin_frames / fs) if bin_frames else 0.0,
+            dfof=dfof,
+            fs=fs,
+            extents=extents,
+            channel_names=md.get("channel_names") or [],
+            main_channel=int(channel),
+            stim=stim,
+            metrics=metrics,
+            curves=getattr(arr, "curves", None),
+            reference=reference,
+            flip_y=flip_y,
+            logger=logger,
+        )
+        logger.info(f"roi_workflow: wrote {len(written)} figure(s) -> {out}")
     logger.info(
-        f"roi_workflow: wrote {K} linescan traces -> {out} ({info['seconds']}s)"
+        f"roi_workflow: wrote {K} linescan traces -> {out} ({round(time.time() - t0, 3)}s)"
     )
     return out
 
@@ -1828,20 +2060,37 @@ def extract_linescan_units(
     *,
     channel: int = 0,
     out_root: str | Path | None = None,
+    units=None,
     **kwargs,
 ) -> dict[str, Path]:
     """Run :func:`extract_linescan_traces` on every linescan unit in a ``.mesc`` file.
 
     Returns ``{unit_key: out_dir}`` for each unit with
     ``kind == "packed"`` (skips ribbon/chessboard/zstack/multicube/timeseries
-    units in the same file).
+    units in the same file). ``units`` restricts that to the named ones, by
+    ``"MUnit_n"`` or full ``"MSession_s/MUnit_n"`` key; naming a unit that is
+    not a linescan raises ``ValueError``. Outputs land in
+    ``out_root/<MUnit_n>/`` when ``out_root`` is given, else in
+    ``rois_linescan/<MUnit_n>/`` beside the file.
     """
     from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
 
     out_root = Path(out_root) if out_root is not None else None
+    wanted = set(units or [])
+    all_units = list_mesc_units(mesc_path)
+    # a bare "MUnit_n" can exist in several sessions of one file; it names
+    # the linescan one, and the same-named non-linescan units are ignored
+    packed_munits = {u["munit"] for u in all_units if u["kind"] == "packed"}
     outputs: dict[str, Path] = {}
-    for u in list_mesc_units(mesc_path):
+    for u in all_units:
+        named = u["key"] in wanted or u["munit"] in wanted
         if u["kind"] != "packed":
+            if u["key"] in wanted or (u["munit"] in wanted and u["munit"] not in packed_munits):
+                raise ValueError(
+                    f"{u['key']} is a {u['modality_name']} unit, not a linescan"
+                )
+            continue
+        if wanted and not named:
             continue
         arr = MescArray(mesc_path, unit=u["key"])
         out_dir = (out_root / u["munit"]) if out_root is not None else None

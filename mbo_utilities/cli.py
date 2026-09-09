@@ -10,6 +10,7 @@ Usage patterns:
   mbo /path/to/data --metadata  # Show only metadata
   mbo convert INPUT OUTPUT      # Convert with CLI args
   mbo info INPUT                # Show array info (CLI only)
+  mbo linescan FILE.mesc        # Per-ROI traces from AOD line-scan units
 """
 import sys
 import threading
@@ -1732,6 +1733,88 @@ def roi_run(input_path, output_dir, register_method, process, rois, planes, roi_
         root = output_dir or Path(next(iter(outputs.values()))).parent
         click.echo(f"registered. Draw ROIs on the registered movie with:  mbo {root}")
         click.echo(f"then:  mbo roi-run {root} --register none --process extract|demix")
+
+
+@main.command("linescan")
+@click.argument("mesc_path", type=click.Path(exists=True, dir_okay=False))
+@click.option("-o", "--output", "out_root", type=click.Path(), default=None,
+              help="Root for the per-unit output dirs (<root>/<MUnit_n>/). "
+                   "Default: rois_<tag>/<MUnit_n>/ beside the .mesc file.")
+@click.option("--unit", "units", multiple=True,
+              help="Only this unit, e.g. MUnit_3 (repeatable). Default: every linescan unit.")
+@click.option("--channel", type=int, default=0, show_default=True, help="Channel to average.")
+@click.option("--dfof-window", type=float, default=5.0, show_default=True,
+              help="Rolling max-min baseline window for dF/F, in seconds.")
+@click.option("--no-dfof", is_flag=True, default=False, help="Skip dfof.npy.")
+@click.option("--no-figures", is_flag=True, default=False, help="Skip the numbered PNG figure set.")
+@click.option("--flip-y", is_flag=True, default=False,
+              help="Mirror the lines vertically on the reference Z-stack figure.")
+@click.option("--tag", default="linescan", show_default=True, help="Output dir name: rois_<tag>/.")
+def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figures, flip_y, tag):
+    """Per-ROI traces from every AOD line-scan unit of a Femtonics .mesc file.
+
+    Each line the scientist drew is its own ROI; its kymograph is averaged
+    over the line (cropped to the line's true, unpadded extent) into one
+    trace per timepoint. Writes suite2p-style F/Fneu/stat/ops/iscell plus
+    dfof.npy, binned kymographs, every other channel's traces, the
+    photostimulation frames and a numbered PNG figure set per unit (lines on
+    the reference Z-stack, line profiles, kymographs, traces, stimulus-
+    aligned response, per-ROI metrics, motion correction). Ribbon,
+    chessboard, Z-stack and other units in the same file are skipped.
+
+    \b
+      mbo linescan scan.mesc
+      mbo linescan scan.mesc -o results/linescan --unit MUnit_3 --channel 1
+    """
+    from mbo_utilities.roi_workflow import extract_linescan_units
+
+    try:
+        outputs = extract_linescan_units(
+            mesc_path, channel=channel, out_root=out_root, units=list(units) or None,
+            compute_dfof=not no_dfof, dfof_window_s=dfof_window, tag=tag,
+            figures=not no_figures, flip_y=flip_y,
+        )
+    except (ValueError, KeyError, IndexError, FileNotFoundError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise click.Abort
+    if not outputs:
+        click.echo(f"no linescan units in {mesc_path}")
+        return
+    import numpy as np
+
+    for unit_key, out in outputs.items():
+        F = np.load(out / "F.npy")
+        stat = np.load(out / "stat.npy", allow_pickle=True)
+        ops = np.load(out / "ops.npy", allow_pickle=True).item()
+        fs = ops.get("fs")
+        widths = ", ".join(str(int(r["width"])) for r in stat)
+        click.echo(f"{unit_key}: {len(stat)} ROI(s) x {F.shape[1]} timepoints"
+                   f"{f' at {fs:.1f} Hz' if fs else ''} -> {out}")
+        click.echo(f"  widths px: {widths}")
+        click.echo(f"  F mean {F.mean():.1f}  min {F.min():.1f}  max {F.max():.1f}")
+        if not no_dfof:
+            dfof = np.load(out / "dfof.npy")
+            click.echo("  dF/F per ROI max: "
+                       + ", ".join(f"{v:.2f}" for v in np.nanmax(dfof, axis=1)))
+        info = ops.get("roi_workflow") or {}
+        if info.get("stim_onsets_s"):
+            onsets = ", ".join(f"{t:.3f}" for t in info["stim_onsets_s"])
+            click.echo(f"  stimulus: {info['stim_n_pulses']} pulse(s), train onset(s) at {onsets} s;"
+                       "  peak dF/F after stim: "
+                       + ", ".join(f"{r.get('peak_dfof', float('nan')):.2f}" for r in stat))
+        else:
+            click.echo("  no photostimulation found in this unit")
+        bg = info.get("background_image")
+        if bg:
+            click.echo(f"  drawn on snapshot: {bg['munit']} ({bg['width']:.0f} um FOV at z {bg['z']:.2f})")
+        ref = info.get("reference_zstack")
+        if ref:
+            click.echo(f"  reference z-stack: {ref['munit']} at {ref['um_per_px']:.2f} um/px "
+                       f"({ref['xy_fraction']:.0%} of lines in its field, {ref['z_fraction']:.0%} within its depth range"
+                       f"{'; COARSE, no stack resolves the lines' if ref.get('coarse') else ''})")
+        figs = sorted(out.glob("[0-9][0-9]*_*.png"))
+        if figs:
+            click.echo(f"  figures: {len(figs)} ({figs[0].name} .. {figs[-1].name})")
 
 
 # hpc subcommand group (light import: heavy deps load lazily inside the commands).

@@ -247,6 +247,65 @@ Features:
 Installation OK
 ```
 
+## Linescan
+
+Per-ROI traces from the AOD line-scan units of a Femtonics `.mesc` file. Each
+line drawn on the reference Z-stack is its own ROI; its kymograph is averaged
+over the line (cropped to the line's true, unpadded extent) into one trace per
+timepoint. Ribbon, chessboard, Z-stack and other units in the file are skipped.
+
+```bash
+mbo linescan scan.mesc                                  # every linescan unit
+mbo linescan scan.mesc -o results/linescan              # keep the raw folder untouched
+mbo linescan scan.mesc --unit MUnit_3 --channel 1       # one unit, second channel
+mbo linescan scan.mesc --dfof-window 2 --no-dfof        # baseline window in seconds
+```
+
+Outputs one directory per unit, `rois_linescan/<MUnit_n>/` beside the file (or
+`<output>/<MUnit_n>/`):
+
+| file | contents |
+|------|----------|
+| `F.npy` | K x T mean over each line, in the file's converted counts (zero = no photons; MESc's raw uint16 sit ~1000 counts above that, which left in makes every dF/F several times too small) |
+| `F_chan<c>.npy` | the same for every other channel (the red structural channel next to the green functional one) |
+| `dfof.npy` | rolling max-min baseline dF/F, window in seconds so kHz line rates get the same seconds as a raster movie; stim frames bridged |
+| `kymographs.npy`, `kymographs_chan<c>.npy` | K x bins x W position-along-line x time, 10 ms bins (NaN beyond a narrower line's width) |
+| `stim_frames.npy` | frames acquired while a photostimulation pattern was active (from the `PatternSeq_AO1` curve, the rule lab4 uses); the scanner reads low on these, so derived traces bridge them |
+| `stat.npy` | per ROI: `roi_index`, `height`, `width`, `npix`, plus `f0`, `peak_dfof`, `time_to_peak_s`, `response_auc`, `noise_dfof`, `snr` (stimulus-aligned when there is a stimulus, whole-run otherwise) |
+| `ops.npy` | `roi_workflow` holds fs, channels, stim onsets/durations/pulse count, the paired reference Z-stack and the channel conversion used |
+| `Fneu.npy`, `spks.npy`, `iscell.npy`, `rois.json` | suite2p-shaped placeholders so `mbo info` and lsp tools still open the directory |
+
+A ROI whose baseline is at or below zero is reported as unreliable rather than
+silently written.
+
+The numbered figures read in order, like the suite2p and masknmf sets:
+
+| figure | what to look for |
+|--------|------------------|
+| `01a_background_snapshot_lines.png` | every line on the raster snapshot it was drawn on (the unit's `BackgroundImagePath`, taken seconds before the scan), composite plus each channel; lines more than 1 um off that plane are dashed |
+| `01b_reference_zstack_lines.png` | the lines on the paired Z-stack, one panel per slice that carries lines; the dot is the line start. The stack is the finest one whose field holds the lines and that puts at least 10 pixels along a line (a whole-cell stack never qualifies while a dendrite stack exists). A line scanned outside the stack's depth range is dashed with a `!`, drawn on the nearest slice, and its offset is in the title |
+| `01c_line_zooms.png` | an 8 um crop around every line, each channel, local contrast, from the snapshot or the stack slice at the line's depth: the line should cross a bright spine or shaft. This is the panel to check first when an overlay looks wrong |
+
+The micron-to-pixel convention (translation = the array's corner, rows grow
+with +y, no mirror) was verified on real data: 36 of 40 in-plane lines are
+brighter than random same-shaped lines nearby, the mirrored mapping is at
+chance. `--flip-y` remains for a rig that saves the other way round.
+| `02_line_profiles.png` | time-averaged counts along each line, both channels, shared y-axis: a bump is a spine, a flat line at background missed |
+| `03a_kymographs_green.png`, `03b_kymographs_red.png` | position x time per ROI, stimulus marked |
+| `04a_traces_raw.png`, `04b_traces_dfof.png` | stacked per-ROI traces over the run |
+| `05_stim_response.png` | stimulus-aligned dF/F (F0 = 1 s before onset): ROI x time heatmap, every ROI, mean +/- s.e.m. |
+| `06_roi_response_metrics.png` | per-ROI F0 (both channels), peak dF/F, latency, noise, SNR, response integral |
+| `07_motion_correction.png` | the AOD's real-time motion correction in X/Y/Z over the run |
+
+`--no-figures` skips them. To scrub the lines interactively, run
+`python scripts/reference_zstack_viewer.py scan.mesc --traces rois_linescan/MUnit_3`:
+three panels on top (the line-scan itself, the snapshot the lines were drawn
+on, the paired Z-stack) and the traces below. The Z-stack picker shows every
+stack's fit (fraction of lines in its field and depth range, pixel size)
+and defaults to the paired one; a stack holding none of the lines is
+refused. `--dry-run` prints the choice and placement without a window,
+`--screenshot out.png` renders the window offscreen.
+
 ## Formats
 
 ```bash
