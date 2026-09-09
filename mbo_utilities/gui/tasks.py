@@ -21,6 +21,7 @@ from pathlib import Path
 
 from mbo_utilities import imread, log
 from mbo_utilities.writer import imwrite
+from mbo_utilities.arrays.features import apply_read_features
 from mbo_utilities.arrays._registration import (
     compute_axial_shifts,
     validate_axial_shifts,
@@ -142,11 +143,15 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
     logger.info(f"Loading {input_path}")
     arr = imread(input_path, **(args.get("reader_kwargs") or {}))
 
-    # Apply on-the-fly settings if supported
-    if hasattr(arr, "fix_phase"):
-        arr.fix_phase = args.get("fix_phase", True)
-    if hasattr(arr, "use_fft"):
-        arr.use_fft = args.get("use_fft", True)
+    # read-time features: phase settings land on the reader, frame_average
+    # wraps it so the binning is baked into the output. reader_kwargs may
+    # already carry frame_average from the viewer; the explicit arg wins.
+    arr, _ = apply_read_features(
+        arr,
+        fix_phase=args.get("fix_phase", True),
+        use_fft=args.get("use_fft", True),
+        frame_average=args.get("frame_average", None),
+    )
 
     # Handle Z-Registration
     register_z = args.get("register_z", False)
@@ -582,11 +587,29 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             s2p_settings = dict(s2p_settings)
             s2p_settings["workers"] = resolved
 
-    # build writer_kwargs for phase correction settings
+    # build writer_kwargs for the read-time features (phase, temporal binning)
     writer_kwargs = {
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
+        "frame_average": int(args.get("frame_average") or 1),
     }
+
+    # a detection-only re-run copies the source ops.npy rather than writing
+    # a new one, so images left there as JSON lists by an older export would
+    # reach suite2p's plotting as lists and every figure that indexes .shape
+    # would fail. repair both ends before handing them over.
+    from mbo_utilities.metadata import repair_ops_tree
+
+    for target in (input_path, output_dir):
+        try:
+            fixed = repair_ops_tree(target)
+            if fixed:
+                logger.info(
+                    f"task_suite2p: repaired {fixed} ops.npy file(s) under {target} "
+                    "(summary images were stored as lists)"
+                )
+        except Exception as _e:  # noqa: BLE001 - never block the run on this
+            logger.warning(f"task_suite2p: ops.npy repair pass failed for {target}: {_e}")
 
     # Rastermap Force → drop cached model.npy in every plane subdir under
     # output_dir before pipeline runs. lsp's plot_zplane_figures already
@@ -756,12 +779,29 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
     writer_kwargs = {
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
+        "frame_average": int(args.get("frame_average") or 1),
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Input: {input_path}")
     logger.info(f"Output: {output_dir}")
     logger.info(f"Planes: {planes}")
+
+    # same repair the suite2p task does: a stage that resumes from an
+    # existing plane dir reads its ops.npy, and an older export may have
+    # left the summary images there as JSON lists
+    from mbo_utilities.metadata import repair_ops_tree
+
+    for target in (input_path, output_dir):
+        try:
+            fixed = repair_ops_tree(target)
+            if fixed:
+                logger.info(
+                    f"task_masknmf: repaired {fixed} ops.npy file(s) under {target} "
+                    "(summary images were stored as lists)"
+                )
+        except Exception as _e:  # noqa: BLE001 - never block the run on this
+            logger.warning(f"task_masknmf: ops.npy repair pass failed for {target}: {_e}")
 
     # periodic log line keeps the worker's stall watchdog fed through long
     # silent GPU stages (PMD / HALS)

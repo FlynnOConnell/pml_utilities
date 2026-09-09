@@ -14,6 +14,13 @@ correction it changes ``T``, so the size accessors come off ``_shape5d`` (via
 ``LazyArray``) rather than the source, and ``metadata["fs"]`` is divided by
 the factor - every downstream window, detrend and trace axis is in seconds.
 
+The view is meant to sit under the writers, which mutate the array they are
+given (``arr.roi = r`` per split ROI, ``arr.fix_phase = ...`` from the save
+options). Attribute writes therefore forward to the source, the shape is read
+from the source on every call, and ``reader_kwargs`` carries the factor so a
+worker that re-opens the path with ``imread(path, **reader_kwargs)`` gets the
+same binned array the user was looking at.
+
 A trailing partial bin is dropped, so every frame really is the mean of
 ``factor`` frames.
 """
@@ -25,6 +32,7 @@ from collections import OrderedDict
 import numpy as np
 
 from mbo_utilities.arrays._registration import _TCZYX, _validated_tczyx_shape
+from mbo_utilities.arrays.features._frame_average import FRAME_AVERAGE_KEY
 from mbo_utilities.lazy_array import LazyArray
 
 __all__ = ["FrameAveragedView", "average_frames"]
@@ -54,7 +62,7 @@ class FrameAveragedView(LazyArray):
         factor = int(factor)
         if factor < 1:
             raise ValueError(f"factor must be >= 1, got {factor}")
-        t, c, z, y, x = _validated_tczyx_shape(source)
+        t = _validated_tczyx_shape(source)[0]
         if t // factor < 1:
             raise ValueError(
                 f"factor {factor} is larger than the {t} timepoints available"
@@ -65,7 +73,6 @@ class FrameAveragedView(LazyArray):
         self._source = source
         self._factor = factor
         self._out_dtype = np.float32 if dtype == "float32" else np.dtype(source.dtype)
-        self._T, self._C, self._Z, self._Y, self._X = t // factor, c, z, y, x
         self._cache: OrderedDict[int, np.ndarray] = OrderedDict()
 
     # ------------------------------------------------------------------
@@ -88,6 +95,20 @@ class FrameAveragedView(LazyArray):
         return self._factor
 
     @property
+    def frame_average(self) -> int:
+        """The binning factor, under the name the option kwargs use, so
+        ``getattr(arr, "frame_average", 1)`` reads the same on any array."""
+        return self._factor
+
+    @property
+    def reader_kwargs(self) -> dict:
+        """``imread`` kwargs that re-create this view from the source's path:
+        the source's own selectors plus the binning factor."""
+        kwargs = dict(getattr(self._source, "reader_kwargs", None) or {})
+        kwargs[FRAME_AVERAGE_KEY] = self._factor
+        return kwargs
+
+    @property
     def dtype(self):
         return self._out_dtype
 
@@ -96,7 +117,14 @@ class FrameAveragedView(LazyArray):
         return _TCZYX
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
-        return (self._T, self._C, self._Z, self._Y, self._X)
+        # read through every call: the writers change the source's ROI
+        # selection (and so its Y/X) while holding this view
+        t, c, z, y, x = _validated_tczyx_shape(self._source)
+        return (t // self._factor, c, z, y, x)
+
+    @property
+    def _T(self) -> int:
+        return self._shape5d()[0]
 
     def __len__(self) -> int:
         return self._T
@@ -113,16 +141,32 @@ class FrameAveragedView(LazyArray):
         )
         if isinstance(meta.get("num_frames"), (int, float)):
             meta["num_frames"] = self._T
-        meta["frame_average"] = self._factor
+        meta[FRAME_AVERAGE_KEY] = self._factor
         meta["processing_history"] = [
             *(meta.get("processing_history") or []),
-            {"step": "frame_average", "factor": self._factor},
+            {"step": FRAME_AVERAGE_KEY, "factor": self._factor},
         ]
         return meta
 
     @metadata.setter
     def metadata(self, value):
-        self._source.metadata = value
+        # the writer does `arr.metadata = dict(arr.metadata, **overrides)`;
+        # what it hands back is already in binned time, so undo the scaling
+        # before storing on the source or the getter would scale it twice
+        from mbo_utilities.metadata import scale_frame_rate
+
+        meta = scale_frame_rate(dict(value or {}), 1.0 / self._factor)
+        if isinstance(meta.get("num_frames"), (int, float)):
+            meta["num_frames"] = _validated_tczyx_shape(self._source)[0]
+        meta.pop(FRAME_AVERAGE_KEY, None)
+        history = meta.get("processing_history")
+        if history:
+            meta["processing_history"] = [
+                h
+                for h in history
+                if not (isinstance(h, dict) and h.get("step") == FRAME_AVERAGE_KEY)
+            ]
+        self._source.metadata = meta
 
     # ------------------------------------------------------------------
     # reads
@@ -174,17 +218,18 @@ class FrameAveragedView(LazyArray):
     def __getitem__(self, key):
         t_key, *rest = self._key5(key)
         rest = tuple(rest)
+        T = self._T
 
         if isinstance(t_key, (int, np.integer)):
             t = int(t_key)
             if t < 0:
-                t += self._T
-            if not 0 <= t < self._T:
-                raise IndexError(f"t index {t_key} out of range for {self._T} frames")
+                t += T
+            if not 0 <= t < T:
+                raise IndexError(f"t index {t_key} out of range for {T} frames")
             return self._bin(t, rest)
 
         if isinstance(t_key, slice):
-            start, stop, step = t_key.indices(self._T)
+            start, stop, step = t_key.indices(T)
             bins = list(range(start, stop, step))
             if bins and step == 1:
                 # contiguous: one source read, then bin-average in place
@@ -192,7 +237,7 @@ class FrameAveragedView(LazyArray):
                 block = np.asarray(self._source[(slice(lo, hi),) + rest])
                 return self._means(block, len(bins))
         else:
-            bins = [int(t) if int(t) >= 0 else self._T + int(t) for t in np.ravel(t_key)]
+            bins = [int(t) if int(t) >= 0 else T + int(t) for t in np.ravel(t_key)]
 
         if not bins:
             # keep the trailing axes so an empty read still stacks/reshapes
@@ -207,6 +252,10 @@ class FrameAveragedView(LazyArray):
     def astype(self, dtype, *args, **kwargs):
         return np.asarray(self).astype(dtype, *args, **kwargs)
 
+    # ------------------------------------------------------------------
+    # source passthrough
+    # ------------------------------------------------------------------
+
     def __getattr__(self, name):
         # forward domain attributes (filenames, source_path, roi, ...) to the
         # source. Everything T-shaped is defined above or comes off _shape5d,
@@ -214,7 +263,30 @@ class FrameAveragedView(LazyArray):
         # names are not forwarded so __init__ stays recursion-safe.
         if name.startswith("_"):
             raise AttributeError(name)
-        return getattr(object.__getattribute__(self, "_source"), name)
+        source = object.__getattribute__(self, "_source")
+        if name == "get_offset_at":
+            # the writers ask for the scan-phase offset of each *written*
+            # frame; a binned frame's offset is that of its first source frame
+            source_fn = getattr(source, name)
+            factor = self._factor
+
+            def get_offset_at(t, c, z):
+                return source_fn(int(t) * factor, c, z)
+
+            return get_offset_at
+        return getattr(source, name)
+
+    def __setattr__(self, name, value):
+        # own state and own properties stay here; anything else is a reader
+        # setting (roi, fix_phase, use_fft, ...) and belongs to the source.
+        # cached bins were read under the old setting, so drop them.
+        if name.startswith("_") or isinstance(
+            getattr(type(self), name, None), property
+        ):
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._source, name, value)
+        self._cache.clear()
 
     def _imwrite(self, outpath, **kwargs):
         """Stream this view to disk; the averaging is baked into the output."""

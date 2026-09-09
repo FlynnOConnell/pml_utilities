@@ -180,16 +180,12 @@ def _write_raw_bin(
     logger,
 ) -> Path:
     from mbo_utilities import imread, imwrite
+    from mbo_utilities.arrays.features import apply_read_features
 
     arr = input_data if hasattr(input_data, "shape") else imread(input_data)
-    kwargs = dict(writer_kwargs or {})
-    # phase correction is an array attribute, not an imwrite kwarg
-    fix_phase = kwargs.pop("fix_phase", None)
-    use_fft = kwargs.pop("use_fft", None)
-    if fix_phase is not None and hasattr(arr, "fix_phase"):
-        arr.fix_phase = bool(fix_phase)
-    if use_fft is not None and hasattr(arr, "use_fft"):
-        arr.use_fft = bool(use_fft)
+    # read-time features (phase settings, frame_average) apply to the array;
+    # nz below must see the binned/phase-set array, not the raw reader
+    arr, kwargs = apply_read_features(arr, writer_kwargs)
     if frame_indices is not None:
         kwargs["timepoints"] = [i + 1 for i in frame_indices]
     if channel is not None:

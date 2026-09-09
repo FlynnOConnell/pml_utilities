@@ -174,8 +174,17 @@ def _imagej_layout(meta: dict, path: Path) -> tuple[int, ...] | None:
 
     Prefers the counts already deposited by ``get_metadata_single``; reads them
     straight from the file only when caller-supplied metadata omits them.
+
+    ImageJ writes ``slices=N`` for *any* plain stack, including a movie saved
+    without going through Stack -> Hyperstack. Only a real hyperstack carries
+    ``hyperstack=true`` (and a z-stack normally a ``spacing``), so a plain
+    single-channel stack with no ``frames`` count is read as a time series -
+    the page axis is what every downstream step (traces, binning, pipelines)
+    needs on T. ``imread(path, dims="ZYX")`` forces the z reading.
     """
     counts = tuple(meta.get(k) for k in ("frames", "slices", "channels"))
+    hyperstack = meta.get("hyperstack")
+    spacing = meta.get("spacing")
     if any(c is not None for c in counts):
         frames, slices, channels = (int(c or 1) for c in counts)
     else:
@@ -185,7 +194,44 @@ def _imagej_layout(meta: dict, path: Path) -> tuple[int, ...] | None:
             if not tf.is_imagej:
                 return None
             frames, slices, channels = imagej_hyperstack_counts(tf)
-    return (frames, slices, channels) if frames * slices * channels > 1 else None
+            ij = tf.imagej_metadata or {}
+            hyperstack = ij.get("hyperstack")
+            spacing = ij.get("spacing")
+    if frames * slices * channels <= 1:
+        return None
+    if (
+        frames == 1
+        and channels == 1
+        and slices > 1
+        and not hyperstack
+        and not spacing
+    ):
+        logger.info(
+            f"ImageJ stack with slices={slices} and no hyperstack/spacing tags: "
+            "reading the page axis as time. Pass dims='ZYX' to keep it as z."
+        )
+        frames, slices = slices, 1
+    return (frames, slices, channels)
+
+
+def _apply_dims_override(
+    layout: tuple[int, ...], dims: str | Sequence[str] | None
+) -> tuple[int, ...]:
+    """Move a single-file page axis between T and Z when the caller says so.
+
+    ``dims`` naming T but not Z (``"TYX"``) puts a z-labelled stack on T;
+    naming Z but not T (``"ZYX"``) does the reverse. Anything else, or a file
+    that already has both axes populated, is left alone.
+    """
+    if not dims:
+        return layout
+    letters = {d.upper() for d in (dims if not isinstance(dims, str) else tuple(dims))}
+    frames, slices, channels = layout
+    if "T" in letters and "Z" not in letters and frames == 1 and slices > 1:
+        return (slices, 1, channels)
+    if "Z" in letters and "T" not in letters and slices == 1 and frames > 1:
+        return (1, frames, channels)
+    return layout
 
 
 def _ome_layout(meta: dict) -> tuple[int, int, int] | None:
@@ -571,6 +617,7 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
         self._target_dtype = None
         self._interleaved_reader = None
         self._nc = 1
+        self._dims_override = dims
 
         # normalize input to list of paths
         if isinstance(files, (str, Path)):
@@ -610,9 +657,21 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
                 or _shape_layout(self._metadata)
             )
             if layout:
-                self._init_interleaved(file_list[0], *layout)
+                self._init_interleaved(
+                    file_list[0], *_apply_dims_override(layout, dims)
+                )
                 return
         self._init_from_file_structure(file_list)
+
+    @property
+    def reader_kwargs(self) -> dict:
+        """``imread`` kwargs that re-create this array: the ``dims`` override
+        when one was given, so a worker re-opening the path reads the page
+        axis the same way."""
+        if not self._dims_override:
+            return {}
+        dims = self._dims_override
+        return {"dims": dims if isinstance(dims, str) else "".join(dims)}
 
 
     def _init_volume_from_groups(self, plane_groups: list[list[Path]]):

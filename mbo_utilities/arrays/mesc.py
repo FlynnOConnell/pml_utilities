@@ -1112,6 +1112,17 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             "mesc_raw_frame_rate": raw_fs,
             "mesc_light_paths": layout.light_paths,
             "mesc_curves": sorted(self._curves),
+            # MESc stores each channel as uint16 with a linear conversion to
+            # its real value (``raw * scale + offset``); the offset is the
+            # detector's zero (about -1000 on the AOD rigs). Pixels are
+            # returned raw; readers needing photon-level zero apply this.
+            "mesc_channel_conversion": [
+                {
+                    "scale": float(_attr(self._unit, f"Channel_{c}_Conversion_ConversionLinearScale", 1.0) or 1.0),
+                    "offset": float(_attr(self._unit, f"Channel_{c}_Conversion_ConversionLinearOffset", 0.0) or 0.0),
+                }
+                for c in range(layout.nc)
+            ],
             "mesc_dichroic": layout.frame_maps is not None,
             "channel_names": channel_names,
             "comment": _attr(self._unit, "Comment", "") or "",
@@ -1213,6 +1224,13 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         return tuple(labels)
 
     # -- metadata --------------------------------------------------------
+
+    @property
+    def curves(self) -> dict[str, dict]:
+        """Timing curves of this unit, ``{name: {"timestamps": ms, "values"}}``
+        (see ``CURVE_NAMES``): the pattern sequence, dichroic switching,
+        sync lines and RTMC motion-correction totals."""
+        return self._curves
 
     @property
     def metadata(self) -> dict:

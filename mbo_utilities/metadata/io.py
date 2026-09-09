@@ -278,6 +278,7 @@ def _imagej_to_metadata(tiff_file) -> dict:
     frames, slices, channels = imagej_hyperstack_counts(tiff_file)
 
     md: dict = {"frames": frames, "slices": slices, "channels": channels}
+    md["hyperstack"] = bool(ij.get("hyperstack", False))
     if page0 is not None:
         md["Ly"] = int(page0.shape[-2])
         md["Lx"] = int(page0.shape[-1])

@@ -197,7 +197,10 @@ class PreviewDataWidget(EdgeWindow):
         threading_enabled: bool = True,
         size: int | None = None,
         location: Literal["bottom", "right"] = "right",
-        title: str = "Data Preview",
+        # None: no title bar over the panel. fastplotlib draws a custom,
+        # full-width title box for an edge window with a title, and a static
+        # label there only costs the panel a row of height.
+        title: str | None = None,
         show_title: bool = False,
         movable: bool = False,
         resizable: bool = False,
@@ -994,6 +997,15 @@ class PreviewDataWidget(EdgeWindow):
             return
         self._apply_frame_average(source, value)
 
+    def _sync_frame_average_options(self, factor: int) -> None:
+        """"Apply to dataset" is the default for every run started from
+        here: the save-as, suite2p and masknmf option menus pick up the
+        factor the way their Fix Phase defaults track the data, and each can
+        still be changed per run in its own Options."""
+        self._saveas_frame_average = factor
+        self._s2p_frame_average = factor
+        self._masknmf_frame_average = factor
+
     def _apply_frame_average(self, source, factor: int) -> None:
         """Swap the viewer onto (or off) a ``FrameAveragedView`` of ``source``.
 
@@ -1032,6 +1044,7 @@ class PreviewDataWidget(EdgeWindow):
 
         self._frame_average = factor
         self._frame_average_source = source if factor > 1 else None
+        self._sync_frame_average_options(factor)
         self.shape = wrapped.shape
         if len(self.shape) == 5:
             self.nc, self.nz = self.shape[1], self.shape[2]

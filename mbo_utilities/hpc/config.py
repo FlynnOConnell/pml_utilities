@@ -78,8 +78,8 @@ _PIPELINE_PARAM_KEYS = frozenset({
     "timepoints", "num_timepoints",
     "frames", "frame_indices",  # deprecated aliases of timepoints
 })
-# routed into writer_kwargs (phase correction).
-_WRITER_PARAM_KEYS = frozenset({"fix_phase", "use_fft"})
+# routed into writer_kwargs (read-time features: phase correction, binning).
+_WRITER_PARAM_KEYS = frozenset({"fix_phase", "use_fft", "frame_average"})
 # owned by the runner / [pipeline]; rejected if set in [parameters].
 _MANAGED_PARAM_KEYS = frozenset({
     "save_path", "ops", "workers", "threads_per_worker",
@@ -109,6 +109,7 @@ PARAM_HELP: dict = {
     "keep_raw": "keep raw pre-registration data_raw.bin; false deletes it",
     "fix_phase": "bidirectional scan-phase correction (on for raw ScanImage)",
     "use_fft": "subpixel (FFT) phase shift vs integer-pixel",
+    "frame_average": "average every N consecutive frames into one before processing; 1 = off",
 }
 
 # keys written into the generated [parameters] block. The rest of DEFAULT_OPS /
@@ -134,8 +135,8 @@ TEMPLATE_COMMENTED: tuple = (
 def split_parameters(params: dict) -> tuple[dict, dict]:
     """Route a flat [parameters] table into (suite2p ops, lbm pipeline kwargs).
 
-    Dispatch by key name: known pipeline kwargs -> pipeline(); fix_phase/use_fft
-    -> writer_kwargs; runner-owned keys are rejected; all other keys are suite2p
+    Dispatch by key name: known pipeline kwargs -> pipeline(); fix_phase/use_fft/
+    frame_average -> writer_kwargs; runner-owned keys are rejected; all other keys are suite2p
     ops parameters (so a typo silently becomes an ignored ops key).
     """
     ops = dict(DEFAULT_OPS)
