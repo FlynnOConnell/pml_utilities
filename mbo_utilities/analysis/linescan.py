@@ -217,26 +217,30 @@ def _background_planes(mesc_path, bg: dict) -> dict[int, np.ndarray]:
 
 def zstack_candidates(
     mesc_path, unit_key: str, units: list[dict] | None = None, *, min_px_per_line: int = 10,
+    zstack_path=None,
 ) -> list[dict]:
     """Every Z-stack of the file scored against a line-scan unit's lines:
     ``xy_fraction`` / ``z_fraction`` of lines inside its field / depth range,
     ``um_per_px``, and ``coarse`` when it puts fewer than ``min_px_per_line``
     pixels along the median line. All stacks, including those holding no
-    line at all, so a picker can show why one is unsuitable."""
+    line at all, so a picker can show why one is unsuitable. ``zstack_path``
+    is the file holding the stacks when they were saved separately from the
+    line scan (``units`` then lists that file's units)."""
     from mbo_utilities.arrays.mesc import list_mesc_units
 
     lines = linescan_endpoints_um(mesc_path, unit_key)
     if not lines:
         return []
+    stack_path = mesc_path if zstack_path is None else zstack_path
     lengths = [float(np.hypot(*(seg[:2, 1] - seg[:2, 0]))) for seg in lines]
     max_um_per_px = float(np.median(lengths)) / max(min_px_per_line, 1)
-    units = units if units is not None else list_mesc_units(mesc_path)
+    units = units if units is not None else list_mesc_units(stack_path)
     out = []
     for u in units:
         if u["modality_name"] != "zstack":
             continue
-        vp = viewport_geometry(mesc_path, u["key"])
-        depth = zstack_depth_info(mesc_path, u["key"])
+        vp = viewport_geometry(stack_path, u["key"])
+        depth = zstack_depth_info(stack_path, u["key"])
         if vp is None or depth is None:
             continue
         nx = int(u["shape"][-1])
@@ -257,6 +261,7 @@ def zstack_candidates(
 
 def pair_reference_zstack(
     mesc_path, unit_key: str, units: list[dict] | None = None, *, min_px_per_line: int = 10,
+    zstack_path=None,
 ) -> dict | None:
     """Pick the Z-stack unit of the same file that the lines were drawn on.
 
@@ -280,8 +285,13 @@ def pair_reference_zstack(
     Returns ``{"key", "munit", "xy_fraction", "z_fraction", "um_per_px",
     "coarse"}``.
     """
-    cands = [c for c in zstack_candidates(mesc_path, unit_key, units, min_px_per_line=min_px_per_line)
-             if c["xy_fraction"] > 0]
+    cands = [
+        c
+        for c in zstack_candidates(
+            mesc_path, unit_key, units, min_px_per_line=min_px_per_line, zstack_path=zstack_path
+        )
+        if c["xy_fraction"] > 0
+    ]
     if not cands:
         return None
     fine = [c for c in cands if not c["coarse"]]
