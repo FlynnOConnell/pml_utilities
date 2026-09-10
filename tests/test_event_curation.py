@@ -47,6 +47,16 @@ def _write_spatial_recording(root, trace=None):
     return pf_dir
 
 
+@pytest.fixture(autouse=True)
+def _keep_preferences(monkeypatch):
+    """The widget remembers the last data path in ~/.mbo; tests must not
+    leave a pytest tmp dir there for the next real session to open."""
+    from mbo_utilities.gui import event_curation
+
+    monkeypatch.setattr(event_curation, "set_last_dir", lambda *a, **k: None)
+    monkeypatch.setattr(event_curation, "get_last_dir", lambda *a, **k: None)
+
+
 @pytest.fixture
 def data_root(tmp_path):
     _write_spatial_recording(tmp_path)
@@ -276,55 +286,72 @@ def _frames(widget, n=2):
 
 
 def _load(widget, data_root):
+    """Scan the root: everything under it is cataloged and loaded."""
     widget.scan(data_root)
-    session = widget.session
-    widget.select_experiment(session.experiments(widget.animal)[0][1])
-    widget.load(session.recordings[0][1])
     widget.wait(60)
-    assert session.loaded, widget.status
+    assert widget.session is not None and widget.session.loaded, widget.status
+
+
+def _each_panel(widget, frames=2):
+    for key in ("all_traces", "curation", "candidates"):
+        widget.strip.focus(key)
+        _frames(widget, frames)
 
 
 class TestWidget:
-    def test_registers_two_top_panels(self, curation):
-        assert curation.strip.has("curation") and curation.strip.has("candidates")
+    def test_registers_three_top_panels(self, curation):
+        assert all(curation.strip.has(k) for k in ("all_traces", "curation", "candidates"))
         assert {p.right_tab for p in curation.strip.panels} == {"curation"}
         _frames(curation)
 
-    def test_scan_picks_the_only_animal(self, curation, data_root):
+    def test_scan_catalogs_and_loads_everything(self, curation, data_root, tmp_path):
+        # a second experiment under the same animal is found and loaded too
+        pf2 = tmp_path / "stan1" / "stan1_expt2" / "PF"
+        pf2.mkdir(parents=True)
+        for name in ("denoised_trace_scans.pkl", "fs_scans.pkl", "scanIDs_ROIs.pkl"):
+            (pf2 / name).write_bytes((data_root / "stan1" / "stan1_expt1" / "PF" / name).read_bytes())
         curation.scan(data_root)
-        assert curation.animal.endswith("stan1")
-        assert curation.session.hierarchical
-        _frames(curation)
+        assert [r.rid for r in curation.catalog] == [
+            "stan1/stan1_expt1/scan=10/domain=soma",
+            "stan1/stan1_expt2/scan=10/domain=soma",
+        ]
+        assert curation.experiments == ["stan1_expt1", "stan1_expt2"]
+        assert curation.current == curation.catalog[0].rid
+        assert "2 recordings in 2 experiment(s)" in curation.status
+        curation.wait(60)
+        # the first experiment loads on its own; the rest on demand
+        assert [r.rid for r, _ in curation.loaded()] == [curation.catalog[0].rid]
+        curation.load_all(None)
+        curation.wait(60)
+        assert len(curation.loaded()) == 2
+        _each_panel(curation)
 
     def test_bad_path_reports_instead_of_raising(self, curation, tmp_path):
         empty = tmp_path / "empty"
         empty.mkdir()
         curation.scan(empty)
-        assert curation.session is not None
-        assert not curation.session.has_dataset
-        assert curation.session.recordings == []
+        assert curation.catalog == []
+        assert curation.session is None
         assert "no vnoiser data" in curation.status
         _frames(curation)
 
     def test_load_runs_off_the_frame_and_draws_every_panel(self, curation, data_root):
         _load(curation, data_root)
         assert curation.session.n == 3
-        _frames(curation, 3)
-        curation.strip.focus("candidates")
-        _frames(curation, 3)
+        _each_panel(curation, 3)
         assert curation.strip.active == "candidates"
 
-    def test_mode_switch_reloads_the_same_recording(self, curation, data_root):
+    def test_mode_switch_loads_the_same_recording(self, curation, data_root):
         _load(curation, data_root)
         fast = curation.session
         curation.set_mode("slow")
+        assert curation.session is None and curation.loading
         curation.wait(60)
         slow = curation.session
         assert slow is not fast and slow.mode == "slow"
         assert slow.recording_id == fast.recording_id
-        _frames(curation, 2)
-        curation.strip.focus("candidates")
-        _frames(curation, 2)
+        assert curation.sessions[("fast", fast.recording_id)] is fast
+        _each_panel(curation)
 
     def test_labels_and_filters_redraw(self, curation, data_root):
         _load(curation, data_root)
@@ -332,15 +359,13 @@ class TestWidget:
         session.select(1)
         session.set_label("yes")
         session.set_view_filter("yes")
-        _frames(curation, 2)
-        curation.strip.focus("candidates")
-        _frames(curation, 2)
+        _each_panel(curation)
         assert session.counts() == (1, 0, 2)
 
     def test_close_gives_the_strip_back(self, curation):
         strip = curation.strip
         curation.close()
-        assert not strip.has("curation") and not strip.has("candidates")
+        assert not any(strip.has(k) for k in ("all_traces", "curation", "candidates"))
         curation.close()
 
 
@@ -486,7 +511,8 @@ class TestLoadTrace:
         curation.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=2", label="ROI 2", source_path=source)
         curation.wait(60)
         assert curation.session.loaded and curation.session.n == 3
-        assert curation.data_path == str(source)
+        assert curation.current == "expt/MUnit_1/roi=2"
+        assert [r.rid for r in curation.catalog] == ["expt/MUnit_1/roi=2"]
         _frames(curation, 2)
         assert focused and abs(focused[-1] - 700 / FS_HZ) < 0.01
         curation.session.select(2)
@@ -607,7 +633,8 @@ class TestPfForMesc:
         curation.scan(mesc)
         assert curation.data_path == str(pf_dir)
         assert "PF folder of" in curation.status
-        assert curation.session.recordings
+        assert curation.catalog
+        curation.wait(60)
         lone = tmp_path / "elsewhere" / "scan.mesc"
         lone.parent.mkdir()
         lone.write_bytes(b"x")
