@@ -812,15 +812,19 @@ def _run_gui_impl(
         if demix_file is not None:
             return _launch_curation_gui(demix_file)
 
-        # a .mesc prompts for its unit once, here; an AOD line-scan unit
-        # opens the line-scan + Z-stack viewer instead of the image viewer
+        # a .mesc holding AOD line scans opens the line-scan + Z-stack viewer
+        # with no unit prompt: the processed scan (else the first line scan)
+        # is shown and the others are a combo in its panel. Other .mesc files
+        # prompt for their unit once, here.
         if _is_mesc(data_in):
+            if unit is None and _has_linescan_units(data_in):
+                return _launch_linescan_viewer(data_in, None)
+            if _is_linescan_unit(data_in, unit):
+                return _launch_linescan_viewer(data_in, unit)
             mesc_kwargs, proceed = _resolve_mesc_unit(data_in, unit)
             if not proceed:
                 return None
             unit = mesc_kwargs.get("unit", unit)
-            if _is_linescan_unit(data_in, unit):
-                return _launch_linescan_viewer(data_in, unit)
 
         # Dispatch based on Mode
         # pollen calibration is auto-detected in the fastplotlib viewer via get_viewer_class()
@@ -1042,16 +1046,28 @@ def _mesc_unit(path, unit) -> dict | None:
 def _is_linescan_unit(path, unit) -> bool:
     """Whether the unit is an AOD line scan (a "packed" unit: one row per
     line, one column per sample along it)."""
+    if unit is None:
+        return False
     chosen = _mesc_unit(path, unit)
     return chosen is not None and chosen.get("kind") == "packed"
 
 
+def _has_linescan_units(path) -> bool:
+    from mbo_utilities.arrays.mesc import list_mesc_units
+
+    try:
+        return any(u.get("kind") == "packed" for u in list_mesc_units(path))
+    except Exception:
+        return False
+
+
 def _launch_linescan_viewer(path, unit):
-    """Open the line-scan + Z-stack viewer on the unit and run the loop, or
-    in a notebook show the canvas in the cell and return the widget."""
+    """Open the line-scan + Z-stack viewer on the unit (None: the viewer's
+    default, the processed scan) and run the loop, or in a notebook show the
+    canvas in the cell and return the widget."""
     from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
 
-    chosen = _mesc_unit(path, unit)
+    chosen = _mesc_unit(path, unit) if unit is not None else None
     ref_key = chosen["key"] if chosen is not None else None
     if in_notebook():
         ndw = open_linescan_viewer(path, ref_key=ref_key, run_loop=False)

@@ -185,6 +185,32 @@ def _load_or_compute_traces(ref_arr, channel: int, traces_dir: Path | None) -> n
     return linescan_roi_means(ref_arr, channel=channel, progress=_progress)
 
 
+def _close_figure(figure) -> None:
+    """Close a shown figure's window; an offscreen figure has no output, so
+    fall back to its canvas."""
+    try:
+        figure.close()
+    except AttributeError:
+        try:
+            figure.canvas.close()
+        except Exception:
+            pass
+
+
+def default_linescan_unit(mesc_path, units: list[dict]) -> str:
+    """Which line-scan unit to open when none was named: the first one the
+    vnoiser pipeline processed (a PF scan with its number), else the first."""
+    packed = [u for u in units if u.get("kind") == "packed"] or list(units)
+    try:
+        from mbo_utilities.vnoiser import pf_scan_for_mesc
+    except ImportError:
+        return packed[0]["key"]
+    for u in packed:
+        if pf_scan_for_mesc(mesc_path, u["key"]) is not None:
+            return u["key"]
+    return packed[0]["key"]
+
+
 def _display_normalize(F: np.ndarray) -> np.ndarray:
     """Per-ROI robust 0..1 scaling so rows of very different brightness stack
     legibly; the panel is for seeing events in time, not absolute F."""
@@ -509,11 +535,15 @@ class LineScanOverlay:
 class LinePanel:
     """Right-hand imgui panel: one row per line, depth navigation, toggles."""
 
-    def __init__(self, ndw, overlay: LineScanOverlay, size: int = 360, curation=None):
+    def __init__(self, ndw, overlay: LineScanOverlay, size: int = 360, curation=None,
+                 units: list[dict] | None = None, switch=None):
         from mbo_utilities.gui._edge_window import EdgeWindow
 
         self.overlay = overlay
         self.curation = curation
+        # the file's line-scan units; picking another reopens the window on it
+        self.units = list(units or [])
+        self.switch = switch
 
         class _Window(EdgeWindow):
             def update(win_self):  # noqa: N805
@@ -525,6 +555,20 @@ class LinePanel:
         from imgui_bundle import imgui
 
         ov = self.overlay
+        if len(self.units) > 1 and self.switch is not None:
+            labels = [
+                f"{u['munit']}  {u['nrois']} lines  {u.get('comment') or ''}".rstrip()
+                for u in self.units
+            ]
+            keys = [u["key"] for u in self.units]
+            idx = keys.index(ov.ref_key) if ov.ref_key in keys else 0
+            imgui.set_next_item_width(-1)
+            changed, idx = imgui.combo("##linescan_unit", idx, labels)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("the file's line-scan units; picking one reopens on it")
+            if changed and keys[idx] != ov.ref_key:
+                self.switch(keys[idx])
+                return
         imgui.text(f"{ov.n} line(s) on {len(ov.occupied)} of {ov.zdim} slices")
         z_here = ov.slice_depths[ov.slice]
         imgui.text(f"current slice {ov.slice + 1}/{ov.zdim}   z {z_here:+.1f} um")
@@ -896,7 +940,7 @@ def open_linescan_viewer(
     def _resolve(key, pool, label, extra=None, default=None):
         if key is None:
             if not ask:
-                key = default if default is not None else pool[0]["key"]
+                key = default if default is not None else default_linescan_unit(mesc_path, pool)
                 print(f"{label}: {key}")
             else:
                 return _console_pick_unit(pool, label, extra=extra, default=default)
@@ -1064,7 +1108,18 @@ def open_linescan_viewer(
     if overlay is not None:
         if traces is not None and curation:
             line_curation = LineCuration.build(ndw, overlay, ref_arr, traces, mesc_path, ref_key)
-        LinePanel(ndw, overlay, curation=line_curation)
+
+        def switch(key: str) -> None:
+            # a new window for the other scan on the running loop, then this
+            # one goes away; the loop keeps running for the new window
+            open_linescan_viewer(
+                mesc_path, ref_key=key, zstack_key=zstack_key, zstack_path=zstack_path,
+                channel=channel, flip_y=flip_y, traces_dir=None, no_traces=no_traces,
+                curation=curation, run_loop=False,
+            )
+            _close_figure(ndw.figure)
+
+        LinePanel(ndw, overlay, curation=line_curation, units=linescan_units, switch=switch)
     # keep the overlay and panel alive with the widget
     ndw.linescan_overlay = overlay
     ndw.linescan_curation = line_curation
