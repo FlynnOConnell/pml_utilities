@@ -666,9 +666,7 @@ class LineTracesPanel:
         self.fs = float(overlay.fs)
         self.traces = np.asarray(traces, dtype=np.float32)
         self.n = int(self.traces.shape[0])
-        # which other lines to show behind the selected one; the curation
-        # glue sets this to the lines of the same PF domain
-        self.siblings = lambda i: []
+        self.duration_s = float(max(self.traces.shape[1] - 1, 1)) / self.fs
         self._cache: dict[int, tuple] = {}
         self._fit = True
         self._last = None
@@ -711,6 +709,8 @@ class LineTracesPanel:
         self.draw(max(imgui.get_content_region_avail().y - 2, 60.0))
 
     def draw(self, height: float) -> None:
+        from imgui_bundle import implot
+
         from mbo_utilities.gui.imgui.lines import drag_vline, line, line_plot
 
         ov = self.overlay
@@ -722,12 +722,9 @@ class LineTracesPanel:
         with line_plot("##line_traces_plot", "time (s)", "F", height=height, fit=fit, legend=True) as ok:
             if not ok:
                 return
-            for j in self.siblings(i):
-                if j == i or not 0 <= j < self.n:
-                    continue
-                _tb, _b, ts, smooth = self._prepared(j)
-                r, g, b = (float(v) for v in ov.colors[j][:3])
-                line(f"ROI {j}", smooth, x=ts, color=(r, g, b, 0.45), weight=0.8)
+            # the x axis never leaves the recording: no blank space past
+            # either end, no panning beyond it
+            implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, self.duration_s)
             t_band, band, ts, smooth = self._prepared(i)
             r, g, b = (float(v) for v in ov.colors[i][:3])
             line(f"ROI {i} raw", band, x=t_band, color=(r, g, b, 0.28), weight=0.8)
@@ -806,8 +803,6 @@ class LineCuration:
         from mbo_utilities.gui.event_curation import PANEL_HEIGHT
 
         self.widget.extra_panel = (panel.draw, TRACES_HEIGHT)
-        if self.pf is not None:
-            panel.siblings = lambda i: self.pf.domains.get(self.pf.domain_for_roi(i) or "", [])
         for top in self.widget.strip.panels:
             if top.key == "curation":
                 top.height = PANEL_HEIGHT + TRACES_HEIGHT
