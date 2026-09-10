@@ -812,6 +812,16 @@ def _run_gui_impl(
         if demix_file is not None:
             return _launch_curation_gui(demix_file)
 
+        # a .mesc prompts for its unit once, here; an AOD line-scan unit
+        # opens the line-scan + Z-stack viewer instead of the image viewer
+        if _is_mesc(data_in):
+            mesc_kwargs, proceed = _resolve_mesc_unit(data_in, unit)
+            if not proceed:
+                return None
+            unit = mesc_kwargs.get("unit", unit)
+            if _is_linescan_unit(data_in, unit):
+                return _launch_linescan_viewer(data_in, unit)
+
         # Dispatch based on Mode
         # pollen calibration is auto-detected in the fastplotlib viewer via get_viewer_class()
         if mode == "Fastplotlib viewer (default)":
@@ -1001,6 +1011,55 @@ def _resolve_mesc_unit(data_in, unit):
         return {}, False
     logger.info(f"MESc unit selected: {chosen}")
     return {"unit": chosen}, True
+
+
+def _is_mesc(path) -> bool:
+    try:
+        p = Path(path)
+    except TypeError:
+        return False
+    return p.is_file() and p.suffix.lower() == ".mesc"
+
+
+def _mesc_unit(path, unit) -> dict | None:
+    """The unit record ``unit`` names in the ``.mesc``: an index, a
+    ``MSession_0/MUnit_3`` key or a bare ``MUnit_3``; None picks the first."""
+    from mbo_utilities.arrays.mesc import list_mesc_units
+
+    try:
+        units = list_mesc_units(path)
+    except Exception:
+        return None
+    if not units:
+        return None
+    if unit is None:
+        return units[0]
+    if isinstance(unit, int):
+        return units[unit] if 0 <= unit < len(units) else None
+    return next((u for u in units if unit in (u["key"], u["munit"])), None)
+
+
+def _is_linescan_unit(path, unit) -> bool:
+    """Whether the unit is an AOD line scan (a "packed" unit: one row per
+    line, one column per sample along it)."""
+    chosen = _mesc_unit(path, unit)
+    return chosen is not None and chosen.get("kind") == "packed"
+
+
+def _launch_linescan_viewer(path, unit):
+    """Open the line-scan + Z-stack viewer on the unit and run the loop, or
+    in a notebook show the canvas in the cell and return the widget."""
+    from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
+
+    chosen = _mesc_unit(path, unit)
+    ref_key = chosen["key"] if chosen is not None else None
+    if in_notebook():
+        ndw = open_linescan_viewer(path, ref_key=ref_key, run_loop=False)
+        if ndw is not None:
+            display_widget(ndw.figure.canvas)
+        return ndw
+    open_linescan_viewer(path, ref_key=ref_key)
+    return None
 
 
 def _find_demixing_results(path) -> Path | None:

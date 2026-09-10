@@ -298,7 +298,7 @@ chance. `--flip-y` remains for a rig that saves the other way round.
 | `07_motion_correction.png` | the AOD's real-time motion correction in X/Y/Z over the run |
 
 `--no-figures` skips them. To scrub the lines interactively, run
-`python scripts/reference_zstack_viewer.py scan.mesc --traces rois_linescan/MUnit_3`:
+`mbo scan.mesc` (pick the line-scan unit) or `mbo linescan scan.mesc --view`:
 three panels on top (the line-scan itself, the snapshot the lines were drawn
 on, the paired Z-stack) and the traces below. The Z-stack picker shows every
 stack's fit (fraction of lines in its field and depth range, pixel size)
