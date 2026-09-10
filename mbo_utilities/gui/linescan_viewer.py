@@ -262,6 +262,7 @@ class LineScanOverlay:
         self.follow_roi = True
         self.selected = 0
         self.slice = 0
+        self.t_index = 0
         self._busy = False
         # called with the ROI index whenever the selection changes
         self.on_select: list = []
@@ -465,11 +466,12 @@ class LineScanOverlay:
                 self._apply_selection(i)
                 if self.follow_roi and not self._busy:
                     self.goto_slice(self.placements[i]["slice"])
+        if self.t_dim is not None:
+            self.t_index = self._ref_to_index(indices[self.t_dim])
         if self.t_dim is not None and self.selector is not None and not self._busy:
-            t = self._ref_to_index(indices[self.t_dim])
             self._busy = True
             try:
-                self.selector.selection = t / self.fs
+                self.selector.selection = self.t_index / self.fs
             finally:
                 self._busy = False
         self._update_titles()
@@ -643,6 +645,82 @@ class LinePanel:
             self.curation.draw()
 
 
+TRACES_HEIGHT = 150
+TRACE_ROW_GAP = 1.15
+
+
+class LineTracesPanel:
+    """The per-line traces as an imgui plot on the top strip: every line
+    stacked, the selected one bold, a time cursor tied to the Reference's
+    Timepoint (drag it to scrub), click a row to select that line. Drawn as
+    its own ``Traces`` tab and, when curation is on, above the curation
+    trace so both are in view.
+    """
+
+    def __init__(self, ndw, overlay: LineScanOverlay, traces: np.ndarray, strip, own_strip: bool):
+        from mbo_utilities.gui._top_strip import TopPanel
+        from mbo_utilities.gui.imgui.lines import decimate_minmax
+
+        self.ndw = ndw
+        self.overlay = overlay
+        self.strip = strip
+        self._own_strip = own_strip
+        self.fs = float(overlay.fs)
+        norm = _display_normalize(np.asarray(traces, dtype=np.float32))
+        self.rows = []
+        for i in range(norm.shape[0]):
+            idx, values = decimate_minmax(norm[i], 3000)
+            self.rows.append((idx / self.fs, values))
+        self.n = len(self.rows)
+        self._fit = True
+        self.strip.register(TopPanel("line_traces", "Traces", self.draw_tab, 260, None, 10))
+
+    def close(self) -> None:
+        self.strip.unregister("line_traces")
+        if self._own_strip:
+            self.strip.close()
+
+    def draw_tab(self) -> None:
+        from imgui_bundle import imgui
+
+        ov = self.overlay
+        imgui.text_disabled(
+            f"{self.n} lines · ROI {ov.selected} · t {ov.t_index / self.fs:.3f} s · "
+            "click a row to select it, drag the cursor to scrub"
+        )
+        imgui.same_line(0, 12)
+        if imgui.button("fit##line_traces"):
+            self._fit = True
+        self.draw(max(imgui.get_content_region_avail().y - 2, 60.0))
+
+    def draw(self, height: float) -> None:
+        from imgui_bundle import imgui, implot
+
+        from mbo_utilities.gui.imgui.lines import drag_vline, line, line_plot
+
+        ov = self.overlay
+        fit, self._fit = self._fit, False
+        with line_plot("##line_traces_plot", "time (s)", "", height=height, fit=fit, legend=False) as ok:
+            if not ok:
+                return
+            for i, (t, values) in enumerate(self.rows):
+                offset = (self.n - 1 - i) * TRACE_ROW_GAP
+                selected = i == ov.selected
+                r, g, b = (float(v) for v in ov.colors[i][:3])
+                line(
+                    f"##line{i}", values + offset, x=t, color=(r, g, b, 1.0 if selected else 0.7),
+                    weight=2.2 if selected else 0.9, legend=False,
+                )
+            cursor, held = drag_vline(99, ov.t_index / self.fs, (1.0, 0.85, 0.3, 0.9), 1.5)
+            if held:
+                ov.goto_time(cursor)
+            elif implot.is_plot_hovered() and imgui.is_mouse_clicked(0):
+                y = implot.get_plot_mouse_pos().y
+                row = self.n - 1 - int(np.floor(y / TRACE_ROW_GAP + 0.15))
+                if 0 <= row < self.n and row != ov.selected:
+                    ov.select_roi(row)
+
+
 class LineCuration:
     """vnoiser event curation of the selected line's trace.
 
@@ -705,6 +783,35 @@ class LineCuration:
 
     def recording_id(self, i: int) -> str:
         return f"{self.mesc_path.stem}/{self.munit}/roi={int(i)}"
+
+    def attach_traces(self, panel: LineTracesPanel) -> None:
+        """Draw the line traces above the curation trace, and follow a flip
+        through recordings on the line overlay."""
+        from mbo_utilities.gui.event_curation import PANEL_HEIGHT
+
+        self.widget.extra_panel = (panel.draw, TRACES_HEIGHT)
+        for top in self.widget.strip.panels:
+            if top.key == "curation":
+                top.height = PANEL_HEIGHT + TRACES_HEIGHT
+                self.widget.strip.register(top)
+        self.widget.on_recording = self._on_recording
+
+    def _on_recording(self, rid: str) -> None:
+        """Select a line of the domain (or the ROI) that was flipped to."""
+        if "domain=" in rid and self.pf is not None:
+            domain = rid.rsplit("domain=", 1)[-1]
+            rois = self.pf.domains.get(domain, [])
+            if rois and self.overlay.selected not in rois:
+                self.curated_domain = domain
+                self.overlay.select_roi(rois[0])
+        elif "roi=" in rid:
+            try:
+                roi = int(rid.rsplit("roi=", 1)[-1])
+            except ValueError:
+                return
+            self.curated = roi
+            if roi != self.overlay.selected:
+                self.overlay.select_roi(roi)
 
     def curate(self, i: int) -> None:
         """Curate line ``i``: its PF domain trace when the pipeline ran on
@@ -1039,20 +1146,17 @@ def open_linescan_viewer(
     # scripts/capture_docs.py uses: no window, no event loop, works headless
     figure_kwargs = ({"canvas": "offscreen", "size": (1500, 950)} if screenshot is not None
                      else _figure_kwargs_for_here())
-    top = 0.68 if traces is not None else 1.0
+    # the traces are an imgui panel on the top strip, so the image panels
+    # take the whole canvas
     names = [f"Reference [{ref_key.rsplit('/', 1)[-1]}]"]
     if bg is not None:
         names.append(f"Snapshot [{bg['munit']}]")
     names.append(f"Z-stack [{zstack_key.rsplit('/', 1)[-1]}]")
     n_top = len(names)
-    extents = [(i / n_top, (i + 1) / n_top, 0.0, top) for i in range(n_top)]
+    extents = [(i / n_top, (i + 1) / n_top, 0.0, 1.0) for i in range(n_top)]
     snap_index = 1 if bg is not None else None
     z_index = n_top - 1
     trace_index = None
-    if traces is not None:
-        extents.append((0.0, 1.0, top, 1.0))
-        names.append("Traces")
-        trace_index = n_top
 
     ndw = NDWidget(
         ref_ranges={**ref_ranges, **zstack_ranges},
@@ -1104,14 +1208,23 @@ def open_linescan_viewer(
 
     overlay = build_overlay(
         ndw, mesc_path, ref_key, zstack_key, ref_arr, zstack_arr,
-        ref_dims, zstack_dims, flip_y=flip_y, traces=traces,
+        ref_dims, zstack_dims, flip_y=flip_y, traces=None,
         z_index=z_index, trace_index=trace_index, snapshot=snapshot,
         zstack_path=zstack_path,
     )
     line_curation = None
+    traces_panel = None
     if overlay is not None:
         if traces is not None and curation:
             line_curation = LineCuration.build(ndw, overlay, ref_arr, traces, mesc_path, ref_key)
+        if traces is not None:
+            from mbo_utilities.gui._top_strip import TopStrip
+
+            own_strip = line_curation is None
+            strip = TopStrip(ndw.figure) if own_strip else line_curation.widget.strip
+            traces_panel = LineTracesPanel(ndw, overlay, traces, strip, own_strip)
+            if line_curation is not None:
+                line_curation.attach_traces(traces_panel)
 
         def switch(key: str) -> None:
             # a new window for the other scan on the running loop, then this
@@ -1124,9 +1237,10 @@ def open_linescan_viewer(
             _close_figure(ndw.figure)
 
         LinePanel(ndw, overlay, curation=line_curation, units=linescan_units, switch=switch)
-    # keep the overlay and panel alive with the widget
+    # keep the overlay and panels alive with the widget
     ndw.linescan_overlay = overlay
     ndw.linescan_curation = line_curation
+    ndw.linescan_traces = traces_panel
 
     ndw.show()
     _after_show(ndw)
