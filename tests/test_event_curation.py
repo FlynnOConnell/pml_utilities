@@ -502,8 +502,16 @@ class TestLoadTrace:
         _frames(curation, 2)
 
 
-ASAKO_MESC = (
-    "C:/Users/flynn/repos/vnoiser/data/stan112/stan112_expt12/stan112_expt12/stan112_expt12.mesc"
+ASAKO_MESC = next(
+    (
+        p
+        for p in (
+            "X:/data/asako/stan112/stan112_expt12/stan112_expt12/stan112_expt12.mesc",
+            "C:/Users/flynn/repos/vnoiser/data/stan112/stan112_expt12/stan112_expt12/stan112_expt12.mesc",
+        )
+        if __import__("pathlib").Path(p).exists()
+    ),
+    "X:/data/asako/stan112/stan112_expt12/stan112_expt12/stan112_expt12.mesc",
 )
 
 
@@ -544,6 +552,69 @@ class TestSeparateZstackFile:
         assert "1 zstack in stan112_expt12_zstack.mesc" in out
         assert "Z-stack: MSession_0/MUnit_3" in out
         assert "24 line(s) on MUnit_3" in out
+
+
+def _mesc_beside_pf(tmp_path):
+    """Asako's layout: <animal>/<expt>/<expt>/<expt>.mesc next to <animal>/<expt>/PF."""
+    pf_dir = _write_spatial_recording(tmp_path)
+    scan_dir = pf_dir.parent / "stan1_expt1"
+    scan_dir.mkdir()
+    mesc = scan_dir / "stan1_expt1.mesc"
+    mesc.write_bytes(b"x")
+    return mesc, pf_dir
+
+
+class TestPfForMesc:
+    def test_pf_folder_and_scan_are_found_beside_the_mesc(self, tmp_path):
+        from mbo_utilities.vnoiser import pf_dir_for_mesc, pf_scan_for_mesc
+
+        mesc, pf_dir = _mesc_beside_pf(tmp_path)
+        assert pf_dir_for_mesc(mesc) == pf_dir
+        scan = pf_scan_for_mesc(mesc, "MSession_0/MUnit_10")
+        assert scan is not None
+        assert scan.scan_id == "10" and scan.domains == {"soma": [0]}
+        assert scan.domain_for_roi(0) == "soma" and scan.domain_for_roi(7) is None
+        assert scan.recording_id("soma") == "stan1/stan1_expt1/scan=10/domain=soma"
+
+    def test_unprocessed_scan_or_missing_pf_gives_none(self, tmp_path):
+        from mbo_utilities.vnoiser import pf_dir_for_mesc, pf_scan_for_mesc
+
+        mesc, _pf_dir = _mesc_beside_pf(tmp_path)
+        assert pf_scan_for_mesc(mesc, "MUnit_99") is None
+        lone = tmp_path / "elsewhere" / "scan.mesc"
+        lone.parent.mkdir()
+        lone.write_bytes(b"x")
+        assert pf_dir_for_mesc(lone) is None
+        assert pf_scan_for_mesc(lone, "MUnit_10") is None
+
+    def test_domain_trace_loads_by_its_recording_id(self, tmp_path):
+        from mbo_utilities.vnoiser import CurationSession, pf_scan_for_mesc
+
+        mesc, pf_dir = _mesc_beside_pf(tmp_path)
+        scan = pf_scan_for_mesc(mesc, "MUnit_10")
+        session = CurationSession(pf_dir, mode="fast")
+        assert not session.hierarchical
+        session.load(scan.recording_id("soma"))
+        assert session.loaded and session.n == 3
+
+    def test_picker_pointed_at_a_mesc_redirects_to_its_pf(self, curation, data_root, tmp_path):
+        # the curation fixture already wrote the PF folder under data_root
+        pf_dir = data_root / "stan1" / "stan1_expt1" / "PF"
+        scan_dir = pf_dir.parent / "stan1_expt1"
+        scan_dir.mkdir()
+        mesc = scan_dir / "stan1_expt1.mesc"
+        mesc.write_bytes(b"x")
+        curation.scan(mesc)
+        assert curation.data_path == str(pf_dir)
+        assert "PF folder of" in curation.status
+        assert curation.session.recordings
+        lone = tmp_path / "elsewhere" / "scan.mesc"
+        lone.parent.mkdir()
+        lone.write_bytes(b"x")
+        curation.scan(lone)
+        assert curation.data_path == ""
+        assert "raw line scan" in curation.status
+        _frames(curation)
 
 
 class TestMboOpensTheLineScanViewer:
