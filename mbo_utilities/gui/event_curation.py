@@ -1,14 +1,16 @@
 """Event curation of voltage traces with vnoiser, inside the viewer.
 
-The curation notebook's dashboard as viewer panels. Two panels on the top
-strip: ``Curation`` is the full trace with the candidate markers and the
-threshold / auto-pass lines (the notebook's panel A with cards A1 and A2);
-``Candidates`` holds the template, the focused candidate, the second-pass
-preview and the candidate PCA (B to E). The Curation tab on the right bar
-picks the data, the mode and the recording, and carries the decision and
-navigation controls. Every rule comes from ``vnoiser.curation`` through
-:class:`mbo_utilities.vnoiser.CurationSession`; each mode keeps its own
-session and its own JSON file, as the notebook's sections do.
+The curation notebook's dashboard as viewer panels, over every recording a
+data path holds at once. Scanning a path catalogs each animal, experiment
+and scan / domain the pipeline processed, and loads them all in the
+background; the ``All traces`` panel stacks them with their candidate
+events, ``Curation`` is the focused one (the notebook's panel A with cards
+A1 and A2) and ``Candidates`` its template, focused candidate, second-pass
+preview and PCA (B to E). The Curation tab on the right bar lists the
+recordings, switches mode, and carries the decision and navigation
+controls. Every rule comes from ``vnoiser.curation`` through
+:class:`mbo_utilities.vnoiser.CurationSession`: one per mode and
+recording, each with its own JSON file, as the notebook's sections have.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +30,7 @@ from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui._theme import card, em, section
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
-from mbo_utilities.gui.imgui.lines import drag_hline, line, line_plot, vlines
+from mbo_utilities.gui.imgui.lines import decimate_minmax, drag_hline, line, line_plot, vlines
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.install import VNOISER_HINT
@@ -37,6 +40,7 @@ from mbo_utilities.vnoiser import MODES, CurationSession, pf_dir_for_mesc
 __all__ = [
     "KEYBINDS",
     "EventCurationWidget",
+    "Recording",
     "attach_curation_widget",
     "detach_curation_widget",
     "help_markdown",
@@ -45,8 +49,10 @@ __all__ = [
 PANEL_HEIGHT = 280
 CARD_WIDTH_EM = 8.5
 FILTERS = ("all", "yes", "no", "unlabeled")
+STACK_GAP = 1.25
 
 TRACE_COLOR = (0.85, 0.85, 0.85, 1.0)
+STACK_COLOR = (0.65, 0.65, 0.68, 1.0)
 LOWPASS_COLOR = (0.35, 0.60, 0.95, 1.0)
 THRESHOLD_COLOR = (0.84, 0.15, 0.24, 1.0)
 AUTO_PASS_COLOR = (0.16, 0.62, 0.56, 1.0)
@@ -60,7 +66,7 @@ KEYBINDS = (
     ("n", "label the focused candidate no"),
     ("backspace", "clear its label"),
     ("[ / ]", "previous / next candidate in view"),
-    ("click", "focus a candidate on the trace or the PCA plot"),
+    ("click", "focus a candidate on a trace or the PCA plot"),
     ("drag", "move the threshold / auto-pass line on the trace"),
 )
 
@@ -74,10 +80,11 @@ _MODE_TITLES = {
 def help_markdown() -> str:
     return (
         "## Event Curation\n\n"
-        "vnoiser's curation notebook inside the viewer. Pick a data path "
-        "(a `Data` folder, an animal or experiment folder, a `PF` folder, or "
-        "a raw `.mat` recording), then the animal, experiment and scan / "
-        "domain, and Load.\n\n"
+        "vnoiser's curation notebook inside the viewer, over every recording "
+        "at once. Pick a data path (a `Data` folder, an animal or experiment "
+        "folder, a `PF` folder, a raw `.mat` recording, or a line-scan `.mesc` "
+        "with a PF folder beside it): every scan / domain the pipeline "
+        "processed is listed and loaded.\n\n"
         "### Modes\n\n"
         "- **fast**: thresholds the denoised trace; the template is seeded "
         "from the top 25% highest-amplitude candidates.\n"
@@ -85,14 +92,16 @@ def help_markdown() -> str:
         "trace (blue); the template is seeded the same way.\n"
         "- **manual**: no seed template; only Yes events shape it.\n\n"
         "### Panels\n\n"
-        "- **Curation** (top): the trace with candidate markers. Drag the red "
+        "- **All traces** (top): every loaded recording stacked, with its "
+        "candidates coloured by label. Click a candidate to focus it.\n"
+        "- **Curation** (top): the focused recording's trace. Drag the red "
         "line to change the candidate threshold; drag the teal line (or the "
         "A2 slider) to set the auto-pass amplitude.\n"
         "- **Candidates** (top): the current template, the focused candidate "
         "against it, the second-pass preview with rejected events removed, "
         "and the candidate PCA over 400 ms windows. Click a point to focus it.\n"
-        "- **Curation** tab (right): mode, source, view filter, Yes / No / "
-        "Clear, and navigation.\n\n"
+        "- **Curation** tab (right): the recordings table, mode, view filter, "
+        "Yes / No / Clear, and navigation.\n\n"
         "Each mode saves to its own `PF/.curation/<mode>_template_curation.json`; "
         "reopening the same scan / domain restores it."
     )
@@ -100,6 +109,17 @@ def help_markdown() -> str:
 
 def _mode_title(mode: str, cutoff: float) -> str:
     return _MODE_TITLES[mode].format(cutoff=cutoff)
+
+
+@dataclass
+class Recording:
+    """One curatable recording: what a session opens and which id loads it."""
+
+    rid: str
+    label: str
+    experiment: str
+    source: str
+    pre_denoised: bool
 
 
 class EventCurationWidget:
@@ -111,6 +131,8 @@ class EventCurationWidget:
         Anything with ``image_widget`` (a figure) and a ``logger``.
     strip : TopStrip, optional
         The figure's shared top strip; a private one is built without.
+    data_path : str, optional
+        Path to scan at once; None reopens the last one, "" none.
     """
 
     def __init__(self, parent: Any, strip: TopStrip | None = None, data_path: str | None = None):
@@ -120,6 +142,11 @@ class EventCurationWidget:
         self._own_strip = strip is None
         self.strip = TopStrip(self.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
+        # kept so the panel can ask for more height as recordings load
+        self._all_panel = TopPanel(
+            "all_traces", "All traces", self.draw_all_panel, PANEL_HEIGHT, "curation", 11
+        )
+        self.strip.register(self._all_panel)
         self.strip.register(
             TopPanel("curation", "Curation", self.draw_timeline_panel, PANEL_HEIGHT, "curation", 12)
         )
@@ -129,39 +156,39 @@ class EventCurationWidget:
 
         self.mode = "fast"
         self.slow_cutoff_hz = 40.0
-        self.sessions: dict[str, CurationSession] = {}
-        if data_path is None:
-            last = get_last_dir("vnoiser")
-            data_path = str(last) if last else ""
-        self.data_path = str(data_path)
-        # a trace handed over in memory (a line-scan ROI), replayed on a
-        # mode switch the way a picked recording is
-        self._trace_source: dict | None = None
+        self.catalog: list[Recording] = []
+        self.sessions: dict[tuple[str, str], CurationSession] = {}
+        self.current = ""
+        # traces handed over in memory (line-scan ROIs), by recording id
+        self._trace_sources: dict[str, dict] = {}
         # called with the focused candidate's time (s) whenever it changes
         self.on_focus = None
         self._last_focus = None
+        self.data_path = ""
         self.prompt = PathPrompt(
             "Curation data",
-            path=self.data_path,
+            path="",
             action="scan",
-            hint="vnoiser Data folder, an experiment or PF folder, or a .mat recording",
+            hint="vnoiser Data folder, an animal, experiment or PF folder, a .mat, or a line-scan .mesc",
         )
         self._folder_dialog = None
-        self.animal = ""
-        self.experiment = ""
-        self.recording = ""
-        self.status = "Set a data path, then choose a recording and Load."
+        self.status = "Set a data path: every recording under it is listed and loaded."
 
-        self._loading = False
-        self._load_thread: threading.Thread | None = None
-        self._load_results: queue.Queue = queue.Queue()
+        self._busy: set[tuple[str, str]] = set()
+        self._jobs: queue.Queue = queue.Queue()
+        self._results: queue.Queue = queue.Queue()
+        self._worker: threading.Thread | None = None
 
         self.timeline_points = ScatterPlot("##curation_timeline_pts", marker_size=7.0)
+        self.stack_points = ScatterPlot("##curation_stack_pts", marker_size=3.5)
         self.pca = ScatterPlot("##curation_pca", marker_size=7.0)
         self.autofit = True
         self._fit_timeline = False
+        self._fit_stack = False
         self._timeline_key = None
+        self._stack_key = None
         self._panel_keys: dict[str, tuple] = {}
+        self._decimated: dict[tuple, tuple] = {}
         self._threshold_drag: float | None = None
         self._auto_pass_drag: float | None = None
         self._slider_pending: dict[str, float] = {}
@@ -169,6 +196,12 @@ class EventCurationWidget:
         self._hovered = False
         self.focus_tab = False
         self._closed = False
+
+        if data_path is None:
+            last = get_last_dir("vnoiser")
+            data_path = str(last) if last else ""
+        if data_path:
+            self.scan(data_path)
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -181,48 +214,59 @@ class EventCurationWidget:
         self._closed = True
         self._folder_dialog = None
         self.strip.remove_hook(self._frame)
-        self.strip.unregister("curation")
-        self.strip.unregister("candidates")
+        for key in ("all_traces", "curation", "candidates"):
+            self.strip.unregister(key)
         if self._own_strip:
             self.strip.close()
 
     # ------------------------------------------------------------------
-    # sessions
+    # catalog and sessions
     # ------------------------------------------------------------------
 
     @property
     def session(self) -> CurationSession | None:
-        """The current mode's session, built on first use."""
-        if not self.data_path:
-            return None
-        session = self.sessions.get(self.mode)
-        if session is None:
-            try:
-                session = CurationSession(
-                    self.data_path, mode=self.mode, slow_cutoff_hz=self.slow_cutoff_hz
-                )
-            except Exception as error:
-                self.logger.warning("vnoiser cannot open %s", self.data_path, exc_info=True)
-                self.status = f"cannot open {self.data_path}: {error}"
-                self.data_path = ""
-                return None
-            self.sessions[self.mode] = session
-            if self.experiment:
-                session.select_experiment(self.experiment)
-        return session
+        """The focused recording's session in the current mode, if loaded."""
+        return self.sessions.get((self.mode, self.current))
+
+    @property
+    def loading(self) -> bool:
+        return bool(self._busy)
 
     def _ready(self) -> CurationSession | None:
-        """The session when it can be read: not None, not mid-load, loaded."""
-        if self._loading:
+        """The focused session when it can be read: loaded and not mid-load."""
+        if (self.mode, self.current) in self._busy:
             return None
         session = self.session
         return session if session is not None and session.loaded else None
 
+    def recording(self, rid: str) -> Recording | None:
+        return next((r for r in self.catalog if r.rid == rid), None)
+
+    @property
+    def experiments(self) -> list[str]:
+        seen: list[str] = []
+        for rec in self.catalog:
+            if rec.experiment not in seen:
+                seen.append(rec.experiment)
+        return seen
+
+    def loaded(self, mode: str | None = None) -> list[tuple[Recording, CurationSession]]:
+        """Every loaded recording of ``mode`` (the current one), catalog order."""
+        mode = mode or self.mode
+        out = []
+        for rec in self.catalog:
+            session = self.sessions.get((mode, rec.rid))
+            if session is not None and session.loaded and (mode, rec.rid) not in self._busy:
+                out.append((rec, session))
+        return out
+
     def scan(self, path) -> None:
-        """Point every mode at a new data path."""
+        """Catalog every recording under a path and start loading them."""
         self.sessions.clear()
-        self.animal = self.experiment = self.recording = ""
-        self._trace_source = None
+        self._decimated.clear()
+        self._trace_sources.clear()
+        self.catalog = []
+        self.current = ""
         path = Path(path).expanduser()
         note = ""
         if path.suffix.lower() == ".mesc":
@@ -240,145 +284,187 @@ class EventCurationWidget:
             note = f" (PF folder of {path.name})"
             path = pf
         self.data_path = str(path)
-        session = self.session
-        if session is None:
+        try:
+            self.catalog = _build_catalog(path, self.logger)
+        except Exception as error:
+            self.logger.warning("vnoiser cannot open %s", path, exc_info=True)
+            self.status = f"cannot open {path}: {error}"
+            self.data_path = ""
             return
         set_last_dir("vnoiser", self.data_path)
         self.prompt.path = self.data_path
-        self.status = session.status + note
-        if not session.has_dataset:
+        if not self.catalog:
             self.status = (
                 f"no vnoiser data at {self.data_path}: expected a Data folder "
                 "(stan*/…_expt*/PF/denoised_trace_scans.pkl), an animal, experiment or "
                 "PF folder, or a .mat recording."
             )
             return
-        animals = session.animals
-        if len(animals) == 1:
-            self.animal = animals[0][1]
+        n_pre = sum(r.pre_denoised for r in self.catalog)
+        self.status = (
+            f"{len(self.catalog)} recordings in {len(self.experiments)} experiment(s)"
+            f"{note}; {n_pre} processed"
+        )
+        # the first processed experiment loads on its own; raw .mat
+        # recordings take minutes each in the denoiser, so they wait for a click
+        first = next((r for r in self.catalog if r.pre_denoised), None)
+        if first is not None:
+            self.current = first.rid
+            self.load_all(first.experiment)
 
     def set_mode(self, mode: str) -> None:
         if mode not in MODES or mode == self.mode:
             return
         self.mode = mode
-        self._fit_timeline = True
-        self._reload()
+        self._fit_timeline = self._fit_stack = True
+        rec = self.recording(self.current)
+        if rec is not None:
+            self.load(self.current)
+            if rec.pre_denoised:
+                self.load_all(rec.experiment)
 
     def set_slow_cutoff(self, cutoff_hz: float) -> None:
         cutoff_hz = float(cutoff_hz)
         if cutoff_hz <= 0 or cutoff_hz == self.slow_cutoff_hz:
             return
         self.slow_cutoff_hz = cutoff_hz
-        self.sessions.pop("slow", None)
+        for key in [k for k in self.sessions if k[0] == "slow"]:
+            self.sessions.pop(key)
         if self.mode == "slow":
-            self._reload()
+            self.set_mode("fast")
+            self.set_mode("slow")
 
-    def _reload(self) -> None:
-        """Bring the current mode's session onto what the others show."""
-        session = self.session
-        if session is None:
+    def load(self, rid: str) -> None:
+        """Focus recording ``rid``, loading it for the current mode if needed."""
+        rec = self.recording(rid)
+        if rec is None:
             return
-        if self._trace_source is not None:
-            if session.recording_id != self._trace_source["recording_id"]:
-                self.load_trace(**self._trace_source)
-        elif self.recording and session.recording_id != self.recording:
-            self.load(self.recording)
+        self.current = rid
+        self._fit_timeline = True
+        self.pca.refit()
+        self._panel_keys.clear()
+        key = (self.mode, rid)
+        if key in self.sessions or key in self._busy:
+            return
+        self._enqueue(rec, self.mode)
+
+    def load_all(self, experiment: str | None = None) -> None:
+        """Load every processed recording of ``experiment`` (all when None)."""
+        for rec in self.catalog:
+            if experiment is not None and rec.experiment != experiment:
+                continue
+            if not rec.pre_denoised and rec.rid not in self._trace_sources:
+                continue
+            key = (self.mode, rec.rid)
+            if key not in self.sessions and key not in self._busy:
+                self._enqueue(rec, self.mode)
+        if not self.current:
+            first = next((r for r in self.catalog if (self.mode, r.rid) in self._busy), None)
+            if first is not None:
+                self.current = first.rid
 
     def load_trace(self, trace, fs_hz, *, recording_id, label, source_path, curation_dir=None) -> None:
-        """Curate a trace held in memory, on a worker thread: vnoiser's
-        denoiser runs on it unless a cache exists. See
-        :meth:`CurationSession.load_trace`."""
+        """Curate a trace held in memory: vnoiser's denoiser runs on it on
+        the worker unless a cache exists. See :meth:`CurationSession.load_trace`."""
         source_path = str(Path(source_path))
-        if source_path != self.data_path:
-            self.sessions.clear()
-            self.animal = self.experiment = self.recording = ""
-            self.data_path = source_path
-        session = self.session
-        if session is None or self._loading:
-            return
-        self._trace_source = {
+        rid = str(recording_id)
+        if self.recording(rid) is None:
+            self.catalog.append(Recording(rid, str(label), Path(source_path).stem, source_path, False))
+        self._trace_sources[rid] = {
             "trace": trace,
             "fs_hz": float(fs_hz),
-            "recording_id": str(recording_id),
+            "recording_id": rid,
             "label": str(label),
             "source_path": source_path,
             "curation_dir": curation_dir,
         }
-        source = self._trace_source
-        job = get_process_manager().start_job("vnoiser", f"denoise + curate: {label}")
-        self._loading = True
-        self.status = f"denoising {label}... (cached after the first run)"
+        for key in [k for k in self.sessions if k[1] == rid]:
+            self.sessions.pop(key)
+        self.load(rid)
 
-        def run():
-            try:
+    def _enqueue(self, rec: Recording, mode: str) -> None:
+        key = (mode, rec.rid)
+        self._busy.add(key)
+        source = self._trace_sources.get(rec.rid)
+        cutoff = self.slow_cutoff_hz
+
+        def work():
+            session = CurationSession(rec.source, mode=mode, slow_cutoff_hz=cutoff)
+            if source is not None:
                 message = session.load_trace(**source)
-            except Exception as error:
-                job.fail(f"{type(error).__name__}: {error}")
-                self._load_results.put((session, None, f"load failed: {error}"))
-                return
-            job.done(message)
-            self._load_results.put((session, message, None))
+            else:
+                message = session.load(rec.rid)
+            return session, message
 
-        self._load_thread = threading.Thread(target=run, name="vnoiser-denoise", daemon=True)
-        self._load_thread.start()
+        self._jobs.put((key, rec.label, work))
+        if self._worker is None or not self._worker.is_alive():
+            self._worker = threading.Thread(target=self._run_jobs, name="vnoiser-load", daemon=True)
+            self._worker.start()
 
-    def select_experiment(self, experiment: str) -> None:
-        self.experiment = str(experiment)
-        self.recording = ""
-        for session in self.sessions.values():
-            self.status = session.select_experiment(self.experiment)
-
-    def load(self, recording_id: str) -> None:
-        """Load one recording for the current mode on a worker thread."""
-        session = self.session
-        if session is None or self._loading or not recording_id:
-            return
-        self.recording = recording_id
-        label = dict(session.recordings).get(recording_id, recording_id)
-        job = get_process_manager().start_job("vnoiser", f"curation: {label}")
-        self._loading = True
-        self.status = f"loading {label}..."
-
-        def run():
-            try:
-                message = session.load(recording_id)
-            except Exception as error:
-                job.fail(f"{type(error).__name__}: {error}")
-                self._load_results.put((session, None, f"load failed: {error}"))
-                return
-            job.done(message)
-            self._load_results.put((session, message, None))
-
-        self._load_thread = threading.Thread(target=run, name="vnoiser-load", daemon=True)
-        self._load_thread.start()
-
-    def wait(self, timeout: float | None = None) -> None:
-        """Block until a pending load finishes and apply it (tests)."""
-        if self._load_thread is not None:
-            self._load_thread.join(timeout)
-        self._drain_loads()
-
-    def _drain_loads(self) -> None:
+    def _run_jobs(self) -> None:
+        manager = get_process_manager()
         while True:
             try:
-                _session, message, error = self._load_results.get_nowait()
+                key, label, work = self._jobs.get(timeout=0.5)
             except queue.Empty:
                 return
-            self._loading = False
-            self._load_thread = None
-            self.status = error or message
-            if error:
-                self.logger.warning(self.status)
-            self._fit_timeline = True
-            self.pca.refit()
-            self._panel_keys.clear()
+            job = manager.start_job("vnoiser", f"curation: {label}")
+            try:
+                session, message = work()
+            except Exception as error:
+                job.fail(f"{type(error).__name__}: {error}")
+                self._results.put((key, None, f"{label}: load failed: {error}"))
+            else:
+                job.done(message)
+                self._results.put((key, session, message))
+            finally:
+                self._jobs.task_done()
+
+    def wait(self, timeout: float | None = None) -> None:
+        """Block until every queued load finishes and apply them (tests)."""
+        import time
+
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while self._busy:
+            self._drain()
+            worker = self._worker
+            if not self._busy:
+                break
+            if worker is None or not worker.is_alive():
+                if self._jobs.empty():
+                    break
+            if deadline is not None and time.monotonic() > deadline:
+                break
+            time.sleep(0.02)
+        self._drain()
+
+    def _drain(self) -> None:
+        while True:
+            try:
+                key, session, message = self._results.get_nowait()
+            except queue.Empty:
+                return
+            self._busy.discard(key)
+            if session is None:
+                self.logger.warning(message)
+                self.status = message
+                continue
+            self.sessions[key] = session
+            self._fit_stack = True
+            if key == (self.mode, self.current):
+                self.status = message
+                self._fit_timeline = True
+                self.pca.refit()
+                self._panel_keys.clear()
+            elif not self._busy:
+                self.status = f"{len(self.loaded())} recordings loaded"
 
     # ------------------------------------------------------------------
     # per frame
     # ------------------------------------------------------------------
 
     def _frame(self) -> None:
-        self._drain_loads()
+        self._drain()
         self._poll_folder_dialog()
         self._draw_prompt()
         self._handle_keys()
@@ -404,8 +490,7 @@ class EventCurationWidget:
         if submitted:
             if Path(submitted).expanduser().exists():
                 self.scan(submitted)
-                session = self.session
-                if session is not None and session.has_dataset:
+                if self.catalog:
                     self.prompt.open = False
                 else:
                     self.prompt.status = self.status
@@ -447,7 +532,85 @@ class EventCurationWidget:
             self._hovered = True
 
     # ------------------------------------------------------------------
-    # top panel: the trace
+    # top panel: every loaded trace
+    # ------------------------------------------------------------------
+
+    def _decimated_trace(self, rid: str, session: CurationSession):
+        """``(t, y)`` of the analysis trace at a few thousand points, and its
+        robust 0..1 scaling, cached per recording and mode."""
+        y = session.analysis_trace
+        key = (session.mode, rid, y.shape[0], float(session.fs))
+        cached = self._decimated.get(key)
+        if cached is None:
+            idx, values = decimate_minmax(y, 4000)
+            lo, hi = np.nanpercentile(y, (1, 99))
+            span = hi - lo if hi > lo else 1.0
+            cached = (idx / session.fs, values, float(lo), float(span))
+            self._decimated[key] = cached
+        return cached
+
+    def draw_all_panel(self) -> None:
+        """The All traces panel: every loaded recording stacked, with its
+        candidates; click one to focus it."""
+        self._mark_hovered()
+        rows = self.loaded()
+        if not rows:
+            imgui.text_disabled(self.status)
+            return
+        n_busy = len(self._busy)
+        imgui.text_disabled(
+            f"{len(rows)} recordings · {_mode_title(self.mode, self.slow_cutoff_hz)}"
+            + (f" · loading {n_busy} more" if n_busy else "")
+        )
+        imgui.same_line(0, 12)
+        if imgui.button("fit##stack"):
+            self._fit_stack = True
+        key = (self.mode, len(rows))
+        fit = self._fit_stack or key != self._stack_key
+        if key != self._stack_key:
+            # about 16 px per trace, within what a strip can sensibly take
+            self._all_panel.height = int(min(max(PANEL_HEIGHT, 16 * len(rows) + 60), 640))
+            self.strip.register(self._all_panel)
+        self._stack_key = key
+        self._fit_stack = False
+        height = max(imgui.get_content_region_avail().y - 2, 60.0)
+        with line_plot("##curation_stack", "time (s)", "", height=height, fit=fit, legend=False) as ok:
+            if not ok:
+                return
+            xs_all, ys_all, colors_all, owners = [], [], [], []
+            for row, (rec, session) in enumerate(rows):
+                t, values, lo, span = self._decimated_trace(rec.rid, session)
+                offset = (len(rows) - 1 - row) * STACK_GAP
+                focused = rec.rid == self.current
+                line(
+                    f"##trace{row}", (values - lo) / span + offset, x=t,
+                    color=TRACE_COLOR if focused else STACK_COLOR,
+                    weight=1.4 if focused else 0.8, legend=False,
+                )
+                implot.plot_text(rec.label, float(t[0]), offset + 1.0, imgui.ImVec2(4, -6))
+                if session.n:
+                    marker_y = np.interp(session.times_s, session.t, session.analysis_trace)
+                    xs_all.append(session.times_s)
+                    ys_all.append((marker_y - lo) / span + offset)
+                    colors_all.append(session.colors())
+                    owners.append(np.full(session.n, row, dtype=int))
+            if not xs_all:
+                return
+            xs = np.concatenate(xs_all)
+            ys = np.concatenate(ys_all)
+            owners = np.concatenate(owners)
+            picked = self.stack_points.items(
+                xs, ys, np.concatenate(colors_all),
+                tooltip=lambda i: f"{rows[owners[i]][0].label}: {xs[i]:.3f} s",
+            )
+            if picked is not None:
+                rec, session = rows[owners[picked]]
+                first = int(np.flatnonzero(owners == owners[picked])[0])
+                self.load(rec.rid)
+                session.select(picked - first)
+
+    # ------------------------------------------------------------------
+    # top panel: the focused trace
     # ------------------------------------------------------------------
 
     def draw_timeline_panel(self) -> None:
@@ -706,32 +869,26 @@ class EventCurationWidget:
     # ------------------------------------------------------------------
 
     def draw_tab(self) -> None:
-        """The Curation tab: source, mode, filter, decisions, navigation."""
+        """The Curation tab: source, recordings, mode, filter, decisions, navigation."""
         self.strip.report_right_tab("curation")
         self._mark_hovered()
         self._draw_mode_row()
         self._draw_source()
-        session = self.session
-        if session is None:
-            imgui.text_disabled(self.status)
-            return
-        self._draw_selection(session)
-        self._draw_controls(session)
+        self._draw_recordings()
+        self._draw_controls()
 
     def draw_embedded(self) -> None:
         """The controls without the source picker, for a host that hands
         traces over itself (the line-scan viewer's ROI panel)."""
         self._mark_hovered()
         self._draw_mode_row()
-        session = self.session if self.data_path else None
-        if session is None:
-            imgui.text_wrapped(self.status)
-            return
-        self._draw_controls(session)
+        self._draw_recordings()
+        self._draw_controls()
 
-    def _draw_controls(self, session: CurationSession) -> None:
+    def _draw_controls(self) -> None:
         imgui.text_wrapped(self.status)
-        if self._loading or not session.loaded:
+        session = self._ready()
+        if session is None:
             return
         self._draw_filter(session)
         self._draw_decision(session)
@@ -767,44 +924,62 @@ class EventCurationWidget:
         if self.data_path and imgui.is_item_hovered():
             imgui.set_tooltip(self.data_path)
 
-    def _draw_selection(self, session: CurationSession) -> None:
-        if session.hierarchical:
-            animals = session.animals
-            self._combo("animal", animals, self.animal, self._pick_animal)
-            experiments = session.experiments(self.animal) if self.animal else []
-            self._combo("experiment", experiments, self.experiment, self.select_experiment)
-        recordings = session.recordings
-        self._combo("recording", recordings, self.recording, self._pick_recording)
-        can_load = bool(self.recording) and not self._loading
-        if not can_load:
-            imgui.begin_disabled()
-        if imgui.button("Load", imgui.ImVec2(em(6), 0)):
-            self.load(self.recording)
-        if not can_load:
-            imgui.end_disabled()
-        if self._loading:
-            imgui.same_line(0, em(0.5))
-            imgui.text_disabled("loading...")
-
-    def _pick_animal(self, value: str) -> None:
-        self.animal = value
-        self.experiment = ""
-        self.recording = ""
-
-    def _pick_recording(self, value: str) -> None:
-        self.recording = value
-
-    def _combo(self, label, options, current, on_pick) -> None:
-        """A combo over ``(label, value)`` options."""
-        values = [value for _label, value in options]
-        labels = [text for text, _value in options]
-        idx = values.index(current) if current in values else -1
-        if not options:
-            labels, idx = [f"no {label}s found"], 0
-        imgui.set_next_item_width(-em(5.5))
-        changed, idx = imgui.combo(label, idx, labels)
-        if changed and options and 0 <= idx < len(values) and values[idx] != current:
-            on_pick(values[idx])
+    def _draw_recordings(self) -> None:
+        if not self.catalog:
+            return
+        section("Recordings")
+        n_loaded = len(self.loaded())
+        imgui.text_disabled(
+            f"{n_loaded}/{len(self.catalog)} loaded"
+            + (f", {len(self._busy)} loading" if self._busy else "")
+        )
+        imgui.same_line(0, em(0.6))
+        if imgui.small_button("load all"):
+            self.load_all(None)
+        set_tooltip("load every processed recording of every experiment", show_mark=False)
+        flags = (
+            imgui.TableFlags_.row_bg
+            | imgui.TableFlags_.borders_inner_h
+            | imgui.TableFlags_.scroll_y
+            | imgui.TableFlags_.sizing_fixed_fit
+        )
+        rows = min(len(self.catalog), 12)
+        height = imgui.get_text_line_height_with_spacing() * (rows + 1.5)
+        if not imgui.begin_table("##curation_recordings", 4, flags, imgui.ImVec2(0, height)):
+            return
+        imgui.table_setup_scroll_freeze(0, 1)
+        for name in ("experiment", "recording", "cand", "yes / no"):
+            imgui.table_setup_column(name)
+        imgui.table_headers_row()
+        for rec in self.catalog:
+            key = (self.mode, rec.rid)
+            session = self.sessions.get(key)
+            ready = session is not None and session.loaded and key not in self._busy
+            imgui.table_next_row()
+            imgui.table_next_column()
+            imgui.text_disabled(rec.experiment)
+            imgui.table_next_column()
+            short = rec.label.rsplit(" / ", 2)[-2:] if " / " in rec.label else [rec.label]
+            clicked, _ = imgui.selectable(
+                f"{' / '.join(short)}##rec{rec.rid}", rec.rid == self.current,
+                imgui.SelectableFlags_.span_all_columns,
+            )
+            if clicked:
+                self.load(rec.rid)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(rec.label if not rec.pre_denoised else f"{rec.label}\n{rec.source}")
+            imgui.table_next_column()
+            if ready:
+                imgui.text(str(session.n))
+            elif key in self._busy:
+                imgui.text_disabled("...")
+            else:
+                imgui.text_disabled("-" if rec.pre_denoised else "raw")
+            imgui.table_next_column()
+            if ready:
+                yes, no, _un = session.counts()
+                imgui.text(f"{yes} / {no}")
+        imgui.end_table()
 
     def _draw_filter(self, session) -> None:
         section("View")
@@ -889,6 +1064,46 @@ class EventCurationWidget:
         from mbo_utilities.vnoiser import LABEL_RGBA
 
         return LABEL_RGBA.get(label, LABEL_RGBA["unlabeled"])
+
+
+def _build_catalog(root: Path, logger) -> list[Recording]:
+    """Every recording under ``root``: each experiment's scan / domain traces
+    for a spatial JEDI Data / animal / experiment / PF folder, else the raw
+    ``.mat`` recordings of a folder (or the one file)."""
+    from vnoiser.dataset import SpatialJediDataset, open_recording_dataset
+
+    if SpatialJediDataset.can_open(root):
+        dataset = SpatialJediDataset(root)
+        if dataset.requires_experiment_selection:
+            if dataset.scope == "data":
+                animals = [path for _, path in dataset.animal_options()]
+            else:
+                animals = [str(root)]
+            experiments = [
+                path for animal in animals for _, path in dataset.experiment_options(animal)
+            ]
+        else:
+            experiments = [str(dataset.fixed_experiment)]
+        catalog = []
+        for experiment in experiments:
+            try:
+                refs = dataset.select_experiment(experiment)
+            except Exception as error:
+                logger.warning("skipping %s: %s", experiment, error)
+                continue
+            catalog += [
+                Recording(ref.recording_id, ref.label, ref.experiment, str(ref.pf_dir), True)
+                for ref in refs
+            ]
+        return catalog
+    try:
+        dataset = open_recording_dataset(root)
+    except FileNotFoundError:
+        return []
+    return [
+        Recording(value, label, root.name, str(root), False)
+        for label, value in dataset.recording_options()
+    ]
 
 
 def attach_curation_widget(parent: Any, focus: bool = False) -> EventCurationWidget | None:
