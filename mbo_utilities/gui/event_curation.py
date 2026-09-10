@@ -1,14 +1,14 @@
 """Event curation of voltage traces with vnoiser, inside the viewer.
 
 The curation notebook's dashboard as viewer panels, over every recording a
-data path holds at once. Scanning a path catalogs each animal, experiment
-and scan / domain the pipeline processed, and loads them all in the
-background; the ``All traces`` panel stacks them with their candidate
-events, ``Curation`` is the focused one (the notebook's panel A with cards
-A1 and A2) and ``Candidates`` its template, focused candidate, second-pass
-preview and PCA (B to E). The Curation tab on the right bar lists the
-recordings, switches mode, and carries the decision and navigation
-controls. Every rule comes from ``vnoiser.curation`` through
+data path holds. Scanning a path catalogs each animal, experiment and
+scan / domain the pipeline processed and loads them in the background;
+``Curation`` shows one recording at a time (the notebook's panel A with
+cards A1, A2, Decision and Navigation) and flips through them, and
+``Candidates`` holds its template, focused candidate, second-pass preview
+and PCA (B to E). The Curation tab on the right bar lists the recordings
+and switches mode. Every panel reads the focused session, so a label, a
+threshold or a flip updates all of them at once. Every rule comes from ``vnoiser.curation`` through
 :class:`mbo_utilities.vnoiser.CurationSession`: one per mode and
 recording, each with its own JSON file, as the notebook's sections have.
 """
@@ -30,7 +30,7 @@ from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui._theme import card, em, section
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
-from mbo_utilities.gui.imgui.lines import decimate_minmax, drag_hline, line, line_plot, vlines
+from mbo_utilities.gui.imgui.lines import drag_hline, line, line_plot, vlines
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.install import VNOISER_HINT
@@ -48,11 +48,10 @@ __all__ = [
 
 PANEL_HEIGHT = 280
 CARD_WIDTH_EM = 8.5
+WIDE_CARD_EM = 15.0
 FILTERS = ("all", "yes", "no", "unlabeled")
-STACK_GAP = 1.25
 
 TRACE_COLOR = (0.85, 0.85, 0.85, 1.0)
-STACK_COLOR = (0.65, 0.65, 0.68, 1.0)
 LOWPASS_COLOR = (0.35, 0.60, 0.95, 1.0)
 THRESHOLD_COLOR = (0.84, 0.15, 0.24, 1.0)
 AUTO_PASS_COLOR = (0.16, 0.62, 0.56, 1.0)
@@ -66,6 +65,7 @@ KEYBINDS = (
     ("n", "label the focused candidate no"),
     ("backspace", "clear its label"),
     ("[ / ]", "previous / next candidate in view"),
+    (", / .", "previous / next recording"),
     ("click", "focus a candidate on a trace or the PCA plot"),
     ("drag", "move the threshold / auto-pass line on the trace"),
 )
@@ -92,16 +92,14 @@ def help_markdown() -> str:
         "trace (blue); the template is seeded the same way.\n"
         "- **manual**: no seed template; only Yes events shape it.\n\n"
         "### Panels\n\n"
-        "- **All traces** (top): every loaded recording stacked, with its "
-        "candidates coloured by label. Click a candidate to focus it.\n"
-        "- **Curation** (top): the focused recording's trace. Drag the red "
-        "line to change the candidate threshold; drag the teal line (or the "
-        "A2 slider) to set the auto-pass amplitude.\n"
+        "- **Curation** (top): one recording at a time; the arrows (or `,` "
+        "and `.`) flip through them. Drag the red line to change the "
+        "candidate threshold; drag the teal line (or the A2 slider) to set "
+        "the auto-pass amplitude. Decision and Navigation sit beside it.\n"
         "- **Candidates** (top): the current template, the focused candidate "
         "against it, the second-pass preview with rejected events removed, "
         "and the candidate PCA over 400 ms windows. Click a point to focus it.\n"
-        "- **Curation** tab (right): the recordings table, mode, view filter, "
-        "Yes / No / Clear, and navigation.\n\n"
+        "- **Curation** tab (right): the recordings table and the mode.\n\n"
         "Each mode saves to its own `PF/.curation/<mode>_template_curation.json`; "
         "reopening the same scan / domain restores it."
     )
@@ -120,6 +118,8 @@ class Recording:
     experiment: str
     source: str
     pre_denoised: bool
+    # why the last load failed (the pipeline never wrote this scan / domain)
+    error: str = ""
 
 
 class EventCurationWidget:
@@ -142,11 +142,6 @@ class EventCurationWidget:
         self._own_strip = strip is None
         self.strip = TopStrip(self.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
-        # kept so the panel can ask for more height as recordings load
-        self._all_panel = TopPanel(
-            "all_traces", "All traces", self.draw_all_panel, PANEL_HEIGHT, "curation", 11
-        )
-        self.strip.register(self._all_panel)
         self.strip.register(
             TopPanel("curation", "Curation", self.draw_timeline_panel, PANEL_HEIGHT, "curation", 12)
         )
@@ -164,6 +159,12 @@ class EventCurationWidget:
         # called with the focused candidate's time (s) whenever it changes
         self.on_focus = None
         self._last_focus = None
+        # called with the recording id whenever another recording is focused
+        self.on_recording = None
+        self._last_recording = None
+        # a host may draw something of its own above the trace (the
+        # line-scan viewer's raw line traces): ``(draw(height), height)``
+        self.extra_panel = None
         self.data_path = ""
         self.prompt = PathPrompt(
             "Curation data",
@@ -180,15 +181,11 @@ class EventCurationWidget:
         self._worker: threading.Thread | None = None
 
         self.timeline_points = ScatterPlot("##curation_timeline_pts", marker_size=7.0)
-        self.stack_points = ScatterPlot("##curation_stack_pts", marker_size=3.5)
         self.pca = ScatterPlot("##curation_pca", marker_size=7.0)
         self.autofit = True
         self._fit_timeline = False
-        self._fit_stack = False
         self._timeline_key = None
-        self._stack_key = None
         self._panel_keys: dict[str, tuple] = {}
-        self._decimated: dict[tuple, tuple] = {}
         self._threshold_drag: float | None = None
         self._auto_pass_drag: float | None = None
         self._slider_pending: dict[str, float] = {}
@@ -214,7 +211,7 @@ class EventCurationWidget:
         self._closed = True
         self._folder_dialog = None
         self.strip.remove_hook(self._frame)
-        for key in ("all_traces", "curation", "candidates"):
+        for key in ("curation", "candidates"):
             self.strip.unregister(key)
         if self._own_strip:
             self.strip.close()
@@ -263,7 +260,6 @@ class EventCurationWidget:
     def scan(self, path) -> None:
         """Catalog every recording under a path and start loading them."""
         self.sessions.clear()
-        self._decimated.clear()
         self._trace_sources.clear()
         self.catalog = []
         self.current = ""
@@ -316,7 +312,7 @@ class EventCurationWidget:
         if mode not in MODES or mode == self.mode:
             return
         self.mode = mode
-        self._fit_timeline = self._fit_stack = True
+        self._fit_timeline = True
         rec = self.recording(self.current)
         if rec is not None:
             self.load(self.current)
@@ -338,6 +334,9 @@ class EventCurationWidget:
         """Focus recording ``rid``, loading it for the current mode if needed."""
         rec = self.recording(rid)
         if rec is None:
+            return
+        if rec.error:
+            self.status = f"{rec.label}: {rec.error}"
             return
         self.current = rid
         self._fit_timeline = True
@@ -448,9 +447,15 @@ class EventCurationWidget:
             if session is None:
                 self.logger.warning(message)
                 self.status = message
+                rec = self.recording(key[1])
+                if rec is not None:
+                    rec.error = message.rsplit(": ", 1)[-1]
+                # a recording the pipeline never wrote cannot be shown:
+                # move on to the next one rather than sit on an empty panel
+                if key == (self.mode, self.current) and self.loadable():
+                    self.step_recording(1)
                 continue
             self.sessions[key] = session
-            self._fit_stack = True
             if key == (self.mode, self.current):
                 self.status = message
                 self._fit_timeline = True
@@ -473,7 +478,16 @@ class EventCurationWidget:
 
     def _report_focus(self) -> None:
         session = self._ready()
-        if session is None or not session.n:
+        if session is None:
+            return
+        if session.recording_id != self._last_recording:
+            self._last_recording = session.recording_id
+            if self.on_recording is not None:
+                try:
+                    self.on_recording(session.recording_id)
+                except Exception:
+                    self.logger.debug("curation recording callback failed", exc_info=True)
+        if not session.n:
             return
         key = (session.mode, session.recording_id, session.current)
         if key == self._last_focus:
@@ -526,105 +540,56 @@ class EventCurationWidget:
             session.step(-1)
         if imgui.is_key_pressed(imgui.Key.right_bracket, True):
             session.step(1)
+        if imgui.is_key_pressed(imgui.Key.comma, False):
+            self.step_recording(-1)
+        if imgui.is_key_pressed(imgui.Key.period, False):
+            self.step_recording(1)
 
     def _mark_hovered(self) -> None:
         if imgui.is_window_hovered(imgui.HoveredFlags_.root_and_child_windows):
             self._hovered = True
 
     # ------------------------------------------------------------------
-    # top panel: every loaded trace
+    # flipping through recordings
     # ------------------------------------------------------------------
 
-    def _decimated_trace(self, rid: str, session: CurationSession):
-        """``(t, y)`` of the analysis trace at a few thousand points, and its
-        robust 0..1 scaling, cached per recording and mode."""
-        y = session.analysis_trace
-        key = (session.mode, rid, y.shape[0], float(session.fs))
-        cached = self._decimated.get(key)
-        if cached is None:
-            idx, values = decimate_minmax(y, 4000)
-            lo, hi = np.nanpercentile(y, (1, 99))
-            span = hi - lo if hi > lo else 1.0
-            cached = (idx / session.fs, values, float(lo), float(span))
-            self._decimated[key] = cached
-        return cached
+    def loadable(self) -> list[Recording]:
+        """The recordings a flip can land on: processed ones and traces handed over."""
+        return [
+            r for r in self.catalog
+            if not r.error and (r.pre_denoised or r.rid in self._trace_sources)
+        ]
 
-    def draw_all_panel(self) -> None:
-        """The All traces panel: every loaded recording stacked, with its
-        candidates; click one to focus it."""
-        self._mark_hovered()
-        rows = self.loaded()
+    def step_recording(self, delta: int) -> None:
+        """Focus the previous / next loadable recording, loading it if needed."""
+        rows = self.loadable()
         if not rows:
-            imgui.text_disabled(self.status)
             return
-        n_busy = len(self._busy)
-        imgui.text_disabled(
-            f"{len(rows)} recordings · {_mode_title(self.mode, self.slow_cutoff_hz)}"
-            + (f" · loading {n_busy} more" if n_busy else "")
-        )
-        imgui.same_line(0, 12)
-        if imgui.button("fit##stack"):
-            self._fit_stack = True
-        key = (self.mode, len(rows))
-        fit = self._fit_stack or key != self._stack_key
-        if key != self._stack_key:
-            # about 16 px per trace, within what a strip can sensibly take
-            self._all_panel.height = int(min(max(PANEL_HEIGHT, 16 * len(rows) + 60), 640))
-            self.strip.register(self._all_panel)
-        self._stack_key = key
-        self._fit_stack = False
-        height = max(imgui.get_content_region_avail().y - 2, 60.0)
-        with line_plot("##curation_stack", "time (s)", "", height=height, fit=fit, legend=False) as ok:
-            if not ok:
-                return
-            xs_all, ys_all, colors_all, owners = [], [], [], []
-            for row, (rec, session) in enumerate(rows):
-                t, values, lo, span = self._decimated_trace(rec.rid, session)
-                offset = (len(rows) - 1 - row) * STACK_GAP
-                focused = rec.rid == self.current
-                line(
-                    f"##trace{row}", (values - lo) / span + offset, x=t,
-                    color=TRACE_COLOR if focused else STACK_COLOR,
-                    weight=1.4 if focused else 0.8, legend=False,
-                )
-                implot.plot_text(rec.label, float(t[0]), offset + 1.0, imgui.ImVec2(4, -6))
-                if session.n:
-                    marker_y = np.interp(session.times_s, session.t, session.analysis_trace)
-                    xs_all.append(session.times_s)
-                    ys_all.append((marker_y - lo) / span + offset)
-                    colors_all.append(session.colors())
-                    owners.append(np.full(session.n, row, dtype=int))
-            if not xs_all:
-                return
-            xs = np.concatenate(xs_all)
-            ys = np.concatenate(ys_all)
-            owners = np.concatenate(owners)
-            picked = self.stack_points.items(
-                xs, ys, np.concatenate(colors_all),
-                tooltip=lambda i: f"{rows[owners[i]][0].label}: {xs[i]:.3f} s",
-            )
-            if picked is not None:
-                rec, session = rows[owners[picked]]
-                first = int(np.flatnonzero(owners == owners[picked])[0])
-                self.load(rec.rid)
-                session.select(picked - first)
+        rids = [r.rid for r in rows]
+        if self.current not in rids:
+            self.load(rids[0])
+            return
+        pos = rids.index(self.current)
+        self.load(rids[(pos + int(delta)) % len(rids)])
 
     # ------------------------------------------------------------------
     # top panel: the focused trace
     # ------------------------------------------------------------------
 
     def draw_timeline_panel(self) -> None:
-        """The Curation panel: trace, candidate markers, threshold cards."""
+        """The Curation panel: one recording, its trace, candidates and cards."""
         self._mark_hovered()
+        if self.extra_panel is not None:
+            draw, height = self.extra_panel
+            with imgui_ctx.begin_child("##curation_extra", imgui.ImVec2(0, float(height))):
+                draw(float(height))
+        self._draw_flip_row()
         session = self._ready()
         if session is None:
             imgui.text_disabled(self.status)
             return
         kind = _mode_title(session.mode, self.slow_cutoff_hz)
-        imgui.text_disabled(
-            f"A. {session.recording_label} · {kind}: {session.n} "
-            f"({len(session.visible)} in view)"
-        )
+        imgui.text_disabled(f"A. {kind}: {session.n} ({len(session.visible)} in view)")
         imgui.same_line(0, 12)
         changed, self.autofit = imgui.checkbox("autofit", self.autofit)
         set_tooltip("Refit the axes whenever the recording or mode changes.", show_mark=False)
@@ -641,8 +606,9 @@ class EventCurationWidget:
         )
         avail = imgui.get_content_region_avail()
         card_w = em(CARD_WIDTH_EM)
+        wide_w = em(WIDE_CARD_EM)
         n_cards = 2 if session.seeded else 1
-        plot_w = max(avail.x - n_cards * (card_w + em(0.5)), em(10))
+        plot_w = max(avail.x - n_cards * (card_w + em(0.5)) - 2 * (wide_w + em(0.5)), em(10))
         with imgui_ctx.begin_child("##curation_trace", imgui.ImVec2(plot_w, 0)):
             self._draw_timeline(session)
         imgui.same_line(0, em(0.5))
@@ -650,6 +616,39 @@ class EventCurationWidget:
         if session.seeded:
             imgui.same_line(0, em(0.5))
             self._draw_auto_pass_card(session, card_w, avail.y)
+        imgui.same_line(0, em(0.5))
+        with card("##curation_decision", "Decision", avail.y, wide_w):
+            self._draw_decision_body(session)
+            self._draw_event_body(session)
+        imgui.same_line(0, em(0.5))
+        with card("##curation_nav", "Navigation", avail.y, wide_w):
+            self._draw_navigation_body(session)
+            self._draw_filter_body(session)
+            self._draw_files_body(session)
+
+    def _draw_flip_row(self) -> None:
+        """Previous / next recording, and which one this is."""
+        rows = self.loadable()
+        rec = self.recording(self.current)
+        pos = next((i for i, r in enumerate(rows) if r.rid == self.current), -1)
+        if not rows:
+            imgui.begin_disabled()
+        if imgui.arrow_button("##prev_rec", imgui.Dir.left):
+            self.step_recording(-1)
+        set_tooltip(",", show_mark=False)
+        imgui.same_line(0, em(0.3))
+        if imgui.arrow_button("##next_rec", imgui.Dir.right):
+            self.step_recording(1)
+        set_tooltip(".", show_mark=False)
+        if not rows:
+            imgui.end_disabled()
+        imgui.same_line(0, em(0.6))
+        label = rec.label if rec is not None else "no recording"
+        where = f"  ({pos + 1}/{len(rows)})" if pos >= 0 else ""
+        imgui.text(f"{label}{where}")
+        if (self.mode, self.current) in self._busy:
+            imgui.same_line(0, em(0.6))
+            imgui.text_disabled("loading...")
 
     def _draw_timeline(self, session: CurationSession) -> None:
         key = (session.mode, session.recording_id)
@@ -887,14 +886,6 @@ class EventCurationWidget:
 
     def _draw_controls(self) -> None:
         imgui.text_wrapped(self.status)
-        session = self._ready()
-        if session is None:
-            return
-        self._draw_filter(session)
-        self._draw_decision(session)
-        self._draw_navigation(session)
-        self._draw_event(session)
-        self._draw_files(session)
 
     def _draw_mode_row(self) -> None:
         imgui.set_next_item_width(em(6))
@@ -973,6 +964,10 @@ class EventCurationWidget:
                 imgui.text(str(session.n))
             elif key in self._busy:
                 imgui.text_disabled("...")
+            elif rec.error:
+                imgui.text_disabled("missing")
+                if imgui.is_item_hovered():
+                    imgui.set_tooltip(rec.error)
             else:
                 imgui.text_disabled("-" if rec.pre_denoised else "raw")
             imgui.table_next_column()
@@ -983,6 +978,9 @@ class EventCurationWidget:
 
     def _draw_filter(self, session) -> None:
         section("View")
+        self._draw_filter_body(session)
+
+    def _draw_filter_body(self, session) -> None:
         current = session.view_filter
         for i, name in enumerate(FILTERS):
             if i:
@@ -992,9 +990,12 @@ class EventCurationWidget:
 
     def _draw_decision(self, session) -> None:
         section("Decision")
+        self._draw_decision_body(session)
+
+    def _draw_decision_body(self, session) -> None:
         if not session.n:
             imgui.begin_disabled()
-        width = imgui.ImVec2(em(4.5), em(2))
+        width = imgui.ImVec2(em(4.2), em(1.8))
         with theme.button_colors((0.11, 0.60, 0.55, 1.0), (0.14, 0.72, 0.65, 1.0)):
             if imgui.button("Yes", width):
                 session.set_label("yes")
@@ -1013,6 +1014,9 @@ class EventCurationWidget:
 
     def _draw_navigation(self, session) -> None:
         section("Navigation")
+        self._draw_navigation_body(session)
+
+    def _draw_navigation_body(self, session) -> None:
         if not session.n:
             imgui.begin_disabled()
         if imgui.button("< Event"):
@@ -1029,6 +1033,9 @@ class EventCurationWidget:
 
     def _draw_event(self, session) -> None:
         section("Event")
+        self._draw_event_body(session)
+
+    def _draw_event_body(self, session) -> None:
         if not session.n:
             imgui.text_disabled("No candidate events found.")
             return
@@ -1053,6 +1060,9 @@ class EventCurationWidget:
 
     def _draw_files(self, session) -> None:
         section("Files")
+        self._draw_files_body(session)
+
+    def _draw_files_body(self, session) -> None:
         yes, no, unlabeled = session.counts()
         imgui.text_disabled(f"yes {yes} · no {no} · unlabeled {unlabeled}")
         imgui.text_disabled(f"template source events: {len(session.template_source)}")
