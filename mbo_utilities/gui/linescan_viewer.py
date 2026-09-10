@@ -645,34 +645,33 @@ class LinePanel:
             self.curation.draw()
 
 
-TRACES_HEIGHT = 150
-TRACE_ROW_GAP = 1.15
+TRACES_HEIGHT = 170
 
 
 class LineTracesPanel:
-    """The per-line traces as an imgui plot on the top strip: every line
-    stacked, the selected one bold, a time cursor tied to the Reference's
-    Timepoint (drag it to scrub), click a row to select that line. Drawn as
-    its own ``Traces`` tab and, when curation is on, above the curation
-    trace so both are in view.
+    """The selected line's trace as an imgui plot on the top strip: raw F as
+    a faint min/max band, a 25 ms smoothed line over it in the line's
+    colour, the other lines of its domain thin behind, and a time cursor
+    tied to the Reference's Timepoint (drag it to scrub). Drawn as its own
+    ``Traces`` tab and, when curation is on, above the curation trace.
     """
 
     def __init__(self, ndw, overlay: LineScanOverlay, traces: np.ndarray, strip, own_strip: bool):
         from mbo_utilities.gui._top_strip import TopPanel
-        from mbo_utilities.gui.imgui.lines import decimate_minmax
 
         self.ndw = ndw
         self.overlay = overlay
         self.strip = strip
         self._own_strip = own_strip
         self.fs = float(overlay.fs)
-        norm = _display_normalize(np.asarray(traces, dtype=np.float32))
-        self.rows = []
-        for i in range(norm.shape[0]):
-            idx, values = decimate_minmax(norm[i], 3000)
-            self.rows.append((idx / self.fs, values))
-        self.n = len(self.rows)
+        self.traces = np.asarray(traces, dtype=np.float32)
+        self.n = int(self.traces.shape[0])
+        # which other lines to show behind the selected one; the curation
+        # glue sets this to the lines of the same PF domain
+        self.siblings = lambda i: []
+        self._cache: dict[int, tuple] = {}
         self._fit = True
+        self._last = None
         self.strip.register(TopPanel("line_traces", "Traces", self.draw_tab, 260, None, 10))
 
     def close(self) -> None:
@@ -680,13 +679,31 @@ class LineTracesPanel:
         if self._own_strip:
             self.strip.close()
 
+    def _prepared(self, i: int) -> tuple:
+        """``(t_band, band, t_smooth, smooth)`` for line ``i``: raw F min/max
+        per 4000 bins, and a 25 ms boxcar at a stride that keeps ~20k points."""
+        got = self._cache.get(i)
+        if got is None:
+            from scipy.ndimage import uniform_filter1d
+
+            from mbo_utilities.gui.imgui.lines import decimate_minmax
+
+            y = self.traces[i].astype(np.float64)
+            idx, band = decimate_minmax(y, 4000)
+            k = max(1, int(round(0.025 * self.fs)))
+            smooth = uniform_filter1d(y, size=k, mode="nearest") if k > 1 else y
+            stride = max(1, int(np.ceil(y.size / 20000)))
+            got = (idx / self.fs, band, np.arange(0, y.size, stride) / self.fs, smooth[::stride])
+            self._cache[i] = got
+        return got
+
     def draw_tab(self) -> None:
         from imgui_bundle import imgui
 
         ov = self.overlay
         imgui.text_disabled(
-            f"{self.n} lines · ROI {ov.selected} · t {ov.t_index / self.fs:.3f} s · "
-            "click a row to select it, drag the cursor to scrub"
+            f"ROI {ov.selected} · t {ov.t_index / self.fs:.3f} s · raw F (band) and 25 ms mean; "
+            "drag the cursor to scrub, drag pans, scroll zooms"
         )
         imgui.same_line(0, 12)
         if imgui.button("fit##line_traces"):
@@ -694,31 +711,30 @@ class LineTracesPanel:
         self.draw(max(imgui.get_content_region_avail().y - 2, 60.0))
 
     def draw(self, height: float) -> None:
-        from imgui_bundle import imgui, implot
-
         from mbo_utilities.gui.imgui.lines import drag_vline, line, line_plot
 
         ov = self.overlay
+        i = int(ov.selected)
+        if i != self._last:
+            self._last = i
+            self._fit = True
         fit, self._fit = self._fit, False
-        with line_plot("##line_traces_plot", "time (s)", "", height=height, fit=fit, legend=False) as ok:
+        with line_plot("##line_traces_plot", "time (s)", "F", height=height, fit=fit, legend=True) as ok:
             if not ok:
                 return
-            for i, (t, values) in enumerate(self.rows):
-                offset = (self.n - 1 - i) * TRACE_ROW_GAP
-                selected = i == ov.selected
-                r, g, b = (float(v) for v in ov.colors[i][:3])
-                line(
-                    f"##line{i}", values + offset, x=t, color=(r, g, b, 1.0 if selected else 0.7),
-                    weight=2.2 if selected else 0.9, legend=False,
-                )
+            for j in self.siblings(i):
+                if j == i or not 0 <= j < self.n:
+                    continue
+                _tb, _b, ts, smooth = self._prepared(j)
+                r, g, b = (float(v) for v in ov.colors[j][:3])
+                line(f"ROI {j}", smooth, x=ts, color=(r, g, b, 0.45), weight=0.8)
+            t_band, band, ts, smooth = self._prepared(i)
+            r, g, b = (float(v) for v in ov.colors[i][:3])
+            line(f"ROI {i} raw", band, x=t_band, color=(r, g, b, 0.28), weight=0.8)
+            line(f"ROI {i}", smooth, x=ts, color=(r, g, b, 1.0), weight=1.8)
             cursor, held = drag_vline(99, ov.t_index / self.fs, (1.0, 0.85, 0.3, 0.9), 1.5)
             if held:
                 ov.goto_time(cursor)
-            elif implot.is_plot_hovered() and imgui.is_mouse_clicked(0):
-                y = implot.get_plot_mouse_pos().y
-                row = self.n - 1 - int(np.floor(y / TRACE_ROW_GAP + 0.15))
-                if 0 <= row < self.n and row != ov.selected:
-                    ov.select_roi(row)
 
 
 class LineCuration:
@@ -790,6 +806,8 @@ class LineCuration:
         from mbo_utilities.gui.event_curation import PANEL_HEIGHT
 
         self.widget.extra_panel = (panel.draw, TRACES_HEIGHT)
+        if self.pf is not None:
+            panel.siblings = lambda i: self.pf.domains.get(self.pf.domain_for_roi(i) or "", [])
         for top in self.widget.strip.panels:
             if top.key == "curation":
                 top.height = PANEL_HEIGHT + TRACES_HEIGHT
