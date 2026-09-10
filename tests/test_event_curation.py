@@ -168,6 +168,79 @@ class TestSession:
             "stan1/stan1_expt1/scan=10/domain=soma": hi
         }
 
+    def test_a1_a2_controls_do_what_the_notebook_sliders_do(self, data_root):
+        """The imgui A1 / A2 controls call the session; the notebook moves
+        ipywidgets sliders. Driving both on the same recording must leave
+        identical candidates, auto calls, labels and saved JSON."""
+        from vnoiser.curation import EventCurationDashboard
+
+        from mbo_utilities.vnoiser import CurationSession
+
+        def notebook(mode):
+            dash = EventCurationDashboard(data_path=data_root, mode=mode, duration_s=None, auto_load=False)
+            experiment = dash.dataset.experiment_options(dash.dataset.animal_options()[0][1])[0][1]
+            dash._experiment_changed({"new": experiment})
+            dash.recording_dropdown.value = dash.dataset.recording_options()[0][1]
+            dash._load_selected_recording(None)
+            return dash
+
+        def state(dash):
+            return (
+                dash.candidates.indices.tolist(),
+                [dash._label_for_index(i) for i in range(len(dash.candidates.indices))],
+                float(dash.candidate_threshold),
+                dash.auto_pass_amplitude,
+                bool(dash.waveform_rejection),
+                json.loads(dash.label_path.read_text(encoding="utf-8"))["candidate_detection"]
+                if dash.label_path.exists()
+                else None,
+            )
+
+        dash = notebook("fast")
+        session = _loaded(data_root, mode="fast")
+        assert state(dash) == state(session.dash)
+
+        # A1: the notebook slider snaps to its own range; so does set_threshold
+        lo, hi, _step = session.threshold_range
+        assert (float(dash.threshold_slider.min), float(dash.threshold_slider.max)) == (lo, hi)
+        target = lo + 0.5 * (hi - lo)
+        dash.threshold_slider.value = target
+        session.set_threshold(target)
+        assert state(dash) == state(session.dash)
+        dash.threshold_slider.value = hi + 100  # ipywidgets clips to max
+        session.set_threshold(hi + 100)
+        assert state(dash) == state(session.dash)
+
+        # A2: auto-pass starts off (slider parked at its top), then a value
+        # auto-passes everything at or above it
+        assert dash.auto_pass_amplitude is None and session.auto_pass is None
+        assert float(dash.auto_pass_slider.value) == session.auto_pass_range[1]
+        amp = session.auto_pass_range[0]
+        dash.auto_pass_slider.value = amp
+        session.set_auto_pass(amp)
+        assert state(dash) == state(session.dash)
+        assert all(label == "auto_yes" for label in session.labels())
+
+        # waveform rejection off leaves sub-threshold candidates unlabeled
+        dash.waveform_rejection_checkbox.value = False
+        session.set_waveform_rejection(False)
+        assert state(dash) == state(session.dash)
+
+        # and manual labels survive a threshold change on both (the
+        # threshold sits at the top of its range now, so bring candidates back)
+        dash.threshold_slider.value = target
+        session.set_threshold(target)
+        assert session.n > 0
+        dash._select_event(0)
+        dash._set_label("no")
+        session.select(0)
+        session.set_label("no")
+        dash.threshold_slider.value = lo + 0.25 * (hi - lo)
+        session.set_threshold(lo + 0.25 * (hi - lo))
+        assert state(dash) == state(session.dash)
+        # the label follows its event (keyed by sample), not its index
+        assert [session.manual_label(i) for i in range(session.n)].count("no") == 1
+
     def test_view_filter_and_stepping(self, data_root):
         session = _loaded(data_root)
         session.select(0)
