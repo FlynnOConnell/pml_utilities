@@ -621,23 +621,41 @@ class TestMboOpensTheLineScanViewer:
     """``mbo scan.mesc`` hands a picked line-scan unit to the viewer; other
     units and files still go to the image viewer."""
 
-    def test_line_scan_unit_goes_to_the_viewer(self, tmp_path, monkeypatch):
+    @staticmethod
+    def _units(monkeypatch, kinds):
         from mbo_utilities.gui import run_gui as rg
 
+        units = [
+            {"key": f"MSession_0/MUnit_{i}", "munit": f"MUnit_{i}", "kind": kind}
+            for i, kind in enumerate(kinds)
+        ]
+        monkeypatch.setattr("mbo_utilities.arrays.mesc.list_mesc_units", lambda p: units)
+        return rg
+
+    def test_a_file_with_line_scans_opens_the_viewer_with_no_prompt(self, tmp_path, monkeypatch):
+        rg = self._units(monkeypatch, ["multicube", "frames", "packed", "packed"])
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
         opened, standard = [], []
-        monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: ({"unit": "MSession_0/MUnit_35"}, True))
-        monkeypatch.setattr(rg, "_is_linescan_unit", lambda p, u: u == "MSession_0/MUnit_35")
+        monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: pytest.fail("prompted"))
         monkeypatch.setattr(rg, "_launch_linescan_viewer", lambda p, u: opened.append((p, u)))
         monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
         rg._run_gui_impl(data_in=mesc)
-        assert opened == [(mesc, "MSession_0/MUnit_35")]
+        assert opened == [(mesc, None)]
         assert standard == []
 
-    def test_other_units_still_open_the_image_viewer_without_a_second_prompt(self, tmp_path, monkeypatch):
-        from mbo_utilities.gui import run_gui as rg
+    def test_an_explicit_line_scan_unit_goes_to_the_viewer(self, tmp_path, monkeypatch):
+        rg = self._units(monkeypatch, ["multicube", "packed"])
+        mesc = tmp_path / "scan.mesc"
+        mesc.write_bytes(b"x")
+        opened = []
+        monkeypatch.setattr(rg, "_launch_linescan_viewer", lambda p, u: opened.append((p, u)))
+        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: pytest.fail("image viewer"))
+        rg._run_gui_impl(data_in=mesc, unit="MUnit_1")
+        assert opened == [(mesc, "MUnit_1")]
 
+    def test_a_file_without_line_scans_prompts_once_and_opens_the_image_viewer(self, tmp_path, monkeypatch):
+        rg = self._units(monkeypatch, ["multicube", "frames"])
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
         prompts, standard = [], []
@@ -647,15 +665,13 @@ class TestMboOpensTheLineScanViewer:
             return {"unit": "MSession_0/MUnit_0"}, True
 
         monkeypatch.setattr(rg, "_resolve_mesc_unit", resolve)
-        monkeypatch.setattr(rg, "_is_linescan_unit", lambda p, u: False)
         monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
         rg._run_gui_impl(data_in=mesc)
         assert prompts == [None]
         assert standard and standard[0][-1] == "MSession_0/MUnit_0"
 
     def test_cancelled_picker_opens_nothing(self, tmp_path, monkeypatch):
-        from mbo_utilities.gui import run_gui as rg
-
+        rg = self._units(monkeypatch, ["multicube", "frames"])
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
         monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: ({}, False))
