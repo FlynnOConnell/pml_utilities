@@ -524,3 +524,84 @@ class TestSeparateZstackFile:
         paired = pair_reference_zstack(mesc, "MSession_0/MUnit_35", units, zstack_path=zstack)
         assert paired["munit"] == "MUnit_3"
         assert zstack_candidates(mesc, "MSession_0/MUnit_35") == []
+
+    @pytest.mark.skipif(not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only")
+    def test_mbo_recognises_the_line_scan_unit(self):
+        from mbo_utilities.gui.run_gui import _is_linescan_unit, _mesc_unit
+
+        assert _is_linescan_unit(ASAKO_MESC, "MUnit_35")
+        assert _is_linescan_unit(ASAKO_MESC, "MSession_0/MUnit_38")
+        assert not _is_linescan_unit(ASAKO_MESC, "MUnit_0")
+        assert not _is_linescan_unit(ASAKO_MESC, None)
+        assert _mesc_unit(ASAKO_MESC, "MUnit_35")["key"] == "MSession_0/MUnit_35"
+
+    @pytest.mark.skipif(not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only")
+    def test_dry_run_of_the_viewer_entry_point(self, capsys):
+        from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
+
+        assert open_linescan_viewer(ASAKO_MESC, ref_key="MUnit_35", dry_run=True) is None
+        out = capsys.readouterr().out
+        assert "1 zstack in stan112_expt12_zstack.mesc" in out
+        assert "Z-stack: MSession_0/MUnit_3" in out
+        assert "24 line(s) on MUnit_3" in out
+
+
+class TestMboOpensTheLineScanViewer:
+    """``mbo scan.mesc`` hands a picked line-scan unit to the viewer; other
+    units and files still go to the image viewer."""
+
+    def test_line_scan_unit_goes_to_the_viewer(self, tmp_path, monkeypatch):
+        from mbo_utilities.gui import run_gui as rg
+
+        mesc = tmp_path / "scan.mesc"
+        mesc.write_bytes(b"x")
+        opened, standard = [], []
+        monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: ({"unit": "MSession_0/MUnit_35"}, True))
+        monkeypatch.setattr(rg, "_is_linescan_unit", lambda p, u: u == "MSession_0/MUnit_35")
+        monkeypatch.setattr(rg, "_launch_linescan_viewer", lambda p, u: opened.append((p, u)))
+        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        rg._run_gui_impl(data_in=mesc)
+        assert opened == [(mesc, "MSession_0/MUnit_35")]
+        assert standard == []
+
+    def test_other_units_still_open_the_image_viewer_without_a_second_prompt(self, tmp_path, monkeypatch):
+        from mbo_utilities.gui import run_gui as rg
+
+        mesc = tmp_path / "scan.mesc"
+        mesc.write_bytes(b"x")
+        prompts, standard = [], []
+
+        def resolve(p, u):
+            prompts.append(u)
+            return {"unit": "MSession_0/MUnit_0"}, True
+
+        monkeypatch.setattr(rg, "_resolve_mesc_unit", resolve)
+        monkeypatch.setattr(rg, "_is_linescan_unit", lambda p, u: False)
+        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        rg._run_gui_impl(data_in=mesc)
+        assert prompts == [None]
+        assert standard and standard[0][-1] == "MSession_0/MUnit_0"
+
+    def test_cancelled_picker_opens_nothing(self, tmp_path, monkeypatch):
+        from mbo_utilities.gui import run_gui as rg
+
+        mesc = tmp_path / "scan.mesc"
+        mesc.write_bytes(b"x")
+        monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: ({}, False))
+        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: pytest.fail("opened"))
+        assert rg._run_gui_impl(data_in=mesc) is None
+
+    def test_linescan_command_view_flag(self, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+
+        from mbo_utilities import cli
+        from mbo_utilities.gui import linescan_viewer
+
+        mesc = tmp_path / "scan.mesc"
+        mesc.write_bytes(b"x")
+        calls = []
+        monkeypatch.setattr(linescan_viewer, "open_linescan_viewer", lambda p, **k: calls.append((p, k)))
+        result = CliRunner().invoke(cli.main, ["linescan", str(mesc), "--view", "--unit", "MUnit_35"])
+        assert result.exit_code == 0, result.output
+        assert calls[0][1]["ref_key"] == "MUnit_35"
+        assert calls[0][1]["zstack_key"] is None
