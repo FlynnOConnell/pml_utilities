@@ -395,3 +395,132 @@ class TestViewerIntegration:
             assert not parent.top_strip.has("curation")
         finally:
             vis.close()
+
+
+# ----------------------------------------------------------------------
+# a trace handed over in memory (a line-scan ROI)
+# ----------------------------------------------------------------------
+
+
+def _fake_pipeline(monkeypatch, event_indices=(700, 1500, 2300)):
+    """Stand in for the wavelet denoiser, the way vnoiser's own tests do."""
+    from vnoiser.curation import EventCurationDashboard
+
+    event_indices = np.asarray(event_indices, dtype=int)
+    calls = []
+
+    def run_pipeline(self, sample):
+        calls.append(sample.metadata.get("recording_id"))
+        self.recording = sample
+        self.raw_trace = sample.trace.astype(float)
+        self.denoised = np.zeros_like(self.raw_trace)
+        self.denoised[event_indices] = np.arange(len(event_indices)) + 4.0
+        self.denoiser_input = self.denoised.copy()
+        self.raw_cluster_starts = event_indices.copy()
+        self.pca_event_indices = np.array([], dtype=int)
+        self.pca_event_score_z = np.zeros_like(self.raw_trace)
+        self.pca_threshold_z = 3.0
+        self._finalize_pipeline_state()
+
+    monkeypatch.setattr(EventCurationDashboard, "_run_pipeline", run_pipeline)
+    return calls
+
+
+def _source(tmp_path):
+    source = tmp_path / "expt.mesc"
+    source.write_bytes(b"not really a mesc")
+    return source
+
+
+class TestLoadTrace:
+    def test_runs_the_pipeline_and_files_labels_beside_the_source(self, tmp_path, monkeypatch):
+        from mbo_utilities.vnoiser import CurationSession
+
+        calls = _fake_pipeline(monkeypatch)
+        source = _source(tmp_path)
+        trace = np.random.default_rng(0).normal(size=3000) + 100.0
+        session = CurationSession(source, mode="fast")
+        session.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=3", label="ROI 3", source_path=source)
+        assert session.loaded and session.n == 3
+        assert calls == ["expt/MUnit_1/roi=3"]
+        assert session.cache_status == "computed pipeline"
+        assert session.label_path == tmp_path / ".curation" / "fast_template_curation.json"
+        session.select(0)
+        session.set_label("yes")
+        payload = json.loads(session.label_path.read_text(encoding="utf-8"))
+        key = next(iter(payload["events"]))
+        assert key.startswith("expt/MUnit_1/roi=3|sample=")
+        assert payload["events"][key]["recording"] == "expt/MUnit_1/roi=3"
+
+    def test_second_load_restores_the_cache_per_roi(self, tmp_path, monkeypatch):
+        from mbo_utilities.vnoiser import CurationSession
+
+        calls = _fake_pipeline(monkeypatch)
+        source = _source(tmp_path)
+        trace = np.random.default_rng(1).normal(size=3000)
+        session = CurationSession(source, mode="fast")
+        session.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=0", label="ROI 0", source_path=source)
+        session.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=1", label="ROI 1", source_path=source)
+        assert calls == ["expt/MUnit_1/roi=0", "expt/MUnit_1/roi=1"]
+        session.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=0", label="ROI 0", source_path=source)
+        assert calls == ["expt/MUnit_1/roi=0", "expt/MUnit_1/roi=1"]
+        assert session.cache_status.startswith("loaded cache")
+        assert len(list((tmp_path / ".curation" / "cache").glob("*.npz"))) == 2
+
+    def test_rejects_bad_traces(self, tmp_path):
+        from mbo_utilities.vnoiser import CurationSession
+
+        source = _source(tmp_path)
+        session = CurationSession(source, mode="fast")
+        with pytest.raises(ValueError):
+            session.load_trace([1.0], FS_HZ, recording_id="r", label="r", source_path=source)
+        with pytest.raises(ValueError):
+            session.load_trace([1.0, np.nan, 2.0], FS_HZ, recording_id="r", label="r", source_path=source)
+
+    def test_widget_loads_a_trace_off_the_frame_and_reports_focus(self, curation, tmp_path, monkeypatch):
+        _fake_pipeline(monkeypatch)
+        source = _source(tmp_path)
+        focused = []
+        curation.on_focus = focused.append
+        trace = np.random.default_rng(2).normal(size=3000)
+        curation.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=2", label="ROI 2", source_path=source)
+        curation.wait(60)
+        assert curation.session.loaded and curation.session.n == 3
+        assert curation.data_path == str(source)
+        _frames(curation, 2)
+        assert focused and abs(focused[-1] - 700 / FS_HZ) < 0.01
+        curation.session.select(2)
+        _frames(curation, 2)
+        assert abs(focused[-1] - 2300 / FS_HZ) < 0.01
+        curation.strip.focus("candidates")
+        _frames(curation, 2)
+        # a mode switch replays the same trace into the new mode's session
+        curation.set_mode("slow")
+        curation.wait(60)
+        assert curation.session.mode == "slow"
+        assert curation.session.recording_id == "expt/MUnit_1/roi=2"
+        _frames(curation, 2)
+
+
+ASAKO_MESC = (
+    "C:/Users/flynn/repos/vnoiser/data/stan112/stan112_expt12/stan112_expt12/stan112_expt12.mesc"
+)
+
+
+class TestSeparateZstackFile:
+    @pytest.mark.skipif(not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only")
+    def test_stack_in_a_sibling_file_pairs_with_the_lines(self):
+        from pathlib import Path
+
+        from mbo_utilities.analysis.linescan import pair_reference_zstack, zstack_candidates
+        from mbo_utilities.arrays.mesc import list_mesc_units
+
+        mesc = Path(ASAKO_MESC)
+        zstack = mesc.parent.parent / f"{mesc.stem}_zstack.mesc"
+        units = list_mesc_units(zstack)
+        cands = zstack_candidates(mesc, "MSession_0/MUnit_35", units, zstack_path=zstack)
+        assert [c["munit"] for c in cands] == ["MUnit_3"]
+        assert cands[0]["xy_fraction"] == 1.0 and cands[0]["z_fraction"] == 1.0
+        paired = pair_reference_zstack(mesc, "MSession_0/MUnit_35", units, zstack_path=zstack)
+        assert paired["munit"] == "MUnit_3"
+        assert zstack_candidates(mesc, "MSession_0/MUnit_35") == []
