@@ -113,7 +113,7 @@ class EventCurationWidget:
         The figure's shared top strip; a private one is built without.
     """
 
-    def __init__(self, parent: Any, strip: TopStrip | None = None):
+    def __init__(self, parent: Any, strip: TopStrip | None = None, data_path: str | None = None):
         self.parent = parent
         self.logger = getattr(parent, "logger", None) or logging.getLogger(__name__)
         self.figure = parent.image_widget.figure
@@ -130,8 +130,16 @@ class EventCurationWidget:
         self.mode = "fast"
         self.slow_cutoff_hz = 40.0
         self.sessions: dict[str, CurationSession] = {}
-        last = get_last_dir("vnoiser")
-        self.data_path = str(last) if last else ""
+        if data_path is None:
+            last = get_last_dir("vnoiser")
+            data_path = str(last) if last else ""
+        self.data_path = str(data_path)
+        # a trace handed over in memory (a line-scan ROI), replayed on a
+        # mode switch the way a picked recording is
+        self._trace_source: dict | None = None
+        # called with the focused candidate's time (s) whenever it changes
+        self.on_focus = None
+        self._last_focus = None
         self.prompt = PathPrompt(
             "Curation data",
             path=self.data_path,
@@ -214,6 +222,7 @@ class EventCurationWidget:
         """Point every mode at a new data path."""
         self.sessions.clear()
         self.animal = self.experiment = self.recording = ""
+        self._trace_source = None
         self.data_path = str(Path(path).expanduser())
         session = self.session
         if session is None:
@@ -233,9 +242,7 @@ class EventCurationWidget:
             return
         self.mode = mode
         self._fit_timeline = True
-        session = self.session
-        if session is not None and self.recording and session.recording_id != self.recording:
-            self.load(self.recording)
+        self._reload()
 
     def set_slow_cutoff(self, cutoff_hz: float) -> None:
         cutoff_hz = float(cutoff_hz)
@@ -243,8 +250,57 @@ class EventCurationWidget:
             return
         self.slow_cutoff_hz = cutoff_hz
         self.sessions.pop("slow", None)
-        if self.mode == "slow" and self.recording:
+        if self.mode == "slow":
+            self._reload()
+
+    def _reload(self) -> None:
+        """Bring the current mode's session onto what the others show."""
+        session = self.session
+        if session is None:
+            return
+        if self._trace_source is not None:
+            if session.recording_id != self._trace_source["recording_id"]:
+                self.load_trace(**self._trace_source)
+        elif self.recording and session.recording_id != self.recording:
             self.load(self.recording)
+
+    def load_trace(self, trace, fs_hz, *, recording_id, label, source_path, curation_dir=None) -> None:
+        """Curate a trace held in memory, on a worker thread: vnoiser's
+        denoiser runs on it unless a cache exists. See
+        :meth:`CurationSession.load_trace`."""
+        source_path = str(Path(source_path))
+        if source_path != self.data_path:
+            self.sessions.clear()
+            self.animal = self.experiment = self.recording = ""
+            self.data_path = source_path
+        session = self.session
+        if session is None or self._loading:
+            return
+        self._trace_source = {
+            "trace": trace,
+            "fs_hz": float(fs_hz),
+            "recording_id": str(recording_id),
+            "label": str(label),
+            "source_path": source_path,
+            "curation_dir": curation_dir,
+        }
+        source = self._trace_source
+        job = get_process_manager().start_job("vnoiser", f"denoise + curate: {label}")
+        self._loading = True
+        self.status = f"denoising {label}... (cached after the first run)"
+
+        def run():
+            try:
+                message = session.load_trace(**source)
+            except Exception as error:
+                job.fail(f"{type(error).__name__}: {error}")
+                self._load_results.put((session, None, f"load failed: {error}"))
+                return
+            job.done(message)
+            self._load_results.put((session, message, None))
+
+        self._load_thread = threading.Thread(target=run, name="vnoiser-denoise", daemon=True)
+        self._load_thread.start()
 
     def select_experiment(self, experiment: str) -> None:
         self.experiment = str(experiment)
@@ -306,7 +362,22 @@ class EventCurationWidget:
         self._poll_folder_dialog()
         self._draw_prompt()
         self._handle_keys()
+        self._report_focus()
         self._hovered = False
+
+    def _report_focus(self) -> None:
+        session = self._ready()
+        if session is None or not session.n:
+            return
+        key = (session.mode, session.recording_id, session.current)
+        if key == self._last_focus:
+            return
+        self._last_focus = key
+        if self.on_focus is not None:
+            try:
+                self.on_focus(float(session.times_s[session.current]))
+            except Exception:
+                self.logger.debug("curation focus callback failed", exc_info=True)
 
     def _draw_prompt(self) -> None:
         submitted, browse = draw_path_prompt(self.prompt)
@@ -625,6 +696,20 @@ class EventCurationWidget:
             imgui.text_disabled(self.status)
             return
         self._draw_selection(session)
+        self._draw_controls(session)
+
+    def draw_embedded(self) -> None:
+        """The controls without the source picker, for a host that hands
+        traces over itself (the line-scan viewer's ROI panel)."""
+        self._mark_hovered()
+        self._draw_mode_row()
+        session = self.session if self.data_path else None
+        if session is None:
+            imgui.text_wrapped(self.status)
+            return
+        self._draw_controls(session)
+
+    def _draw_controls(self, session: CurationSession) -> None:
         imgui.text_wrapped(self.status)
         if self._loading or not session.loaded:
             return

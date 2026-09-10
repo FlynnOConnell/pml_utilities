@@ -11,6 +11,8 @@ figures, which is why label and threshold changes cost tens of ms.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -18,9 +20,10 @@ import numpy as np
 from vnoiser.curation import (
     AUTO_TEMPLATE_THRESHOLD,
     LABEL_COLORS,
+    PIPELINE_CACHE_VERSION,
     EventCurationDashboard,
 )
-from vnoiser.dataset import SpatialJediDataset
+from vnoiser.dataset import RecordingSample, SpatialJediDataset
 
 __all__ = ["LABEL_RGBA", "MODES", "CurationSession", "hex_rgba"]
 
@@ -147,6 +150,96 @@ class CurationSession:
         self.dash._load_selected_recording(None)
         self.recording_id = recording_id
         return self.status
+
+    def load_trace(
+        self,
+        trace,
+        fs_hz: float,
+        *,
+        recording_id: str,
+        label: str,
+        source_path,
+        curation_dir=None,
+    ) -> str:
+        """Curate a trace held in memory: an ROI trace pulled from a line
+        scan, say. vnoiser's denoiser runs on it (the same pipeline a raw
+        ``.mat`` recording gets), cached under ``curation_dir/cache`` by
+        ``recording_id`` and the source file's size and mtime. Labels go to
+        ``curation_dir/<mode>_template_curation.json`` keyed by
+        ``recording_id``. Returns the status line."""
+        trace = np.asarray(trace, dtype=float).ravel()
+        if trace.size < 2:
+            raise ValueError(f"{label} has fewer than two samples")
+        if not np.isfinite(trace).all():
+            raise ValueError(f"{label} contains NaN or infinite values")
+        source_path = Path(source_path)
+        curation_dir = (
+            Path(curation_dir) if curation_dir is not None else source_path.parent / ".curation"
+        )
+        t = np.arange(trace.size, dtype=float) / float(fs_hz)
+        full = RecordingSample(
+            t=t,
+            trace=trace,
+            fs_hz=float(fs_hz),
+            events_ap_indices=np.array([], dtype=int),
+            events_ap_times_s=np.array([], dtype=float),
+            path=source_path,
+            metadata={
+                "recording_id": str(recording_id),
+                "label": str(label),
+                "fs_hz": float(fs_hz),
+                "duration_s": float(t[-1]),
+                "n_samples": int(trace.size),
+                "curation_dir": str(curation_dir),
+                "pre_denoised": False,
+                "source_format": "trace",
+            },
+        )
+        dash = self.dash
+        recording = dash._window_from_recording(full)
+        dash._activate_recording_storage(recording)
+        cache_path = self._trace_cache_path(recording)
+        if cache_path is not None and cache_path.exists():
+            dash._load_pipeline_cache(recording, cache_path)
+            dash.pipeline_cache_status = f"loaded cache: {cache_path.name}"
+        else:
+            dash._run_pipeline(recording)
+            dash.pipeline_cache_status = "computed pipeline"
+            if cache_path is not None:
+                dash._save_pipeline_cache(cache_path)
+        dash.event_slider.max = max(0, len(dash.candidates.indices) - 1)
+        dash.event_slider.value = 0
+        dash._set_loaded_controls(True)
+        dash._refresh_all()
+        dash.status.value = (
+            f"<b>Status:</b> loaded {label}; {len(dash.event_keys)} candidates; "
+            f"{dash.pipeline_cache_status}."
+        )
+        self.recording_id = str(recording_id)
+        return self.status
+
+    def _trace_cache_path(self, recording) -> Path | None:
+        """Like the dashboard's cache path, with the recording id in the key
+        so several traces of one source file do not share a cache."""
+        if not self.dash.enable_pipeline_cache:
+            return None
+        stat = Path(recording.path).stat()
+        payload = {
+            "version": PIPELINE_CACHE_VERSION,
+            "recording_id": recording.metadata.get("recording_id"),
+            "path": str(Path(recording.path).resolve()),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "fs_hz": float(recording.fs_hz),
+            "n_samples": int(len(recording.trace)),
+            "window_start_index": int(recording.metadata.get("window_start_index", 0)),
+            "duration_s": self.dash.duration_s,
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(recording.metadata.get("recording_id")))
+        return self.dash.curation_dir / "cache" / f"{stem}-{digest}.npz"
 
     @property
     def loaded(self) -> bool:
