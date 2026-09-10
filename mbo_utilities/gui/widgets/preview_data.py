@@ -190,6 +190,10 @@ class PreviewDataWidget(EdgeWindow):
     # the figure's top edge: menu row plus the registered full-width panels
     top_strip = None
 
+    # built on demand by sync_event_curation() when Widgets > Event Curation
+    # is on; registers its panels on the top strip and owns the Curation tab
+    event_curation = None
+
     def __init__(
         self,
         iw: "fpl.ImageWidget",
@@ -723,6 +727,28 @@ class PreviewDataWidget(EdgeWindow):
         # honour a persisted / CLI-set "Manual ROI Labeling" toggle
         from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
         self.sync_manual_roi(widget_enabled("manual_roi"))
+        self.sync_event_curation(widget_enabled("vnoiser"))
+
+    def sync_event_curation(self, enabled: bool) -> None:
+        """Create or tear down the vnoiser curation widget to match the toggle."""
+        from mbo_utilities.gui._availability import HAS_VNOISER
+
+        current = getattr(self, "event_curation", None)
+        if enabled and current is None:
+            if not HAS_VNOISER:
+                self.logger.info("vnoiser is not installed; Event Curation stays off")
+                return
+            from mbo_utilities.gui.event_curation import attach_curation_widget
+
+            attach_curation_widget(self)
+        elif not enabled and current is not None:
+            from mbo_utilities.gui.event_curation import detach_curation_widget
+
+            try:
+                detach_curation_widget(self)
+            except Exception:
+                self.logger.debug("event curation teardown failed", exc_info=True)
+                self.event_curation = None
 
     def sync_manual_roi(self, enabled: bool) -> None:
         """Create or tear down the manual-ROI widget to match the toggle.
@@ -1522,6 +1548,7 @@ class PreviewDataWidget(EdgeWindow):
         cleanup_pipelines(self)
         cleanup_all_widgets(self._widgets)
         self.sync_manual_roi(False)
+        self.sync_event_curation(False)
         strip = getattr(self, "top_strip", None)
         if strip is not None:
             strip.close()

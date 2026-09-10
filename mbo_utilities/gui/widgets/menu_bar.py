@@ -276,6 +276,15 @@ def _roi_keybinds(parent: Any) -> list[tuple[str, str | None]]:
     return [("", ""), ("ROI Labeling", None), *KEYBINDS]
 
 
+def _curation_keybinds(parent: Any) -> list[tuple[str, str | None]]:
+    """The curation widget's keys, when it is on."""
+    if getattr(parent, "event_curation", None) is None:
+        return []
+    from mbo_utilities.gui.event_curation import KEYBINDS
+
+    return [("", ""), ("Event Curation", None), *KEYBINDS]
+
+
 def draw_keybinds_popup(parent: Any):
     """Draw the keybinds cheatsheet popup.
 
@@ -335,6 +344,7 @@ def draw_keybinds_popup(parent: Any):
             ("k", "Open/close this popup"),
         ]
         keybinds += _roi_keybinds(parent)
+        keybinds += _curation_keybinds(parent)
 
         table_flags = imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
         if imgui.begin_table("keybinds_table", 2, table_flags):
