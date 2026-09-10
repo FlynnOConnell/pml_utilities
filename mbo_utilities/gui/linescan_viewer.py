@@ -656,7 +656,8 @@ class LineTracesPanel:
     ``Traces`` tab and, when curation is on, above the curation trace.
     """
 
-    def __init__(self, ndw, overlay: LineScanOverlay, traces: np.ndarray, strip, own_strip: bool):
+    def __init__(self, ndw, overlay: LineScanOverlay, traces: np.ndarray, strip, own_strip: bool,
+                 tab: bool = True):
         from mbo_utilities.gui._top_strip import TopPanel
 
         self.ndw = ndw
@@ -670,7 +671,9 @@ class LineTracesPanel:
         self._cache: dict[int, tuple] = {}
         self._fit = True
         self._last = None
-        self.strip.register(TopPanel("line_traces", "Traces", self.draw_tab, 260, None, 10))
+        # its own tab only when nothing else shows it (no curation panels)
+        if tab:
+            self.strip.register(TopPanel("line_traces", "Traces", self.draw_tab, 260, None, 10))
 
     def close(self) -> None:
         self.strip.unregister("line_traces")
@@ -1235,7 +1238,7 @@ def open_linescan_viewer(
 
             own_strip = line_curation is None
             strip = TopStrip(ndw.figure) if own_strip else line_curation.widget.strip
-            traces_panel = LineTracesPanel(ndw, overlay, traces, strip, own_strip)
+            traces_panel = LineTracesPanel(ndw, overlay, traces, strip, own_strip, tab=own_strip)
             if line_curation is not None:
                 line_curation.attach_traces(traces_panel)
 
