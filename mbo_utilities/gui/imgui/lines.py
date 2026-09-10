@@ -13,6 +13,7 @@ import numpy as np
 from imgui_bundle import imgui, implot
 
 __all__ = [
+    "decimate_minmax",
     "drag_hline",
     "drag_vline",
     "hlines",
@@ -47,6 +48,29 @@ def packed_colors(colors) -> np.ndarray:
 
 def _f64(values) -> np.ndarray:
     return np.ascontiguousarray(values, dtype=np.float64)
+
+
+def decimate_minmax(y, n_bins: int = 4000) -> tuple[np.ndarray, np.ndarray]:
+    """``(index, value)`` keeping each bin's min and max, so a long trace
+    draws with a few thousand points and no peak goes missing. Returns the
+    trace itself when it is short enough."""
+    y = np.asarray(y, dtype=np.float64).ravel()
+    n = y.size
+    if n <= 2 * n_bins:
+        return np.arange(n, dtype=np.float64), y
+    width = int(np.ceil(n / n_bins))
+    n_bins = int(np.ceil(n / width))
+    pad = n_bins * width - n
+    padded = np.concatenate([y, np.full(pad, np.nan)]) if pad else y
+    blocks = padded.reshape(n_bins, width)
+    lo = np.nanargmin(blocks, axis=1)
+    hi = np.nanargmax(blocks, axis=1)
+    base = np.arange(n_bins) * width
+    first, second = np.minimum(lo, hi), np.maximum(lo, hi)
+    idx = np.empty(2 * n_bins, dtype=np.float64)
+    idx[0::2] = base + first
+    idx[1::2] = base + second
+    return idx, y[idx.astype(int)]
 
 
 @contextmanager

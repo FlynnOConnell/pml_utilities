@@ -672,7 +672,10 @@ class LineCuration:
         if self.pf is not None:
             print(f"\nPF traces for scan {self.pf.scan_id}: {', '.join(self.pf.domains)} "
                   f"({self.pf.pf_dir})")
-            widget.status = "select a line: its PF domain trace loads"
+            # every scan / domain of the experiment loads now; a line click
+            # then just focuses its domain
+            widget.scan(str(self.pf.pf_dir))
+            widget.status = "loading every domain; select a line to focus its trace"
         else:
             widget.status = "select a line, then denoise it"
         widget.on_focus = self._on_focus
@@ -715,10 +718,11 @@ class LineCuration:
     def curate_domain(self, domain: str) -> None:
         """Load the pipeline's processed trace of ``domain`` (the notebook's
         data for this scan) into the curation."""
-        if self.pf is None or domain not in self.pf.domains or self.widget._loading:
+        if self.pf is None or domain not in self.pf.domains:
             return
         pf_dir = str(self.pf.pf_dir)
         if self.widget.data_path != pf_dir:
+            # catalogs and loads every scan / domain of the experiment
             self.widget.scan(pf_dir)
         self.curated_domain = domain
         self.curated = None
@@ -760,7 +764,7 @@ class LineCuration:
 
         section("Curation")
         i = self.overlay.selected
-        loading = self.widget._loading
+        loading = self.widget.loading
         domain = self.pf.domain_for_roi(i) if self.pf is not None else None
         imgui.begin_disabled(loading)
         if domain is not None:
