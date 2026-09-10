@@ -16,7 +16,7 @@ from mbo_utilities.arrays import ScanImageArray
 from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.preferences import add_recent_file, get_last_dir, set_last_dir
 
-_IMAGE_FILTERS = ["Image Files", "*.tif *.tiff *.zarr *.npy *.bin", "All Files", "*"]
+_IMAGE_FILTERS = ["All Files", "*"]
 
 
 def open_prompts(parent: Any) -> tuple[PathPrompt, PathPrompt]:

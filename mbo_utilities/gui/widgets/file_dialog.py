@@ -643,13 +643,12 @@ class FileDialog:
                 fa.ICON_FA_FILE_IMAGE,
                 "Open File(s)",
                 imgui.ImVec2(btn_w, btn_h),
-                "Select one or more image files" if NATIVE_DIALOGS else no_dialog_hint()
+                "Select one or more data files" if NATIVE_DIALOGS else no_dialog_hint()
             ):
                 self._open_multi = pfd.open_file(
                     "Select files",
                     self._default_dir,
-                    ["Image Files", "*.tif *.tiff *.zarr *.npy *.bin",
-                     "All Files", "*"],
+                    ["All Files", "*"],
                     pfd.opt.multiselect
                 )
 
@@ -660,7 +659,7 @@ class FileDialog:
                 fa.ICON_FA_FOLDER_OPEN,
                 "Select Folder",
                 imgui.ImVec2(btn_w, btn_h),
-                "Select folder with image data" if NATIVE_DIALOGS else no_dialog_hint()
+                "Select a data folder" if NATIVE_DIALOGS else no_dialog_hint()
             ):
                 self._select_folder = pfd.select_folder("Select folder", self._default_dir)
             if not NATIVE_DIALOGS:
