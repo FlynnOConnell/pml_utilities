@@ -40,6 +40,7 @@ HAS_CUPY: bool = _get_cached_flag("cupy", lambda: _check_import("cupy"))
 HAS_TORCH: bool = _get_cached_flag("torch", lambda: _check_import("torch"))
 HAS_RASTERMAP: bool = _get_cached_flag("rastermap", lambda: _check_import("rastermap"))
 HAS_MASKNMF: bool = _get_cached_flag("masknmf", lambda: _check_import("masknmf"))
+HAS_VNOISER: bool = _get_cached_flag("vnoiser", lambda: _check_import("vnoiser"))
 HAS_IMGUI: bool = _get_cached_flag("imgui_bundle", lambda: _check_import("imgui_bundle"))
 HAS_FASTPLOTLIB: bool = _get_cached_flag("fastplotlib", lambda: _check_import("fastplotlib"))
 HAS_PYQT6: bool = _get_cached_flag("pyqt6", lambda: _check_import("PyQt6"))
@@ -122,6 +123,7 @@ class InstallStatus:
 _TORCH_INDEX = "https://download.pytorch.org/whl/"
 _SUITE2P_HINT = "uv pip install lbm-suite2p-python suite2p rastermap --no-deps"
 _MASKNMF_HINT = "uv pip install git+https://github.com/apasarkar/masknmf-toolbox.git"
+VNOISER_HINT = "uv pip install -e <path to the vnoiser checkout>"
 
 
 def _major(ver: str | None) -> int | None:
@@ -363,6 +365,10 @@ def check_installation(callback=None) -> InstallStatus:
             torch,
         ),
         _check_pkg("rastermap", "rastermap", "Rastermap", "sorts suite2p traces", _SUITE2P_HINT),
+        _check_pkg(
+            "vnoiser", "vnoiser", "vnoiser",
+            "wavelet denoising and event curation of voltage traces", VNOISER_HINT,
+        ),
     ]
 
     _update(0.9, "Checking napari...")
