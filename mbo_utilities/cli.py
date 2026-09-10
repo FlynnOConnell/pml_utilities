@@ -342,6 +342,7 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
       mbo view /data --roi 0 --roi 2 View specific ROIs
       mbo view /data --widget manualroi  Open with the ROIs widget on (draw + label by hand)
       mbo view /data/scan.mesc --unit 2   Open one MESc measurement unit
+      mbo view /data/scan.mesc --unit MUnit_35   A line-scan unit opens the line-scan viewer
       mbo view --list-gpus           Show available GPU adapters
       mbo view /data/raw --gpu 0     Force GPU index 0
     """
@@ -1750,7 +1751,15 @@ def roi_run(input_path, output_dir, register_method, process, rois, planes, roi_
 @click.option("--flip-y", is_flag=True, default=False,
               help="Mirror the lines vertically on the reference Z-stack figure.")
 @click.option("--tag", default="linescan", show_default=True, help="Output dir name: rois_<tag>/.")
-def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figures, flip_y, tag):
+@click.option("--view", is_flag=True, default=False,
+              help="Open the line-scan + Z-stack viewer (with vnoiser curation when installed) "
+                   "instead of writing outputs. Same as `mbo scan.mesc` and picking the unit.")
+@click.option("--zstack", default=None, help="With --view: the Z-stack unit, e.g. MUnit_3.")
+@click.option("--zstack-file", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="With --view: the .mesc holding the Z-stack when saved separately "
+                   "(default: <name>_zstack.mesc beside the file, else the file itself).")
+def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figures, flip_y, tag,
+             view, zstack, zstack_file):
     """Per-ROI traces from every AOD line-scan unit of a Femtonics .mesc file.
 
     Each line the scientist drew is its own ROI; its kymograph is averaged
@@ -1765,7 +1774,19 @@ def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figur
     \b
       mbo linescan scan.mesc
       mbo linescan scan.mesc -o results/linescan --unit MUnit_3 --channel 1
+      mbo linescan scan.mesc --view --unit MUnit_35
     """
+    if view:
+        from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
+
+        if len(units) > 1:
+            raise click.BadParameter("--view opens one unit; pass a single --unit", param_hint="--unit")
+        open_linescan_viewer(
+            mesc_path, ref_key=units[0] if units else None, zstack_key=zstack,
+            zstack_path=zstack_file, channel=channel, flip_y=flip_y,
+        )
+        return
+
     from mbo_utilities.roi_workflow import extract_linescan_units
 
     try:
