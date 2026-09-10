@@ -32,7 +32,7 @@ from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.install import VNOISER_HINT
 from mbo_utilities.preferences import get_last_dir, set_last_dir
-from mbo_utilities.vnoiser import MODES, CurationSession
+from mbo_utilities.vnoiser import MODES, CurationSession, pf_dir_for_mesc
 
 __all__ = [
     "KEYBINDS",
@@ -223,15 +223,35 @@ class EventCurationWidget:
         self.sessions.clear()
         self.animal = self.experiment = self.recording = ""
         self._trace_source = None
-        self.data_path = str(Path(path).expanduser())
+        path = Path(path).expanduser()
+        note = ""
+        if path.suffix.lower() == ".mesc":
+            # the raw line scan; its processed traces sit in the experiment's
+            # PF folder, which is what the curation notebook reads
+            pf = pf_dir_for_mesc(path)
+            if pf is None:
+                self.data_path = ""
+                self.status = (
+                    f"{path.name} is a raw line scan with no PF folder beside it. Open it "
+                    "with `mbo <file>.mesc` and curate its lines there, or point at a "
+                    "vnoiser Data / experiment / PF folder."
+                )
+                return
+            note = f" (PF folder of {path.name})"
+            path = pf
+        self.data_path = str(path)
         session = self.session
         if session is None:
             return
         set_last_dir("vnoiser", self.data_path)
         self.prompt.path = self.data_path
-        self.status = session.status
+        self.status = session.status + note
         if not session.has_dataset:
-            self.status = f"no vnoiser data at {self.data_path}: {session.status}"
+            self.status = (
+                f"no vnoiser data at {self.data_path}: expected a Data folder "
+                "(stan*/…_expt*/PF/denoised_trace_scans.pkl), an animal, experiment or "
+                "PF folder, or a .mat recording."
+            )
             return
         animals = session.animals
         if len(animals) == 1:

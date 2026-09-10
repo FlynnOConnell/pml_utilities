@@ -25,7 +25,15 @@ from vnoiser.curation import (
 )
 from vnoiser.dataset import RecordingSample, SpatialJediDataset
 
-__all__ = ["LABEL_RGBA", "MODES", "CurationSession", "hex_rgba"]
+__all__ = [
+    "LABEL_RGBA",
+    "MODES",
+    "CurationSession",
+    "PfScan",
+    "hex_rgba",
+    "pf_dir_for_mesc",
+    "pf_scan_for_mesc",
+]
 
 MODES = ("fast", "slow", "manual")
 LABELS = ("yes", "no", "auto_yes", "auto_no", "unlabeled")
@@ -493,3 +501,84 @@ class CurationSession:
     def candidate_window_ms(self) -> float:
         """Half-width of the focused-candidate view."""
         return 500.0 if self.mode == "slow" else 100.0
+
+
+# ----------------------------------------------------------------------
+# the processed PF folder that belongs to a raw line-scan .mesc
+# ----------------------------------------------------------------------
+
+PF_TRACES = SpatialJediDataset.trace_filename
+
+
+def pf_dir_for_mesc(mesc_path) -> Path | None:
+    """The experiment's ``PF`` folder for a raw line scan laid out as
+    ``<animal>/<experiment>/<experiment>/<experiment>.mesc`` with the
+    processed traces in ``<animal>/<experiment>/PF``; None when absent."""
+    mesc_path = Path(mesc_path)
+    for parent in (mesc_path.parent.parent, mesc_path.parent):
+        pf = parent / "PF"
+        if (pf / PF_TRACES).is_file():
+            return pf
+    return None
+
+
+class PfScan:
+    """The processed traces of one line-scan unit: the PF scan whose id is
+    the unit's number (``MUnit_35`` is scan ``35``), its domains (groups of
+    lines the pipeline averaged) and which line ROIs each holds.
+
+    Parameters
+    ----------
+    pf_dir : Path
+        The experiment's ``PF`` folder.
+    scan_id : str
+        Scan id as the pipeline keys it.
+    domains : dict
+        ``{domain: [roi, ...]}`` from ``scanIDs_ROIs.pkl``.
+    """
+
+    def __init__(self, pf_dir: Path, scan_id: str, domains: dict[str, list[int]]):
+        self.pf_dir = Path(pf_dir)
+        self.scan_id = str(scan_id)
+        self.domains = {str(k): [int(v) for v in rois] for k, rois in domains.items()}
+        self.experiment = self.pf_dir.parent.name
+        self.animal = self.pf_dir.parent.parent.name
+
+    def domain_for_roi(self, roi: int) -> str | None:
+        """The domain that averages line ``roi``, or None."""
+        for domain, rois in self.domains.items():
+            if int(roi) in rois:
+                return domain
+        return None
+
+    def recording_id(self, domain: str) -> str:
+        """The dataset's id for a domain trace of this scan."""
+        return f"{self.animal}/{self.experiment}/scan={self.scan_id}/domain={domain}"
+
+
+def pf_scan_for_mesc(mesc_path, unit_key: str) -> PfScan | None:
+    """The :class:`PfScan` of a line-scan unit, or None when the PF folder
+    is missing or the pipeline never processed that scan."""
+    import pickle
+
+    pf_dir = pf_dir_for_mesc(mesc_path)
+    if pf_dir is None:
+        return None
+    munit = str(unit_key).rsplit("/", 1)[-1]
+    scan_id = munit.rsplit("_", 1)[-1]
+    fs_path, roi_path = pf_dir / "fs_scans.pkl", pf_dir / "scanIDs_ROIs.pkl"
+    if not fs_path.is_file() or not roi_path.is_file():
+        return None
+    with fs_path.open("rb") as handle:
+        fs_by_scan = {str(k): v for k, v in pickle.load(handle).items()}
+    if scan_id not in fs_by_scan:
+        return None
+    with roi_path.open("rb") as handle:
+        scan_metadata = pickle.load(handle)
+    domain_map = scan_metadata.get("domain_ROInumber", {})
+    domains = {
+        str(name): list(rois)
+        for name, rois in domain_map.items()
+        if str(name) != "All_domains"
+    }
+    return PfScan(pf_dir, scan_id, domains)

@@ -611,14 +611,26 @@ class LineCuration:
     """
 
     def __init__(self, widget, overlay: LineScanOverlay, traces: np.ndarray, mesc_path, ref_key: str):
+        from mbo_utilities.vnoiser import pf_scan_for_mesc
+
         self.widget = widget
         self.overlay = overlay
         self.traces = traces
         self.mesc_path = Path(mesc_path)
         self.munit = ref_key.rsplit("/", 1)[-1]
-        self.auto = False
+        # the pipeline's processed traces for this scan, when the experiment
+        # has a PF folder: what the curation notebook shows, per domain
+        # (a group of lines), no denoising needed
+        self.pf = pf_scan_for_mesc(self.mesc_path, ref_key)
+        self.auto = self.pf is not None
         self.curated: int | None = None
-        widget.status = "select a line, then curate it"
+        self.curated_domain: str | None = None
+        if self.pf is not None:
+            print(f"\nPF traces for scan {self.pf.scan_id}: {', '.join(self.pf.domains)} "
+                  f"({self.pf.pf_dir})")
+            widget.status = "select a line: its PF domain trace loads"
+        else:
+            widget.status = "select a line, then denoise it"
         widget.on_focus = self._on_focus
         overlay.on_select.append(self._on_select)
 
@@ -648,11 +660,34 @@ class LineCuration:
         return f"{self.mesc_path.stem}/{self.munit}/roi={int(i)}"
 
     def curate(self, i: int) -> None:
-        """Denoise (or restore from cache) and curate ROI ``i``."""
+        """Curate line ``i``: its PF domain trace when the pipeline ran on
+        this scan, else its raw trace through the denoiser."""
+        domain = self.pf.domain_for_roi(i) if self.pf is not None else None
+        if domain is not None:
+            self.curate_domain(domain)
+        else:
+            self.denoise(i)
+
+    def curate_domain(self, domain: str) -> None:
+        """Load the pipeline's processed trace of ``domain`` (the notebook's
+        data for this scan) into the curation."""
+        if self.pf is None or domain not in self.pf.domains or self.widget._loading:
+            return
+        pf_dir = str(self.pf.pf_dir)
+        if self.widget.data_path != pf_dir:
+            self.widget.scan(pf_dir)
+        self.curated_domain = domain
+        self.curated = None
+        self.widget.load(self.pf.recording_id(domain))
+
+    def denoise(self, i: int) -> None:
+        """Run the raw trace of line ``i`` through vnoiser's denoiser (or
+        restore its cache) and curate it."""
         i = int(i)
         if not 0 <= i < len(self.traces):
             return
         self.curated = i
+        self.curated_domain = None
         self.widget.load_trace(
             self.traces[i],
             self.overlay.fs,
@@ -662,8 +697,14 @@ class LineCuration:
         )
 
     def _on_select(self, i: int) -> None:
-        if self.auto and i != self.curated:
-            self.curate(i)
+        if not self.auto:
+            return
+        domain = self.pf.domain_for_roi(i) if self.pf is not None else None
+        if domain is not None:
+            if domain != self.curated_domain:
+                self.curate_domain(domain)
+        elif i != self.curated:
+            self.denoise(i)
 
     def _on_focus(self, t_s: float) -> None:
         self.overlay.goto_time(t_s)
@@ -676,20 +717,33 @@ class LineCuration:
         section("Curation")
         i = self.overlay.selected
         loading = self.widget._loading
+        domain = self.pf.domain_for_roi(i) if self.pf is not None else None
         imgui.begin_disabled(loading)
-        if imgui.button(f"curate ROI {i}"):
-            self.curate(i)
+        if domain is not None:
+            rois = ", ".join(str(r) for r in self.pf.domains[domain])
+            if imgui.button(f"curate {domain}"):
+                self.curate_domain(domain)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    f"the pipeline's processed trace for {domain} (lines {rois}), "
+                    "as the curation notebook shows it"
+                )
+            imgui.same_line()
+        if imgui.button(f"denoise ROI {i}"):
+            self.denoise(i)
         imgui.end_disabled()
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "run vnoiser's wavelet denoiser on this line's trace (minutes the first "
-                "time, cached after) and detect candidate events"
+                "run vnoiser's wavelet denoiser on this line's raw trace (minutes the "
+                "first time, cached after) and detect candidate events"
             )
         imgui.same_line()
         _changed, self.auto = imgui.checkbox("on select", self.auto)
         if imgui.is_item_hovered():
             imgui.set_tooltip("curate every line as it is selected")
-        if self.curated is not None and self.curated != i:
+        if self.curated_domain is not None and self.curated_domain != domain:
+            imgui.text_disabled(f"showing {self.curated_domain}")
+        elif self.curated is not None and self.curated != i:
             imgui.text_disabled(f"showing ROI {self.curated}")
         self.widget.draw_embedded()
 
