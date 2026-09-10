@@ -715,10 +715,15 @@ class ManualRoiWidget:
         if not self.plane_axes:
             return 0
         sizes = [n for _, n in self.plane_axes]
-        idx = [
-            int(np.clip(self.iw.indices[name], 0, n - 1))
-            for name, n in self.plane_axes
-        ]
+        idx = []
+        for name, n in self.plane_axes:
+            # a unit switch (MESc) can drop a scroll dim the store was keyed
+            # on; that dim then sits at plane 0 rather than taking the GUI down
+            try:
+                value = self.iw.indices[name]
+            except KeyError:
+                value = 0
+            idx.append(int(np.clip(value, 0, n - 1)))
         return int(np.ravel_multi_index(idx, sizes))
 
     def _plane_pos(self, plane: int) -> dict[str, int]:

@@ -816,6 +816,9 @@ def _run_gui_impl(
         # with no unit prompt: the processed scan (else the first line scan)
         # is shown and the others are a combo in its panel. Other .mesc files
         # prompt for their unit once, here.
+        # the file dialog hands back a list even for one file
+        if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
+            data_in = data_in[0]
         if _is_mesc(data_in):
             if unit is None and _has_linescan_units(data_in):
                 return _launch_linescan_viewer(data_in, None)
