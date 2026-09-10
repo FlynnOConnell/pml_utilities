@@ -30,7 +30,7 @@ from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui._theme import card, em, section
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
-from mbo_utilities.gui.imgui.lines import drag_hline, line, line_plot, vlines
+from mbo_utilities.gui.imgui.lines import decimate_minmax, drag_hline, line, line_plot, vec4, vlines
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.install import VNOISER_HINT
@@ -185,6 +185,7 @@ class EventCurationWidget:
         self.autofit = True
         self._fit_timeline = False
         self._timeline_key = None
+        self._timeline_trace_cache: dict[str, tuple] = {}
         self._panel_keys: dict[str, tuple] = {}
         self._threshold_drag: float | None = None
         self._auto_pass_drag: float | None = None
@@ -607,15 +608,14 @@ class EventCurationWidget:
         avail = imgui.get_content_region_avail()
         card_w = em(CARD_WIDTH_EM)
         wide_w = em(WIDE_CARD_EM)
-        n_cards = 2 if session.seeded else 1
-        plot_w = max(avail.x - n_cards * (card_w + em(0.5)) - 2 * (wide_w + em(0.5)), em(10))
+        plot_w = max(avail.x - (card_w + em(0.5)) - 2 * (wide_w + em(0.5)), em(10))
         with imgui_ctx.begin_child("##curation_trace", imgui.ImVec2(plot_w, 0)):
             self._draw_timeline(session)
         imgui.same_line(0, em(0.5))
-        self._draw_threshold_card(session, card_w, avail.y)
         if session.seeded:
-            imgui.same_line(0, em(0.5))
-            self._draw_auto_pass_card(session, card_w, avail.y)
+            self._draw_threshold_autopass_card(session, card_w, avail.y)
+        else:
+            self._draw_threshold_card(session, card_w, avail.y)
         imgui.same_line(0, em(0.5))
         with card("##curation_decision", "Decision", avail.y, wide_w):
             self._draw_decision_body(session)
@@ -650,9 +650,23 @@ class EventCurationWidget:
             imgui.same_line(0, em(0.6))
             imgui.text_disabled("loading...")
 
+    def _cached_trace(self, name: str, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Min/max-decimated ``(t, y)`` for the timeline trace, cached per
+        recording so zooming does not replot the full-resolution array every
+        frame (mirrors the notebook's ``downsample_xy`` before plotly)."""
+        cached = self._timeline_trace_cache.get(name)
+        if cached is None:
+            idx, values = decimate_minmax(y, 4000)
+            cached = (t[idx.astype(int)], values)
+            self._timeline_trace_cache[name] = cached
+        return cached
+
     def _draw_timeline(self, session: CurationSession) -> None:
         key = (session.mode, session.recording_id)
         fit = self._fit_timeline or (self.autofit and key != self._timeline_key)
+        if fit or key != self._timeline_key:
+            # fit also fires on a slow-cutoff edit, which changes analysis_trace under the same key
+            self._timeline_trace_cache = {}
         self._timeline_key = key
         self._fit_timeline = False
         height = max(imgui.get_content_region_avail().y - 2, 60.0)
@@ -660,12 +674,14 @@ class EventCurationWidget:
             if not ok:
                 return
             t = session.t
-            line("denoised", session.denoised, x=t, color=TRACE_COLOR, weight=1.0)
+            t_plot, denoised_plot = self._cached_trace("denoised", t, session.denoised)
+            line("denoised", denoised_plot, x=t_plot, color=TRACE_COLOR, weight=1.0)
             marker_source = session.denoised
             if session.mode == "slow":
+                t_lp, lp_plot = self._cached_trace("analysis", t, session.analysis_trace)
                 line(
                     f"<{self.slow_cutoff_hz:g} Hz low-pass",
-                    session.analysis_trace, x=t, color=LOWPASS_COLOR, weight=1.6,
+                    lp_plot, x=t_lp, color=LOWPASS_COLOR, weight=1.6,
                 )
                 marker_source = session.analysis_trace
 
@@ -711,15 +727,19 @@ class EventCurationWidget:
             )
             self._v_slider("threshold", session.threshold, lo, hi, session.set_threshold)
 
-    def _draw_auto_pass_card(self, session, width, height) -> None:
+    def _draw_threshold_autopass_card(self, session, width, height) -> None:
         lo, hi, _step = session.auto_pass_range
-        with card("##curation_a2", "A2. Auto-pass", height, width):
+        with card("##curation_a1a2", "A1/A2. Threshold / auto-pass", height, width):
             set_tooltip(
-                "Every candidate at or above this amplitude is auto-called "
-                "pass regardless of template similarity. Saved per recording.",
+                "Bottom (red) handle: candidate threshold. Top (teal) handle: "
+                "amplitude at or above which every candidate auto-passes "
+                "regardless of template similarity. Both saved per recording.",
             )
-            shown = session.auto_pass if session.auto_pass is not None else hi
-            self._v_slider("auto_pass", shown, lo, hi, session.set_auto_pass, extra_rows=1)
+            auto_pass_shown = session.auto_pass if session.auto_pass is not None else hi
+            self._v_range_slider(
+                "a1a2", session.threshold, auto_pass_shown, lo, hi,
+                session.set_threshold, session.set_auto_pass, extra_rows=1,
+            )
             changed, value = imgui.checkbox("waveform reject", session.waveform_rejection)
             set_tooltip(
                 "Auto-reject candidates whose cosine similarity to the seed "
@@ -729,7 +749,7 @@ class EventCurationWidget:
             if changed:
                 session.set_waveform_rejection(value)
             if session.auto_pass is None:
-                imgui.text_disabled("off")
+                imgui.text_disabled("auto-pass off")
 
     def _v_slider(self, key, value, lo, hi, apply, extra_rows: int = 0) -> None:
         """A vertical slider that applies on release, so a drag does not
@@ -745,6 +765,59 @@ class EventCurationWidget:
         if imgui.is_item_deactivated_after_edit():
             self._slider_pending.pop(key, None)
             apply(shown)
+        imgui.same_line(0, em(0.4))
+        imgui.text_disabled(f"{hi:.2f}\n\n\n{lo:.2f}")
+
+    def _v_range_slider(
+        self, key, lo_value, hi_value, lo, hi, apply_lo, apply_hi, extra_rows: int = 0,
+    ) -> None:
+        """One vertical track, two draggable handles (red = low, teal =
+        high) sharing ``[lo, hi]``; each applies on release, like
+        ``_v_slider``. The handles don't constrain each other, matching
+        threshold and auto-pass having always been independent values."""
+        lo_key, hi_key = f"{key}_lo", f"{key}_hi"
+        lo_shown = self._slider_pending.get(lo_key, float(lo_value))
+        hi_shown = self._slider_pending.get(hi_key, float(hi_value))
+        width = em(2.2)
+        handle_r = em(0.45)
+        height = max(imgui.get_content_region_avail().y - em(1.6) * (1 + extra_rows), em(3))
+        origin = imgui.get_cursor_screen_pos()
+        top_y, bottom_y = origin.y + handle_r, origin.y + height - handle_r
+        span = (float(hi) - float(lo)) or 1.0
+
+        def y_of(value: float) -> float:
+            return bottom_y - (float(value) - lo) / span * (bottom_y - top_y)
+
+        def value_at(mouse_y: float) -> float:
+            frac = float(np.clip((bottom_y - mouse_y) / (bottom_y - top_y or 1.0), 0.0, 1.0))
+            return float(lo) + frac * span
+
+        track_x = origin.x + width * 0.5
+        draw = imgui.get_window_draw_list()
+        draw.add_line(
+            imgui.ImVec2(track_x, top_y), imgui.ImVec2(track_x, bottom_y),
+            imgui.get_color_u32(imgui.Col_.frame_bg), 3.0,
+        )
+        for suffix, value, color, apply in (
+            ("lo", lo_shown, THRESHOLD_COLOR, apply_lo),
+            ("hi", hi_shown, AUTO_PASS_COLOR, apply_hi),
+        ):
+            pending_key = f"{key}_{suffix}"
+            y = y_of(value)
+            imgui.set_cursor_screen_pos(imgui.ImVec2(track_x - handle_r, y - handle_r))
+            imgui.invisible_button(f"##{pending_key}", imgui.ImVec2(handle_r * 2, handle_r * 2))
+            active = imgui.is_item_active()
+            hovered = imgui.is_item_hovered()
+            if active:
+                self._slider_pending[pending_key] = value_at(imgui.get_mouse_pos().y)
+            elif pending_key in self._slider_pending:
+                apply(self._slider_pending.pop(pending_key))
+            draw.add_circle_filled(
+                imgui.ImVec2(track_x, y), handle_r,
+                imgui.get_color_u32(vec4(color, 1.0 if (active or hovered) else 0.85)),
+            )
+        imgui.set_cursor_screen_pos(imgui.ImVec2(origin.x, origin.y + height))
+        imgui.dummy(imgui.ImVec2(width, 1))
         imgui.same_line(0, em(0.4))
         imgui.text_disabled(f"{hi:.2f}\n\n\n{lo:.2f}")
 
