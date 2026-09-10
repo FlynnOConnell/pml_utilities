@@ -24,6 +24,11 @@ were drawn and keeps the three views of the same experiment in step:
   that slice, length and sampling; click a row to select. Prev/next-depth
   buttons (also ``[`` / ``]``) walk only through slices that carry lines;
   ``n`` / ``p`` step through ROIs.
+- **Curation** (top edge + under the ROI panel, when vnoiser is installed):
+  "curate ROI n" runs vnoiser's wavelet denoiser on the selected line's
+  trace (cached beside the file) and opens the event curation panels on it;
+  the focused candidate moves the Timepoint so the kymograph shows it.
+  Labels go to ``.curation/<mode>_template_curation.json`` beside the file.
 
 Panels are genuinely independent (own controller, own sliders, movable
 separately): built on `fastplotlib.widgets.nd_widget` directly rather than
@@ -228,6 +233,8 @@ class LineScanOverlay:
         self.selected = 0
         self.slice = 0
         self._busy = False
+        # called with the ROI index whenever the selection changes
+        self.on_select: list = []
 
         ref_sp = ndw[0].subplot
         z_sp = ndw[z_index].subplot
@@ -381,7 +388,11 @@ class LineScanOverlay:
             self.labels[i].text = self._label_text(p)
 
     def _apply_selection(self, i: int) -> None:
+        changed = int(i) != self.selected
         self.selected = int(i)
+        if changed:
+            for fn in list(self.on_select):
+                fn(self.selected)
         for j, p in enumerate(self.placements):
             g = self.lines.graphics[j]
             if p["slice"] == self.slice:
@@ -483,14 +494,22 @@ class LineScanOverlay:
             self._apply_slice(self.slice)
             self._apply_selection(self.selected)
 
+    def goto_time(self, t_s: float) -> None:
+        """Move the Reference's Timepoint (and the trace cursor) to ``t_s``."""
+        if self.t_dim is None:
+            return
+        index = max(0, int(round(float(t_s) * self.fs)))
+        self.ndw.indices.set_dim_index(self.t_dim, index + 1)
+
 
 class LinePanel:
     """Right-hand imgui panel: one row per line, depth navigation, toggles."""
 
-    def __init__(self, ndw, overlay: LineScanOverlay, size: int = 360):
+    def __init__(self, ndw, overlay: LineScanOverlay, size: int = 360, curation=None):
         from mbo_utilities.gui._edge_window import EdgeWindow
 
         self.overlay = overlay
+        self.curation = curation
 
         class _Window(EdgeWindow):
             def update(win_self):  # noqa: N805
@@ -572,25 +591,125 @@ class LinePanel:
             "with lines, n / p next/prev ROI. 'off' is how far the line really "
             "sits from the slice it is drawn on."
         )
+        if self.curation is not None:
+            self.curation.draw()
+
+
+class LineCuration:
+    """vnoiser event curation of the selected line's trace.
+
+    The curation panels (trace with candidates, template / candidate / PCA)
+    claim the figure's top edge; this draws the controls under the ROI
+    table. The selected ROI's raw trace goes through vnoiser's denoiser the
+    first time (cached beside the file under ``.curation/cache``), and the
+    focused candidate moves the Reference's Timepoint so the kymograph
+    shows that event.
+    """
+
+    def __init__(self, widget, overlay: LineScanOverlay, traces: np.ndarray, mesc_path, ref_key: str):
+        self.widget = widget
+        self.overlay = overlay
+        self.traces = traces
+        self.mesc_path = Path(mesc_path)
+        self.munit = ref_key.rsplit("/", 1)[-1]
+        self.auto = False
+        self.curated: int | None = None
+        widget.status = "select a line, then curate it"
+        widget.on_focus = self._on_focus
+        overlay.on_select.append(self._on_select)
+
+    @classmethod
+    def build(cls, ndw, overlay, ref_arr, traces, mesc_path, ref_key):
+        """The curation widget on ``ndw``'s figure, or None (printed) when
+        vnoiser is not installed."""
+        import logging
+        from types import SimpleNamespace
+
+        from mbo_utilities.gui._availability import HAS_VNOISER
+        from mbo_utilities.install import VNOISER_HINT
+
+        if not HAS_VNOISER:
+            print(f"\nvnoiser is not installed; no curation panels ({VNOISER_HINT}).")
+            return None
+        from mbo_utilities.gui.event_curation import EventCurationWidget
+
+        parent = SimpleNamespace(
+            image_widget=ndw, logger=logging.getLogger("reference_zstack_viewer"),
+            fpath=str(mesc_path),
+        )
+        widget = EventCurationWidget(parent, data_path="")
+        return cls(widget, overlay, traces, mesc_path, ref_key)
+
+    def recording_id(self, i: int) -> str:
+        return f"{self.mesc_path.stem}/{self.munit}/roi={int(i)}"
+
+    def curate(self, i: int) -> None:
+        """Denoise (or restore from cache) and curate ROI ``i``."""
+        i = int(i)
+        if not 0 <= i < len(self.traces):
+            return
+        self.curated = i
+        self.widget.load_trace(
+            self.traces[i],
+            self.overlay.fs,
+            recording_id=self.recording_id(i),
+            label=f"{self.munit} ROI {i}",
+            source_path=self.mesc_path,
+        )
+
+    def _on_select(self, i: int) -> None:
+        if self.auto and i != self.curated:
+            self.curate(i)
+
+    def _on_focus(self, t_s: float) -> None:
+        self.overlay.goto_time(t_s)
+
+    def draw(self) -> None:
+        from imgui_bundle import imgui
+
+        from mbo_utilities.gui._theme import section
+
+        section("Curation")
+        i = self.overlay.selected
+        loading = self.widget._loading
+        imgui.begin_disabled(loading)
+        if imgui.button(f"curate ROI {i}"):
+            self.curate(i)
+        imgui.end_disabled()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "run vnoiser's wavelet denoiser on this line's trace (minutes the first "
+                "time, cached after) and detect candidate events"
+            )
+        imgui.same_line()
+        _changed, self.auto = imgui.checkbox("on select", self.auto)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("curate every line as it is selected")
+        if self.curated is not None and self.curated != i:
+            imgui.text_disabled(f"showing ROI {self.curated}")
+        self.widget.draw_embedded()
 
 
 def build_overlay(ndw, mesc_path, ref_key, zstack_key, ref_arr, zstack_arr,
                   ref_dims, zstack_dims, *, flip_y: bool, traces, z_index: int = 1,
-                  trace_index: int | None = 2, snapshot: dict | None = None) -> LineScanOverlay | None:
+                  trace_index: int | None = 2, snapshot: dict | None = None,
+                  zstack_path=None) -> LineScanOverlay | None:
     """Wire the overlay onto ``ndw``; prints why and returns ``None`` when the
-    file lacks the geometry (older MESc, non-AOD unit)."""
+    file lacks the geometry (older MESc, non-AOD unit). ``zstack_path`` is
+    the stack's own file when it was saved apart from the line scan."""
     from mbo_utilities.annotation.store import CLASS_COLORS
 
+    stack_path = mesc_path if zstack_path is None else zstack_path
     lines_um = linescan_endpoints_um(mesc_path, ref_key)
     if lines_um is None:
         print("\nno CoordinateMapJSON/driftEndPoints on the Reference unit "
               "-- skipping the line overlay.")
         return None
-    vp = viewport_geometry(mesc_path, zstack_key)
+    vp = viewport_geometry(stack_path, zstack_key)
     if vp is None:
         print("\nno ReferenceViewportJSON on the Z-stack unit -- skipping the line overlay.")
         return None
-    depth = zstack_depth_info(mesc_path, zstack_key)
+    depth = zstack_depth_info(stack_path, zstack_key)
     if depth is None:
         print("\nno MinZ/MaxZ/ZDim on the Z-stack unit -- skipping the line overlay.")
         return None
@@ -663,6 +782,13 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("mesc_path", nargs="?", type=Path)
     ap.add_argument("--ref", help="linescan unit key, e.g. MSession_0/MUnit_3 (skips the prompt)")
     ap.add_argument("--zstack", help="zstack unit key (skips the prompt)")
+    ap.add_argument("--zstack-file", type=Path, default=None,
+                    help="the .mesc holding the Z-stack when it was saved separately from "
+                         "the line scan (default: look in mesc_path)")
+    ap.add_argument("--no-curation", action="store_true",
+                    help="skip the vnoiser event-curation panels even when vnoiser is installed")
+    ap.add_argument("--curate", type=int, default=None,
+                    help="denoise and curate this ROI as soon as the window opens")
     ap.add_argument("--channel", type=int, default=0, help="channel for the traces panel")
     ap.add_argument("--flip-y", action="store_true", help="mirror the lines vertically")
     ap.add_argument("--no-traces", action="store_true", help="skip the per-ROI trace panel")
@@ -694,14 +820,27 @@ def main(argv: list[str] | None = None) -> None:
 
     units = list_mesc_units(mesc_path)
     linescan_units = [u for u in units if u["kind"] == "packed"]
-    zstack_units = [u for u in units if u["modality_name"] == "zstack"]
     if not linescan_units:
         raise SystemExit(f"no linescan units found in {mesc_path}")
+    # the Z-stack may live in its own file (Asako's rig saves
+    # <expt>_zstack.mesc beside the line scan): look there when told, else
+    # beside the line scan for a sibling named that way, else in the file
+    zstack_path = args.zstack_file
+    if zstack_path is None:
+        sibling = mesc_path.parent.parent / f"{mesc_path.stem}_zstack.mesc"
+        if not any(u["modality_name"] == "zstack" for u in units) and sibling.exists():
+            zstack_path = sibling
+    if zstack_path is None:
+        zstack_path = mesc_path
+        stack_units = units
+    else:
+        stack_units = list_mesc_units(zstack_path)
+    zstack_units = [u for u in stack_units if u["modality_name"] == "zstack"]
     if not zstack_units:
-        raise SystemExit(f"no zstack units found in {mesc_path}")
+        raise SystemExit(f"no zstack units found in {zstack_path}")
 
-    print(f"{mesc_path.name}: {len(units)} unit(s), "
-          f"{len(linescan_units)} linescan, {len(zstack_units)} zstack.")
+    print(f"{mesc_path.name}: {len(units)} unit(s), {len(linescan_units)} linescan; "
+          f"{len(zstack_units)} zstack in {zstack_path.name}.")
 
     def _resolve(key, pool, label, extra=None, default=None):
         if key is None:
@@ -719,8 +858,11 @@ def main(argv: list[str] | None = None) -> None:
     # score every stack against these lines; the picker shows the fit and
     # defaults to the paired one, and a stack holding none of the lines is
     # refused - drawing them on it would be meaningless
-    cands = {c["key"]: c for c in zstack_candidates(mesc_path, ref_key, units)}
-    paired = pair_reference_zstack(mesc_path, ref_key, units)
+    cands = {
+        c["key"]: c
+        for c in zstack_candidates(mesc_path, ref_key, stack_units, zstack_path=zstack_path)
+    }
+    paired = pair_reference_zstack(mesc_path, ref_key, stack_units, zstack_path=zstack_path)
     fit = {}
     for u in zstack_units:
         c = cands.get(u["key"])
@@ -748,7 +890,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"warning: only {chosen['xy_fraction']:.0%} of the lines fall inside {chosen['munit']}'s field.")
 
     ref_arr = MescArray(mesc_path, unit=ref_key)
-    zstack_arr = MescArray(mesc_path, unit=zstack_key)
+    zstack_arr = MescArray(zstack_path, unit=zstack_key)
     _print_metadata("Reference", ref_arr)
     _print_metadata("Z-stack", zstack_arr)
 
@@ -763,7 +905,7 @@ def main(argv: list[str] | None = None) -> None:
         from mbo_utilities.arrays.mesc_geometry import roi_placements, zstack_depth_info
 
         placements = roi_placements(
-            linescan_endpoints_um(mesc_path, ref_key), zstack_depth_info(mesc_path, zstack_key),
+            linescan_endpoints_um(mesc_path, ref_key), zstack_depth_info(zstack_path, zstack_key),
             [int(e["width"]) for e in ref_arr.metadata["mesc_roi_extents"]],
         )
         print(f"\n{len(placements)} line(s) on {chosen['munit']}:")
@@ -860,18 +1002,27 @@ def main(argv: list[str] | None = None) -> None:
         ndw, mesc_path, ref_key, zstack_key, ref_arr, zstack_arr,
         ref_dims, zstack_dims, flip_y=args.flip_y, traces=traces,
         z_index=z_index, trace_index=trace_index, snapshot=snapshot,
+        zstack_path=zstack_path,
     )
+    curation = None
     if overlay is not None:
-        LinePanel(ndw, overlay)
+        if traces is not None and not args.no_curation:
+            curation = LineCuration.build(ndw, overlay, ref_arr, traces, mesc_path, ref_key)
+        LinePanel(ndw, overlay, curation=curation)
 
     ndw.show()
     _after_show(ndw)
+    if curation is not None and args.curate is not None:
+        curation.curate(args.curate)
 
     import fastplotlib as fpl
 
     if args.screenshot is not None:
         import imageio.v3 as iio
 
+        if curation is not None and args.curate is not None:
+            print("waiting for the denoiser...", flush=True)
+            curation.widget.wait()
         for _ in range(10):
             ndw.figure.canvas.draw()
         # NDWidget fetches slices through the event loop, which never runs
