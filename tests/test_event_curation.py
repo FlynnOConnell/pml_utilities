@@ -293,16 +293,38 @@ def _load(widget, data_root):
 
 
 def _each_panel(widget, frames=2):
-    for key in ("all_traces", "curation", "candidates"):
+    for key in ("curation", "candidates"):
         widget.strip.focus(key)
         _frames(widget, frames)
 
 
 class TestWidget:
-    def test_registers_three_top_panels(self, curation):
-        assert all(curation.strip.has(k) for k in ("all_traces", "curation", "candidates"))
+    def test_registers_the_top_panels(self, curation):
+        assert all(curation.strip.has(k) for k in ("curation", "candidates"))
         assert {p.right_tab for p in curation.strip.panels} == {"curation"}
         _frames(curation)
+
+    def test_flipping_through_recordings_updates_everything(self, curation, data_root, tmp_path):
+        pf2 = tmp_path / "stan1" / "stan1_expt2" / "PF"
+        pf2.mkdir(parents=True)
+        for name in ("denoised_trace_scans.pkl", "fs_scans.pkl", "scanIDs_ROIs.pkl"):
+            (pf2 / name).write_bytes((data_root / "stan1" / "stan1_expt1" / "PF" / name).read_bytes())
+        seen = []
+        curation.on_recording = seen.append
+        _load(curation, data_root)
+        first = curation.current
+        _each_panel(curation)
+        assert seen == [first]
+        curation.step_recording(1)
+        assert curation.current != first and curation.loading
+        curation.wait(60)
+        _each_panel(curation)
+        assert seen == [first, curation.current]
+        assert curation.session.recording_id == curation.current
+        curation.step_recording(1)
+        assert curation.current == first
+        _each_panel(curation)
+        assert seen == [first, seen[1], first]
 
     def test_scan_catalogs_and_loads_everything(self, curation, data_root, tmp_path):
         # a second experiment under the same animal is found and loaded too
@@ -365,7 +387,7 @@ class TestWidget:
     def test_close_gives_the_strip_back(self, curation):
         strip = curation.strip
         curation.close()
-        assert not any(strip.has(k) for k in ("all_traces", "curation", "candidates"))
+        assert not any(strip.has(k) for k in ("curation", "candidates"))
         curation.close()
 
 
