@@ -62,6 +62,11 @@ TRACE_COLOR = (0.85, 0.85, 0.85, 1.0)
 LOWPASS_COLOR = (0.35, 0.60, 0.95, 1.0)
 THRESHOLD_COLOR = (0.84, 0.15, 0.24, 1.0)
 AUTO_PASS_COLOR = (0.16, 0.62, 0.56, 1.0)
+# A3: the PC1 line on the PCA and its slider; A4: the cosine slider
+PC1_COLOR = (0.62, 0.45, 0.90, 1.0)
+COSINE_COLOR = (0.95, 0.68, 0.25, 1.0)
+# drag-tool id of the A3 line on the PCA plot
+PC1_LINE_ID = 3
 TEMPLATE_COLOR = (1.0, 1.0, 1.0, 1.0)
 SNIPPET_COLOR = (0.30, 0.47, 0.66, 1.0)
 ORIGINAL_COLOR = (0.62, 0.79, 0.91, 1.0)
@@ -86,7 +91,7 @@ KEYBINDS = (
     ("Box accept / delete", "box mode: right-drag a box on the trace or the PCA, then drag its edges"),
     ("enter", "apply the box"),
     ("esc", "leave box mode"),
-    ("drag line", "move the threshold (red) / auto-pass (teal) line on the trace"),
+    ("drag line", "move the threshold (red) / auto-pass (teal) line on the trace, or the PC1 (purple) line on the PCA"),
     ("scroll", "zoom (shift: x only, alt: y only); drag pans; double-click fits"),
     ("k", "this list"),
 )
@@ -117,7 +122,12 @@ def help_markdown() -> str:
         "a time; the arrows (or up / down) flip through them. Top row: the "
         "trace with its candidates (drag the red line to change the candidate "
         "threshold, the teal line or the A2 slider to set the auto-pass "
-        "amplitude) beside the Decision and Navigation cards. Bottom row: the "
+        "amplitude) beside the A3 / A4 card and the Decision and Navigation "
+        "cards. A3 is the purple line on the PCA (drag it, or its slider): "
+        "every candidate on its passing side auto-passes; the arrow button "
+        "under the slider picks the side. A4 is the seed-template cosine at "
+        "or above which a candidate auto-passes; below it auto-rejects, so "
+        "A4 at the bottom rejects nothing. Bottom row: the "
         "current template, the focused candidate against it, the second-pass "
         "preview with rejected events removed, and the candidate PCA over "
         "400 ms windows. Click a point to focus it. **Box accept** / **Box "
@@ -220,6 +230,7 @@ class EventCurationWidget:
         self._panel_keys: dict[str, tuple] = {}
         self._threshold_drag: float | None = None
         self._auto_pass_drag: float | None = None
+        self._pc1_drag: float | None = None
         self._slider_pending: dict[str, float] = {}
 
         self._hovered = False
