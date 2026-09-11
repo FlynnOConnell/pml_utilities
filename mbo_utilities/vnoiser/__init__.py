@@ -8,6 +8,7 @@ package only adapts them to the imgui viewer. See ``session.CurationSession``.
 from mbo_utilities.vnoiser.session import (
     LABEL_RGBA,
     MODES,
+    PC1_SIDES,
     CurationSession,
     PfScan,
     hex_rgba,
@@ -18,6 +19,7 @@ from mbo_utilities.vnoiser.session import (
 __all__ = [
     "LABEL_RGBA",
     "MODES",
+    "PC1_SIDES",
     "CurationSession",
     "PfScan",
     "hex_rgba",

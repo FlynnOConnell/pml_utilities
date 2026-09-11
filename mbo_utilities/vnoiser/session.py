@@ -18,8 +18,8 @@ from pathlib import Path
 
 import numpy as np
 from vnoiser.curation import (
-    AUTO_TEMPLATE_THRESHOLD,
     LABEL_COLORS,
+    PC1_SIDES,
     PIPELINE_CACHE_VERSION,
     EventCurationDashboard,
 )
@@ -28,6 +28,7 @@ from vnoiser.dataset import RecordingSample, SpatialJediDataset
 __all__ = [
     "LABEL_RGBA",
     "MODES",
+    "PC1_SIDES",
     "CurationSession",
     "PfScan",
     "hex_rgba",
@@ -374,9 +375,84 @@ class CurationSession:
             return
         self.dash._waveform_rejection_changed({"new": bool(value)})
 
+    # A3: the PC1 line on the candidate PCA
+
+    @property
+    def auto_pass_pc1(self) -> float | None:
+        """PC1 score of the A3 line; None while the rule is off."""
+        return self.dash.auto_pass_pc1
+
+    @property
+    def auto_pass_pc1_side(self) -> str:
+        """``"right"``: PC1 at or above the line passes; ``"left"``: at or below."""
+        return str(self.dash.auto_pass_pc1_side)
+
+    @property
+    def auto_pass_pc1_range(self) -> tuple[float, float, float]:
+        """``(low, high, step)`` of the A3 line: the candidates' PC1 scores
+        padded so the line at either end passes none."""
+        lo, hi, step = self.dash.pc1_slider_range()
+        return float(lo), float(hi), float(step)
+
+    @property
+    def auto_pass_pc1_shown(self) -> float:
+        """Where the A3 line is drawn: its value, or parked at the end of
+        the passing side (nothing passes) while the rule is off."""
+        if self.auto_pass_pc1 is not None:
+            return float(self.auto_pass_pc1)
+        lo, hi, _ = self.auto_pass_pc1_range
+        return lo if self.auto_pass_pc1_side == "left" else hi
+
+    def auto_pass_pc1_count(self) -> int:
+        """How many candidates the A3 line passes now."""
+        if not self.loaded or self.auto_pass_pc1 is None or not self.n:
+            return 0
+        return int(sum(self.dash._pc1_passes(i) for i in range(self.n)))
+
+    def set_auto_pass_pc1(self, value: float) -> None:
+        if not self.loaded or not self.seeded:
+            return
+        lo, hi, _ = self.auto_pass_pc1_range
+        value = float(np.clip(value, lo, hi))
+        if self.auto_pass_pc1 is not None and value == self.auto_pass_pc1:
+            return
+        self.dash._auto_pass_pc1_changed({"new": value})
+
+    def set_auto_pass_pc1_side(self, side: str) -> None:
+        if not self.loaded or not self.seeded or side not in PC1_SIDES:
+            return
+        if side == self.auto_pass_pc1_side:
+            return
+        self.dash._auto_pass_pc1_side_changed({"new": side})
+
+    # A4: the seed-template cosine at or above which a candidate passes
+
     @property
     def auto_template_threshold(self) -> float:
-        return float(AUTO_TEMPLATE_THRESHOLD)
+        return float(self.dash.auto_template_threshold)
+
+    @property
+    def auto_template_threshold_range(self) -> tuple[float, float, float]:
+        s = self.dash.cosine_slider
+        return float(s.min), float(s.max), float(s.step)
+
+    def auto_template_count(self) -> int:
+        """How many candidates the cosine threshold passes on its own."""
+        if not self.loaded or not self.seeded or not self.n:
+            return 0
+        scores = np.asarray(self.dash.initial_template_scores, dtype=float)
+        if len(scores) < self.n:
+            return 0
+        return int(np.count_nonzero(scores[: self.n] >= self.auto_template_threshold))
+
+    def set_auto_template_threshold(self, value: float) -> None:
+        if not self.loaded or not self.seeded:
+            return
+        lo, hi, _ = self.auto_template_threshold_range
+        value = float(np.clip(value, lo, hi))
+        if value == self.auto_template_threshold:
+            return
+        self.dash._auto_template_threshold_changed({"new": value})
 
     # ------------------------------------------------------------------
     # candidates and labels
@@ -498,6 +574,8 @@ class CurationSession:
             "template_cosine": score,
             "initial_cosine": float(self.dash._initial_template_score_for_index(i)),
             "auto_call": self.dash._initial_auto_call_for_index(i),
+            "pc1": float(self.dash.candidates.pca_scores[i, 0]),
+            "pc1_pass": bool(self.dash._pc1_passes(i)),
             "seed": bool(i in set(self.dash.seed_indices.tolist())),
         }
 
