@@ -541,6 +541,14 @@ class CurationSession:
         dash._refresh_all()
         return len(keys)
 
+    def clear_labels(self) -> int:
+        """Drop every manual label of this recording and save; the auto
+        rules decide every candidate again. Returns how many were dropped."""
+        if not self.n:
+            return 0
+        labelled = [i for i in range(self.n) if self.manual_label(i) != "unlabeled"]
+        return self.set_labels(labelled, "unlabeled") if labelled else 0
+
     def counts(self) -> tuple[int, int, int]:
         """``(yes, no, unlabeled)`` over manual labels."""
         manual = [self.manual_label(i) for i in range(self.n)]
