@@ -55,6 +55,8 @@ TIMELINE_HEIGHT = 260
 CANDIDATE_HEIGHT = 210
 PANEL_HEIGHT = TIMELINE_HEIGHT + CANDIDATE_HEIGHT
 CARD_WIDTH_EM = 8.5
+# the A3 / A4 card holds two vertical sliders side by side
+A34_CARD_EM = 11.5
 WIDE_CARD_EM = 15.0
 FILTERS = ("all", "yes", "no", "unlabeled")
 
@@ -673,13 +675,19 @@ class EventCurationWidget:
         set_tooltip("k", show_mark=False)
         avail = imgui.get_content_region_avail()
         card_w = em(CARD_WIDTH_EM)
+        a34_w = em(A34_CARD_EM) if session.seeded else 0.0
         wide_w = em(WIDE_CARD_EM)
-        plot_w = max(avail.x - (card_w + em(0.5)) - 2 * (wide_w + em(0.5)), em(10))
+        plot_w = max(
+            avail.x - (card_w + em(0.5)) - (a34_w + em(0.5) if a34_w else 0.0) - 2 * (wide_w + em(0.5)),
+            em(10),
+        )
         with imgui_ctx.begin_child("##curation_trace", imgui.ImVec2(plot_w, 0)):
             self._draw_timeline(session)
         imgui.same_line(0, em(0.5))
         if session.seeded:
             self._draw_threshold_autopass_card(session, card_w, avail.y)
+            imgui.same_line(0, em(0.5))
+            self._draw_pc1_cosine_card(session, a34_w, avail.y)
         else:
             self._draw_threshold_card(session, card_w, avail.y)
         imgui.same_line(0, em(0.5))
