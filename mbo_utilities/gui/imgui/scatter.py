@@ -126,16 +126,26 @@ class ScatterPlot:
         legend: bool = False,
         tooltip: Callable[[int], str] | None = None,
         groups: list[tuple[str, np.ndarray]] | None = None,
+        inside: Callable[[], None] | None = None,
+        flags: int = 0,
     ) -> int | None:
-        """Open a plot, draw the points, close it; returns the clicked index."""
+        """Open a plot, draw the points, close it; returns the clicked index.
+        ``inside`` runs while the plot is still open, after the points (for
+        anything that needs implot's plot state, such as a box tool);
+        ``flags`` are extra ``implot.Flags_`` for the plot."""
         fit, self._fit = self._fit, False
-        with line_plot(self.plot_id, x_label, y_label, height, width, fit=fit, legend=legend) as ok:
+        with line_plot(
+            self.plot_id, x_label, y_label, height, width, fit=fit, legend=legend, flags=flags,
+        ) as ok:
             if not ok:
                 return None
-            return self.items(
+            picked = self.items(
                 x, y, colors,
                 focused=focused, label=label, legend=legend, tooltip=tooltip, groups=groups,
             )
+            if inside is not None:
+                inside()
+            return picked
 
     def _points(self, label, x, y, packed, idx, legend) -> None:
         spec = implot.Spec(
@@ -166,6 +176,22 @@ class ScatterPlot:
         py = pos.y + (limits.y.max - y) / yr * size.y
         mouse = imgui.get_mouse_pos()
         return nearest_index(px, py, mouse.x, mouse.y, self.pick_radius)
+
+    def rings(self, x, y, color, weight: float, ring_id: str) -> None:
+        """Hollow rings around several points (a box's contents)."""
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        y = np.ascontiguousarray(y, dtype=np.float64)
+        if not x.size:
+            return
+        spec = implot.Spec(
+            marker=implot.Marker_.circle.value,
+            marker_size=self.marker_size + 5.0,
+            marker_fill_color=imgui.ImVec4(0, 0, 0, 0),
+            marker_line_color=vec4(color),
+            line_weight=float(weight),
+            flags=implot.ItemFlags_.no_legend,
+        )
+        implot.plot_scatter(f"{self.plot_id}{ring_id}", x, y, spec)
 
     def _ring(self, x, y, color, weight, ring_id) -> None:
         spec = implot.Spec(

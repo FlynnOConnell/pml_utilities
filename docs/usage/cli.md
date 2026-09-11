@@ -297,10 +297,23 @@ chance. `--flip-y` remains for a rig that saves the other way round.
 | `06_roi_response_metrics.png` | per-ROI F0 (both channels), peak dF/F, latency, noise, SNR, response integral |
 | `07_motion_correction.png` | the AOD's real-time motion correction in X/Y/Z over the run |
 
-`--no-figures` skips them. To scrub the lines interactively, run
-`mbo scan.mesc` (pick the line-scan unit) or `mbo linescan scan.mesc --view`:
-three panels on top (the line-scan itself, the snapshot the lines were drawn
-on, the paired Z-stack) and the traces below. The Z-stack picker shows every
+`--no-figures` skips them.
+
+`mbo scan.mesc` (or `mbo <animal>/<expt>`, an experiment folder laid out the
+curation notebook's way with the processed traces in `PF/`) opens the event
+curation window when vnoiser is installed: the notebook's dashboard on its
+own, with the trace and its candidates over the template, focused candidate,
+second pass and PCA, one recording at a time with arrows to flip, and the
+recordings table beside it. A `.mesc` with no `PF` folder lists every line
+of its line-scan units as a raw recording; clicking one runs the wavelet
+denoiser on it. `python -m mbo_utilities.gui.curation_viewer PATH` is the
+same window from a script.
+
+To scrub the lines on the stack instead, run `mbo linescan scan.mesc --view`
+(or `mbo linescan <animal>/<expt> --view`): three panels on top (the
+line-scan itself, the snapshot the lines were drawn on, the paired Z-stack)
+and the curation dashboard, scoped to the scan on screen, on the strip
+above them. The Z-stack picker shows every
 stack's fit (fraction of lines in its field and depth range, pixel size)
 and defaults to the paired one; a stack holding none of the lines is
 refused. `--dry-run` prints the choice and placement without a window,

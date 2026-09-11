@@ -1,16 +1,18 @@
 """Event curation of voltage traces with vnoiser, inside the viewer.
 
-The curation notebook's dashboard as viewer panels, over every recording a
-data path holds. Scanning a path catalogs each animal, experiment and
-scan / domain the pipeline processed and loads them in the background;
-``Curation`` shows one recording at a time (the notebook's panel A with
-cards A1, A2, Decision and Navigation) and flips through them, and
-``Candidates`` holds its template, focused candidate, second-pass preview
-and PCA (B to E). The Curation tab on the right bar lists the recordings
-and switches mode. Every panel reads the focused session, so a label, a
-threshold or a flip updates all of them at once. Every rule comes from ``vnoiser.curation`` through
-:class:`mbo_utilities.vnoiser.CurationSession`: one per mode and
-recording, each with its own JSON file, as the notebook's sections have.
+The curation notebook's dashboard as one viewer panel, over every recording
+a data path holds. Scanning a path catalogs each animal, experiment and
+scan / domain the pipeline processed and loads them in the background. The
+``Curation`` panel on the top strip shows one recording at a time in the
+notebook's grid: the trace with its candidates (A) beside the threshold /
+auto-pass, Decision and Navigation cards, then the template, focused
+candidate, second-pass preview and PCA (B to E) under it; the arrows flip
+through recordings. The Curation tab on the right bar lists the recordings
+and switches mode. Every plot reads the focused session, so a label, a
+threshold or a flip updates all of them at once. Every rule comes from
+``vnoiser.curation`` through :class:`mbo_utilities.vnoiser.CurationSession`:
+one per mode and recording, each with its own JSON file, as the notebook's
+sections have.
 """
 
 from __future__ import annotations
@@ -30,7 +32,8 @@ from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui._theme import card, em, section
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
-from mbo_utilities.gui.imgui.lines import decimate_minmax, drag_hline, line, line_plot, vec4, vlines
+from mbo_utilities.gui.imgui.lines import decimate_minmax, dotted_vline, drag_hline, line, line_plot, vec4, vlines
+from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.install import VNOISER_HINT
@@ -46,7 +49,11 @@ __all__ = [
     "help_markdown",
 ]
 
-PANEL_HEIGHT = 280
+# the dashboard is two rows: the trace row (A with its cards) over the
+# candidate row (B to E); the strip asks for their sum
+TIMELINE_HEIGHT = 260
+CANDIDATE_HEIGHT = 210
+PANEL_HEIGHT = TIMELINE_HEIGHT + CANDIDATE_HEIGHT
 CARD_WIDTH_EM = 8.5
 WIDE_CARD_EM = 15.0
 FILTERS = ("all", "yes", "no", "unlabeled")
@@ -59,15 +66,29 @@ TEMPLATE_COLOR = (1.0, 1.0, 1.0, 1.0)
 SNIPPET_COLOR = (0.30, 0.47, 0.66, 1.0)
 ORIGINAL_COLOR = (0.62, 0.79, 0.91, 1.0)
 FOCUS_COLOR = THRESHOLD_COLOR
+# the t = 0 marker on the candidate plots: a reference, not a call
+ZERO_COLOR = (0.62, 0.62, 0.65, 0.9)
+# Box accept / Box delete: the box and the rings on what it holds take the
+# colour of the label it will apply
+BOX_COLORS = {"yes": (0.14, 0.72, 0.65, 1.0), "no": (0.95, 0.22, 0.30, 1.0)}
+# in box mode the plots give right-drag to the box: no zoom-to-box, no menu
+BOX_PLOT_FLAGS = implot.Flags_.no_box_select | implot.Flags_.no_menus
+# drag-tool id of the box on a plot (the threshold lines are 1 and 2)
+BOX_TOOL_ID = 7
 
 KEYBINDS = (
     ("y", "label the focused candidate yes"),
     ("n", "label the focused candidate no"),
     ("backspace", "clear its label"),
-    ("[ / ]", "previous / next candidate in view"),
-    (", / .", "previous / next recording"),
-    ("click", "focus a candidate on a trace or the PCA plot"),
-    ("drag", "move the threshold / auto-pass line on the trace"),
+    ("\u2190 / \u2192", "previous / next candidate in view"),
+    ("\u2191 / \u2193", "previous / next recording"),
+    ("click", "focus a candidate on the trace or the PCA plot"),
+    ("Box accept / delete", "box mode: right-drag a box on the trace or the PCA, then drag its edges"),
+    ("enter", "apply the box"),
+    ("esc", "leave box mode"),
+    ("drag line", "move the threshold (red) / auto-pass (teal) line on the trace"),
+    ("scroll", "zoom (shift: x only, alt: y only); drag pans; double-click fits"),
+    ("k", "this list"),
 )
 
 _MODE_TITLES = {
@@ -92,13 +113,19 @@ def help_markdown() -> str:
         "trace (blue); the template is seeded the same way.\n"
         "- **manual**: no seed template; only Yes events shape it.\n\n"
         "### Panels\n\n"
-        "- **Curation** (top): one recording at a time; the arrows (or `,` "
-        "and `.`) flip through them. Drag the red line to change the "
-        "candidate threshold; drag the teal line (or the A2 slider) to set "
-        "the auto-pass amplitude. Decision and Navigation sit beside it.\n"
-        "- **Candidates** (top): the current template, the focused candidate "
-        "against it, the second-pass preview with rejected events removed, "
-        "and the candidate PCA over 400 ms windows. Click a point to focus it.\n"
+        "- **Curation** (top): the notebook's dashboard for one recording at "
+        "a time; the arrows (or up / down) flip through them. Top row: the "
+        "trace with its candidates (drag the red line to change the candidate "
+        "threshold, the teal line or the A2 slider to set the auto-pass "
+        "amplitude) beside the Decision and Navigation cards. Bottom row: the "
+        "current template, the focused candidate against it, the second-pass "
+        "preview with rejected events removed, and the candidate PCA over "
+        "400 ms windows. Click a point to focus it. **Box accept** / **Box "
+        "delete** start a box mode: right-drag a box on the trace or the PCA, "
+        "drag its edges or corners to adjust (the candidates inside are "
+        "ringed and counted), then **Apply** or enter labels them all; esc "
+        "leaves the mode. Drag the strip's grab bar to give the rows more "
+        "height; the `keybinds` button lists the keys.\n"
         "- **Curation** tab (right): the recordings table and the mode.\n\n"
         "Each mode saves to its own `PF/.curation/<mode>_template_curation.json`; "
         "reopening the same scan / domain restores it."
@@ -143,10 +170,7 @@ class EventCurationWidget:
         self.strip = TopStrip(self.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
         self.strip.register(
-            TopPanel("curation", "Curation", self.draw_timeline_panel, PANEL_HEIGHT, "curation", 12)
-        )
-        self.strip.register(
-            TopPanel("candidates", "Candidates", self.draw_candidate_panel, PANEL_HEIGHT, "curation", 13)
+            TopPanel("curation", "Curation", self.draw_panel, PANEL_HEIGHT, "curation", 12)
         )
 
         self.mode = "fast"
@@ -162,9 +186,9 @@ class EventCurationWidget:
         # called with the recording id whenever another recording is focused
         self.on_recording = None
         self._last_recording = None
-        # a host may draw something of its own above the trace (the
-        # line-scan viewer's raw line traces): ``(draw(height), height)``
-        self.extra_panel = None
+        # a host may narrow the recordings it shows to those of one scan
+        # (the line-scan viewer: the unit on screen); None shows them all
+        self.scope = None
         self.data_path = ""
         self.prompt = PathPrompt(
             "Curation data",
@@ -183,6 +207,13 @@ class EventCurationWidget:
         self.timeline_points = ScatterPlot("##curation_timeline_pts", marker_size=7.0)
         self.pca = ScatterPlot("##curation_pca", marker_size=7.0)
         self.autofit = True
+        self.show_keybinds = False
+        # Box accept / delete mode: the label a drawn box applies ("yes" /
+        # "no"), the rectangle (plot name, corners in plot units, whether
+        # the right button is still drawing it) and the candidates it holds
+        self.box_mode: str | None = None
+        self._box_rect: dict | None = None
+        self._box: tuple[str, np.ndarray] | None = None
         self._fit_timeline = False
         self._timeline_key = None
         self._timeline_trace_cache: dict[str, tuple] = {}
@@ -212,8 +243,7 @@ class EventCurationWidget:
         self._closed = True
         self._folder_dialog = None
         self.strip.remove_hook(self._frame)
-        for key in ("curation", "candidates"):
-            self.strip.unregister(key)
+        self.strip.unregister("curation")
         if self._own_strip:
             self.strip.close()
 
@@ -237,6 +267,15 @@ class EventCurationWidget:
         session = self.session
         return session if session is not None and session.loaded else None
 
+    def in_scope(self, rec: Recording) -> bool:
+        """Whether the host shows this recording (see ``scope``)."""
+        return self.scope is None or bool(self.scope(rec))
+
+    @property
+    def shown(self) -> list[Recording]:
+        """The catalog narrowed to the host's scope."""
+        return [r for r in self.catalog if self.in_scope(r)]
+
     def recording(self, rid: str) -> Recording | None:
         return next((r for r in self.catalog if r.rid == rid), None)
 
@@ -252,7 +291,7 @@ class EventCurationWidget:
         """Every loaded recording of ``mode`` (the current one), catalog order."""
         mode = mode or self.mode
         out = []
-        for rec in self.catalog:
+        for rec in self.shown:
             session = self.sessions.get((mode, rec.rid))
             if session is not None and session.loaded and (mode, rec.rid) not in self._busy:
                 out.append((rec, session))
@@ -304,7 +343,7 @@ class EventCurationWidget:
         )
         # the first processed experiment loads on its own; raw .mat
         # recordings take minutes each in the denoiser, so they wait for a click
-        first = next((r for r in self.catalog if r.pre_denoised), None)
+        first = next((r for r in self.shown if r.pre_denoised), None)
         if first is not None:
             self.current = first.rid
             self.load_all(first.experiment)
@@ -350,7 +389,7 @@ class EventCurationWidget:
 
     def load_all(self, experiment: str | None = None) -> None:
         """Load every processed recording of ``experiment`` (all when None)."""
-        for rec in self.catalog:
+        for rec in self.shown:
             if experiment is not None and rec.experiment != experiment:
                 continue
             if not rec.pre_denoised and rec.rid not in self._trace_sources:
@@ -363,13 +402,16 @@ class EventCurationWidget:
             if first is not None:
                 self.current = first.rid
 
-    def load_trace(self, trace, fs_hz, *, recording_id, label, source_path, curation_dir=None) -> None:
-        """Curate a trace held in memory: vnoiser's denoiser runs on it on
-        the worker unless a cache exists. See :meth:`CurationSession.load_trace`."""
+    def add_trace(self, trace, fs_hz, *, recording_id, label, source_path, curation_dir=None) -> Recording:
+        """List a trace held in memory (a line-scan ROI) as a raw recording;
+        loading it runs vnoiser's denoiser on the worker unless a cache
+        exists. See :meth:`CurationSession.load_trace`."""
         source_path = str(Path(source_path))
         rid = str(recording_id)
-        if self.recording(rid) is None:
-            self.catalog.append(Recording(rid, str(label), Path(source_path).stem, source_path, False))
+        rec = self.recording(rid)
+        if rec is None:
+            rec = Recording(rid, str(label), Path(source_path).stem, source_path, False)
+            self.catalog.append(rec)
         self._trace_sources[rid] = {
             "trace": trace,
             "fs_hz": float(fs_hz),
@@ -380,7 +422,15 @@ class EventCurationWidget:
         }
         for key in [k for k in self.sessions if k[1] == rid]:
             self.sessions.pop(key)
-        self.load(rid)
+        return rec
+
+    def load_trace(self, trace, fs_hz, *, recording_id, label, source_path, curation_dir=None) -> None:
+        """:meth:`add_trace`, then load it."""
+        rec = self.add_trace(
+            trace, fs_hz, recording_id=recording_id, label=label,
+            source_path=source_path, curation_dir=curation_dir,
+        )
+        self.load(rec.rid)
 
     def _enqueue(self, rec: Recording, mode: str) -> None:
         key = (mode, rec.rid)
@@ -474,6 +524,7 @@ class EventCurationWidget:
         self._poll_folder_dialog()
         self._draw_prompt()
         self._handle_keys()
+        self.show_keybinds = draw_keybinds_popup(KEYBINDS, self.show_keybinds, "Curation keybinds")
         self._report_focus()
         self._hovered = False
 
@@ -528,6 +579,16 @@ class EventCurationWidget:
         io = imgui.get_io()
         if not self._hovered or io.want_text_input:
             return
+        if imgui.is_key_pressed(imgui.Key.k, False):
+            self.show_keybinds = not self.show_keybinds
+        if imgui.is_key_pressed(imgui.Key.escape, False):
+            self.exit_box_mode()
+        if self.box_mode is not None and imgui.is_key_pressed(imgui.Key.enter, False):
+            self.apply_box()
+        if imgui.is_key_pressed(imgui.Key.up_arrow, False):
+            self.step_recording(-1)
+        if imgui.is_key_pressed(imgui.Key.down_arrow, False):
+            self.step_recording(1)
         session = self._ready()
         if session is None or not session.n:
             return
@@ -537,14 +598,10 @@ class EventCurationWidget:
             session.set_label("no")
         if imgui.is_key_pressed(imgui.Key.backspace, False):
             session.set_label("unlabeled")
-        if imgui.is_key_pressed(imgui.Key.left_bracket, True):
+        if imgui.is_key_pressed(imgui.Key.left_arrow, True):
             session.step(-1)
-        if imgui.is_key_pressed(imgui.Key.right_bracket, True):
+        if imgui.is_key_pressed(imgui.Key.right_arrow, True):
             session.step(1)
-        if imgui.is_key_pressed(imgui.Key.comma, False):
-            self.step_recording(-1)
-        if imgui.is_key_pressed(imgui.Key.period, False):
-            self.step_recording(1)
 
     def _mark_hovered(self) -> None:
         if imgui.is_window_hovered(imgui.HoveredFlags_.root_and_child_windows):
@@ -557,7 +614,7 @@ class EventCurationWidget:
     def loadable(self) -> list[Recording]:
         """The recordings a flip can land on: processed ones and traces handed over."""
         return [
-            r for r in self.catalog
+            r for r in self.shown
             if not r.error and (r.pre_denoised or r.rid in self._trace_sources)
         ]
 
@@ -574,37 +631,35 @@ class EventCurationWidget:
         self.load(rids[(pos + int(delta)) % len(rids)])
 
     # ------------------------------------------------------------------
-    # top panel: the focused trace
+    # top panel: the dashboard for the focused recording
     # ------------------------------------------------------------------
 
-    def draw_timeline_panel(self) -> None:
-        """The Curation panel: one recording, its trace, candidates and cards."""
+    def draw_panel(self) -> None:
+        """The Curation panel: the notebook's dashboard for one recording.
+        The trace row (A with the threshold / auto-pass, Decision and
+        Navigation cards) sits over the candidate row (B to E); the rows
+        share the height the strip gives in the ratio they asked for."""
         self._mark_hovered()
-        if self.extra_panel is not None:
-            draw, height = self.extra_panel
-            with imgui_ctx.begin_child("##curation_extra", imgui.ImVec2(0, float(height))):
-                draw(float(height))
         self._draw_flip_row()
         session = self._ready()
         if session is None:
             imgui.text_disabled(self.status)
             return
+        avail = imgui.get_content_region_avail()
+        top = max(avail.y * TIMELINE_HEIGHT / PANEL_HEIGHT, em(6))
+        with imgui_ctx.begin_child("##curation_row_a", imgui.ImVec2(0, top)):
+            self._draw_timeline_row(session)
+        with imgui_ctx.begin_child("##curation_row_b", imgui.ImVec2(0, 0)):
+            self._draw_candidate_row(session)
+
+    def _draw_timeline_row(self, session: CurationSession) -> None:
+        """A: the trace with its candidates, and the cards beside it."""
         kind = _mode_title(session.mode, self.slow_cutoff_hz)
         imgui.text_disabled(f"A. {kind}: {session.n} ({len(session.visible)} in view)")
         imgui.same_line(0, 12)
-        changed, self.autofit = imgui.checkbox("autofit", self.autofit)
-        set_tooltip("Refit the axes whenever the recording or mode changes.", show_mark=False)
-        if changed and self.autofit:
-            self._fit_timeline = True
-        imgui.same_line(0, 6)
-        if imgui.button("fit"):
-            self._fit_timeline = True
-        set_tooltip(
-            "drag pans, scroll zooms, double-click fits · shift+scroll zooms x "
-            "only, alt+scroll zooms y only · drag the red line to move the "
-            "threshold, the teal line the auto-pass amplitude",
-            show_mark=False,
-        )
+        if imgui.small_button("keybinds"):
+            self.show_keybinds = not self.show_keybinds
+        set_tooltip("k", show_mark=False)
         avail = imgui.get_content_region_avail()
         card_w = em(CARD_WIDTH_EM)
         wide_w = em(WIDE_CARD_EM)
@@ -633,13 +688,13 @@ class EventCurationWidget:
         pos = next((i for i, r in enumerate(rows) if r.rid == self.current), -1)
         if not rows:
             imgui.begin_disabled()
-        if imgui.arrow_button("##prev_rec", imgui.Dir.left):
+        if imgui.arrow_button("##prev_rec", imgui.Dir.up):
             self.step_recording(-1)
-        set_tooltip(",", show_mark=False)
+        set_tooltip("previous recording (up)", show_mark=False)
         imgui.same_line(0, em(0.3))
-        if imgui.arrow_button("##next_rec", imgui.Dir.right):
+        if imgui.arrow_button("##next_rec", imgui.Dir.down):
             self.step_recording(1)
-        set_tooltip(".", show_mark=False)
+        set_tooltip("next recording (down)", show_mark=False)
         if not rows:
             imgui.end_disabled()
         imgui.same_line(0, em(0.6))
@@ -670,7 +725,8 @@ class EventCurationWidget:
         self._timeline_key = key
         self._fit_timeline = False
         height = max(imgui.get_content_region_avail().y - 2, 60.0)
-        with line_plot("##curation_timeline", "time (s)", "z", height=height, fit=fit) as ok:
+        flags = BOX_PLOT_FLAGS if self.box_mode is not None else 0
+        with line_plot("##curation_timeline", "time (s)", "z", height=height, fit=fit, flags=flags) as ok:
             if not ok:
                 return
             t = session.t
@@ -716,7 +772,85 @@ class EventCurationWidget:
             )
             if picked is not None:
                 session.select(int(visible[picked]))
+            self._box_select("timeline", xs, ys, visible, self.timeline_points)
             vlines("##focus", [session.times_s[session.current]], FOCUS_COLOR, 1.0, legend=False)
+
+    # ------------------------------------------------------------------
+    # box mode: Box accept / Box delete draw a rectangle on the trace or
+    # the PCA that labels everything inside on Apply
+    # ------------------------------------------------------------------
+
+    def set_box_mode(self, mode: str | None) -> None:
+        """Enter box mode for ``mode`` ("yes" / "no"); the same mode again
+        leaves it. Any box drawn so far is dropped."""
+        self.box_mode = None if mode == self.box_mode else mode
+        self.clear_box()
+
+    def exit_box_mode(self) -> None:
+        self.box_mode = None
+        self.clear_box()
+
+    def clear_box(self) -> None:
+        self._box_rect = None
+        self._box = None
+
+    def _box_select(self, name: str, xs, ys, visible, points: ScatterPlot) -> None:
+        """Inside an open plot, in box mode: a right-drag starts the box on
+        this plot; once the button is up the box stays as an implot drag
+        rectangle whose edges and corners resize it. The candidates inside
+        are ringed and remembered for :meth:`apply_box`."""
+        if self.box_mode is None:
+            return
+        color = BOX_COLORS[self.box_mode]
+        rect = self._box_rect if self._box_rect is not None and self._box_rect["plot"] == name else None
+        mouse = implot.get_plot_mouse_pos()
+        if rect is None:
+            if not (implot.is_plot_hovered() and imgui.is_mouse_clicked(1)):
+                return
+            # a new box here drops one drawn on the other plot
+            rect = self._box_rect = {
+                "plot": name, "x0": float(mouse.x), "y0": float(mouse.y),
+                "x1": float(mouse.x), "y1": float(mouse.y), "drawing": True,
+            }
+            self._box = None
+        if rect["drawing"]:
+            if imgui.is_mouse_down(1):
+                rect["x1"], rect["y1"] = float(mouse.x), float(mouse.y)
+            else:
+                rect["drawing"] = False
+            implot.drag_rect(
+                BOX_TOOL_ID, rect["x0"], rect["y0"], rect["x1"], rect["y1"], vec4(color),
+                implot.DragToolFlags_.no_inputs,
+            )
+        else:
+            changed, x0, y0, x1, y1, _clicked, _hovered, _held = implot.drag_rect(
+                BOX_TOOL_ID, rect["x0"], rect["y0"], rect["x1"], rect["y1"], vec4(color),
+                implot.DragToolFlags_.no_fit,
+            )
+            if changed:
+                rect.update(x0=float(x0), y0=float(y0), x1=float(x1), y1=float(y1))
+        xs, ys = np.asarray(xs, dtype=float), np.asarray(ys, dtype=float)
+        lo_x, hi_x = sorted((rect["x0"], rect["x1"]))
+        lo_y, hi_y = sorted((rect["y0"], rect["y1"]))
+        inside = (xs >= lo_x) & (xs <= hi_x) & (ys >= lo_y) & (ys <= hi_y)
+        self._box = (name, np.asarray(visible, dtype=int)[inside])
+        points.rings(xs[inside], ys[inside], color, 2.0, "##boxed")
+
+    def boxed(self) -> np.ndarray:
+        """Candidate indices inside the box."""
+        return np.array([], dtype=int) if self._box is None else self._box[1]
+
+    def apply_box(self, label: str | None = None) -> int:
+        """Label every boxed candidate (the mode's label unless given) and
+        drop the box; the mode stays on for the next one. Returns how many."""
+        label = label or self.box_mode
+        session = self._ready()
+        idx = self.boxed()
+        if session is None or label not in ("yes", "no") or not len(idx):
+            return 0
+        n = session.set_labels([int(i) for i in idx], label)
+        self.clear_box()
+        return n
 
     def _draw_threshold_card(self, session, width, height) -> None:
         lo, hi, _step = session.threshold_range
@@ -729,27 +863,36 @@ class EventCurationWidget:
 
     def _draw_threshold_autopass_card(self, session, width, height) -> None:
         lo, hi, _step = session.auto_pass_range
-        with card("##curation_a1a2", "A1/A2. Threshold / auto-pass", height, width):
+        with card("##curation_a1a2", "A1 / A2", height, width):
             set_tooltip(
-                "Bottom (red) handle: candidate threshold. Top (teal) handle: "
-                "amplitude at or above which every candidate auto-passes "
-                "regardless of template similarity. Both saved per recording.",
+                "Red handle: candidate threshold on the trace. Teal handle: "
+                "auto-pass amplitude - every candidate whose baseline-subtracted "
+                "amplitude is at or above it passes, whatever its template "
+                "similarity; at the bottom, every candidate passes. Both saved "
+                "per recording.",
             )
             auto_pass_shown = session.auto_pass if session.auto_pass is not None else hi
             self._v_range_slider(
                 "a1a2", session.threshold, auto_pass_shown, lo, hi,
-                session.set_threshold, session.set_auto_pass, extra_rows=1,
+                session.set_threshold, session.set_auto_pass, extra_rows=2,
             )
             changed, value = imgui.checkbox("waveform reject", session.waveform_rejection)
             set_tooltip(
                 "Auto-reject candidates whose cosine similarity to the seed "
-                f"template is at or below {session.auto_template_threshold:.2f}.",
+                f"template is at or below {session.auto_template_threshold:.2f}. "
+                "Off: they stay unlabeled instead.",
                 show_mark=False,
             )
             if changed:
                 session.set_waveform_rejection(value)
             if session.auto_pass is None:
                 imgui.text_disabled("auto-pass off")
+            else:
+                imgui.text_disabled(f"{session.auto_pass_count()}/{session.n} pass A2")
+                set_tooltip(
+                    "candidates whose amplitude is at or above the teal handle",
+                    show_mark=False,
+                )
 
     def _v_slider(self, key, value, lo, hi, apply, extra_rows: int = 0) -> None:
         """A vertical slider that applies on release, so a drag does not
@@ -780,6 +923,8 @@ class EventCurationWidget:
         hi_shown = self._slider_pending.get(hi_key, float(hi_value))
         width = em(2.2)
         handle_r = em(0.45)
+        # rows under the track: the caller's extra rows, plus one for the
+        # cursor line the track ends on
         height = max(imgui.get_content_region_avail().y - em(1.6) * (1 + extra_rows), em(3))
         origin = imgui.get_cursor_screen_pos()
         top_y, bottom_y = origin.y + handle_r, origin.y + height - handle_r
@@ -816,22 +961,19 @@ class EventCurationWidget:
                 imgui.ImVec2(track_x, y), handle_r,
                 imgui.get_color_u32(vec4(color, 1.0 if (active or hovered) else 0.85)),
             )
+        # range labels beside the track's ends, drawn directly so they take
+        # no layout rows: text laid out after the track would push whatever
+        # follows (the waveform checkbox) off the card
+        label_x = origin.x + width + em(0.4)
+        text_color = imgui.get_color_u32(imgui.Col_.text_disabled)
+        half_line = 0.5 * imgui.get_text_line_height()
+        draw.add_text(imgui.ImVec2(label_x, top_y - half_line), text_color, f"{hi:.2f}")
+        draw.add_text(imgui.ImVec2(label_x, bottom_y - half_line), text_color, f"{lo:.2f}")
         imgui.set_cursor_screen_pos(imgui.ImVec2(origin.x, origin.y + height))
-        imgui.dummy(imgui.ImVec2(width, 1))
-        imgui.same_line(0, em(0.4))
-        imgui.text_disabled(f"{hi:.2f}\n\n\n{lo:.2f}")
+        imgui.dummy(imgui.ImVec2(width + em(0.4) + imgui.calc_text_size(f"{hi:.2f}").x, 1))
 
-    # ------------------------------------------------------------------
-    # top panel: the candidates
-    # ------------------------------------------------------------------
-
-    def draw_candidate_panel(self) -> None:
-        """The Candidates panel: template, focused candidate, second pass, PCA."""
-        self._mark_hovered()
-        session = self._ready()
-        if session is None:
-            imgui.text_disabled(self.status)
-            return
+    def _draw_candidate_row(self, session: CurationSession) -> None:
+        """B to E: template, focused candidate, second pass, PCA."""
         if not session.n:
             imgui.text_disabled("No candidate events found; lower the threshold.")
             return
@@ -849,7 +991,9 @@ class EventCurationWidget:
                 imgui.same_line(0, gap)
             with imgui_ctx.begin_child(f"##curation_panel{i}", imgui.ImVec2(width, 0)):
                 imgui.text_colored(theme.to_vec4(theme.THEME.accent), title)
-                draw(session)
+                # the plot takes exactly what is left under the title: a
+                # fill-height plot rounds over by a pixel and grows a scrollbar
+                draw(session, max(imgui.get_content_region_avail().y - 2, em(3)))
 
     @staticmethod
     def _candidate_title(session) -> str:
@@ -865,10 +1009,12 @@ class EventCurationWidget:
         self._panel_keys[name] = key
         return True
 
-    def _draw_template(self, session) -> None:
+    def _draw_template(self, session, height: float) -> None:
         source = session.template_source
         fit = self._fit_for("template", (session.mode, session.recording_id, len(source)))
-        with line_plot("##curation_b", "aligned time (ms)", "baseline-subtracted z", fit=fit, legend=False) as ok:
+        with line_plot(
+            "##curation_b", "aligned time (ms)", "z", height=height, fit=fit, legend=False,
+        ) as ok:
             if not ok:
                 return
             if session.template is None:
@@ -879,7 +1025,7 @@ class EventCurationWidget:
                 line(f"##snippet{i}", session.short_snippet(i), x=t_ms, color=SNIPPET_COLOR, alpha=0.18)
             line("template", session.template, x=t_ms, color=TEMPLATE_COLOR, weight=3.0)
 
-    def _draw_candidate(self, session) -> None:
+    def _draw_candidate(self, session, height: float) -> None:
         i = session.current
         half = session.candidate_window_ms
         t_ms = session.long_time_ms
@@ -892,15 +1038,15 @@ class EventCurationWidget:
             lo, hi = (float(np.min(ys)), float(np.max(ys))) if ys.size else (-1.0, 1.0)
             pad = 0.05 * (hi - lo or 1.0)
             implot.set_next_axes_limits(-half, half, lo - pad, hi + pad, imgui.Cond_.always)
-        with line_plot("##curation_c", "time from event (ms)", "z", legend=True) as ok:
+        with line_plot("##curation_c", "time from event (ms)", "z", height=height, legend=True) as ok:
             if not ok:
                 return
             line("candidate", y, x=t_ms, color=SNIPPET_COLOR, weight=1.2)
             if session.template is not None:
                 line("template", session.template, x=session.template_time_ms, color=TEMPLATE_COLOR, weight=2.5)
-            vlines("##zero", [0.0], FOCUS_COLOR, 1.0, legend=False)
+            dotted_vline(0.0, ZERO_COLOR)
 
-    def _draw_second_pass(self, session) -> None:
+    def _draw_second_pass(self, session, height: float) -> None:
         i = session.current
         peak = session.aligned_index(i)
         fs = session.fs
@@ -909,14 +1055,14 @@ class EventCurationWidget:
         hi = min(len(session.denoised), peak + radius + 1)
         x_ms = (np.arange(lo, hi) - peak) / fs * 1000.0
         fit = self._fit_for("second", (session.mode, session.recording_id, i, session.counts()))
-        with line_plot("##curation_d", "time from event (ms)", "z", fit=fit, legend=True) as ok:
+        with line_plot("##curation_d", "time from event (ms)", "z", height=height, fit=fit, legend=True) as ok:
             if not ok:
                 return
             line("original denoised", session.denoised[lo:hi], x=x_ms, color=ORIGINAL_COLOR, weight=1.1)
             line("rejected removed", session.second_pass[lo:hi], x=x_ms, color=THRESHOLD_COLOR, weight=1.4)
-            vlines("##zero", [0.0], FOCUS_COLOR, 1.0, legend=False)
+            dotted_vline(0.0, ZERO_COLOR)
 
-    def _draw_pca(self, session) -> None:
+    def _draw_pca(self, session, height: float) -> None:
         scores = session.pca_scores
         explained = session.pca_explained * 100.0
         visible = session.visible
@@ -927,11 +1073,14 @@ class EventCurationWidget:
             scores[visible, 0], scores[visible, 1], session.colors(visible),
             x_label=f"PC1 ({explained[0]:.1f}%)",
             y_label=f"PC2 ({explained[1]:.1f}%)",
+            height=height,
             focused=int(focused[0]) if focused.size else None,
             tooltip=lambda k: (
                 f"event {visible[k] + 1}: {session.label(visible[k])}\n"
                 f"PC1 {scores[visible[k], 0]:.2f}  PC2 {scores[visible[k], 1]:.2f}"
             ),
+            inside=lambda: self._box_select("pca", scores[visible, 0], scores[visible, 1], visible, self.pca),
+            flags=BOX_PLOT_FLAGS if self.box_mode is not None else 0,
         )
         if picked is not None:
             session.select(int(visible[picked]))
@@ -989,12 +1138,13 @@ class EventCurationWidget:
             imgui.set_tooltip(self.data_path)
 
     def _draw_recordings(self) -> None:
-        if not self.catalog:
+        rows_shown = self.shown
+        if not rows_shown:
             return
         section("Recordings")
         n_loaded = len(self.loaded())
         imgui.text_disabled(
-            f"{n_loaded}/{len(self.catalog)} loaded"
+            f"{n_loaded}/{len(rows_shown)} loaded"
             + (f", {len(self._busy)} loading" if self._busy else "")
         )
         imgui.same_line(0, em(0.6))
@@ -1007,7 +1157,7 @@ class EventCurationWidget:
             | imgui.TableFlags_.scroll_y
             | imgui.TableFlags_.sizing_fixed_fit
         )
-        rows = min(len(self.catalog), 12)
+        rows = min(len(rows_shown), 12)
         height = imgui.get_text_line_height_with_spacing() * (rows + 1.5)
         if not imgui.begin_table("##curation_recordings", 4, flags, imgui.ImVec2(0, height)):
             return
@@ -1015,7 +1165,7 @@ class EventCurationWidget:
         for name in ("experiment", "recording", "cand", "yes / no"):
             imgui.table_setup_column(name)
         imgui.table_headers_row()
-        for rec in self.catalog:
+        for rec in rows_shown:
             key = (self.mode, rec.rid)
             session = self.sessions.get(key)
             ready = session is not None and session.loaded and key not in self._busy
@@ -1084,6 +1234,46 @@ class EventCurationWidget:
         set_tooltip("backspace", show_mark=False)
         if not session.n:
             imgui.end_disabled()
+        # Box accept / delete: a mode. Right-drag a box on the trace or the
+        # PCA, drag its edges to adjust, Apply (enter) labels what it holds.
+        wide = imgui.ImVec2(em(5.6), em(1.8))
+        for i, (mode, caption, base) in enumerate((
+            ("yes", "Box accept", (0.11, 0.60, 0.55, 1.0)),
+            ("no", "Box delete", (0.84, 0.15, 0.24, 1.0)),
+        )):
+            if i:
+                imgui.same_line(0, em(0.5))
+            hot = BOX_COLORS[mode]
+            active = self.box_mode == mode
+            with theme.button_colors(hot if active else base, hot):
+                if imgui.button(caption, wide):
+                    self.set_box_mode(mode)
+            set_tooltip(
+                f"box mode: right-drag a box on the trace or the PCA, adjust its edges, "
+                f"then Apply (enter) labels every candidate inside {mode}; again or esc leaves",
+                show_mark=False,
+            )
+        if self.box_mode is None:
+            return
+        n_box = int(len(self.boxed()))
+        if not n_box:
+            imgui.begin_disabled()
+        if imgui.button("Apply", imgui.ImVec2(em(4.2), em(1.8))):
+            self.apply_box()
+        set_tooltip("enter", show_mark=False)
+        if not n_box:
+            imgui.end_disabled()
+        imgui.same_line(0, em(0.5))
+        if imgui.button("Cancel", imgui.ImVec2(em(4.2), em(1.8))):
+            self.exit_box_mode()
+        set_tooltip("esc", show_mark=False)
+        if self._box_rect is None:
+            imgui.text_disabled("right-drag a box on the trace or the PCA")
+        else:
+            imgui.text_colored(
+                theme.to_vec4(BOX_COLORS[self.box_mode]),
+                f"{n_box} candidate{'s' if n_box != 1 else ''} in the box -> {self.box_mode}",
+            )
 
     def _draw_navigation(self, session) -> None:
         section("Navigation")
@@ -1092,11 +1282,15 @@ class EventCurationWidget:
     def _draw_navigation_body(self, session) -> None:
         if not session.n:
             imgui.begin_disabled()
-        if imgui.button("< Event"):
+        if imgui.arrow_button("##prev_event", imgui.Dir.left):
             session.step(-1)
-        imgui.same_line(0, em(0.5))
-        if imgui.button("Event >"):
+        set_tooltip("previous candidate in view (left)", show_mark=False)
+        imgui.same_line(0, em(0.3))
+        if imgui.arrow_button("##next_event", imgui.Dir.right):
             session.step(1)
+        set_tooltip("next candidate in view (right)", show_mark=False)
+        imgui.same_line(0, em(0.6))
+        imgui.text_disabled("prev / next")
         imgui.set_next_item_width(-em(3.5))
         changed, value = imgui.slider_int("event", session.current + 1, 1, max(1, session.n))
         if changed:

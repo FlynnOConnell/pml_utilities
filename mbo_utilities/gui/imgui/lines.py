@@ -149,6 +149,24 @@ def vlines(label: str, xs, color, weight: float = 1.0, legend: bool = True) -> N
     implot.plot_inf_lines(label, _f64(np.atleast_1d(xs)), spec)
 
 
+def dotted_vline(x: float, color, weight: float = 1.0, dash_px: float = 4.0, gap_px: float = 4.0) -> None:
+    """A dotted vertical marker (a reference line such as t = 0) across the
+    open plot, drawn on its draw list; implot has no dashed line style."""
+    pos, size = implot.get_plot_pos(), implot.get_plot_size()
+    px = float(implot.plot_to_pixels(float(x), 0.0).x)
+    if not pos.x <= px <= pos.x + size.x:
+        return
+    draw = implot.get_plot_draw_list()
+    col = imgui.get_color_u32(vec4(color))
+    implot.push_plot_clip_rect()
+    y = pos.y
+    bottom = pos.y + size.y
+    while y < bottom:
+        draw.add_line(imgui.ImVec2(px, y), imgui.ImVec2(px, min(y + dash_px, bottom)), col, weight)
+        y += dash_px + gap_px
+    implot.pop_plot_clip_rect()
+
+
 def drag_hline(line_id: int, y: float, color, weight: float = 1.5, tag: bool = True) -> tuple[float, bool]:
     """A horizontal line the user can drag. Returns ``(y, held)``: the
     line's position this frame and whether the mouse still holds it."""
