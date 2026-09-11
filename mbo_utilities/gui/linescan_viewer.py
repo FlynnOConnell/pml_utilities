@@ -47,9 +47,11 @@ one ``analysis.linescan.pair_reference_zstack`` picks. A stack holding none
 of the lines is refused: drawing them on it is meaningless.
 
 Usage:
-    mbo scan.mesc                       pick the line-scan unit in the dialog
-    mbo scan.mesc --unit MUnit_35       open that unit straight away
-    mbo linescan scan.mesc --view       the same from the linescan command
+    mbo linescan scan.mesc --view [--unit MUnit_35]
+    mbo linescan <animal>/<expt> --view the notebook's experiment (or PF) folder:
+                                        its <expt>/<expt>.mesc, Z-stack and PF traces
+    (`mbo scan.mesc` itself opens the standalone curation window,
+    gui/curation_viewer.py, without the image panels)
     python -m mbo_utilities.gui.linescan_viewer [mesc_path] [--ref MUnit_x]
         [--zstack MUnit_y] [--zstack-file stack.mesc] [--channel 0] [--flip-y]
         [--no-traces] [--traces rois_linescan/MUnit_x] [--curate 0]
@@ -645,15 +647,14 @@ class LinePanel:
             self.curation.draw()
 
 
-TRACES_HEIGHT = 170
-
 
 class LineTracesPanel:
-    """The selected line's trace as an imgui plot on the top strip: raw F as
+    """The selected line's raw trace as an imgui plot on the top strip: F as
     a faint min/max band, a 25 ms smoothed line over it in the line's
-    colour, the other lines of its domain thin behind, and a time cursor
-    tied to the Reference's Timepoint (drag it to scrub). Drawn as its own
-    ``Traces`` tab and, when curation is on, above the curation trace.
+    colour, and a time cursor tied to the Reference's Timepoint (drag it to
+    scrub). Its own ``Traces`` tab, drawn only when there is no curation:
+    the curation panel shows the denoised trace of the same lines and the
+    raw one adds nothing to that view.
     """
 
     def __init__(self, ndw, overlay: LineScanOverlay, traces: np.ndarray, strip, own_strip: bool,
@@ -671,7 +672,6 @@ class LineTracesPanel:
         self._cache: dict[int, tuple] = {}
         self._fit = True
         self._last = None
-        # its own tab only when nothing else shows it (no curation panels)
         if tab:
             self.strip.register(TopPanel("line_traces", "Traces", self.draw_tab, 260, None, 10))
 
@@ -766,13 +766,20 @@ class LineCuration:
         if self.pf is not None:
             print(f"\nPF traces for scan {self.pf.scan_id}: {', '.join(self.pf.domains)} "
                   f"({self.pf.pf_dir})")
-            # every scan / domain of the experiment loads now; a line click
-            # then just focuses its domain
+            # the curation shows this scan's domains: the recordings of the
+            # unit on screen (another scan is the combo in the panel); the
+            # experiment's other scans stay in the catalog but out of view
+            scan_tag = f"scan={self.pf.scan_id}"
+            widget.scope = lambda rec: scan_tag in rec.rid.split("/")
+            # every domain of this scan loads now; a line click then just
+            # focuses its domain
             widget.scan(str(self.pf.pf_dir))
             widget.status = "loading every domain; select a line to focus its trace"
         else:
             widget.status = "select a line, then denoise it"
         widget.on_focus = self._on_focus
+        # a flip through recordings follows on the line overlay
+        widget.on_recording = self._on_recording
         overlay.on_select.append(self._on_select)
 
     @classmethod
@@ -799,18 +806,6 @@ class LineCuration:
 
     def recording_id(self, i: int) -> str:
         return f"{self.mesc_path.stem}/{self.munit}/roi={int(i)}"
-
-    def attach_traces(self, panel: LineTracesPanel) -> None:
-        """Draw the line traces above the curation trace, and follow a flip
-        through recordings on the line overlay."""
-        from mbo_utilities.gui.event_curation import PANEL_HEIGHT
-
-        self.widget.extra_panel = (panel.draw, TRACES_HEIGHT)
-        for top in self.widget.strip.panels:
-            if top.key == "curation":
-                top.height = PANEL_HEIGHT + TRACES_HEIGHT
-                self.widget.strip.register(top)
-        self.widget.on_recording = self._on_recording
 
     def _on_recording(self, rid: str) -> None:
         """Select a line of the domain (or the ROI) that was flipped to."""
@@ -845,7 +840,7 @@ class LineCuration:
             return
         pf_dir = str(self.pf.pf_dir)
         if self.widget.data_path != pf_dir:
-            # catalogs and loads every scan / domain of the experiment
+            # catalogs the experiment and loads this scan's domains
             self.widget.scan(pf_dir)
         self.curated_domain = domain
         self.curated = None
@@ -1233,14 +1228,12 @@ def open_linescan_viewer(
     if overlay is not None:
         if traces is not None and curation:
             line_curation = LineCuration.build(ndw, overlay, ref_arr, traces, mesc_path, ref_key)
-        if traces is not None:
+        if traces is not None and line_curation is None:
+            # the raw traces get a tab only without curation; the curation
+            # panel's denoised trace is the view of the same lines
             from mbo_utilities.gui._top_strip import TopStrip
 
-            own_strip = line_curation is None
-            strip = TopStrip(ndw.figure) if own_strip else line_curation.widget.strip
-            traces_panel = LineTracesPanel(ndw, overlay, traces, strip, own_strip, tab=own_strip)
-            if line_curation is not None:
-                line_curation.attach_traces(traces_panel)
+            traces_panel = LineTracesPanel(ndw, overlay, traces, TopStrip(ndw.figure), True)
 
         def switch(key: str) -> None:
             # a new window for the other scan on the running loop, then this

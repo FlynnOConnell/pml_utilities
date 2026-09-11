@@ -52,6 +52,19 @@ class TestTopStrip:
         strip.unregister("a")
         assert strip.size == MENU_HEIGHT
 
+    def test_a_panel_taller_than_the_window_leaves_the_images_room(self, figure):
+        from mbo_utilities.gui._top_strip import MIN_RENDER_AREA, TopStrip
+
+        strip = TopStrip(figure)
+        canvas_height = figure.canvas.get_logical_size()[1]
+        strip.register(panel("a", height=int(canvas_height * 3)))
+        bottom = figure._edge_size("bottom")
+        assert canvas_height - strip.size - bottom >= MIN_RENDER_AREA
+        # the user may still drag it taller than the automatic cap
+        auto = strip.size
+        strip.resize_to(auto + 40)
+        assert strip.size > auto
+
     def test_registering_the_same_key_replaces(self, figure):
         from mbo_utilities.gui._top_strip import TopStrip
 

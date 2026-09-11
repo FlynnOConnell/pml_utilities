@@ -66,10 +66,17 @@ def card(name: str, title: str, height: float, width: float = 0.0, theme: Theme 
         child_flags=flags,
         window_flags=imgui.WindowFlags_.no_scrollbar,
     )
+    # a fixed-width card wraps its text at its edge rather than clipping it
+    # (a content-sized card has no edge to wrap at until it is laid out)
+    wrap = width != 0
+    if wrap:
+        imgui.push_text_wrap_pos(0.0)
     imgui.text_colored(to_vec4(theme.accent), title)
     try:
         yield
     finally:
+        if wrap:
+            imgui.pop_text_wrap_pos()
         imgui.end_child()
         imgui.pop_style_var()
         imgui.pop_style_color()

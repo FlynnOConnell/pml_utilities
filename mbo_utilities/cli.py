@@ -1737,7 +1737,7 @@ def roi_run(input_path, output_dir, register_method, process, rois, planes, roi_
 
 
 @main.command("linescan")
-@click.argument("mesc_path", type=click.Path(exists=True, dir_okay=False))
+@click.argument("mesc_path", type=click.Path(exists=True))
 @click.option("-o", "--output", "out_root", type=click.Path(), default=None,
               help="Root for the per-unit output dirs (<root>/<MUnit_n>/). "
                    "Default: rois_<tag>/<MUnit_n>/ beside the .mesc file.")
@@ -1771,11 +1771,27 @@ def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figur
     aligned response, per-ROI metrics, motion correction). Ribbon,
     chessboard, Z-stack and other units in the same file are skipped.
 
+    MESC_PATH may also be an experiment folder laid out the curation
+    notebook's way (<expt>/<expt>/<expt>.mesc with PF/ beside it): its line
+    scan is used.
+
     \b
       mbo linescan scan.mesc
       mbo linescan scan.mesc -o results/linescan --unit MUnit_3 --channel 1
       mbo linescan scan.mesc --view --unit MUnit_35
+      mbo linescan X:/data/asako/stan112/stan112_expt12 --view
     """
+    if Path(mesc_path).is_dir():
+        from mbo_utilities.analysis.linescan import experiment_linescan_mesc
+
+        found = experiment_linescan_mesc(mesc_path)
+        if found is None:
+            raise click.BadParameter(
+                f"{mesc_path} is a folder with no <name>/<name>.mesc line scan in it",
+                param_hint="MESC_PATH",
+            )
+        click.echo(f"line scan: {found}")
+        mesc_path = str(found)
     if view:
         from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
 

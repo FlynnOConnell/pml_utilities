@@ -812,18 +812,18 @@ def _run_gui_impl(
         if demix_file is not None:
             return _launch_curation_gui(demix_file)
 
-        # a .mesc holding AOD line scans opens the line-scan + Z-stack viewer
-        # with no unit prompt: the processed scan (else the first line scan)
-        # is shown and the others are a combo in its panel. Other .mesc files
-        # prompt for their unit once, here.
         # the file dialog hands back a list even for one file
         if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
             data_in = data_in[0]
+        # a .mesc holding AOD line scans, or the curation notebook's
+        # experiment / PF folder, opens the standalone event curation window
+        # (vnoiser's dashboard): the processed traces when a PF folder is
+        # there, else every line's raw trace for the denoiser. The Z-stack
+        # viewer that draws the lines stays on `mbo linescan --view`. Other
+        # .mesc files prompt for their unit once, here.
+        if _curation_target(data_in, unit):
+            return _launch_curation_viewer(data_in)
         if _is_mesc(data_in):
-            if unit is None and _has_linescan_units(data_in):
-                return _launch_linescan_viewer(data_in, None)
-            if _is_linescan_unit(data_in, unit):
-                return _launch_linescan_viewer(data_in, unit)
             mesc_kwargs, proceed = _resolve_mesc_unit(data_in, unit)
             if not proceed:
                 return None
@@ -1028,6 +1028,24 @@ def _is_mesc(path) -> bool:
     return p.is_file() and p.suffix.lower() == ".mesc"
 
 
+def _experiment_linescan(path) -> Path | None:
+    """The raw line-scan ``.mesc`` when ``path`` is an experiment folder laid
+    out the curation notebook's way (``<expt>/<expt>/<expt>.mesc``, or its
+    ``PF`` folder), else None."""
+    from mbo_utilities.analysis.linescan import experiment_linescan_mesc
+
+    try:
+        p = Path(path)
+    except TypeError:
+        return None
+    if not p.is_dir():
+        return None
+    mesc = experiment_linescan_mesc(p)
+    if mesc is None or not _has_linescan_units(mesc):
+        return None
+    return mesc
+
+
 def _mesc_unit(path, unit) -> dict | None:
     """The unit record ``unit`` names in the ``.mesc``: an index, a
     ``MSession_0/MUnit_3`` key or a bare ``MUnit_3``; None picks the first."""
@@ -1062,6 +1080,29 @@ def _has_linescan_units(path) -> bool:
         return any(u.get("kind") == "packed" for u in list_mesc_units(path))
     except Exception:
         return False
+
+
+def _curation_target(path, unit) -> bool:
+    """Whether ``path`` is for the event curation window: a ``.mesc`` with
+    line scans (and no other unit asked for, or a line-scan unit), or an
+    experiment / PF folder laid out the curation notebook's way."""
+    if _is_mesc(path):
+        if unit is None:
+            return _has_linescan_units(path)
+        return _is_linescan_unit(path, unit)
+    return _experiment_linescan(path) is not None
+
+
+def _launch_curation_viewer(path):
+    """Open the standalone curation dashboard on the path: a desktop window
+    run until it closes, or in a notebook a figure displayed in the cell
+    (returned, as ``run_gui`` returns the DataVis)."""
+    from mbo_utilities.gui.curation_viewer import open_curation_viewer
+
+    if in_notebook():
+        return open_curation_viewer(path)
+    open_curation_viewer(path)
+    return None
 
 
 def _launch_linescan_viewer(path, unit):

@@ -332,8 +332,29 @@ class CurationSession:
 
     @property
     def auto_pass_range(self) -> tuple[float, float, float]:
+        """``(low, high, step)`` for the auto-pass amplitude.
+
+        The notebook's A2 slider shares the threshold slider's range, whose
+        floor is the trace median. The amplitude it is compared with is the
+        candidate's baseline-subtracted peak, which can sit below that floor
+        (a fast-mode candidate near the noise whose peak is under its own
+        preceding baseline), so the notebook's slider at its bottom still
+        leaves those rejected. Here the floor drops under the lowest
+        amplitude, so A2 all the way down passes every candidate.
+        """
         s = self.dash.auto_pass_slider
-        return float(s.min), float(s.max), float(s.step)
+        lo, hi, step = float(s.min), float(s.max), float(s.step)
+        if self.loaded and self.n:
+            lowest = float(np.nanmin(self.amplitudes))
+            if np.isfinite(lowest):
+                lo = min(lo, lowest - step)
+        return lo, hi, step
+
+    def auto_pass_count(self) -> int:
+        """How many candidates the auto-pass amplitude passes now."""
+        if not self.loaded or self.auto_pass is None or not self.n:
+            return 0
+        return int(np.count_nonzero(self.amplitudes >= float(self.auto_pass)))
 
     def set_auto_pass(self, value: float) -> None:
         if not self.loaded or not self.seeded:
@@ -418,6 +439,31 @@ class CurationSession:
         if label not in ("yes", "no", "unlabeled") or not self.n:
             return
         self.dash._set_label(label)
+
+    def set_labels(self, indices, label: str) -> int:
+        """Label several candidates at once (a box selection) and save;
+        the template and second pass follow, as after ``set_label``.
+        Returns how many were labelled."""
+        if label not in ("yes", "no", "unlabeled") or not self.n:
+            return 0
+        dash = self.dash
+        keys = [dash.event_keys[int(i)] for i in indices if 0 <= int(i) < len(dash.event_keys)]
+        if not keys:
+            return 0
+        for key in keys:
+            if label == "unlabeled":
+                dash.labels.pop(key, None)
+            else:
+                dash.labels[key] = label
+        dash._compute_template_state()
+        dash._compute_second_pass()
+        dash._save_labels()
+        if label == "unlabeled":
+            # a cleared manual label may drop a retained sub-threshold event
+            dash._rebuild_candidates(preserve_key=dash.event_keys[dash.current])
+            dash._set_loaded_controls(True)
+        dash._refresh_all()
+        return len(keys)
 
     def counts(self) -> tuple[int, int, int]:
         """``(yes, no, unlabeled)`` over manual labels."""

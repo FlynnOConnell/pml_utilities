@@ -42,8 +42,12 @@ SYNC_HOLD = 3
 GROW_SHARE = 0.28
 GROW_MAX = 2.0
 
-# never drag the strip so far down that the canvas has less than this
+# never size or drag the strip so far down that the canvas has less than
+# this left to render into, after the other edge windows (the NDWidget's
+# slider block along the bottom) have taken theirs
 MIN_RENDER_AREA = 150
+# and never squeeze a panel under this on its own account
+MIN_PANEL = 60
 
 
 @dataclass
@@ -206,8 +210,11 @@ class TopStrip(ImguiWindow):
         The strip is as tall as what it is *showing*, not as tall as the
         tallest thing registered, and it grows with the window: on a tall
         canvas the panel takes a share of the height instead of leaving a
-        band of empty space under its cards. A drag on the grab bar pins the
-        height until :meth:`reset_size`.
+        band of empty space under its cards. It also leaves the images at
+        least ``MIN_RENDER_AREA`` after the other edge windows, so a tall
+        panel (the curation dashboard over the line traces) on a short
+        window shrinks instead of pushing the viewport negative. A drag on
+        the grab bar pins the height until :meth:`reset_size`.
         """
         if not self.panels:
             return MENU_HEIGHT
@@ -221,9 +228,20 @@ class TopStrip(ImguiWindow):
             canvas_height = float(self.figure.canvas.get_logical_size()[1])
         except Exception:
             canvas_height = 0.0
+        chrome = MENU_HEIGHT + PANEL_PAD + self.handle_height
         if canvas_height > 0:
             height = max(height, min(canvas_height * GROW_SHARE, height * GROW_MAX))
-        return MENU_HEIGHT + int(height) + PANEL_PAD + self.handle_height
+            room = canvas_height - self._other_edges() - MIN_RENDER_AREA - chrome
+            height = min(height, max(room, MIN_PANEL))
+        return int(height) + chrome
+
+    def _other_edges(self) -> float:
+        """Canvas height the other edge windows take (the bottom one; the
+        strip is the only top window)."""
+        try:
+            return float(self.figure._edge_size("bottom"))
+        except Exception:
+            return 0.0
 
     def _resize(self) -> None:
         want = self._want_size()

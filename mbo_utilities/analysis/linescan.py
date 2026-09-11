@@ -62,6 +62,7 @@ from mbo_utilities.arrays.mesc_geometry import (
 )
 
 __all__ = [
+    "experiment_linescan_mesc",
     "stim_events",
     "background_image",
     "zstack_candidates",
@@ -75,6 +76,48 @@ _FIG_BG = "black"
 _FIG_FG = "white"
 _TRAIN_GAP_MS = 100.0  # pulses closer than this belong to one train
 _SMOOTH_S = 0.02  # display / peak smoothing window for kHz traces
+
+
+# ---------------------------------------------------------------------------
+# the raw line scan of an experiment folder
+# ---------------------------------------------------------------------------
+
+
+def experiment_linescan_mesc(path) -> Path | None:
+    """The raw line-scan ``.mesc`` of an experiment laid out the way the
+    curation notebook's data path is: ``<animal>/<expt>/<expt>/<expt>.mesc``
+    with the processed traces in ``<animal>/<expt>/PF`` and the Z-stack in
+    ``<animal>/<expt>/<expt>_zstack.mesc``.
+
+    ``path`` may be the experiment folder, its ``PF`` folder, the inner
+    ``<expt>/<expt>`` folder, or the ``.mesc`` itself. Returns None when no
+    line scan is there (a Data or animal folder, or any other folder), so a
+    caller can fall through to whatever else the path may be.
+    """
+    path = Path(path).expanduser()
+    if path.is_file():
+        return path if path.suffix.lower() == ".mesc" else None
+    if not path.is_dir():
+        return None
+    if path.name == "PF" or (path.parent.name == path.name and path.parent != path):
+        experiment = path.parent
+    else:
+        experiment = path
+    folders = [experiment / experiment.name, experiment]
+    for folder in folders:
+        named = folder / f"{experiment.name}.mesc"
+        if named.is_file():
+            return named
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        found = sorted(
+            p for p in folder.glob("*.mesc")
+            if not p.stem.lower().endswith("_zstack")
+        )
+        if found:
+            return found[0]
+    return None
 
 
 # ---------------------------------------------------------------------------
