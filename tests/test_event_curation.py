@@ -263,6 +263,101 @@ class TestSession:
         assert session.auto_pass_count() == above
         assert sum(label == "auto_yes" for label in session.labels()) >= above
 
+    def test_a3_a4_controls_do_what_the_notebook_sliders_do(self, data_root):
+        """The PC1 line (A3) and the cosine threshold (A4) drive vnoiser's
+        own sliders; the session's setters must leave the same calls and
+        the same saved JSON as moving them in the notebook."""
+        from vnoiser.curation import EventCurationDashboard
+
+        def notebook(mode):
+            dash = EventCurationDashboard(data_path=data_root, mode=mode, duration_s=None, auto_load=False)
+            experiment = dash.dataset.experiment_options(dash.dataset.animal_options()[0][1])[0][1]
+            dash._experiment_changed({"new": experiment})
+            dash.recording_dropdown.value = dash.dataset.recording_options()[0][1]
+            dash._load_selected_recording(None)
+            return dash
+
+        def state(dash):
+            return (
+                [dash._label_for_index(i) for i in range(len(dash.candidates.indices))],
+                dash.auto_pass_pc1,
+                dash.auto_pass_pc1_side,
+                float(dash.auto_template_threshold),
+                json.loads(dash.label_path.read_text(encoding="utf-8"))["candidate_detection"]
+                if dash.label_path.exists()
+                else None,
+            )
+
+        dash = notebook("fast")
+        session = _loaded(data_root, mode="fast")
+        assert state(dash) == state(session.dash)
+        assert session.auto_pass_pc1 is None and session.auto_pass_pc1_side == "right"
+        assert session.auto_template_threshold == pytest.approx(0.8)
+
+        # A3 starts off, parked beyond the rightmost point so nothing passes
+        lo, hi, _step = session.auto_pass_pc1_range
+        pc1 = session.pca_scores[:, 0]
+        assert lo < pc1.min() and hi > pc1.max()
+        assert session.auto_pass_pc1_shown == pytest.approx(hi)
+        assert float(dash.pc1_slider.value) == pytest.approx(hi)
+        assert session.auto_pass_pc1_count() == 0
+
+        # a line between the two highest PC1 scores passes the top one
+        order = np.argsort(pc1)
+        line = 0.5 * (pc1[order[-1]] + pc1[order[-2]])
+        dash.pc1_slider.value = line
+        session.set_auto_pass_pc1(line)
+        assert state(dash) == state(session.dash)
+        assert session.auto_pass_pc1_count() == 1
+        assert session.label(int(order[-1])) == "auto_yes"
+        assert session.event_info(int(order[-1]))["pc1_pass"] is True
+        assert session.event_info(int(order[0]))["pc1_pass"] is False
+
+        # flip the side: the others pass instead
+        dash.pc1_side.value = "left"
+        session.set_auto_pass_pc1_side("left")
+        assert state(dash) == state(session.dash)
+        assert session.auto_pass_pc1_count() == session.n - 1
+        assert session.label(int(order[0])) == "auto_yes"
+
+        # A4: every candidate at or above the cosine threshold passes; at the
+        # floor nothing is rejected, at the top only A2 / A3 can pass one
+        session.set_auto_pass_pc1_side("right")
+        dash.pc1_side.value = "right"
+        scores = session.dash.initial_template_scores
+        assert session.auto_template_count() == int((scores >= 0.8).sum())
+        floor = session.auto_template_threshold_range[0]
+        dash.cosine_slider.value = floor
+        session.set_auto_template_threshold(floor)
+        assert state(dash) == state(session.dash)
+        assert session.auto_template_count() == session.n
+        assert "auto_no" not in session.labels()
+        dash.cosine_slider.value = 1.0
+        session.set_auto_template_threshold(1.0)
+        assert state(dash) == state(session.dash)
+        rejected = sum(label == "auto_no" for label in session.labels())
+        expected = sum(
+            not session.event_info(i)["pc1_pass"] and scores[i] < 1.0 for i in range(session.n)
+        )
+        assert rejected == expected > 0
+
+        # both are saved per recording and restored by a fresh session
+        detection = state(session.dash)[-1]
+        assert detection["auto_pass_pc1"][session.recording_id] == pytest.approx(line)
+        assert detection["auto_pass_pc1_sides"][session.recording_id] == "right"
+        assert detection["auto_template_thresholds"][session.recording_id] == pytest.approx(1.0)
+        again = _loaded(data_root, mode="fast")
+        assert again.auto_pass_pc1 == pytest.approx(line)
+        assert again.auto_template_threshold == pytest.approx(1.0)
+        assert again.labels() == session.labels()
+
+        # manual mode has neither rule
+        manual = _loaded(data_root, mode="manual")
+        manual.set_auto_pass_pc1(line)
+        manual.set_auto_template_threshold(0.0)
+        assert manual.auto_pass_pc1 is None
+        assert manual.auto_pass_pc1_count() == 0 and manual.auto_template_count() == 0
+
     def test_set_labels_labels_a_box_at_once(self, data_root):
         session = _loaded(data_root, mode="fast")
         assert session.n == 3
@@ -402,7 +497,7 @@ def _load(widget, data_root):
 
 
 def _each_panel(widget, frames=2):
-    """The one Curation panel draws both rows (A with its cards, B to E)."""
+    """The one Curation panel draws both rows (A with its cards, B to D)."""
     widget.strip.focus("curation")
     _frames(widget, frames)
 
@@ -524,6 +619,29 @@ class TestWidget:
         session.set_view_filter("yes")
         _each_panel(curation)
         assert session.counts() == (1, 0, 2)
+
+    def test_a3_a4_card_and_pc1_line_draw(self, curation, data_root):
+        """The A3 / A4 card and the PC1 line on the PCA draw in a seeded
+        mode; a release of the dragged line applies through the session."""
+        _load(curation, data_root)
+        session = curation.session
+        _each_panel(curation)
+        lo, hi, _step = session.auto_pass_pc1_range
+        line = 0.5 * (lo + hi)
+        session.set_auto_pass_pc1(line)
+        session.set_auto_pass_pc1_side("left")
+        session.set_auto_template_threshold(0.5)
+        _each_panel(curation, 3)
+        assert session.auto_pass_pc1 == pytest.approx(line)
+        # the drag ends off-frame: the next frame applies the held value
+        curation._pc1_drag = lo + 0.25 * (hi - lo)
+        _each_panel(curation)
+        assert curation._pc1_drag is None
+        assert session.auto_pass_pc1 == pytest.approx(lo + 0.25 * (hi - lo))
+        # manual mode shows neither the card nor the line
+        curation.set_mode("manual")
+        curation.wait(60)
+        _each_panel(curation)
 
     def test_box_mode_labels_what_the_box_holds(self, curation, data_root):
         _load(curation, data_root)
@@ -1112,3 +1230,18 @@ class TestCurationWindow:
         assert rec in curation.catalog and not rec.pre_denoised
         assert not curation.loading and curation.session is None
         assert [r.rid for r in curation.loadable()] == ["x/roi=0"]
+
+
+class TestClearLabels:
+    def test_clear_all_hands_every_candidate_back_to_the_rules(self, data_root):
+        session = _loaded(data_root, mode="fast")
+        session.set_labels([0, 1], "no")
+        assert session.counts()[1] == 2
+        assert session.labels()[0] == "no"
+        assert session.clear_labels() == 2
+        assert session.counts() == (0, 0, session.n)
+        assert "no" not in session.labels() and "yes" not in session.labels()
+        assert session.clear_labels() == 0
+        saved = json.loads(session.label_path.read_text(encoding="utf-8"))
+        assert saved["events"] == {}
+        assert saved["candidate_detection"]["thresholds"]
