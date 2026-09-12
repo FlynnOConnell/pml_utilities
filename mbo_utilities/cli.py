@@ -1859,6 +1859,39 @@ from mbo_utilities.hpc.cli import hpc as _hpc_group  # noqa: E402
 
 main.add_command(_hpc_group)
 
+@main.command("curate")
+@click.argument("path", type=click.Path(exists=True), required=False)
+@click.option("--serve", is_flag=True, default=False,
+              help="Serve the dashboard to browsers over HTTP instead of opening a window.")
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="With --serve: interface to listen on (0.0.0.0 for the network).")
+@click.option("--port", type=int, default=60649, show_default=True, help="With --serve: port.")
+@click.option("--channel", type=int, default=0, show_default=True,
+              help="Channel averaged for a raw line scan's traces.")
+def curate(path, serve, host, port, channel):
+    """vnoiser event curation of PATH: a Data / animal / experiment / PF
+    folder, a .mat, or a line-scan .mesc (default: the last data path).
+
+    Opens the desktop window, the same as `mbo PATH`. With --serve the
+    dashboard is rendered here and streamed to any browser that opens the
+    printed URL: run it on the machine that holds the data and a GPU, and
+    curate from a laptop. No login: keep --host on localhost and tunnel
+    (ssh -L 60649:localhost:60649 server), or put a proxy in front.
+
+    
+      mbo curate X:/data/asako/stan112/stan112_expt12
+      mbo curate /data/stan112/stan112_expt12 --serve
+      mbo curate /data/stan112 --serve --host 0.0.0.0 --port 8080
+    """
+    if serve:
+        from mbo_utilities.gui.curation_server import serve_curation
+
+        serve_curation(path, channel=channel, host=host, port=port)
+        return
+    from mbo_utilities.gui.curation_viewer import open_curation_viewer
+
+    open_curation_viewer(path, channel=channel)
+
 
 if __name__ == "__main__":
     main()

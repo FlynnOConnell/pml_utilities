@@ -12,6 +12,9 @@ Two hosts draw the same layout:
   dashboard streams to the browser from wherever the kernel runs (a cluster
   node, as the plotly notebook did); offscreen it is what the tests draw.
   ``open_curation_viewer`` picks it in a notebook and displays the canvas.
+  On rendercanvas's ``http`` canvas it is what
+  :class:`mbo_utilities.gui.curation_server.CurationServer` streams to
+  browsers over the network (``mbo curate <path> --serve``).
 
 What opens:
 
@@ -71,6 +74,10 @@ WINDOW_SIZE = (1500, 900)
 # drawn there, but the empty subplot's fixed insets (title row, padding,
 # ~37 px) come off it and the renderer needs a positive viewport after that
 FIGURE_MARGIN = 48
+# the smallest canvas the dashboard renders on: under it the window cannot
+# leave pygfx a positive viewport (a browser tab shrunk to nothing, or one
+# that has not reported its size yet)
+MIN_CANVAS = (320, 200)
 
 
 class PanelHost:
@@ -354,7 +361,10 @@ class CurationVis(_Dashboard):
 
         kwargs = _figure_kwargs_for_here(size)
         if canvas is not None:
+            # an explicit canvas takes none of the desktop branch's Qt
+            # kwargs (present_method="screen" is not a bitmap method)
             kwargs["canvas"] = canvas
+            kwargs.pop("canvas_kwargs", None)
         self.figure = fpl.Figure(**kwargs)
         # the one subplot is empty and sits behind the dashboard window: no
         # toolbar (it would take ~55 px off the viewport) and no axes (their
@@ -362,6 +372,8 @@ class CurationVis(_Dashboard):
         subplot = self.figure[0, 0]
         subplot.toolbar = False
         subplot.axes.visible = False
+        # its "(0, 0)" title would show in the strip left under the dashboard
+        subplot.title.visible = False
         self._output = None
         self._shown = False
         self._closed = False
@@ -372,8 +384,32 @@ class CurationVis(_Dashboard):
         """Show the figure; returns the canvas widget in a notebook."""
         if not self._shown:
             self._output = self.figure.show()
+            # the figure's own draw function, guarded (see _draw)
+            self.figure.canvas.request_draw(self._draw)
             self._shown = True
         return self._output
+
+    def _draw(self) -> None:
+        """The canvas's draw function: the figure's render with two guards a
+        streamed canvas needs. A browser reports its size only after it
+        connects (the canvas is 1 x 1 until then) and can shrink by hundreds
+        of pixels in one step, so the dashboard window is sized to the
+        canvas *before* pygfx renders (the window's own update runs after,
+        inside the imgui pass) and a canvas under MIN_CANVAS draws nothing.
+        The next frame is requested whatever happened: the imgui figure
+        only asks for one after a successful render, so one bad frame would
+        otherwise end the stream."""
+        canvas = self.figure.canvas
+        try:
+            w, h = canvas.get_logical_size()
+            if w < MIN_CANVAS[0] or h < MIN_CANVAS[1]:
+                return
+            want = self.window._want(self.figure)
+            if self.window.size != want:
+                self.window.size = want  # resets the figure's layout
+            self.figure._render()
+        finally:
+            canvas.request_draw()
 
     def close(self) -> None:
         if self._closed:
