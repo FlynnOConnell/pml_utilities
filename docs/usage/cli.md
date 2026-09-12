@@ -309,6 +309,16 @@ of its line-scan units as a raw recording; clicking one runs the wavelet
 denoiser on it. `python -m mbo_utilities.gui.curation_viewer PATH` is the
 same window from a script.
 
+To curate from another machine, serve the dashboard instead of opening a
+window: `mbo curate PATH --serve` (or `python -m mbo_utilities.gui.curation_server
+PATH`) renders it where the data and the GPU are and streams it to any browser
+that opens the printed URL (default `http://localhost:60649/`); pointer and key
+events go back the same way, so nothing is installed on the laptop. Every
+connected browser sees the same frames and the longest-connected one drives.
+There is no login: leave `--host` on localhost and tunnel
+(`ssh -L 60649:localhost:60649 server`), or front it with an authenticating
+proxy; `--host 0.0.0.0` opens it to the network as is.
+
 To scrub the lines on the stack instead, run `mbo linescan scan.mesc --view`
 (or `mbo linescan <animal>/<expt> --view`): three panels on top (the
 line-scan itself, the snapshot the lines were drawn on, the paired Z-stack)

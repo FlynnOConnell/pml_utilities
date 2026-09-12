@@ -5,10 +5,10 @@ a data path holds. Scanning a path catalogs each animal, experiment and
 scan / domain the pipeline processed and loads them in the background. The
 ``Curation`` panel on the top strip shows one recording at a time in the
 notebook's grid: the trace with its candidates (A) beside the threshold /
-auto-pass, PC1 / cosine auto-pass, Decision and Navigation cards, then the
-template, focused candidate and PCA (B to D) under it;
-the arrows flip through recordings. The Curation tab on the right bar lists
-the recordings and switches mode. Every plot reads the focused session, so a
+slider card (A1 to A4), then the template, focused candidate and PCA (B to
+D) under it; the arrows flip through recordings. The Curation tab on the
+right bar holds the Decision and Recordings tabs (labels, navigation, the
+table, the mode). Every plot reads the focused session, so a
 label, a threshold or a flip updates all of them at once. Every rule comes from
 ``vnoiser.curation`` through :class:`mbo_utilities.vnoiser.CurationSession`:
 one per mode and recording, each with its own JSON file, as the notebook's
@@ -56,12 +56,12 @@ __all__ = [
 TIMELINE_HEIGHT = 260
 CANDIDATE_HEIGHT = 210
 PANEL_HEIGHT = TIMELINE_HEIGHT + CANDIDATE_HEIGHT
-CARD_WIDTH_EM = 8.5
-# the A1 / A2 and A3 / A4 cards hold two vertical sliders side by side
-A34_CARD_EM = 11.5
-WIDE_CARD_EM = 15.0
-# Yes / No / Clear over Box accept / Box reject / Clear all
-DECISION_CARD_EM = 18.0
+# the slider card beside the trace: one column per rule (A1 threshold, A2
+# amplitude, A3 PC1, A4 cosine), each a vertical slider with its range
+# above and below and a short name and count under it
+SLIDER_COL_EM = 4.2
+SLIDER_GAP_EM = 0.4
+SLIDER_CARD_PAD_EM = 1.4
 FILTERS = ("all", "yes", "no", "unlabeled")
 
 TRACE_COLOR = (0.85, 0.85, 0.85, 1.0)
@@ -127,8 +127,7 @@ def help_markdown() -> str:
         "a time; the arrows (or up / down) flip through them. Top row: the "
         "trace with its candidates (drag the red line to change the candidate "
         "threshold, the teal line or the A2 slider to set the auto-pass "
-        "amplitude) beside the A3 / A4 card and the Decision and Navigation "
-        "cards. A3 is the purple line on the PCA (drag it, or its slider): "
+        "amplitude) beside the slider card. A3 is the purple line on the PCA (drag it, or its slider): "
         "every candidate on its passing side auto-passes; the arrow button "
         "under the slider picks the side. A4 is the seed-template cosine at "
         "or above which a candidate auto-passes; below it auto-rejects, so "
@@ -142,7 +141,9 @@ def help_markdown() -> str:
         "A2 / A3 / A4 rules; **Clear all** drops them so the rules apply "
         "again. Drag the strip's grab bar to give the rows more "
         "height; the `keybinds` button lists the keys.\n"
-        "- **Curation** tab (right): the recordings table and the mode.\n\n"
+        "- **Curation** tab (right): **Decision** (Yes / No / Clear, the box "
+        "modes, the focused event, navigation, the view filter, files) and "
+        "**Recordings** (mode, data path, the table).\n\n"
         "Each mode saves to its own `PF/.curation/<mode>_template_curation.json`; "
         "reopening the same scan / domain restores it."
     )
@@ -670,7 +671,9 @@ class EventCurationWidget:
             self._draw_candidate_row(session)
 
     def _draw_timeline_row(self, session: CurationSession) -> None:
-        """A: the trace with its candidates, and the cards beside it."""
+        """A: the trace with its candidates, as wide as the row allows, and
+        the slider card (A1 to A4) beside it. Decision and Navigation live
+        in the controls column (``draw_tab``), not in this row."""
         kind = _mode_title(session.mode, self.slow_cutoff_hz)
         imgui.text_disabled(f"A. {kind}: {session.n} ({len(session.visible)} in view)")
         imgui.same_line(0, 12)
@@ -678,33 +681,13 @@ class EventCurationWidget:
             self.show_keybinds = not self.show_keybinds
         set_tooltip("k", show_mark=False)
         avail = imgui.get_content_region_avail()
-        card_w = em(A34_CARD_EM if session.seeded else CARD_WIDTH_EM)
-        a34_w = em(A34_CARD_EM) if session.seeded else 0.0
-        wide_w = em(WIDE_CARD_EM)
-        decision_w = em(DECISION_CARD_EM)
-        plot_w = max(
-            avail.x - (card_w + em(0.5)) - (a34_w + em(0.5) if a34_w else 0.0)
-            - (decision_w + em(0.5)) - (wide_w + em(0.5)),
-            em(10),
-        )
+        n_cols = 4 if session.seeded else 1
+        card_w = em(SLIDER_COL_EM) * n_cols + em(SLIDER_GAP_EM) * (n_cols - 1) + em(SLIDER_CARD_PAD_EM)
+        plot_w = max(avail.x - card_w - em(0.5), em(10))
         with imgui_ctx.begin_child("##curation_trace", imgui.ImVec2(plot_w, 0)):
             self._draw_timeline(session)
         imgui.same_line(0, em(0.5))
-        if session.seeded:
-            self._draw_threshold_autopass_card(session, card_w, avail.y)
-            imgui.same_line(0, em(0.5))
-            self._draw_pc1_cosine_card(session, a34_w, avail.y)
-        else:
-            self._draw_threshold_card(session, card_w, avail.y)
-        imgui.same_line(0, em(0.5))
-        with card("##curation_decision", "Decision", avail.y, decision_w):
-            self._draw_decision_body(session)
-            self._draw_event_body(session)
-        imgui.same_line(0, em(0.5))
-        with card("##curation_nav", "Navigation", avail.y, wide_w):
-            self._draw_navigation_body(session)
-            self._draw_filter_body(session)
-            self._draw_files_body(session)
+        self._draw_slider_card(session, card_w, avail.y)
 
     def _draw_flip_row(self) -> None:
         """Previous / next recording, and which one this is."""
@@ -877,131 +860,108 @@ class EventCurationWidget:
         self.clear_box()
         return n
 
-    def _draw_threshold_card(self, session, width, height) -> None:
-        lo, hi, _step = session.threshold_range
-        with card("##curation_a1", "A1. Threshold", height, width):
+    def _draw_slider_card(self, session, width, height) -> None:
+        """A1 to A4 as one line of slider columns: the candidate threshold
+        (red, also the red line on the trace); in a seeded mode also the
+        auto-pass amplitude (teal, the teal line), the PC1 line of the PCA
+        (purple, drawn on panel D; the arrow picks the passing side) and the
+        seed-template cosine at or above which a candidate passes (amber)."""
+        title = "A1 - A4" if session.seeded else "A1"
+        with card("##curation_sliders", title, height, width):
             set_tooltip(
-                "Candidates are local maxima of the analysis trace above "
-                "this value. Saved per recording.",
+                "Sliders apply on release. A1 threshold: candidates are local "
+                "maxima of the trace above it. A2 amplitude: a candidate at or "
+                "above it passes whatever its shape. A3 PC1: every candidate on "
+                "the passing side of the purple line on the PCA passes (the "
+                "arrow flips the side; drag the line on the plot too). A4 "
+                "cosine: a candidate whose similarity to the seed template is "
+                "at or above it passes, below it is rejected; at the bottom "
+                "nothing is rejected. Manual labels always win. All saved per "
+                "recording.",
             )
-            self._v_slider("threshold", session.threshold, lo, hi, session.set_threshold)
-
-    def _draw_threshold_autopass_card(self, session, width, height) -> None:
-        lo, hi, _step = session.auto_pass_range
-        with card("##curation_a1a2", "A1 / A2", height, width):
-            set_tooltip(
-                "Red: candidate threshold on the trace. Teal: "
-                "auto-pass amplitude - every candidate whose baseline-subtracted "
-                "amplitude is at or above it passes, whatever its template "
-                "similarity; at the bottom, every candidate passes. Both saved "
-                "per recording.",
+            lo, hi, _step = session.threshold_range
+            self._slider_column(
+                "a1", "thr", session.threshold, lo, hi, session.set_threshold, THRESHOLD_COLOR,
+                f"{session.n} found", "candidate threshold: local maxima of the trace above it",
             )
-            auto_pass_shown = session.auto_pass if session.auto_pass is not None else hi
-            imgui.begin_group()
-            self._v_slider(
-                "a1", session.threshold, lo, hi, session.set_threshold,
-                extra_rows=2, color=THRESHOLD_COLOR,
+            if not session.seeded:
+                return
+            alo, ahi, _step = session.auto_pass_range
+            imgui.same_line(0, em(SLIDER_GAP_EM))
+            self._slider_column(
+                "a2", "amp", session.auto_pass if session.auto_pass is not None else ahi,
+                alo, ahi, session.set_auto_pass, AUTO_PASS_COLOR,
+                "off" if session.auto_pass is None else f"{session.auto_pass_count()}/{session.n}",
+                "auto-pass amplitude: candidates at or above it pass; at the bottom all pass",
             )
-            imgui.text_disabled("threshold")
-            imgui.text_disabled(f"{session.n} found")
-            imgui.end_group()
-            imgui.same_line(0, em(0.5))
-            imgui.begin_group()
-            self._v_slider(
-                "a2", auto_pass_shown, lo, hi, session.set_auto_pass,
-                extra_rows=2, color=AUTO_PASS_COLOR,
-            )
-            imgui.text_disabled("amplitude")
-            if session.auto_pass is None:
-                imgui.text_disabled("off")
-            else:
-                imgui.text_disabled(f"{session.auto_pass_count()}/{session.n} pass")
-                set_tooltip(
-                    "candidates whose amplitude is at or above the teal handle",
-                    show_mark=False,
-                )
-            imgui.end_group()
-
-    def _draw_pc1_cosine_card(self, session, width, height) -> None:
-        """A3: the PC1 line of the candidate PCA (purple; also draggable on
-        panel E) with the side it passes. A4: the seed-template cosine at
-        or above which a candidate passes (amber); below it rejects."""
-        lo, hi, _step = session.auto_pass_pc1_range
-        clo, chi, _cstep = session.auto_template_threshold_range
-        with card("##curation_a3a4", "A3 / A4", height, width):
-            set_tooltip(
-                "Purple: PC1 auto-pass - every candidate on the passing side "
-                "of the line (the arrow under the slider picks it) passes, "
-                "whatever its amplitude or template similarity. Drag the line "
-                "on the PCA plot or the slider. Amber: cosine auto-pass - a "
-                "candidate whose similarity to the seed template is at or "
-                "above it passes, below it is rejected; at the bottom nothing "
-                "is rejected. Both saved per recording.",
-            )
+            plo, phi, _step = session.auto_pass_pc1_range
             side = session.auto_pass_pc1_side
-            imgui.begin_group()
-            self._v_slider(
-                "a3", session.auto_pass_pc1_shown, lo, hi, session.set_auto_pass_pc1,
-                extra_rows=2, color=PC1_COLOR,
+            imgui.same_line(0, em(SLIDER_GAP_EM))
+            self._slider_column(
+                "a3", "PC1", session.auto_pass_pc1_shown, plo, phi, session.set_auto_pass_pc1, PC1_COLOR,
+                "off" if session.auto_pass_pc1 is None else f"{session.auto_pass_pc1_count()}/{session.n}",
+                f"PC1 auto-pass: candidates at or {'above' if side == 'right' else 'below'} the "
+                "purple line on the PCA pass; the arrow flips the side",
+                side=side, flip=lambda: session.set_auto_pass_pc1_side("left" if side == "right" else "right"),
             )
-            if imgui.arrow_button("##pc1_side", imgui.Dir.right if side == "right" else imgui.Dir.left):
-                session.set_auto_pass_pc1_side("left" if side == "right" else "right")
-            set_tooltip(
-                f"passing side: PC1 at or {'above' if side == 'right' else 'below'} the line "
-                "(click to flip)",
-                show_mark=False,
+            clo, chi, _step = session.auto_template_threshold_range
+            imgui.same_line(0, em(SLIDER_GAP_EM))
+            self._slider_column(
+                "a4", "cos", session.auto_template_threshold, clo, chi,
+                session.set_auto_template_threshold, COSINE_COLOR,
+                f"{session.auto_template_count()}/{session.n}",
+                "cosine auto-pass: candidates whose seed-template cosine is at or above it pass, "
+                "below it they are rejected",
             )
-            imgui.same_line(0, em(0.3))
-            imgui.text_disabled("PC1")
-            if session.auto_pass_pc1 is None:
-                imgui.text_disabled("off")
-            else:
-                imgui.text_disabled(f"{session.auto_pass_pc1_count()}/{session.n} pass")
-            imgui.end_group()
-            imgui.same_line(0, em(0.5))
-            imgui.begin_group()
-            self._v_slider(
-                "a4", session.auto_template_threshold, clo, chi,
-                session.set_auto_template_threshold, extra_rows=2, color=COSINE_COLOR,
-            )
-            imgui.text_disabled("cosine")
-            imgui.text_disabled(f"{session.auto_template_count()}/{session.n} pass")
-            set_tooltip(
-                "candidates whose seed-template cosine is at or above the amber handle",
-                show_mark=False,
-            )
-            imgui.end_group()
 
-    def _v_slider(self, key, value, lo, hi, apply, extra_rows: int = 0, color=None) -> None:
-        """A vertical slider that applies on release, so a drag does not
-        rebuild the candidates every frame. ``color`` tints the grab; the
-        range labels sit beside the track's ends."""
+    def _slider_column(self, key, name, value, lo, hi, apply, color, count, tooltip, *,
+                       side=None, flip=None) -> None:
+        """One column of the slider card: the range's top, a vertical slider
+        that applies on release (a drag does not rebuild the candidates every
+        frame), the range's bottom, the rule's short name (``side`` adds the
+        PC1 arrow before it; ``flip`` is called when it is clicked) and a
+        count. Everything is centred on a SLIDER_COL_EM column."""
+        width = em(SLIDER_COL_EM)
         pending = self._slider_pending.get(key)
         shown = pending if pending is not None else float(value)
-        width = em(2.2)
-        height = max(imgui.get_content_region_avail().y - em(1.6) * (1 + extra_rows), em(3))
-        origin = imgui.get_cursor_screen_pos()
-        if color is not None:
-            imgui.push_style_color(imgui.Col_.slider_grab, vec4(color, 0.85))
-            imgui.push_style_color(imgui.Col_.slider_grab_active, vec4(color, 1.0))
+        line_h = imgui.get_text_line_height_with_spacing()
+        track_h = max(imgui.get_content_region_avail().y - 4 * line_h - em(0.4), em(3))
+        imgui.begin_group()
+        x0 = imgui.get_cursor_pos_x()
+
+        def centred(text: str) -> None:
+            imgui.set_cursor_pos_x(x0 + max((width - imgui.calc_text_size(text).x) / 2, 0.0))
+            imgui.text_disabled(text)
+
+        centred(f"{hi:.2f}")
+        slider_w = em(2.2)
+        imgui.set_cursor_pos_x(x0 + (width - slider_w) / 2)
+        imgui.push_style_color(imgui.Col_.slider_grab, vec4(color, 0.85))
+        imgui.push_style_color(imgui.Col_.slider_grab_active, vec4(color, 1.0))
         changed, shown = imgui.v_slider_float(
-            f"##{key}", imgui.ImVec2(width, height), shown, float(lo), float(hi), "%.2f"
+            f"##{key}", imgui.ImVec2(slider_w, track_h), shown, float(lo), float(hi), "%.2f",
         )
-        if color is not None:
-            imgui.pop_style_color(2)
+        imgui.pop_style_color(2)
         if changed:
             self._slider_pending[key] = shown
         if imgui.is_item_deactivated_after_edit():
             self._slider_pending.pop(key, None)
             apply(shown)
-        draw = imgui.get_window_draw_list()
-        label_x = origin.x + width + em(0.4)
-        text_color = imgui.get_color_u32(imgui.Col_.text_disabled)
-        line_h = imgui.get_text_line_height()
-        draw.add_text(imgui.ImVec2(label_x, origin.y), text_color, f"{hi:.2f}")
-        draw.add_text(imgui.ImVec2(label_x, origin.y + height - line_h), text_color, f"{lo:.2f}")
-        imgui.same_line(0, em(0.4))
-        imgui.dummy(imgui.ImVec2(imgui.calc_text_size(f"{hi:.2f}").x, 1))
+        centred(f"{lo:.2f}")
+        if side is None:
+            centred(name)
+        else:
+            arrow_w = imgui.get_frame_height()
+            name_w = imgui.calc_text_size(name).x
+            imgui.set_cursor_pos_x(x0 + max((width - arrow_w - em(0.3) - name_w) / 2, 0.0))
+            if imgui.arrow_button(f"##{key}_side", imgui.Dir.right if side == "right" else imgui.Dir.left):
+                flip()
+            imgui.same_line(0, em(0.3))
+            imgui.text_disabled(name)
+        set_tooltip(tooltip, show_mark=False)
+        centred(count)
+        imgui.dummy(imgui.ImVec2(width, 1))
+        imgui.end_group()
 
     def _draw_candidate_row(self, session: CurationSession) -> None:
         """B to D: template, focused candidate, PCA."""
@@ -1128,21 +1088,45 @@ class EventCurationWidget:
     # ------------------------------------------------------------------
 
     def draw_tab(self) -> None:
-        """The Curation tab: source, recordings, mode, filter, decisions, navigation."""
+        """The controls column, two tabs: Decision (with the event, navigation,
+        view filter and files under it) and Recordings (mode, source, the
+        table). It is the Curation tab on a figure's right bar, and the
+        column beside the dashboard in the standalone hosts."""
         self.strip.report_right_tab("curation")
         self._mark_hovered()
-        self._draw_mode_row()
-        self._draw_source()
-        self._draw_recordings()
-        self._draw_controls()
+        self._draw_tabs(source=True)
 
     def draw_embedded(self) -> None:
-        """The controls without the source picker, for a host that hands
-        traces over itself (the line-scan viewer's ROI panel)."""
+        """The tabs without the source picker, for a host that hands traces
+        over itself (the line-scan viewer's ROI panel)."""
         self._mark_hovered()
-        self._draw_mode_row()
-        self._draw_recordings()
-        self._draw_controls()
+        self._draw_tabs(source=False)
+
+    def _draw_tabs(self, source: bool) -> None:
+        if not imgui.begin_tab_bar("##curation_tabs"):
+            return
+        if imgui.begin_tab_item("Decision")[0]:
+            self._draw_decision_tab()
+            imgui.end_tab_item()
+        if imgui.begin_tab_item("Recordings")[0]:
+            self._draw_mode_row()
+            if source:
+                self._draw_source()
+            self._draw_recordings()
+            self._draw_controls()
+            imgui.end_tab_item()
+        imgui.end_tab_bar()
+
+    def _draw_decision_tab(self) -> None:
+        session = self._ready()
+        if session is None:
+            imgui.text_wrapped(self.status)
+            return
+        self._draw_decision(session)
+        self._draw_event(session)
+        self._draw_navigation(session)
+        self._draw_filter(session)
+        self._draw_files(session)
 
     def _draw_controls(self) -> None:
         imgui.text_wrapped(self.status)
@@ -1390,7 +1374,10 @@ class EventCurationWidget:
         yes, no, unlabeled = session.counts()
         imgui.text_disabled(f"yes {yes} · no {no} · unlabeled {unlabeled}")
         imgui.text_disabled(f"template source events: {len(session.template_source)}")
-        imgui.text_disabled(f"curation file: {session.label_path}")
+        # the path is long: wrap it to the column instead of running off it
+        imgui.push_style_color(imgui.Col_.text, imgui.get_style_color_vec4(imgui.Col_.text_disabled))
+        imgui.text_wrapped(f"curation file: {session.label_path}")
+        imgui.pop_style_color()
         imgui.text_disabled(f"cache: {session.cache_status}")
 
     @staticmethod
