@@ -1533,10 +1533,85 @@ def task_roi_workflow(args: dict, logger: logging.Logger) -> None:
         raise
 
 
+def _voltage_heartbeat(stop: threading.Event, logger: logging.Logger) -> None:
+    while not stop.wait(600):
+        logger.info("voltage: still running")
+
+
+def _voltage_progress(monitor: TaskMonitor, total: int, done: list, scan_id: str, domain: str) -> None:
+    done[0] += 1
+    monitor.update(0.05 + 0.9 * (done[0] - 1) / max(total, 1), f"scan {scan_id}: denoising {domain} ({done[0]}/{total})")
+
+
+def task_voltage(args: dict, logger: logging.Logger) -> None:
+    """
+    Voltage pipeline task: line-scan units of a .mesc to a PF folder.
+
+    Runs mbo_utilities.vnoiser.pipeline.run_voltage_pipeline with the Run
+    tab's settings; every ticked unit is one scan, the domain table says
+    which lines make each domain.
+    """
+    from functools import partial
+
+    from mbo_utilities.metadata import strip_for_export
+    from mbo_utilities.vnoiser.params import VoltageSettings
+    from mbo_utilities.vnoiser.pipeline import run_voltage_pipeline
+
+    monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
+    monitor.update(0.01, "Reading line-scan traces...")
+    settings = VoltageSettings.from_dict(args.get("settings"))
+    units = list(args.get("units") or [])
+    domains = {str(k): [int(v) for v in rois] for k, rois in (args.get("domains") or {}).items()}
+    frames = args.get("frames")
+    try:
+        src_arr = imread(args["input_path"], **(args.get("reader_kwargs") or {}))
+        metadata = dict(getattr(src_arr, "metadata", {}) or {})
+        metadata.update(args.get("custom_metadata") or {})
+    except Exception as e:
+        monitor.fail(str(e), details={"traceback": traceback.format_exc()})
+        logger.exception(f"voltage: cannot open input {args.get('input_path')!r}: {e}")
+        raise
+    logger.info(f"Input: {args['input_path']}  units: {units}")
+    logger.info(f"Output: {args['output_dir']}")
+    logger.info(f"Domains: {domains}")
+    total = max(len(units), 1) * len([d for d in domains if d not in ("All_domains", "bg")])
+    stop = threading.Event()
+    threading.Thread(target=_voltage_heartbeat, args=(stop, logger), daemon=True).start()
+    try:
+        paths = run_voltage_pipeline(
+            args["input_path"],
+            domains=domains,
+            units=units or None,
+            first_env=args.get("first_env") or (),
+            out=args["output_dir"],
+            channel=int(args.get("channel") or 0),
+            convert=settings.runtime.convert,
+            frames=None if frames is None else (int(frames[0]), int(frames[1])),
+            save_cwt=settings.runtime.save_cwt,
+            spike_cfg=settings.events.config(),
+            detect=settings.events.detect,
+            dfof_cfg=settings.dfof.config(),
+            denoiser_factory=settings.denoiser.factory,
+            overwrite=settings.runtime.overwrite,
+            provenance={"settings": settings.to_dict(), "source_metadata": strip_for_export(metadata)},
+            progress=partial(_voltage_progress, monitor, total, [0]),
+            log=logger.info,
+        )
+        monitor.finish(f"Voltage pipeline wrote {len(paths)} files to {args['output_dir']}")
+        logger.info(f"voltage completed: {sorted(paths)}")
+    except Exception as e:
+        monitor.fail(str(e), details={"traceback": traceback.format_exc()})
+        logger.exception(f"voltage failed: {e}")
+        raise
+    finally:
+        stop.set()
+
+
 TASKS = {
     "save_as": task_save_as,
     "suite2p": task_suite2p,
     "masknmf": task_masknmf,
+    "voltage": task_voltage,
     "roi_workflow": task_roi_workflow,
     "isoview": task_isoview,
     "isoview_correct": task_correct_stack,

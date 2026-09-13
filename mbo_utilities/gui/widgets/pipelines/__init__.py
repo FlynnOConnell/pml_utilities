@@ -66,6 +66,12 @@ def _register_pipelines_sync() -> None:
         except Exception:
             pass
 
+        try:
+            from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
+            _PIPELINE_CLASSES.append(VoltagePipelineWidget)
+        except Exception:
+            pass
+
         # third-party pipelines from the "mbo_utilities.pipelines"
         # entry-point group. Loaded last so a plugin never shadows a
         # built-in in the selector order.
