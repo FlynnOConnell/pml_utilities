@@ -69,7 +69,6 @@ from functools import partial
 from pathlib import Path
 
 import numpy as np
-import pygfx
 
 from mbo_utilities.arrays.mesc_geometry import (
     linescan_endpoints_um,
@@ -161,6 +160,13 @@ def _panel_dims(arr, squeezed, role: str) -> tuple[tuple[str, ...], dict]:
     sizes = squeezed.shape[: len(dims)]
     ranges = {name: RangeContinuous(1, int(size) + 1, 1) for name, size in zip(dims, sizes)}
     return dims, ranges
+
+
+def _limits(sample) -> tuple[float, float]:
+    """(vmin, vmax) for a graphic from a sample of its data"""
+    v = np.asarray(sample, dtype=np.float32).ravel()
+    lo, hi = np.percentile(v, (0.5, 99.9))
+    return float(lo), float(hi if hi > lo else lo + 1)
 
 
 def _load_or_compute_traces(ref_arr, channel: int, traces_dir: Path | None) -> np.ndarray:
@@ -290,8 +296,8 @@ class LineScanOverlay:
                 g.thickness = ON_THICKNESS if self.snap_on_plane[i] else GHOST_THICKNESS
             snap_starts = np.array([seg[0] for seg in snapshot["pixel_lines"]], dtype=np.float32)
             sp.add_scatter(
-                snap_starts, colors=[pygfx.Color(*c).hex for c in colors], sizes=START_DOT_SIZE,
-                uniform_size=True, name="snapshot_starts",
+                snap_starts, colors=colors, sizes=START_DOT_SIZE, mode="simple",
+                name="snapshot_starts",
             )
             for i, seg in enumerate(snapshot["pixel_lines"]):
                 sp.add_text(
@@ -306,11 +312,8 @@ class LineScanOverlay:
         for i, g in enumerate(self.lines.graphics):
             g.add_event_handler(partial(self._on_line_click, i), "click")
         starts = np.array([seg[0] for seg in pixel_lines], dtype=np.float32)
-        # hex strings: fastplotlib reads a colour *array* with exactly 3 or 4
-        # rows as one RGB(A) colour, so a 3- or 4-ROI unit would fail to draw
         self.starts = z_sp.add_scatter(
-            starts, colors=[pygfx.Color(*c).hex for c in colors], sizes=START_DOT_SIZE,
-            uniform_size=True, name="line_starts",
+            starts, colors=colors, sizes=START_DOT_SIZE, mode="simple", name="line_starts",
         )
         self.labels = []
         for i, (seg, p) in enumerate(zip(pixel_lines, placements)):
@@ -356,7 +359,7 @@ class LineScanOverlay:
         data = [np.column_stack([t_s, norm[i]]).astype(np.float32) for i in range(self.n)]
         self.trace_stack = subplot.add_line_stack(
             data, colors=self.colors, thickness=1.0,
-            separation=TRACE_SEPARATION, name="roi_traces",
+            separation=(0.0, TRACE_SEPARATION, 0.0), name="roi_traces",
         )
         # LineStack spaces rows by each row's data range plus ``separation``,
         # so read the real offsets back rather than assuming even spacing
@@ -541,19 +544,12 @@ class LinePanel:
 
     def __init__(self, ndw, overlay: LineScanOverlay, size: int = 360, curation=None,
                  units: list[dict] | None = None, switch=None):
-        from mbo_utilities.gui._edge_window import EdgeWindow
-
         self.overlay = overlay
         self.curation = curation
         # the file's line-scan units; picking another reopens the window on it
         self.units = list(units or [])
         self.switch = switch
-
-        class _Window(EdgeWindow):
-            def update(win_self):  # noqa: N805
-                self.draw()
-
-        self.window = _Window(ndw.figure, size=size, location="right", title=None)
+        ndw.figure.add_imgui_window(self.draw, location="right", size=size, title=None)
 
     def draw(self) -> None:
         from imgui_bundle import imgui
@@ -1170,43 +1166,30 @@ def open_linescan_viewer(
     trace_index = None
 
     ndw = NDWidget(
-        ref_ranges={**ref_ranges, **zstack_ranges},
+        ranges={**ref_ranges, **zstack_ranges},
         extents=extents,
         names=names,
         controller_ids=None,  # independent controller per subplot
         **figure_kwargs,
     )
 
-    def _set_contrast(ndg, vmin: float, vmax: float) -> None:
-        # NDImage doesn't take vmin/vmax at construction - set on its
-        # histogram widget when present, else the graphic itself, as
-        # MboNDViewer._style_graphic does.
-        cb = ndg.histogram_widget
-        target = cb if cb is not None else ndg.graphic
-        target.vmax = float(vmax)
-        target.vmin = float(vmin)
-
     spatial = (_ROW, _COL)
-    ref_ndg = ndw[0].add_nd_image(
-        data=ref_view, dims=ref_dims + spatial, spatial_dims=spatial,
+    vmin, vmax = _limits(ref_arr[: min(2000, ref_arr.shape[0]), channel])
+    ndw[0].add_nd_image(
+        data=ref_view, dims=ref_dims + spatial, display_dims=spatial,
         compute_histogram=True, name="Reference",
-        slider_dim_transforms={d: _ref_to_index for d in ref_dims},
-    )
-
-    def _limits(sample) -> tuple[float, float]:
-        v = np.asarray(sample, dtype=np.float32).ravel()
-        lo, hi = np.percentile(v, (0.5, 99.9))
-        return float(lo), float(hi if hi > lo else lo + 1)
-
-    _set_contrast(ref_ndg, *_limits(ref_arr[: min(2000, ref_arr.shape[0]), channel]))
-    zstack_ndg = ndw[z_index].add_nd_image(
-        data=zstack_view, dims=zstack_dims + spatial, spatial_dims=spatial,
-        compute_histogram=True, name="Z-stack",
-        slider_dim_transforms={d: _ref_to_index for d in zstack_dims},
+        slider_maps={d: _ref_to_index for d in ref_dims},
+        graphic_kwargs={"vmin": vmin, "vmax": vmax},
     )
     # limits from the channel shown first (channel 0): the red channel's soma
     # would set a ceiling that leaves a green dendrite nearly black
-    _set_contrast(zstack_ndg, *_limits(zstack_arr[0, 0, int(zstack_arr.shape[2]) // 2]))
+    vmin, vmax = _limits(zstack_arr[0, 0, int(zstack_arr.shape[2]) // 2])
+    zstack_ndg = ndw[z_index].add_nd_image(
+        data=zstack_view, dims=zstack_dims + spatial, display_dims=spatial,
+        compute_histogram=True, name="Z-stack",
+        slider_maps={d: _ref_to_index for d in zstack_dims},
+        graphic_kwargs={"vmin": vmin, "vmax": vmax},
+    )
 
     snapshot = None
     if bg is not None:
