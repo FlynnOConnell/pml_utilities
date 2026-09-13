@@ -544,20 +544,14 @@ def load_new_data(parent: Any, path: str):
         # so the reset contract can be tested in isolation.
         _reset_per_data_state(parent)
 
-        # Drop stale closures *before* swapping data. The processor's
-        # spatial_func is a closure that captured the previous dataset's
-        # mean_img, so the next render after data[0] = new_data would crash
-        # if the new shape differs. _reset_per_data_state already cleared
-        # _mean_subtraction and _gaussian_sigma, so _rebuild_spatial_func
-        # will install the identity passthrough. Window funcs/sizes get
-        # cleared too since they're bound to the old t-rank.
+        # Drop the stale spatial closure *before* swapping data: it captured
+        # the previous dataset's mean_img, so the next render after
+        # data[0] = new_data would crash if the new shape differs.
+        # _reset_per_data_state already cleared _mean_subtraction and
+        # _gaussian_sigma, so _rebuild_spatial_func clears the func. The
+        # viewer drops its own window funcs during the swap.
         if hasattr(parent, "_rebuild_spatial_func"):
             parent._rebuild_spatial_func()
-        if hasattr(parent, "image_widget") and parent.image_widget is not None:
-            for proc in getattr(parent.image_widget, "_image_processors", []):
-                proc.window_funcs = None
-                proc.window_sizes = None
-                proc.window_order = None
 
         # The manual ROI widget is bound to the old data's shape, store and
         # graphics; tear it down while the old scene is still intact and
