@@ -138,17 +138,31 @@ def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[di
     """Per-line raw traces of every line-scan unit in a ``.mesc``:
     ``[{"key", "munit", "fs", "traces"}, ...]`` with ``traces`` shaped
     ``(lines, samples)``. Reads ``traces_dir/F.npy`` when given (an
-    ``mbo linescan`` output), else averages each line's kymograph."""
+    ``mbo linescan`` output), else averages each line's kymograph, once:
+    the result is kept under ``.curation/cache`` beside the file, keyed by
+    the file's size and mtime, so reopening the file does not recompute it."""
     from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
     from mbo_utilities.gui.linescan_viewer import _load_or_compute_traces
 
     mesc_path = Path(mesc_path)
+    stat = mesc_path.stat()
+    cache_dir = mesc_path.parent / ".curation" / "cache"
     out = []
     for unit in list_mesc_units(mesc_path):
         if unit.get("kind") != "packed":
             continue
         arr = MescArray(mesc_path, unit=unit["key"])
-        traces = _load_or_compute_traces(arr, channel, traces_dir)
+        cache = cache_dir / f"{mesc_path.stem}_{unit['munit']}_ch{int(channel)}_traces.npz"
+        traces = None
+        if traces_dir is None and cache.exists():
+            with np.load(cache) as saved:
+                if int(saved["size"]) == stat.st_size and int(saved["mtime_ns"]) == stat.st_mtime_ns:
+                    traces = saved["traces"]
+        if traces is None:
+            traces = np.asarray(_load_or_compute_traces(arr, channel, traces_dir))
+            if traces_dir is None:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(cache, traces=traces, size=stat.st_size, mtime_ns=stat.st_mtime_ns)
         out.append({
             "key": unit["key"],
             "munit": unit["munit"],
@@ -243,6 +257,9 @@ class _Dashboard:
                 n += 1
         widget.data_path = str(mesc_path)
         widget.prompt.path = widget.data_path
+        widget.pipeline_mesc = mesc_path
+        widget._pipeline = None
+        widget.focus_pipeline_tab = True
         widget.status = (
             f"{n} raw line traces in {mesc_path.name}; no PF folder beside it, so click a "
             "recording to run vnoiser's denoiser on it (minutes the first time, cached after)"
