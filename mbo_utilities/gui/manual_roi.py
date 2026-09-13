@@ -555,12 +555,11 @@ class ManualRoiWidget:
         # the vector overlays, one line per source. Thickness is in screen
         # pixels, so a hairline stays a hairline at any zoom, and the paths
         # of every ROI ride in one buffer split by NaN rows. They start on
-        # five dummy vertices: fastplotlib reads a shorter color array as
-        # one flat color, and per-vertex colors are the whole point
+        # a few dummy vertices with an [n, 4] colors array, which makes the
+        # colors per-vertex; _set_line reallocates both on every refresh
         self.outline = self.subplot.add_line(
             np.zeros((5, 3), np.float32),
             colors=np.zeros((5, 4), np.float32),
-            color_mode="vertex",
             thickness=self.line_width,
             size_space="screen",
             name="manual_roi_outline",
@@ -570,7 +569,6 @@ class ManualRoiWidget:
         self.derived_outline = self.subplot.add_line(
             np.zeros((5, 3), np.float32),
             colors=np.zeros((5, 4), np.float32),
-            color_mode="vertex",
             thickness=self.line_width,
             size_space="screen",
             name="manual_roi_derived_outline",
