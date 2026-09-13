@@ -114,10 +114,6 @@ class MescUnitsWidget(Widget):
 
         _reset_per_data_state(parent)
         parent._rebuild_spatial_func()
-        for proc in getattr(iw, "_image_processors", []) or []:
-            proc.window_funcs = None
-            proc.window_sizes = None
-            proc.window_order = None
 
         display = display_wrap(arr)
         iw.data[0] = display
