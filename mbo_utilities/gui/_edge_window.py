@@ -15,8 +15,6 @@ class EdgeWindow(ImguiWindow):
         window_flags=imgui.WindowFlags_.no_collapse
         | imgui.WindowFlags_.no_resize
         | imgui.WindowFlags_.no_title_bar,
-        *args,
-        **kwargs,
     ):
         super().__init__()
         figure.add_imgui_window(
@@ -26,15 +24,3 @@ class EdgeWindow(ImguiWindow):
             title=title,
             window_flags=window_flags,
         )
-
-    def draw(self):
-        self.draw_window()
-
-    def draw_window(self):
-        ImguiWindow.draw(self)
-
-    def update(self):
-        raise NotImplementedError
-
-    def get_rect(self) -> tuple[int, int, int, int]:
-        return self.x, self.y, self.width, self.height
