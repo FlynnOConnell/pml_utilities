@@ -1245,3 +1245,31 @@ class TestClearLabels:
         saved = json.loads(session.label_path.read_text(encoding="utf-8"))
         assert saved["events"] == {}
         assert saved["candidate_detection"]["thresholds"]
+
+
+class TestPipelineTab:
+    def test_raw_mesc_gets_the_pipeline_tab(self, tmp_path):
+        """A raw line-scan .mesc opened in the standalone window offers the voltage pipeline on it."""
+        from pathlib import Path
+
+        from mbo_utilities.gui.curation_viewer import _Dashboard
+
+        if not Path(ASAKO_MESC).exists():
+            pytest.skip("local data only")
+        dash = _Dashboard(None)
+        widget = dash.widget
+        assert widget.pipeline_mesc is None
+        widget.pipeline_mesc = widget._mesc_behind(Path(ASAKO_MESC))
+        assert widget.pipeline_mesc == Path(ASAKO_MESC)
+        # the archive experiment folder and its PF folder resolve to the same file
+        experiment = Path(ASAKO_MESC).parent.parent
+        assert widget._mesc_behind(experiment) == Path(ASAKO_MESC)
+        assert widget._mesc_behind(experiment / "PF") == Path(ASAKO_MESC)
+        assert widget._mesc_behind(tmp_path) is None
+        assert widget.loading_line() == ""
+        widget._busy.add(("fast", "x"))
+        assert widget.loading_line() == "1 queued"
+        widget._active = (("fast", "x"), "MUnit_35 ROI 0", 0.0)
+        widget._trace_sources["x"] = {}
+        assert widget.loading_line().startswith("denoising MUnit_35 ROI 0 · ")
+        widget.close()
