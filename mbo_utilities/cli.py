@@ -1893,5 +1893,107 @@ def curate(path, serve, host, port, channel):
     open_curation_viewer(path, channel=channel)
 
 
+def _voltage_progress(scan_id, domain):
+    click.echo(f"  scan {scan_id}: denoising {domain}")
+
+
+@main.command("voltage")
+@click.argument("mesc_path", type=click.Path(exists=True))
+@click.option("--domains", "domains_path", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="domains.json (or an archive scanIDs_ROIs.pkl) naming which ROIs make each domain. "
+                   "Default: domains.json beside the file.")
+@click.option("--unit", "units", multiple=True,
+              help="Line-scan unit(s) to process, in scan order (MUnit_35 or MSession_0/MUnit_35). "
+                   "Default: the domains file's scans, else every line-scan unit.")
+@click.option("-o", "--out", type=click.Path(file_okay=False), default=None,
+              help="The PF folder to write. Default: <animal>/<expt>/PF for the archive layout "
+                   "(<expt>/<expt>/<expt>.mesc), else PF beside the file.")
+@click.option("--channel", type=int, default=0, show_default=True, help="Channel averaged per line.")
+@click.option("--convert", is_flag=True, default=False,
+              help="Apply the file's linear conversion so zero means no photons. Off reproduces "
+                   "the archive, which worked on raw counts.")
+@click.option("--events", default=None, metavar="LO,HI,BP_SD,AMP_SD,DUR_MS",
+              help="Peak detector thresholds: band-pass Hz, SD on the band-passed trace, SD on the "
+                   "trace, minimum duration ms. Default 2,400,3.5,4,5 (the archive's).")
+@click.option("--save-cwt", is_flag=True, default=False,
+              help="Also write cwts.h5, the wavelet coefficients (about 20 bytes per sample per domain).")
+@click.option("--overwrite", is_flag=True, default=False, help="Replace an existing PF folder's files.")
+@click.option("--init", is_flag=True, default=False,
+              help="Write a domains.json template beside the file (ROIs grouped in threes) and exit.")
+def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_cwt, overwrite, init):
+    """The spatial JEDI voltage pipeline on a line-scan .mesc: per-line
+    traces, domain dF/F and z-score, wavelet denoising, peaks, written as a
+    PF folder that `mbo curate` opens.
+
+    Each line-scan unit is one scan (its MUnit number is the scan id). The
+    domains file says which lines make the soma and each branch. Run with
+    --init first to get a template, edit the names and groups, then run
+    again. With vnoiser's upstream settings the traces match the archive's
+    PF folders.
+
+    \b
+      mbo voltage stan112_expt12.mesc --init
+      mbo voltage stan112_expt12.mesc --unit MUnit_35 --unit MUnit_38
+      mbo voltage stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl -o PF_new
+      mbo curate X:/data/asako/stan112/stan112_expt12
+    """
+    from mbo_utilities.gui._availability import HAS_VNOISER
+    from mbo_utilities.install import VNOISER_HINT
+
+    if not HAS_VNOISER:
+        raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
+    from vnoiser import SpikeDetectConfig
+
+    from mbo_utilities.vnoiser.pipeline import (
+        DOMAINS_FILE,
+        read_domains,
+        run_voltage_pipeline,
+        write_domains_template,
+    )
+
+    mesc_path = Path(mesc_path)
+    if mesc_path.is_dir():
+        from mbo_utilities.analysis.linescan import experiment_linescan_mesc
+
+        found = experiment_linescan_mesc(mesc_path)
+        if found is None:
+            raise click.BadParameter(
+                f"{mesc_path} is a folder with no <name>/<name>.mesc line scan in it",
+                param_hint="MESC_PATH",
+            )
+        mesc_path = Path(found)
+    if init:
+        path = write_domains_template(mesc_path, units=list(units) or None)
+        click.echo(f"wrote {path}; name the domains and group the ROIs, then run `mbo voltage` again")
+        return
+    domains_path = Path(domains_path) if domains_path else mesc_path.parent / DOMAINS_FILE
+    if not domains_path.exists():
+        raise click.BadParameter(
+            f"{domains_path} not found; write one with `mbo voltage {mesc_path.name} --init`",
+            param_hint="--domains",
+        )
+    spec = read_domains(domains_path)
+    spike_cfg = None
+    if events:
+        try:
+            lo, hi, bp_sd, amp_sd, dur = (float(v) for v in events.split(","))
+        except ValueError:
+            raise click.BadParameter("expected LO,HI,BP_SD,AMP_SD,DUR_MS", param_hint="--events")
+        spike_cfg = SpikeDetectConfig(bp=(lo, hi), thres_bp_sd=bp_sd, thres_amp_sd=amp_sd, duration_thres_ms=dur)
+    chosen = list(units) or [f"MUnit_{s}" for s in spec["scan_ids"]] or None
+    try:
+        paths = run_voltage_pipeline(
+            mesc_path, domains=spec["domains"], units=chosen, first_env=spec["first_env"], out=out,
+            channel=channel, convert=convert, save_cwt=save_cwt, spike_cfg=spike_cfg,
+            overwrite=overwrite, progress=_voltage_progress, log=click.echo,
+        )
+    except (ValueError, KeyError, FileExistsError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise click.Abort
+    pf_dir = next(iter(paths.values())).parent
+    click.echo(f"wrote {len(paths)} files to {pf_dir}")
+    click.echo(f"curate with: mbo curate {pf_dir.parent}")
+
+
 if __name__ == "__main__":
     main()
