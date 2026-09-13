@@ -1756,6 +1756,7 @@ def linescan_roi_read(
     batch_size: int = 5000,
     bin_frames: int | None = None,
     convert: bool = True,
+    dtype=np.float32,
     progress=None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """One pass over a linescan unit: ``(K, T)`` per-ROI means and, when
@@ -1773,8 +1774,9 @@ def linescan_roi_read(
     zeros, which would pull the mean down. The kymograph averages over the
     ROI's lines (its height) and over ``bin_frames`` consecutive frames;
     ``W`` is the widest ROI and narrower ROIs are NaN beyond their width.
-    Reads ``batch_size`` frames at a time. ``progress(i, K, seconds)`` is
-    called after each ROI when given.
+    Reads ``batch_size`` frames at a time; the means are accumulated and
+    returned in ``dtype`` (``float64`` reproduces a pixel mean exactly).
+    ``progress(i, K, seconds)`` is called after each ROI when given.
     """
     md = arr.metadata
     extents = md["mesc_roi_extents"]
@@ -1785,20 +1787,21 @@ def linescan_roi_read(
         scale, offset = float(conv[channel]["scale"]), float(conv[channel]["offset"])
     movies = [as_movie(arr, z=i, c=channel) for i in range(K)]
     T = movies[0].shape[0]
-    F = np.zeros((K, T), np.float32)
+    dtype = np.dtype(dtype)
+    F = np.zeros((K, T), dtype)
     kymo = None
     if bin_frames:
         bin_frames = int(bin_frames)
         batch_size = max(bin_frames, (batch_size // bin_frames) * bin_frames)
         nb = int(np.ceil(T / bin_frames))
         W = max(int(e["width"]) for e in extents)
-        kymo = np.full((K, nb, W), np.nan, np.float32)
+        kymo = np.full((K, nb, W), np.nan, dtype)
     t0 = time.time()
     for i, (movie, ext) in enumerate(zip(movies, extents)):
         h, w = int(ext["height"]), int(ext["width"])
         for tt0 in range(0, T, batch_size):
             tt1 = min(T, tt0 + batch_size)
-            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(np.float32, copy=False)
+            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(dtype, copy=False)
             if scale != 1.0 or offset != 0.0:
                 blk = blk * scale + offset
             F[i, tt0:tt1] = blk.reshape(blk.shape[0], -1).mean(axis=1)
