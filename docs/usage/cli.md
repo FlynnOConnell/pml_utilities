@@ -329,6 +329,58 @@ and defaults to the paired one; a stack holding none of the lines is
 refused. `--dry-run` prints the choice and placement without a window,
 `--screenshot out.png` renders the window offscreen.
 
+## Voltage
+
+The spatial JEDI pipeline (Noguchi & Terada) on a line-scan `.mesc`, producing
+the `PF` folder the curation window reads. Each line-scan unit is one scan;
+each line's mean fluorescence per frame is read as above, the lines of a
+domain (the soma, one branch) are averaged pixel-weighted, dF/F and a
+sign-flipped z-score follow, then vnoiser's wavelet denoiser with the archive's
+settings, then the peak detector.
+
+```bash
+mbo voltage stan112_expt12.mesc --init                      # domains.json template beside the file
+mbo voltage stan112_expt12.mesc                             # every scan in domains.json
+mbo voltage stan112_expt12.mesc --unit MUnit_35 -o PF_new   # one scan, elsewhere
+mbo voltage stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl --overwrite
+mbo curate X:/data/asako/stan112/stan112_expt12             # then curate it
+```
+
+`domains.json` names the domains and their 0-based line indices, the scans
+in order and the first scan of each environment:
+
+```json
+{"domains": {"soma1": [0, 1, 2], "basal1": [3, 4, 5]}, "scans": ["35", "38"], "first_env": ["35"]}
+```
+
+Written to `<animal>/<expt>/PF` for the archive layout
+(`<expt>/<expt>/<expt>.mesc`), else `PF` beside the file:
+
+| file | contents |
+|------|----------|
+| `denoised_trace_scans.pkl` | `{scan: {domain: trace}}`, the trace the curation window shows (the masked wavelet sum, no baseline) |
+| `fs_scans.pkl`, `scanIDs_ROIs.pkl` | frame rate (rounded down, as the archive stored it) and the scan / domain / ROI tables |
+| `detected_events_peaks.pkl`, `param_spike_detect.pkl` | peaks per domain and the thresholds (`--events LO,HI,BP_SD,AMP_SD,DUR_MS`) |
+| `denoised_trace_components.pkl`, `test.h5` | the masked sum, 1 Hz / 100 Hz baselines and envelope; per-domain dF/F and z |
+| `cwts.h5` | the wavelet coefficients, only with `--save-cwt` (large) |
+| `pipeline.json` | provenance: source file and units, every parameter, versions, ROI pixel weights |
+
+Run on `stan112_expt12`'s raw scans with the archive's `scanIDs_ROIs.pkl`, the
+output reproduces the archive's PF traces to float precision (the peaks on 7 of
+16 domains exactly, the rest with one to nine extra borderline events); the
+conversion is left off (`--convert` applies the file's offset so zero means no
+photons, which the archive never did).
+
+The same pipeline is the **Pipeline** tab of the curation window (`mbo
+scan.mesc` opens it for any `.mesc` with line scans), and the **Voltage** entry
+of the main viewer's Process tab: the dataset block, output folder, slice popup
+(a frame window and the channel; every line is used), a Scans block ticking
+which units become scans, a Domains table naming which lines make each domain
+(loaded from or saved to `domains.json`, seeded from a `PF` folder beside the
+file when one exists), the settings popup with the archive's values as
+defaults, and Run, which spawns a worker the process console tracks. When the
+folder is written, "Open in Curation" loads it.
+
 ## Formats
 
 ```bash
