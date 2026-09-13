@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
+from types import SimpleNamespace
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -220,6 +222,12 @@ class EventCurationWidget:
         self._jobs: queue.Queue = queue.Queue()
         self._results: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
+        # the job the worker is on: (key, label, started at), for the loading line
+        self._active: tuple | None = None
+        # the line-scan .mesc behind the data, when known: the Pipeline tab runs the voltage pipeline on it
+        self.pipeline_mesc: Path | None = None
+        self._pipeline = None
+        self.focus_pipeline_tab = False
 
         self.timeline_points = ScatterPlot("##curation_timeline_pts", marker_size=7.0)
         self.pca = ScatterPlot("##curation_pca", marker_size=7.0)
@@ -323,6 +331,8 @@ class EventCurationWidget:
         self.current = ""
         path = Path(path).expanduser()
         note = ""
+        self.pipeline_mesc = self._mesc_behind(path)
+        self._pipeline = None
         if path.suffix.lower() == ".mesc":
             # the raw line scan; its processed traces sit in the experiment's
             # PF folder, which is what the curation notebook reads
@@ -365,6 +375,18 @@ class EventCurationWidget:
         if first is not None:
             self.current = first.rid
             self.load_all(first.experiment)
+
+    def _mesc_behind(self, path: Path) -> Path | None:
+        """The line-scan .mesc a path refers to: the file itself, or the one an experiment or PF folder sits beside."""
+        from mbo_utilities.analysis.linescan import experiment_linescan_mesc
+
+        if path.suffix.lower() == ".mesc":
+            return path
+        folder = path.parent if path.name == "PF" else path
+        try:
+            return experiment_linescan_mesc(folder)
+        except Exception:
+            return None
 
     def set_mode(self, mode: str) -> None:
         if mode not in MODES or mode == self.mode:
@@ -477,6 +499,7 @@ class EventCurationWidget:
             except queue.Empty:
                 return
             job = manager.start_job("vnoiser", f"curation: {label}")
+            self._active = (key, label, time.monotonic())
             try:
                 session, message = work()
             except Exception as error:
@@ -486,12 +509,23 @@ class EventCurationWidget:
                 job.done(message)
                 self._results.put((key, session, message))
             finally:
+                self._active = None
                 self._jobs.task_done()
+
+    def loading_line(self) -> str:
+        """What the worker is doing: the job, its elapsed time and the queue."""
+        active = self._active
+        if active is None:
+            return f"{len(self._busy)} queued" if self._busy else ""
+        key, label, started = active
+        elapsed = int(time.monotonic() - started)
+        verb = "denoising" if key[1] in self._trace_sources else "loading"
+        line = f"{verb} {label} · {elapsed // 60}:{elapsed % 60:02d}"
+        queued = len(self._busy) - 1
+        return line + (f" · {queued} queued" if queued > 0 else "")
 
     def wait(self, timeout: float | None = None) -> None:
         """Block until every queued load finishes and apply them (tests)."""
-        import time
-
         deadline = None if timeout is None else time.monotonic() + timeout
         while self._busy:
             self._drain()
@@ -711,7 +745,7 @@ class EventCurationWidget:
         imgui.text(f"{label}{where}")
         if (self.mode, self.current) in self._busy:
             imgui.same_line(0, em(0.6))
-            imgui.text_disabled("loading...")
+            imgui.text_disabled(self.loading_line() or "loading...")
 
     def _cached_trace(self, name: str, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Min/max-decimated ``(t, y)`` for the timeline trace, cached per
@@ -1115,7 +1149,41 @@ class EventCurationWidget:
             self._draw_recordings()
             self._draw_controls()
             imgui.end_tab_item()
+        if source and self.pipeline_mesc is not None:
+            flags = imgui.TabItemFlags_.set_selected if self.focus_pipeline_tab else 0
+            self.focus_pipeline_tab = False
+            if imgui.begin_tab_item("Pipeline", None, flags)[0]:
+                self._draw_pipeline_tab()
+                imgui.end_tab_item()
         imgui.end_tab_bar()
+
+    def _draw_pipeline_tab(self) -> None:
+        """The voltage pipeline on the line-scan .mesc behind the data: raw lines in, a PF folder out."""
+        if self._pipeline is None:
+            from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
+            from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
+
+            try:
+                units = [u for u in list_mesc_units(self.pipeline_mesc) if u.get("kind") == "packed"]
+                arr = MescArray(self.pipeline_mesc, unit=units[0]["key"])
+            except Exception as error:
+                imgui.text_wrapped(f"cannot open {self.pipeline_mesc}: {error}")
+                return
+            host = SimpleNamespace(
+                image_widget=SimpleNamespace(data=[arr]), fpath=str(self.pipeline_mesc), _custom_metadata={},
+                event_curation=self, logger=self.logger, _bold_font=None,
+            )
+            self._pipeline = VoltagePipelineWidget(host)
+            # no unit is on screen here, so every line scan in the file is a scan
+            self._pipeline._ensure_state()
+            for key in self._pipeline._scans:
+                self._pipeline._scans[key] = True
+        imgui.text_wrapped(
+            "Turns the raw lines into per-domain traces: dF/F, z-score, wavelet denoising and peaks, "
+            "written as a PF folder. Group the lines into domains, run, then Open in Curation."
+        )
+        imgui.spacing()
+        self._pipeline.draw()
 
     def _draw_decision_tab(self) -> None:
         session = self._ready()
@@ -1165,14 +1233,15 @@ class EventCurationWidget:
             return
         section("Recordings")
         n_loaded = len(self.loaded())
-        imgui.text_disabled(
-            f"{n_loaded}/{len(rows_shown)} loaded"
-            + (f", {len(self._busy)} loading" if self._busy else "")
-        )
+        imgui.text_disabled(f"{n_loaded}/{len(rows_shown)} loaded")
         imgui.same_line(0, em(0.6))
         if imgui.small_button("load all"):
             self.load_all(None)
         set_tooltip("load every processed recording of every experiment", show_mark=False)
+        if self._busy:
+            imgui.text_wrapped(self.loading_line())
+        if self._trace_sources and not self._busy:
+            imgui.text_disabled("raw lines: the first load runs the wavelet denoiser, about 1 min per 100 s of recording; cached after")
         # no fixed height and no scroll region: the table takes as many
         # rows as it has and the tab itself scrolls when they overflow
         flags = (
