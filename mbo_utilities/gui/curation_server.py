@@ -1,19 +1,5 @@
-"""Serve the vnoiser event curation dashboard to browsers over HTTP.
-
-The same dashboard :mod:`mbo_utilities.gui.curation_viewer` draws in a
-desktop window or a notebook cell, on rendercanvas's ``http`` backend: the
-process renders with wgpu wherever it runs (a lab server, a cluster node)
-and streams JPEG frames over a websocket to any browser that opens the URL,
-which sends its pointer and key events back. Nothing is installed on the
-user's machine; the page is a full-window canvas.
-
-- One canvas per process, several viewers per canvas: everyone connected
-  sees the same frames; the longest-connected client is the one whose input
-  counts (the page's badge says ``active`` or ``passive``). One process per
-  user is how a hub would scale this, like a kernel per notebook.
-- No authentication: bind to ``127.0.0.1`` and tunnel (``ssh -L``), or put
-  it behind a proxy that authenticates. ``--host 0.0.0.0`` exposes it to
-  the network as is.
+"""
+Serve the vnoiser event curation dashboard to browsers over HTTP.
 
 Usage:
     mbo curate <path> --serve [--host 127.0.0.1] [--port 60649]
@@ -36,15 +22,6 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 60649
 DEFAULT_SIZE = (1500, 900)
 
-# The client JS wants a '#canvas' wrapper and an optional '#status' badge;
-# it loads renderview.js / renderview-client.js / renderview.css from the
-# same path. The wrapper's size must be an INLINE style: renderview's resize
-# observer pins a wrapper without one to its first pixel size (and caps it
-# at 90vmin), which is what a stylesheet rule would get. 100vw x 100vh
-# fills the browser window and follows it; the dashboard's edge window
-# follows the canvas. 'is-resizable' shows renderview's drag corner, which
-# writes a pixel size into the same inline style; 'fit window' puts the
-# viewport size back.
 PAGE_HTML = """<!DOCTYPE html>
 <html>
 <head>
