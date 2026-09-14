@@ -124,6 +124,13 @@ class MescUnitsWidget(Widget):
         if getattr(iw, "n_sliders", 0) > 0:
             iw.indices = [0] * iw.n_sliders
 
+        # the Manual ROI panel caches tdim/zdim/cdim and its mask store's
+        # (ny, nx) from whichever unit was live when it was built; each unit
+        # is an unrelated recording, so that has to be re-derived per swap.
+        manual_roi = getattr(parent, "manual_roi", None)
+        if manual_roi is not None:
+            manual_roi.rebind()
+
         parent.shape = display.shape
         nt, nc, nz, _, _ = arr.shape
         parent.nc, parent.nz = nc, nz
