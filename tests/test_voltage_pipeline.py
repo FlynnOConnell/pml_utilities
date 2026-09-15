@@ -191,6 +191,18 @@ def test_chessboard_patches_run_as_scans(tmp_path):
     assert len(files.peaks["1"]["domain2"]) <= 5
 
 
+def test_the_viewer_opens_a_mesc_on_a_scan_its_pf_folder_holds(tmp_path):
+    """`mbo scan.mesc` lands on the first unit the pipeline processed, not the file's first ROI unit."""
+    from mbo_utilities.gui.run_gui import _first_linescan_unit
+
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc, extra_unit=True)
+    assert _first_linescan_unit(mesc) == "MSession_0/MUnit_1"
+    doc = json.loads(write_domains_template(mesc, tmp_path / DOMAINS_FILE).read_text())
+    run_voltage_pipeline(mesc, domains=doc["domains"], units=["MUnit_2"], out=tmp_path / "PF")
+    assert _first_linescan_unit(mesc) == "MSession_0/MUnit_2"
+
+
 def test_task_and_widget_are_registered():
     pytest.importorskip("imgui_bundle")
     from types import SimpleNamespace

@@ -280,11 +280,6 @@ class EventCurationWidget:
         self._worker: threading.Thread | None = None
         # the job the worker is on: (key, label, started at), for the loading line
         self._active: tuple | None = None
-        # the line-scan .mesc behind the data, when known: the Pipeline tab runs the voltage pipeline on it
-        self.pipeline_mesc: Path | None = None
-        self._pipeline = None
-        self.focus_pipeline_tab = False
-
         self.timeline_points = ScatterPlot("##curation_timeline_pts", marker_size=7.0)
         self.pca = ScatterPlot("##curation_pca", marker_size=7.0)
         self.autofit = True
@@ -387,8 +382,6 @@ class EventCurationWidget:
         self.current = ""
         path = Path(path).expanduser()
         note = ""
-        self.pipeline_mesc = self._mesc_behind(path)
-        self._pipeline = None
         if path.suffix.lower() == ".mesc":
             # the raw line scan; its processed traces sit in the experiment's
             # PF folder, which is what the curation notebook reads
@@ -431,18 +424,6 @@ class EventCurationWidget:
         if first is not None:
             self.current = first.rid
             self.load_all(first.experiment)
-
-    def _mesc_behind(self, path: Path) -> Path | None:
-        """The line-scan .mesc a path refers to: the file itself, or the one an experiment or PF folder sits beside."""
-        from mbo_utilities.analysis.linescan import experiment_linescan_mesc
-
-        if path.suffix.lower() == ".mesc":
-            return path
-        folder = path.parent if path.name == "PF" else path
-        try:
-            return experiment_linescan_mesc(folder)
-        except Exception:
-            return None
 
     def set_mode(self, mode: str) -> None:
         if mode not in MODES or mode == self.mode:
@@ -529,9 +510,11 @@ class EventCurationWidget:
         self.load(rec.rid)
 
     def open_array(self, arr) -> str:
-        """Point the curation at the array a viewer shows: a PF folder's
-        traces scoped to its scan, the PF folder beside an AOD ROI unit
-        scoped to that unit, or the raw ROIs of a file without one.
+        """Point the curation at the array a viewer shows: every scan of a
+        PF folder (the folder itself, or the one beside an AOD ROI unit)
+        with the scan on screen selected first, or the raw ROIs of a file
+        without one scoped to that unit. Called again for another unit of
+        the same folder it only moves the selection.
         Returns :func:`curation_source` of the array."""
         from mbo_utilities.lazy_array import base_array
 
@@ -543,9 +526,16 @@ class EventCurationWidget:
             if pf_dir is None:
                 pf_dir = pf_dir_for_mesc(arr.filenames[0])
                 scan_id = str(arr.unit_key).rsplit("_", 1)[-1]
+            self.scope = None
+            if self.data_path != str(pf_dir) or not self.catalog:
+                self.scan(pf_dir)
             tag = f"scan={scan_id}"
-            self.scope = lambda rec: tag in rec.rid.split("/")
-            self.scan(pf_dir)
+            first = next((r for r in self.shown if tag in r.rid.split("/") and r.pre_denoised), None)
+            if first is not None and first.rid != self.current:
+                self.load(first.rid)
+            elif first is None and self.catalog:
+                scans = sorted({part[5:] for r in self.catalog for part in r.rid.split("/") if part.startswith("scan=")})
+                self.status = f"scan {scan_id} is not in {pf_dir} (scans {', '.join(scans)}); showing them all"
         elif kind == "raw":
             self.scan_raw_mesc(arr.filenames[0])
             munit = str(arr.unit_key).rsplit("/", 1)[-1]
@@ -573,9 +563,6 @@ class EventCurationWidget:
                 n += 1
         self.data_path = str(mesc_path)
         self.prompt.path = self.data_path
-        self.pipeline_mesc = mesc_path
-        self._pipeline = None
-        self.focus_pipeline_tab = True
         self.status = (
             f"{n} raw ROI traces in {mesc_path.name}; no PF folder beside it, so click a "
             "recording to run vnoiser's denoiser on it (minutes the first time, cached after)"
@@ -1260,41 +1247,7 @@ class EventCurationWidget:
             self._draw_recordings()
             self._draw_controls()
             imgui.end_tab_item()
-        if source and self.pipeline_mesc is not None:
-            flags = imgui.TabItemFlags_.set_selected if self.focus_pipeline_tab else 0
-            self.focus_pipeline_tab = False
-            if imgui.begin_tab_item("Pipeline", None, flags)[0]:
-                self._draw_pipeline_tab()
-                imgui.end_tab_item()
         imgui.end_tab_bar()
-
-    def _draw_pipeline_tab(self) -> None:
-        """The voltage pipeline on the AOD .mesc behind the data: raw ROIs in, a PF folder out."""
-        if self._pipeline is None:
-            from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray, list_mesc_units
-            from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
-
-            try:
-                units = [u for u in list_mesc_units(self.pipeline_mesc) if u.get("kind") in ROI_LAYOUTS]
-                arr = MescArray(self.pipeline_mesc, unit=units[0]["key"])
-            except Exception as error:
-                imgui.text_wrapped(f"cannot open {self.pipeline_mesc}: {error}")
-                return
-            host = SimpleNamespace(
-                image_widget=SimpleNamespace(data=[arr]), fpath=str(self.pipeline_mesc), _custom_metadata={},
-                event_curation=self, logger=self.logger, _bold_font=None,
-            )
-            self._pipeline = VoltagePipelineWidget(host)
-            # no unit is on screen here, so every ROI unit in the file is a scan
-            self._pipeline._ensure_state()
-            for key in self._pipeline._scans:
-                self._pipeline._scans[key] = True
-        imgui.text_wrapped(
-            "Turns the raw ROIs into per-domain traces: dF/F, z-score, wavelet denoising and peaks, "
-            "written as a PF folder. Group the ROIs into domains, run, then Open in Curation."
-        )
-        imgui.spacing()
-        self._pipeline.draw()
 
     def _draw_decision_tab(self) -> None:
         session = self._ready()

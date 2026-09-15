@@ -1058,13 +1058,30 @@ def _is_linescan_unit(path, unit) -> bool:
 
 def _first_linescan_unit(path) -> str | None:
     """The key of the first AOD ROI unit (a line scan, chessboard or ribbon
-    scan: ``ROI_LAYOUTS``) in a ``.mesc``, or None."""
+    scan: ``ROI_LAYOUTS``) in a ``.mesc``, or None. With a PF folder beside
+    the file (the voltage pipeline's output) the unit of its first scan wins,
+    so the curation opens on a processed scan."""
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
+    from mbo_utilities.arrays.pf import TRACES_FILE, PfArray
 
     try:
-        return next((u["key"] for u in list_mesc_units(path) if u.get("kind") in ROI_LAYOUTS), None)
+        units = [u for u in list_mesc_units(path) if u.get("kind") in ROI_LAYOUTS]
     except Exception:
         return None
+    path = Path(path)
+    for parent in (path.parent.parent, path.parent):
+        if not (parent / "PF" / TRACES_FILE).is_file():
+            continue
+        try:
+            pf = PfArray(parent / "PF", source=False)
+        except Exception:
+            break
+        wanted = {pf.source_units.get(s, f"MUnit_{s}").rsplit("/", 1)[-1] for s in pf.scan_ids}
+        for u in units:
+            if u["key"].rsplit("/", 1)[-1] in wanted:
+                return u["key"]
+        break
+    return units[0]["key"] if units else None
 
 
 def _find_demixing_results(path) -> Path | None:
