@@ -162,13 +162,13 @@ def test_chessboard_patches_run_as_scans(tmp_path):
     assert np.allclose(scan.traces[1], raw[:, :, 20:40].mean(axis=(1, 2)))
     template = write_domains_template(mesc, tmp_path / DOMAINS_FILE)
     doc = json.loads(template.read_text())
-    assert doc["scans"] == ["1", "2"] and doc["domains"] == {"domain1": [0], "domain2": [1], "domain3": [2]}
+    assert doc["scans"] == ["1", "2"] and doc["domains"] == {"roi0": [0], "roi1": [1], "roi2": [2]}
     with pytest.raises(ValueError, match="frame rate"):
         run_voltage_pipeline(mesc, domains=doc["domains"], units=["MUnit_1", "MUnit_2"], out=tmp_path / "PF_mixed")
     paths = run_voltage_pipeline(mesc, domains=doc["domains"], units=["MUnit_1"], first_env=["1"], out=tmp_path / "PF")
     assert "denoised_trace_scans.pkl" in paths and "detected_events_peaks.pkl" in paths
     files = read_pf(tmp_path / "PF")
-    assert files.scan_ids == ["1"] and set(files.domains) >= {"domain1", "domain2", "domain3"}
+    assert files.scan_ids == ["1"] and set(files.domains) >= {"roi0", "roi1", "roi2"}
     prov = files.provenance
     assert prov["source"]["units"] == {"1": "MSession_0/MUnit_1"}
     assert prov["fs_hz"]["1"] == pytest.approx(200.0)
@@ -181,14 +181,14 @@ def test_chessboard_patches_run_as_scans(tmp_path):
     assert np.load(traces / "scan1_rois.npy").shape == (3, 1200)
     for name in ("dfof", "zscore", "denoised"):
         assert np.load(traces / f"scan1_{name}.npy").shape == (3, 1200)
-    assert np.allclose(np.load(traces / "scan1_denoised.npy")[0], files.traces["1"]["domain1"], atol=1e-3)
-    assert (traces / "domains.csv").read_text().splitlines() == ["row,domain,rois", "0,domain1,0", "1,domain2,1", "2,domain3,2"]
+    assert np.allclose(np.load(traces / "scan1_denoised.npy")[0], files.traces["1"]["roi0"], atol=1e-3)
+    assert (traces / "domains.csv").read_text().splitlines() == ["row,domain,rois", "0,roi0,0", "1,roi1,1", "2,roi2,2"]
     assert (traces / "scans.csv").read_text().splitlines()[1].startswith("1,MSession_0/MUnit_1,200.0")
     assert (traces / "scan1_peaks.csv").read_text().splitlines()[0] == "domain,frame,time_s"
-    peaks = files.peaks["1"]["domain1"]
+    peaks = files.peaks["1"]["roi0"]
     # the two injected dips (sign-flipped to peaks) are found; the quiet patches stay near-empty
     assert any(abs(int(p) - 300) <= 3 for p in peaks) and any(abs(int(p) - 700) <= 3 for p in peaks)
-    assert len(files.peaks["1"]["domain2"]) <= 5
+    assert len(files.peaks["1"]["roi1"]) <= 5
 
 
 def test_the_viewer_opens_a_mesc_on_a_scan_its_pf_folder_holds(tmp_path):
@@ -240,8 +240,9 @@ def test_domains_template_lists_the_scans_and_groups_lines(tmp_path):
     doc = json.loads(path.read_text())
     assert doc["scans"] == ["35", "38"]
     assert doc["first_env"] == ["35"]
-    assert len(doc["domains"]) == 8
-    assert list(doc["domains"].values())[0] == [0, 1, 2]
+    assert len(doc["domains"]) == 24 and doc["domains"]["roi0"] == [0]
+    grouped = json.loads(write_domains_template(MESC, tmp_path / "threes.json", per_domain=3).read_text())
+    assert len(grouped["domains"]) == 8 and list(grouped["domains"].values())[0] == [0, 1, 2]
     spec = read_domains(path)
     assert spec["scan_ids"] == ["35", "38"]
 

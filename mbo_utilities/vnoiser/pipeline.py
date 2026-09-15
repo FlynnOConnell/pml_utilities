@@ -116,12 +116,12 @@ def read_domains(path) -> dict:
     }
 
 
-def write_domains_template(mesc_path, path=None, *, units=None, per_domain: int | None = None) -> Path:
-    """Write a ``domains.json`` to fill in: the file's AOD ROI units as
-    ``scans`` and their ROIs grouped ``per_domain`` at a time (three lines of
-    a line scan, one patch of a chessboard or ribbon scan), named from the
-    unit comment when it lists as many names (``'soma,bas1-3,api1-5'`` does
-    not; those stay ``domain1``...). Returns the path."""
+def write_domains_template(mesc_path, path=None, *, units=None, per_domain: int = 1) -> Path:
+    """Write a ``domains.json`` to edit: the file's AOD ROI units as
+    ``scans`` and one domain per ROI (``roi0: [0]``, ...; ``per_domain``
+    groups consecutive ROIs instead, the archive's three lines per
+    domain), named from the unit comment when it lists as many names
+    (``'soma,bas1-3,api1-5'`` does not). Returns the path."""
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
 
     mesc_path = Path(mesc_path)
@@ -132,13 +132,11 @@ def write_domains_template(mesc_path, path=None, *, units=None, per_domain: int 
         scans = [u for u in scans if u["key"] in wanted or u["munit"] in wanted]
     if not scans:
         raise ValueError(f"no AOD ROI units in {mesc_path}")
-    if per_domain is None:
-        per_domain = 3 if scans[0]["kind"] == "packed" else 1
     n_rois = int(scans[0]["nrois"])
     names = [n.strip() for n in str(scans[0].get("comment") or "").split(",") if n.strip()]
     groups = [list(range(i, min(i + per_domain, n_rois))) for i in range(0, n_rois, per_domain)]
     if len(names) != len(groups):
-        names = [f"domain{i + 1}" for i in range(len(groups))]
+        names = [f"roi{g[0]}" if len(g) == 1 else f"domain{i + 1}" for i, g in enumerate(groups)]
     doc = {
         "mesc": mesc_path.name,
         "scans": [_munit_number(u["key"]) for u in scans],
@@ -212,7 +210,8 @@ def run_voltage_pipeline(
     format a ``traces`` subfolder holds plain files: ``scans.csv``,
     ``domains.csv``, and per scan ``scan<id>_rois.npy`` (ROI, frame),
     ``scan<id>_dfof.npy`` / ``_zscore.npy`` / ``_denoised.npy`` (domain,
-    frame) in ``domains.csv`` row order, ``scan<id>_peaks.csv``.
+    frame) in ``domains.csv`` row order, ``scan<id>_peaks.csv``, and
+    ``scan<id>_denoised.png`` / ``scan<id>_rois.png`` figures.
     """
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
 
@@ -307,5 +306,40 @@ def run_voltage_pipeline(
                 for n in names:
                     for frame in (files.peaks or {}).get(sid, {}).get(final_domain_name(n), ()):
                         rows.writerow([final_domain_name(n), int(frame), f"{int(frame) / s.fs_hz:.6f}"])
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    for s in scans:
+        sid = s.scan_id
+        t = np.arange(s.n_frames) / s.fs_hz
+        denoised = np.load(traces_dir / f"scan{sid}_denoised.npy")
+        fig, axes = plt.subplots(len(names), 1, figsize=(12, 1.6 * len(names) + 0.8), sharex=True, squeeze=False)
+        for ax, n, trace in zip(axes[:, 0], names, denoised, strict=True):
+            ax.plot(t, trace, lw=0.5, color="k")
+            frames = (files.peaks or {}).get(sid, {}).get(final_domain_name(n), ())
+            if len(frames):
+                ax.plot(t[frames], trace[frames], ".", color="r", ms=4)
+            ax.set_ylabel(final_domain_name(n), rotation=0, ha="right", va="center")
+            ax.spines[["top", "right"]].set_visible(False)
+        axes[-1, 0].set_xlabel("s")
+        axes[0, 0].set_title(f"scan {sid} denoised")
+        fig.tight_layout()
+        fig.savefig(traces_dir / f"scan{sid}_denoised.png", dpi=120)
+        plt.close(fig)
+        rois = np.load(traces_dir / f"scan{sid}_rois.npy")
+        fig, ax = plt.subplots(figsize=(12, 0.5 * len(rois) + 1.2))
+        for i, trace in enumerate(rois):
+            span = np.ptp(trace) or 1.0
+            ax.plot(t, (trace - trace.mean()) / span - i, lw=0.4, color="k")
+        ax.set_yticks(-np.arange(len(rois)), [str(i) for i in range(len(rois))])
+        ax.set_ylabel("ROI")
+        ax.set_xlabel("s")
+        ax.set_title(f"scan {sid} raw ROIs")
+        ax.spines[["top", "right"]].set_visible(False)
+        fig.tight_layout()
+        fig.savefig(traces_dir / f"scan{sid}_rois.png", dpi=120)
+        plt.close(fig)
     paths.update({f"{TRACES_DIR}/{p.name}": p for p in sorted(traces_dir.iterdir())})
     return paths
