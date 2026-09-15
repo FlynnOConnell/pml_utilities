@@ -94,9 +94,6 @@ def _console_pick_unit(
 ) -> str | None:
     """Print a table of ``units`` and read a chosen index from stdin.
 
-    Mirrors the columns of run_gui.py's Qt unit picker (``_prompt_for_mesc_unit``)
-    rendered to the terminal: that dialog needs a Qt binding this install may
-    not have (`pyqt6` is a base dependency only on Linux, see `pyproject.toml`).
     ``extra`` adds one text column per unit key; ``default`` is the key a
     blank answer picks (with no default, blank cancels).
     """

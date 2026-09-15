@@ -843,11 +843,6 @@ def _run_gui_impl(
             splash.close()
 
 
-# returned by the picker when no Qt binding is importable, so the caller can
-# tell "couldn't ask" apart from "user said no".
-_PICKER_UNAVAILABLE = object()
-
-
 def _fmt_duration(seconds):
     """Compact recording length: '' when unknown, seconds under a minute."""
     if not seconds:
@@ -858,125 +853,19 @@ def _fmt_duration(seconds):
     return f"{m}m {s:02d}s"
 
 
-def _prompt_for_mesc_unit(path, units):
-    """Pop a Qt dialog listing the measurement units in a ``.mesc`` file.
-
-    A ``.mesc`` holds one MUnit per scan the operator ran — a z-stack, a
-    ribbon time series, a snapshot — and they are unrelated recordings with
-    different shapes, so there is no sensible way to merge them into one
-    array. The user picks which one to open.
-
-    Returns the chosen ``"MSession_N/MUnit_M"`` key, None if the user
-    cancelled, or `_PICKER_UNAVAILABLE` when no Qt binding is importable — the
-    caller then opens the file's default (first) unit rather than treating a
-    dialog we never showed as a refusal.
-    """
-    try:
-        from qtpy.QtCore import Qt
-        from qtpy.QtWidgets import (
-            QAbstractItemView,
-            QApplication,
-            QDialog,
-            QDialogButtonBox,
-            QHeaderView,
-            QLabel,
-            QTableWidget,
-            QTableWidgetItem,
-            QVBoxLayout,
-        )
-    except ImportError:
-        from mbo_utilities.log import get as _get
-        _get("gui.boot").info(
-            "no Qt binding available for the MESc unit picker; "
-            "opening the first unit."
-        )
-        return _PICKER_UNAVAILABLE
-
-    app = QApplication.instance() or QApplication([])
-
-    dialog = QDialog()
-    dialog.setWindowTitle(f"Select a measurement unit — {Path(path).name}")
-    dialog.resize(860, 420)
-    layout = QVBoxLayout(dialog)
-    plural = "unit" if len(units) == 1 else "units"
-    layout.addWidget(
-        QLabel(
-            f"{Path(path).name} contains {len(units)} measurement {plural} "
-            f"(one per scan). Choose which to open:"
-        )
-    )
-
-    columns = (
-        "Unit", "Type", "Role", "T", "C", "Z / ROI", "Y", "X",
-        "Duration", "Acquired", "Comment",
-    )
-    table = QTableWidget(len(units), len(columns))
-    table.setHorizontalHeaderLabels(columns)
-    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    table.verticalHeader().setVisible(False)
-    for row, unit in enumerate(units):
-        t, c, z, y, x = unit["shape"]
-        if unit["kind"] == "multicube":
-            # Z holds cubes x z-slices, not ROIs
-            z_text = (
-                f"{unit['nrois']}x{z // unit['nrois']}"
-                if unit["nrois"] > 1
-                else str(z)
-            )
-        else:
-            z_text = f"{z} ROI" if unit["nrois"] > 1 else str(z)
-        cells = (
-            unit["munit"],
-            unit["modality_name"],
-            unit.get("role") or "",
-            str(t),
-            str(c),
-            z_text,
-            str(y),
-            str(x),
-            _fmt_duration(unit.get("duration_s")),
-            (unit["start_time"] or "")[:19].replace("T", " "),
-            unit["comment"],
-        )
-        for col, text in enumerate(cells):
-            table.setItem(row, col, QTableWidgetItem(text))
-    table.resizeColumnsToContents()
-    table.horizontalHeader().setStretchLastSection(True)
-    table.horizontalHeader().setSectionResizeMode(
-        len(columns) - 1, QHeaderView.ResizeMode.Stretch
-    )
-    table.selectRow(0)
-    table.cellDoubleClicked.connect(lambda *_: dialog.accept())
-    layout.addWidget(table)
-
-    buttons = QDialogButtonBox(
-        QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel
-    )
-    buttons.accepted.connect(dialog.accept)
-    buttons.rejected.connect(dialog.reject)
-    layout.addWidget(buttons)
-
-    dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    accepted = dialog.exec()
-    app.processEvents()
-    if not accepted:
-        return None
-    row = table.currentRow()
-    return units[max(0, row)]["key"]
-
-
 def _resolve_mesc_unit(data_in, unit):
     """Reader kwargs selecting which MUnit of a ``.mesc`` to open.
 
-    Every ``.mesc`` prompts — a file holds one MUnit per scan the operator
-    ran, so which one to open is always the user's call, never a default worth
-    guessing at. An explicit ``unit`` is the deliberate bypass.
+    Every ``.mesc`` opens straight to its first measurement unit, no prompt.
+    A file with more than one MUnit (unrelated scans the operator ran back
+    to back) is switched between from the Image tab's MESc Units combo
+    (``mbo_utilities.gui.widgets.mesc_units.MescUnitsWidget``), an ImGui
+    widget like the rest of the viewer — no Qt involved anywhere in this
+    path. An explicit ``unit`` is the deliberate bypass.
 
     Returns ``({}, True)`` for anything that isn't a ``.mesc``. The second
-    element is False only when the user cancelled the picker, in which case
-    the caller should abort instead of opening something arbitrary.
+    element is kept (always True now) so existing callers that check for a
+    cancelled picker don't need to change.
     """
     from mbo_utilities.log import get as _get
 
@@ -999,26 +888,12 @@ def _resolve_mesc_unit(data_in, unit):
         return {}, True
     if not units:
         return {}, True  # let imread raise the real "nothing readable" error
-
-    if in_notebook():
-        # the picker is a Qt dialog on the kernel's machine; in a notebook
-        # the unit is an argument, and the error lists what there is to pick
-        if len(units) == 1:
-            return {"unit": units[0]}, True
-        listing = "\n".join(f"  {i}: {u}" for i, u in enumerate(units))
-        raise ValueError(
-            f"{path.name} holds {len(units)} measurement units; pass unit= "
-            f"(an index or key) to choose one:\n{listing}"
+    if len(units) > 1:
+        logger.info(
+            f"{path.name} holds {len(units)} measurement units; opening "
+            f"{units[0]['key']} (switch from the Image tab)."
         )
-
-    chosen = _prompt_for_mesc_unit(path, units)
-    if chosen is _PICKER_UNAVAILABLE:
-        return {}, True
-    if chosen is None:
-        logger.info(f"MESc unit selection cancelled for {path.name}")
-        return {}, False
-    logger.info(f"MESc unit selected: {chosen}")
-    return {"unit": chosen}, True
+    return {"unit": units[0]["key"]}, True
 
 
 def _is_mesc(path) -> bool:
