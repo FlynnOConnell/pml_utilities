@@ -37,7 +37,7 @@ RASTER_WIDTH = 4096
 
 _PF_INFO = PipelineInfo(
     name="voltage",
-    description="Spatial JEDI voltage pipeline: line-scan traces, dF/F, wavelet denoising, peaks (a PF folder)",
+    description="Spatial JEDI voltage pipeline: AOD ROI traces, dF/F, wavelet denoising, peaks (a PF folder)",
     input_patterns=["**/*.mesc"],
     output_patterns=[f"**/PF/{TRACES_FILE}", f"**/PF/{PROVENANCE_FILE}", "**/PF/test.h5"],
     input_extensions=["mesc"],

@@ -93,6 +93,95 @@ def test_settings_from_provenance_of_a_written_folder(tmp_path):
     assert again.denoiser.thres_type == "soft" and again.denoiser.complex_bands is True
 
 
+def test_settings_scale_to_the_frame_rate():
+    """The sample-count parameters keep the archive's durations at another frame rate."""
+    settings = VoltageSettings()
+    assert settings.at_fs(1075.2688) == settings
+    fast = settings.at_fs(1000 / 4.8)
+    k = (1000 / 4.8) / 1075.2688
+    assert fast.dfof.sigma_dfof == pytest.approx(1500 * k)
+    assert fast.dfof.sigma_baseline == pytest.approx(5000 * k)
+    assert fast.dfof.n_startup == round(1000 * k)
+    assert fast.denoiser.scale_min == 1.0 and fast.denoiser.scale_max == pytest.approx(1000 * k)
+    assert fast.events.distance_samples == 1
+    assert fast.events.bp_high == pytest.approx(0.95 * (1000 / 4.8) / 2)
+    assert fast.events.bp_low == 2.0
+    assert fast.runtime.reference_fs == pytest.approx(1000 / 4.8)
+    assert fast.at_fs(1000 / 4.8) == fast
+    # what is not counted in samples stays: the wavelet count, the FIR window in ms, the thresholds
+    assert fast.denoiser.n_scales == 100 and fast.denoiser.fir_window_ms == 2000.0
+    assert fast.events.thres_bp_sd == 3.5 and fast.denoiser.soft_levels == settings.denoiser.soft_levels
+    # the band-pass is capped at any rate, even the reference one
+    settings.events.bp_high = 600.0
+    assert settings.at_fs(1075.2688).events.bp_high == pytest.approx(0.95 * 1075.2688 / 2)
+
+
+def _chessboard_mesc(path, *, n_frames=1200, step_ms=5.0, extra_unit=False):
+    """A .mesc with one MethodType 8 unit: three 20 x 20 patches tiled along X, JEDI-like
+    dips in patch 0 at frames 300 and 700; optionally a second unit at half the rate."""
+    import h5py
+
+    rng = np.random.default_rng(0)
+    page = rng.normal(1200, 15, (n_frames, 20, 60))
+    # two 30 ms-wide dips in patch 0, the shape a 200 Hz scan resolves (a 1 ms spike is sub-sample)
+    t = np.arange(n_frames)[:, None, None]
+    for centre in (300, 700):
+        page[:, :, 0:20] -= 80 * np.exp(-0.5 * ((t - centre) / 2.5) ** 2)
+    pattern = {
+        "centerPoints": [[10.0, 40.0, 70.0], [5.0, 5.0, 5.0], [-100.0, -100.0, -100.0]],
+        "pixelSizeX": 1.0, "pixelSizeY": 1.0, "edgeSize": 20,
+        "rotation": {"e": [0.0, 0.0, 0.0]},
+    }
+    protocol = json.dumps({"protocol": {"scanners": {"mainPatternIndex": 1}}, "scanPatterns": {"patterns": [pattern]}})
+    with h5py.File(path, "w") as f:
+        s = f.create_group("MSession_0")
+        for munit, ms in (("MUnit_1", step_ms), ("MUnit_2", step_ms * 2)):
+            if munit == "MUnit_2" and not extra_unit:
+                continue
+            u = s.create_group(munit)
+            u.attrs.update({"MethodType": 8, "VecChannelsSize": 2, "TStepInMs": ms, "MeasurementDatePosix": 1_700_000_000,
+                            "Comment": "", "ImageRoleDebugString": "measurement"})
+            u.attrs["MultiROIProtocolJSON"] = protocol
+            for c in range(2):
+                u.create_dataset(f"Channel_{c}", data=np.clip(page + 50 * c, 0, 65535).astype(np.uint16))
+    return page
+
+
+def test_chessboard_patches_run_as_scans(tmp_path):
+    """A chessboard unit's patches are ROIs like a line scan's lines: read, grouped one per domain,
+    denoised with the settings scaled to its frame rate, written as a PF folder."""
+    from vnoiser import read_pf
+
+    mesc = tmp_path / "chess.mesc"
+    page = _chessboard_mesc(mesc, extra_unit=True)
+    scan = scan_traces_from_mesc(mesc, "MUnit_1")
+    assert scan.scan_id == "1" and scan.fs_hz == pytest.approx(200.0)
+    assert sorted(scan.traces) == [0, 1, 2] and scan.weights == {0: 400.0, 1: 400.0, 2: 400.0}
+    raw = np.clip(page, 0, 65535).astype(np.uint16).astype(np.float64)
+    # the reader flips chessboard pages in Y, which a patch mean does not see
+    assert np.allclose(scan.traces[1], raw[:, :, 20:40].mean(axis=(1, 2)))
+    template = write_domains_template(mesc, tmp_path / DOMAINS_FILE)
+    doc = json.loads(template.read_text())
+    assert doc["scans"] == ["1", "2"] and doc["domains"] == {"domain1": [0], "domain2": [1], "domain3": [2]}
+    with pytest.raises(ValueError, match="frame rate"):
+        run_voltage_pipeline(mesc, domains=doc["domains"], units=["MUnit_1", "MUnit_2"], out=tmp_path / "PF_mixed")
+    paths = run_voltage_pipeline(mesc, domains=doc["domains"], units=["MUnit_1"], first_env=["1"], out=tmp_path / "PF")
+    assert "denoised_trace_scans.pkl" in paths and "detected_events_peaks.pkl" in paths
+    files = read_pf(tmp_path / "PF")
+    assert files.scan_ids == ["1"] and set(files.domains) >= {"domain1", "domain2", "domain3"}
+    prov = files.provenance
+    assert prov["source"]["units"] == {"1": "MSession_0/MUnit_1"}
+    assert prov["fs_hz"]["1"] == pytest.approx(200.0)
+    k = 200.0 / 1075.2688
+    assert prov["dfof"]["sigma_dfof"] == pytest.approx(1500 * k)
+    assert prov["events"]["bp"][1] == pytest.approx(95.0)
+    assert prov["events"]["distance_samples"] == 1
+    peaks = files.peaks["1"]["domain1"]
+    # the two injected dips (sign-flipped to peaks) are found; the quiet patches stay near-empty
+    assert any(abs(int(p) - 300) <= 3 for p in peaks) and any(abs(int(p) - 700) <= 3 for p in peaks)
+    assert len(files.peaks["1"]["domain2"]) <= 5
+
+
 def test_task_and_widget_are_registered():
     pytest.importorskip("imgui_bundle")
     from types import SimpleNamespace
@@ -107,7 +196,10 @@ def test_task_and_widget_are_registered():
     assert get_pipeline_info("voltage").marker_files == ["denoised_trace_scans.pkl"]
     assert VoltagePipelineWidget.axis_mode("Z") == "all"
     assert VoltagePipelineWidget.applies_to(SimpleNamespace(metadata={"mesc_layout": "packed"}))
-    assert not VoltagePipelineWidget.applies_to(SimpleNamespace(metadata={"mesc_layout": "boxes"}, filenames=["a.tif"]))
+    # chessboard patches and ribbon boxes are ROIs too
+    assert VoltagePipelineWidget.applies_to(SimpleNamespace(metadata={"mesc_layout": "tiled"}))
+    assert VoltagePipelineWidget.applies_to(SimpleNamespace(metadata={"mesc_layout": "boxes"}, filenames=["a.tif"]))
+    assert not VoltagePipelineWidget.applies_to(SimpleNamespace(metadata={"mesc_layout": "frames"}, filenames=["a.tif"]))
     assert not VoltagePipelineWidget.applies_to(None)
     if ARCHIVE is not None:
         zstack = SimpleNamespace(metadata={"mesc_layout": "multicube"}, filenames=[str(ARCHIVE / "stan112_expt12_zstack.mesc")])

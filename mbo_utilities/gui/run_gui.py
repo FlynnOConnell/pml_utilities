@@ -815,9 +815,10 @@ def _run_gui_impl(
         # the file dialog hands back a list even for one file
         if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
             data_in = data_in[0]
-        # a .mesc holding AOD line scans opens on its first line scan with
-        # no prompt: the curation widget and the Voltage pipeline follow the
-        # unit on screen and offer the other scans there. A PF or experiment
+        # a .mesc holding AOD ROI units (line scans, chessboard or ribbon
+        # patches) opens on the first one with no prompt: the curation widget
+        # and the Voltage pipeline follow the unit on screen and offer the
+        # other scans there. A PF or experiment
         # folder opens as a PfArray through imread, like a suite2p folder.
         # Other .mesc files prompt for their unit once, here.
         if _is_mesc(data_in):
@@ -906,7 +907,7 @@ def _prompt_for_mesc_unit(path, units):
     )
 
     columns = (
-        "Unit", "Type", "T", "C", "Z / ROI", "Y", "X",
+        "Unit", "Type", "Role", "T", "C", "Z / ROI", "Y", "X",
         "Duration", "Acquired", "Comment",
     )
     table = QTableWidget(len(units), len(columns))
@@ -929,6 +930,7 @@ def _prompt_for_mesc_unit(path, units):
         cells = (
             unit["munit"],
             unit["modality_name"],
+            unit.get("role") or "",
             str(t),
             str(c),
             z_text,
@@ -1055,11 +1057,12 @@ def _is_linescan_unit(path, unit) -> bool:
 
 
 def _first_linescan_unit(path) -> str | None:
-    """The key of the first AOD line-scan ("packed") unit in a ``.mesc``, or None."""
-    from mbo_utilities.arrays.mesc import list_mesc_units
+    """The key of the first AOD ROI unit (a line scan, chessboard or ribbon
+    scan: ``ROI_LAYOUTS``) in a ``.mesc``, or None."""
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
 
     try:
-        return next((u["key"] for u in list_mesc_units(path) if u.get("kind") == "packed"), None)
+        return next((u["key"] for u in list_mesc_units(path) if u.get("kind") in ROI_LAYOUTS), None)
     except Exception:
         return None
 

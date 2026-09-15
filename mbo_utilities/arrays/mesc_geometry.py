@@ -1,13 +1,14 @@
-"""Where a Femtonics AOD line-scan's drawn lines sit inside a Z-stack.
+"""Where a Femtonics AOD unit's drawn ROIs sit inside a Z-stack.
 
-An AOD line-scan unit holds several ROIs, each a straight line the
-scientist drew on a reference Z-stack, and each scanned at its *own* depth
-(the AOD steers the beam to a different (x, y, z) per ROI within one frame
-period). So a unit's lines are scattered across the stack: some slices
-carry one line, some carry several, most carry none. Everything here turns
-the raw MESc attrs into the per-ROI placement a viewer needs to show that
-truthfully: which slice each line belongs on, how far off that slice it
-really is, how long it is, and which end is the start of the kymograph.
+An AOD unit holds several ROIs, each a straight line (line scan) or a
+rectangular patch (chessboard, ribbon scan) the scientist drew on a
+reference Z-stack, and each scanned at its *own* depth (the AOD steers the
+beam to a different (x, y, z) per ROI within one frame period). So a unit's
+ROIs are scattered across the stack: some slices carry one, some carry
+several, most carry none. Everything here turns the raw MESc attrs into the
+per-ROI placement a viewer needs to show that truthfully: which slice each
+ROI belongs on, how far off that slice it really is, how long it is, and
+which end is the start of the kymograph.
 
 Neither ``lab4/convert/aod/aod.py`` nor ``MescArray.metadata`` keeps what's
 needed for this: both reduce a ROI's guideline to a centroid + rotation
@@ -18,6 +19,8 @@ directly with h5py:
 - A linescan unit's ``CoordinateMapJSON["maps"][0]["driftEndPoints"]``: one
   ``[[x0, x1], [y0, y1], [z0, z1]]`` per ROI, in physical microns, in the
   same order as the unit's ROI axis. ``z0 == z1`` on every real ROI checked.
+  A chessboard or ribbon unit's ``["contours"]`` instead: the four corners
+  of each patch, ``[[x0..x3], [y0..y3], [z0..z3]]``, one z per patch.
 - A Z-stack unit's ``ReferenceViewportJSON["viewports"][0]``: the FOV's
   physical placement (``geomTransTransl``, ``width``, ``height``), XY corner
   and the stack's own Z origin, in the same micron frame as the endpoints.
@@ -43,6 +46,7 @@ import h5py
 import numpy as np
 
 __all__ = [
+    "roi_outlines_um",
     "linescan_endpoints_um",
     "viewport_geometry",
     "zstack_depth_info",
@@ -60,11 +64,14 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def linescan_endpoints_um(mesc_path, unit_key: str) -> list[np.ndarray] | None:
-    """One ``(3, 2)`` ``[[x0, x1], [y0, y1], [z0, z1]]`` array per ROI, in microns.
+def roi_outlines_um(mesc_path, unit_key: str) -> list[np.ndarray] | None:
+    """One ``(3, N)`` ``[xs, ys, zs]`` array per ROI, in microns: the two
+    ends of a line scan's line (``driftEndPoints``, N = 2) or the corners of
+    a chessboard or ribbon patch (``contours``, N = 4, in drawing order), in
+    the order of the unit's ROI axis.
 
-    ``None`` if this unit has no ``CoordinateMapJSON`` or no ``driftEndPoints``
-    inside it (present on real linescan units, not guaranteed on others).
+    ``None`` if this unit has no ``CoordinateMapJSON`` or neither key inside
+    it (present on real AOD units, not guaranteed on others).
     """
     with h5py.File(mesc_path, "r") as f:
         unit = f.get(unit_key)
@@ -75,9 +82,16 @@ def linescan_endpoints_um(mesc_path, unit_key: str) -> list[np.ndarray] | None:
             return None
         doc = json.loads(raw)
         maps = doc.get("maps") or []
-        if not maps or "driftEndPoints" not in maps[0]:
+        if not maps:
             return None
-        return [np.asarray(seg, dtype=float) for seg in maps[0]["driftEndPoints"]]
+        outlines = maps[0].get("driftEndPoints") or maps[0].get("contours")
+        if not outlines:
+            return None
+        return [np.asarray(seg, dtype=float) for seg in outlines]
+
+
+# the line-scan name the viewers import; a line's outline is its two ends
+linescan_endpoints_um = roi_outlines_um
 
 
 def viewport_geometry(mesc_path, unit_key: str) -> dict | None:
@@ -162,7 +176,8 @@ def roi_placements(
     depth: dict,
     sample_counts: list[int] | None = None,
 ) -> list[dict]:
-    """Everything a viewer needs to place and describe one ROI's line.
+    """Everything a viewer needs to place and describe one ROI's outline
+    (a line's two ends, a patch's four corners).
 
     One dict per ROI, in ROI order::
 
@@ -175,9 +190,9 @@ def roi_placements(
         in_range     False when the ROI was scanned above/below the stack;
                      ``slice`` is then the nearest edge slice and ``dz_um``
                      says by how much it misses
-        tilted       True when the endpoints differ in z (never seen on real
-                     data; the line is then drawn at its mean depth)
-        length_um    XY length of the drawn line
+        tilted       True when the points differ in z (never seen on real
+                     data; the ROI is then drawn at its mean depth)
+        length_um    XY length of the drawn line, or of a patch's first edge
         sample_um    microns per kymograph column, when ``sample_counts``
                      (pixels along each line, ``mesc_roi_extents[i]["width"]``)
                      is given; else ``None``
@@ -202,7 +217,7 @@ def roi_placements(
                 "slice_z_um": float(depths[idx]),
                 "dz_um": z_um - float(depths[idx]),
                 "in_range": 0 <= raw_idx < zdim,
-                "tilted": not np.isclose(seg[2, 0], seg[2, 1]),
+                "tilted": not np.allclose(seg[2], seg[2, 0]),
                 "length_um": length,
                 "sample_um": (length / n) if n else None,
             }

@@ -4,8 +4,10 @@ Same run experience as Suite2p and MaskNMF: current-dataset block, output
 folder, the slicing popup, a settings popup with (?) hints and
 modified-orange tinting, the modified table and a green Run button that
 spawns the "voltage" worker. What is new is the scans-and-domains block:
-which line-scan units of the file become scans and which lines make each
-domain. Results are a PF folder, which the Curation tab opens.
+which AOD ROI units of the file (line scans, chessboard or ribbon patches)
+become scans and which ROIs make each domain. Settings are written for the
+archive's frame rate and scaled to the scans'. Results are a PF folder,
+which the Curation tab opens.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
     _truncate_to_width,
 )
 from mbo_utilities.install import VNOISER_HINT
+from mbo_utilities.arrays.mesc import ROI_LAYOUTS
 from mbo_utilities.arrays.pf import PfArray
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import get_last_dir, set_last_dir
@@ -91,7 +94,7 @@ def _is_default(obj, name: str) -> bool:
 
 
 class VoltagePipelineWidget(PipelineWidget):
-    """Line-scan .mesc units to a PF folder with vnoiser."""
+    """AOD ROI .mesc units (line scans, chessboard or ribbon patches) to a PF folder with vnoiser."""
 
     name = "Voltage"
     is_available = HAS_VNOISER
@@ -101,12 +104,12 @@ class VoltagePipelineWidget(PipelineWidget):
 
     @classmethod
     def applies_to(cls, arr: Any) -> bool:
-        """True for any unit of a .mesc that holds a line-scan unit (the unit on screen need not be one)
-        and for a PF folder whose source line scan is reachable."""
+        """True for any unit of a .mesc that holds an AOD ROI unit (the unit on screen need not be one)
+        and for a PF folder whose source unit is reachable."""
         arr = base_array(arr)
         if isinstance(arr, PfArray):
             return arr.source_mesc is not None
-        if (getattr(arr, "metadata", None) or {}).get("mesc_layout") == "packed":
+        if (getattr(arr, "metadata", None) or {}).get("mesc_layout") in ROI_LAYOUTS:
             return True
         filenames = getattr(arr, "filenames", None) or []
         if not filenames or Path(str(filenames[0])).suffix.lower() != ".mesc":
@@ -114,7 +117,7 @@ class VoltagePipelineWidget(PipelineWidget):
         from mbo_utilities.arrays.mesc import list_mesc_units
 
         try:
-            return any(u.get("kind") == "packed" for u in list_mesc_units(filenames[0]))
+            return any(u.get("kind") in ROI_LAYOUTS for u in list_mesc_units(filenames[0]))
         except Exception:
             return False
 
@@ -145,7 +148,7 @@ class VoltagePipelineWidget(PipelineWidget):
         return base_array(iw.data[0])
 
     def _dims(self) -> tuple[int, int, int]:
-        """(frames, lines, channels) of the scans to process: the shortest ticked unit, else the first line scan."""
+        """(frames, ROIs, channels) of the scans to process: the shortest ticked unit, else the first ROI unit."""
         ticked = [u for u in self._units if self._scans.get(u["key"])] or self._units[:1]
         if not ticked:
             return 1000, 1, 1
@@ -185,11 +188,11 @@ class VoltagePipelineWidget(PipelineWidget):
             return
         shown = getattr(self._array(), "unit_key", None)
         try:
-            self._units = [u for u in list_mesc_units(mesc) if u.get("kind") == "packed"]
+            self._units = [u for u in list_mesc_units(mesc) if u.get("kind") in ROI_LAYOUTS]
         except Exception as e:
             self._set_status(f"Cannot list the file's units: {e}", error=True)
             return
-        # the unit on screen when it is a line scan, else every line scan in the file
+        # the unit on screen when it has ROIs, else every ROI unit in the file
         on_screen = any(u["key"] == shown for u in self._units)
         for u in self._units:
             self._scans[u["key"]] = u["key"] == shown or not on_screen
@@ -226,7 +229,8 @@ class VoltagePipelineWidget(PipelineWidget):
             except Exception as e:
                 self._domain_error = f"{DOMAINS_FILE}: {e}"
         if not domains:
-            domains = {f"domain{i // 3 + 1}": list(range(i, min(i + 3, n_lines))) for i in range(0, n_lines, 3)}
+            per = 3 if self._units and self._units[0]["kind"] == "packed" else 1
+            domains = {f"domain{i // per + 1}": list(range(i, min(i + per, n_lines))) for i in range(0, n_lines, per)}
         self._domain_rows = [[name, ",".join(str(r) for r in rois)] for name, rois in domains.items()]
         if scan_ids:
             for u in self._units:
@@ -311,11 +315,17 @@ class VoltagePipelineWidget(PipelineWidget):
         if filenames:
             imgui.text(f"Size on disk: {_format_size(_dataset_size_bytes(self, filenames))}")
         imgui.text(f"On screen: {getattr(arr, 'unit_key', '?')}")
-        set_tooltip("The measurement unit on screen; the Scans block below picks which line-scan units to process.")
-        imgui.text_disabled(f"{len(self._units)} line-scan unit(s) in the file")
+        set_tooltip("The measurement unit on screen; the Scans block below picks which units become scans.")
+        imgui.text_disabled(f"{len(self._units)} unit(s) with AOD ROIs in the file")
         ticked = [u for u in self._units if self._scans.get(u["key"])]
         if ticked:
-            _draw_md_field("Frame rate", float(ticked[0]["fs"]), "Hz")
+            fs = float(ticked[0]["fs"])
+            _draw_md_field("Frame rate", fs, "Hz")
+            ref = float(self.settings.runtime.reference_fs or 0)
+            if ref > 0 and not math.isclose(fs, ref, rel_tol=1e-6):
+                imgui.text_disabled(f"Sample-count settings scale by {fs / ref:.3f} from {ref:.1f} Hz")
+                set_tooltip("dF/F sigmas, start-up samples, wavelet scales and peak spacing are written for the "
+                            "reference rate and scaled to this scan's; the peak band-pass is capped below Nyquist.")
             comment = str(ticked[0].get("comment") or "")
             if comment:
                 imgui.text_disabled(f"Comment: {comment}")
@@ -343,12 +353,12 @@ class VoltagePipelineWidget(PipelineWidget):
         max_frames, n_lines, num_channels = self._dims()
         if imgui.button("Set slice##voltage_slice", imgui.ImVec2(hello_imgui.em_size(6), 0)):
             self._show_slice_popup = True
-        set_tooltip("Frame window and channel. Every line is used; the domain table decides how they group.", show_mark=False)
+        set_tooltip("Frame window and channel. Every ROI is used; the domain table decides how they group.", show_mark=False)
         imgui.same_line()
         try:
             window = self._frame_window()
             n_frames = max_frames if window is None else window[1] - window[0]
-            imgui.text_colored(_DIM_COLOR, f"{n_frames} frames · {n_lines} lines · ch {self._channel() + 1}")
+            imgui.text_colored(_DIM_COLOR, f"{n_frames} frames · {n_lines} ROIs · ch {self._channel() + 1}")
         except ValueError as e:
             imgui.text_colored(_MISSING_COLOR, str(e))
         if self._show_slice_popup:
@@ -360,7 +370,7 @@ class VoltagePipelineWidget(PipelineWidget):
             draw_selection_table(
                 self, max_frames, n_lines, tp_attr="_voltage_tp", z_attr="_voltage_z",
                 id_suffix="_voltage", num_channels=num_channels, c_attr="_voltage_c",
-                tp_label=tp_label, z_label="Lines", c_label=c_label, axes=self.axes_consumed,
+                tp_label=tp_label, z_label="ROIs", c_label=c_label, axes=self.axes_consumed,
             )
             imgui.spacing()
             if imgui.button("Close##voltage_slice_close", imgui.ImVec2(hello_imgui.em_size(6), 0)):
@@ -369,16 +379,16 @@ class VoltagePipelineWidget(PipelineWidget):
 
     def _draw_scans_block(self) -> None:
         imgui.text_colored(_SUBSECTION_COLOR, "Scans")
-        set_tooltip("Each ticked line-scan unit becomes one scan of the PF folder, keyed by its MUnit number. "
+        set_tooltip("Each ticked unit becomes one scan of the PF folder, keyed by its MUnit number. "
                     "env marks the first scan of each environment (scanID_1st_env).")
         if not self._units:
-            imgui.text_disabled("No line-scan units in this file.")
+            imgui.text_disabled("No units with AOD ROIs in this file.")
             return
         for u in self._units:
             key = u["key"]
             munit = key.rsplit("/", 1)[-1]
             seconds = u.get("duration_s")
-            label = f"{munit} ({u['nrois']} lines, {seconds:.0f} s)" if seconds else f"{munit} ({u['nrois']} lines)"
+            label = f"{munit} ({u['nrois']} ROIs, {seconds:.0f} s)" if seconds else f"{munit} ({u['nrois']} ROIs)"
             _, self._scans[key] = imgui.checkbox(f"{label}##voltage_scan_{key}", self._scans.get(key, False))
             if imgui.is_item_hovered():
                 imgui.set_tooltip(key)
@@ -390,14 +400,14 @@ class VoltagePipelineWidget(PipelineWidget):
 
     def _draw_domains_block(self) -> None:
         imgui.text_colored(_SUBSECTION_COLOR, "Domains")
-        set_tooltip("Which lines make the soma and each branch, 0-based in drawing order: 0,1,2 or 0:2. "
-                    "A domain's lines are averaged weighted by their pixel counts.")
+        set_tooltip("Which ROIs make each domain (the lines of a soma or branch, the patch of a cell), "
+                    "0-based in drawing order: 0,1,2 or 0:2. A domain's ROIs are averaged weighted by their pixel counts.")
         _, n_lines, _ = self._dims()
         flags = imgui.TableFlags_.row_bg | imgui.TableFlags_.borders_inner_h | imgui.TableFlags_.sizing_stretch_prop
         remove = None
         if imgui.begin_table("##voltage_domains", 3, flags):
             imgui.table_setup_column("Domain", imgui.TableColumnFlags_.width_stretch, 2.0)
-            imgui.table_setup_column("Lines", imgui.TableColumnFlags_.width_stretch, 3.0)
+            imgui.table_setup_column("ROIs", imgui.TableColumnFlags_.width_stretch, 3.0)
             imgui.table_setup_column("", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(1.8))
             imgui.table_headers_row()
             for i, row in enumerate(self._domain_rows):
@@ -448,7 +458,7 @@ class VoltagePipelineWidget(PipelineWidget):
         if self._domain_error:
             imgui.text_colored(_MISSING_COLOR, self._domain_error)
         else:
-            imgui.text_disabled(f"{len(domains)} domains, {sum(len(v) for v in domains.values())} lines")
+            imgui.text_disabled(f"{len(domains)} domains, {sum(len(v) for v in domains.values())} ROIs")
         if self._domains_path:
             shown = _truncate_to_width(self._domains_path, imgui.get_content_region_avail().x)
             imgui.text_disabled(shown)
@@ -705,6 +715,7 @@ class VoltagePipelineWidget(PipelineWidget):
     def _draw_run(self) -> None:
         mesc = self._mesc_path()
         scans = [u["key"] for u in self._units if self._scans.get(u["key"])]
+        rates = sorted({round(float(u["fs"] or 0), 3) for u in self._units if self._scans.get(u["key"])})
         domains = self._domains()
         try:
             window = self._frame_window()
@@ -713,11 +724,13 @@ class VoltagePipelineWidget(PipelineWidget):
             window, window_error = None, str(e)
         reason = ""
         if mesc is None:
-            reason = "Load a line-scan .mesc first."
+            reason = "Load a .mesc with AOD ROI units first."
         elif not self._outdir:
             reason = "Set the output folder."
         elif not scans:
             reason = "Tick at least one scan."
+        elif len(rates) > 1:
+            reason = f"Ticked scans have different frame rates ({', '.join(f'{r:g}' for r in rates)} Hz); run them separately."
         elif not domains:
             reason = self._domain_error
         elif window_error:

@@ -17,6 +17,7 @@ import pytest
 from mbo_utilities.arrays.mesc_geometry import (
     linescan_endpoints_um,
     neighbour_slices,
+    roi_outlines_um,
     roi_placements,
     roi_slice_indices,
     slice_depths_um,
@@ -33,6 +34,11 @@ LINES = [
     [[120, 120], [204, 228], [-46, -46]],  # z +4 -> slice 7
     [[105, 135], [220, 230], [-53.9, -53.9]],  # z -3.9 -> slice 3 too
     [[112, 118], [212, 212], [-70, -70]],  # z -20 -> below the stack
+]
+PATCHES = [
+    # x0..x3        y0..y3                z0..z3   (a chessboard patch's corners, absolute microns)
+    [[110, 130, 130, 110], [210, 210, 230, 230], [-46, -46, -46, -46]],  # z +4 -> slice 7
+    [[100, 120, 120, 100], [200, 200, 220, 220], [-70, -70, -70, -70]],  # below the stack
 ]
 
 
@@ -66,6 +72,14 @@ def mesc_path(tmp_path_factory):
         bare.attrs.update({"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 1.0,
                            "MeasurementDatePosix": 2})
         bare.create_dataset("Channel_0", data=np.zeros((2, 4, 4), np.uint16))
+
+        chess = s.create_group("MUnit_3")
+        chess.attrs.update({"MethodType": 8, "VecChannelsSize": 1, "TStepInMs": 5.0,
+                            "MeasurementDatePosix": 3, "Comment": "chessboard"})
+        chess.attrs["CoordinateMapJSON"] = json.dumps(
+            {"maps": [{"measurementROIs": [], "contours": PATCHES}]}
+        )
+        chess.create_dataset("Channel_0", data=np.zeros((1, 20, 40), np.uint16))
     return path
 
 
@@ -130,6 +144,23 @@ def test_slices_with_rois_and_neighbours(depth, lines):
     assert neighbour_slices(0, occ) == (None, 3)
     assert neighbour_slices(7, occ) == (3, None)
     assert neighbour_slices(5, occ) == (3, 7)  # a slice with no lines
+
+
+def test_chessboard_patches_place_like_lines(mesc_path, depth):
+    patches = roi_outlines_um(mesc_path, "MSession_0/MUnit_3")
+    assert len(patches) == 2 and patches[0].shape == (3, 4)
+    # the line-scan name reads the same attribute and gives the same outlines
+    assert all(np.array_equal(a, b) for a, b in zip(linescan_endpoints_um(mesc_path, "MSession_0/MUnit_3"), patches))
+    p = roi_placements(patches, depth, sample_counts=[20, 20])
+    assert [q["slice"] for q in p] == [7, 0]
+    assert [q["in_range"] for q in p] == [True, False]
+    assert np.allclose([q["z_um"] for q in p], [4.0, -20.0])
+    assert np.allclose([q["length_um"] for q in p], [20.0, 20.0])
+    assert np.allclose([q["sample_um"] for q in p], [1.0, 1.0])
+    assert not any(q["tilted"] for q in p)
+    vp = viewport_geometry(mesc_path, "MSession_0/MUnit_0")
+    corners = um_to_pixels(patches[0][:2].T, vp, 64, 80)
+    assert np.allclose(corners, [[20, 20], [60, 20], [60, 60], [20, 60]])
 
 
 def test_um_to_pixels(mesc_path, lines):

@@ -193,6 +193,7 @@ class MescUnitsWidget(Widget):
 
         labels = [
             f"{u['munit']} · {u['modality_name']}"
+            + (f" · {u['role']}" if u.get("role") and u["role"] != "measurement" else "")
             + (f" · {u['start_time'][:10]}" if u.get("start_time") else "")
             for u in units
         ]

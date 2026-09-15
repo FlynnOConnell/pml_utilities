@@ -993,6 +993,19 @@ class TestMboOpensTheLineScanViewer:
         assert len(standard) == 1
         assert standard[0][0] == mesc and standard[0][-1] == "MSession_0/MUnit_2"
 
+    def test_a_file_with_chessboard_patches_opens_the_same_way(self, tmp_path, monkeypatch):
+        rg = self._units(monkeypatch, ["frames", "tiled", "packed"])
+        mesc = tmp_path / "chess.mesc"
+        mesc.write_bytes(b"x")
+        standard = []
+        monkeypatch.setattr(
+            rg, "_resolve_mesc_unit",
+            lambda p, u: ({"unit": u}, True) if u is not None else pytest.fail("prompted"),
+        )
+        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        rg._run_gui_impl(data_in=mesc)
+        assert len(standard) == 1 and standard[0][-1] == "MSession_0/MUnit_1"
+
     def test_an_explicit_line_scan_unit_goes_to_the_viewer(self, tmp_path, monkeypatch):
         rg = self._units(monkeypatch, ["multicube", "packed"])
         mesc = tmp_path / "scan.mesc"
@@ -1180,7 +1193,7 @@ class TestCurationWindow:
             widget = app.widget
             assert [r.rid for r in widget.catalog] == [f"scan/MUnit_35/roi={i}" for i in range(3)]
             assert not any(r.pre_denoised for r in widget.catalog)
-            assert widget.session is None and "3 raw line traces" in widget.status
+            assert widget.session is None and "3 raw ROI traces" in widget.status
             # nothing runs until a recording is picked; then the denoiser does
             assert calls == []
             widget.load("scan/MUnit_35/roi=1")
@@ -1297,6 +1310,13 @@ class TestOpenArray:
         lone.write_bytes(b"x")
         unit.filenames = [lone]
         assert curation_source(unit) == "raw"
+        # chessboard patches and ribbon boxes are ROIs too; a plain frame series is not
+        unit.metadata = {"mesc_layout": "tiled"}
+        assert curation_source(unit) == "raw"
+        unit.metadata = {"mesc_layout": "boxes"}
+        assert curation_source(unit) == "raw"
+        unit.metadata = {"mesc_layout": "frames"}
+        assert curation_source(unit) == ""
 
     def test_a_pf_array_scans_its_folder_scoped_to_its_scan(self, curation, data_root):
         from mbo_utilities.arrays.pf import PfArray

@@ -337,12 +337,17 @@ refused. `--dry-run` prints the choice and placement without a window,
 
 ## Voltage
 
-The spatial JEDI pipeline (Noguchi & Terada) on a line-scan `.mesc`, producing
-the `PF` folder the curation window reads. Each line-scan unit is one scan;
-each line's mean fluorescence per frame is read as above, the lines of a
-domain (the soma, one branch) are averaged pixel-weighted, dF/F and a
-sign-flipped z-score follow, then vnoiser's wavelet denoiser with the archive's
-settings, then the peak detector.
+The spatial JEDI pipeline (Noguchi & Terada) on a `.mesc` with AOD ROI units,
+producing the `PF` folder the curation window reads. A unit's ROIs are the
+lines of a line scan or the patches of a chessboard or ribbon scan; each unit
+is one scan. Each ROI's mean fluorescence per frame is read as above, the ROIs
+of a domain (the soma, one branch, one cell's patch) are averaged
+pixel-weighted, dF/F and a sign-flipped z-score follow, then vnoiser's wavelet
+denoiser with the archive's settings, then the peak detector. The settings
+are written for the archive's 1075 Hz line scans; the parameters counted in
+samples are scaled to each scan's frame rate and the peak band-pass is capped
+below Nyquist, so a 200 Hz chessboard scan keeps the same baseline durations.
+One run takes scans of one frame rate.
 
 ```bash
 mbo voltage stan112_expt12.mesc --init                      # domains.json template beside the file
@@ -352,8 +357,9 @@ mbo voltage stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl --overwrite
 mbo curate X:/data/asako/stan112/stan112_expt12             # then curate it
 ```
 
-`domains.json` names the domains and their 0-based line indices, the scans
-in order and the first scan of each environment:
+`domains.json` names the domains and their 0-based ROI indices (lines or
+patches, in drawing order), the scans in order and the first scan of each
+environment. `--init` groups lines in threes and patches one per domain:
 
 ```json
 {"domains": {"soma1": [0, 1, 2], "basal1": [3, 4, 5]}, "scans": ["35", "38"], "first_env": ["35"]}

@@ -120,6 +120,10 @@ _PACKED_MODALITIES = frozenset({6, 7})
 # Modalities where axis 0 interleaves z-slices within each timepoint
 # (frame i = timepoint i//Slices, slice i%Slices).
 _VOLUME_MODALITIES = frozenset({11})
+# Layouts whose Z axis holds AOD ROIs scanned within one frame period: the
+# lines of a line scan, the patches of a chessboard, the boxes of a ribbon
+# scan. The voltage pipeline and the curation widget take any of them.
+ROI_LAYOUTS = frozenset({"packed", "tiled", "boxes"})
 
 # Y is flipped on read for these, matching lab4.convert. The flip corrects
 # MEScan's save orientation; whether it also belongs on linescan/multiline is
@@ -701,8 +705,13 @@ def list_mesc_units(path: Path | str) -> list[dict]:
         ``nchannels``, ``nrois``, ``fs`` (timepoint rate in Hz, from
         ``TStepInMs``), ``duration_s`` (``nframes / fs``; None for
         single-timepoint units, and an underestimate for dichroic multiline
-        units, whose ``nframes`` counts channel pairs), ``comment`` and
-        ``start_time``.
+        units, whose ``nframes`` counts channel pairs), ``planned_s`` (the
+        length the operator set, ``MeasurementLengthInMs``; a shorter
+        ``duration_s`` means the run was stopped early; None when unset),
+        ``role`` (MEScan's ``ImageRoleDebugString``: ``"measurement"`` for a
+        scan the operator ran, ``"background"`` and ``"motionCorrection"``
+        for the snapshot and RTMC stream it saves beside one; ``""`` when
+        unset), ``comment`` and ``start_time``.
 
     Examples
     --------
@@ -734,6 +743,10 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                 except (TypeError, ValueError):
                     step_ms = 0.0
                 fs = 1000.0 / step_ms if step_ms > 0 else None
+                try:
+                    planned_ms = float(_attr(unit, "MeasurementLengthInMs") or 0)
+                except (TypeError, ValueError):
+                    planned_ms = 0.0
                 units.append(
                     {
                         "session": session_key,
@@ -759,6 +772,8 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                         "duration_s": (
                             layout.nt / fs if fs and layout.nt > 1 else None
                         ),
+                        "planned_s": planned_ms / 1000.0 if planned_ms > 0 else None,
+                        "role": str(_attr(unit, "ImageRoleDebugString", "") or ""),
                         "comment": _attr(unit, "Comment", "") or "",
                         "start_time": _iso_time(_attr(unit, "MeasurementDatePosix")),
                     }

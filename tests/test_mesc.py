@@ -17,7 +17,7 @@ import h5py
 import numpy as np
 import pytest
 
-from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
+from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray, list_mesc_units
 from mbo_utilities.reader import imread
 
 
@@ -131,7 +131,8 @@ def mesc_path(tmp_path_factory):
         u = s.create_group("MUnit_4")
         u.attrs.update(
             {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 100.0,
-             "MeasurementDatePosix": 1_700_000_400, "Comment": "timeseries"}
+             "MeasurementDatePosix": 1_700_000_400, "Comment": "timeseries",
+             "ImageRoleDebugString": "measurement", "MeasurementLengthInMs": 700.0}
         )
         u.create_dataset(
             "Channel_0", data=np.arange(7 * 16 * 18, dtype=np.uint16).reshape(7, 16, 18)
@@ -219,6 +220,16 @@ def test_list_units_reports_every_layout(mesc_path):
     assert units[6]["fs"] == pytest.approx(1000 / 60)
     assert units[6]["duration_s"] == pytest.approx(3 * 60 / 1000)
     assert units[0]["duration_s"] is None  # a z-stack has one timepoint
+    # MEScan's role label and planned length ride along when the unit declares them
+    assert [u["role"] for u in units] == ["", "", "", "", "measurement", "", ""]
+    assert units[4]["planned_s"] == pytest.approx(0.7)
+    assert all(u["planned_s"] is None for u in units if u["munit"] != "MUnit_4")
+    assert [u["kind"] in ROI_LAYOUTS for u in units] == [False, True, True, True, False, True, False]
+    # MEScan's role label and planned length ride along when the unit declares them
+    assert [u["role"] for u in units] == ["", "", "", "", "measurement", "", ""]
+    assert units[4]["planned_s"] == pytest.approx(0.7)
+    assert all(u["planned_s"] is None for u in units if u["munit"] != "MUnit_4")
+    assert [u["kind"] in ROI_LAYOUTS for u in units] == [False, True, True, True, False, True, False]
 
 
 def test_imread_dispatches_to_mesc_array(mesc_path):

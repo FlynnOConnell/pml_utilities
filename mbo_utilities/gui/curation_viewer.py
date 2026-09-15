@@ -23,8 +23,8 @@ What opens:
   loads (the notebook's animal / experiment / recording dropdowns);
 - a raw line-scan ``.mesc`` with a ``PF`` folder beside it: its experiment's
   processed traces;
-- a raw line-scan ``.mesc`` without one: every line of every line-scan unit
-  as a raw recording; clicking one runs vnoiser's wavelet denoiser on its
+- a raw AOD ``.mesc`` without one: every ROI of every line-scan, chessboard
+  or ribbon unit as a raw recording; clicking one runs vnoiser's wavelet denoiser on its
   trace (minutes the first time, cached under ``.curation/cache`` beside the
   file) and curates the result - the full pipeline vnoiser offers;
 - a folder of raw ``.mat`` recordings, or one file.
@@ -198,7 +198,7 @@ class _Dashboard:
             self.widget.scan(str(path))
 
     def open_raw_mesc(self, mesc_path) -> int:
-        """Every line of every line-scan unit as a raw recording the
+        """Every ROI of every AOD ROI unit as a raw recording the
         denoiser runs on when clicked. Returns how many."""
         return self.widget.scan_raw_mesc(mesc_path, self.channel)
 

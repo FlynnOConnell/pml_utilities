@@ -3,10 +3,14 @@
 GUI-free and JSON round-trippable, like ``masknmf.params``. The defaults are
 the archive's (``Denoiser.upstream``), so an untouched run reproduces a PF
 folder; ``from_provenance`` reads them back out of a folder's ``pipeline.json``.
+The parameters counted in samples are written for the archive's frame rate
+(``runtime.reference_fs``); ``VoltageSettings.at_fs`` scales them to a scan's.
 """
 
 from __future__ import annotations
 
+import copy
+import math
 from dataclasses import asdict, dataclass, field, fields
 
 import numpy as np
@@ -102,6 +106,7 @@ class VoltageRuntimeSettings:
     convert: bool = False
     save_cwt: bool = False
     overwrite: bool = True
+    reference_fs: float = 1075.2688
 
 
 def _section(cls, d):
@@ -126,6 +131,29 @@ class VoltageSettings:
     denoiser: VoltageDenoiserSettings = field(default_factory=VoltageDenoiserSettings)
     events: VoltageEventSettings = field(default_factory=VoltageEventSettings)
     runtime: VoltageRuntimeSettings = field(default_factory=VoltageRuntimeSettings)
+
+    def at_fs(self, fs: float) -> VoltageSettings:
+        """A copy for scans at ``fs`` Hz: the parameters counted in samples
+        (the dF/F sigmas, start-up samples, wavelet scales and peak spacing)
+        are scaled by ``fs / runtime.reference_fs`` so they keep the
+        archive's durations, and the peak band-pass is capped below Nyquist.
+        The copy's ``reference_fs`` is ``fs``, so applying it again changes
+        nothing; at the reference rate the parameters are untouched."""
+        out = copy.deepcopy(self)
+        ref = float(self.runtime.reference_fs or 0)
+        k = float(fs) / ref if ref > 0 else 1.0
+        if not math.isclose(k, 1.0, rel_tol=1e-9):
+            out.dfof.sigma_dfof = float(self.dfof.sigma_dfof) * k
+            out.dfof.sigma_baseline = float(self.dfof.sigma_baseline) * k
+            out.dfof.n_startup = max(1, int(round(self.dfof.n_startup * k)))
+            out.denoiser.scale_min = max(1.0, float(self.denoiser.scale_min) * k)
+            out.denoiser.scale_max = max(out.denoiser.scale_min, float(self.denoiser.scale_max) * k)
+            out.events.distance_samples = max(1, int(round(self.events.distance_samples * k)))
+            out.runtime.reference_fs = float(fs)
+        out.events.bp_high = min(float(self.events.bp_high), 0.95 * float(fs) / 2)
+        if out.events.bp_low >= out.events.bp_high:
+            out.events.bp_low = out.events.bp_high / 2
+        return out
 
     def to_dict(self) -> dict:
         d = asdict(self)
