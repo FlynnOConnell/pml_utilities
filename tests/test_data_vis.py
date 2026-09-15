@@ -220,14 +220,9 @@ class TestRunGuiWhereItRuns:
             rg._run_gui_impl(data_in=None)
         assert picked == [], "the desktop picker was never opened"
 
-    def test_cancelled_unit_picker_opens_nothing(self, monkeypatch):
-        rg = self._offscreen(monkeypatch)
-        monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda d, u: ({}, False))
-        assert rg._launch_standard_viewer("x.mesc", None, "none", False) is None
-
-
 class TestMescInNotebook:
-    """No Qt picker on the kernel's machine: the unit is an argument."""
+    """No Qt anywhere: a notebook opens the first unit exactly like a
+    terminal does, and switches units through the Image tab's ImGui combo."""
 
     @staticmethod
     def _mesc(tmp_path, monkeypatch, units):
@@ -238,24 +233,32 @@ class TestMescInNotebook:
         path.write_bytes(b"")
         monkeypatch.setattr(mesc, "list_mesc_units", lambda p: list(units))
         monkeypatch.setattr(rg, "in_notebook", lambda: True)
-        monkeypatch.setattr(
-            rg, "_prompt_for_mesc_unit", lambda *a: pytest.fail("Qt picker opened")
-        )
         return rg, path
 
     def test_one_unit_opens_without_asking(self, tmp_path, monkeypatch):
-        rg, path = self._mesc(tmp_path, monkeypatch, ["MSession_0/MUnit_0"])
-        assert rg._resolve_mesc_unit(path, None) == ({"unit": "MSession_0/MUnit_0"}, True)
-
-    def test_many_units_list_what_to_pick(self, tmp_path, monkeypatch):
         rg, path = self._mesc(
-            tmp_path, monkeypatch, ["MSession_0/MUnit_0", "MSession_0/MUnit_1"]
+            tmp_path, monkeypatch, [{"key": "MSession_0/MUnit_0"}]
         )
-        with pytest.raises(ValueError, match="MUnit_1"):
-            rg._resolve_mesc_unit(path, None)
+        assert rg._resolve_mesc_unit(path, None) == (
+            {"unit": "MSession_0/MUnit_0"},
+            True,
+        )
+
+    def test_many_units_opens_the_first_without_asking(self, tmp_path, monkeypatch):
+        rg, path = self._mesc(
+            tmp_path,
+            monkeypatch,
+            [{"key": "MSession_0/MUnit_0"}, {"key": "MSession_0/MUnit_1"}],
+        )
+        assert rg._resolve_mesc_unit(path, None) == (
+            {"unit": "MSession_0/MUnit_0"},
+            True,
+        )
 
     def test_explicit_unit_still_bypasses(self, tmp_path, monkeypatch):
-        rg, path = self._mesc(tmp_path, monkeypatch, ["a", "b"])
+        rg, path = self._mesc(
+            tmp_path, monkeypatch, [{"key": "a"}, {"key": "b"}]
+        )
         assert rg._resolve_mesc_unit(path, 1) == ({"unit": 1}, True)
 
 
