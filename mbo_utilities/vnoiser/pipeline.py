@@ -20,12 +20,16 @@ traces of its ``PF`` folder follow (see ``tests/test_voltage_pipeline.py``).
 
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
+import h5py
 import numpy as np
-from vnoiser import DfofConfig, ScanTraces, SpikeDetectConfig, run_pipeline
+from vnoiser import DfofConfig, ScanTraces, SpikeDetectConfig, read_pf, run_pipeline
+from vnoiser.pf import DFOF_FILE, final_domain_name
 from vnoiser.pipeline import load_scan_rois
+from vnoiser.preprocess import domain_names
 
 from mbo_utilities.vnoiser.params import VoltageSettings
 
@@ -36,9 +40,11 @@ __all__ = [
     "write_domains_template",
     "default_pf_dir",
     "run_voltage_pipeline",
+    "TRACES_DIR",
 ]
 
 DOMAINS_FILE = "domains.json"
+TRACES_DIR = "traces"
 
 
 def _munit_number(unit_key: str) -> str:
@@ -202,7 +208,11 @@ def run_voltage_pipeline(
     log : callable(str)
         Where the per-unit read is reported.
 
-    Returns ``{file name: path}`` of the written folder.
+    Returns ``{file name: path}`` of the written folder. Beside the archive
+    format a ``traces`` subfolder holds plain files: ``scans.csv``,
+    ``domains.csv``, and per scan ``scan<id>_rois.npy`` (ROI, frame),
+    ``scan<id>_dfof.npy`` / ``_zscore.npy`` / ``_denoised.npy`` (domain,
+    frame) in ``domains.csv`` row order, ``scan<id>_peaks.csv``.
     """
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
 
@@ -262,9 +272,40 @@ def run_voltage_pipeline(
     pf_dir = Path(out) if out is not None else default_pf_dir(mesc_path)
     processed = {s.scan_id for s in scans}
     first_env = [str(s) for s in first_env if str(s) in processed]
-    return run_pipeline(
+    paths = run_pipeline(
         scans, pf_dir, domains=domains, first_env=first_env, dfof_cfg=dfof_cfg,
         denoiser_factory=denoiser_factory, spike_cfg=spike_cfg,
         detect=detect, save_cwt=save_cwt, provenance=info, overwrite=overwrite,
         progress=progress,
     )
+    files = read_pf(pf_dir)
+    names = domain_names(domains)
+    traces_dir = pf_dir / TRACES_DIR
+    traces_dir.mkdir(exist_ok=True)
+    with (traces_dir / "scans.csv").open("w", newline="") as fh:
+        rows = csv.writer(fh)
+        rows.writerow(["scan", "unit", "fs_hz", "n_frames", "n_rois"])
+        for s, u in zip(scans, chosen, strict=True):
+            rows.writerow([s.scan_id, u["key"], s.fs_hz, s.n_frames, len(s.traces)])
+    with (traces_dir / "domains.csv").open("w", newline="") as fh:
+        rows = csv.writer(fh)
+        rows.writerow(["row", "domain", "rois"])
+        for i, name in enumerate(names):
+            rows.writerow([i, final_domain_name(name), " ".join(str(r) for r in domains[name])])
+    with h5py.File(pf_dir / DFOF_FILE, "r") as f:
+        for s in scans:
+            sid = s.scan_id
+            rois = np.stack([np.asarray(s.traces[r]) for r in sorted(s.traces)])
+            np.save(traces_dir / f"scan{sid}_rois.npy", rois.astype(np.float32))
+            np.save(traces_dir / f"scan{sid}_dfof.npy", f[sid]["dfof_raw"][:].astype(np.float32))
+            np.save(traces_dir / f"scan{sid}_zscore.npy", f[sid]["dfof_zscore"][:].astype(np.float32))
+            denoised = np.stack([files.traces[sid][final_domain_name(n)] for n in names])
+            np.save(traces_dir / f"scan{sid}_denoised.npy", denoised.astype(np.float32))
+            with (traces_dir / f"scan{sid}_peaks.csv").open("w", newline="") as fh:
+                rows = csv.writer(fh)
+                rows.writerow(["domain", "frame", "time_s"])
+                for n in names:
+                    for frame in (files.peaks or {}).get(sid, {}).get(final_domain_name(n), ()):
+                        rows.writerow([final_domain_name(n), int(frame), f"{int(frame) / s.fs_hz:.6f}"])
+    paths.update({f"{TRACES_DIR}/{p.name}": p for p in sorted(traces_dir.iterdir())})
+    return paths
