@@ -570,12 +570,21 @@ def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
         rois = []
         for box in boxes:
             n_lines = box["row1"] - box["row0"]
-            width = box["col1"] - box["col0"]
+            # BreakView/CoordinateMap pixel coords are in the scanner's
+            # configured canvas, which can run wider than what actually got
+            # written to the raw page for a given ROI (chessboard/ribbon
+            # scans in particular) -- clamp so `_read_packed`'s col0:col1
+            # slice never runs past the real page and comes back empty.
+            col0 = max(0, min(box["col0"], page_x))
+            col1 = max(col0, min(box["col1"], page_x))
+            width = col1 - col0
             if n_lines <= 0 or width <= 0:
                 continue
             rois.append(
                 {
                     **box,
+                    "col0": col0,
+                    "col1": col1,
                     "n_lines": n_lines,
                     "width": width,
                     "nframes": page_y // n_lines,
@@ -1328,6 +1337,13 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         """Unpack frames stored as consecutive row blocks of a single raw page."""
         roi = self._layout.rois[z]
         n_lines, col0, col1 = roi["n_lines"], roi["col0"], roi["col1"]
+        # the layout clamps col0/col1 to Channel_0's width at open time, but a
+        # different channel index can point at a narrower physical dataset
+        # (dichroic switching, mismatched Channel_N shapes) -- reclamp here so
+        # a stale bound can't slice past this dataset's actual width.
+        page_cols = dataset.shape[2]
+        if col1 > page_cols:
+            col0, col1 = min(col0, page_cols), page_cols
         src = self._source_frames(c, frames)
         if src.size == 0:
             return np.empty((0, n_lines, col1 - col0), dtype=dataset.dtype)
