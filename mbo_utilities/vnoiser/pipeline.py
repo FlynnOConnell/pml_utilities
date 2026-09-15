@@ -1,12 +1,16 @@
-"""The spatial JEDI voltage pipeline on a raw line-scan ``.mesc``.
+"""The spatial JEDI voltage pipeline on a raw AOD ``.mesc``.
 
-Each line-scan unit is one scan; each line ROI's mean fluorescence per frame
+Each unit with AOD ROIs (:data:`mbo_utilities.arrays.mesc.ROI_LAYOUTS`: the
+lines of a line scan, the patches of a chessboard, the boxes of a ribbon
+scan) is one scan; each ROI's mean fluorescence per frame
 (``roi_workflow.linescan_roi_read``, the same read ``mbo linescan`` does)
 goes into vnoiser's stages 0-5 (:func:`vnoiser.run_pipeline`): domains are
 pixel-weighted means of their ROIs, dF/F, z-score, wavelet denoising, peaks,
 and a ``PF`` folder that ``mbo curate`` opens. Domains (which ROIs make the
-soma, each branch) come from a ``domains.json`` beside the file, or an
-archive's ``scanIDs_ROIs.pkl``.
+soma, each branch; which patch is which cell) come from a ``domains.json``
+beside the file, or an archive's ``scanIDs_ROIs.pkl``. Settings are written
+for the archive's frame rate and scaled to the scans'
+(:meth:`~mbo_utilities.vnoiser.params.VoltageSettings.at_fs`).
 
 Reproduces the archive: ``stan112_expt12/stan112_expt12/stan112_expt12.mesc``
 units 35 and 38, read this way with ``convert=False``, give the per-ROI
@@ -20,8 +24,10 @@ import json
 from pathlib import Path
 
 import numpy as np
-from vnoiser import Denoiser, DfofConfig, ScanTraces, SpikeDetectConfig, run_pipeline
+from vnoiser import DfofConfig, ScanTraces, SpikeDetectConfig, run_pipeline
 from vnoiser.pipeline import load_scan_rois
+
+from mbo_utilities.vnoiser.params import VoltageSettings
 
 __all__ = [
     "DOMAINS_FILE",
@@ -49,7 +55,7 @@ def scan_traces_from_mesc(
     batch_size: int = 20000,
     progress=None,
 ) -> ScanTraces:
-    """One line-scan unit as vnoiser's :class:`ScanTraces`.
+    """One AOD ROI unit (line scan, chessboard, ribbon) as vnoiser's :class:`ScanTraces`.
 
     ``convert=False`` keeps MESc's raw counts, as the archive's converter
     did; ``True`` applies the file's linear conversion so zero means no
@@ -57,13 +63,13 @@ def scan_traces_from_mesc(
     factor; the z-score is nearly unaffected). ``frames=(start, stop)``
     keeps that half-open window of the recording.
     """
-    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray
     from mbo_utilities.roi_workflow import linescan_roi_read
 
     arr = MescArray(mesc_path, unit=unit_key)
     md = arr.metadata
-    if md.get("mesc_layout") != "packed":
-        raise ValueError(f"{unit_key} is a {md.get('mesc_modality_name')} unit, not a line scan")
+    if md.get("mesc_layout") not in ROI_LAYOUTS:
+        raise ValueError(f"{unit_key} is a {md.get('mesc_modality_name')} unit with no AOD ROIs")
     F, _ = linescan_roi_read(
         arr, channel=channel, convert=convert, batch_size=batch_size, dtype=np.float64,
         progress=progress,
@@ -104,32 +110,35 @@ def read_domains(path) -> dict:
     }
 
 
-def write_domains_template(mesc_path, path=None, *, units=None, per_domain: int = 3) -> Path:
-    """Write a ``domains.json`` to fill in: the file's line-scan units as
-    ``scans`` and their ROIs grouped ``per_domain`` at a time, named from
-    the unit comment when it lists as many names (``'soma,bas1-3,api1-5'``
-    does not; those stay ``domain1``...). Returns the path."""
-    from mbo_utilities.arrays.mesc import list_mesc_units
+def write_domains_template(mesc_path, path=None, *, units=None, per_domain: int | None = None) -> Path:
+    """Write a ``domains.json`` to fill in: the file's AOD ROI units as
+    ``scans`` and their ROIs grouped ``per_domain`` at a time (three lines of
+    a line scan, one patch of a chessboard or ribbon scan), named from the
+    unit comment when it lists as many names (``'soma,bas1-3,api1-5'`` does
+    not; those stay ``domain1``...). Returns the path."""
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
 
     mesc_path = Path(mesc_path)
     path = Path(path) if path is not None else mesc_path.parent / DOMAINS_FILE
-    packed = [u for u in list_mesc_units(mesc_path) if u.get("kind") == "packed"]
+    scans = [u for u in list_mesc_units(mesc_path) if u.get("kind") in ROI_LAYOUTS]
     if units:
         wanted = {str(u) for u in units}
-        packed = [u for u in packed if u["key"] in wanted or u["munit"] in wanted]
-    if not packed:
-        raise ValueError(f"no line-scan units in {mesc_path}")
-    n_rois = int(packed[0]["nrois"])
-    names = [n.strip() for n in str(packed[0].get("comment") or "").split(",") if n.strip()]
+        scans = [u for u in scans if u["key"] in wanted or u["munit"] in wanted]
+    if not scans:
+        raise ValueError(f"no AOD ROI units in {mesc_path}")
+    if per_domain is None:
+        per_domain = 3 if scans[0]["kind"] == "packed" else 1
+    n_rois = int(scans[0]["nrois"])
+    names = [n.strip() for n in str(scans[0].get("comment") or "").split(",") if n.strip()]
     groups = [list(range(i, min(i + per_domain, n_rois))) for i in range(0, n_rois, per_domain)]
     if len(names) != len(groups):
         names = [f"domain{i + 1}" for i in range(len(groups))]
     doc = {
         "mesc": mesc_path.name,
-        "scans": [_munit_number(u["key"]) for u in packed],
-        "first_env": [_munit_number(packed[0]["key"])],
+        "scans": [_munit_number(u["key"]) for u in scans],
+        "first_env": [_munit_number(scans[0]["key"])],
         "domains": {name: rois for name, rois in zip(names, groups, strict=True)},
-        "note": "domains: name -> ROI indices (0-based, the order the lines were drawn); "
+        "note": "domains: name -> ROI indices (0-based, the order the lines or patches were drawn); "
                 "scans: MUnit numbers in order; first_env: the first scan of each environment",
     }
     path.write_text(json.dumps(doc, indent=2))
@@ -160,12 +169,13 @@ def run_voltage_pipeline(
     detect: bool = True,
     dfof_cfg: DfofConfig | None = None,
     denoiser_factory=None,
+    settings: VoltageSettings | None = None,
     overwrite: bool = False,
     provenance: dict | None = None,
     progress=None,
     log=print,
 ) -> dict:
-    """Every line-scan unit of ``mesc_path`` (or ``units``) into a PF folder.
+    """Every AOD ROI unit of ``mesc_path`` (or ``units``) into a PF folder.
 
     Parameters
     ----------
@@ -173,11 +183,17 @@ def run_voltage_pipeline(
     domains : mapping of domain -> ROI indices
     units : sequence of str, optional
         ``MUnit_n`` or ``MSession_s/MUnit_n`` keys, in scan order; default
-        every line-scan unit in file order.
+        every AOD ROI unit in file order. One run takes scans of one frame
+        rate.
     first_env : sequence of scan ids
     out : path, optional
         The PF folder; default :func:`default_pf_dir`.
     channel, convert, frames : see :func:`scan_traces_from_mesc`
+    settings : VoltageSettings, optional
+        The Run tab's settings (default :class:`VoltageSettings`), scaled to
+        the scans' frame rate with ``at_fs``; a ``dfof_cfg``,
+        ``denoiser_factory`` or ``spike_cfg`` given explicitly is used as
+        it is instead.
     save_cwt, spike_cfg, detect, dfof_cfg, denoiser_factory, overwrite :
         see :func:`vnoiser.run_pipeline`
     provenance : dict, optional
@@ -188,26 +204,34 @@ def run_voltage_pipeline(
 
     Returns ``{file name: path}`` of the written folder.
     """
-    from mbo_utilities.arrays.mesc import list_mesc_units
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
 
     mesc_path = Path(mesc_path)
     all_units = list_mesc_units(mesc_path)
-    packed = [u for u in all_units if u.get("kind") == "packed"]
-    packed_munits = {u["munit"] for u in packed}
+    roi_units = [u for u in all_units if u.get("kind") in ROI_LAYOUTS]
+    roi_munits = {u["munit"] for u in roi_units}
     if units:
         chosen = []
         for name in units:
-            match = [u for u in packed if u["key"] == name or u["munit"] == name]
+            match = [u for u in roi_units if u["key"] == name or u["munit"] == name]
             if not match:
-                other = [u for u in all_units if u["key"] == name or (u["munit"] == name and name not in packed_munits)]
+                other = [u for u in all_units if u["key"] == name or (u["munit"] == name and name not in roi_munits)]
                 if other:
-                    raise ValueError(f"{name} is a {other[0]['modality_name']} unit, not a line scan")
+                    raise ValueError(f"{name} is a {other[0]['modality_name']} unit with no AOD ROIs")
                 raise ValueError(f"{name} is not in {mesc_path.name}")
             chosen.append(match[0])
     else:
-        chosen = packed
+        chosen = roi_units
     if not chosen:
-        raise ValueError(f"no line-scan units in {mesc_path}")
+        raise ValueError(f"no AOD ROI units in {mesc_path}")
+    rates = sorted({round(float(u["fs"] or 0), 3) for u in chosen})
+    if len(rates) > 1:
+        listed = ", ".join(f"{r:g}" for r in rates)
+        raise ValueError(f"the chosen scans differ in frame rate ({listed} Hz); run them separately")
+    settings = (settings or VoltageSettings()).at_fs(float(chosen[0]["fs"]))
+    dfof_cfg = dfof_cfg or settings.dfof.config()
+    spike_cfg = spike_cfg or settings.events.config()
+    denoiser_factory = denoiser_factory or settings.denoiser.factory
 
     scans = []
     for u in chosen:
@@ -240,7 +264,7 @@ def run_voltage_pipeline(
     first_env = [str(s) for s in first_env if str(s) in processed]
     return run_pipeline(
         scans, pf_dir, domains=domains, first_env=first_env, dfof_cfg=dfof_cfg,
-        denoiser_factory=denoiser_factory or Denoiser.upstream, spike_cfg=spike_cfg,
+        denoiser_factory=denoiser_factory, spike_cfg=spike_cfg,
         detect=detect, save_cwt=save_cwt, provenance=info, overwrite=overwrite,
         progress=progress,
     )

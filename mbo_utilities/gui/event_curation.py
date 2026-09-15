@@ -156,13 +156,13 @@ def _mode_title(mode: str, cutoff: float) -> str:
 
 
 def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[dict]:
-    """Per-line raw traces of every line-scan unit in a ``.mesc``:
-    ``[{"key", "munit", "fs", "traces"}, ...]`` with ``traces`` shaped
-    ``(lines, samples)``. Reads ``traces_dir/F.npy`` when given (an
-    ``mbo linescan`` output), else averages each line's kymograph, once:
+    """Per-ROI raw traces of every AOD ROI unit (line scan, chessboard or
+    ribbon patches) in a ``.mesc``: ``[{"key", "munit", "fs", "traces"}, ...]``
+    with ``traces`` shaped ``(rois, samples)``. Reads ``traces_dir/F.npy``
+    when given (an ``mbo linescan`` output), else averages each ROI, once:
     the result is kept under ``.curation/cache`` beside the file, keyed by
     the file's size and mtime, so reopening the file does not recompute it."""
-    from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray, list_mesc_units
     from mbo_utilities.gui.linescan_viewer import _load_or_compute_traces
 
     mesc_path = Path(mesc_path)
@@ -170,7 +170,7 @@ def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[di
     cache_dir = mesc_path.parent / ".curation" / "cache"
     out = []
     for unit in list_mesc_units(mesc_path):
-        if unit.get("kind") != "packed":
+        if unit.get("kind") not in ROI_LAYOUTS:
             continue
         arr = MescArray(mesc_path, unit=unit["key"])
         cache = cache_dir / f"{mesc_path.stem}_{unit['munit']}_ch{int(channel)}_traces.npz"
@@ -195,8 +195,9 @@ def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[di
 
 def curation_source(arr) -> str:
     """What a viewer's array brings to the curation: "pf" for a PF folder
-    (:class:`~mbo_utilities.arrays.pf.PfArray`) or a line-scan unit whose
-    experiment has one, "raw" for a line-scan unit without, "" otherwise."""
+    (:class:`~mbo_utilities.arrays.pf.PfArray`) or an AOD ROI unit whose
+    experiment has one, "raw" for an AOD ROI unit without, "" otherwise."""
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS
     from mbo_utilities.arrays.pf import PfArray
     from mbo_utilities.lazy_array import base_array
 
@@ -205,7 +206,7 @@ def curation_source(arr) -> str:
         return "pf"
     md = getattr(arr, "metadata", None) or {}
     files = getattr(arr, "filenames", None) or []
-    if md.get("mesc_layout") != "packed" or not files:
+    if md.get("mesc_layout") not in ROI_LAYOUTS or not files:
         return ""
     return "pf" if pf_dir_for_mesc(files[0]) is not None else "raw"
 
@@ -529,8 +530,8 @@ class EventCurationWidget:
 
     def open_array(self, arr) -> str:
         """Point the curation at the array a viewer shows: a PF folder's
-        traces scoped to its scan, the PF folder beside a line-scan unit
-        scoped to that unit, or the raw lines of a file without one.
+        traces scoped to its scan, the PF folder beside an AOD ROI unit
+        scoped to that unit, or the raw ROIs of a file without one.
         Returns :func:`curation_source` of the array."""
         from mbo_utilities.lazy_array import base_array
 
@@ -552,8 +553,9 @@ class EventCurationWidget:
         return kind
 
     def scan_raw_mesc(self, mesc_path, channel: int = 0) -> int:
-        """Every line of every line-scan unit of a ``.mesc`` as a raw
-        recording the denoiser runs on when clicked. Returns how many."""
+        """Every ROI of every AOD ROI unit of a ``.mesc`` (line scans,
+        chessboard or ribbon patches) as a raw recording the denoiser runs
+        on when clicked. Returns how many."""
         mesc_path = Path(mesc_path)
         self.sessions.clear()
         self._trace_sources.clear()
@@ -575,9 +577,9 @@ class EventCurationWidget:
         self._pipeline = None
         self.focus_pipeline_tab = True
         self.status = (
-            f"{n} raw line traces in {mesc_path.name}; no PF folder beside it, so click a "
+            f"{n} raw ROI traces in {mesc_path.name}; no PF folder beside it, so click a "
             "recording to run vnoiser's denoiser on it (minutes the first time, cached after)"
-            if n else f"no line-scan units in {mesc_path.name}"
+            if n else f"no AOD ROI units in {mesc_path.name}"
         )
         return n
 
@@ -1267,13 +1269,13 @@ class EventCurationWidget:
         imgui.end_tab_bar()
 
     def _draw_pipeline_tab(self) -> None:
-        """The voltage pipeline on the line-scan .mesc behind the data: raw lines in, a PF folder out."""
+        """The voltage pipeline on the AOD .mesc behind the data: raw ROIs in, a PF folder out."""
         if self._pipeline is None:
-            from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
+            from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray, list_mesc_units
             from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
 
             try:
-                units = [u for u in list_mesc_units(self.pipeline_mesc) if u.get("kind") == "packed"]
+                units = [u for u in list_mesc_units(self.pipeline_mesc) if u.get("kind") in ROI_LAYOUTS]
                 arr = MescArray(self.pipeline_mesc, unit=units[0]["key"])
             except Exception as error:
                 imgui.text_wrapped(f"cannot open {self.pipeline_mesc}: {error}")
@@ -1283,13 +1285,13 @@ class EventCurationWidget:
                 event_curation=self, logger=self.logger, _bold_font=None,
             )
             self._pipeline = VoltagePipelineWidget(host)
-            # no unit is on screen here, so every line scan in the file is a scan
+            # no unit is on screen here, so every ROI unit in the file is a scan
             self._pipeline._ensure_state()
             for key in self._pipeline._scans:
                 self._pipeline._scans[key] = True
         imgui.text_wrapped(
-            "Turns the raw lines into per-domain traces: dF/F, z-score, wavelet denoising and peaks, "
-            "written as a PF folder. Group the lines into domains, run, then Open in Curation."
+            "Turns the raw ROIs into per-domain traces: dF/F, z-score, wavelet denoising and peaks, "
+            "written as a PF folder. Group the ROIs into domains, run, then Open in Curation."
         )
         imgui.spacing()
         self._pipeline.draw()

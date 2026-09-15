@@ -1545,11 +1545,11 @@ def _voltage_progress(monitor: TaskMonitor, total: int, done: list, scan_id: str
 
 def task_voltage(args: dict, logger: logging.Logger) -> None:
     """
-    Voltage pipeline task: line-scan units of a .mesc to a PF folder.
+    Voltage pipeline task: AOD ROI units of a .mesc to a PF folder.
 
     Runs mbo_utilities.vnoiser.pipeline.run_voltage_pipeline with the Run
-    tab's settings; every ticked unit is one scan, the domain table says
-    which lines make each domain.
+    tab's settings (scaled there to the scans' frame rate); every ticked
+    unit is one scan, the domain table says which ROIs make each domain.
     """
     from functools import partial
 
@@ -1588,10 +1588,8 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
             convert=settings.runtime.convert,
             frames=None if frames is None else (int(frames[0]), int(frames[1])),
             save_cwt=settings.runtime.save_cwt,
-            spike_cfg=settings.events.config(),
+            settings=settings,
             detect=settings.events.detect,
-            dfof_cfg=settings.dfof.config(),
-            denoiser_factory=settings.denoiser.factory,
             overwrite=settings.runtime.overwrite,
             provenance={"settings": settings.to_dict(), "source_metadata": strip_for_export(metadata)},
             progress=partial(_voltage_progress, monitor, total, [0]),

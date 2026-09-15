@@ -896,11 +896,11 @@ def _echo_mesc_units(input_path, unit):
     units = list_mesc_units(path)
     click.echo("")
     click.secho(f"Measurement units ({len(units)})", fg="cyan")
-    click.echo(f"  {'idx':<5}{'unit':<12}{'type':<20}{'shape (T,C,Z,Y,X)':<26}comment")
+    click.echo(f"  {'idx':<5}{'unit':<12}{'type':<20}{'role':<18}{'shape (T,C,Z,Y,X)':<26}comment")
     for u in units:
         shape = ",".join(str(v) for v in u["shape"])
         click.echo(
-            f"  {u['index']:<5}{u['munit']:<12}{u['modality_name']:<20}"
+            f"  {u['index']:<5}{u['munit']:<12}{u['modality_name']:<20}{(u.get('role') or '-'):<18}"
             f"({shape}){'':<{max(0, 24 - len(shape))}}{u['comment']}"
         )
     if unit is None and len(units) > 1:
@@ -1903,8 +1903,8 @@ def _voltage_progress(scan_id, domain):
               help="domains.json (or an archive scanIDs_ROIs.pkl) naming which ROIs make each domain. "
                    "Default: domains.json beside the file.")
 @click.option("--unit", "units", multiple=True,
-              help="Line-scan unit(s) to process, in scan order (MUnit_35 or MSession_0/MUnit_35). "
-                   "Default: the domains file's scans, else every line-scan unit.")
+              help="Unit(s) to process, in scan order (MUnit_35 or MSession_0/MUnit_35): line scans, "
+                   "chessboard or ribbon patches. Default: the domains file's scans, else every such unit.")
 @click.option("-o", "--out", type=click.Path(file_okay=False), default=None,
               help="The PF folder to write. Default: <animal>/<expt>/PF for the archive layout "
                    "(<expt>/<expt>/<expt>.mesc), else PF beside the file.")
@@ -1921,15 +1921,17 @@ def _voltage_progress(scan_id, domain):
 @click.option("--init", is_flag=True, default=False,
               help="Write a domains.json template beside the file (ROIs grouped in threes) and exit.")
 def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_cwt, overwrite, init):
-    """The spatial JEDI voltage pipeline on a line-scan .mesc: per-line
-    traces, domain dF/F and z-score, wavelet denoising, peaks, written as a
-    PF folder that `mbo curate` opens.
+    """The spatial JEDI voltage pipeline on a .mesc with AOD ROI units (line
+    scans, chessboard or ribbon patches): per-ROI traces, domain dF/F and
+    z-score, wavelet denoising, peaks, written as a PF folder that
+    `mbo curate` opens.
 
-    Each line-scan unit is one scan (its MUnit number is the scan id). The
-    domains file says which lines make the soma and each branch. Run with
-    --init first to get a template, edit the names and groups, then run
-    again. With vnoiser's upstream settings the traces match the archive's
-    PF folders.
+    Each unit is one scan (its MUnit number is the scan id). The domains
+    file says which ROIs make each domain: the lines of a soma or branch,
+    the patch of a cell. Run with --init first to get a template, edit the
+    names and groups, then run again. Settings are the archive's, written
+    for its 1075 Hz and scaled to each scan's frame rate; at the archive's
+    rate the traces match its PF folders.
 
     \b
       mbo voltage stan112_expt12.mesc --init
@@ -1942,8 +1944,7 @@ def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_
 
     if not HAS_VNOISER:
         raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
-    from vnoiser import SpikeDetectConfig
-
+    from mbo_utilities.vnoiser.params import VoltageSettings
     from mbo_utilities.vnoiser.pipeline import (
         DOMAINS_FILE,
         read_domains,
@@ -1973,19 +1974,22 @@ def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_
             param_hint="--domains",
         )
     spec = read_domains(domains_path)
-    spike_cfg = None
+    settings = VoltageSettings()
     if events:
         try:
             lo, hi, bp_sd, amp_sd, dur = (float(v) for v in events.split(","))
         except ValueError:
             raise click.BadParameter("expected LO,HI,BP_SD,AMP_SD,DUR_MS", param_hint="--events")
-        spike_cfg = SpikeDetectConfig(bp=(lo, hi), thres_bp_sd=bp_sd, thres_amp_sd=amp_sd, duration_thres_ms=dur)
+        settings.events.bp_low, settings.events.bp_high = lo, hi
+        settings.events.thres_bp_sd, settings.events.thres_amp_sd = bp_sd, amp_sd
+        settings.events.duration_thres_ms = dur
     chosen = list(units) or [f"MUnit_{s}" for s in spec["scan_ids"]] or None
     try:
         paths = run_voltage_pipeline(
             mesc_path, domains=spec["domains"], units=chosen, first_env=spec["first_env"], out=out,
-            channel=channel, convert=convert, save_cwt=save_cwt, spike_cfg=spike_cfg,
+            channel=channel, convert=convert, save_cwt=save_cwt, settings=settings,
             overwrite=overwrite, progress=_voltage_progress, log=click.echo,
+            provenance={"settings": settings.to_dict()},
         )
     except (ValueError, KeyError, FileExistsError) as e:
         click.echo(f"error: {e}", err=True)
