@@ -1262,25 +1262,13 @@ class TestClearLabels:
         assert saved["candidate_detection"]["thresholds"]
 
 
-class TestPipelineTab:
-    def test_raw_mesc_gets_the_pipeline_tab(self, tmp_path):
-        """A raw line-scan .mesc opened in the standalone window offers the voltage pipeline on it."""
-        from pathlib import Path
-
+class TestLoadingLine:
+    def test_loading_line_names_the_active_job(self, tmp_path):
         from mbo_utilities.gui.curation_viewer import _Dashboard
 
-        if not Path(ASAKO_MESC).exists():
-            pytest.skip("local data only")
         dash = _Dashboard(None)
         widget = dash.widget
-        assert widget.pipeline_mesc is None
-        widget.pipeline_mesc = widget._mesc_behind(Path(ASAKO_MESC))
-        assert widget.pipeline_mesc == Path(ASAKO_MESC)
-        # the archive experiment folder and its PF folder resolve to the same file
-        experiment = Path(ASAKO_MESC).parent.parent
-        assert widget._mesc_behind(experiment) == Path(ASAKO_MESC)
-        assert widget._mesc_behind(experiment / "PF") == Path(ASAKO_MESC)
-        assert widget._mesc_behind(tmp_path) is None
+        assert not hasattr(widget, "pipeline_mesc")
         assert widget.loading_line() == ""
         widget._busy.add(("fast", "x"))
         assert widget.loading_line() == "1 queued"
@@ -1318,15 +1306,51 @@ class TestOpenArray:
         unit.metadata = {"mesc_layout": "frames"}
         assert curation_source(unit) == ""
 
-    def test_a_pf_array_scans_its_folder_scoped_to_its_scan(self, curation, data_root):
+    def test_a_pf_array_scans_its_folder_and_selects_its_scan(self, curation, data_root):
         from mbo_utilities.arrays.pf import PfArray
 
         pf_dir = data_root / "stan1" / "stan1_expt1" / "PF"
         assert curation.open_array(PfArray(pf_dir)) == "pf"
         assert curation.data_path == str(pf_dir)
+        assert curation.scope is None
         assert [r.rid for r in curation.shown] == ["stan1/stan1_expt1/scan=10/domain=soma"]
+        assert curation.current == "stan1/stan1_expt1/scan=10/domain=soma"
         curation.wait(60)
         assert curation.session is not None and curation.session.loaded
+        _frames(curation)
+
+    def test_a_unit_beside_a_pf_folder_shows_every_scan_and_follows_the_unit(self, curation, tmp_path):
+        """The viewer shows one unit at a time; the curation lists every scan the pipeline wrote
+        and moves its selection with the unit, without rescanning the folder."""
+        from types import SimpleNamespace
+
+        mesc, pf = _mesc_beside_pf(tmp_path / "beside")
+        traces = pickle.loads((pf / "denoised_trace_scans.pkl").read_bytes())
+        traces["20"] = {"soma": traces["10"]["soma"]}
+        (pf / "denoised_trace_scans.pkl").write_bytes(pickle.dumps(traces))
+        fs = pickle.loads((pf / "fs_scans.pkl").read_bytes())
+        fs["20"] = fs["10"]
+        (pf / "fs_scans.pkl").write_bytes(pickle.dumps(fs))
+        meta = pickle.loads((pf / "scanIDs_ROIs.pkl").read_bytes())
+        meta["scanID_spatial"] = np.array([10, 20])
+        (pf / "scanIDs_ROIs.pkl").write_bytes(pickle.dumps(meta))
+
+        unit = SimpleNamespace(metadata={"mesc_layout": "packed"}, filenames=[mesc], unit_key="MSession_0/MUnit_20")
+        assert curation.open_array(unit) == "pf"
+        assert curation.data_path == str(pf)
+        assert sorted(r.rid for r in curation.shown) == [
+            "stan1/stan1_expt1/scan=10/domain=soma", "stan1/stan1_expt1/scan=20/domain=soma",
+        ]
+        assert curation.current == "stan1/stan1_expt1/scan=20/domain=soma"
+        catalog = curation.catalog
+        unit.unit_key = "MSession_0/MUnit_10"
+        assert curation.open_array(unit) == "pf"
+        assert curation.current == "stan1/stan1_expt1/scan=10/domain=soma"
+        assert curation.catalog is catalog
+        # a unit the pipeline never processed keeps every scan on show and says so
+        unit.unit_key = "MSession_0/MUnit_2"
+        assert curation.open_array(unit) == "pf"
+        assert len(curation.shown) == 2 and "scan 2 is not in" in curation.status
         _frames(curation)
 
     def test_a_raw_line_scan_lists_its_lines_scoped_to_the_unit(self, curation, tmp_path, monkeypatch):
@@ -1348,7 +1372,7 @@ class TestOpenArray:
         assert curation.open_array(unit) == "raw"
         assert len(curation.catalog) == 4
         assert [r.rid for r in curation.shown] == ["scan/MUnit_38/roi=0", "scan/MUnit_38/roi=1"]
-        assert curation.pipeline_mesc == mesc and "4 raw line traces" in curation.status
+        assert "4 raw ROI traces" in curation.status
         _frames(curation)
 
     def test_the_viewer_turns_the_curation_on_for_a_pf_folder(self, data_root):

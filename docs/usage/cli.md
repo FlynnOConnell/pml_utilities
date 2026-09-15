@@ -397,14 +397,16 @@ conversion is left off (`--convert` applies the file's offset so zero means no
 photons, which the archive never did).
 
 The same pipeline is the **Voltage** entry of the viewer's Process tab (`mbo
-scan.mesc`, or `mbo <expt>/PF` to run it again on a folder's source scan) and
-the **Pipeline** tab of the standalone curation window (`mbo curate`): the dataset block, output folder, slice popup
+scan.mesc`, or `mbo <expt>/PF` to run it again on a folder's source scan): the dataset block, output folder, slice popup
 (a frame window and the channel; every line is used), a Scans block ticking
 which units become scans, a Domains table naming which lines make each domain
 (loaded from or saved to `domains.json`, seeded from a `PF` folder beside the
 file when one exists), the settings popup with the archive's values as
 defaults, and Run, which spawns a worker the process console tracks. When the
-folder is written, "Open in Curation" loads it.
+folder is written, "Open in Curation" loads it. The standalone curation
+window (`mbo curate`) only reads results: every scan of the PF folder is
+listed, and `mbo scan.mesc` opens on the first scan the folder holds with
+the curation following the unit on screen.
 
 ## Formats
 
