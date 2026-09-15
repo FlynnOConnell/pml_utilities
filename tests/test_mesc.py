@@ -686,61 +686,41 @@ def single_unit_mesc(tmp_path_factory):
 
 
 class TestUnitPicker:
-    """`.mesc` always asks which unit to open — it is never a safe default."""
+    """A `.mesc` always opens straight to its first unit, no prompt, no Qt;
+    the Image tab's MESc Units combo (ImGui) is how the rest get picked."""
 
-    @staticmethod
-    def _patch(monkeypatch, result):
-        from mbo_utilities.gui import run_gui as rg
-
-        calls = []
-
-        def _fake(path, units):
-            calls.append((Path(path).name, len(units)))
-            return result
-
-        monkeypatch.setattr(rg, "_prompt_for_mesc_unit", _fake)
-        return calls
-
-    def test_prompts_even_when_the_file_holds_one_unit(
-        self, single_unit_mesc, monkeypatch
-    ):
+    def test_single_unit_file_opens_without_prompting(self, single_unit_mesc):
         from mbo_utilities.gui.run_gui import _resolve_mesc_unit
 
-        calls = self._patch(monkeypatch, "MSession_0/MUnit_0")
         kwargs, proceed = _resolve_mesc_unit(single_unit_mesc, None)
-        assert calls == [("one.mesc", 1)]
-        assert (kwargs, proceed) == ({"unit": "MSession_0/MUnit_0"}, True)
+        assert proceed is True
+        assert kwargs["unit"] == "MSession_0/MUnit_0"
 
-    def test_explicit_unit_bypasses_the_picker(self, mesc_path, monkeypatch):
-        from mbo_utilities.gui.run_gui import _resolve_mesc_unit
-
-        calls = self._patch(monkeypatch, "MSession_0/MUnit_0")
-        assert _resolve_mesc_unit(mesc_path, 3) == ({"unit": 3}, True)
-        assert calls == []
-
-    def test_cancelling_aborts_instead_of_opening_something(
-        self, mesc_path, monkeypatch
+    def test_multi_unit_file_opens_the_first_unit_without_prompting(
+        self, mesc_path
     ):
+        from mbo_utilities.arrays.mesc import list_mesc_units
         from mbo_utilities.gui.run_gui import _resolve_mesc_unit
 
-        self._patch(monkeypatch, None)
-        assert _resolve_mesc_unit(mesc_path, None) == ({}, False)
+        units = list_mesc_units(mesc_path)
+        assert len(units) > 1
+        assert _resolve_mesc_unit(mesc_path, None) == (
+            {"unit": units[0]["key"]},
+            True,
+        )
 
-    def test_no_qt_falls_through_to_the_first_unit(self, mesc_path, monkeypatch):
-        from mbo_utilities.gui import run_gui as rg
-
-        self._patch(monkeypatch, rg._PICKER_UNAVAILABLE)
-        assert rg._resolve_mesc_unit(mesc_path, None) == ({}, True)
-
-    def test_non_mesc_inputs_are_left_alone(self, tmp_path, monkeypatch):
+    def test_explicit_unit_bypasses_scanning(self, mesc_path):
         from mbo_utilities.gui.run_gui import _resolve_mesc_unit
 
-        calls = self._patch(monkeypatch, "MSession_0/MUnit_0")
+        assert _resolve_mesc_unit(mesc_path, 3) == ({"unit": 3}, True)
+
+    def test_non_mesc_inputs_are_left_alone(self, tmp_path):
+        from mbo_utilities.gui.run_gui import _resolve_mesc_unit
+
         other = tmp_path / "scan.tif"
         other.touch()
         assert _resolve_mesc_unit(other, None) == ({}, True)
         assert _resolve_mesc_unit(tmp_path, None) == ({}, True)
-        assert calls == []
 
 
 # ============================================================

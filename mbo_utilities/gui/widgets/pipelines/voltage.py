@@ -399,8 +399,14 @@ class VoltagePipelineWidget(PipelineWidget):
 
     def _draw_domains_block(self) -> None:
         imgui.text_colored(_SUBSECTION_COLOR, "Domains")
-        set_tooltip("Which ROIs make each domain (the lines of a soma or branch, the patch of a cell), "
-                    "0-based in drawing order: 0,1,2 or 0:2. A domain's ROIs are averaged weighted by their pixel counts.")
+        set_tooltip(
+            "Domains are groups of ROIs, letting you average signals from the same "
+            "structure (a soma, a branch, a cell).\n\n"
+            "By default, each domain has 1 ROI.\n\n"
+            "Femtonics comments like 'bas1-3, api1-5' are parsed automatically to name "
+            "them. If you expect different parsing than what you see here, file an issue.\n\n"
+            "ROIs are 0-based, in drawing order: 0,1,2 or 0:2."
+        )
         _, n_lines, _ = self._dims()
         flags = imgui.TableFlags_.row_bg | imgui.TableFlags_.borders_inner_h | imgui.TableFlags_.sizing_stretch_prop
         remove = None
