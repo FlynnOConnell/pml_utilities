@@ -107,6 +107,10 @@ def _configure_qt_backend():
 
     must happen before importing fastplotlib to avoid glfw selection.
     """
+    if os.environ.get("RENDERCANVAS_FORCE_OFFSCREEN"):
+        # offscreen/http canvases never touch Qt; importing QtWidgets here
+        # would need libGL even on a headless box that doesn't have it
+        return
     if importlib.util.find_spec("PyQt6") is None:
         return
 

@@ -350,12 +350,6 @@ def plane_masks(
         out[plane == (i + 1)] = k
     return out, kept
 
-
-# ---------------------------------------------------------------------------
-# quick traces
-# ---------------------------------------------------------------------------
-
-
 def _bbox(mask: np.ndarray) -> tuple[int, int, int, int]:
     rows, cols = np.nonzero(mask)
     if rows.size == 0:
@@ -469,11 +463,6 @@ def pixel_trace(source, row: int, col: int, t=slice(None), *, z: int = 0, c: int
     return out
 
 
-# ---------------------------------------------------------------------------
-# registered plane dirs
-# ---------------------------------------------------------------------------
-
-
 def open_registered(plane_dir: str | Path) -> tuple[np.memmap, dict]:
     """``(movie (T, Y, X) int16 memmap, ops)`` for a suite2p-shaped plane dir.
 
@@ -549,11 +538,6 @@ def plane_store(
         st = LabelsZarr.load(local)
         return st, (0 if st.nz == 1 else z_global)
     return fallback, z_global
-
-
-# ---------------------------------------------------------------------------
-# run dirs
-# ---------------------------------------------------------------------------
 
 
 @dataclass

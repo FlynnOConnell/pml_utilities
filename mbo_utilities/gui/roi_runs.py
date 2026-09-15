@@ -78,11 +78,6 @@ def set_color(index: int) -> tuple[float, float, float]:
     return SET_COLORS[index % len(SET_COLORS)]
 
 
-# ---------------------------------------------------------------------------
-# runs
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class RoiRun:
     """One background run: an in-process job (``job``) or a spawn (``pid``)."""
@@ -311,19 +306,6 @@ def _rim(mask: np.ndarray) -> np.ndarray:
     core[:, :-1] &= mask[:, 1:]
     return mask & ~core
 
-
-# ---------------------------------------------------------------------------
-# vector overlays: thin paths instead of a filled raster
-# ---------------------------------------------------------------------------
-
-# A filled mask hides the pixels it covers, and at a handful of pixels per
-# cell even the 1-px rim above eats the whole footprint. suite2p and cellpose
-# get around that by drawing the mask boundary rather than its body, which is
-# what "outline" mode does here. The stand-in "circle" mode goes further: it
-# drops the footprint shape and just rings the cell, so nothing under the ROI
-# is covered at all. Both come out as line geometry, whose stroke stays one
-# screen pixel wide at any zoom instead of growing with the data pixels the
-# way a raster overlay does.
 
 MASK_MODES = ("circle", "outline", "fill")
 RING_SEGMENTS = 36  # reads as round at any sane zoom
