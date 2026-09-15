@@ -155,6 +155,61 @@ def _mode_title(mode: str, cutoff: float) -> str:
     return _MODE_TITLES[mode].format(cutoff=cutoff)
 
 
+def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[dict]:
+    """Per-line raw traces of every line-scan unit in a ``.mesc``:
+    ``[{"key", "munit", "fs", "traces"}, ...]`` with ``traces`` shaped
+    ``(lines, samples)``. Reads ``traces_dir/F.npy`` when given (an
+    ``mbo linescan`` output), else averages each line's kymograph, once:
+    the result is kept under ``.curation/cache`` beside the file, keyed by
+    the file's size and mtime, so reopening the file does not recompute it."""
+    from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
+    from mbo_utilities.gui.linescan_viewer import _load_or_compute_traces
+
+    mesc_path = Path(mesc_path)
+    stat = mesc_path.stat()
+    cache_dir = mesc_path.parent / ".curation" / "cache"
+    out = []
+    for unit in list_mesc_units(mesc_path):
+        if unit.get("kind") != "packed":
+            continue
+        arr = MescArray(mesc_path, unit=unit["key"])
+        cache = cache_dir / f"{mesc_path.stem}_{unit['munit']}_ch{int(channel)}_traces.npz"
+        traces = None
+        if traces_dir is None and cache.exists():
+            with np.load(cache) as saved:
+                if int(saved["size"]) == stat.st_size and int(saved["mtime_ns"]) == stat.st_mtime_ns:
+                    traces = saved["traces"]
+        if traces is None:
+            traces = np.asarray(_load_or_compute_traces(arr, channel, traces_dir))
+            if traces_dir is None:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(cache, traces=traces, size=stat.st_size, mtime_ns=stat.st_mtime_ns)
+        out.append({
+            "key": unit["key"],
+            "munit": unit["munit"],
+            "fs": float(arr.metadata["fs"]),
+            "traces": np.asarray(traces),
+        })
+    return out
+
+
+def curation_source(arr) -> str:
+    """What a viewer's array brings to the curation: "pf" for a PF folder
+    (:class:`~mbo_utilities.arrays.pf.PfArray`) or a line-scan unit whose
+    experiment has one, "raw" for a line-scan unit without, "" otherwise."""
+    from mbo_utilities.arrays.pf import PfArray
+    from mbo_utilities.lazy_array import base_array
+
+    arr = base_array(arr)
+    if isinstance(arr, PfArray):
+        return "pf"
+    md = getattr(arr, "metadata", None) or {}
+    files = getattr(arr, "filenames", None) or []
+    if md.get("mesc_layout") != "packed" or not files:
+        return ""
+    return "pf" if pf_dir_for_mesc(files[0]) is not None else "raw"
+
+
 @dataclass
 class Recording:
     """One curatable recording: what a session opens and which id loads it."""
@@ -471,6 +526,60 @@ class EventCurationWidget:
             source_path=source_path, curation_dir=curation_dir,
         )
         self.load(rec.rid)
+
+    def open_array(self, arr) -> str:
+        """Point the curation at the array a viewer shows: a PF folder's
+        traces scoped to its scan, the PF folder beside a line-scan unit
+        scoped to that unit, or the raw lines of a file without one.
+        Returns :func:`curation_source` of the array."""
+        from mbo_utilities.lazy_array import base_array
+
+        arr = base_array(arr)
+        kind = curation_source(arr)
+        if kind == "pf":
+            pf_dir = getattr(arr, "pf_dir", None)
+            scan_id = getattr(arr, "scan", None)
+            if pf_dir is None:
+                pf_dir = pf_dir_for_mesc(arr.filenames[0])
+                scan_id = str(arr.unit_key).rsplit("_", 1)[-1]
+            tag = f"scan={scan_id}"
+            self.scope = lambda rec: tag in rec.rid.split("/")
+            self.scan(pf_dir)
+        elif kind == "raw":
+            self.scan_raw_mesc(arr.filenames[0])
+            munit = str(arr.unit_key).rsplit("/", 1)[-1]
+            self.scope = lambda rec: rec.rid.split("/")[1:2] == [munit]
+        return kind
+
+    def scan_raw_mesc(self, mesc_path, channel: int = 0) -> int:
+        """Every line of every line-scan unit of a ``.mesc`` as a raw
+        recording the denoiser runs on when clicked. Returns how many."""
+        mesc_path = Path(mesc_path)
+        self.sessions.clear()
+        self._trace_sources.clear()
+        self.catalog = []
+        self.current = ""
+        n = 0
+        for unit in raw_linescan_traces(mesc_path, channel):
+            for i, trace in enumerate(unit["traces"]):
+                self.add_trace(
+                    trace, unit["fs"],
+                    recording_id=f"{mesc_path.stem}/{unit['munit']}/roi={i}",
+                    label=f"{unit['munit']} ROI {i}",
+                    source_path=mesc_path,
+                )
+                n += 1
+        self.data_path = str(mesc_path)
+        self.prompt.path = self.data_path
+        self.pipeline_mesc = mesc_path
+        self._pipeline = None
+        self.focus_pipeline_tab = True
+        self.status = (
+            f"{n} raw line traces in {mesc_path.name}; no PF folder beside it, so click a "
+            "recording to run vnoiser's denoiser on it (minutes the first time, cached after)"
+            if n else f"no line-scan units in {mesc_path.name}"
+        )
+        return n
 
     def _enqueue(self, rec: Recording, mode: str) -> None:
         key = (mode, rec.rid)
@@ -1497,18 +1606,27 @@ def _build_catalog(root: Path, logger) -> list[Recording]:
 
 
 def attach_curation_widget(parent: Any, focus: bool = False) -> EventCurationWidget | None:
-    """Turn the curation widget on for a ``PreviewDataWidget``. Returns None
-    (logged) when it cannot be built."""
+    """Turn the curation widget on for a ``PreviewDataWidget``. A PF folder
+    or a line scan on screen is opened in it (:meth:`EventCurationWidget.open_array`);
+    anything else reopens the last data path. Returns None (logged) when it
+    cannot be built."""
     widget = getattr(parent, "event_curation", None)
     if widget is not None:
         widget.focus_tab = widget.focus_tab or focus
         return widget
+    data = getattr(getattr(parent, "image_widget", None), "data", None)
+    arr = data[0] if data else None
+    kind = curation_source(arr) if arr is not None else ""
     try:
-        widget = EventCurationWidget(parent, strip=getattr(parent, "top_strip", None))
+        widget = EventCurationWidget(
+            parent, strip=getattr(parent, "top_strip", None), data_path="" if kind else None,
+        )
     except Exception:
         parent.logger.warning("event curation widget unavailable", exc_info=True)
         parent.event_curation = None
         return None
+    if kind:
+        widget.open_array(arr)
     widget.focus_tab = focus
     parent.event_curation = widget
     return widget

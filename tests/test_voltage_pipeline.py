@@ -101,7 +101,10 @@ def test_task_and_widget_are_registered():
     from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget, parse_roi_text
 
     assert "voltage" in TASKS
-    assert VoltagePipelineWidget.info.marker_files == ["denoised_trace_scans.pkl"]
+    from mbo_utilities.pipeline_registry import get_pipeline_info
+    import mbo_utilities.arrays.pf  # noqa: F401  registers the PF folder as the pipeline's output
+
+    assert get_pipeline_info("voltage").marker_files == ["denoised_trace_scans.pkl"]
     assert VoltagePipelineWidget.axis_mode("Z") == "all"
     assert VoltagePipelineWidget.applies_to(SimpleNamespace(metadata={"mesc_layout": "packed"}))
     assert not VoltagePipelineWidget.applies_to(SimpleNamespace(metadata={"mesc_layout": "boxes"}, filenames=["a.tif"]))

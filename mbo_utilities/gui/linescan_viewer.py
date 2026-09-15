@@ -50,8 +50,8 @@ Usage:
     mbo linescan scan.mesc --view [--unit MUnit_35]
     mbo linescan <animal>/<expt> --view the notebook's experiment (or PF) folder:
                                         its <expt>/<expt>.mesc, Z-stack and PF traces
-    (`mbo scan.mesc` itself opens the standalone curation window,
-    gui/curation_viewer.py, without the image panels)
+    (`mbo scan.mesc` opens the image viewer on the line scan with the curation
+    widget; `mbo curate` is the dashboard alone, gui/curation_viewer.py)
     python -m mbo_utilities.gui.linescan_viewer [mesc_path] [--ref MUnit_x]
         [--zstack MUnit_y] [--zstack-file stack.mesc] [--channel 0] [--flip-y]
         [--no-traces] [--traces rois_linescan/MUnit_x] [--curate 0]
