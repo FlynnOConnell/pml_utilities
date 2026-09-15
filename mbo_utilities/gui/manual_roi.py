@@ -642,6 +642,55 @@ class ManualRoiWidget:
     # lifecycle
     # ------------------------------------------------------------------
 
+    def rebind(self):
+        """Re-derive dims and mask geometry after ``self.iw``'s array is
+        swapped in place (an MESc unit switch): each unit is an unrelated
+        recording, so ``tdim``/``zdim``/``cdim`` and the store's (ny, nx)
+        go stale exactly like a fresh :meth:`__init__` would derive them.
+        The store (and anything keyed off its rows) is only replaced when
+        its shape no longer fits the new frame; same-shape units keep
+        their masks, same as an adopted store on re-attach.
+        """
+        iw = self.iw
+        self.image = iw.graphics[0]
+        self.ny, self.nx = self.image.data.value.shape[:2]
+
+        self.zdim = find_slider_name(iw.dim_names, "z")
+        self.tdim = find_slider_name(iw.dim_names, "t")
+        self.cdim = find_slider_name(iw.dim_names, "c")
+
+        axes = []
+        for name in iw.dim_names:
+            if name == self.tdim:
+                continue
+            rr = iw.ndwidget.indices.ref_ranges.get(name)
+            n = max(int(rr.stop - rr.start), 1) if rr is not None else 1
+            if n > 1:
+                axes.append((name, n))
+        axes.sort(key=lambda a: a[0] == self.zdim)
+        self.plane_axes = tuple(axes)
+        nz = int(np.prod([n for _, n in axes])) if axes else 1
+
+        if (self.store.nz, self.store.ny, self.store.nx) != (nz, self.ny, self.nx):
+            label_names = self.store.label_names
+            self.store = RoiLabelStore(nz, self.ny, self.nx, min_pixels=MIN_ROI_PIXELS)
+            for name in label_names:
+                self.store.add_label_name(name)
+            self.selected = -1
+            self.selected_derived = None
+            self.buffer = []
+            self._feathers = {}
+            self.derived = []
+            self.trace_sets = {}
+            self.overlay.data = np.zeros((self.ny, self.nx, 4), np.uint8)
+            self.derived_overlay.data = np.zeros((self.ny, self.nx, 4), np.uint8)
+        self.store.plane_axes = self.plane_axes
+
+        self.z = self._current_z()
+        self._resync()
+        self.refresh_overlay()
+        self.refresh_derived_overlay()
+
     def close(self):
         """Take everything back off the figure: panel, overlays, handlers."""
         if self._closed:
