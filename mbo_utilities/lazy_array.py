@@ -375,3 +375,23 @@ def _dispatch(path) -> type[LazyArray] | None:
         except Exception:
             continue
     return None
+
+
+def base_array(arr):
+    """The array ``imread`` returned under the viewer's display wrappers and
+    read-time views (timing proxy, squeezed singletons, frame averaging,
+    scan-phase correction, axial shifts), for ``isinstance`` checks."""
+    from mbo_utilities.arrays._average_view import FrameAveragedView
+    from mbo_utilities.arrays._phasecorr_view import PhaseCorrectedView
+    from mbo_utilities.arrays._registration import AxialShiftView
+    from mbo_utilities.squeeze import SqueezedView
+
+    while True:
+        if isinstance(arr, (FrameAveragedView, PhaseCorrectedView, AxialShiftView)):
+            arr = arr._source
+        elif isinstance(arr, SqueezedView):
+            arr = arr.base
+        elif type(arr).__name__ in ("_ScrubTimingProxy", "_SqueezeSingletonDims"):
+            arr = arr._arr
+        else:
+            return arr

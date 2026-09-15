@@ -63,7 +63,6 @@ __all__ = [
     "CurationVis",
     "PanelHost",
     "open_curation_viewer",
-    "raw_linescan_traces",
     "main",
 ]
 
@@ -134,44 +133,6 @@ class PanelHost:
         return next((p for p in self.panels if p.key == key), None)
 
 
-def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[dict]:
-    """Per-line raw traces of every line-scan unit in a ``.mesc``:
-    ``[{"key", "munit", "fs", "traces"}, ...]`` with ``traces`` shaped
-    ``(lines, samples)``. Reads ``traces_dir/F.npy`` when given (an
-    ``mbo linescan`` output), else averages each line's kymograph, once:
-    the result is kept under ``.curation/cache`` beside the file, keyed by
-    the file's size and mtime, so reopening the file does not recompute it."""
-    from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
-    from mbo_utilities.gui.linescan_viewer import _load_or_compute_traces
-
-    mesc_path = Path(mesc_path)
-    stat = mesc_path.stat()
-    cache_dir = mesc_path.parent / ".curation" / "cache"
-    out = []
-    for unit in list_mesc_units(mesc_path):
-        if unit.get("kind") != "packed":
-            continue
-        arr = MescArray(mesc_path, unit=unit["key"])
-        cache = cache_dir / f"{mesc_path.stem}_{unit['munit']}_ch{int(channel)}_traces.npz"
-        traces = None
-        if traces_dir is None and cache.exists():
-            with np.load(cache) as saved:
-                if int(saved["size"]) == stat.st_size and int(saved["mtime_ns"]) == stat.st_mtime_ns:
-                    traces = saved["traces"]
-        if traces is None:
-            traces = np.asarray(_load_or_compute_traces(arr, channel, traces_dir))
-            if traces_dir is None:
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(cache, traces=traces, size=stat.st_size, mtime_ns=stat.st_mtime_ns)
-        out.append({
-            "key": unit["key"],
-            "munit": unit["munit"],
-            "fs": float(arr.metadata["fs"]),
-            "traces": np.asarray(traces),
-        })
-    return out
-
-
 def draw_dashboard(widget, host: PanelHost) -> None:
     """One frame of the layout both hosts share: the widget's frame hook,
     the dashboard panel on the left, the controls column on the right."""
@@ -239,34 +200,7 @@ class _Dashboard:
     def open_raw_mesc(self, mesc_path) -> int:
         """Every line of every line-scan unit as a raw recording the
         denoiser runs on when clicked. Returns how many."""
-        mesc_path = Path(mesc_path)
-        widget = self.widget
-        widget.sessions.clear()
-        widget._trace_sources.clear()
-        widget.catalog = []
-        widget.current = ""
-        n = 0
-        for unit in raw_linescan_traces(mesc_path, self.channel):
-            for i, trace in enumerate(unit["traces"]):
-                widget.add_trace(
-                    trace, unit["fs"],
-                    recording_id=f"{mesc_path.stem}/{unit['munit']}/roi={i}",
-                    label=f"{unit['munit']} ROI {i}",
-                    source_path=mesc_path,
-                )
-                n += 1
-        widget.data_path = str(mesc_path)
-        widget.prompt.path = widget.data_path
-        widget.pipeline_mesc = mesc_path
-        widget._pipeline = None
-        widget.focus_pipeline_tab = True
-        widget.status = (
-            f"{n} raw line traces in {mesc_path.name}; no PF folder beside it, so click a "
-            "recording to run vnoiser's denoiser on it (minutes the first time, cached after)"
-            if n else f"no line-scan units in {mesc_path.name}"
-        )
-        return n
-
+        return self.widget.scan_raw_mesc(mesc_path, self.channel)
 
 
 class CurationApp(_Dashboard):

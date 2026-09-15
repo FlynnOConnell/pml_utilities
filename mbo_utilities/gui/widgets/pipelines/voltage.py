@@ -41,7 +41,8 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
     _truncate_to_width,
 )
 from mbo_utilities.install import VNOISER_HINT
-from mbo_utilities.pipeline_registry import PipelineInfo
+from mbo_utilities.arrays.pf import PfArray
+from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
 
@@ -95,22 +96,16 @@ class VoltagePipelineWidget(PipelineWidget):
     name = "Voltage"
     is_available = HAS_VNOISER
     install_command = VNOISER_HINT
-    info = PipelineInfo(
-        name="voltage",
-        description="Spatial JEDI voltage pipeline: line-scan traces, dF/F, wavelet denoising, peaks (a PF folder)",
-        input_patterns=["**/*.mesc"],
-        output_patterns=["**/PF/denoised_trace_scans.pkl", "**/PF/pipeline.json", "**/PF/test.h5"],
-        input_extensions=["mesc"],
-        output_extensions=["pkl", "h5", "json"],
-        marker_files=["denoised_trace_scans.pkl"],
-        category="processor",
-    )
     # frames are a window, every line is needed for the domains, one channel is averaged
     axes_consumed = {"T": "range", "Z": "all", "C": "select-one"}
 
     @classmethod
     def applies_to(cls, arr: Any) -> bool:
-        """True for any unit of a .mesc that holds a line-scan unit; the unit on screen need not be one."""
+        """True for any unit of a .mesc that holds a line-scan unit (the unit on screen need not be one)
+        and for a PF folder whose source line scan is reachable."""
+        arr = base_array(arr)
+        if isinstance(arr, PfArray):
+            return arr.source_mesc is not None
         if (getattr(arr, "metadata", None) or {}).get("mesc_layout") == "packed":
             return True
         filenames = getattr(arr, "filenames", None) or []
@@ -147,7 +142,7 @@ class VoltagePipelineWidget(PipelineWidget):
         iw = getattr(self.parent, "image_widget", None)
         if iw is None or not iw.data:
             return None
-        return iw.data[0]
+        return base_array(iw.data[0])
 
     def _dims(self) -> tuple[int, int, int]:
         """(frames, lines, channels) of the scans to process: the shortest ticked unit, else the first line scan."""
@@ -158,6 +153,9 @@ class VoltagePipelineWidget(PipelineWidget):
         return int(unit["nframes"]), int(unit["nrois"]) or 1, int(unit.get("nchannels") or 1)
 
     def _mesc_path(self) -> Path | None:
+        arr = self._array()
+        if isinstance(arr, PfArray):
+            return arr.source_mesc
         fpath = getattr(self.parent, "fpath", None)
         if isinstance(fpath, (list, tuple)):
             fpath = fpath[0] if fpath else None
@@ -205,8 +203,9 @@ class VoltagePipelineWidget(PipelineWidget):
         self._voltage_z_error = ""
         self._voltage_c_selection = "1"
         self._voltage_c_error = ""
-        self._outdir = str(default_pf_dir(mesc))
-        pf = pf_dir_for_mesc(mesc)
+        arr = self._array()
+        pf = arr.pf_dir if isinstance(arr, PfArray) else pf_dir_for_mesc(mesc)
+        self._outdir = str(pf if isinstance(arr, PfArray) else default_pf_dir(mesc))
         domains, scan_ids, first_env = {}, [], []
         if pf is not None:
             try:

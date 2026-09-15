@@ -963,9 +963,10 @@ class TestPfForMesc:
 
 
 class TestMboOpensTheLineScanViewer:
-    """``mbo scan.mesc`` opens the standalone curation window for a file
-    with line scans (or a picked line-scan unit); other units and files
-    still go to the image viewer."""
+    """``mbo scan.mesc`` opens the image viewer on the file's first line-scan
+    unit with no prompt (or on the line-scan unit picked); the curation and
+    the Voltage pipeline follow the unit on screen. Other units and files
+    still prompt once and go to the image viewer."""
 
     @staticmethod
     def _units(monkeypatch, kinds):
@@ -982,29 +983,30 @@ class TestMboOpensTheLineScanViewer:
         rg = self._units(monkeypatch, ["multicube", "frames", "packed", "packed"])
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
-        opened, standard = [], []
-        monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: pytest.fail("prompted"))
-        monkeypatch.setattr(rg, "_launch_curation_viewer", lambda p: opened.append(p))
+        standard = []
+        monkeypatch.setattr(
+            rg, "_resolve_mesc_unit",
+            lambda p, u: ({"unit": u}, True) if u is not None else pytest.fail("prompted"),
+        )
         monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
         rg._run_gui_impl(data_in=mesc)
-        assert opened == [mesc]
-        assert standard == []
+        assert len(standard) == 1
+        assert standard[0][0] == mesc and standard[0][-1] == "MSession_0/MUnit_2"
 
     def test_an_explicit_line_scan_unit_goes_to_the_viewer(self, tmp_path, monkeypatch):
         rg = self._units(monkeypatch, ["multicube", "packed"])
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
-        opened = []
-        monkeypatch.setattr(rg, "_launch_curation_viewer", lambda p: opened.append(p))
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: pytest.fail("image viewer"))
+        standard = []
+        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
         rg._run_gui_impl(data_in=mesc, unit="MUnit_1")
-        assert opened == [mesc]
+        assert len(standard) == 1 and standard[0][-1] == "MUnit_1"
         # a non line-scan unit of the same file still goes to the image viewer
         standard = []
         monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: ({"unit": u}, True))
         monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
         rg._run_gui_impl(data_in=mesc, unit="MUnit_0")
-        assert opened == [mesc] and standard
+        assert standard and standard[0][-1] == "MUnit_0"
 
     def test_a_file_without_line_scans_prompts_once_and_opens_the_image_viewer(self, tmp_path, monkeypatch):
         rg = self._units(monkeypatch, ["multicube", "frames"])
@@ -1087,22 +1089,20 @@ class TestExperimentFolder:
         assert experiment_linescan_mesc(tif) is None
         assert experiment_linescan_mesc(tmp_path / "missing") is None
 
-    def test_mbo_opens_the_experiment_folder_in_the_curation_window(self, tmp_path, monkeypatch):
+    def test_mbo_opens_the_experiment_folder_in_the_image_viewer(self, tmp_path, monkeypatch):
         rg = TestMboOpensTheLineScanViewer._units(monkeypatch, ["frames", "packed"])
         experiment, _mesc = _experiment_layout(tmp_path)
-        opened = []
-        monkeypatch.setattr(rg, "_launch_curation_viewer", lambda p: opened.append(p))
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: pytest.fail("image viewer"))
+        standard = []
+        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
         rg._run_gui_impl(data_in=experiment)
         rg._run_gui_impl(data_in=str(experiment / "PF"))
-        # the folder itself is handed over: the widget scans the experiment
-        assert opened == [experiment, str(experiment / "PF")]
+        # the folder itself is handed over: imread opens it as a PfArray
+        assert [a[0] for a in standard] == [experiment, str(experiment / "PF")]
 
     def test_a_folder_without_line_scans_falls_through(self, tmp_path, monkeypatch):
         rg = TestMboOpensTheLineScanViewer._units(monkeypatch, ["frames"])
         experiment, _mesc = _experiment_layout(tmp_path)
         standard = []
-        monkeypatch.setattr(rg, "_launch_curation_viewer", lambda p: pytest.fail("curation window"))
         monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
         rg._run_gui_impl(data_in=experiment)
         assert standard and standard[0][0] == experiment
@@ -1166,8 +1166,10 @@ class TestCurationWindow:
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
         traces = np.random.default_rng(0).random((3, 4000))
+        from mbo_utilities.gui import event_curation
+
         monkeypatch.setattr(
-            curation_viewer, "raw_linescan_traces",
+            event_curation, "raw_linescan_traces",
             lambda p, channel=0, traces_dir=None: [
                 {"key": "MSession_0/MUnit_35", "munit": "MUnit_35", "fs": FS_HZ, "traces": traces},
             ],
@@ -1273,3 +1275,78 @@ class TestPipelineTab:
         widget._trace_sources["x"] = {}
         assert widget.loading_line().startswith("denoising MUnit_35 ROI 0 · ")
         widget.close()
+
+
+class TestOpenArray:
+    def test_curation_source_of_each_kind(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        from mbo_utilities.arrays.numpy import NumpyArray
+        from mbo_utilities.arrays.pf import PfArray
+        from mbo_utilities.gui.event_curation import curation_source
+
+        pf_dir = _write_spatial_recording(tmp_path)
+        assert curation_source(PfArray(pf_dir)) == "pf"
+        assert curation_source(NumpyArray(np.zeros((2, 4, 4), dtype=np.float32))) == ""
+        assert curation_source(None) == ""
+        mesc, _pf = _mesc_beside_pf(tmp_path / "beside")
+        unit = SimpleNamespace(metadata={"mesc_layout": "packed"}, filenames=[mesc], unit_key="MSession_0/MUnit_10")
+        assert curation_source(unit) == "pf"
+        lone = tmp_path / "elsewhere" / "scan.mesc"
+        lone.parent.mkdir()
+        lone.write_bytes(b"x")
+        unit.filenames = [lone]
+        assert curation_source(unit) == "raw"
+
+    def test_a_pf_array_scans_its_folder_scoped_to_its_scan(self, curation, data_root):
+        from mbo_utilities.arrays.pf import PfArray
+
+        pf_dir = data_root / "stan1" / "stan1_expt1" / "PF"
+        assert curation.open_array(PfArray(pf_dir)) == "pf"
+        assert curation.data_path == str(pf_dir)
+        assert [r.rid for r in curation.shown] == ["stan1/stan1_expt1/scan=10/domain=soma"]
+        curation.wait(60)
+        assert curation.session is not None and curation.session.loaded
+        _frames(curation)
+
+    def test_a_raw_line_scan_lists_its_lines_scoped_to_the_unit(self, curation, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        from mbo_utilities.gui import event_curation
+
+        mesc = tmp_path / "scan.mesc"
+        mesc.write_bytes(b"x")
+        traces = np.random.default_rng(0).random((2, 4000))
+        monkeypatch.setattr(
+            event_curation, "raw_linescan_traces",
+            lambda p, channel=0, traces_dir=None: [
+                {"key": "MSession_0/MUnit_35", "munit": "MUnit_35", "fs": FS_HZ, "traces": traces},
+                {"key": "MSession_0/MUnit_38", "munit": "MUnit_38", "fs": FS_HZ, "traces": traces},
+            ],
+        )
+        unit = SimpleNamespace(metadata={"mesc_layout": "packed"}, filenames=[mesc], unit_key="MSession_0/MUnit_38")
+        assert curation.open_array(unit) == "raw"
+        assert len(curation.catalog) == 4
+        assert [r.rid for r in curation.shown] == ["scan/MUnit_38/roi=0", "scan/MUnit_38/roi=1"]
+        assert curation.pipeline_mesc == mesc and "4 raw line traces" in curation.status
+        _frames(curation)
+
+    def test_the_viewer_turns_the_curation_on_for_a_pf_folder(self, data_root):
+        if not _offscreen_selected():
+            pytest.skip("needs the offscreen rendercanvas")
+        from mbo_utilities.arrays.pf import PfArray
+        from mbo_utilities.gui.data_vis import DataVis
+
+        pf_dir = data_root / "stan1" / "stan1_expt1" / "PF"
+        vis = DataVis(PfArray(pf_dir), size=FIGURE_SIZE)
+        vis.show()
+        try:
+            parent = vis.widget
+            widget = parent.event_curation
+            assert widget is not None and widget.data_path == str(pf_dir)
+            assert parent.top_strip.has("curation")
+            widget.wait(60)
+            for _ in range(2):
+                vis.figure.canvas.draw()
+        finally:
+            vis.close()

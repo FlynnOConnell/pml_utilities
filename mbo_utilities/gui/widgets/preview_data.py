@@ -729,7 +729,15 @@ class PreviewDataWidget(EdgeWindow):
         # honour a persisted / CLI-set "Manual ROI Labeling" toggle
         from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
         self.sync_manual_roi(widget_enabled("manual_roi"))
-        self.sync_event_curation(widget_enabled("vnoiser"))
+        # a PF folder or a line scan on screen brings its own curation data
+        from mbo_utilities.gui._availability import HAS_VNOISER
+
+        auto = False
+        if HAS_VNOISER:
+            from mbo_utilities.gui.event_curation import curation_source
+
+            auto = bool(curation_source(self.image_widget.data[0]))
+        self.sync_event_curation(widget_enabled("vnoiser") or auto)
 
     def sync_event_curation(self, enabled: bool) -> None:
         """Create or tear down the vnoiser curation widget to match the toggle."""

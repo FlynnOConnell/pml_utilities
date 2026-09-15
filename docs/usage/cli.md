@@ -299,15 +299,21 @@ chance. `--flip-y` remains for a rig that saves the other way round.
 
 `--no-figures` skips them.
 
-`mbo scan.mesc` (or `mbo <animal>/<expt>`, an experiment folder laid out the
-curation notebook's way with the processed traces in `PF/`) opens the event
-curation window when vnoiser is installed: the notebook's dashboard on its
-own, with the trace and its candidates over the template, focused candidate,
-second pass and PCA, one recording at a time with arrows to flip, and the
-recordings table beside it. A `.mesc` with no `PF` folder lists every line
-of its line-scan units as a raw recording; clicking one runs the wavelet
-denoiser on it. `python -m mbo_utilities.gui.curation_viewer PATH` is the
-same window from a script.
+`mbo scan.mesc` opens the image viewer on the file's first line-scan unit
+with no unit prompt. With vnoiser installed the Event Curation widget comes
+on by itself: the experiment's `PF` folder when one sits beside the file
+(its recordings scoped to the unit on screen), else every line of the file's
+line-scan units as a raw recording that the wavelet denoiser runs on when
+clicked. The Voltage pipeline is on the Process tab. `mbo <animal>/<expt>`
+or `mbo <expt>/PF` opens the folder the same way: `imread` returns a
+`PfArray` for a `PF` folder, like a suite2p output folder, whose image is
+the line scan it came from (named in `pipeline.json`, or laid out the
+notebook's way beside it) or, without that file, a raster of the denoised
+traces. The notebook's dashboard on its own, with no image, is
+`mbo curate PATH` (`python -m mbo_utilities.gui.curation_viewer PATH` from
+a script): the trace and its candidates over the template, focused candidate
+and PCA, one recording at a time with arrows to flip, and the recordings
+table beside it.
 
 To curate from another machine, serve the dashboard instead of opening a
 window: `mbo curate PATH --serve` (or `python -m mbo_utilities.gui.curation_server
@@ -371,9 +377,9 @@ output reproduces the archive's PF traces to float precision (the peaks on 7 of
 conversion is left off (`--convert` applies the file's offset so zero means no
 photons, which the archive never did).
 
-The same pipeline is the **Pipeline** tab of the curation window (`mbo
-scan.mesc` opens it for any `.mesc` with line scans), and the **Voltage** entry
-of the main viewer's Process tab: the dataset block, output folder, slice popup
+The same pipeline is the **Voltage** entry of the viewer's Process tab (`mbo
+scan.mesc`, or `mbo <expt>/PF` to run it again on a folder's source scan) and
+the **Pipeline** tab of the standalone curation window (`mbo curate`): the dataset block, output folder, slice popup
 (a frame window and the channel; every line is used), a Scans block ticking
 which units become scans, a Domains table naming which lines make each domain
 (loaded from or saved to `domains.json`, seeded from a `PF` folder beside the
