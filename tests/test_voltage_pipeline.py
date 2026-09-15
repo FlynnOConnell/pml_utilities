@@ -176,6 +176,15 @@ def test_chessboard_patches_run_as_scans(tmp_path):
     assert prov["dfof"]["sigma_dfof"] == pytest.approx(1500 * k)
     assert prov["events"]["bp"][1] == pytest.approx(95.0)
     assert prov["events"]["distance_samples"] == 1
+    traces = tmp_path / "PF" / "traces"
+    assert paths["traces/scan1_denoised.npy"] == traces / "scan1_denoised.npy"
+    assert np.load(traces / "scan1_rois.npy").shape == (3, 1200)
+    for name in ("dfof", "zscore", "denoised"):
+        assert np.load(traces / f"scan1_{name}.npy").shape == (3, 1200)
+    assert np.allclose(np.load(traces / "scan1_denoised.npy")[0], files.traces["1"]["domain1"], atol=1e-3)
+    assert (traces / "domains.csv").read_text().splitlines() == ["row,domain,rois", "0,domain1,0", "1,domain2,1", "2,domain3,2"]
+    assert (traces / "scans.csv").read_text().splitlines()[1].startswith("1,MSession_0/MUnit_1,200.0")
+    assert (traces / "scan1_peaks.csv").read_text().splitlines()[0] == "domain,frame,time_s"
     peaks = files.peaks["1"]["domain1"]
     # the two injected dips (sign-flipped to peaks) are found; the quiet patches stay near-empty
     assert any(abs(int(p) - 300) <= 3 for p in peaks) and any(abs(int(p) - 700) <= 3 for p in peaks)

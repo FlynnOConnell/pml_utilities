@@ -376,6 +376,19 @@ Written to `<animal>/<expt>/PF` for the archive layout
 | `denoised_trace_components.pkl`, `test.h5` | the masked sum, 1 Hz / 100 Hz baselines and envelope; per-domain dF/F and z |
 | `cwts.h5` | the wavelet coefficients, only with `--save-cwt` (large) |
 | `pipeline.json` | provenance: source file and units, every parameter, versions, ROI pixel weights |
+| `traces/` | the same results as plain files, see below |
+
+`PF/traces/` needs only numpy and pandas to read
+(`demos/voltage_results.ipynb` walks through it). Row `i` of every
+`(domain, frame)` array is row `i` of `domains.csv`:
+
+| file | contents |
+|------|----------|
+| `scans.csv` | scan id, MESc unit, frame rate, frames, ROIs |
+| `domains.csv` | row index, domain name, ROI indices |
+| `scan<id>_rois.npy` | raw mean fluorescence, `(ROI, frame)` |
+| `scan<id>_dfof.npy`, `scan<id>_zscore.npy`, `scan<id>_denoised.npy` | dF/F, z-score and denoised trace per domain, `(domain, frame)` |
+| `scan<id>_peaks.csv` | detected events: domain, frame, time in seconds |
 
 Run on `stan112_expt12`'s raw scans with the archive's `scanIDs_ROIs.pkl`, the
 output reproduces the archive's PF traces to float precision (the peaks on 7 of
