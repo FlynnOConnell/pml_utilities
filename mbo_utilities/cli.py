@@ -1919,7 +1919,7 @@ def _voltage_progress(scan_id, domain):
               help="Also write cwts.h5, the wavelet coefficients (about 20 bytes per sample per domain).")
 @click.option("--overwrite", is_flag=True, default=False, help="Replace an existing PF folder's files.")
 @click.option("--init", is_flag=True, default=False,
-              help="Write a domains.json template beside the file (ROIs grouped in threes) and exit.")
+              help="Write a domains.json template beside the file (one domain per ROI) and exit.")
 def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_cwt, overwrite, init):
     """The spatial JEDI voltage pipeline on a .mesc with AOD ROI units (line
     scans, chessboard or ribbon patches): per-ROI traces, domain dF/F and

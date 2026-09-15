@@ -359,7 +359,8 @@ mbo curate X:/data/asako/stan112/stan112_expt12             # then curate it
 
 `domains.json` names the domains and their 0-based ROI indices (lines or
 patches, in drawing order), the scans in order and the first scan of each
-environment. `--init` groups lines in threes and patches one per domain:
+environment. `--init` writes one domain per ROI (`roi0: [0]`, ...); merge
+the lines of a soma or branch by hand, as the archive's layout below does:
 
 ```json
 {"domains": {"soma1": [0, 1, 2], "basal1": [3, 4, 5]}, "scans": ["35", "38"], "first_env": ["35"]}
@@ -389,6 +390,10 @@ Written to `<animal>/<expt>/PF` for the archive layout
 | `scan<id>_rois.npy` | raw mean fluorescence, `(ROI, frame)` |
 | `scan<id>_dfof.npy`, `scan<id>_zscore.npy`, `scan<id>_denoised.npy` | dF/F, z-score and denoised trace per domain, `(domain, frame)` |
 | `scan<id>_peaks.csv` | detected events: domain, frame, time in seconds |
+| `scan<id>_denoised.png`, `scan<id>_rois.png` | the denoised domains with their events, and the raw ROIs, stacked |
+
+Events labelled in the curation window land in `PF/.curation/<mode>_template_curation.json`
+(`events`: recording, `source_event_index`, `source_event_time_s`, `label`).
 
 Run on `stan112_expt12`'s raw scans with the archive's `scanIDs_ROIs.pkl`, the
 output reproduces the archive's PF traces to float precision (the peaks on 7 of

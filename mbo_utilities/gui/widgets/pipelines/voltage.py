@@ -229,8 +229,7 @@ class VoltagePipelineWidget(PipelineWidget):
             except Exception as e:
                 self._domain_error = f"{DOMAINS_FILE}: {e}"
         if not domains:
-            per = 3 if self._units and self._units[0]["kind"] == "packed" else 1
-            domains = {f"domain{i // per + 1}": list(range(i, min(i + per, n_lines))) for i in range(0, n_lines, per)}
+            domains = {f"roi{i}": [i] for i in range(n_lines)}
         self._domain_rows = [[name, ",".join(str(r) for r in rois)] for name, rois in domains.items()]
         if scan_ids:
             for u in self._units:
@@ -794,7 +793,14 @@ class VoltagePipelineWidget(PipelineWidget):
         if widget is None:
             self._set_status("Event Curation is off; enable it in the Widgets menu.", error=True)
             return
+        # a scope left from the raw unit would hide every scan of the new folder
+        widget.scope = None
         widget.scan(self._outdir)
+        # the unit on screen first, when it is one of the scans
+        munit = str(getattr(self._array(), "unit_key", "") or "").rsplit("_", 1)[-1]
+        first = next((r for r in widget.shown if f"scan={munit}" in r.rid.split("/") and r.pre_denoised), None)
+        if first is not None and first.rid != widget.current:
+            widget.load(first.rid)
         widget.focus_tab = True
 
     def cleanup(self) -> None:
