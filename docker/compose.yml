@@ -1,0 +1,42 @@
+services:
+  headless:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: base
+    image: pml-utilities:headless
+    volumes:
+      - ..:/app
+    working_dir: /app
+    stdin_open: true
+    tty: true
+
+  x11:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: base
+      args:
+        WITH_X: "1"
+    image: pml-utilities:x11
+    volumes:
+      - ..:/app
+    working_dir: /app
+    stdin_open: true
+    tty: true
+
+  desktop:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: desktop
+      args:
+        WITH_X: "1"
+    image: pml-utilities:desktop
+    volumes:
+      - ..:/app
+    working_dir: /app
+    ports:
+      - "6080:6080"
+    environment:
+      GEOMETRY: 1600x900
