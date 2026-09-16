@@ -2,7 +2,9 @@
 
 The file holds factors, not pixels: the PMD movie ``u v``, the demixed
 signals ``a c`` and the background terms. The C axis picks which
-reconstruction to render (``VIEWS``); masknmf rebuilds frames on read.
+reconstruction to render (``VIEWS``). Frames are rebuilt on read: with numpy
+on the cpu, or with masknmf when the compute-GPU policy (``MBO_GPU``,
+``CUDA_VISIBLE_DEVICES``, the GUI preference) selects a working CUDA device.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import scipy.sparse
 
 from mbo_utilities import log
 from mbo_utilities.arrays._base import ReductionMixin, _normalize_key
+from mbo_utilities.gpu import compute_gpu
 from mbo_utilities.lazy_array import LazyArray
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
@@ -53,6 +56,17 @@ def has_demixing_results(path: Path | str) -> bool:
             return GROUP in f
     except OSError:
         return False
+
+
+def _read_sparse(node: h5py.Group | h5py.Dataset) -> scipy.sparse.csc_matrix:
+    """A masknmf tensor stored as a ``sparse_coo`` group or a dense dataset."""
+    if isinstance(node, h5py.Group):
+        idx = node["indices"][()]
+        return scipy.sparse.csc_matrix(
+            (np.asarray(node["values"][()], dtype=np.float32), (idx[0], idx[1])),
+            shape=tuple(int(s) for s in node["size"][()]),
+        )
+    return scipy.sparse.csc_matrix(np.asarray(node[()], dtype=np.float32))
 
 
 def _describe(path: Path, label: str) -> dict:
@@ -103,8 +117,8 @@ class DemixingArray(ReductionMixin, LazyArray):
 
     C is the view: 0 the PMD movie, 1 the demixed signals, 2 the residual
     (``VIEWS``). ROI footprints and traces are read straight from the file;
-    pixels are rebuilt by masknmf on first read, on the CUDA device when
-    there is one.
+    pixels are rebuilt from the factors on first read: numpy on the cpu, masknmf
+    on cuda. ``device`` overrides the compute-GPU policy from ``mbo_utilities.gpu``.
     """
 
     PRIORITY = 60
@@ -114,6 +128,7 @@ class DemixingArray(ReductionMixin, LazyArray):
         self.filenames = [path]
         self._device = device
         self._results = None
+        self._factors = None
         self._traces = None
         self._footprints = None
         with h5py.File(path, "r") as f:
@@ -193,15 +208,7 @@ class DemixingArray(ReductionMixin, LazyArray):
         """The spatial footprints ``a`` as a ``(Y * X, num_rois)`` sparse matrix."""
         if self._footprints is None:
             with h5py.File(self.filenames[0], "r") as f:
-                a = f[GROUP]["a"]
-                if isinstance(a, h5py.Group):
-                    idx = a["indices"][()]
-                    self._footprints = scipy.sparse.csc_matrix(
-                        (a["values"][()], (idx[0], idx[1])),
-                        shape=tuple(int(s) for s in a["size"][()]),
-                    )
-                else:
-                    self._footprints = scipy.sparse.csc_matrix(a[()])
+                self._footprints = _read_sparse(f[GROUP]["a"])
         return self._footprints
 
     def footprint(self, k: int) -> np.ndarray:
@@ -209,16 +216,64 @@ class DemixingArray(ReductionMixin, LazyArray):
         _, y, x = self._shape3
         return np.asarray(self.footprints[:, k].todense(), dtype=np.float32).reshape(y, x)
 
-    def _view(self, c: int):
-        if self._results is None:
-            import torch
-            from masknmf import DemixingResults
+    def _frames(self, c: int, ts: list[int]) -> np.ndarray:
+        """View ``c`` at timepoints ``ts`` as ``(len(ts), Y * X)``."""
+        if self._results is None and self._factors is None:
+            want_cuda = (
+                self._device.startswith("cuda")
+                if self._device
+                else compute_gpu()["backend"] == "cuda"
+            )
+            if want_cuda:
+                try:
+                    import torch
+                    from masknmf import DemixingResults
 
-            device = self._device or ("cuda" if torch.cuda.is_available() else "cpu")
-            logger.info(f"loading {self.filenames[0].name} on {device}")
-            self._results = DemixingResults.from_hdf5(self.filenames[0], device=device)
-        res = self._results
-        return (res.pmd_array, res.ac_array, res.residual_array)[c]
+                    want_cuda = torch.cuda.is_available()
+                except (ImportError, AttributeError) as e:
+                    logger.warning(f"cuda requested but unusable ({e}); rebuilding frames with numpy")
+                    want_cuda = False
+            if want_cuda:
+                device = self._device or "cuda"
+                logger.info(f"loading {self.filenames[0].name} with masknmf on {device}")
+                self._results = DemixingResults.from_hdf5(self.filenames[0], device=device)
+            else:
+                logger.info(f"loading {self.filenames[0].name} factors for numpy reconstruction")
+                with h5py.File(self.filenames[0], "r") as f:
+                    g = f[GROUP]
+                    u = _read_sparse(g["u"]).tocsr()
+                    v = np.asarray(g["v"][()], dtype=np.float32)
+                    a = _read_sparse(g["a"]).tocsr()
+                    cc = np.asarray(g["c"][()], dtype=np.float32)
+                    if "factorized_bkgd_term1" in g and "factorized_bkgd_term2" in g:
+                        k1 = np.asarray(g["factorized_bkgd_term1"][()], dtype=np.float32)
+                        k2 = np.asarray(g["factorized_bkgd_term2"][()], dtype=np.float32)
+                    else:
+                        k1 = np.zeros((u.shape[1], 1), np.float32)
+                        k2 = np.zeros((1, v.shape[1]), np.float32)
+                    if "b" in g:
+                        b = np.asarray(g["b"][()], dtype=np.float32).reshape(-1)
+                    else:
+                        # masknmf's default baseline: the residual has mean zero
+                        b = (
+                            u @ v.mean(axis=1)
+                            - a @ cc.mean(axis=0)
+                            - u @ (k1 @ k2.mean(axis=1))
+                        ).astype(np.float32)
+                self._factors = (u, v, a, cc, b, k1, k2)
+        if self._results is not None:
+            res = self._results
+            view = (res.pmd_array, res.ac_array, res.residual_array)[c]
+            return np.asarray(view[ts], dtype=np.float32).reshape(len(ts), -1)
+        u, v, a, cc, b, k1, k2 = self._factors
+        if c == 1:
+            return np.asarray((a @ cc[ts].T).T, dtype=np.float32)
+        pmd = np.asarray((u @ v[:, ts]).T, dtype=np.float32)
+        if c == 0:
+            return pmd
+        bkgd = np.asarray((u @ (k1 @ k2[:, ts])).T, dtype=np.float32)
+        ac = np.asarray((a @ cc[ts].T).T, dtype=np.float32)
+        return pmd - bkgd - ac - b[None, :]
 
     def __getitem__(self, key):
         key = _normalize_key(key, 5)
@@ -227,10 +282,7 @@ class DemixingArray(ReductionMixin, LazyArray):
         nt, nc, _, ny, nx = self._shape5d()
         ts = np.atleast_1d(np.arange(nt)[t_key]).tolist()
         cs = np.atleast_1d(np.arange(nc)[c_key]).tolist()
-        stack = np.stack(
-            [np.asarray(self._view(c)[ts], dtype=np.float32).reshape(len(ts), ny, nx) for c in cs],
-            axis=1,
-        )
+        stack = np.stack([self._frames(c, ts).reshape(len(ts), ny, nx) for c in cs], axis=1)
         out = stack[:, :, None][:, :, z_key, y_key, x_key]
         if isinstance(c_key, (int, np.integer)):
             out = out[:, 0]
@@ -245,3 +297,4 @@ class DemixingArray(ReductionMixin, LazyArray):
 
     def close(self) -> None:
         self._results = None
+        self._factors = None
