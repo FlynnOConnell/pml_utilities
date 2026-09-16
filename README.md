@@ -83,6 +83,16 @@ uv pip install "mbo_utilities[notebooks]"
 uv pip install "mbo_utilities[all]"
 ```
 
+### Ubuntu/Debian XCB/X11 Libraries
+
+This installs multimedia libraries for Ubuntu/Debian systems:
+
+```bash
+sudo apt install libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+  libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+  libxcb-xkb1 libxkbcommon-x11-0 libegl1 libgl1 libfontconfig1 libdbus-1-3 ffmpeg
+```
+
 ### GPU dependencies
 
 PyTorch and CuPy require CUDA-specific wheels that must be installed separately.

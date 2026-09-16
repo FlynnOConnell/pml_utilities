@@ -18,7 +18,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         libfontconfig1 libdbus-1-3 \
     && if [ "$WITH_X" = "1" ]; then apt-get install -y --no-install-recommends \
         xvfb xauth libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-        libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+        libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
         libxcb-xkb1 libxkbcommon-x11-0 libvulkan1 mesa-vulkan-drivers; fi \
     && rm -rf /var/lib/apt/lists/*
 
