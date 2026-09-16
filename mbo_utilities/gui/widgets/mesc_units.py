@@ -138,6 +138,20 @@ class MescUnitsWidget(Widget):
             except Exception:
                 parent.logger.debug("curation did not follow the unit", exc_info=True)
 
+        # the Traces tab is bound to the old unit's slider dims (ROI may not
+        # exist on the new one at all); tear it down and let it re-derive
+        # itself, same as when the viewer first opens
+        traces = getattr(parent, "linescan_traces", None)
+        if traces is not None:
+            traces.close()
+            parent.linescan_traces = None
+        from mbo_utilities.gui.linescan_viewer import attach_standard_traces
+
+        try:
+            attach_standard_traces(parent)
+        except Exception:
+            parent.logger.warning("line-scan traces tab unavailable", exc_info=True)
+
         parent.shape = display.shape
         nt, nc, nz, _, _ = arr.shape
         parent.nc, parent.nz = nc, nz
