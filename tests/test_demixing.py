@@ -1,4 +1,4 @@
-"""masknmf demixing results: the reader, the sibling listing and the Demixing tab."""
+"""masknmf demixing results: the reader, the sibling listing and the viewer switcher."""
 
 from __future__ import annotations
 
@@ -9,25 +9,8 @@ import h5py
 import numpy as np
 import scipy.sparse
 import pytest
-from imgui_bundle import imgui
 
 T, Y, X, R, K = 12, 6, 8, 3, 4
-ROWS = []
-TEXTS = []
-REAL_SELECTABLE = imgui.selectable
-REAL_TEXT = imgui.text
-
-
-def spy_selectable(label, selected, *a, **k):
-    ROWS.append((label.split("##")[0], selected))
-    return REAL_SELECTABLE(label, selected, *a, **k)
-
-
-def spy_text(text):
-    TEXTS.append(text)
-    return REAL_TEXT(text)
-
-
 def write_demixing(path, fs=None, labels=True, seed=0):
     """A DemixingResults hdf5 in masknmf's layout: sparse_coo factors, a
     trace matrix c, and a footprint per ROI on a distinct pixel block."""
@@ -42,6 +25,7 @@ def write_demixing(path, fs=None, labels=True, seed=0):
         u.create_dataset("values", data=rng.random(pixels).astype(np.float32))
         u.create_dataset("size", data=np.array([pixels, R]))
         g.create_dataset("v", data=rng.random((R, T)).astype(np.float32))
+        g["v"].attrs["layout"] = "strided"
         a = g.create_group("a")
         a.attrs["layout"] = "sparse_coo"
         rows = np.concatenate([np.arange(k * 4, k * 4 + 4) for k in range(K)])
@@ -55,6 +39,9 @@ def write_demixing(path, fs=None, labels=True, seed=0):
         g.create_dataset("b", data=np.zeros(pixels, np.float32))
         g.create_dataset("mean_img", data=rng.random((Y, X)).astype(np.float32))
         g.create_dataset("var_img", data=np.ones((Y, X), np.float32))
+        # masknmf only rebuilds tensors from datasets that carry its layout tag
+        for name in ("c", "b", "mean_img", "var_img"):
+            g[name].attrs["layout"] = "strided"
         g.create_dataset("iscell", data=np.array([True, True, False, True]))
         if labels:
             g.create_dataset("class_labels", data=np.array([0, 1, 0, 2]))
@@ -62,16 +49,6 @@ def write_demixing(path, fs=None, labels=True, seed=0):
         if fs:
             f.attrs["mbo_provenance"] = json.dumps({"fs": fs, "input": "abc"})
     return path
-
-
-class FakeImageWidget:
-    def __init__(self, data):
-        self.data = data
-
-
-class FakeParent:
-    def __init__(self, data):
-        self.image_widget = FakeImageWidget(data)
 
 
 @pytest.fixture(scope="module")
@@ -156,76 +133,38 @@ def test_list_demixing_results_walks_plane_folders(planes_dir):
     assert [e["channel"] for e in entries] == [None, None]
 
 
-def test_roi_rows_and_footprint_overlay(run_dir):
-    from mbo_utilities.arrays.demixing import DemixingArray
-    from mbo_utilities.gui.widgets.demixing import ROI_COLUMNS, footprint_rgba, roi_rows
+def test_run_files_finds_the_stage_exports(planes_dir, tmp_path):
+    from mbo_utilities.gui.masknmf_vis import run_files
 
-    arr = DemixingArray(run_dir / "calcium_spine_demixing.hdf5")
-    rows = roi_rows(arr)
-    assert len(rows) == K
-    cells, keys = rows[2]
-    assert len(cells) == len(keys) == len(ROI_COLUMNS)
-    assert cells[:3] == ("2", "soma", "no")
-    assert keys[0] == 2 and keys[2] is False
-    assert max(rows, key=lambda r: r[1][3])[1][0] == 1
-
-    rgba = footprint_rgba(arr, range(K), selected=1)
-    assert rgba.shape == (Y, X, 4)
-    flat = rgba.reshape(-1, 4)
-    assert flat[4:8, :3].tolist() == [[255, 255, 90]] * 4  # roi 1 highlighted
-    assert flat[7, 3] == 220 and flat[4, 3] == 100  # alpha follows the weight
-    assert flat[0, 3] > 0 and flat[16, 3] == 0  # roi 0 painted; pixel 16 belongs to no roi
-    only_selected = footprint_rgba(arr, (), selected=3)
-    assert only_selected.reshape(-1, 4)[:12, 3].tolist() == [0] * 12
+    files = run_files(planes_dir / "zplane01" / "demixing_results.hdf5")
+    assert files["demixing"] == planes_dir / "zplane01" / "demixing_results.hdf5"
+    assert files["compression"] is None and files["motion"] is None
+    assert files["raw"] is None and files["ops"] is None
+    run = tmp_path / "run"
+    run.mkdir()
+    write_demixing(run / "demixing_results.hdf5", fs=9.6)
+    for name in ("compression.hdf5", "motion_correction.hdf5", "data_raw.bin", "ops.npy"):
+        (run / name).write_bytes(b"")
+    files = run_files(run / "demixing_results.hdf5")
+    assert files["compression"] == run / "compression.hdf5"
+    assert files["motion"] == run / "motion_correction.hdf5"
+    assert files["raw"] == run / "data_raw.bin" and files["ops"] == run / "ops.npy"
 
 
-def test_tab_appears_only_for_demixing_data(run_dir):
-    from mbo_utilities.arrays.demixing import DemixingArray
-    from mbo_utilities.gui.widgets import get_tab_widgets
-    from mbo_utilities.gui.widgets.demixing import DemixingTabWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
-
-    arr = DemixingArray(run_dir / "calcium_spine_demixing.hdf5")
-    names = [type(w).__name__ for w in get_tab_widgets(FakeParent([display_wrap(arr)]))]
-    assert "DemixingTabWidget" in names
-    assert names.index("PreviewTabWidget") < names.index("DemixingTabWidget")
-    assert not DemixingTabWidget.is_supported(FakeParent([np.zeros((2, 4, 4))]))
-
-
-def test_tab_draws_channels_and_every_roi(run_dir):
-    """One frame on a bare imgui context: the channel combo, a row per ROI
-    with its label, and no selection to start."""
-    from mbo_utilities.arrays.demixing import DemixingArray
-    from mbo_utilities.gui.widgets.demixing import DemixingTabWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
-
-    arr = DemixingArray(run_dir / "glutamate_spine_demixing.hdf5")
-    widget = DemixingTabWidget(FakeParent([display_wrap(arr)]))
-    ROWS.clear()
-    TEXTS.clear()
-    ctx = imgui.create_context()
-    io = imgui.get_io()
-    io.display_size = imgui.ImVec2(900, 700)
-    # imgui 1.92 builds fonts lazily once a renderer claims texture support
-    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
-    imgui.selectable, imgui.text = spy_selectable, spy_text
+def test_viewer_switcher_needs_masknmf(run_dir):
+    # masknmf's import fails with AttributeError on a mismatched fastplotlib
+    # pin, which importorskip would report as a failure
     try:
-        for _ in range(2):
-            imgui.new_frame()
-            imgui.set_next_window_size(imgui.ImVec2(800, 600))
-            imgui.begin("host")
-            widget.draw()
-            imgui.end()
-            imgui.end_frame()
-    finally:
-        imgui.selectable, imgui.text = REAL_SELECTABLE, REAL_TEXT
-        imgui.destroy_context(ctx)
-    assert [e["label"] for e in widget._siblings] == [
-        "calcium_spine", "glutamate_global_activity", "glutamate_spine",
-    ]
-    assert ROWS[-K:] == [("0", False), ("1", False), ("2", False), ("3", False)]
-    assert "dendrite" in TEXTS and "edge" in TEXTS
-    assert widget._selected is None
+        import masknmf  # noqa: F401
+    except Exception as e:
+        pytest.skip(f"masknmf not importable: {e}")
+    from mbo_utilities.gui.masknmf_vis import KINDS, MasknmfViewers
+
+    viewers = MasknmfViewers(run_dir / "calcium_spine_demixing.hdf5", device="cpu")
+    assert viewers.timings.shape == (T,) and viewers.timings[1] == pytest.approx(1 / 19.66)
+    assert KINDS == ("demixing", "compression", "classification")
+    with pytest.raises(FileNotFoundError):
+        viewers.open("compression")
 
 
 def test_frames_are_rebuilt_with_numpy_without_torch(run_dir, monkeypatch):

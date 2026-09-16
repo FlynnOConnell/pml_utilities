@@ -860,6 +860,7 @@ def _run_gui_impl(
     runner_params: Any | None = None,
     mode: str = "Fastplotlib viewer (default)",
     unit: int | str | None = None,
+    vis: str = "demixing",
 ):
     """Internal implementation of run_gui with all heavy imports."""
     # Apply persisted Options (GPU adapter, debug logging) before any
@@ -923,6 +924,30 @@ def _run_gui_impl(
         # the file dialog hands back a list even for one file
         if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
             data_in = data_in[0]
+        # a masknmf demixing result opens in masknmf's own viewers
+        from mbo_utilities.arrays.demixing import has_demixing_results
+
+        if not metadata_only and isinstance(data_in, (str, Path)) and has_demixing_results(data_in):
+            import importlib.util
+
+            from mbo_utilities.install import _MASKNMF_HINT
+
+            if importlib.util.find_spec("masknmf") is None or importlib.util.find_spec("torch") is None:
+                raise click.ClickException(
+                    f"{Path(data_in).name} is a masknmf demixing result and opens in masknmf's "
+                    f"viewers, but masknmf (with torch) is not installed here: {_MASKNMF_HINT}"
+                )
+            from mbo_utilities.gui.masknmf_vis import MasknmfViewers
+
+            viewers = MasknmfViewers(data_in)
+            output = viewers.open(vis)
+            if in_notebook():
+                display_widget(output)
+                return viewers
+            import fastplotlib as fpl
+
+            fpl.loop.run()
+            return None
         # a .mesc holding AOD ROI units (line scans, chessboard or ribbon
         # patches) opens on the first one with no prompt: the curation widget
         # and the Voltage pipeline follow the unit on screen and offer the
@@ -1065,26 +1090,6 @@ def _first_linescan_unit(path) -> str | None:
                 return u["key"]
         break
     return units[0]["key"] if units else None
-
-
-# curation windows opened onto an already-running loop; referenced here so
-# they aren't garbage collected when the opener returns
-_curation_windows: list = []
-
-
-def _open_curation_gui(path):
-    """Show masknmf's curation GUI (accept/reject + class labels) for the file.
-
-    ``from_masknmf`` restores any labels saved in the ``<results>.labels.hdf5``
-    sidecar and autosaves edits back into it. Does not run the event loop: the
-    Demixing tab calls it on the running loop and just gets the extra window.
-    """
-    from masknmf.visualization.classification_vis import ClassificationVis
-
-    vis = ClassificationVis.from_masknmf([str(path)])
-    vis.show()
-    _curation_windows.append(vis)
-    return vis
 
 
 class ViewerCancelled(Exception):
@@ -1564,9 +1569,14 @@ def run_gui(
     select_only: bool = False,
     runner_params: Any | None = None,
     unit: int | str | None = None,
+    vis: str = "demixing",
 ):
     """
     Open a GUI to preview data of any supported type.
+
+    A masknmf demixing result opens in masknmf's own viewer instead:
+    ``vis`` picks ``demixing`` (default), ``compression`` or
+    ``classification``; a bar on the viewer switches between them.
 
     The one-call form of ``DataVis``: it builds the viewer, picks the canvas
     and size for wherever it is running, and shows it. In a terminal or
@@ -1645,6 +1655,7 @@ def run_gui(
         select_only=select_only,
         runner_params=runner_params,
         unit=unit,
+        vis=vis,
     )
 
 

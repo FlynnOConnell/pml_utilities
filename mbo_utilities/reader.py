@@ -139,7 +139,7 @@ def imread(
     - .bin: Suite2p binary files (.bin + ops.npy)
     - .tif/.tiff: TIFF files (BigTIFF, OME-TIFF and raw ScanImage TIFFs)
     - .h5: HDF5 files
-    - .hdf5 with a DemixingResults group: masknmf demixing results, C = view
+    - .hdf5 with a DemixingResults group: masknmf demixing results, C = view (the GUI opens these in masknmf's viewers)
       (PMD movie, demixed signals, residual)
     - .mesc: Femtonics MESc acquisitions (one MUnit per array)
     - .zarr: Zarr v3

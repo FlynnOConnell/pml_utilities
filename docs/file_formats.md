@@ -269,8 +269,8 @@ An hdf5 with a `DemixingResults` group: what masknmf's demixing exports, either
 `<channel>_<pass>_demixing.hdf5` from a glutamate/calcium spine run. The file
 holds factors rather than pixels, so C selects which reconstruction to
 render: `0` the PMD movie (`u v`), `1` the demixed signals (`a c`), `2` the
-residual. Frames are rebuilt by masknmf on first read, on the CUDA device
-when there is one.
+residual. Frames are rebuilt from the factors on first read: with numpy on
+the cpu, or with masknmf when the compute-GPU policy selects a CUDA device.
 
 ```python
 arr = mbo.imread("run/calcium_spine_demixing.hdf5")
@@ -287,8 +287,8 @@ for entry in list_demixing_results("run/calcium_spine_demixing.hdf5"):
 ```
 
 `fs` comes from the `mbo_provenance` attribute the MaskNMF pipeline stamps;
-files from other runs report no rate. In the GUI these files open with the
-Demixing tab (see the GUI guide).
+files from other runs report no rate. `mbo <file>` opens these in masknmf's
+own viewers rather than the Studio viewer (see the GUI guide).
 
 (mescarray)=
 ### MescArray

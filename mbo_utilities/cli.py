@@ -7,7 +7,7 @@ GUI-related imports are deferred until actually needed.
 Usage patterns:
   mbo                           # Open GUI with file dialog
   mbo /path/to/data             # Open GUI with specific file
-  mbo run/demixing_results.hdf5 # masknmf demixing results, with the Demixing tab
+  mbo run/demixing_results.hdf5 # masknmf demixing results in masknmf's viewer
   mbo /path/to/data --metadata  # Show only metadata
   mbo convert INPUT OUTPUT      # Convert with CLI args
   mbo info INPUT                # Show array info (CLI only)
@@ -330,8 +330,15 @@ def main(
     is_flag=True,
     help="List available GPU adapters and exit.",
 )
+@click.option(
+    "--vis",
+    type=click.Choice(["demixing", "compression", "classification"]),
+    default="demixing",
+    show_default=True,
+    help="For a masknmf demixing result: which of masknmf's viewers to open first.",
+)
 def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=False,
-         unit=None, gpu_index=None, list_gpus=False):
+         unit=None, gpu_index=None, list_gpus=False, vis="demixing"):
     r"""
     Open imaging data in the GUI viewer.
 
@@ -344,6 +351,7 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
       mbo view /data --widget manualroi  Open with the ROIs widget on (draw + label by hand)
       mbo view /data/scan.mesc --unit 2   Open one MESc measurement unit
       mbo view /data/scan.mesc --unit MUnit_35   A line-scan unit opens the line-scan viewer
+      mbo view run/demixing_results.hdf5 --vis compression   masknmf's compression viewer
       mbo view --list-gpus           Show available GPU adapters
       mbo view /data/raw --gpu 0     Force GPU index 0
     """
@@ -398,6 +406,7 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
         widget="none" if no_widget else widget,
         metadata_only=metadata,
         unit=_parse_unit(unit),
+        vis=vis,
     )
 
 

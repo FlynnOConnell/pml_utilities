@@ -463,8 +463,7 @@ def _reset_per_data_state(parent: Any) -> None:
 def swap_viewer_array(parent: Any, arr, title: str | None = None) -> None:
     """Show ``arr`` in the running viewer in place of the current array.
 
-    For a sibling of what is open (another MESc unit, another demixing
-    channel): the file dialog path in `load_new_data` rebuilds the viewer,
+    For a sibling of what is open (another MESc unit): the file dialog path in `load_new_data` rebuilds the viewer,
     this only re-derives the per-dataset display state. Stale closures are
     dropped before the swap (the spatial func captured the previous array's
     mean image and would be fed a differently shaped frame), then the
