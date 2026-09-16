@@ -56,6 +56,7 @@ the 5D array underneath for writers and the viewer.
 | ↳ Standard/ImageJ | `TiffArray` | `(T, C, Z, Y, X)` | All TIFFs including ImageJ hyperstacks |
 | **`.bin`** | `BinArray` | as-passed, e.g. `(T, Y, X)` | Suite2p binary (requires shape) |
 | **`.h5`** | `H5Array` | `(T, C, Z, Y, X)` | HDF5 datasets |
+| ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
 | **`.zarr`** | `ZarrArray` | `(T, C, Z, Y, X)` | Zarr v3 / OME-Zarr |
 | **`.npy`** | `NumpyArray` | `(T, C, Z, Y, X)` | Memory-mapped numpy |
@@ -72,7 +73,9 @@ imread(path)
 │
 ├── np.ndarray ───────────────────────────► NumpyArray (in-memory)
 ├── .npy ─────────────────────────────────► NumpyArray (mmap)
-├── .h5 / .hdf5 ──────────────────────────► H5Array
+├── .h5 / .hdf5
+│   ├── DemixingResults group ────────────► DemixingArray (masknmf)
+│   └── else ─────────────────────────────► H5Array
 ├── .mesc ─────────────────────────────────► MescArray (one MUnit)
 ├── .zarr ────────────────────────────────► ZarrArray
 ├── .bin (with ops.npy nearby) ───────────► Suite2pArray
@@ -257,6 +260,35 @@ On write, the dataset rank follows the channel count: one channel gives a 4D
 `TZYX` dataset, two or more give 5D `TCZYX`. Either is read back as the
 canonical 5D shape, and the dataset carries a `dims` attribute recording which
 it is.
+
+(demixingarray)=
+### DemixingArray
+
+An hdf5 with a `DemixingResults` group: what masknmf's demixing exports, either
+`demixing_results.hdf5` from the MaskNMF pipeline (one per `zplaneNN/`) or
+`<channel>_<pass>_demixing.hdf5` from a glutamate/calcium spine run. The file
+holds factors rather than pixels, so C selects which reconstruction to
+render: `0` the PMD movie (`u v`), `1` the demixed signals (`a c`), `2` the
+residual. Frames are rebuilt by masknmf on first read, on the CUDA device
+when there is one.
+
+```python
+arr = mbo.imread("run/calcium_spine_demixing.hdf5")
+print(arr.shape)        # (T, 3, 1, Y, X)
+arr.num_rois            # number of demixed components
+arr.roi_labels          # class name per ROI, "-" when the file has none
+arr.traces              # c as (T, num_rois)
+arr.footprint(k)        # ROI k's footprint as a (Y, X) image
+
+# every result file of the run: one per channel and pass, or one per plane
+from mbo_utilities.arrays import list_demixing_results
+for entry in list_demixing_results("run/calcium_spine_demixing.hdf5"):
+    print(entry["label"], entry["channel"], entry["num_rois"])
+```
+
+`fs` comes from the `mbo_provenance` attribute the MaskNMF pipeline stamps;
+files from other runs report no rate. In the GUI these files open with the
+Demixing tab (see the GUI guide).
 
 (mescarray)=
 ### MescArray

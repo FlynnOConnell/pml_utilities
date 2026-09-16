@@ -105,6 +105,24 @@ Features:
 - z-stats signal quality analysis
 - suite2p pipeline integration
 
+### Demixing Tab
+
+Opening a masknmf demixing result (`mbo run/demixing_results.hdf5`, or any
+`*_demixing.hdf5` from a glutamate/calcium spine run) shows it in the
+time-series viewer with a **View** slider (0 the PMD movie, 1 the demixed
+signals, 2 the residual) and adds a Demixing tab:
+
+- **Channel**: every result file of the same run, one per channel and pass
+  (`calcium_spine`, `glutamate_spine`, `glutamate_global_activity`) or one per
+  plane (`zplane01`, `zplane02`). Switching swaps the viewer in place.
+- an ROI table with class label, cell flag, trace peak and mean; click a row
+  to plot its trace and paint its footprint over the image, click again to
+  clear. **All footprints** paints every ROI coloured by class label.
+- **Curation GUI** opens masknmf's accept / reject and class-label window for
+  the file; labels save to `<file>.labels.hdf5` beside it.
+
+The tab is listed under Widgets as *Demixing*.
+
 ### Pollen Calibration Viewer
 
 Specialized viewer for LBM beamlet calibration data (`stack_type == "pollen"`). Automatically selected when pollen calibration data is loaded.

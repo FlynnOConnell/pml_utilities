@@ -916,12 +916,6 @@ def _run_gui_impl(
         if select_only:
             return data_in
 
-        # masknmf demixing results open in masknmf's own curation GUI
-        # (accept/reject + class labeling) instead of the standard viewer
-        demix_file = _find_demixing_results(data_in)
-        if demix_file is not None:
-            return _launch_curation_gui(demix_file)
-
         # the file dialog hands back a list even for one file
         if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
             data_in = data_in[0]
@@ -1069,31 +1063,6 @@ def _first_linescan_unit(path) -> str | None:
     return units[0]["key"] if units else None
 
 
-def _find_demixing_results(path) -> Path | None:
-    """Resolve a masknmf demixing results file for an opened path.
-
-    Matches the file itself (an hdf5 with a DemixingResults group) or a
-    selected folder directly containing ``demixing_results.hdf5``.
-    """
-    try:
-        p = Path(path)
-    except TypeError:
-        return None
-    if p.is_dir():
-        from mbo_utilities.masknmf.params import DEMIX_FILE
-
-        p = p / DEMIX_FILE
-    if not (p.is_file() and p.suffix.lower() in (".h5", ".hdf5")):
-        return None
-    try:
-        import h5py
-
-        with h5py.File(p, "r") as f:
-            return p if "DemixingResults" in f else None
-    except Exception:
-        return None
-
-
 # curation windows opened onto an already-running loop; referenced here so
 # they aren't garbage collected when the opener returns
 _curation_windows: list = []
@@ -1103,8 +1072,8 @@ def _open_curation_gui(path):
     """Show masknmf's curation GUI (accept/reject + class labels) for the file.
 
     ``from_masknmf`` restores any labels saved in the ``<results>.labels.hdf5``
-    sidecar and autosaves edits back into it. Does not run the event loop — a
-    caller on an already-running loop (File -> Open) just gets the extra window.
+    sidecar and autosaves edits back into it. Does not run the event loop: the
+    Demixing tab calls it on the running loop and just gets the extra window.
     """
     from masknmf.visualization.classification_vis import ClassificationVis
 
@@ -1112,19 +1081,6 @@ def _open_curation_gui(path):
     vis.show()
     _curation_windows.append(vis)
     return vis
-
-
-def _launch_curation_gui(path):
-    """Open the curation GUI from a cold start and run the event loop."""
-    import fastplotlib as fpl
-
-    vis = _open_curation_gui(path)
-    if in_notebook():
-        # show() already ran; the canvas it returned is what the cell needs
-        display_widget(vis.show())
-        return vis
-    fpl.loop.run()
-    return None
 
 
 class ViewerCancelled(Exception):
