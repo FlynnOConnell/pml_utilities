@@ -25,14 +25,23 @@ from mbo_utilities.reader import imread
 # synthetic fixture
 # ============================================================
 
-def _curve(unit, idx, name, values, delta=1.0):
+def _curve(unit, idx, name, values, delta=1.0, **attrs):
     g = unit.create_group(f"Curve_{idx}")
     g.attrs["Name"] = name
     g.attrs["CurveDataXRawDelta"] = delta
+    g.attrs.update(attrs)
     g.create_dataset(
         "CurveDataYIdxNextSample", data=np.arange(1, len(values) + 1, dtype=np.int64)
     )
     g.create_dataset("CurveDataYRawData", data=np.asarray(values))
+
+
+# how MEScan stores RTMC curves: uint32-style counts with a linear conversion to um
+_RTMC_UM = {
+    "CurveDataYConversionType": np.uint32(1),
+    "CurveDataYConversionConversionLinearScale": 0.0009765625,
+    "CurveDataYConversionConversionLinearOffset": -8192.0,
+}
 
 
 def _protocol(pattern):
@@ -93,6 +102,13 @@ def mesc_path(tmp_path_factory):
                 f"Channel_{c}",
                 data=np.arange(6 * 32 * 96, dtype=np.uint16).reshape(6, 32, 96) + c,
             )
+        # RTMC ran on this scan: X moved (counts -> um), Y is stored in um
+        # already, Z never moved (one sample), plus an intercycle X trace
+        _curve(u, 0, "RTMC X correction (total)", 8388608.0 + 1024.0 * np.arange(5), 0.03, **_RTMC_UM)
+        _curve(u, 1, "RTMC Y correction (total)", [0.0, -0.5, -1.0, -1.5], 0.03)
+        _curve(u, 2, "RTMC Z correction (total)", [8388608.0], 0.03, **_RTMC_UM)
+        _curve(u, 3, "RTMC X correction (intercycle)", [0.0, 1.0, 0.0], 0.03)
+        _curve(u, 4, "RTMC Y correction (total) layer 3", [0.0, 2.0], 0.03)
 
         # MUnit_2 - MethodType 9 ribbon transverse: ragged ROI boxes
         u = s.create_group("MUnit_2")
@@ -831,3 +847,23 @@ def test_unit_switching_stands_down_on_split_roi_views(mesc_path):
     finally:
         mod.imgui = original
     assert "text_disabled" in drawn
+
+
+def test_rtmc_traces_are_read_in_um_and_empty_curves_dropped(mesc_path):
+    arr = MescArray(mesc_path, unit="MUnit_1")
+    assert sorted(arr.rtmc) == ["X intercycle", "X total", "Y total", "Y total layer 3"]
+    assert arr.metadata["mesc_rtmc"] == sorted(arr.rtmc)
+    x = arr.rtmc["X total"]
+    np.testing.assert_allclose(x["um"], np.arange(5))
+    np.testing.assert_allclose(x["t"], np.arange(5) * 0.03 / 1000.0)
+    np.testing.assert_allclose(arr.rtmc["Y total"]["um"], [0.0, -0.5, -1.0, -1.5])
+    assert "RTMC Z correction (total)" in arr.curves
+    assert "Z total" not in arr.rtmc
+    arr.close()
+
+
+def test_units_without_rtmc_report_none(mesc_path):
+    arr = MescArray(mesc_path, unit="MUnit_2")
+    assert arr.rtmc == {}
+    assert arr.metadata["mesc_rtmc"] == []
+    arr.close()
