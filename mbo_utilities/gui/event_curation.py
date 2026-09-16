@@ -18,6 +18,7 @@ sections have.
 from __future__ import annotations
 
 import logging
+from functools import partial
 import queue
 import threading
 import time
@@ -155,40 +156,69 @@ def _mode_title(mode: str, cutoff: float) -> str:
     return _MODE_TITLES[mode].format(cutoff=cutoff)
 
 
+class UnitTraces:
+    """The per-ROI traces of one AOD ROI unit, read the first time a ROI is
+    asked for (on the curation worker, never at open): the pipeline's own
+    PF traces or an ``F.npy`` when the unit has them, else the
+    ``.curation/cache`` copy of an earlier reduction keyed by the file's
+    size and mtime, else the reduction itself, cached there for next time."""
+
+    def __init__(self, mesc_path: Path, unit: dict, channel: int, traces_dir=None):
+        self.mesc_path = Path(mesc_path)
+        self.unit = unit
+        self.channel = int(channel)
+        self.traces_dir = traces_dir
+        self.traces: np.ndarray | None = None
+
+    def load(self) -> np.ndarray:
+        """``(rois, samples)``, read or computed once."""
+        from mbo_utilities.arrays.mesc import MescArray
+        from mbo_utilities.gui.linescan_viewer import saved_roi_traces
+        from mbo_utilities.roi_workflow import linescan_roi_means
+
+        if self.traces is not None:
+            return self.traces
+        arr = MescArray(self.mesc_path, unit=self.unit["key"])
+        saved = saved_roi_traces(arr, self.traces_dir)
+        if saved is not None:
+            self.traces = np.asarray(saved[0])
+            return self.traces
+        stat = self.mesc_path.stat()
+        cache_dir = self.mesc_path.parent / ".curation" / "cache"
+        cache = cache_dir / f"{self.mesc_path.stem}_{self.unit['munit']}_ch{self.channel}_traces.npz"
+        if cache.exists():
+            with np.load(cache) as saved:
+                if int(saved["size"]) == stat.st_size and int(saved["mtime_ns"]) == stat.st_mtime_ns:
+                    self.traces = np.asarray(saved["traces"])
+                    return self.traces
+        self.traces = np.asarray(linescan_roi_means(arr, channel=self.channel))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(cache, traces=self.traces, size=stat.st_size, mtime_ns=stat.st_mtime_ns)
+        return self.traces
+
+    def roi(self, i: int) -> np.ndarray:
+        return self.load()[int(i)]
+
+
 def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[dict]:
-    """Per-ROI raw traces of every AOD ROI unit (line scan, chessboard or
-    ribbon patches) in a ``.mesc``: ``[{"key", "munit", "fs", "traces"}, ...]``
-    with ``traces`` shaped ``(rois, samples)``. Reads ``traces_dir/F.npy``
-    when given (an ``mbo linescan`` output), else averages each ROI, once:
-    the result is kept under ``.curation/cache`` beside the file, keyed by
-    the file's size and mtime, so reopening the file does not recompute it."""
-    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray, list_mesc_units
-    from mbo_utilities.gui.linescan_viewer import _load_or_compute_traces
+    """Every AOD ROI unit (line scan, chessboard or ribbon patches) in a
+    ``.mesc``: ``[{"key", "munit", "fs", "n_rois", "traces"}, ...]`` where
+    ``traces`` is a :class:`UnitTraces`, read when first asked for. Nothing
+    is read here beyond the units' metadata, so opening a file with many
+    long scans costs nothing until a ROI is clicked."""
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
 
     mesc_path = Path(mesc_path)
-    stat = mesc_path.stat()
-    cache_dir = mesc_path.parent / ".curation" / "cache"
     out = []
     for unit in list_mesc_units(mesc_path):
         if unit.get("kind") not in ROI_LAYOUTS:
             continue
-        arr = MescArray(mesc_path, unit=unit["key"])
-        cache = cache_dir / f"{mesc_path.stem}_{unit['munit']}_ch{int(channel)}_traces.npz"
-        traces = None
-        if traces_dir is None and cache.exists():
-            with np.load(cache) as saved:
-                if int(saved["size"]) == stat.st_size and int(saved["mtime_ns"]) == stat.st_mtime_ns:
-                    traces = saved["traces"]
-        if traces is None:
-            traces = np.asarray(_load_or_compute_traces(arr, channel, traces_dir))
-            if traces_dir is None:
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(cache, traces=traces, size=stat.st_size, mtime_ns=stat.st_mtime_ns)
         out.append({
             "key": unit["key"],
             "munit": unit["munit"],
-            "fs": float(arr.metadata["fs"]),
-            "traces": np.asarray(traces),
+            "fs": float(unit["fs"]),
+            "n_rois": int(unit["nrois"]),
+            "traces": UnitTraces(mesc_path, unit, channel, traces_dir),
         })
     return out
 
@@ -552,10 +582,15 @@ class EventCurationWidget:
         self.catalog = []
         self.current = ""
         n = 0
+        # per-unit loaders, so a viewer that already has a unit's traces
+        # (the Traces tab's background job) can hand them over
+        self.unit_traces = {}
         for unit in raw_linescan_traces(mesc_path, channel):
-            for i, trace in enumerate(unit["traces"]):
+            self.unit_traces[unit["munit"]] = unit["traces"]
+            for i in range(unit["n_rois"]):
+                # read on the worker when the recording is clicked
                 self.add_trace(
-                    trace, unit["fs"],
+                    partial(unit["traces"].roi, i), unit["fs"],
                     recording_id=f"{mesc_path.stem}/{unit['munit']}/roi={i}",
                     label=f"{unit['munit']} ROI {i}",
                     source_path=mesc_path,
@@ -579,6 +614,10 @@ class EventCurationWidget:
         def work():
             session = CurationSession(rec.source, mode=mode, slow_cutoff_hz=cutoff)
             if source is not None:
+                # a line-scan ROI's trace is a loader until now: the read or
+                # reduction happens here, on the worker
+                if callable(source["trace"]):
+                    source["trace"] = source["trace"]()
                 message = session.load_trace(**source)
             else:
                 message = session.load(rec.rid)

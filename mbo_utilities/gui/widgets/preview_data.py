@@ -161,6 +161,10 @@ def _base_5d(arr):
             return arr
 
 
+# the Signal Quality plot on the top strip
+ZSTATS_PANEL_HEIGHT = 260
+
+
 class PreviewDataWidget(EdgeWindow):
     """
     Main GUI widget for data preview and processing.
@@ -700,7 +704,7 @@ class PreviewDataWidget(EdgeWindow):
             self.top_strip.register(
                 TopPanel(
                     "zstats", "Signal Quality", self.draw_stats_plot,
-                    height=260, right_tab="signal_quality", priority=20,
+                    height=ZSTATS_PANEL_HEIGHT, right_tab="signal_quality", priority=20,
                 )
             )
         elif not want:
@@ -736,6 +740,14 @@ class PreviewDataWidget(EdgeWindow):
 
             auto = bool(curation_source(self.image_widget.data[0]))
         self.sync_event_curation(widget_enabled("vnoiser") or auto)
+        # a line-scan unit brings its per-ROI traces (PF, F.npy, or computed
+        # in the background when Options allows) as a Traces tab on the strip
+        from mbo_utilities.gui.linescan_viewer import attach_standard_traces
+
+        try:
+            attach_standard_traces(self)
+        except Exception:
+            self.logger.warning("line-scan traces tab unavailable", exc_info=True)
 
     def sync_event_curation(self, enabled: bool) -> None:
         """Create or tear down the vnoiser curation widget to match the toggle."""
@@ -1434,6 +1446,10 @@ class PreviewDataWidget(EdgeWindow):
         cleanup_all_widgets(self._widgets)
         self.sync_manual_roi(False)
         self.sync_event_curation(False)
+        traces = getattr(self, "linescan_traces", None)
+        if traces is not None:
+            traces.close()
+            self.linescan_traces = None
         strip = getattr(self, "top_strip", None)
         if strip is not None:
             strip.close()

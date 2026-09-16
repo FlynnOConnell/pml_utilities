@@ -511,6 +511,21 @@ _NOTEBOOK_SIZE = (1400, 900)
 _PREVIEW_WIDTH = 300
 
 
+def screen_box() -> tuple[int, int] | None:
+    """The screen's available work area less the window frame and title bar,
+    ``None`` when there is no Qt screen to ask."""
+    try:
+        from PyQt6.QtGui import QGuiApplication
+
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return None
+        avail = screen.availableGeometry()
+    except Exception:
+        return None
+    return max(400, avail.width() - 40), max(400, avail.height() - 100)
+
+
 def fit_figure_size(
     box: tuple[int, int],
     image_hw: tuple[int, int],
@@ -586,16 +601,7 @@ def _figure_kwargs_for_here(size: tuple[int, int] | None = None, fit: dict | Non
         RenderCanvas = None
 
     if size is None:
-        box = (1000, 1000)
-        try:
-            from PyQt6.QtGui import QGuiApplication
-            screen = QGuiApplication.primaryScreen()
-            if screen is not None:
-                avail = screen.availableGeometry()
-                # headroom for the window frame and title bar
-                box = (max(400, avail.width() - 40), max(400, avail.height() - 100))
-        except Exception:
-            pass
+        box = screen_box() or (1000, 1000)
         size = fit_figure_size(box, **fit) if fit else (min(1000, box[0]), min(1000, box[1]))
 
     if RenderCanvas is not None:
@@ -655,7 +661,7 @@ def _create_image_widget(
     # when asked for, or when this data has annotations or pipeline ROIs
     # beside it; the widget builds itself from the toggle. Not persisted — the
     # flag came from the command line or the disk, not the menu.
-    manual_roi = False
+    manual_roi = signal_quality = False
     if widget != "none":
         from mbo_utilities.gui.manual_roi import labels_path
         from mbo_utilities.gui.roi_runs import run_dir_complete
@@ -666,6 +672,7 @@ def _create_image_widget(
             src is not None
             and (labels_path(src).exists() or run_dir_complete(labels_path(src).parent))
         )
+        signal_quality = widget_enabled("signal_quality")
 
     # Determine slider dimension names from array's dims property if available
     from mbo_utilities.arrays.features import get_slider_dims
@@ -731,15 +738,20 @@ def _create_image_widget(
 
         from mbo_utilities.gui._top_strip import MENU_HEIGHT, MENU_MIN_WIDTH, strip_height
         from mbo_utilities.gui.manual_roi import PANEL_HEIGHT, roi_panel_min_width
+        from mbo_utilities.gui.widgets.preview_data import ZSTATS_PANEL_HEIGHT
 
         rgb = bool(getattr(arrays[0], "rgb", False))
         shape = tuple(arrays[0].shape)
         top, right, min_width = 0, 0, 0.0
         if widget != "none":
             top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
+        # the strip is as tall as the tab that will be selected: the ROI panel
+        # registers first, else the Signal Quality plot once its stats are in
         if manual_roi:
             top = strip_height(PANEL_HEIGHT)
             min_width = max(min_width, roi_panel_min_width())
+        elif signal_quality:
+            top = strip_height(ZSTATS_PANEL_HEIGHT)
         figure_kwargs = _figure_kwargs_for_here(
             fit=dict(
                 image_hw=shape[-3:-1] if rgb else shape[-2:],

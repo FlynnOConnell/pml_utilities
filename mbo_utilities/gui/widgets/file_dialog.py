@@ -262,7 +262,9 @@ class FileDialog:
                 self._compute_devices = []
             # re-read prefs on open; they may have changed elsewhere
             from mbo_utilities.gui._options_popup import sync_memory_options
+            from mbo_utilities.preferences import get_linescan_auto_traces
             sync_memory_options(self)
+            self._options_linescan_auto = get_linescan_auto_traces()
             imgui.open_popup("##options_popup")
             self._show_options_popup = False
 
@@ -300,6 +302,7 @@ class FileDialog:
                 compute_gpu_options,
                 compute_gpu_current_index,
                 apply_compute_gpu,
+                draw_linescan_options,
                 draw_memory_options,
             )
             imgui.text_colored(COL_TEXT_DIM, "Compute GPU (suite2p / cellpose)")
@@ -341,6 +344,7 @@ class FileDialog:
                     pass
 
             draw_memory_options(self, tooltip=wrapped_tooltip)
+            draw_linescan_options(self, tooltip=wrapped_tooltip)
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.3))
             if imgui.button("Close", imgui.ImVec2(hello_imgui.em_size(6), 0)):
