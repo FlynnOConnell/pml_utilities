@@ -225,6 +225,18 @@ def draw_run_tab(parent: Any) -> None:
         parent._pipeline_instances = {}
 
     arr = _active_array(parent)
+    # applies_to can open the source file; evaluate once per array, not per frame
+    cache = getattr(parent, "_pipeline_applies_cache", None)
+    if cache is None or cache[0] is not arr:
+        applies_by_cls = {}
+        for cls in _PIPELINE_CLASSES:
+            try:
+                applies_by_cls[cls] = bool(cls.applies_to(arr))
+            except Exception:
+                applies_by_cls[cls] = False
+        cache = (arr, applies_by_cls)
+        parent._pipeline_applies_cache = cache
+    applies_by_cls = cache[1]
 
     if not _PIPELINE_CLASSES:
         imgui.text_colored(
@@ -244,10 +256,7 @@ def draw_run_tab(parent: Any) -> None:
     not_installed: list[type[PipelineWidget]] = []
     for cls in _PIPELINE_CLASSES:
         installed = _is_pipeline_available(cls)
-        try:
-            applies = cls.applies_to(arr)
-        except Exception:
-            applies = False
+        applies = applies_by_cls.get(cls, False)
         if installed and applies:
             applicable.append(cls)
         elif not installed:
