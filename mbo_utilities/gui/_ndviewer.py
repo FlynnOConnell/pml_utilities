@@ -35,7 +35,14 @@ from fastplotlib.widgets.nd_widget._index import RangeContinuous
 from fastplotlib.widgets.nd_widget._async import run_sync
 from fastplotlib.widgets.nd_widget._ui import NDWidgetUI
 
-__all__ = ["MboNDViewer", "MboNDImageSlicer", "_sample_array"]
+from mbo_utilities.gui import _fpl_config  # noqa: F401
+
+__all__ = ["MboNDViewer", "MboNDImageSlicer", "_sample_array", "sliders_height"]
+
+
+def sliders_height(n_sliders: int) -> int:
+    """Height of the NDWidget controls window: the playback row and one row per slider."""
+    return 57 + 50 * n_sliders
 
 
 # positional letters for slider axes 0/1/2 — the vendored widget's internal
@@ -622,7 +629,7 @@ class MboNDViewer:
         self._ndw.figure.add_imgui_window(
             ui,
             location="bottom",
-            size=57 + 50 * len(self._ndw.indices),
+            size=sliders_height(len(self._ndw.indices)),
             title="NDWidget controls",
         )
         self._ndw._sliders_ui = ui

@@ -507,35 +507,78 @@ def _squeeze_for_viewer(arr):
 
 
 _NOTEBOOK_SIZE = (1400, 900)
+# the PreviewDataWidget on the figure's right edge
+_PREVIEW_WIDTH = 300
 
 
-def _figure_kwargs_for_here(size: tuple[int, int] | None = None) -> dict:
+def fit_figure_size(
+    box: tuple[int, int],
+    image_hw: tuple[int, int],
+    grid: tuple[int, int] = (1, 1),
+    top: int = 0,
+    bottom: int = 0,
+    right: int = 0,
+    min_width: float = 0.0,
+) -> tuple[int, int]:
+    """Canvas size whose render area has the images' aspect.
+
+    The image column fills the height of ``box`` (w, h) and the width follows
+    from the aspect, so the subplot shows no black band around the image. The
+    edge windows (``top`` strip, ``bottom`` sliders, ``right`` widget) and each
+    subplot's histogram dock and frame padding are added around it. The window
+    is widened only as far as ``min_width`` needs to keep the top strip on one
+    row; that is the one place the image gets a margin.
+    """
+    from mbo_utilities.gui._fpl_config import HISTOGRAM_WIDTH, SUBPLOT_PAD_H, SUBPLOT_PAD_W
+    from mbo_utilities.gui._top_strip import MIN_RENDER_AREA
+
+    nrows, ncols = grid
+    h, w = max(float(image_hw[0]), 1.0), max(float(image_hw[1]), 1.0)
+    col_pad = HISTOGRAM_WIDTH + SUBPLOT_PAD_W
+    img_h = (box[1] - top - bottom) / nrows - SUBPLOT_PAD_H
+    img_w = img_h * w / h
+    width = ncols * (img_w + col_pad) + right
+    if width > box[0]:
+        img_w = (box[0] - right) / ncols - col_pad
+        img_h = img_w * h / w
+        width = box[0]
+    height = nrows * (img_h + SUBPLOT_PAD_H) + top + bottom
+    return int(max(width, min_width)), int(max(height, top + bottom + MIN_RENDER_AREA))
+
+
+def _figure_kwargs_for_here(size: tuple[int, int] | None = None, fit: dict | None = None) -> dict:
     """The canvas and size for wherever this process is running.
 
     A notebook gets the jupyter canvas: it belongs in the output cell, not
     in a Qt window the browser cannot see, which is what the pyqt6 branch
     would build whenever PyQt6 happens to be installed (napari pulls it in).
     jupyter_rfb streams the same wgpu frames over the kernel, so this is also
-    what makes a remote/JupyterHub session work. Its default size is a floor,
-    not a preference: the edge windows reserve fixed pixels (300 for the side
-    widget, the strip's menu row + panel, the NDWidget controls), and a canvas
-    too small for them leaves pygfx a negative viewport, which fails
-    validation and blanks the whole frame. A notebook cell has no screen to
-    measure, so ask for room.
+    what makes a remote/JupyterHub session work. A notebook cell has no
+    screen to measure, so its room is a fixed box with space for the edge
+    windows; a desktop window's room is the screen's available work area,
+    so launches on shorter monitors (laptops, 1080p with a taskbar) don't run
+    past the bottom of the screen.
 
-    A desktop window is clamped to the screen's available work area so
-    launches on shorter monitors (laptops, 1080p with a taskbar) don't run
-    past the bottom of the screen; (1000, 1000) when Qt can't be asked.
+    ``size`` is used as given. Otherwise ``fit``, the keyword arguments of
+    :func:`fit_figure_size`, sizes the canvas to the images within that room,
+    and without either the canvas is the room itself, at most 1000 px a side.
     """
+    # every viewer asks here right before it builds its figure
+    from mbo_utilities.gui import _fpl_config  # noqa: F401
+
     if in_notebook():
-        return {"canvas": "jupyter", "size": tuple(size or _NOTEBOOK_SIZE)}
+        if size is None:
+            size = fit_figure_size(_NOTEBOOK_SIZE, **fit) if fit else _NOTEBOOK_SIZE
+        return {"canvas": "jupyter", "size": tuple(size)}
 
     import os
 
     if os.environ.get("RENDERCANVAS_FORCE_OFFSCREEN"):
         # tests and headless capture: rendercanvas.auto already resolved to
         # the offscreen backend, and a Qt canvas would fight it
-        return {"size": tuple(size or (1000, 1000))}
+        if size is None:
+            size = fit_figure_size((1000, 1000), **fit) if fit else (1000, 1000)
+        return {"size": tuple(size)}
 
     try:
         from rendercanvas.pyqt6 import RenderCanvas
@@ -543,20 +586,17 @@ def _figure_kwargs_for_here(size: tuple[int, int] | None = None) -> dict:
         RenderCanvas = None
 
     if size is None:
-        fig_w, fig_h = 1000, 1000
+        box = (1000, 1000)
         try:
             from PyQt6.QtGui import QGuiApplication
             screen = QGuiApplication.primaryScreen()
             if screen is not None:
                 avail = screen.availableGeometry()
-                # leave headroom for window chrome, side widget, and OS bars.
-                # PreviewDataWidget is ~300 px wide, added by add_gui — so the
-                # canvas itself wants the remaining width.
-                fig_w = max(400, min(fig_w, avail.width() - 360))
-                fig_h = max(400, min(fig_h, avail.height() - 120))
+                # headroom for the window frame and title bar
+                box = (max(400, avail.width() - 40), max(400, avail.height() - 100))
         except Exception:
             pass
-        size = (fig_w, fig_h)
+        size = fit_figure_size(box, **fit) if fit else (min(1000, box[0]), min(1000, box[1]))
 
     if RenderCanvas is not None:
         # present_method="screen" renders the wgpu surface directly. The
@@ -602,10 +642,30 @@ def _create_image_widget(
     import copy
     import numpy as np
 
-    if figure_kwargs_override is not None:
-        figure_kwargs = figure_kwargs_override
-    else:
-        figure_kwargs = _figure_kwargs_for_here()
+    if isinstance(widget, bool) or widget is None:
+        widget = "preview" if widget else "none"
+    if widget not in ("preview", "manualroi", "none"):
+        raise ValueError(
+            f"unknown widget {widget!r}, expected one of: preview, manualroi, none"
+        )
+
+    # drawing needs the windowing controls to see anything, so the ROI
+    # ui takes the top strip and right-widget tabs alongside the preview
+    # widget, not instead of it. Flip the Widgets-menu toggle on for this session
+    # when asked for, or when this data has annotations or pipeline ROIs
+    # beside it; the widget builds itself from the toggle. Not persisted — the
+    # flag came from the command line or the disk, not the menu.
+    manual_roi = False
+    if widget != "none":
+        from mbo_utilities.gui.manual_roi import labels_path
+        from mbo_utilities.gui.roi_runs import run_dir_complete
+        from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
+
+        src = data_array.source_path
+        manual_roi = widget == "manualroi" or widget_enabled("manual_roi") or (
+            src is not None
+            and (labels_path(src).exists() or run_dir_complete(labels_path(src).parent))
+        )
 
     # Determine slider dimension names from array's dims property if available
     from mbo_utilities.arrays.features import get_slider_dims
@@ -658,76 +718,71 @@ def _create_image_widget(
             arr.roi = r
             arrays.append(_squeeze_for_viewer(arr))
             names.append(f"ROI {r}" if r else (base_name or "Full Image"))
-
-        from mbo_utilities.gui._ndviewer import MboNDViewer
-
-        iw = MboNDViewer(
-            data=arrays,
-            names=names,
-            slider_dim_names=slider_dim_names,
-            window_funcs=window_funcs,
-            window_sizes=window_sizes,
-            cmap="gnuplot2",
-            histogram_widget=True,
-            figure_kwargs=figure_kwargs,
-            graphic_kwargs=graphic_kwargs,
-        )
     else:
-        from mbo_utilities.gui._ndviewer import MboNDViewer
+        arrays = [_squeeze_for_viewer(data_array)]
+        names = None
 
-        iw = MboNDViewer(
-            data=_squeeze_for_viewer(data_array),
-            slider_dim_names=slider_dim_names,
-            window_funcs=window_funcs,
-            window_sizes=window_sizes,
-            cmap="gnuplot2",
-            histogram_widget=True,
-            figure_kwargs=figure_kwargs,
-            graphic_kwargs=graphic_kwargs,
+    from mbo_utilities.gui._ndviewer import MboNDViewer, sliders_height
+
+    if figure_kwargs_override is not None:
+        figure_kwargs = figure_kwargs_override
+    else:
+        from fastplotlib.utils import calculate_figure_shape
+
+        from mbo_utilities.gui._top_strip import MENU_HEIGHT, MENU_MIN_WIDTH, strip_height
+        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT, roi_panel_min_width
+
+        rgb = bool(getattr(arrays[0], "rgb", False))
+        shape = tuple(arrays[0].shape)
+        top, right, min_width = 0, 0, 0.0
+        if widget != "none":
+            top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
+        if manual_roi:
+            top = strip_height(PANEL_HEIGHT)
+            min_width = max(min_width, roi_panel_min_width())
+        figure_kwargs = _figure_kwargs_for_here(
+            fit=dict(
+                image_hw=shape[-3:-1] if rgb else shape[-2:],
+                grid=calculate_figure_shape(len(arrays)),
+                top=top,
+                bottom=sliders_height(MboNDViewer._n_slider_dims(arrays[0], rgb)),
+                right=right,
+                min_width=min_width,
+            )
         )
+
+    iw = MboNDViewer(
+        data=arrays,
+        names=names,
+        slider_dim_names=slider_dim_names,
+        window_funcs=window_funcs,
+        window_sizes=window_sizes,
+        cmap="gnuplot2",
+        histogram_widget=True,
+        figure_kwargs=figure_kwargs,
+        graphic_kwargs=graphic_kwargs,
+    )
 
     if show:
         iw.show()
         _after_show(iw)
 
-    # Attach the requested side widget
-    if isinstance(widget, bool) or widget is None:
-        widget = "preview" if widget else "none"
-    if widget in ("preview", "manualroi"):
+    if widget != "none":
         from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
-
-        # drawing needs the windowing controls to see anything, so the ROI
-        # ui takes the top strip and right-widget tabs alongside the preview
-        # widget, not instead of it. Flip the Widgets-menu toggle on for this session
-        # when asked for, or when this data has annotations or pipeline ROIs
-        # beside it; the widget builds itself from the toggle. Not persisted — the
-        # flag came from the command line or the disk, not the menu.
-        from mbo_utilities.gui.manual_roi import labels_path
-        from mbo_utilities.gui.roi_runs import run_dir_complete
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        src = data_array.source_path
-        if widget == "manualroi" or (
-            src is not None
-            and (labels_path(src).exists() or run_dir_complete(labels_path(src).parent))
-        ):
+        if manual_roi:
             set_widget_enabled("manual_roi", True, persist=False)
-
         gui = PreviewDataWidget(
             iw=iw,
             fpath=data_array.source_path,
-            size=300,
+            size=_PREVIEW_WIDTH,
         )
         # the EdgeWindow shim registers itself with the figure during
         # __init__; add_gui exists only on mbo-fastplotlib
         add_gui = getattr(iw.figure, "add_gui", None)
         if add_gui is not None:
             add_gui(gui)
-    elif widget != "none":
-        raise ValueError(
-            f"unknown widget {widget!r}, expected one of: preview, manualroi, none"
-        )
-
     return iw
 
 

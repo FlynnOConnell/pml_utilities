@@ -318,10 +318,8 @@ class CurationVis(_Dashboard):
             kwargs.pop("canvas_kwargs", None)
         self.figure = fpl.Figure(**kwargs)
         # the one subplot is empty and sits behind the dashboard window: no
-        # toolbar (it would take ~55 px off the viewport) and no axes (their
-        # update needs a graphic to intersect)
+        # axes (their update needs a graphic to intersect)
         subplot = self.figure[0, 0]
-        subplot.toolbar = False
         subplot.axes.visible = False
         # its "(0, 0)" title would show in the strip left under the dashboard
         subplot.title.visible = False

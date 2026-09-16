@@ -14,8 +14,8 @@ in a panel body.
 A grab bar along the strip's bottom edge drags it taller or shorter and
 double-clicks shut, the way fastplotlib's right and bottom edge windows work
 (it does not draw one for the top edge, so the strip draws its own). Dragging
-pins the height until :meth:`TopStrip.reset_size`; until then the strip sizes
-itself to whatever panel is showing.
+pins the height until :meth:`TopStrip.reset_size`; until then the strip is
+exactly as tall as the panel showing asked for.
 """
 
 from __future__ import annotations
@@ -26,21 +26,20 @@ from typing import Callable
 from fastplotlib.ui import ImguiWindow
 from imgui_bundle import imgui, imgui_ctx
 
-__all__ = ["MENU_HEIGHT", "TopPanel", "TopStrip"]
+__all__ = ["MENU_HEIGHT", "MENU_MIN_WIDTH", "TopPanel", "TopStrip", "strip_height"]
 
-# the menu row on its own; a registered panel adds its height below it
-MENU_HEIGHT = 42
+# the menu row on its own: the 20 px menu bar inside the window padding
+MENU_HEIGHT = 36
+# canvas width that keeps the menu row on one line: the File / Widgets / Docs
+# menus and the status cluster at the 14 px font, plus the window padding
+MENU_MIN_WIDTH = 560
 # tab bar + spacing around a panel body
 PANEL_PAD = 22
+# the grab bar along the bottom edge
+HANDLE_HEIGHT = 14
 # frames to ignore right-bar reports for after the top switches: the right bar
 # redraws its old tab for a frame or two before it follows
 SYNC_HOLD = 3
-
-# a tall window gives the strip more room rather than handing every pixel to
-# the canvas: the panel takes this share of the canvas height, never less than
-# the height it asked for and never more than twice it
-GROW_SHARE = 0.28
-GROW_MAX = 2.0
 
 # never size or drag the strip so far down that the canvas has less than
 # this left to render into, after the other edge windows (the NDWidget's
@@ -48,6 +47,11 @@ GROW_MAX = 2.0
 MIN_RENDER_AREA = 150
 # and never squeeze a panel under this on its own account
 MIN_PANEL = 60
+
+
+def strip_height(panel_height: int) -> int:
+    """Height of the strip showing a panel of ``panel_height``."""
+    return MENU_HEIGHT + PANEL_PAD + int(panel_height) + HANDLE_HEIGHT
 
 
 @dataclass
@@ -170,7 +174,7 @@ class TopStrip(ImguiWindow):
     @property
     def handle_height(self) -> int:
         """Thickness of the grab bar along the bottom edge."""
-        return int(self._separator_thickness)
+        return HANDLE_HEIGHT
 
     @property
     def shut_size(self) -> int:
@@ -208,13 +212,11 @@ class TopStrip(ImguiWindow):
         """Menu row plus the selected panel, unless the user set a height.
 
         The strip is as tall as what it is *showing*, not as tall as the
-        tallest thing registered, and it grows with the window: on a tall
-        canvas the panel takes a share of the height instead of leaving a
-        band of empty space under its cards. It also leaves the images at
-        least ``MIN_RENDER_AREA`` after the other edge windows, so a tall
-        panel (the curation dashboard over the line traces) on a short
-        window shrinks instead of pushing the viewport negative. A drag on
-        the grab bar pins the height until :meth:`reset_size`.
+        tallest thing registered. It also leaves the images at least
+        ``MIN_RENDER_AREA`` after the other edge windows, so a tall panel
+        (the curation dashboard over the line traces) on a short window
+        shrinks instead of pushing the viewport negative. A drag on the
+        grab bar pins the height until :meth:`reset_size`.
         """
         if not self.panels:
             return MENU_HEIGHT
@@ -228,12 +230,10 @@ class TopStrip(ImguiWindow):
             canvas_height = float(self.figure.canvas.get_logical_size()[1])
         except Exception:
             canvas_height = 0.0
-        chrome = MENU_HEIGHT + PANEL_PAD + self.handle_height
         if canvas_height > 0:
-            height = max(height, min(canvas_height * GROW_SHARE, height * GROW_MAX))
-            room = canvas_height - self._other_edges() - MIN_RENDER_AREA - chrome
+            room = canvas_height - self._other_edges() - MIN_RENDER_AREA - strip_height(0)
             height = min(height, max(room, MIN_PANEL))
-        return int(height) + chrome
+        return strip_height(height)
 
     def _other_edges(self) -> float:
         """Canvas height the other edge windows take (the bottom one; the

@@ -87,6 +87,9 @@ GHOST_THICKNESS = 1.0
 GHOST_ALPHA = 0.28
 START_DOT_SIZE = 9.0
 TRACE_SEPARATION = 1.4
+RTMC_COLORS = ((0.95, 0.35, 0.35, 0.9), (0.35, 0.85, 0.4, 0.9), (0.4, 0.55, 1.0, 0.9))
+LINE_PANEL_WIDTH = 360
+TRACES_PANEL_HEIGHT = 260
 
 
 def _console_pick_unit(
@@ -539,7 +542,7 @@ class LineScanOverlay:
 class LinePanel:
     """Right-hand imgui panel: one row per line, depth navigation, toggles."""
 
-    def __init__(self, ndw, overlay: LineScanOverlay, size: int = 360, curation=None,
+    def __init__(self, ndw, overlay: LineScanOverlay, size: int = LINE_PANEL_WIDTH, curation=None,
                  units: list[dict] | None = None, switch=None):
         self.overlay = overlay
         self.curation = curation
@@ -651,9 +654,19 @@ class LineTracesPanel:
     """
 
     def __init__(self, ndw, overlay: LineScanOverlay, traces: np.ndarray, strip, own_strip: bool,
-                 tab: bool = True):
+                 tab: bool = True, curves: dict | None = None):
         from mbo_utilities.gui._top_strip import TopPanel
 
+        # RTMC X/Y/Z totals (um) from the unit's timing curves, when the scan
+        # ran with real-time motion correction; times are curve ms -> s
+        self.rtmc = [
+            (axis, curves[name]["timestamps"] / 1000.0, curves[name]["values"])
+            for axis, name in (("X", "RTMC X correction (total)"),
+                               ("Y", "RTMC Y correction (total)"),
+                               ("Z", "RTMC Z correction (total)"))
+            if curves is not None and name in curves
+        ]
+        self.show_rtmc = bool(self.rtmc)
         self.ndw = ndw
         self.overlay = overlay
         self.strip = strip
@@ -666,7 +679,9 @@ class LineTracesPanel:
         self._fit = True
         self._last = None
         if tab:
-            self.strip.register(TopPanel("line_traces", "Traces", self.draw_tab, 260, None, 10))
+            self.strip.register(
+                TopPanel("line_traces", "Traces", self.draw_tab, TRACES_PANEL_HEIGHT, None, 10)
+            )
 
     def close(self) -> None:
         self.strip.unregister("line_traces")
@@ -702,6 +717,11 @@ class LineTracesPanel:
         imgui.same_line(0, 12)
         if imgui.button("fit##line_traces"):
             self._fit = True
+        if self.rtmc:
+            imgui.same_line(0, 12)
+            _changed, self.show_rtmc = imgui.checkbox("RTMC##line_traces", self.show_rtmc)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("real-time motion correction X/Y/Z totals (um), right axis")
         self.draw(max(imgui.get_content_region_avail().y - 2, 60.0))
 
     def draw(self, height: float) -> None:
@@ -721,10 +741,17 @@ class LineTracesPanel:
             # the x axis never leaves the recording: no blank space past
             # either end, no panning beyond it
             implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, self.duration_s)
+            if self.rtmc and self.show_rtmc:
+                implot.setup_axis(implot.ImAxis_.y2, "RTMC (um)", implot.AxisFlags_.aux_default)
             t_band, band, ts, smooth = self._prepared(i)
             r, g, b = (float(v) for v in ov.colors[i][:3])
             line(f"ROI {i} raw", band, x=t_band, color=(r, g, b, 0.28), weight=0.8)
             line(f"ROI {i}", smooth, x=ts, color=(r, g, b, 1.0), weight=1.8)
+            if self.rtmc and self.show_rtmc:
+                implot.set_axes(implot.ImAxis_.x1, implot.ImAxis_.y2)
+                for (axis, t, v), color in zip(self.rtmc, RTMC_COLORS):
+                    line(f"RTMC {axis}", v, x=t, color=color, weight=1.0)
+                implot.set_axes(implot.ImAxis_.x1, implot.ImAxis_.y1)
             cursor, held = drag_vline(99, ov.t_index / self.fs, (1.0, 0.85, 0.3, 0.9), 1.5)
             if held:
                 ov.goto_time(cursor)
@@ -1133,7 +1160,9 @@ def open_linescan_viewer(
         return None
 
     from mbo_utilities.gui.run_gui import _after_show, _figure_kwargs_for_here, _squeeze_for_viewer
-    from mbo_utilities.gui._ndviewer import _ROW, _COL, _ref_to_index
+    from mbo_utilities.gui._ndviewer import _ROW, _COL, _ref_to_index, sliders_height
+    from mbo_utilities.gui._top_strip import strip_height
+    from mbo_utilities.gui.event_curation import PANEL_HEIGHT as CURATION_PANEL_HEIGHT
     from fastplotlib.widgets.nd_widget import NDWidget
 
     traces = None
@@ -1146,10 +1175,6 @@ def open_linescan_viewer(
     ref_dims, ref_ranges = _panel_dims(ref_arr, ref_view, "Reference")
     zstack_dims, zstack_ranges = _panel_dims(zstack_arr, zstack_view, "Z-stack")
 
-    # --screenshot renders offscreen and reads the frame back, the same route
-    # scripts/capture_docs.py uses: no window, no event loop, works headless
-    figure_kwargs = ({"canvas": "offscreen", "size": (1500, 950)} if screenshot is not None
-                     else _figure_kwargs_for_here())
     # the traces are an imgui panel on the top strip, so the image panels
     # take the whole canvas
     names = [f"Reference [{ref_key.rsplit('/', 1)[-1]}]"]
@@ -1157,6 +1182,22 @@ def open_linescan_viewer(
         names.append(f"Snapshot [{bg['munit']}]")
     names.append(f"Z-stack [{zstack_key.rsplit('/', 1)[-1]}]")
     n_top = len(names)
+    # --screenshot renders offscreen and reads the frame back, the same route
+    # scripts/capture_docs.py uses: no window, no event loop, works headless
+    if screenshot is not None:
+        figure_kwargs = {"canvas": "offscreen", "size": (1500, 950)}
+    else:
+        # the strip holds the curation panel, else the raw traces tab
+        panel = 0 if traces is None else CURATION_PANEL_HEIGHT if curation else TRACES_PANEL_HEIGHT
+        figure_kwargs = _figure_kwargs_for_here(
+            fit=dict(
+                image_hw=ref_view.shape[-2:],
+                grid=(1, n_top),
+                top=strip_height(panel) if panel else 0,
+                bottom=sliders_height(len(ref_ranges) + len(zstack_ranges)),
+                right=LINE_PANEL_WIDTH,
+            )
+        )
     extents = [(i / n_top, (i + 1) / n_top, 0.0, 1.0) for i in range(n_top)]
     snap_index = 1 if bg is not None else None
     z_index = n_top - 1
@@ -1213,7 +1254,8 @@ def open_linescan_viewer(
             # panel's denoised trace is the view of the same lines
             from mbo_utilities.gui._top_strip import TopStrip
 
-            traces_panel = LineTracesPanel(ndw, overlay, traces, TopStrip(ndw.figure), True)
+            traces_panel = LineTracesPanel(ndw, overlay, traces, TopStrip(ndw.figure), True,
+                                           curves=ref_arr.curves)
 
         def switch(key: str) -> None:
             # a new window for the other scan on the running loop, then this
