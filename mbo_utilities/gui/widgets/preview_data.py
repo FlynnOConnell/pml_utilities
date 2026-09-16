@@ -26,7 +26,9 @@ import time
 
 # Force rendercanvas to use Qt backend if PyQt6 is available
 # This must happen BEFORE importing fastplotlib to avoid glfw selection
-if importlib.util.find_spec("PyQt6") is not None:
+if importlib.util.find_spec("PyQt6") is not None and os.environ.get(
+    "RENDERCANVAS_BACKEND", "qt"
+).lower() in ("qt", "pyqt6"):
     os.environ.setdefault("RENDERCANVAS_BACKEND", "qt")
     import PyQt6  # noqa: F401 - Must be imported before rendercanvas.qt can load
 

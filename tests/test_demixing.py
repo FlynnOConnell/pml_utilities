@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import h5py
 import numpy as np
+import scipy.sparse
 import pytest
 from imgui_bundle import imgui
 
@@ -226,7 +228,40 @@ def test_tab_draws_channels_and_every_roi(run_dir):
     assert widget._selected is None
 
 
-def test_frames_are_rebuilt_by_masknmf(run_dir):
+def test_frames_are_rebuilt_with_numpy_without_torch(run_dir, monkeypatch):
+    # MBO_GPU=0 forces the cpu path, which must never import torch or masknmf
+    monkeypatch.setenv("MBO_GPU", "0")
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "masknmf", None)
+    from mbo_utilities.arrays.demixing import DemixingArray
+
+    path = run_dir / "calcium_spine_demixing.hdf5"
+    with h5py.File(path, "r") as f:
+        g = f["DemixingResults"]
+        ui = g["u/indices"][()]
+        u = scipy.sparse.csr_matrix((g["u/values"][()], (ui[0], ui[1])), shape=tuple(g["u/size"][()]))
+        ai = g["a/indices"][()]
+        a = scipy.sparse.csr_matrix((g["a/values"][()], (ai[0], ai[1])), shape=tuple(g["a/size"][()]))
+        v = g["v"][()]
+        c = g["c"][()]
+    pmd = np.asarray((u @ v).T).reshape(T, Y, X)
+    ac = np.asarray((a @ c.T).T).reshape(T, Y, X)
+
+    arr = DemixingArray(path)
+    assert arr[3, 1, 0].shape == (Y, X)
+    np.testing.assert_allclose(arr[3, 1, 0], ac[3], rtol=1e-5)
+    np.testing.assert_allclose(arr[5, 0, 0], pmd[5], rtol=1e-5)
+    # the fixture stores a zero baseline and no background terms
+    np.testing.assert_allclose(arr[2, 2, 0], pmd[2] - ac[2], rtol=1e-5, atol=1e-6)
+    assert arr[0:2].shape == (2, 3, 1, Y, X)
+    assert arr[0, :, 0, 1:3, :].shape == (3, 2, X)
+    np.testing.assert_allclose(arr[0:2][:, 0, 0], pmd[0:2], rtol=1e-5)
+    assert arr._results is None
+    arr.close()
+    assert arr._factors is None
+
+
+def test_numpy_frames_match_masknmf(run_dir):
     # masknmf's import fails with AttributeError on a mismatched fastplotlib
     # pin, which importorskip would report as a failure
     try:
@@ -237,10 +272,8 @@ def test_frames_are_rebuilt_by_masknmf(run_dir):
 
     arr = DemixingArray(run_dir / "calcium_spine_demixing.hdf5", device="cpu")
     res = masknmf.DemixingResults.from_hdf5(run_dir / "calcium_spine_demixing.hdf5", device="cpu")
-    frame = arr[3, 1, 0]
-    assert frame.shape == (Y, X)
-    np.testing.assert_allclose(frame, np.asarray(res.ac_array[3]), rtol=1e-5)
-    assert arr[0:2].shape == (2, 3, 1, Y, X)
-    assert arr[0, :, 0, 1:3, :].shape == (3, 2, X)
+    np.testing.assert_allclose(arr[3, 1, 0], np.asarray(res.ac_array[3]), rtol=1e-5)
     np.testing.assert_allclose(arr[5, 0, 0], np.asarray(res.pmd_array[5]), rtol=1e-5)
+    np.testing.assert_allclose(arr[2, 2, 0], np.asarray(res.residual_array[2]), rtol=1e-5, atol=1e-6)
+    assert arr._results is None
     arr.close()

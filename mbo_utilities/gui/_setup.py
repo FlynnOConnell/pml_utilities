@@ -113,6 +113,9 @@ def _configure_qt_backend():
         return
     if importlib.util.find_spec("PyQt6") is None:
         return
+    if os.environ.get("RENDERCANVAS_BACKEND", "qt").lower() not in ("qt", "pyqt6"):
+        # the user chose another backend (glfw on a box without qt's xcb libs)
+        return
 
     os.environ.setdefault("RENDERCANVAS_BACKEND", "qt")
     import PyQt6  # noqa: F401

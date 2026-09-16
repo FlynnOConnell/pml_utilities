@@ -597,10 +597,14 @@ def _figure_kwargs_for_here(size: tuple[int, int] | None = None, fit: dict | Non
             size = fit_figure_size((1000, 1000), **fit) if fit else (1000, 1000)
         return {"size": tuple(size)}
 
-    try:
-        from rendercanvas.pyqt6 import RenderCanvas
-    except (ImportError, RuntimeError):  # RuntimeError if qt is already selected
+    if os.environ.get("RENDERCANVAS_BACKEND", "qt").lower() not in ("qt", "pyqt6"):
+        # a chosen backend is left to rendercanvas.auto, which honors the variable
         RenderCanvas = None
+    else:
+        try:
+            from rendercanvas.pyqt6 import RenderCanvas
+        except (ImportError, RuntimeError):  # RuntimeError if qt is already selected
+            RenderCanvas = None
 
     if size is None:
         box = screen_box() or (1000, 1000)
