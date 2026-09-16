@@ -106,12 +106,6 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
                 "click a row to display it.",
     ),
     WidgetEntry(
-        key="demixing",
-        label="Demixing",
-        tooltip="The ROIs of an open masknmf demixing result: footprints, traces, "
-                "and a switch between the run's calcium / glutamate channels.",
-    ),
-    WidgetEntry(
         key="signal_quality",
         label="Signal Quality",
         tooltip="Per-plane z-stats and signal-quality plots.",
