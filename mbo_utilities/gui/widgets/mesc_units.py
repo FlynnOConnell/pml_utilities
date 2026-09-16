@@ -11,13 +11,29 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import imgui
+from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.widgets._base import Widget
 
 _ACCENT = imgui.ImVec4(0.8, 0.8, 0.2, 1.0)
 _ERROR = imgui.ImVec4(1.0, 0.4, 0.4, 1.0)
+
+# (header, stretch weight, hidden by default); right-click the header to show
+UNIT_COLUMNS = (
+    ("unit", 1.0, False),
+    ("modality", 1.4, False),
+    ("layout", 1.0, True),
+    ("T", 0.7, False),
+    ("C", 0.5, False),
+    ("Z", 0.5, False),
+    ("Y", 0.7, False),
+    ("X", 0.7, False),
+    ("fs", 0.8, False),
+    ("duration", 0.9, False),
+    ("start", 1.6, False),
+    ("comment", 3.0, False),
+)
 
 
 def mesc_array_of(obj):
@@ -100,29 +116,14 @@ class MescUnitsWidget(Widget):
     # -- swapping --------------------------------------------------------
 
     def _install(self, arr) -> None:
-        """Show `arr` in the viewer, re-deriving every per-dataset display state.
+        """Show `arr` in the viewer, re-deriving every per-dataset display state."""
+        from mbo_utilities.gui._dialogs import swap_viewer_array
 
-        Mirrors `mbo_utilities.gui._dialogs.load_new_data`: stale closures are
-        dropped before the swap (the spatial func captured the previous unit's
-        mean image and would be fed a differently shaped frame), then the
-        widget re-derives its dimensions from the new array.
-        """
-        from mbo_utilities.gui._dialogs import _reset_per_data_state
-
+        unit = arr.unit_key.rsplit("/", 1)[-1]
+        swap_viewer_array(
+            self.parent, arr, title=f"{Path(arr.filenames[0]).stem[:16]} · {unit}"
+        )
         parent = self.parent
-        iw = parent.image_widget
-
-        _reset_per_data_state(parent)
-        parent._rebuild_spatial_func()
-
-        display = display_wrap(arr)
-        iw.data[0] = display
-        # slider labels are a plain attribute on the widget; a unit swap can
-        # change both the count and the meaning (Z-plane vs ROI), so they have
-        # to be re-stamped alongside the data.
-        iw._slider_dim_names = tuple(arr.slider_dim_labels) or None
-        if getattr(iw, "n_sliders", 0) > 0:
-            iw.indices = [0] * iw.n_sliders
 
         # the Manual ROI panel caches tdim/zdim/cdim and its mask store's
         # (ny, nx) from whichever unit was live when it was built; each unit
@@ -151,34 +152,6 @@ class MescUnitsWidget(Widget):
             attach_standard_traces(parent)
         except Exception:
             parent.logger.warning("line-scan traces tab unavailable", exc_info=True)
-
-        parent.shape = display.shape
-        nt, nc, nz, _, _ = arr.shape
-        parent.nc, parent.nz = nc, nz
-        parent._custom_metadata = {}
-        parent._update_window_funcs()
-        parent.set_context_info()
-
-        try:
-            unit = arr.unit_key.rsplit("/", 1)[-1]
-            iw.figure[0, 0].title = f"{Path(arr.filenames[0]).stem[:16]} · {unit}"
-        except Exception:
-            self.parent.logger.debug("subplot title update skipped", exc_info=True)
-
-        # summary images / projections cache per-dataset statistics; the new
-        # unit's are unrelated to the old one's.
-        try:
-            from mbo_utilities.gui.viewers import TimeSeriesViewer
-
-            if isinstance(getattr(parent, "_viewer", None), TimeSeriesViewer):
-                parent.refresh_zstats()
-        except Exception:
-            parent.logger.debug("zstats refresh skipped", exc_info=True)
-
-        # widget support can differ between units (a snapshot has no time
-        # axis, a z-stack no scan-phase). Rebinds parent._widgets to a new
-        # list; the frame currently iterating the old one finishes safely.
-        parent._refresh_widgets()
         parent.logger.info(f"MESc unit: {arr.unit_key}  shape={arr.shape}")
 
     def _switch(self, arr) -> None:
@@ -267,3 +240,154 @@ class MescUnitsWidget(Widget):
             except Exception:
                 pass
         self.parent._mesc_unit_cache = None
+
+
+def unit_row(info: dict) -> tuple[tuple[str, ...], tuple]:
+    """One table row per `list_mesc_units` entry: the cell texts and the sort
+    keys, both in UNIT_COLUMNS order (numbers sort as numbers)."""
+    t, c, z, y, x = info["shape"]
+    fs = info.get("fs")
+    dur = info.get("duration_s")
+    start = (info.get("start_time") or "")[:19].replace("T", " ")
+    comment = " / ".join(info.get("comment", "").splitlines())
+    cells = (
+        info["munit"],
+        info["modality_name"],
+        info["kind"],
+        str(t),
+        str(c),
+        str(z),
+        str(y),
+        str(x),
+        f"{fs:.1f} Hz" if fs else "-",
+        f"{dur:.0f} s" if dur else "-",
+        start,
+        comment,
+    )
+    keys = (
+        info["index"],
+        info["modality_name"],
+        info["kind"],
+        t,
+        c,
+        z,
+        y,
+        x,
+        fs or 0.0,
+        dur or 0.0,
+        start,
+        comment.lower(),
+    )
+    return cells, keys
+
+
+class MescTabWidget(Widget):
+    """The MESc tab: every measurement unit in the open file, with its
+    comment; the displayed unit is highlighted and clicking a row shows it."""
+
+    name = "MESc"
+    tab_label = "MESc"
+    placement = "tab"
+    toggle_key = "mesc"
+    priority = 15
+
+    def __init__(self, parent: Any):
+        super().__init__(parent)
+        # the combo widget owns the unit cache and the viewer swap
+        self._units = MescUnitsWidget(parent)
+        self._sort = (0, True)
+
+    @classmethod
+    def is_supported(cls, parent: Any) -> bool:
+        return MescUnitsWidget.is_supported(parent)
+
+    def draw(self) -> None:
+        with imgui_ctx.begin_child(
+            "##MescContent", imgui.ImVec2(0, 0), imgui.ChildFlags_.none
+        ):
+            mesc = self._units._mesc
+            if mesc is None:
+                imgui.text_disabled("No .mesc file is open.")
+                return
+            units = mesc.units
+            self._units._cache().setdefault(mesc.unit_key, mesc)
+            split = len(self.parent.image_widget.data) > 1
+
+            imgui.text_colored(_ACCENT, Path(mesc.filenames[0]).name)
+            imgui.same_line(0, 12)
+            imgui.text_disabled(
+                f"{len(units)} units · showing {mesc.unit_key.rsplit('/', 1)[-1]}"
+            )
+            if split:
+                imgui.text_disabled("Split ROIs: reopen without --roi to switch units.")
+            else:
+                imgui.text_disabled("Click a row to display that unit.")
+            if self._units._error:
+                imgui.text_colored(_ERROR, "Unit switch failed")
+                set_tooltip(self._units._error)
+
+            flags = (
+                imgui.TableFlags_.sortable | imgui.TableFlags_.row_bg
+                | imgui.TableFlags_.borders_inner_h | imgui.TableFlags_.scroll_y
+                | imgui.TableFlags_.resizable | imgui.TableFlags_.hideable
+                | imgui.TableFlags_.sizing_stretch_prop
+            )
+            avail = imgui.get_content_region_avail()
+            if not imgui.begin_table(
+                "##mesc_units_table", len(UNIT_COLUMNS), flags, imgui.ImVec2(0, avail.y)
+            ):
+                return
+            imgui.table_setup_scroll_freeze(0, 1)
+            for i, (name, weight, hidden) in enumerate(UNIT_COLUMNS):
+                column_flags = imgui.TableColumnFlags_.width_stretch
+                if i == 0:
+                    column_flags |= imgui.TableColumnFlags_.default_sort
+                if hidden:
+                    column_flags |= imgui.TableColumnFlags_.default_hide
+                imgui.table_setup_column(name, column_flags, weight)
+            imgui.table_headers_row()
+            set_tooltip("Right-click a header to show or hide columns", show_mark=False)
+            specs = imgui.table_get_sort_specs()
+            if specs is not None and specs.specs_dirty:
+                if specs.specs_count > 0:
+                    self._sort = (
+                        int(specs.specs.column_index),
+                        specs.specs.sort_direction == imgui.SortDirection.ascending,
+                    )
+                specs.specs_dirty = False
+            column, ascending = self._sort
+            rows = sorted(
+                ((*unit_row(u), u) for u in units),
+                key=lambda row: row[1][column],
+                reverse=not ascending,
+            )
+            picked = None
+            last = len(UNIT_COLUMNS) - 1
+            for cells, _keys, info in rows:
+                imgui.table_next_row()
+                imgui.table_next_column()
+                clicked, _ = imgui.selectable(
+                    f"{cells[0]}##unit_{info['key']}",
+                    info["key"] == mesc.unit_key,
+                    imgui.SelectableFlags_.span_all_columns,
+                )
+                if clicked and not split and info["key"] != mesc.unit_key:
+                    picked = info
+                for i in range(1, len(cells)):
+                    if imgui.table_next_column():
+                        imgui.text(cells[i])
+                        if i == last and info["comment"] and imgui.is_item_hovered():
+                            imgui.set_tooltip(info["comment"])
+            imgui.end_table()
+
+            if picked is None:
+                return
+            # swapping rebuilds the widget list; finish the frame on the old one
+            try:
+                arr = self._units._open_unit(mesc.filenames[0], picked["key"])
+            except Exception as e:
+                self._units._error = str(e)
+                self.parent.logger.exception(f"cannot open {picked['key']}: {e}")
+            else:
+                self._units._switch(arr)
+

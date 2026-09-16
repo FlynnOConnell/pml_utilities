@@ -7,6 +7,7 @@ GUI-related imports are deferred until actually needed.
 Usage patterns:
   mbo                           # Open GUI with file dialog
   mbo /path/to/data             # Open GUI with specific file
+  mbo run/demixing_results.hdf5 # masknmf demixing results, with the Demixing tab
   mbo /path/to/data --metadata  # Show only metadata
   mbo convert INPUT OUTPUT      # Convert with CLI args
   mbo info INPUT                # Show array info (CLI only)
