@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -139,15 +140,18 @@ CURVE_NAMES = frozenset(
         "PatternSeq_AO1",
         "DichroSw_AO1",
         "Amplitude_AO1",
-        "RTMC X correction (total)",
-        "RTMC Y correction (total)",
-        "RTMC Z correction (total)",
         "disUG",
         "disUR",
         "DiI1",
         "DiI2",
     }
 )
+
+# Real-time motion correction curves MEScan writes when RTMC ran: the
+# correction applied per axis, "total" (cumulative) or "intercycle" (per
+# cycle), and one per layer for a z-stack. A unit that armed RTMC without
+# it ever moving carries the curve with a single sample.
+_RTMC_NAME = re.compile(r"^RTMC ([XYZ]) correction \((total|intercycle)\)(?: layer (\d+))?$")
 
 SYNC_KEY_DEFAULT = "DiI2"
 SYNC_EDGE_DEFAULT = "falling"
@@ -391,10 +395,13 @@ def _spatial_info(unit, modality: int) -> dict:
 
 
 def _parse_curves(unit) -> dict[str, dict]:
-    """Timing curves for one unit, keyed by curve name.
+    """Timing and RTMC curves for one unit, keyed by curve name.
 
-    Each entry is ``{"timestamps": ms array, "values": raw array}``. Curves are
-    small (one sample per scanner event), so they are read eagerly.
+    Each entry is ``{"timestamps": ms array, "values": array}``. Curves are
+    run-length encoded: sample ``i`` holds from its timestamp until
+    ``CurveDataYIdxNextSample[i]``. Values are stored as counts with a linear
+    conversion (``CurveDataYConversionType == 1``) when the curve has a unit,
+    which is applied here so RTMC curves come back in µm.
     """
     curves: dict[str, dict] = {}
     for key in unit:
@@ -403,14 +410,12 @@ def _parse_curves(unit) -> dict[str, dict]:
         curve = unit[key]
         try:
             name = _attr(curve, "Name")
-            if name not in CURVE_NAMES:
+            if name not in CURVE_NAMES and not _RTMC_NAME.match(name or ""):
                 continue
             delta = float(curve.attrs["CurveDataXRawDelta"])
             ts = np.roll(curve["CurveDataYIdxNextSample"][:], 1)
             ts[0] = 0
             values = curve["CurveDataYRawData"][:]
-            # newer MEScan writes some curves (the RTMC totals) as raw counts
-            # with a linear conversion (type 1) to the unit named on the curve
             if int(_attr(curve, "CurveDataYConversionType", 0) or 0) == 1:
                 scale = float(_attr(curve, "CurveDataYConversionConversionLinearScale", 1.0))
                 offset = float(_attr(curve, "CurveDataYConversionConversionLinearOffset", 0.0))
@@ -937,6 +942,16 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         self.modality = selected["modality"]
         self._unit = self._f[self.unit_key]
         self._curves = _parse_curves(self._unit)
+        # one trace per RTMC curve that has samples: "X total", "Z intercycle layer 3"
+        self._rtmc: dict[str, dict] = {}
+        for name, curve in self._curves.items():
+            m = _RTMC_NAME.match(name)
+            if m is None or len(curve["values"]) < 2:
+                continue
+            label = f"{m[1]} {m[2]}" + (f" layer {m[3]}" if m[3] else "")
+            self._rtmc[label] = {"t": curve["timestamps"] / 1000.0, "um": curve["values"]}
+        if self._rtmc:
+            logger.info(f"{self.unit_key}: RTMC traces {sorted(self._rtmc)}")
         self._layout = _resolve_layout(
             self._unit, self.modality, self._curves, flip_y=flip_y
         )
@@ -1155,13 +1170,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
                 for c in range(layout.nc)
             ],
             "mesc_dichroic": layout.frame_maps is not None,
-            # real-time motion correction ran: MEScan wrote RTMC X/Y/Z totals
-            # (see `curves`). the linked reference stream alone is not enough:
-            # units can carry MotionCorrectionImagePath with no correction curves
-            "mesc_rtmc": any(
-                n.startswith("RTMC") and len(c["values"]) > 1 for n, c in self._curves.items()
-            ),
-            "mesc_rtmc_unit": (_attr(self._unit, "MotionCorrectionImagePath", "") or "").lstrip("/") or None,
+            "mesc_rtmc": sorted(self._rtmc),
             "channel_names": channel_names,
             "comment": _attr(self._unit, "Comment", "") or "",
             "start_time": _iso_time(_attr(self._unit, "MeasurementDatePosix")),
@@ -1267,8 +1276,15 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
     def curves(self) -> dict[str, dict]:
         """Timing curves of this unit, ``{name: {"timestamps": ms, "values"}}``
         (see ``CURVE_NAMES``): the pattern sequence, dichroic switching,
-        sync lines and RTMC motion-correction totals."""
+        sync lines, plus every RTMC curve under its MEScan name."""
         return self._curves
+
+    @property
+    def rtmc(self) -> dict[str, dict]:
+        """Real-time motion correction traces, ``{"X total": {"t": s, "um": µm}, ...}``,
+        one per axis and kind (``total`` / ``intercycle``, ``layer N`` for a
+        z-stack). Empty when RTMC never ran or never moved."""
+        return self._rtmc
 
     @property
     def metadata(self) -> dict:

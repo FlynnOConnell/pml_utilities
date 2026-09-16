@@ -4,6 +4,8 @@ CLI entry point for mbo_utilities GUI.
 This module is designed for fast startup - heavy imports are deferred until needed.
 Operations like --check-install should be near-instant.
 """
+import functools
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -617,14 +619,55 @@ def _figure_kwargs_for_here(size: tuple[int, int] | None = None, fit: dict | Non
     return {"size": tuple(size)}
 
 
+# the smallest render viewport a subplot keeps, per side, when the window is
+# dragged narrow; below this the window stops shrinking
+_MIN_VIEWPORT = 24
+
+
+def _clamp_window_to_layout(figure, event=None) -> None:
+    """Keep the Qt window at least as big as its edge windows, docks and
+    per-subplot imgui windows need.
+
+    The figure clamps its render area to 1 px, then each subplot subtracts
+    its histogram window, docks and spacing from its share, so a canvas
+    narrower than the panels gives pygfx a negative viewport and a
+    validation error every frame. Registered on the canvas ``resize``
+    event so it follows whatever the edges are sized to at the time.
+    """
+    canvas = figure.canvas
+    area_w, area_h = figure.get_pygfx_render_area()[2:]
+    need_w = need_h = 0.0
+    for subplot in figure:
+        frame = subplot.frame
+        fw, fh = frame.rect[2:]
+        vw, vh = frame.viewport.rect[2:]
+        # the overhead a subplot carries at any size, scaled back up by its
+        # fraction of the render area
+        need_w = max(need_w, (fw - vw + _MIN_VIEWPORT) * area_w / fw)
+        need_h = max(need_h, (fh - vh + _MIN_VIEWPORT) * area_h / fh)
+    edges = figure.imgui_windows
+    for side in ("left", "right"):
+        need_w += edges[side].size if edges[side] is not None else 0
+    for side in ("top", "bottom"):
+        need_h += edges[side].size if edges[side] is not None else 0
+    min_w, min_h = int(math.ceil(need_w)), int(math.ceil(need_h))
+    current = canvas.minimumSize()
+    if (current.width(), current.height()) != (min_w, min_h):
+        canvas.setMinimumSize(min_w, min_h)
+
+
 def _after_show(iw) -> None:
-    """Window title and icon; only meaningful once a desktop canvas exists."""
+    """Window title, icon and minimum size; only meaningful once a desktop
+    canvas exists."""
     from mbo_utilities import __version__
 
     canvas = iw.figure.canvas
     if hasattr(canvas, "set_title"):
         canvas.set_title(f"Miller Brain Studio v{__version__}")
     _set_qt_icon()
+    if hasattr(canvas, "setMinimumSize"):
+        canvas.add_event_handler(functools.partial(_clamp_window_to_layout, iw.figure), "resize")
+        _clamp_window_to_layout(iw.figure)
 
 
 def _create_image_widget(

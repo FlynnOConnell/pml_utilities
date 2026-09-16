@@ -87,7 +87,7 @@ GHOST_THICKNESS = 1.0
 GHOST_ALPHA = 0.28
 START_DOT_SIZE = 9.0
 TRACE_SEPARATION = 1.4
-RTMC_COLORS = ((0.95, 0.35, 0.35, 0.9), (0.35, 0.85, 0.4, 0.9), (0.4, 0.55, 1.0, 0.9))
+RTMC_COLORS = {"X": (0.95, 0.35, 0.35), "Y": (0.35, 0.85, 0.4), "Z": (0.4, 0.55, 1.0)}
 LINE_PANEL_WIDTH = 360
 TRACES_PANEL_HEIGHT = 260
 # with a motion-correction plot under the F plot
@@ -151,6 +151,20 @@ def _print_metadata(label: str, arr) -> None:
                 "nchannels", "Ly", "Lx", "comment"):
         if key in md:
             print(f"  {key}: {md[key]}")
+    print_rtmc(arr)
+
+
+def print_rtmc(arr) -> None:
+    """One terminal line per RTMC trace the unit carries (samples, µm range,
+    duration), or a line saying it has none."""
+    rtmc = getattr(arr, "rtmc", None) or {}
+    if not rtmc:
+        print("  RTMC: none")
+        return
+    for label, tr in rtmc.items():
+        um, t = tr["um"], tr["t"]
+        print(f"  RTMC {label}: {len(um)} samples, {um.min():+.2f}..{um.max():+.2f} um "
+              f"over {t[-1]:.1f} s")
 
 
 def _panel_dims(arr, squeezed, role: str) -> tuple[tuple[str, ...], dict]:
@@ -328,11 +342,11 @@ class TraceAttach:
             )
         from mbo_utilities.gui._top_strip import TopStrip
 
-        # the raw trace and the RTMC curves get a tab beside Curation on the
+        # the raw trace and the RTMC traces get a tab beside Curation on the
         # same strip, or their own strip without curation
         strip = TopStrip(self.ndw.figure) if line_curation is None else line_curation.widget.strip
         self.ndw.linescan_traces = LineTracesPanel(
-            self.ndw, self.overlay, traces, strip, line_curation is None, curves=self.ref_arr.curves,
+            self.ndw, self.overlay, traces, strip, line_curation is None, rtmc=self.ref_arr.rtmc,
         )
         if line_curation is not None:
             self.ndw.linescan_curation = line_curation
@@ -924,9 +938,10 @@ class StandardTraces:
         if loader is not None and loader.traces is None:
             loader.traces = np.asarray(self.job.result)
         selection = SliderSelection(self.parent.image_widget, n, float(md.get("fs") or 1.0))
+        print_rtmc(self.arr)
         self.panel = LineTracesPanel(
             self.parent.image_widget, selection, self.job.result[:n], self.strip, False,
-            curves=self.arr.curves,
+            rtmc=self.arr.rtmc,
         )
 
     def close(self) -> None:
@@ -962,35 +977,29 @@ class LineTracesPanel:
     faint min/max band, a 25 ms smoothed line over it in the line's colour,
     and a time cursor tied to the Reference's Timepoint (drag it to scrub).
 
-    A scan that ran with real-time motion correction gets a second plot
-    under it: the RTMC X/Y/Z correction totals in um, on the same time
-    axis (it follows the F plot's pan and zoom) with the same
-    cursor, but its own y range and fit. The two are separate traces of
-    separate things and are kept apart: the ``RTMC`` box hides the motion
-    plot. Its own ``Traces`` tab, on the curation widget's strip when
+    A scan that ran with real-time motion correction (``arr.rtmc``) gets a
+    second plot under it on the same time axis (it follows the F plot's pan
+    and zoom) with the same cursor, but its own y range and fit. Every RTMC
+    trace (X/Y/Z, total and intercycle) is its own line with its own
+    checkbox. Its own ``Traces`` tab, on the curation widget's strip when
     there is one.
     """
 
     def __init__(self, ndw, overlay: LineScanOverlay, traces: np.ndarray, strip, own_strip: bool,
-                 tab: bool = True, curves: dict | None = None):
+                 tab: bool = True, rtmc: dict | None = None):
         from mbo_utilities.gui._top_strip import TopPanel
 
         from mbo_utilities.gui.imgui.lines import decimate_minmax
 
-        # RTMC X/Y/Z totals (um) from the unit's timing curves, when the scan
-        # ran with real-time motion correction; times are curve ms -> s.
         # decimated once like the F trace: tens of thousands of points per
-        # curve every frame is what made the whole window lag
-        self.rtmc = []
-        for axis, name in (("X", "RTMC X correction (total)"),
-                           ("Y", "RTMC Y correction (total)"),
-                           ("Z", "RTMC Z correction (total)")):
-            if curves is None or name not in curves:
-                continue
-            idx, values = decimate_minmax(curves[name]["values"], 4000)
-            t = curves[name]["timestamps"][idx.astype(int)] / 1000.0
-            self.rtmc.append((axis, np.ascontiguousarray(t), np.ascontiguousarray(values)))
-        self.show_rtmc = bool(self.rtmc)
+        # trace every frame is what made the whole window lag
+        self.rtmc: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for label, tr in (rtmc or {}).items():
+            idx, values = decimate_minmax(tr["um"], 4000)
+            t = tr["t"][idx.astype(int)]
+            self.rtmc[label] = (np.ascontiguousarray(t), np.ascontiguousarray(values))
+        # intercycle traces start hidden: the totals are what a reader wants first
+        self.show_rtmc = {label: " total" in label for label in self.rtmc}
         self.ndw = ndw
         self.overlay = overlay
         self.strip = strip
@@ -1044,14 +1053,19 @@ class LineTracesPanel:
             self._fit = True
         if self.rtmc:
             imgui.same_line(0, 12)
-            _changed, self.show_rtmc = imgui.checkbox("RTMC##line_traces", self.show_rtmc)
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(
-                    "the scan's real-time motion correction: X/Y/Z totals (um) applied "
-                    "while it ran, as a second plot on the same time axis"
+            imgui.text_disabled("RTMC (um):")
+            for label in self.rtmc:
+                imgui.same_line(0, 8)
+                _changed, self.show_rtmc[label] = imgui.checkbox(
+                    f"{label}##line_rtmc", self.show_rtmc[label]
                 )
+                if imgui.is_item_hovered():
+                    imgui.set_tooltip(
+                        f"real-time motion correction applied while the scan ran: {label} "
+                        "shift in um, as its own trace under F on the same time axis"
+                    )
         avail = max(imgui.get_content_region_avail().y - 2, 60.0)
-        if self.rtmc and self.show_rtmc:
+        if any(self.show_rtmc.values()):
             # the motion plot sits under F; it gives up its x label to F's
             top = max(avail * TRACES_F_SHARE, 40.0)
             self.draw(top)
@@ -1087,8 +1101,8 @@ class LineTracesPanel:
             self._xlim = (float(lim.x.min), float(lim.x.max))
 
     def draw_rtmc(self, height: float) -> None:
-        """The motion-correction plot: X/Y/Z totals on the F plot's time
-        range (set every frame from it) with the same cursor."""
+        """The motion-correction plot: every shown RTMC trace on the F plot's
+        time range (set every frame from it) with the same cursor."""
         from imgui_bundle import implot
 
         from mbo_utilities.gui.imgui.lines import drag_vline, line, line_plot
@@ -1102,8 +1116,12 @@ class LineTracesPanel:
             implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, self.duration_s)
             if self._xlim is not None:
                 implot.setup_axis_limits(implot.ImAxis_.x1, *self._xlim, implot.Cond_.always)
-            for (axis, t, v), color in zip(self.rtmc, RTMC_COLORS):
-                line(f"RTMC {axis}", v, x=t, color=color, weight=1.0)
+            for label, (t, v) in self.rtmc.items():
+                if not self.show_rtmc[label]:
+                    continue
+                r, g, b = RTMC_COLORS[label[0]]
+                alpha, weight = (0.9, 1.0) if " total" in label else (0.55, 0.8)
+                line(label, v, x=t, color=(r, g, b, alpha), weight=weight)
             cursor, held = drag_vline(98, ov.t_index / self.fs, (1.0, 0.85, 0.3, 0.9), 1.5)
             if held:
                 ov.goto_time(cursor)
@@ -1615,11 +1633,11 @@ def open_linescan_viewer(
 
             if curation:
                 line_curation = LineCuration.build(ndw, overlay, ref_arr, traces, mesc_path, ref_key)
-            # the raw trace and the RTMC curves get a tab beside Curation on
+            # the raw trace and the RTMC traces get a tab beside Curation on
             # the same strip, or their own strip without curation
             strip = TopStrip(ndw.figure) if line_curation is None else line_curation.widget.strip
             traces_panel = LineTracesPanel(ndw, overlay, traces, strip, line_curation is None,
-                                           curves=ref_arr.curves)
+                                           rtmc=ref_arr.rtmc)
 
         def switch(key: str) -> None:
             # a new window for the other scan on the running loop, then this
