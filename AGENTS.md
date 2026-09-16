@@ -2,7 +2,7 @@
 
 Single source of truth for any agent (human or AI) contributing to pml_utilities.
 The importable package is `mbo_utilities`; `pml_utilities` is only the distribution
-name. `CLAUDE.md` defers to this file.
+name. `CLAUDE.md` imports this file and `STYLE.md`.
 
 Where code and this file disagree, this file wins: fix the code when you touch it,
 and record anything you cannot fix in [§15](#15-conformance-backlog).
@@ -67,71 +67,14 @@ If a change crosses a boundary, split it into two PRs or justify it in the descr
 
 ## 3. Coding standards
 
-**Style.** `ruff format` and `ruff check` (config in `pyproject.toml`: line length 88,
-`select = ["ALL"]` with the listed ignores, numpy docstring convention).
-
-- 4-space indent, no tabs. `from __future__ import annotations` in modules that use
-  `X | None` or `list[X]` in class bodies or dataclass fields.
-- Imports grouped: stdlib, third-party, `mbo_utilities.*`. Absolute imports inside the
-  package.
-- `pathlib.Path` for paths. No `os.path.join`.
-- Loggers come from `mbo_utilities.log`: `logger = log.get("arrays.zarr")`. Never
-  `logging.getLogger("mbo_utilities")` or `logging.getLogger(__name__)`; they form a
-  second tree the GUI console and `set_global_level` cannot see. No `print()` in
-  library code (§8).
-- Type-hint public signatures. Internal helpers may omit hints when obvious.
-
-**Dependencies.** Support exactly one version of each dependency: pin it in
-`pyproject.toml` and import it at the top of the module. Never write lazy-import
-wrappers with version guards. The one sanctioned function-local import is for optional
-or heavy packages so `import mbo_utilities` stays cheap: `torch`, `suite2p`,
-`lbm_suite2p_python`, `masknmf`, `vnoiser`, `cupy`, `imgui_bundle`, `fastplotlib`,
-`pygfx`, and for breaking a genuine import cycle (`_writers` ↔ `arrays`).
-
-**Comments.** Single line, lowercase, only when the code cannot say it. No banner or
-separator comments, no section headers.
-
-**Functions.** No nested functions or classes. No functions defined inside tests. Do
-not split code into helpers unless the same code is needed in two places; inline it.
-
-**Errors.** Raise specific exceptions. No bare `except:`. In the GUI, catch at the
-draw boundary and show the message; in workers, let it propagate after
-`monitor.fail(...)`.
-
-**No half-finished code.** No `TODO` without a tracking issue. No dead imports. No
-commented-out blocks. No backwards-compatibility shims for names that were never
-released.
-
-**Simplicity defaults.** Unless asked otherwise: no defensive `try`/`except`, no
-speculative edge cases, no extra abstraction layers. Do not add annotations, comments
-or docstrings to code you are not otherwise changing. Keep notebook cells clean; code
-comments instead of markdown cells.
-
-**Indexing.** Public selections (`planes`, `timepoints`, `channels`, `roi`, `unit`)
-are 1-based. Everything internal is 0-based. The conversion happens in
-`arrays/features/_selection.py` and `_slicing.parse_selection`, nowhere else.
+`STYLE.md` holds the rules ruff cannot check: dependencies, functions, comments,
+logging, errors, scope of a change, indexing. `pyproject.toml` `[tool.ruff]` holds
+the rules it can; `.github/workflows/format.yml` applies them on every push to
+`main`. Gaps between the two and the code are listed under **Style** in §15.
 
 ## 4. Docstrings
 
-Numpy style (ruff `pydocstyle` convention `numpy`).
-
-**Module:** one-line summary; a paragraph only when the behavior is non-obvious.
-
-**Class:** what one instance represents and the shape it reports.
-
-```python
-class MescArray(...):
-    """One Femtonics MESc measurement unit as (T, C, Z, Y, X).
-
-    ``MethodType`` decides what axis 0 of ``Channel_N`` means; AOD ROIs land on Z.
-    """
-```
-
-**Function:** required when the signature does not make intent obvious or there are
-side effects (writes to disk, mutates metadata). One line when that is enough. No
-`Parameters`/`Returns` sections that restate the signature.
-
-Skip docstrings on trivially named one-liners.
+Numpy style (ruff `pydocstyle` convention `numpy`). Content rules are in `STYLE.md`.
 
 ## 5. Lazy arrays: the 5D contract
 
@@ -885,3 +828,21 @@ ones. Remove an entry when its fix lands.
   (`hpc/config.py:66-73`, `hpc/pipeline.py:65-100`).
 - Legacy `hpc/*.sh` and `hpc/run_pipeline.py` duplicate `mbo hpc`; remove once the
   submitit path is validated on the cluster.
+
+**Style**
+
+Counts from `ruff check` on the `voltage-pipeline` branch (2026-09-15), before the
+first `format.yml` run on `main`. The workflow autofixes what it can; the rest is
+fix-on-touch. When a family reaches zero, move its rule into `select`.
+
+- Selected, not autofixable: `PTH` 39, `ERA001` 44, `F841` 11, `F403`/`F405` star
+  imports 4, `D301` 14, `D200` 5, `D404` 2, `UP` 13, `E402`/`E702`/`E721`/`E741` 17.
+- Ignored until swept: `E501` 1827 (recount after the first format run; the rest are
+  long strings and comments), `D205` 505, `D400` 37.
+- Not yet selected: `T20` 111 `print` calls in library code, `BLE001` 414 blind
+  excepts, `S110` 117 `try`/`except`/`pass`, `B` 76, `SIM` 125, `N` 281, `G004` 424
+  f-strings in log calls, `PLC0415` 1475 function-local imports (most are the
+  sanctioned heavy packages; needs per-import `noqa` before enabling).
+- Not ruff-checkable: 195 banner comments and 251 section-header comments in 22
+  files, 19 `logging.getLogger` calls, 73 nested `def`s in the library and 60 in
+  tests.
