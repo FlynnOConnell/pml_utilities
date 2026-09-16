@@ -48,16 +48,9 @@ def draw_menu_bar(parent: Any):
                     "Save as", "s", p_selected=False, enabled=can_save
                 )[0]:
                     parent._saveas_popup_open = True
-                if not can_save and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
-                    imgui.begin_tooltip()
-                    arr_type = type(parent.image_widget.data[0]).__name__ if parent.image_widget and parent.image_widget.data else "Unknown"
-                    imgui.text(f"{arr_type} does not support saving.")
-                    imgui.end_tooltip()
                 imgui.separator()
                 if imgui.menu_item("Options", "", p_selected=False, enabled=True)[0]:
                     parent._show_options_popup = True
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip("Render GPU adapter, debug logging, and other settings")
                 imgui.end_menu()
             draw_widgets_menu(parent)
             if imgui.begin_menu("Docs", True):
@@ -233,7 +226,6 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
 
     if imgui.is_item_hovered():
         imgui.set_mouse_cursor(imgui.MouseCursor_.hand)
-        imgui.set_tooltip("Toggle the process console (tasks + live CPU / RAM / GPU)")
 
     # 2. Metadata / help / keybinds buttons, all in the same dark grey with
     # their hotkeys greyed out beside them. Help and Keybinds are one button

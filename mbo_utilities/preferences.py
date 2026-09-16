@@ -527,6 +527,18 @@ def set_compute_gpu(value: str) -> None:
     _set_option("compute_gpu", str(value))
 
 
+def get_linescan_auto_traces() -> bool:
+    """Whether the line-scan viewer computes per-ROI traces on a background
+    thread when no saved traces (``F.npy`` or PF) exist. Off on an imaging
+    rig: the viewer only loads saved traces and offers a button to compute."""
+    return bool(_get_options().get("linescan_auto_traces", True))
+
+
+def set_linescan_auto_traces(value: bool) -> None:
+    """Persist whether the line-scan viewer computes missing traces itself."""
+    _set_option("linescan_auto_traces", bool(value))
+
+
 def get_s2p_torch_device() -> str:
     """Return the persisted suite2p torch device ('cuda'/'cpu'/'mps'/'cuda:N')."""
     return str(_get_options().get("s2p_torch_device", "cuda"))

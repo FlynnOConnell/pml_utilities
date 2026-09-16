@@ -1,6 +1,8 @@
 """The figure's shared top strip: the menu row, the panels features register
 on it, and the Signal Quality split (plot on top, table in the right tab)."""
 
+import time
+
 import numpy as np
 import pytest
 
@@ -18,10 +20,10 @@ def figure():
     iw.close()
 
 
-def panel(key, label="P", height=100, right_tab=None, priority=100):
+def panel(key, label="P", height=100, right_tab=None, priority=100, min_width=0.0):
     from mbo_utilities.gui._top_strip import TopPanel
 
-    return TopPanel(key, label, lambda: None, height, right_tab, priority)
+    return TopPanel(key, label, lambda: None, height, right_tab, priority, min_width)
 
 
 class TestTopStrip:
@@ -93,22 +95,17 @@ class TestTopStrip:
         strip.unregister("b")
         assert strip.active is None
 
-    def test_a_taller_window_gives_the_panel_more_room(self, figure):
-        """Otherwise every extra pixel goes to the canvas and the strip keeps
-        a band of empty space under its cards."""
-        from mbo_utilities.gui._top_strip import GROW_MAX, TopStrip
+    def test_a_taller_window_does_not_stretch_the_strip(self, figure):
+        """Every extra pixel goes to the images; the panel keeps the height
+        it asked for."""
+        from mbo_utilities.gui._top_strip import TopStrip, strip_height
 
         strip = TopStrip(figure)
         strip.register(panel("a", height=100))
-        short = strip.size
+        assert strip.size == strip_height(100)
         figure.canvas.set_logical_size(FIGURE_SIZE[0], FIGURE_SIZE[1] * 2)
         strip._resize()
-        assert strip.size > short
-        # ... but never runs away with the window
-        figure.canvas.set_logical_size(FIGURE_SIZE[0], FIGURE_SIZE[1] * 10)
-        strip._resize()
-        assert strip.size <= strip._want_size()
-        assert strip.size - short <= 100 * GROW_MAX
+        assert strip.size == strip_height(100)
 
     def test_right_focus_is_one_shot(self, figure):
         from mbo_utilities.gui._top_strip import TopStrip
@@ -323,6 +320,56 @@ class TestTopStripResize:
         strip = TopStrip(figure)
         assert strip.size == MENU_HEIGHT
 
+    def test_shut_keeps_the_tab_row(self, figure):
+        """The tabs stay visible so the user knows the panels are there."""
+        from imgui_bundle import imgui
+
+        from mbo_utilities.gui._top_strip import TopStrip, strip_height
+
+        strip = TopStrip(figure)
+        drawn = []
+        strip.register(panel("a", height=180))
+        strip.panels[0].draw = lambda: drawn.append(1)
+        strip.toggle_collapsed()
+        assert strip.size == strip_height(0)
+        bars = []
+        real = imgui.begin_tab_bar
+        imgui.begin_tab_bar = lambda *a, **k: bars.append(1) or real(*a, **k)
+        try:
+            figure.canvas.draw()
+        finally:
+            imgui.begin_tab_bar = real
+        assert bars == [1]
+        assert drawn == [], "a shut strip draws the tab headers, not the body"
+
+    def test_clicking_a_tab_opens_a_shut_strip(self, figure, monkeypatch):
+        from imgui_bundle import imgui
+
+        from mbo_utilities.gui._top_strip import TopStrip
+
+        strip = TopStrip(figure)
+        strip.register(panel("a", height=180))
+        tall = strip.size
+        strip.toggle_collapsed()
+        monkeypatch.setattr(imgui, "is_item_clicked", lambda *a, **k: True)
+        figure.canvas.draw()
+        assert not strip.collapsed
+        strip._resize()
+        assert strip.size == tall
+
+    def test_a_panel_that_needs_more_width_widens_the_window_once(self, figure):
+        from mbo_utilities.gui._top_strip import TopStrip
+
+        strip = TopStrip(figure)
+        width, height = figure.canvas.get_logical_size()
+        strip.register(panel("a", height=100, min_width=width + 300))
+        figure.canvas.draw()
+        assert figure.canvas.get_logical_size()[0] == width + 300
+        # the user narrows it again: the strip does not fight back
+        figure.canvas.set_logical_size(width, height)
+        figure.canvas.draw()
+        assert figure.canvas.get_logical_size()[0] == width
+
 
 class TestMenuRowCluster:
     """The status / metadata / help / keybinds buttons sit at the right end
@@ -352,10 +399,16 @@ class TestMenuRowCluster:
 
         from mbo_utilities.gui.widgets.process_manager import get_process_manager
 
-        iw, _gui = self._gui()
+        iw, gui = self._gui()
         # the status button reports whatever the shared process manager is
         # holding, and other tests leave finished work in it; empty it just
-        # before the frame that is measured
+        # before the frame that is measured. The widget's own z-stats thread
+        # reports there too, so a first frame starts it and the measured frame
+        # waits for it to finish
+        iw.figure.canvas.draw()
+        deadline = time.time() + 30
+        while any(gui._zstats_running) and time.time() < deadline:
+            time.sleep(0.05)
         pm = get_process_manager()
         for job in pm.get_jobs():
             pm.clear_job(job.job_id)

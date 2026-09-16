@@ -831,7 +831,7 @@ wheels = [
 [[package]]
 name = "fastplotlib"
 version = "0.6.1"
-source = { git = "https://github.com/fastplotlib/fastplotlib?rev=7ccbf443050102dfa5ae33f4601f027cf7c86869#7ccbf443050102dfa5ae33f4601f027cf7c86869" }
+source = { git = "https://github.com/fastplotlib/fastplotlib?rev=4473382477b0c30c40ba9bcb0734496dd59526e1#4473382477b0c30c40ba9bcb0734496dd59526e1" }
 dependencies = [
     { name = "cmap" },
     { name = "numpy" },
@@ -3162,7 +3162,7 @@ requires-dist = [
     { name = "click" },
     { name = "dask", specifier = ">=2025.3.0" },
     { name = "docutils", marker = "extra == 'docs'", specifier = ">=0.19" },
-    { name = "fastplotlib", extras = ["imgui"], git = "https://github.com/fastplotlib/fastplotlib?rev=7ccbf443050102dfa5ae33f4601f027cf7c86869" },
+    { name = "fastplotlib", extras = ["imgui"], git = "https://github.com/fastplotlib/fastplotlib?rev=4473382477b0c30c40ba9bcb0734496dd59526e1" },
     { name = "ffmpeg-python" },
     { name = "glfw", marker = "sys_platform != 'linux'" },
     { name = "h5py" },

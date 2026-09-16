@@ -152,8 +152,9 @@ PANEL_LOCATION = "top"
 PANEL_HEIGHT = 200
 
 # a card narrower than this clips its controls, so instead of squeezing them
-# the row wraps and the panel asks the strip for another row's height
-MIN_CARD_EM = 20.0
+# the row wraps and the panel asks the strip for another row's height (the
+# PROCESS card's rows need 300 px after the DRAW card gives up its share)
+MIN_CARD_EM = 20.5
 # DRAW holds one small grid of buttons; the width it does not need goes to
 # the cards beside it (LABELS above all, whose buttons carry class names)
 DRAW_CARD_WEIGHT = 0.7
@@ -320,9 +321,9 @@ def _line_colormap(rgb) -> int:
 def roi_panel_min_width() -> int:
     """Canvas width that keeps the ROI cards on one row, at the 14 px font
     the figure loads; for sizing the window before a frame exists. The strip
-    window's padding and indent take 36 px of the canvas width."""
+    window's padding and indent take 22 px of the canvas width."""
     n = 1 + sum(sub_enabled("manual_roi", s) for s in ("tools", "overlay", "labels", "process"))
-    return math.ceil(14.0 * (n * MIN_CARD_EM + (n - 1) * 0.6)) + 36
+    return math.ceil(14.0 * (n * MIN_CARD_EM + (n - 1) * 0.6)) + 22
 
 
 def card_grid(n: int, avail: float, min_w: float, gap: float) -> tuple[int, int, float]:
@@ -2665,13 +2666,19 @@ class ManualRoiWidget:
         gap = em(0.6)
         min_w = em(MIN_CARD_EM)
         fewest = -(-len(cards) // MAX_CARD_ROWS)
+        avail = imgui.get_content_region_avail().x
+        # the canvas width that puts every card on one row; the strip widens
+        # the window to it. The strip spans the canvas, and its rect is what
+        # this frame's avail was measured in
+        self._roi_panel.min_width = (
+            len(cards) * min_w + (len(cards) - 1) * gap + (float(self.tools_window.width) - avail)
+        )
         with fit_width(
             "ROI tools", min_width=fewest * min_w + (fewest - 1) * gap
         ) as shown:
             if not shown:
                 self._roi_panel.height = PANEL_HEIGHT
                 return
-            avail = imgui.get_content_region_avail().x
             per_row, rows, w = card_grid(len(cards), avail, min_w, gap)
             self._roi_panel.height = PANEL_HEIGHT * rows
             vgap = imgui.get_style().item_spacing.y

@@ -2501,15 +2501,35 @@ class TestPanelWrapping:
         finally:
             iw.close()
 
-    def test_narrow_window_wraps_and_asks_for_more_height(self):
+    def test_narrow_window_widens_to_one_row(self):
+        """The panel says how wide its row is and the strip widens the
+        window to it when the screen has the room."""
+        import math
+
         from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
 
+        iw, w = self._widget(1000)
+        try:
+            assert not self._drawn(w)
+            assert w._roi_panel.height == PANEL_HEIGHT
+            width = iw.figure.canvas.get_logical_size()[0]
+            assert width == math.ceil(w._roi_panel.min_width) > 1000
+        finally:
+            iw.close()
+
+    def test_narrow_screen_wraps_and_asks_for_more_height(self, monkeypatch):
+        from mbo_utilities.gui import run_gui
+        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
+
+        # a screen no wider than the window: the strip cannot widen it
+        monkeypatch.setattr(run_gui, "screen_box", lambda: (1000, 900))
         iw, w = self._widget(1000)
         try:
             assert not self._drawn(w)
             # cards wrapped onto a second row, so the strip is asked for
             # a second row's height instead of clipping them
             assert w._roi_panel.height == 2 * PANEL_HEIGHT
+            assert iw.figure.canvas.get_logical_size()[0] == 1000
         finally:
             iw.close()
 
