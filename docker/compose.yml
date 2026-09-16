@@ -7,6 +7,7 @@ services:
     image: pml-utilities:headless
     volumes:
       - ..:/app
+      - X:/data:/data
     working_dir: /app
     stdin_open: true
     tty: true
@@ -21,6 +22,7 @@ services:
     image: pml-utilities:x11
     volumes:
       - ..:/app
+      - X:/data:/data
     working_dir: /app
     stdin_open: true
     tty: true
@@ -35,6 +37,7 @@ services:
     image: pml-utilities:desktop
     volumes:
       - ..:/app
+      - X:/data:/data
     working_dir: /app
     ports:
       - "6080:6080"
