@@ -952,6 +952,8 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             self._rtmc[label] = {"t": curve["timestamps"] / 1000.0, "um": curve["values"]}
         if self._rtmc:
             logger.info(f"{self.unit_key}: RTMC traces {sorted(self._rtmc)}")
+        else:
+            logger.info(f"{self.unit_key}: no RTMC motion correction detected")
         self._layout = _resolve_layout(
             self._unit, self.modality, self._curves, flip_y=flip_y
         )
