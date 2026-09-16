@@ -429,8 +429,6 @@ class PreviewDataWidget(EdgeWindow):
 
     def _init_state(self):
         """Initialize widget state."""
-        for subplot in self.image_widget.figure:
-            subplot.toolbar = False
         self.image_widget._sliders_ui._loop = True
 
         # Determine nz and nc (z-planes and channels) using dims property

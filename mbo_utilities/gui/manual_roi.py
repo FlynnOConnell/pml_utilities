@@ -51,6 +51,7 @@ every slider that plane encodes. Only the first subplot is drawable.
 
 from __future__ import annotations
 
+import math
 import queue
 import threading
 import time
@@ -314,6 +315,14 @@ def _line_colormap(rgb) -> int:
         color = (key[0] / 255.0, key[1] / 255.0, key[2] / 255.0, 1.0)
         idx = implot.add_colormap(name, np.array([color, color], np.float32))
     return int(idx)
+
+
+def roi_panel_min_width() -> int:
+    """Canvas width that keeps the ROI cards on one row, at the 14 px font
+    the figure loads; for sizing the window before a frame exists. The strip
+    window's padding and indent take 36 px of the canvas width."""
+    n = 1 + sum(sub_enabled("manual_roi", s) for s in ("tools", "overlay", "labels", "process"))
+    return math.ceil(14.0 * (n * MIN_CARD_EM + (n - 1) * 0.6)) + 36
 
 
 def card_grid(n: int, avail: float, min_w: float, gap: float) -> tuple[int, int, float]:
