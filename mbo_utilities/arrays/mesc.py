@@ -408,9 +408,16 @@ def _parse_curves(unit) -> dict[str, dict]:
             delta = float(curve.attrs["CurveDataXRawDelta"])
             ts = np.roll(curve["CurveDataYIdxNextSample"][:], 1)
             ts[0] = 0
+            values = curve["CurveDataYRawData"][:]
+            # newer MEScan writes some curves (the RTMC totals) as raw counts
+            # with a linear conversion (type 1) to the unit named on the curve
+            if int(_attr(curve, "CurveDataYConversionType", 0) or 0) == 1:
+                scale = float(_attr(curve, "CurveDataYConversionConversionLinearScale", 1.0))
+                offset = float(_attr(curve, "CurveDataYConversionConversionLinearOffset", 0.0))
+                values = values * scale + offset
             curves[name] = {
                 "timestamps": ts * delta,  # ms
-                "values": curve["CurveDataYRawData"][:],
+                "values": values,
             }
         except (KeyError, TypeError, ValueError):
             continue
@@ -1148,6 +1155,13 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
                 for c in range(layout.nc)
             ],
             "mesc_dichroic": layout.frame_maps is not None,
+            # real-time motion correction ran: MEScan wrote RTMC X/Y/Z totals
+            # (see `curves`). the linked reference stream alone is not enough:
+            # units can carry MotionCorrectionImagePath with no correction curves
+            "mesc_rtmc": any(
+                n.startswith("RTMC") and len(c["values"]) > 1 for n, c in self._curves.items()
+            ),
+            "mesc_rtmc_unit": (_attr(self._unit, "MotionCorrectionImagePath", "") or "").lstrip("/") or None,
             "channel_names": channel_names,
             "comment": _attr(self._unit, "Comment", "") or "",
             "start_time": _iso_time(_attr(self._unit, "MeasurementDatePosix")),
