@@ -66,7 +66,7 @@ PANEL_HEIGHT = TIMELINE_HEIGHT + CANDIDATE_HEIGHT
 RTMC_HEIGHT = 120
 RTMC_SHARE = 0.35
 # the slider card beside the trace: one column per rule (A1 threshold, A2
-# amplitude, A3 PC1, A4 cosine), each a vertical slider with its range
+# peak, A3 PC1, A4 cosine), each a vertical slider with its range
 # above and below and a short name and count under it
 SLIDER_COL_EM = 4.2
 SLIDER_GAP_EM = 0.4
@@ -1004,15 +1004,15 @@ class EventCurationWidget:
     def _draw_slider_card(self, session, width, height) -> None:
         """A1 to A4 as one line of slider columns: the candidate threshold
         (red, also the red line on the trace); in a seeded mode also the
-        auto-pass amplitude (teal, the teal line), the PC1 line of the PCA
+        auto-pass peak (teal, the teal line), the PC1 line of the PCA
         (purple, drawn on panel D; the arrow picks the passing side) and the
         seed-template cosine at or above which a candidate passes (amber)."""
         title = "A1 - A4" if session.seeded else "A1"
         with card("##curation_sliders", title, height, width):
             set_tooltip(
                 "Sliders apply on release. A1 threshold: candidates are local "
-                "maxima of the trace above it. A2 amplitude: a candidate at or "
-                "above it passes whatever its shape. A3 PC1: every candidate on "
+                "maxima of the trace above it. A2 peak: a candidate peaking at "
+                "or above it passes whatever its shape. A3 PC1: every candidate on "
                 "the passing side of the purple line on the PCA passes (the "
                 "arrow flips the side; drag the line on the plot too). A4 "
                 "cosine: a candidate whose similarity to the seed template is "
@@ -1030,10 +1030,11 @@ class EventCurationWidget:
             alo, ahi, _step = session.auto_pass_range
             imgui.same_line(0, em(SLIDER_GAP_EM))
             self._slider_column(
-                "a2", "amp", session.auto_pass if session.auto_pass is not None else ahi,
+                "a2", "peak", session.auto_pass if session.auto_pass is not None else ahi,
                 alo, ahi, session.set_auto_pass, AUTO_PASS_COLOR,
                 "off" if session.auto_pass is None else f"{session.auto_pass_count()}/{session.n}",
-                "auto-pass amplitude: candidates at or above it pass; at the bottom all pass",
+                "auto-pass peak: candidates whose marker sits at or above the teal "
+                "line on the trace pass; at the bottom all pass",
             )
             plo, phi, _step = session.auto_pass_pc1_range
             side = session.auto_pass_pc1_side
@@ -1482,7 +1483,9 @@ class EventCurationWidget:
         imgui.text("label: ")
         imgui.same_line(0, 0)
         imgui.text_colored(theme.to_vec4(self._label_color(info["shown"])), info["shown"])
-        imgui.text_disabled(f"time {info['time_s']:.3f} s · amplitude {info['amplitude']:.2f}")
+        imgui.text_disabled(
+            f"time {info['time_s']:.3f} s · peak {info['peak']:.2f} · amplitude {info['amplitude']:.2f}"
+        )
         imgui.text_disabled(f"source: {info['source']}")
         score = info["template_cosine"]
         imgui.text_disabled(f"template cosine: {'n/a' if not np.isfinite(score) else f'{score:.2f}'}")

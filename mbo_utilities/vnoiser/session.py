@@ -294,29 +294,27 @@ class CurationSession:
 
     @property
     def auto_pass_range(self) -> tuple[float, float, float]:
-        """``(low, high, step)`` for the auto-pass amplitude.
+        """``(low, high, step)`` for the auto-pass line.
 
-        The notebook's A2 slider shares the threshold slider's range, whose
-        floor is the trace median. The amplitude it is compared with is the
-        candidate's baseline-subtracted peak, which can sit below that floor
-        (a fast-mode candidate near the noise whose peak is under its own
-        preceding baseline), so the notebook's slider at its bottom still
-        leaves those rejected. Here the floor drops under the lowest
-        amplitude, so A2 all the way down passes every candidate.
+        A2 is a line on the trace and is compared with the value a
+        candidate's peak sits at, so it shares the threshold slider's range,
+        whose floor is the trace median. A retained manual event can peak
+        under that floor, so the floor drops under the lowest peak and A2 all
+        the way down passes every candidate.
         """
         s = self.dash.auto_pass_slider
         lo, hi, step = float(s.min), float(s.max), float(s.step)
         if self.loaded and self.n:
-            lowest = float(np.nanmin(self.amplitudes))
+            lowest = float(np.nanmin(self.peak_values))
             if np.isfinite(lowest):
                 lo = min(lo, lowest - step)
         return lo, hi, step
 
     def auto_pass_count(self) -> int:
-        """How many candidates the auto-pass amplitude passes now."""
+        """How many candidates the auto-pass line passes now."""
         if not self.loaded or self.auto_pass is None or not self.n:
             return 0
-        return int(np.count_nonzero(self.amplitudes >= float(self.auto_pass)))
+        return int(np.count_nonzero(self.peak_values >= float(self.auto_pass)))
 
     def set_auto_pass(self, value: float) -> None:
         if not self.loaded or not self.seeded:
@@ -433,7 +431,13 @@ class CurationSession:
 
     @property
     def amplitudes(self) -> np.ndarray:
+        """Baseline-subtracted peak of each candidate, the height panel C draws."""
         return self.dash.candidates.amplitudes
+
+    @property
+    def peak_values(self) -> np.ndarray:
+        """Trace value each candidate peaks at, the height panel A draws it at."""
+        return self.dash.candidates.peak_values
 
     @property
     def current(self) -> int:
@@ -539,6 +543,7 @@ class CurationSession:
             "shown": self.label(i),
             "time_s": float(self.times_s[i]),
             "amplitude": float(self.amplitudes[i]),
+            "peak": float(self.peak_values[i]),
             "source": "threshold" if self.is_threshold_candidate(i) else "retained manual",
             "template_cosine": score,
             "initial_cosine": float(self.dash._initial_template_score_for_index(i)),

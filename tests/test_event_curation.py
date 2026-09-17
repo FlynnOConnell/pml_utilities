@@ -253,26 +253,32 @@ class TestSession:
         # the label follows its event (keyed by sample), not its index
         assert [session.manual_label(i) for i in range(session.n)].count("no") == 1
 
-    def test_a2_floor_reaches_under_every_amplitude(self, data_root):
-        """The amplitude A2 compares with is baseline-subtracted, so it can be
-        below the notebook slider's floor (the trace median); the session's
-        range goes under the lowest one so the bottom passes everything."""
+    def test_a2_passes_what_sits_above_the_line_on_the_trace(self, data_root):
+        """A2 is a line on the trace, so it is compared with the value each
+        candidate peaks at (what panel A draws its marker at), not with the
+        baseline-subtracted amplitude panel C draws."""
         session = _loaded(data_root, mode="fast")
         lo, hi, _step = session.threshold_range
         session.set_threshold(lo)
         assert session.n > 3
         floor = session.auto_pass_range[0]
-        assert floor <= float(session.amplitudes.min())
-        assert floor <= float(session.dash.auto_pass_slider.min)
+        assert floor <= float(session.peak_values.min())
         session.set_auto_pass(floor)
         assert all(label == "auto_yes" for label in session.labels())
         assert session.auto_pass_count() == session.n
-        # halfway up, only the candidates at or above it pass
+        # halfway up, only the candidates peaking at or above it pass
         mid = 0.5 * (floor + session.auto_pass_range[1])
         session.set_auto_pass(mid)
-        above = int((session.amplitudes >= mid).sum())
+        above = int((session.peak_values >= mid).sum())
         assert session.auto_pass_count() == above
         assert sum(label == "auto_yes" for label in session.labels()) >= above
+        marker_y = np.interp(session.times_s, session.t, session.denoised)
+        assert np.allclose(marker_y, session.peak_values)
+        assert all(
+            session.event_info(i)["auto_call"] == "pass"
+            for i in range(session.n)
+            if session.peak_values[i] >= mid
+        )
 
     def test_a3_a4_controls_do_what_the_notebook_sliders_do(self, data_root):
         """The PC1 line (A3) and the cosine threshold (A4) drive vnoiser's
