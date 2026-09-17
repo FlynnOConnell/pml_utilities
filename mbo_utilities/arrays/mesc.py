@@ -190,6 +190,19 @@ def _attr(group, name, default=None):
     return value
 
 
+def _linked_unit(unit, attr: str) -> str | None:
+    """The ``MSession_N/MUnit_M`` key an image-path attr names, or None.
+
+    MEScan links a scan to the snapshot it was set up on
+    (``BackgroundImagePath``) and to the stream its real-time motion
+    correction watched (``MotionCorrectionImagePath``) as absolute HDF5
+    paths; an empty string means it kept none.
+    """
+    raw = _attr(unit, attr)
+    key = str(raw).strip().strip("/") if raw else ""
+    return key or None
+
+
 def _json_attr(group, name):
     """Parse a JSON-valued attribute, or return None if missing/malformed."""
     raw = _attr(group, name)
@@ -203,14 +216,26 @@ def _json_attr(group, name):
 
 
 def _scan_pattern(unit) -> dict | None:
-    """The imaging scan pattern this unit was acquired with, if declared."""
+    """The imaging scan pattern this unit was acquired with, if declared.
+
+    MESc 4.6.0 keeps a 1-based ``mainPatternIndex`` on the single ``scanners``
+    dict; 4.6.2 stores ``scanners`` as a list and a 0-based
+    ``protocol.mainPatternIndex`` beside it (the index
+    ``CoordinateMapJSON.maps[0].patternIdx`` names too).
+    """
     protocol = _json_attr(unit, "MultiROIProtocolJSON")
     if not protocol:
         return None
     try:
-        idx = protocol["protocol"]["scanners"]["mainPatternIndex"] - 1  # MATLAB 1-based
+        proto = protocol["protocol"]
+        if "mainPatternIndex" in proto:
+            idx = int(proto["mainPatternIndex"])
+        else:
+            scanners = proto["scanners"]
+            scanners = scanners[0] if isinstance(scanners, list) else scanners
+            idx = int(scanners["mainPatternIndex"]) - 1
         return protocol["scanPatterns"]["patterns"][idx]
-    except (KeyError, IndexError, TypeError) as e:
+    except (KeyError, IndexError, TypeError, ValueError) as e:
         logger.debug(f"no main scan pattern in {unit.name}: {e}")
         return None
 
@@ -381,9 +406,12 @@ def _spatial_info(unit, modality: int) -> dict:
         if modality in (8, 11):  # chessboard, multicube
             centroids = _as_points(np.asarray(pattern["centerPoints"]).T.tolist())
             n = len(centroids)
+            # 4.6.0 wraps the quaternion as {"e": [...]}, 4.6.2 stores the list
+            rotation = pattern["rotation"]
+            rotation = rotation["e"] if isinstance(rotation, dict) else rotation
             return {
                 "centroids": centroids,
-                "rotations": _extend_to_rois(pattern["rotation"]["e"], n),
+                "rotations": _extend_to_rois(rotation, n),
                 "pixel_size_um": _extend_to_rois(pattern["pixelSizeX"], n)[0],
             }
     except (KeyError, IndexError, TypeError, ValueError) as e:
@@ -427,6 +455,33 @@ def _parse_curves(unit) -> dict[str, dict]:
         except (KeyError, TypeError, ValueError):
             continue
     return curves
+
+
+def _rtmc_traces(curves: dict[str, dict]) -> dict[str, dict]:
+    """One trace per RTMC curve that has samples, ``{"X total": {"t": s,
+    "um": µm}, "Z intercycle layer 3": ...}``."""
+    traces: dict[str, dict] = {}
+    for name, curve in curves.items():
+        m = _RTMC_NAME.match(name)
+        if m is None or len(curve["values"]) < 2:
+            continue
+        label = f"{m[1]} {m[2]}" + (f" layer {m[3]}" if m[3] else "")
+        traces[label] = {"t": curve["timestamps"] / 1000.0, "um": curve["values"]}
+    return traces
+
+
+def unit_rtmc(path, unit: str) -> dict[str, dict]:
+    """:attr:`MescArray.rtmc` of one unit (``MUnit_35`` or
+    ``MSession_0/MUnit_35``) read from its curves alone, no array: ``{}`` for
+    a unit the file lacks, or a file that is not a ``.mesc`` at all."""
+    path = Path(path)
+    key = str(unit) if "/" in str(unit) else f"MSession_0/{unit}"
+    if not path.is_file() or not h5py.is_hdf5(path):
+        return {}
+    with h5py.File(path, "r") as f:
+        if key not in f:
+            return {}
+        return _rtmc_traces(_parse_curves(f[key]))
 
 
 def _find_sync_frame(curves, frame_period_ms, sync_key, sync_edge) -> int:
@@ -732,7 +787,9 @@ def list_mesc_units(path: Path | str) -> list[dict]:
         ``role`` (MEScan's ``ImageRoleDebugString``: ``"measurement"`` for a
         scan the operator ran, ``"background"`` and ``"motionCorrection"``
         for the snapshot and RTMC stream it saves beside one; ``""`` when
-        unset), ``comment`` and ``start_time``.
+        unset), ``background_unit`` and ``rtmc_unit`` (the keys of that
+        snapshot and stream, None when the scan links none), ``comment``
+        and ``start_time``.
 
     Examples
     --------
@@ -795,6 +852,8 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                         ),
                         "planned_s": planned_ms / 1000.0 if planned_ms > 0 else None,
                         "role": str(_attr(unit, "ImageRoleDebugString", "") or ""),
+                        "background_unit": _linked_unit(unit, "BackgroundImagePath"),
+                        "rtmc_unit": _linked_unit(unit, "MotionCorrectionImagePath"),
                         "comment": _attr(unit, "Comment", "") or "",
                         "start_time": _iso_time(_attr(unit, "MeasurementDatePosix")),
                     }
@@ -942,14 +1001,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         self.modality = selected["modality"]
         self._unit = self._f[self.unit_key]
         self._curves = _parse_curves(self._unit)
-        # one trace per RTMC curve that has samples: "X total", "Z intercycle layer 3"
-        self._rtmc: dict[str, dict] = {}
-        for name, curve in self._curves.items():
-            m = _RTMC_NAME.match(name)
-            if m is None or len(curve["values"]) < 2:
-                continue
-            label = f"{m[1]} {m[2]}" + (f" layer {m[3]}" if m[3] else "")
-            self._rtmc[label] = {"t": curve["timestamps"] / 1000.0, "um": curve["values"]}
+        self._rtmc = _rtmc_traces(self._curves)
         if self._rtmc:
             logger.info(f"{self.unit_key}: RTMC traces {sorted(self._rtmc)}")
         else:
@@ -1038,7 +1090,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
                 )
             return self.units[int(unit)]
 
-        key = str(unit)
+        key = str(unit).strip("/")
         if "/" not in key:
             key = f"{session or 'MSession_0'}/{key}"
         for entry in self.units:
@@ -1173,6 +1225,8 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             ],
             "mesc_dichroic": layout.frame_maps is not None,
             "mesc_rtmc": sorted(self._rtmc),
+            "mesc_background_unit": _linked_unit(self._unit, "BackgroundImagePath"),
+            "mesc_rtmc_unit": _linked_unit(self._unit, "MotionCorrectionImagePath"),
             "channel_names": channel_names,
             "comment": _attr(self._unit, "Comment", "") or "",
             "start_time": _iso_time(_attr(self._unit, "MeasurementDatePosix")),

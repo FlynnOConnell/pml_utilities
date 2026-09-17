@@ -867,3 +867,90 @@ def test_units_without_rtmc_report_none(mesc_path):
     assert arr.rtmc == {}
     assert arr.metadata["mesc_rtmc"] == []
     arr.close()
+
+
+def test_unit_rtmc_reads_a_units_traces_without_opening_it(mesc_path, tmp_path):
+    from mbo_utilities.arrays.mesc import unit_rtmc
+
+    arr = MescArray(mesc_path, unit="MUnit_1")
+    traces = unit_rtmc(mesc_path, "MUnit_1")
+    assert sorted(traces) == sorted(arr.rtmc)
+    np.testing.assert_allclose(traces["X total"]["um"], arr.rtmc["X total"]["um"])
+    np.testing.assert_allclose(traces["X total"]["t"], arr.rtmc["X total"]["t"])
+    assert unit_rtmc(mesc_path, "MSession_0/MUnit_1").keys() == traces.keys()
+    arr.close()
+    assert unit_rtmc(mesc_path, "MUnit_2") == {}
+    assert unit_rtmc(mesc_path, "MUnit_99") == {}
+    not_hdf5 = tmp_path / "scan.mesc"
+    not_hdf5.write_bytes(b"x")
+    assert unit_rtmc(not_hdf5, "MUnit_1") == {}
+    assert unit_rtmc(tmp_path / "missing.mesc", "MUnit_1") == {}
+
+
+def test_chessboard_pattern_index_is_zero_based_on_mesc_462(tmp_path):
+    # 4.6.2 stores `scanners` as a list and a 0-based `protocol.mainPatternIndex`
+    path = tmp_path / "chess462.mesc"
+    rng = np.random.default_rng(1)
+    with h5py.File(path, "w") as f:
+        u = f.create_group("MSession_0").create_group("MUnit_0")
+        u.attrs.update(
+            {"MethodType": 8, "VecChannelsSize": 1, "TStepInMs": 50.0,
+             "MeasurementDatePosix": 1_700_000_100}
+        )
+        u.attrs["MultiROIProtocolJSON"] = json.dumps(
+            {
+                "protocol": {"mainPatternIndex": 1, "scanners": [{"name": "AO1"}]},
+                "scanPatterns": {
+                    "patterns": [
+                        {"centerPoints": [[0.0], [0.0], [0.0]], "pixelSizeX": 1.0, "rotation": [0, 0, 0, 1]},
+                        {
+                            "centerPoints": np.arange(12).reshape(3, 4).tolist(),
+                            "pixelSizeX": 0.8,
+                            "rotation": [0, 0, 0, 1],
+                        },
+                    ]
+                },
+            }
+        )
+        u.create_dataset("Channel_0", data=rng.integers(0, 4000, (6, 32, 96)).astype(np.uint16))
+    arr = MescArray(path, unit="MSession_0/MUnit_0")
+    assert arr.shape == (6, 1, 4, 32, 24)
+    assert len(arr.metadata["mesc_centroids"]) == 4
+    assert arr.metadata["mesc_rotations"] == [[0, 0, 0, 1]] * 4
+
+
+def test_linked_units_and_leading_slash_keys(tmp_path):
+    # MEScan links a scan to its snapshot and RTMC stream as absolute HDF5 paths
+    path = tmp_path / "linked.mesc"
+    with h5py.File(path, "w") as f:
+        scan = f.create_group("MSession_0").create_group("MUnit_0")
+        scan.attrs.update(
+            {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 10.0, "MeasurementDatePosix": 1,
+             "ImageRoleDebugString": "measurement", "BackgroundImagePath": "/MSession_1/MUnit_0",
+             "MotionCorrectionImagePath": "/MSession_1/MUnit_1"}
+        )
+        scan.create_dataset("Channel_0", data=np.zeros((3, 8, 8), np.uint16))
+        refs = f.create_group("MSession_1")
+        for i, role in enumerate(("background", "motionCorrection")):
+            u = refs.create_group(f"MUnit_{i}")
+            u.attrs.update(
+                {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 10.0, "MeasurementDatePosix": 1,
+                 "ImageRoleDebugString": role, "MotionCorrectionImagePath": ""}
+            )
+            u.create_dataset("Channel_0", data=np.zeros((1, 8, 8), np.uint16))
+    arr = MescArray(path, unit="MSession_0/MUnit_0")
+    assert arr.metadata["mesc_background_unit"] == "MSession_1/MUnit_0"
+    assert arr.metadata["mesc_rtmc_unit"] == "MSession_1/MUnit_1"
+    ref = MescArray(path, unit=arr.metadata["mesc_rtmc_unit"])
+    assert ref.unit_key == "MSession_1/MUnit_1"
+    assert ref.metadata["mesc_background_unit"] is None
+    assert ref.metadata["mesc_rtmc_unit"] is None
+    snap = MescArray(path, unit="/MSession_1/MUnit_0")
+    assert snap.unit_key == "MSession_1/MUnit_0"
+    units = {u["key"]: u for u in list_mesc_units(path)}
+    assert units["MSession_0/MUnit_0"]["background_unit"] == "MSession_1/MUnit_0"
+    assert units["MSession_0/MUnit_0"]["rtmc_unit"] == "MSession_1/MUnit_1"
+    assert units["MSession_1/MUnit_1"]["rtmc_unit"] is None
+    assert units["MSession_1/MUnit_1"]["background_unit"] is None
+    for a in (arr, ref, snap):
+        a.close()

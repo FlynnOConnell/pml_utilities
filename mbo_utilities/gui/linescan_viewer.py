@@ -48,10 +48,10 @@ of the lines is refused: drawing them on it is meaningless.
 
 Usage:
     mbo linescan scan.mesc --view [--unit MUnit_35]
-    mbo linescan <animal>/<expt> --view the notebook's experiment (or PF) folder:
+    mbo linescan <expt> --view          an experiment folder (or its PF folder):
                                         its <expt>/<expt>.mesc, Z-stack and PF traces
-    (`mbo scan.mesc` opens the image viewer on the line scan with the curation
-    widget; `mbo curate` is the dashboard alone, gui/curation_viewer.py)
+    (`mbo scan.mesc` opens the image viewer on the line scan; its Curate
+    button opens `mbo curate`, the dashboard alone, gui/curation_viewer.py)
     python -m mbo_utilities.gui.linescan_viewer [mesc_path] [--ref MUnit_x]
         [--zstack MUnit_y] [--zstack-file stack.mesc] [--channel 0] [--flip-y]
         [--no-traces] [--traces rois_linescan/MUnit_x] [--curate 0]
@@ -87,12 +87,12 @@ GHOST_THICKNESS = 1.0
 GHOST_ALPHA = 0.28
 START_DOT_SIZE = 9.0
 TRACE_SEPARATION = 1.4
-RTMC_COLORS = {"X": (0.95, 0.35, 0.35), "Y": (0.35, 0.85, 0.4), "Z": (0.4, 0.55, 1.0)}
 LINE_PANEL_WIDTH = 360
 TRACES_PANEL_HEIGHT = 260
 # with a motion-correction plot under the F plot
 TRACES_RTMC_PANEL_HEIGHT = 400
-# the F plot's share of the strip when the motion plot shows
+# the F plot's share of the tab when the motion plot shows, until the
+# splitter between them is dragged
 TRACES_F_SHARE = 0.58
 
 
@@ -930,13 +930,6 @@ class StandardTraces:
     def _attach(self) -> None:
         md = self.arr.metadata
         n = len(md.get("mesc_roi_extents") or []) or int(self.job.result.shape[0])
-        # the curation widget lists this unit's ROIs with lazy loaders; give
-        # it these traces so a click denoises at once instead of re-reading
-        curation = getattr(self.parent, "event_curation", None)
-        loaders = getattr(curation, "unit_traces", None) or {}
-        loader = loaders.get(md["mesc_unit"].rsplit("/", 1)[-1])
-        if loader is not None and loader.traces is None:
-            loader.traces = np.asarray(self.job.result)
         selection = SliderSelection(self.parent.image_widget, n, float(md.get("fs") or 1.0))
         print_rtmc(self.arr)
         self.panel = LineTracesPanel(
@@ -977,29 +970,21 @@ class LineTracesPanel:
     faint min/max band, a 25 ms smoothed line over it in the line's colour,
     and a time cursor tied to the Reference's Timepoint (drag it to scrub).
 
-    A scan that ran with real-time motion correction (``arr.rtmc``) gets a
-    second plot under it on the same time axis (it follows the F plot's pan
-    and zoom) with the same cursor, but its own y range and fit. Every RTMC
-    trace (X/Y/Z, total and intercycle) is its own line with its own
-    checkbox. Its own ``Traces`` tab, on the curation widget's strip when
-    there is one.
+    A scan that ran with real-time motion correction (``arr.rtmc``) gets its
+    motion plot (:class:`~mbo_utilities.gui.imgui.rtmc.RtmcPlot`) under it in
+    linked subplots: one time axis, the plot areas aligned, a splitter
+    between them, the same cursor, its own y range. Its own ``Traces`` tab,
+    on the curation widget's strip when there is one.
     """
 
     def __init__(self, ndw, overlay: LineScanOverlay, traces: np.ndarray, strip, own_strip: bool,
                  tab: bool = True, rtmc: dict | None = None):
+        from imgui_bundle import implot
+
         from mbo_utilities.gui._top_strip import TopPanel
+        from mbo_utilities.gui.imgui.rtmc import RtmcPlot
 
-        from mbo_utilities.gui.imgui.lines import decimate_minmax
-
-        # decimated once like the F trace: tens of thousands of points per
-        # trace every frame is what made the whole window lag
-        self.rtmc: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        for label, tr in (rtmc or {}).items():
-            idx, values = decimate_minmax(tr["um"], 4000)
-            t = tr["t"][idx.astype(int)]
-            self.rtmc[label] = (np.ascontiguousarray(t), np.ascontiguousarray(values))
-        # intercycle traces start hidden: the totals are what a reader wants first
-        self.show_rtmc = {label: " total" in label for label in self.rtmc}
+        self.rtmc = RtmcPlot(rtmc or {})
         self.ndw = ndw
         self.overlay = overlay
         self.strip = strip
@@ -1011,8 +996,10 @@ class LineTracesPanel:
         self._cache: dict[int, tuple] = {}
         self._fit = True
         self._last = None
-        # x range of the F plot this frame, for the motion plot to follow
-        self._xlim: tuple[float, float] | None = None
+        self._show_f = True
+        self._linked = False
+        # F's share of the tab over the motion plot; the splitter drags it
+        self._ratios = implot.SubplotsRowColRatios(row_ratios=[TRACES_F_SHARE, 1.0 - TRACES_F_SHARE])
         if tab:
             height = TRACES_RTMC_PANEL_HEIGHT if self.rtmc else TRACES_PANEL_HEIGHT
             self.strip.register(TopPanel("line_traces", "Line traces", self.draw_tab, height, None, 10))
@@ -1041,7 +1028,9 @@ class LineTracesPanel:
         return got
 
     def draw_tab(self) -> None:
-        from imgui_bundle import imgui
+        from imgui_bundle import imgui, implot
+
+        from mbo_utilities.gui.imgui.lines import subplots
 
         ov = self.overlay
         imgui.text_disabled(
@@ -1053,25 +1042,31 @@ class LineTracesPanel:
             self._fit = True
         if self.rtmc:
             imgui.same_line(0, 12)
-            imgui.text_disabled("RTMC (um):")
-            for label in self.rtmc:
-                imgui.same_line(0, 8)
-                _changed, self.show_rtmc[label] = imgui.checkbox(
-                    f"{label}##line_rtmc", self.show_rtmc[label]
-                )
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip(
-                        f"real-time motion correction applied while the scan ran: {label} "
-                        "shift in um, as its own trace under F on the same time axis"
-                    )
+            _changed, self._show_f = imgui.checkbox("F##line_traces_show", self._show_f)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("show the F plot; off gives the motion plot the whole tab")
+            imgui.same_line(0, 12)
+            self.rtmc.draw_checkboxes("line_rtmc")
         avail = max(imgui.get_content_region_avail().y - 2, 60.0)
-        if any(self.show_rtmc.values()):
-            # the motion plot sits under F; it gives up its x label to F's
-            top = max(avail * TRACES_F_SHARE, 40.0)
-            self.draw(top)
-            self.draw_rtmc(max(avail - top - 4, 40.0))
-        else:
+        rtmc_on = self.rtmc.shown
+        linked = self._show_f and rtmc_on
+        if linked != self._linked:
+            # in or out of the subplots both plots are new to implot
+            self._linked = linked
+            self._fit = True
+            self.rtmc.refit()
+        if linked:
+            link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
+            with subplots("##line_traces_sub", 2, 1, avail, flags=link, ratios=self._ratios) as ok:
+                if ok:
+                    self.draw(-1.0)
+                    self.draw_rtmc(-1.0)
+        elif self._show_f:
             self.draw(avail)
+        elif rtmc_on:
+            self.draw_rtmc(avail)
+        else:
+            imgui.text_disabled("nothing to plot: tick F or an RTMC trace")
 
     def draw(self, height: float) -> None:
         from imgui_bundle import implot
@@ -1097,34 +1092,15 @@ class LineTracesPanel:
             cursor, held = drag_vline(99, ov.t_index / self.fs, (1.0, 0.85, 0.3, 0.9), 1.5)
             if held:
                 ov.goto_time(cursor)
-            lim = implot.get_plot_limits()
-            self._xlim = (float(lim.x.min), float(lim.x.max))
 
     def draw_rtmc(self, height: float) -> None:
-        """The motion-correction plot: every shown RTMC trace on the F plot's
-        time range (set every frame from it) with the same cursor."""
-        from imgui_bundle import implot
-
-        from mbo_utilities.gui.imgui.lines import drag_vline, line, line_plot
-
+        """The motion plot with the Timepoint cursor; dragging it scrubs."""
         ov = self.overlay
-        fit = self._xlim is None
-        with line_plot("##line_rtmc_plot", "time (s)", "RTMC (um)", height=height, fit=fit,
-                       legend=True) as ok:
-            if not ok:
-                return
-            implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, self.duration_s)
-            if self._xlim is not None:
-                implot.setup_axis_limits(implot.ImAxis_.x1, *self._xlim, implot.Cond_.always)
-            for label, (t, v) in self.rtmc.items():
-                if not self.show_rtmc[label]:
-                    continue
-                r, g, b = RTMC_COLORS[label[0]]
-                alpha, weight = (0.9, 1.0) if " total" in label else (0.55, 0.8)
-                line(label, v, x=t, color=(r, g, b, alpha), weight=weight)
-            cursor, held = drag_vline(98, ov.t_index / self.fs, (1.0, 0.85, 0.3, 0.9), 1.5)
-            if held:
-                ov.goto_time(cursor)
+        cursor, held = self.rtmc.draw(
+            "##line_rtmc_plot", height, cursor=ov.t_index / self.fs, cursor_id=98, duration_s=self.duration_s,
+        )
+        if held:
+            ov.goto_time(cursor)
 
 
 class LineCuration:
@@ -1154,13 +1130,13 @@ class LineCuration:
         self.curated: int | None = None
         self.curated_domain: str | None = None
         if self.pf is not None:
-            print(f"\nPF traces for scan {self.pf.scan_id}: {', '.join(self.pf.domains)} "
+            print(f"\nPF traces for scan {self.pf.scan}: {', '.join(self.pf.domains)} "
                   f"({self.pf.pf_dir})")
             # the curation shows this scan's domains: the recordings of the
             # unit on screen (another scan is the combo in the panel); the
-            # experiment's other scans stay in the catalog but out of view
-            scan_tag = f"scan={self.pf.scan_id}"
-            widget.scope = lambda rec: scan_tag in rec.rid.split("/")
+            # folder's other scans stay in the catalog but out of view
+            scan_id = self.pf.scan
+            widget.scope = lambda rec: rec.scan == scan_id
             # every domain of this scan loads now; a line click then just
             # focuses its domain
             widget.scan(str(self.pf.pf_dir))
@@ -1217,7 +1193,7 @@ class LineCuration:
     def curate(self, i: int) -> None:
         """Curate line ``i``: its PF domain trace when the pipeline ran on
         this scan, else its raw trace through the denoiser."""
-        domain = self.pf.domain_for_roi(i) if self.pf is not None else None
+        domain = self.pf.domain_of_line(i) if self.pf is not None else None
         if domain is not None:
             self.curate_domain(domain)
         else:
@@ -1255,7 +1231,7 @@ class LineCuration:
     def _on_select(self, i: int) -> None:
         if not self.auto:
             return
-        domain = self.pf.domain_for_roi(i) if self.pf is not None else None
+        domain = self.pf.domain_of_line(i) if self.pf is not None else None
         if domain is not None:
             if domain != self.curated_domain:
                 self.curate_domain(domain)
@@ -1273,7 +1249,7 @@ class LineCuration:
         section("Curation")
         i = self.overlay.selected
         loading = self.widget.loading
-        domain = self.pf.domain_for_roi(i) if self.pf is not None else None
+        domain = self.pf.domain_of_line(i) if self.pf is not None else None
         imgui.begin_disabled(loading)
         if domain is not None:
             rois = ", ".join(str(r) for r in self.pf.domains[domain])

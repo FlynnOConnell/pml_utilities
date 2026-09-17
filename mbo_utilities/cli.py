@@ -13,6 +13,7 @@ Usage patterns:
   mbo info INPUT                # Show array info (CLI only)
   mbo linescan FILE.mesc        # Per-ROI traces from AOD line-scan units
 """
+import logging
 import sys
 import threading
 import time
@@ -27,6 +28,8 @@ if sys.platform == "win32":
         pass
 
 import click
+
+from mbo_utilities import log
 
 
 class PathAwareGroup(click.Group):
@@ -333,12 +336,12 @@ def main(
 @click.option(
     "--vis",
     type=click.Choice(["demixing", "compression", "classification"]),
-    default="demixing",
-    show_default=True,
-    help="For a masknmf demixing result: which of masknmf's viewers to open first.",
+    default=None,
+    help="For a masknmf demixing result: which of masknmf's viewers to open. "
+         "Omitted: a prompt in the terminal, or the demixing viewer when there is none.",
 )
 def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=False,
-         unit=None, gpu_index=None, list_gpus=False, vis="demixing"):
+         unit=None, gpu_index=None, list_gpus=False, vis=None):
     r"""
     Open imaging data in the GUI viewer.
 
@@ -381,6 +384,22 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
         set_gpu_index(gpu_index)
         info = getattr(adapters[gpu_index], "info", {}) or {}
         click.echo(f"Using GPU {gpu_index}: {info.get('device', info.get('description', '?'))}")
+
+    # a masknmf demixing result opens in one of masknmf's viewers: ask which
+    # before anything heavy loads
+    if vis is None and data_in and not metadata:
+        from mbo_utilities.arrays.demixing import has_demixing_results
+
+        if has_demixing_results(data_in):
+            vis = "demixing"
+            if sys.stdin.isatty():
+                vis = click.prompt(
+                    "masknmf viewer",
+                    type=click.Choice(["demixing", "compression", "classification"]),
+                    default="demixing",
+                    show_choices=True,
+                )
+    vis = vis or "demixing"
 
     # show first-run warning
     first_run = _is_first_run()
@@ -1879,10 +1898,12 @@ main.add_command(_hpc_group)
 @click.option("--channel", type=int, default=0, show_default=True,
               help="Channel averaged for a raw line scan's traces.")
 def curate(path, serve, host, port, channel):
-    """vnoiser event curation of PATH: a Data / animal / experiment / PF
-    folder, a .mat, or a line-scan .mesc (default: the last data path).
+    """vnoiser event curation of PATH: a PF folder the voltage pipeline
+    wrote (or the experiment folder holding it), or a line-scan .mesc, with
+    a PF folder beside it or raw (default: the last data path).
 
-    Opens the desktop window, the same as `mbo PATH`. With --serve the
+    Opens the desktop window, the one the viewer's Curate button opens
+    (the Voltage pipeline, or File > Curate). With --serve the
     dashboard is rendered here and streamed to any browser that opens the
     printed URL: run it on the machine that holds the data and a GPU, and
     curate from a laptop. No login: keep --host on localhost and tunnel
@@ -1901,10 +1922,6 @@ def curate(path, serve, host, port, channel):
     from mbo_utilities.gui.curation_viewer import open_curation_viewer
 
     open_curation_viewer(path, channel=channel)
-
-
-def _voltage_progress(scan_id, domain):
-    click.echo(f"  scan {scan_id}: denoising {domain}")
 
 
 @main.command("voltage")
@@ -1928,9 +1945,15 @@ def _voltage_progress(scan_id, domain):
 @click.option("--save-cwt", is_flag=True, default=False,
               help="Also write cwts.h5, the wavelet coefficients (about 20 bytes per sample per domain).")
 @click.option("--overwrite", is_flag=True, default=False, help="Replace an existing PF folder's files.")
+@click.option("--zarr", "as_zarr", is_flag=True, default=False,
+              help="Write the results as one <date>_<tags>.zarr file (mbo_utilities.results) instead of "
+                   "the archive's pickles; the curation window opens either.")
+@click.option("-p", "--planes", type=int, multiple=True,
+              help="ROI to process (1-based; the unit's Z axis), repeat for several: -p 1 -p 3. Only these "
+                   "are read and every domain is cut down to them. Default: every ROI.")
 @click.option("--init", is_flag=True, default=False,
               help="Write a domains.json template beside the file (one domain per ROI) and exit.")
-def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_cwt, overwrite, init):
+def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_cwt, overwrite, as_zarr, planes, init):
     """The spatial JEDI voltage pipeline on a .mesc with AOD ROI units (line
     scans, chessboard or ribbon patches): per-ROI traces, domain dF/F and
     z-score, wavelet denoising, peaks, written as a PF folder that
@@ -1993,20 +2016,69 @@ def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_
         settings.events.bp_low, settings.events.bp_high = lo, hi
         settings.events.thres_bp_sd, settings.events.thres_amp_sd = bp_sd, amp_sd
         settings.events.duration_thres_ms = dur
+    if as_zarr:
+        settings.runtime.output_format = "zarr"
     chosen = list(units) or [f"MUnit_{s}" for s in spec["scan_ids"]] or None
+    # the runner narrates every step through the mbo logger; give its console lines a clock
+    logger = log.get()
+    for handler in logger.handlers:
+        handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%H:%M:%S"))
     try:
         paths = run_voltage_pipeline(
             mesc_path, domains=spec["domains"], units=chosen, first_env=spec["first_env"], out=out,
-            channel=channel, convert=convert, save_cwt=save_cwt, settings=settings,
-            overwrite=overwrite, progress=_voltage_progress, log=click.echo,
-            provenance={"settings": settings.to_dict()},
+            channel=channel, convert=convert, planes=list(planes) or None, save_cwt=save_cwt,
+            settings=settings, overwrite=overwrite, logger=logger, provenance={"settings": settings.to_dict()},
         )
     except (ValueError, KeyError, FileExistsError) as e:
         click.echo(f"error: {e}", err=True)
         raise click.Abort
     pf_dir = next(iter(paths.values())).parent
     click.echo(f"wrote {len(paths)} files to {pf_dir}")
-    click.echo(f"curate with: mbo curate {pf_dir.parent}")
+    if as_zarr:
+        click.echo(f"results: {next(p for p in paths.values() if p.suffix == '.zarr')}")
+    else:
+        click.echo(f"curate with: mbo curate {pf_dir.parent}")
+
+
+@main.command("results")
+@click.argument("path", type=click.Path(exists=True, file_okay=False))
+@click.option("-o", "--out", type=click.Path(dir_okay=False), default=None,
+              help="The .zarr to write. Default: <date>_<tags>.zarr inside PATH, tags from PATH's name.")
+@click.option("--overwrite", is_flag=True, default=False, help="Replace an existing results file.")
+def results(path, out, overwrite):
+    """Mold a pipeline's output folder into one results zarr.
+
+    PATH is a suite2p or masknmf output folder (one plane dir, or a folder
+    of zplaneNN dirs) or the voltage pipeline's PF folder. The file holds
+    every plane or scan as a group of (roi, t) traces, ROI membership,
+    events and summary images; `mbo_utilities.results.read_results` reads
+    it back.
+
+    \b
+      mbo results run/zplane01_tp00001-01574
+      mbo results stan112_expt12/PF -o stan112_expt12/PF/2026-09-16_stan112_expt12.zarr
+    """
+    from mbo_utilities.arrays.pf import pf_dir_of
+    from mbo_utilities.results import results_from_pf, results_from_suite2p, results_name, write_results
+
+    path = Path(path)
+    pf_dir = pf_dir_of(path)
+    if pf_dir is not None:
+        units, root = results_from_pf(pf_dir)
+        source = (root["source"] or {}).get("mesc") or pf_dir
+    else:
+        try:
+            units, root = results_from_suite2p(path)
+        except FileNotFoundError as e:
+            raise click.BadParameter(str(e), param_hint="PATH")
+        source = path
+    target = Path(out) if out else path / results_name(source)
+    try:
+        written = write_results(target, units, overwrite=overwrite, **root)
+    except (FileExistsError, ValueError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise click.Abort
+    click.echo(f"wrote {len(units)} unit(s) to {written}")
 
 
 if __name__ == "__main__":

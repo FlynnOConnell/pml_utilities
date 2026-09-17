@@ -151,7 +151,7 @@ def test_run_files_finds_the_stage_exports(planes_dir, tmp_path):
     assert files["raw"] == run / "data_raw.bin" and files["ops"] == run / "ops.npy"
 
 
-def test_viewer_switcher_needs_masknmf(run_dir):
+def test_viewers_need_masknmf(run_dir):
     # masknmf's import fails with AttributeError on a mismatched fastplotlib
     # pin, which importorskip would report as a failure
     try:
@@ -160,7 +160,7 @@ def test_viewer_switcher_needs_masknmf(run_dir):
         pytest.skip(f"masknmf not importable: {e}")
     from mbo_utilities.gui.masknmf_vis import KINDS, MasknmfViewers
 
-    viewers = MasknmfViewers(run_dir / "calcium_spine_demixing.hdf5", device="cpu")
+    viewers = MasknmfViewers(run_dir / "calcium_spine_demixing.hdf5", device="cpu", raw_path="x.tif")
     assert viewers.timings.shape == (T,) and viewers.timings[1] == pytest.approx(1 / 19.66)
     assert KINDS == ("demixing", "compression", "classification")
     with pytest.raises(FileNotFoundError):

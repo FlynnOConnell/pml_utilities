@@ -107,6 +107,12 @@ class VoltageRuntimeSettings:
     save_cwt: bool = False
     overwrite: bool = True
     reference_fs: float = 1075.2688
+    # "pkl": the archive's PF pickles, which the curation window reads;
+    # "zarr": one <date>_<tags>.zarr results file (mbo_utilities.results) and no pickles
+    output_format: str = "pkl"
+
+
+OUTPUT_FORMATS = ("pkl", "zarr")
 
 
 def _section(cls, d):
@@ -142,7 +148,8 @@ class VoltageSettings:
         out = copy.deepcopy(self)
         ref = float(self.runtime.reference_fs or 0)
         k = float(fs) / ref if ref > 0 else 1.0
-        if not math.isclose(k, 1.0, rel_tol=1e-9):
+        # the archive's rate is 1000 / 0.93 Hz and reference_fs its rounding; within 1 ppm it is the same rate
+        if not math.isclose(k, 1.0, rel_tol=1e-6):
             out.dfof.sigma_dfof = float(self.dfof.sigma_dfof) * k
             out.dfof.sigma_baseline = float(self.dfof.sigma_baseline) * k
             out.dfof.n_startup = max(1, int(round(self.dfof.n_startup * k)))

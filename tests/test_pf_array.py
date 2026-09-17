@@ -113,8 +113,8 @@ def test_imread_opens_the_folder_as_a_trace_raster(tmp_path):
     assert arr.metadata["source_mesc"] is None and arr.source_mesc is None
     assert arr.reader_kwargs == {"scan": "35"} and arr.source_path == pf
     assert np.array_equal(arr.events("soma"), [10, 20]) and arr.events("basal1").size == 0
-    assert arr.recording_id("soma") == "stan1/stan1_expt1/scan=35/domain=soma"
-    assert arr.recording_id("basal1", "38") == "stan1/stan1_expt1/scan=38/domain=basal1"
+    assert arr.recording_id("soma") == "scan=35/domain=soma"
+    assert arr.recording_id("basal1", "38") == "scan=38/domain=basal1"
     assert arr.domain_of_line(4) == "basal1" and arr.domain_of_line(6) is None
     assert arr.params == {"bp": [3, 400]}
     assert arr.mean().shape == (2, 3000) or arr.mean() is not None
@@ -192,3 +192,20 @@ def test_the_voltage_widget_runs_from_a_pf_folder(tmp_path):
     without = PfArray(write_pf(tmp_path / "b" / "PF"))
     assert VoltagePipelineWidget.applies_to(with_source)
     assert not VoltagePipelineWidget.applies_to(without)
+
+
+def test_pf_source_names_the_line_scan_and_its_units(tmp_path):
+    from mbo_utilities.arrays.pf import pf_source
+
+    mesc = write_mesc(tmp_path / "scan.mesc")
+    named = write_pf(tmp_path / "a" / "PF", source=mesc, units={"35": "MSession_0/MUnit_35"})
+    assert pf_source(named) == (mesc, {"35": "MSession_0/MUnit_35"})
+    # the archive layout beside the folder when the provenance names nothing
+    experiment = tmp_path / "stan1" / "stan1_expt1"
+    (experiment / "stan1_expt1").mkdir(parents=True)
+    beside = write_mesc(experiment / "stan1_expt1" / "stan1_expt1.mesc")
+    assert pf_source(write_pf(experiment / "PF")) == (beside, {})
+    assert pf_source(write_pf(tmp_path / "b" / "PF")) == (None, {})
+    # a provenance already in hand is used as is
+    assert pf_source(tmp_path / "b" / "PF", {"source": {"mesc": str(mesc)}}) == (mesc, {})
+    assert pf_source(tmp_path / "b" / "PF", {"source": {"mesc": str(tmp_path / "gone.mesc")}}) == (None, {})

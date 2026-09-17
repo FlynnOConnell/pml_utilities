@@ -1533,16 +1533,6 @@ def task_roi_workflow(args: dict, logger: logging.Logger) -> None:
         raise
 
 
-def _voltage_heartbeat(stop: threading.Event, logger: logging.Logger) -> None:
-    while not stop.wait(600):
-        logger.info("voltage: still running")
-
-
-def _voltage_progress(monitor: TaskMonitor, total: int, done: list, scan_id: str, domain: str) -> None:
-    done[0] += 1
-    monitor.update(0.05 + 0.9 * (done[0] - 1) / max(total, 1), f"scan {scan_id}: denoising {domain} ({done[0]}/{total})")
-
-
 def task_voltage(args: dict, logger: logging.Logger) -> None:
     """
     Voltage pipeline task: AOD ROI units of a .mesc to a PF folder.
@@ -1550,15 +1540,16 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
     Runs mbo_utilities.vnoiser.pipeline.run_voltage_pipeline with the Run
     tab's settings (scaled there to the scans' frame rate); every ticked
     unit is one scan, the domain table says which ROIs make each domain.
+    The runner logs every step (each ROI read, each domain denoised, the
+    writes) with its time and memory through ``logger`` and drives the
+    progress sidecar through ``monitor.update``.
     """
-    from functools import partial
-
     from mbo_utilities.metadata import strip_for_export
     from mbo_utilities.vnoiser.params import VoltageSettings
     from mbo_utilities.vnoiser.pipeline import run_voltage_pipeline
 
     monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
-    monitor.update(0.01, "Reading line-scan traces...")
+    monitor.update(0.01, "Opening the source...")
     settings = VoltageSettings.from_dict(args.get("settings"))
     units = list(args.get("units") or [])
     domains = {str(k): [int(v) for v in rois] for k, rois in (args.get("domains") or {}).items()}
@@ -1574,9 +1565,6 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
     logger.info(f"Input: {args['input_path']}  units: {units}")
     logger.info(f"Output: {args['output_dir']}")
     logger.info(f"Domains: {domains}")
-    total = max(len(units), 1) * len([d for d in domains if d not in ("All_domains", "bg")])
-    stop = threading.Event()
-    threading.Thread(target=_voltage_heartbeat, args=(stop, logger), daemon=True).start()
     try:
         paths = run_voltage_pipeline(
             args["input_path"],
@@ -1587,13 +1575,14 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
             channel=int(args.get("channel") or 0),
             convert=settings.runtime.convert,
             frames=None if frames is None else (int(frames[0]), int(frames[1])),
+            planes=args.get("planes"),
             save_cwt=settings.runtime.save_cwt,
             settings=settings,
             detect=settings.events.detect,
             overwrite=settings.runtime.overwrite,
             provenance={"settings": settings.to_dict(), "source_metadata": strip_for_export(metadata)},
-            progress=partial(_voltage_progress, monitor, total, [0]),
-            log=logger.info,
+            progress_callback=monitor.update,
+            logger=logger,
         )
         monitor.finish(f"Voltage pipeline wrote {len(paths)} files to {args['output_dir']}")
         logger.info(f"voltage completed: {sorted(paths)}")
@@ -1601,8 +1590,6 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
         monitor.fail(str(e), details={"traceback": traceback.format_exc()})
         logger.exception(f"voltage failed: {e}")
         raise
-    finally:
-        stop.set()
 
 
 TASKS = {

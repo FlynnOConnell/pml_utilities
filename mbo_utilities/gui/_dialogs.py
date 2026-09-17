@@ -458,6 +458,10 @@ def _reset_per_data_state(parent: Any) -> None:
     # save-as dialog selections
     parent._saveas_selected_roi = set()
     parent._saveas_rois = False
+    # the MESc ROI overlay draws on the outgoing unit's subplot
+    from mbo_utilities.gui.widgets.mesc_overlay import close_overlay
+
+    close_overlay(parent)
 
 
 def swap_viewer_array(parent: Any, arr, title: str | None = None) -> None:

@@ -25,6 +25,7 @@ dependencies = [
 	"matplotlib>=3.10.1",
 	"opencv-contrib-python-headless",
 	"h5py",
+	"psutil>=7.0",
 	"tqdm",
 	"icecream>=2.1.4",
 	"glfw",

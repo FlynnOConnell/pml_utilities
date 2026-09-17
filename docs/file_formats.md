@@ -59,6 +59,7 @@ the 5D array underneath for writers and the viewer.
 | ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
 | **`.zarr`** | `ZarrArray` | `(T, C, Z, Y, X)` | Zarr v3 / OME-Zarr |
+| ↳ `<date>_<tags>.zarr` results | `PfArray` (voltage) / `read_results` | traces, not an image | A pipeline's results file (`mbo_utilities.results`); suite2p and masknmf ones are read with `read_results` |
 | **`.npy`** | `NumpyArray` | `(T, C, Z, Y, X)` | Memory-mapped numpy |
 | **`np.ndarray`** | `NumpyArray` | `(T, C, Z, Y, X)` | In-memory wrapper |
 | **Directory** | | | |
@@ -376,6 +377,7 @@ sliders, labelled with the axis names the array reports.
 | `mesc_light_paths` / `mesc_dichroic` | interleaved light paths per scanner frame, and whether switching is on |
 | `mesc_raw_frame_rate` | scanner frame rate, `1000 / TStepInMs`, before the light-path split |
 | `mesc_flip_y` | whether Y was flipped on read |
+| `mesc_background_unit` / `mesc_rtmc_unit` | keys of the snapshot the ROIs were drawn on (`BackgroundImagePath`) and of the real-time motion-correction stream MEScan watched (`MotionCorrectionImagePath`); `None` when the scan links none. `mbo.imread(path, unit=md["mesc_rtmc_unit"])` opens the stream |
 
 #### Frame rate and dichroic switching
 

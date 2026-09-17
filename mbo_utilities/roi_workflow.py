@@ -677,6 +677,41 @@ def load_run_dir(path: str | Path, *, iscell_only: bool = True, logger=None) -> 
     )
 
 
+def run_result_from_unit(unit, path, pipeline: str = "") -> RunResult:
+    """One pixel unit of a results file (``mbo_utilities.results``) as a
+    :class:`RunResult`, so the ROI widget shows it like a run dir.
+
+    Members become ``stat`` rows (``ypix``, ``xpix``, ``lam``) on the unit's
+    ``image_shape``; ``raw`` / ``neuropil`` / ``dff`` become ``F`` / ``Fneu``
+    / ``norm``. ``path`` is the identity the widget keys the set by, normally
+    ``<file>.zarr/<unit name>``.
+    """
+    if unit.member_kind != "pixel" or unit.image_shape is None:
+        raise ValueError(f"{unit.name}: only pixel units with an image shape load as ROIs")
+    ly, lx = (int(v) for v in unit.image_shape)
+    weights = unit.weights if unit.weights is not None else [None] * unit.n_rois
+    stat = np.empty(unit.n_rois, dtype=object)
+    for k, (members, lam) in enumerate(zip(unit.members, weights, strict=True)):
+        ypix, xpix = np.divmod(np.asarray(members, np.int64).ravel(), lx)
+        stat[k] = {
+            "ypix": ypix.astype(np.int32),
+            "xpix": xpix.astype(np.int32),
+            "lam": np.ones(ypix.size, np.float32) if lam is None else np.asarray(lam, np.float32),
+            "med": (float(np.median(ypix)), float(np.median(xpix))) if ypix.size else (0.0, 0.0),
+            "npix": int(ypix.size),
+        }
+    kind = str(pipeline or unit.attrs.get("pipeline") or "suite2p")
+    return RunResult(
+        path=Path(path), kind=kind, z=int(unit.index) - 1 if unit.kind == "plane" else 0,
+        shape=(ly, lx), stat=stat,
+        F=None if "raw" not in unit.traces else np.asarray(unit.traces["raw"], np.float32),
+        Fneu=None if "neuropil" not in unit.traces else np.asarray(unit.traces["neuropil"], np.float32),
+        norm=None if "dff" not in unit.traces else np.asarray(unit.traces["dff"], np.float32),
+        iscell=None if unit.iscell is None else np.asarray(unit.iscell, np.float32),
+        uids=None, store_indices=None, algo=kind,
+    )
+
+
 # ---------------------------------------------------------------------------
 # registration
 # ---------------------------------------------------------------------------
@@ -1742,9 +1777,12 @@ def linescan_roi_read(
     convert: bool = True,
     dtype=np.float32,
     progress=None,
+    rois=None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """One pass over a linescan unit: ``(K, T)`` per-ROI means and, when
     ``bin_frames`` is set, ``(K, ceil(T / bin_frames), W)`` kymographs.
+    ``rois`` (0-based ROI indices, the unit's Z axis) reads only those, in
+    that order; the others are never touched.
 
     With ``convert`` (default) the file's own linear conversion for the
     channel (``metadata["mesc_channel_conversion"]``, ``raw * scale +
@@ -1764,12 +1802,18 @@ def linescan_roi_read(
     """
     md = arr.metadata
     extents = md["mesc_roi_extents"]
+    if rois is not None:
+        rois = [int(r) for r in rois]
+        bad = [r for r in rois if not 0 <= r < len(extents)]
+        if bad:
+            raise ValueError(f"ROI {bad[0]} is outside 0..{len(extents) - 1}")
+        extents = [extents[r] for r in rois]
     K = len(extents)
     scale, offset = 1.0, 0.0
     conv = md.get("mesc_channel_conversion") or []
     if convert and channel < len(conv):
         scale, offset = float(conv[channel]["scale"]), float(conv[channel]["offset"])
-    movies = [as_movie(arr, z=i, c=channel) for i in range(K)]
+    movies = [as_movie(arr, z=int(e["index"]), c=channel) for e in extents]
     T = movies[0].shape[0]
     dtype = np.dtype(dtype)
     F = np.zeros((K, T), dtype)

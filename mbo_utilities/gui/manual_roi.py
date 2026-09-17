@@ -132,6 +132,7 @@ from mbo_utilities.roi_workflow import (
     feather_mask,
     load_run_dir,
     roi_trace,
+    run_result_from_unit,
 )
 
 __all__ = [
@@ -626,6 +627,8 @@ class ManualRoiWidget:
         # _adopt_finished_runs, and when it last looked
         self._adopted: set[int] = set()
         self._adopt_checked = 0.0
+        # results files (mbo_utilities.results) already loaded, by path
+        self._results_loaded: set[str] = set()
         self._restoring = False
 
         # the top edge is shared (menu row, Signal Quality plot, these two
@@ -1601,7 +1604,7 @@ class ManualRoiWidget:
         run dir they belong to."""
         path = Path(path)
         name = path.name
-        if name[:1] == "z" and name[1:].isdigit():
+        if (name[:1] == "z" and name[1:].isdigit()) or path.parent.suffix == ".zarr":
             name = f"{path.parent.name}/{name}"
         while any(s.name == name for s in self.derived):
             name += "~"
@@ -1658,8 +1661,16 @@ class ManualRoiWidget:
     def load_run(self, path, discarded=(), classes=None, colors=None) -> bool:
         """Read one run dir into the widget: extract runs merge their
         traces, everything else loads as a derived set (every row, the
-        rejected ones included - curation happens here)."""
+        rejected ones included - curation happens here). A results file
+        (``mbo_utilities.results``), or one unit inside one, goes through
+        :meth:`load_results`."""
+        from mbo_utilities.results import results_pipeline
+
         path = Path(path)
+        if results_pipeline(path) is not None or (
+            path.parent.suffix == ".zarr" and results_pipeline(path.parent) is not None
+        ):
+            return self.load_results(path, discarded, classes, colors)
         try:
             res = load_run_dir(path, iscell_only=False, logger=self.logger)
         except Exception as e:  # noqa: BLE001 - shown in the status row
@@ -1682,6 +1693,71 @@ class ManualRoiWidget:
             self._save_registry()
             return True
         return self._add_derived(res, discarded, classes, colors) is not None
+
+    def load_results(self, path, discarded=(), classes=None, colors=None) -> bool:
+        """Read a results file (AGENTS.md §7.5) into the widget. Pixel units
+        (suite2p, masknmf) load as derived sets exactly like a run dir; line
+        units (the voltage pipeline's scans) go straight to the Traces tab,
+        one row per ROI plotting its denoised trace and one per member line
+        plotting the line's raw trace. ``path`` may name one unit inside the
+        file (``<file>.zarr/zplane01``). Returns True when anything loaded."""
+        from mbo_utilities.results import read_results, results_pipeline
+
+        path = Path(path)
+        if path.parent.suffix == ".zarr" and results_pipeline(path) is None:
+            file, only = path.parent, path.name
+        else:
+            file, only = path, None
+        try:
+            results = read_results(file)
+        except Exception as e:  # noqa: BLE001 - shown in the status row
+            self._run_error = f"could not load {file.name}: {e}"
+            return False
+        loaded = 0
+        for unit in results.units.values():
+            if only is not None and unit.name != only:
+                continue
+            if unit.member_kind == "pixel" and unit.image_shape is not None:
+                res = run_result_from_unit(unit, file / unit.name, results.pipeline)
+                if self.store.nz == 1 and res.z != 0 and self.fpath is not None and file.parent == labels_path(self.fpath).parent:
+                    # the movie on screen IS this plane, whatever plane the file recorded
+                    res = replace(res, z=0)
+                loaded += self._add_derived(res, discarded, classes, colors) is not None
+                continue
+            name = f"{file.name}/{unit.name}"
+            ts = TraceSet(name, results.pipeline, external=True)
+            n = unit.n_rois
+            for k, roi in enumerate(unit.roi_names):
+                entry = {"label": str(roi), "fs": unit.fs}
+                for kind, field in (("raw", "F"), ("neuropil", "Fneu"), ("dff", "norm"), ("denoised", "norm")):
+                    if kind in unit.traces:
+                        entry[field] = np.asarray(unit.traces[kind][k], np.float32)
+                if "F" not in entry:
+                    entry["F"] = entry.get("norm", np.zeros(unit.n_timepoints, np.float32))
+                ts.data[k] = entry
+            ids = list(unit.attrs.get("member_ids") or [])
+            for kind, arr in unit.member_traces.items():
+                for i, row in enumerate(np.asarray(arr, np.float32)):
+                    member = ids[i] if i < len(ids) else i
+                    ts.data[n + i] = {"label": f"{unit.member_kind} {member} ({kind})", "fs": unit.fs, "F": row}
+            if not ts.data:
+                continue
+            self.trace_sets[name] = ts
+            self.trace_uid = None
+            loaded += 1
+        if not loaded:
+            if not self._run_error:
+                self._run_error = f"{file.name} has no unit this view can show"
+            return False
+        self._results_loaded.add(str(file))
+        if any(ts.external and ts.name.startswith(f"{file.name}/") for ts in self.trace_sets.values()):
+            self.focus_traces = True
+            if not any(str(e["path"]) == str(file) for e in self._registry_extra):
+                self._registry_extra.append({"path": str(file), "kind": results.pipeline, "discarded": []})
+        self._traces_changed()
+        self._save_registry()
+        self.status = f"loaded {loaded} unit(s) of {file.name}"
+        return True
 
     def unload_set(self, si: int):
         s = self.derived.pop(si)
@@ -2507,13 +2583,13 @@ class ManualRoiWidget:
             return
         root = labels_path(self.fpath).parent
         mine = {r.pid for r in self.manager.runs if r.pid is not None}
-        loaded = {str(s.result.path) for s in self.derived}
+        loaded = {str(s.result.path) for s in self.derived} | self._results_loaded
         for info in get_process_manager().get_running():
             if (
                 info.pid in mine
                 or info.pid in self._adopted
                 or info.status != "completed"
-                or info.task_type not in ("suite2p", "masknmf")
+                or info.task_type not in ("suite2p", "masknmf", "voltage")
             ):
                 continue
             self._adopted.add(info.pid)
@@ -2524,10 +2600,17 @@ class ManualRoiWidget:
             out = Path(out)
             if root not in (out, *out.parents) and out not in root.parents:
                 continue  # another dataset's run
-            dirs = [
-                d for d in finished_dirs(out, args.get("planes"))
-                if str(d) not in loaded
-            ]
+            if info.task_type == "voltage":
+                # a zarr-format voltage run leaves one results file in the PF folder
+                from mbo_utilities.arrays.pf import pf_results_in
+
+                found = pf_results_in(out)
+                dirs = [found] if found is not None and str(found) not in loaded else []
+            else:
+                dirs = [
+                    d for d in finished_dirs(out, args.get("planes"))
+                    if str(d) not in loaded
+                ]
             # a volume run writes a dir per plane and this widget shows one:
             # the planes it cannot take are the Process tab's business, not
             # an error to put in front of the user here
@@ -3494,10 +3577,11 @@ class ManualRoiWidget:
         acquired frames, so its samples sit ``A / fs`` seconds apart - traces
         binned differently still line up in time.
         """
-        rate = self.fs()
+        entry = self._trace_entry(key) or {}
+        # a results file's traces carry their own rate (a scan's, not the movie's)
+        rate = entry.get("fs") or self.fs()
         if self.x_unit == "frames" or not rate:
             return 1.0
-        entry = self._trace_entry(key) or {}
         per_sample = int(entry.get("frame_average", 1) or 1) / rate
         return per_sample * (1000.0 if self.x_unit == "ms" else 1.0)
 
@@ -3595,6 +3679,9 @@ class ManualRoiWidget:
         """``(sort value, display text)`` for a key's roi column."""
         origin, name, k = key
         if origin == "uid":
+            ts = self.trace_sets.get(name)
+            if ts is not None and ts.external:
+                return float((1 << 30) + k), str(ts.data.get(k, {}).get("label") or k)
             index = self.store.uid_index(k)
             if index is not None:
                 return float(index), f"{index}"

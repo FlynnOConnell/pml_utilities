@@ -39,18 +39,31 @@ _PF_INFO = PipelineInfo(
     name="voltage",
     description="Spatial JEDI voltage pipeline: AOD ROI traces, dF/F, wavelet denoising, peaks (a PF folder)",
     input_patterns=["**/*.mesc"],
-    output_patterns=[f"**/PF/{TRACES_FILE}", f"**/PF/{PROVENANCE_FILE}", "**/PF/test.h5"],
+    output_patterns=[f"**/PF/{TRACES_FILE}", f"**/PF/{PROVENANCE_FILE}", "**/PF/test.h5", "**/PF/*.zarr"],
     input_extensions=["mesc"],
-    output_extensions=["pkl", "h5", "json"],
+    output_extensions=["pkl", "h5", "json", "zarr"],
     marker_files=[TRACES_FILE],
     category="processor",
 )
 register_pipeline(_PF_INFO)
 
 
+def pf_results_in(folder) -> Path | None:
+    """The voltage results zarr in ``folder`` (``<date>_<tags>.zarr``, the
+    newest when several), or None."""
+    from mbo_utilities.results import results_pipeline
+
+    folder = Path(folder)
+    if not folder.is_dir():
+        return None
+    found = [p for p in folder.glob("*.zarr") if results_pipeline(p) == "voltage"]
+    return max(found, key=lambda p: p.name) if found else None
+
+
 def pf_dir_of(path) -> Path | None:
-    """The ``PF`` folder ``path`` names: the folder itself, its traces pickle,
-    or an experiment folder holding ``PF``; None for anything else."""
+    """The ``PF`` folder ``path`` names: the folder itself, its traces pickle
+    or results zarr, or an experiment folder holding ``PF``; None for
+    anything else."""
     p = Path(path)
     if p.is_file():
         return p.parent if p.name == TRACES_FILE else None
@@ -60,7 +73,36 @@ def pf_dir_of(path) -> Path | None:
         return p
     if (p / "PF" / TRACES_FILE).is_file():
         return p / "PF"
+    if p.suffix == ".zarr":
+        from mbo_utilities.results import results_pipeline
+
+        return p.parent if results_pipeline(p) == "voltage" else None
+    if pf_results_in(p) is not None:
+        return p
+    if pf_results_in(p / "PF") is not None:
+        return p / "PF"
     return None
+
+
+def pf_source(pf_dir, provenance: dict | None = None) -> tuple[Path | None, dict[str, str]]:
+    """The line scan a ``PF`` folder was made from and its ``{scan id: unit
+    key}``: the pipeline's provenance (``pipeline.json`` unless given) names
+    both; without it the ``.mesc`` laid out the archive's way beside the
+    folder is the source and the units are ``MUnit_<scan>``. ``(None, {})``
+    when no source is reachable."""
+    pf_dir = Path(pf_dir)
+    if provenance is None:
+        provenance = {}
+        if (pf_dir / PROVENANCE_FILE).is_file():
+            provenance = json.loads((pf_dir / PROVENANCE_FILE).read_text())
+    block = provenance.get("source") or {}
+    units = {str(s): str(u) for s, u in (block.get("units") or {}).items()}
+    named = block.get("mesc")
+    if named and Path(named).is_file():
+        return Path(named), units
+    from mbo_utilities.analysis.linescan import experiment_linescan_mesc
+
+    return experiment_linescan_mesc(pf_dir), units
 
 
 class PfArray(ReductionMixin, LazyArray):
@@ -71,8 +113,10 @@ class PfArray(ReductionMixin, LazyArray):
     Parameters
     ----------
     filenames : path
-        The ``PF`` folder, its ``denoised_trace_scans.pkl``, or the
-        experiment folder holding ``PF``.
+        The ``PF`` folder, its ``denoised_trace_scans.pkl`` or its
+        ``<date>_<tags>.zarr`` results file (``mbo_utilities.results``, the
+        pipeline's ``output_format="zarr"``), or the experiment folder
+        holding ``PF``.
     scan : str or int, optional
         The scan the image and ``fs`` follow; the first by default.
     unit : str, optional
@@ -97,15 +141,32 @@ class PfArray(ReductionMixin, LazyArray):
     ):
         pf_dir = pf_dir_of(filenames)
         if pf_dir is None:
-            raise FileNotFoundError(f"no {TRACES_FILE} at {filenames}")
+            raise FileNotFoundError(f"no {TRACES_FILE} or voltage results zarr at {filenames}")
         self.pf_dir = pf_dir
         self.filenames = [pf_dir]
         self._metadata: dict = {}
+        self.results_path = None if (pf_dir / TRACES_FILE).is_file() else pf_results_in(pf_dir)
         try:
             from vnoiser import read_pf
         except ImportError:
             read_pf = None
-        if read_pf is not None:
+        if self.results_path is not None:
+            from mbo_utilities.results import read_results
+
+            results = read_results(self.results_path)
+            scans = [u for u in results.units.values() if u.kind == "scan"]
+            traces = {u.attrs["scan_id"]: dict(zip(u.roi_names, u.traces["denoised"], strict=True)) for u in scans}
+            fs = {u.attrs["scan_id"]: u.fs for u in scans}
+            rois = {
+                "scanID_spatial": [u.attrs["scan_id"] for u in scans],
+                "scanID_1st_env": [u.attrs["scan_id"] for u in scans if u.attrs.get("first_env")],
+                "domain_ROInumber": {n: m.tolist() for u in scans[:1] for n, m in zip(u.roi_names, u.members, strict=True)},
+                "roi_list": {u.attrs["scan_id"]: list(u.attrs.get("member_ids") or []) for u in scans},
+            }
+            peaks = {u.attrs["scan_id"]: u.events for u in scans}
+            provenance = results.provenance or {"source": results.source, "settings": results.settings}
+            params = dict(provenance.get("events") or {})
+        elif read_pf is not None:
             files = read_pf(pf_dir)
             traces, fs, rois = files.traces, files.fs, files.rois
             peaks, params, provenance = files.peaks or {}, files.params or {}, files.provenance or {}
@@ -129,9 +190,10 @@ class PfArray(ReductionMixin, LazyArray):
             str(s): {str(d): np.asarray(t, dtype=np.float64) for d, t in v.items()}
             for s, v in traces.items()
         }
-        self.fs_by_scan = {str(s): float(v) for s, v in fs.items()}
+        self.fs_by_scan = {str(s): float(v) for s, v in fs.items() if v is not None}
         self.scan_ids = [str(s) for s in rois.get("scanID_spatial", list(self.traces))]
         self.first_env = [str(s) for s in rois.get("scanID_1st_env", [])]
+        self.roi_list = {str(s): [int(r) for r in v] for s, v in rois.get("roi_list", {}).items()}
         self.domains = {
             FINAL_DOMAIN_NAMES.get(str(k), str(k)): [int(r) for r in v]
             for k, v in rois.get("domain_ROInumber", {}).items()
@@ -151,15 +213,7 @@ class PfArray(ReductionMixin, LazyArray):
         if scan is not None and str(scan) not in self.scan_ids:
             raise ValueError(f"{pf_dir} has no scan {scan!r}; its scans are {self.scan_ids}")
         self.scan = str(scan) if scan is not None else (self.scan_ids[0] if self.scan_ids else "")
-        source_block = self.provenance.get("source") or {}
-        self.source_units = {str(s): str(u) for s, u in (source_block.get("units") or {}).items()}
-        named = source_block.get("mesc")
-        if named and Path(named).is_file():
-            self.source_mesc = Path(named)
-        else:
-            from mbo_utilities.analysis.linescan import experiment_linescan_mesc
-
-            self.source_mesc = experiment_linescan_mesc(pf_dir)
+        self.source_mesc, self.source_units = pf_source(pf_dir, self.provenance)
         self._source = None
         if source and self.source_mesc is not None and self.scan:
             from mbo_utilities.arrays.mesc import MescArray
@@ -256,6 +310,10 @@ class PfArray(ReductionMixin, LazyArray):
             }
         )
         md.setdefault("fs", self.fs_by_scan.get(self.scan))
+        # the run's per-step wall, cpu and memory record, as the pipeline wrote it
+        for key in ("timing", "processing_history"):
+            if key in self.provenance:
+                md[key] = self.provenance[key]
         md.update(self._metadata)
         return md
 
@@ -274,9 +332,9 @@ class PfArray(ReductionMixin, LazyArray):
         return self.peaks.get(str(scan or self.scan), {}).get(str(domain), np.zeros(0, dtype=int))
 
     def recording_id(self, domain: str, scan: str | None = None) -> str:
-        """The curation dataset's id of a domain trace: ``<animal>/<experiment>/scan=<id>/domain=<name>``."""
-        experiment = self.pf_dir.parent
-        return f"{experiment.parent.name}/{experiment.name}/scan={scan or self.scan}/domain={domain}"
+        """The curation's id of a domain trace, ``scan=<id>/domain=<name>``:
+        what its labels are keyed by in ``PF/.curation``."""
+        return f"scan={scan or self.scan}/domain={domain}"
 
     def domain_of_line(self, line: int) -> str | None:
         """The domain that averages line ROI ``line``, or None."""

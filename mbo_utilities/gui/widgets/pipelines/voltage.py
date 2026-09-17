@@ -7,7 +7,8 @@ spawns the "voltage" worker. What is new is the scans-and-domains block:
 which AOD ROI units of the file (line scans, chessboard or ribbon patches)
 become scans and which ROIs make each domain. Settings are written for the
 archive's frame rate and scaled to the scans'. Results are a PF folder,
-which the Curation tab opens.
+which the Curate button opens in the curation window (``mbo curate``, its
+own process).
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
 )
 from mbo_utilities.install import VNOISER_HINT
 from mbo_utilities.arrays.mesc import ROI_LAYOUTS
-from mbo_utilities.arrays.pf import PfArray
+from mbo_utilities.arrays.pf import PfArray, pf_results_in
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
@@ -99,8 +100,9 @@ class VoltagePipelineWidget(PipelineWidget):
     name = "Voltage"
     is_available = HAS_VNOISER
     install_command = VNOISER_HINT
-    # frames are a window, every line is needed for the domains, one channel is averaged
-    axes_consumed = {"T": "range", "Z": "all", "C": "select-one"}
+    # frames are a window; Z is the unit's ROI index (mesc_z_axis_meaning "roi_index"), so the
+    # Z range picks which ROIs are read and cuts the domains down to them; one channel is averaged
+    axes_consumed = {"T": "range", "Z": "range", "C": "select-one"}
 
     @classmethod
     def applies_to(cls, arr: Any) -> bool:
@@ -271,6 +273,18 @@ class VoltagePipelineWidget(PipelineWidget):
             raise ValueError("The frame selection must be one contiguous window; the z-score and baselines use the whole trace.")
         return int(idx[0]), int(idx[-1]) + 1
 
+    def _planes(self) -> list[int] | None:
+        """1-based ROIs of the slice popup's ROI row (the unit's Z axis); None means every ROI; raises on a bad entry."""
+        from mbo_utilities.gui._selection_ui import _parse_z_selection
+
+        _, n_lines, _ = self._dims()
+        text = str(getattr(self, "_voltage_z_selection", "") or f"1:{n_lines}")
+        start, stop, step, error = _parse_z_selection(text, n_lines)
+        if error:
+            raise ValueError(f"ROIs: {error}")
+        planes = list(range(int(start), int(stop) + 1, int(step)))
+        return None if planes == list(range(1, n_lines + 1)) else planes
+
     def _channel(self) -> int:
         text = str(getattr(self, "_voltage_c_selection", "1")).split(":")[0].strip()
         return max(int(text) - 1, 0) if text.isdigit() else 0
@@ -337,7 +351,7 @@ class VoltagePipelineWidget(PipelineWidget):
                 set_last_dir("voltage_outdir", result)
             self._outdir_dialog = None
         imgui.text_colored(_SUBSECTION_COLOR, "Output folder (PF)")
-        set_tooltip("The PF folder the Curation tab opens: <animal>/<expt>/PF for the archive layout, else PF beside the file.")
+        set_tooltip("The PF folder the curation window opens: <animal>/<expt>/PF for the archive layout, else PF beside the file.")
         btn_w = hello_imgui.em_size(6)
         imgui.set_next_item_width(max(imgui.get_content_region_avail().x - btn_w - imgui.get_style().item_spacing.x, hello_imgui.em_size(6)))
         _, self._outdir = imgui.input_text("##voltage_outdir", self._outdir)
@@ -352,12 +366,15 @@ class VoltagePipelineWidget(PipelineWidget):
         max_frames, n_lines, num_channels = self._dims()
         if imgui.button("Set slice##voltage_slice", imgui.ImVec2(hello_imgui.em_size(6), 0)):
             self._show_slice_popup = True
-        set_tooltip("Frame window and channel. Every ROI is used; the domain table decides how they group.", show_mark=False)
+        set_tooltip("Frame window, ROIs and channel. The ROI row is this unit's Z axis: only the chosen ROIs "
+                    "are read and every domain is cut down to them.", show_mark=False)
         imgui.same_line()
         try:
             window = self._frame_window()
+            planes = self._planes()
             n_frames = max_frames if window is None else window[1] - window[0]
-            imgui.text_colored(_DIM_COLOR, f"{n_frames} frames · {n_lines} ROIs · ch {self._channel() + 1}")
+            n_rois = n_lines if planes is None else len(planes)
+            imgui.text_colored(_DIM_COLOR, f"{n_frames} frames · {n_rois}/{n_lines} ROIs · ch {self._channel() + 1}")
         except ValueError as e:
             imgui.text_colored(_MISSING_COLOR, str(e))
         if self._show_slice_popup:
@@ -576,11 +593,27 @@ class VoltagePipelineWidget(PipelineWidget):
                 imgui.spacing()
                 imgui.separator()
                 imgui.text_colored(_SUBSECTION_COLOR, "Runtime")
+                from mbo_utilities.vnoiser.params import OUTPUT_FORMATS
+
                 rt = self.settings.runtime
                 self._f_check(rt, "convert", "Apply the file's conversion offset",
                               "Zero then means no photons. Off reproduces the archive, which worked on raw counts.")
                 self._f_check(rt, "save_cwt", "Save cwts.h5", "The wavelet coefficients, about 20 bytes per sample per domain.")
                 self._f_check(rt, "overwrite", "Overwrite PF", "Replace an existing PF folder's pipeline files; .curation stays.")
+                pushed = self._mod_push(rt, "output_format")
+                imgui.set_next_item_width(hello_imgui.em_size(6))
+                current = OUTPUT_FORMATS.index(rt.output_format) if rt.output_format in OUTPUT_FORMATS else 0
+                changed, chosen = imgui.combo("##voltage_output_format", current, list(OUTPUT_FORMATS))
+                if pushed:
+                    imgui.pop_style_color()
+                if changed:
+                    rt.output_format = OUTPUT_FORMATS[chosen]
+                self._row_tail(
+                    rt, "output_format", "Output format",
+                    "pkl: the archive's PF pickles. zarr: one "
+                    "<date>_<tags>.zarr results file (the shape every pipeline's results share) and no "
+                    "pickles; the traces folder, test.h5 and pipeline.json are written either way.",
+                )
                 imgui.spacing()
                 imgui.separator()
                 btn_w = hello_imgui.em_size(6)
@@ -672,7 +705,7 @@ class VoltagePipelineWidget(PipelineWidget):
 
     def _draw_event_params(self) -> None:
         ev = self.settings.events
-        self._f_check(ev, "detect", "Detect peaks", "Write detected_events_peaks.pkl; the Curation tab does not need it.")
+        self._f_check(ev, "detect", "Detect peaks", "Write detected_events_peaks.pkl; the curation window does not need it.")
         if not ev.detect:
             imgui.begin_disabled()
         try:
@@ -724,9 +757,13 @@ class VoltagePipelineWidget(PipelineWidget):
         domains = self._domains()
         try:
             window = self._frame_window()
+            planes = self._planes()
             window_error = ""
         except ValueError as e:
-            window, window_error = None, str(e)
+            window, planes, window_error = None, None, str(e)
+        # what the runner will keep: every domain cut down to the chosen ROIs
+        chosen = None if planes is None else {p - 1 for p in planes}
+        kept = {n: [r for r in rs if chosen is None or r in chosen] for n, rs in domains.items()}
         reason = ""
         if mesc is None:
             reason = "Load a .mesc with AOD ROI units first."
@@ -740,6 +777,8 @@ class VoltagePipelineWidget(PipelineWidget):
             reason = self._domain_error
         elif window_error:
             reason = window_error
+        elif not any(kept.values()):
+            reason = "No domain has an ROI in the ROI selection."
         ready = not reason
         run_w = hello_imgui.em_size(14)
         imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.13, 0.55, 0.13, 1.0))
@@ -759,14 +798,29 @@ class VoltagePipelineWidget(PipelineWidget):
         if self._last_status:
             imgui.text_colored(self._status_color, self._last_status)
         if clicked and ready:
-            self._submit(mesc, scans, domains, window)
+            self._submit(mesc, scans, domains, window, planes)
         pf_done = bool(self._outdir) and (Path(self._outdir) / "denoised_trace_scans.pkl").exists()
-        if pf_done and imgui.button("Open in Curation##voltage_open_curation", imgui.ImVec2(hello_imgui.em_size(11), 0)):
-            self._open_curation()
-        if pf_done and imgui.is_item_hovered():
-            imgui.set_tooltip("Load this PF folder in the Curation tab.")
+        results = pf_results_in(self._outdir) if self._outdir and not pf_done else None
+        if results is not None:
+            imgui.text_disabled(f"Results: {results.name}")
+            if imgui.button("Load into Traces##voltage_load_traces", imgui.ImVec2(hello_imgui.em_size(11), 0)):
+                self._load_traces(results)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("Load every scan's denoised and line traces into the Traces tab (Manual ROI Labeling).")
+        if mesc is None:
+            return
+        # the curation window on the folder once it is written (pickles or
+        # zarr), else on the file itself (every line raw, denoised when clicked)
+        written = pf_done or results is not None
+        if imgui.button("Curate##voltage_curate", imgui.ImVec2(hello_imgui.em_size(11), 0)):
+            self._curate(self._outdir if written else str(mesc))
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                f"Open {'this PF folder' if written else mesc.name + ', its lines raw for the denoiser,'} "
+                "in the curation window: its own window, what `mbo curate` opens."
+            )
 
-    def _submit(self, mesc: Path, scans: list[str], domains: dict, window) -> None:
+    def _submit(self, mesc: Path, scans: list[str], domains: dict, window, planes=None) -> None:
         from mbo_utilities.gui.widgets.process_manager import get_process_manager
 
         first_env = [k.rsplit("_", 1)[-1] for k in scans if self._first_env.get(k)]
@@ -779,10 +833,12 @@ class VoltagePipelineWidget(PipelineWidget):
             "domains": domains,
             "channel": self._channel(),
             "frames": None if window is None else [window[0], window[1]],
+            "planes": planes,
             "settings": self.settings.to_dict(),
             "custom_metadata": dict(getattr(self.parent, "_custom_metadata", {}) or {}),
         }
-        description = f"Voltage: {len(scans)} scan(s), {len(domains)} domain(s)"
+        rois = "" if planes is None else f", {len(planes)} ROI(s)"
+        description = f"Voltage: {len(scans)} scan(s), {len(domains)} domain(s){rois}"
         pid = get_process_manager().spawn(
             task_type="voltage", args=args, description=description, output_path=self._outdir,
         )
@@ -791,23 +847,29 @@ class VoltagePipelineWidget(PipelineWidget):
         else:
             self._set_status("Failed to start the worker.", error=True)
 
-    def _open_curation(self) -> None:
-        sync = getattr(self.parent, "sync_event_curation", None)
+    def _load_traces(self, results: Path) -> None:
+        """Switch Manual ROI Labeling on and load a results file into its Traces tab."""
+        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
+
+        sync = getattr(self.parent, "sync_manual_roi", None)
         if sync is not None:
+            set_widget_enabled("manual_roi", True)
             sync(True)
-        widget = getattr(self.parent, "event_curation", None)
+        widget = getattr(self.parent, "manual_roi", None)
         if widget is None:
-            self._set_status("Event Curation is off; enable it in the Widgets menu.", error=True)
+            self._set_status("Manual ROI Labeling is unavailable for this view.", error=True)
             return
-        # a scope left from the raw unit would hide every scan of the new folder
-        widget.scope = None
-        widget.scan(self._outdir)
-        # the unit on screen first, when it is one of the scans
-        munit = str(getattr(self._array(), "unit_key", "") or "").rsplit("_", 1)[-1]
-        first = next((r for r in widget.shown if f"scan={munit}" in r.rid.split("/") and r.pre_denoised), None)
-        if first is not None and first.rid != widget.current:
-            widget.load(first.rid)
-        widget.focus_tab = True
+        if widget.load_run(results):
+            self._set_status(f"Loaded {results.name} into the Traces tab.")
+        else:
+            self._set_status(widget._run_error or f"Could not load {results.name}.", error=True)
+
+    def _curate(self, path: str) -> None:
+        # the window module brings hello_imgui and fastplotlib's edge windows
+        from mbo_utilities.gui.curation_viewer import launch_curation_window
+
+        pid = launch_curation_window(path, channel=self._channel())
+        self._set_status(f"Curation window opened on {Path(path).name} (PID {pid}).")
 
     def cleanup(self) -> None:
         self._outdir_dialog = None
