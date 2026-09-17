@@ -20,6 +20,7 @@ __all__ = [
     "line",
     "line_plot",
     "packed_colors",
+    "subplots",
     "vec4",
     "vlines",
 ]
@@ -108,6 +109,32 @@ def line_plot(
         yield True
     finally:
         implot.end_plot()
+
+
+@contextmanager
+def subplots(
+    plot_id: str,
+    rows: int,
+    cols: int,
+    height: float = -1.0,
+    width: float = -1.0,
+    flags: int = 0,
+    ratios=None,
+):
+    """``begin_subplots`` / ``end_subplots``; yields whether they are drawn.
+    The plots opened inside fill the cells in order, their plot areas
+    aligned across rows; ``SubplotFlags_.link_all_x`` shares one time axis.
+    ``ratios`` is an ``implot.SubplotsRowColRatios`` the host keeps, so a
+    dragged splitter stays where it was left."""
+    if implot.get_current_context() is None:
+        implot.create_context()
+    if not implot.begin_subplots(plot_id, int(rows), int(cols), imgui.ImVec2(width, height), flags, ratios):
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        implot.end_subplots()
 
 
 def _spec(color, alpha, weight, legend) -> implot.Spec:

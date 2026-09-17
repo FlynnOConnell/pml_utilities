@@ -275,7 +275,7 @@ def zstack_candidates(
     if not lines:
         return []
     stack_path = mesc_path if zstack_path is None else zstack_path
-    lengths = [float(np.hypot(*(seg[:2, 1] - seg[:2, 0]))) for seg in lines]
+    lengths = [float(np.hypot(*(seg[:2, -1] - seg[:2, 0]))) for seg in lines]
     max_um_per_px = float(np.median(lengths)) / max(min_px_per_line, 1)
     units = units if units is not None else list_mesc_units(stack_path)
     out = []

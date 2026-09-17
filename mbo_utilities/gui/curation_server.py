@@ -168,7 +168,7 @@ def _size(text: str) -> tuple[int, int]:
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("path", nargs="?", type=Path,
-                    help="Data / animal / experiment / PF folder, a .mat, or a line-scan .mesc "
+                    help="a PF folder (or the experiment folder holding it), or a line-scan .mesc "
                          "(default: the last data path)")
     ap.add_argument("--host", default=DEFAULT_HOST,
                     help=f"interface to listen on (default {DEFAULT_HOST}; 0.0.0.0 for the network)")

@@ -1,18 +1,23 @@
-"""Event curation of voltage traces with vnoiser, inside the viewer.
+"""Event curation of voltage traces with vnoiser.
 
-The curation notebook's dashboard as one viewer panel, over every recording
-a data path holds. Scanning a path catalogs each animal, experiment and
-scan / domain the pipeline processed and loads them in the background. The
-``Curation`` panel on the top strip shows one recording at a time in the
-notebook's grid: the trace with its candidates (A) beside the threshold /
-slider card (A1 to A4), then the template, focused candidate and PCA (B to
-D) under it; the arrows flip through recordings. The Curation tab on the
-right bar holds the Decision and Recordings tabs (labels, navigation, the
-table, the mode). Every plot reads the focused session, so a
-label, a threshold or a flip updates all of them at once. Every rule comes from
-``vnoiser.curation`` through :class:`mbo_utilities.vnoiser.CurationSession`:
-one per mode and recording, each with its own JSON file, as the notebook's
-sections have.
+The curation notebook's dashboard as one panel, over every recording a
+``PF`` folder holds. Scanning a path finds the folder (the folder itself,
+its traces file, the experiment folder holding it, or a line scan with one
+beside it), lists every scan / domain trace the voltage pipeline wrote and
+loads them in the background; a line scan without a folder lists its raw
+ROIs for the denoiser instead. The ``Curation`` panel shows one recording
+at a time in the notebook's grid: the
+trace with its candidates (A) beside the threshold / slider card (A1 to A4),
+then the template, focused candidate and PCA (B to D) under it; the arrows
+flip through recordings. When the scan ran with real-time motion correction,
+its RTMC traces sit over the trace on the same time axis. The Decision and
+Recordings tabs (labels, navigation, the table, the mode) are the column
+beside the dashboard in the curation window (``gui/curation_viewer.py``,
+``mbo curate``) and the card under the ROI table in the line-scan viewer.
+Every plot reads the focused session, so a label, a threshold or a flip
+updates all of them at once. Every rule comes from ``vnoiser.curation``
+through :class:`mbo_utilities.vnoiser.CurationSession`: one per mode and
+recording, each with its own JSON file, as the notebook's sections have.
 """
 
 from __future__ import annotations
@@ -22,7 +27,6 @@ from functools import partial
 import queue
 import threading
 import time
-from types import SimpleNamespace
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,18 +34,20 @@ from typing import Any
 import numpy as np
 from imgui_bundle import imgui, imgui_ctx, implot, portable_file_dialogs as pfd
 
+from mbo_utilities.arrays.mesc import unit_rtmc
+from mbo_utilities.arrays.pf import TRACES_FILE, PfArray, pf_dir_of
 from mbo_utilities.gui import _theme as theme
 from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui._theme import card, em, section
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
 from mbo_utilities.gui.imgui.lines import (
-    decimate_minmax, dotted_vline, drag_hline, drag_vline, line, line_plot, vec4, vlines,
+    decimate_minmax, dotted_vline, drag_hline, drag_vline, line, line_plot, subplots, vec4, vlines,
 )
 from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
+from mbo_utilities.gui.imgui.rtmc import RtmcPlot
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
-from mbo_utilities.install import VNOISER_HINT
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.vnoiser import MODES, CurationSession, pf_dir_for_mesc
 
@@ -49,16 +55,16 @@ __all__ = [
     "KEYBINDS",
     "EventCurationWidget",
     "Recording",
-    "attach_curation_widget",
-    "detach_curation_widget",
-    "help_markdown",
 ]
 
 # the dashboard is two rows: the trace row (A with its cards) over the
-# candidate row (B to D); the strip asks for their sum
+# candidate row (B to D); the strip asks for their sum, and for RTMC_HEIGHT
+# more while the motion plot sits over the trace, in RTMC_SHARE of its cell
 TIMELINE_HEIGHT = 260
 CANDIDATE_HEIGHT = 210
 PANEL_HEIGHT = TIMELINE_HEIGHT + CANDIDATE_HEIGHT
+RTMC_HEIGHT = 120
+RTMC_SHARE = 0.35
 # the slider card beside the trace: one column per rule (A1 threshold, A2
 # amplitude, A3 PC1, A4 cosine), each a vertical slider with its range
 # above and below and a short name and count under it
@@ -109,47 +115,6 @@ _MODE_TITLES = {
     "slow": "slow (<{cutoff:g} Hz) candidates",
     "manual": "manual candidates",
 }
-
-
-def help_markdown() -> str:
-    return (
-        "## Event Curation\n\n"
-        "vnoiser's curation notebook inside the viewer, over every recording "
-        "at once. Pick a data path (a `Data` folder, an animal or experiment "
-        "folder, a `PF` folder, a raw `.mat` recording, or a line-scan `.mesc` "
-        "with a PF folder beside it): every scan / domain the pipeline "
-        "processed is listed and loaded.\n\n"
-        "### Modes\n\n"
-        "- **fast**: thresholds the denoised trace; the template is seeded "
-        "from the top 25% highest-amplitude candidates.\n"
-        "- **slow**: thresholds a zero-phase low-pass view of the denoised "
-        "trace (blue); the template is seeded the same way.\n"
-        "- **manual**: no seed template; only Yes events shape it.\n\n"
-        "### Panels\n\n"
-        "- **Curation** (top): the notebook's dashboard for one recording at "
-        "a time; the arrows (or up / down) flip through them. Top row: the "
-        "trace with its candidates (drag the red line to change the candidate "
-        "threshold, the teal line or the A2 slider to set the auto-pass "
-        "amplitude) beside the slider card. A3 is the purple line on the PCA (drag it, or its slider): "
-        "every candidate on its passing side auto-passes; the arrow button "
-        "under the slider picks the side. A4 is the seed-template cosine at "
-        "or above which a candidate auto-passes; below it auto-rejects, so "
-        "A4 at the bottom rejects nothing. Bottom row: the "
-        "current template, the focused candidate against it, and the candidate "
-        "PCA over 400 ms windows. Click a point to focus it. **Box accept** / **Box "
-        "reject** start a box mode: right-drag a box on the trace or the PCA, "
-        "drag its edges or corners to adjust (the candidates inside are "
-        "ringed and counted), then **Apply** or enter labels them all; esc "
-        "leaves the mode. Manual labels (boxed ones too) always win over the "
-        "A2 / A3 / A4 rules; **Clear all** drops them so the rules apply "
-        "again. Drag the strip's grab bar to give the rows more "
-        "height; the `keybinds` button lists the keys.\n"
-        "- **Curation** tab (right): **Decision** (Yes / No / Clear, the box "
-        "modes, the focused event, navigation, the view filter, files) and "
-        "**Recordings** (mode, data path, the table).\n\n"
-        "Each mode saves to its own `PF/.curation/<mode>_template_curation.json`; "
-        "reopening the same scan / domain restores it."
-    )
 
 
 def _mode_title(mode: str, cutoff: float) -> str:
@@ -223,46 +188,32 @@ def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[di
     return out
 
 
-def curation_source(arr) -> str:
-    """What a viewer's array brings to the curation: "pf" for a PF folder
-    (:class:`~mbo_utilities.arrays.pf.PfArray`) or an AOD ROI unit whose
-    experiment has one, "raw" for an AOD ROI unit without, "" otherwise."""
-    from mbo_utilities.arrays.mesc import ROI_LAYOUTS
-    from mbo_utilities.arrays.pf import PfArray
-    from mbo_utilities.lazy_array import base_array
-
-    arr = base_array(arr)
-    if isinstance(arr, PfArray):
-        return "pf"
-    md = getattr(arr, "metadata", None) or {}
-    files = getattr(arr, "filenames", None) or []
-    if md.get("mesc_layout") not in ROI_LAYOUTS or not files:
-        return ""
-    return "pf" if pf_dir_for_mesc(files[0]) is not None else "raw"
-
-
 @dataclass
 class Recording:
-    """One curatable recording: what a session opens and which id loads it."""
+    """One curatable recording: a scan / domain trace of a PF folder
+    (``source`` is the folder, ``scan`` and ``domain`` say which) or a raw
+    trace handed over in memory (``source`` is the file it came from)."""
 
     rid: str
     label: str
-    experiment: str
     source: str
     pre_denoised: bool
     # why the last load failed (the pipeline never wrote this scan / domain)
     error: str = ""
+    scan: str = ""
+    domain: str = ""
 
 
 class EventCurationWidget:
-    """The curation panels and tab on a ``PreviewDataWidget``-like parent.
+    """The curation panel and its controls on a host with a figure.
 
     Parameters
     ----------
     parent
         Anything with ``image_widget`` (a figure) and a ``logger``.
     strip : TopStrip, optional
-        The figure's shared top strip; a private one is built without.
+        The host's top strip (or a ``PanelHost`` standing in for one); a
+        private one is built without.
     data_path : str, optional
         Path to scan at once; None reopens the last one, "" none.
     """
@@ -274,17 +225,24 @@ class EventCurationWidget:
         self._own_strip = strip is None
         self.strip = TopStrip(self.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
-        self.strip.register(
-            TopPanel("curation", "Curation", self.draw_panel, PANEL_HEIGHT, "curation", 12)
-        )
+        self.panel = TopPanel("curation", "Curation", self.draw_panel, PANEL_HEIGHT, None, 12)
+        self.strip.register(self.panel)
 
         self.mode = "fast"
         self.slow_cutoff_hz = 40.0
         self.catalog: list[Recording] = []
         self.sessions: dict[tuple[str, str], CurationSession] = {}
         self.current = ""
+        # the PF folder the catalog lists, its traces read once for every load
+        self._pf: PfArray | None = None
         # traces handed over in memory (line-scan ROIs), by recording id
         self._trace_sources: dict[str, dict] = {}
+        # the RTMC traces of each scan, by (mesc path, unit), read on the
+        # worker with the scan's first recording; which scan a recording is of
+        self.rtmc: dict[tuple[str, str], RtmcPlot] = {}
+        self._scan_keys: dict[str, tuple[str, str] | None] = {}
+        self._rtmc_ratios = implot.SubplotsRowColRatios(row_ratios=[RTMC_SHARE, 1.0 - RTMC_SHARE])
+        self._motion_shown = False
         # called with the focused candidate's time (s) whenever it changes
         self.on_focus = None
         self._last_focus = None
@@ -299,10 +257,10 @@ class EventCurationWidget:
             "Curation data",
             path="",
             action="scan",
-            hint="vnoiser Data folder, an animal, experiment or PF folder, a .mat, or a line-scan .mesc",
+            hint="a PF folder (or the experiment folder holding it), or a line-scan .mesc",
         )
         self._folder_dialog = None
-        self.status = "Set a data path: every recording under it is listed and loaded."
+        self.status = "Set a data path: every scan / domain of the PF folder is listed and loaded."
 
         self._busy: set[tuple[str, str]] = set()
         self._jobs: queue.Queue = queue.Queue()
@@ -330,7 +288,6 @@ class EventCurationWidget:
         self._slider_pending: dict[str, float] = {}
 
         self._hovered = False
-        self.focus_tab = False
         self._closed = False
 
         if data_path is None:
@@ -386,14 +343,6 @@ class EventCurationWidget:
     def recording(self, rid: str) -> Recording | None:
         return next((r for r in self.catalog if r.rid == rid), None)
 
-    @property
-    def experiments(self) -> list[str]:
-        seen: list[str] = []
-        for rec in self.catalog:
-            if rec.experiment not in seen:
-                seen.append(rec.experiment)
-        return seen
-
     def loaded(self, mode: str | None = None) -> list[tuple[Recording, CurationSession]]:
         """Every loaded recording of ``mode`` (the current one), catalog order."""
         mode = mode or self.mode
@@ -405,55 +354,56 @@ class EventCurationWidget:
         return out
 
     def scan(self, path) -> None:
-        """Catalog every recording under a path and start loading them."""
+        """Catalog every scan / domain trace of a PF folder and start loading
+        them. ``path`` is the folder, its traces file, the experiment folder
+        holding it, or a line scan with one beside it."""
         self.sessions.clear()
         self._trace_sources.clear()
         self.catalog = []
         self.current = ""
+        self._pf = None
         path = Path(path).expanduser()
         note = ""
         if path.suffix.lower() == ".mesc":
-            # the raw line scan; its processed traces sit in the experiment's
-            # PF folder, which is what the curation notebook reads
             pf = pf_dir_for_mesc(path)
             if pf is None:
                 self.data_path = ""
                 self.status = (
                     f"{path.name} is a raw line scan with no PF folder beside it. Open it "
-                    "with `mbo <file>.mesc` and curate its lines there, or point at a "
-                    "vnoiser Data / experiment / PF folder."
+                    "with `mbo curate <file>.mesc` and curate its lines there, or point at "
+                    "a PF folder."
                 )
                 return
             note = f" (PF folder of {path.name})"
             path = pf
-        self.data_path = str(path)
+        pf_dir = pf_dir_of(path)
+        if pf_dir is None:
+            self.data_path = ""
+            self.status = (
+                f"no PF folder at {path}: expected the folder the voltage pipeline wrote "
+                f"({TRACES_FILE} or a results zarr), the experiment folder holding it, or a "
+                "line scan with one beside it."
+            )
+            return
+        self.data_path = str(pf_dir)
         try:
-            self.catalog = _build_catalog(path, self.logger)
+            self._pf = PfArray(pf_dir, source=False)
         except Exception as error:
-            self.logger.warning("vnoiser cannot open %s", path, exc_info=True)
-            self.status = f"cannot open {path}: {error}"
+            self.logger.warning("cannot open %s", pf_dir, exc_info=True)
+            self.status = f"cannot open {pf_dir}: {error}"
             self.data_path = ""
             return
+        self.catalog = _build_catalog(self._pf)
         set_last_dir("vnoiser", self.data_path)
         self.prompt.path = self.data_path
         if not self.catalog:
-            self.status = (
-                f"no vnoiser data at {self.data_path}: expected a Data folder "
-                "(stan*/…_expt*/PF/denoised_trace_scans.pkl), an animal, experiment or "
-                "PF folder, or a .mat recording."
-            )
+            self.status = f"no scan / domain traces in {pf_dir}"
             return
-        n_pre = sum(r.pre_denoised for r in self.catalog)
-        self.status = (
-            f"{len(self.catalog)} recordings in {len(self.experiments)} experiment(s)"
-            f"{note}; {n_pre} processed"
-        )
-        # the first processed experiment loads on its own; raw .mat
-        # recordings take minutes each in the denoiser, so they wait for a click
-        first = next((r for r in self.shown if r.pre_denoised), None)
+        self.status = f"{len(self.catalog)} recordings ({len(self._pf.scan_ids)} scans) in {pf_dir}{note}"
+        first = next((r for r in self.shown), None)
         if first is not None:
             self.current = first.rid
-            self.load_all(first.experiment)
+            self.load_all()
 
     def set_mode(self, mode: str) -> None:
         if mode not in MODES or mode == self.mode:
@@ -464,7 +414,7 @@ class EventCurationWidget:
         if rec is not None:
             self.load(self.current)
             if rec.pre_denoised:
-                self.load_all(rec.experiment)
+                self.load_all()
 
     def set_slow_cutoff(self, cutoff_hz: float) -> None:
         cutoff_hz = float(cutoff_hz)
@@ -494,11 +444,10 @@ class EventCurationWidget:
             return
         self._enqueue(rec, self.mode)
 
-    def load_all(self, experiment: str | None = None) -> None:
-        """Load every processed recording of ``experiment`` (all when None)."""
+    def load_all(self) -> None:
+        """Load every shown recording that can load without a click: the
+        folder's traces and the raw traces handed over."""
         for rec in self.shown:
-            if experiment is not None and rec.experiment != experiment:
-                continue
             if not rec.pre_denoised and rec.rid not in self._trace_sources:
                 continue
             key = (self.mode, rec.rid)
@@ -517,7 +466,7 @@ class EventCurationWidget:
         rid = str(recording_id)
         rec = self.recording(rid)
         if rec is None:
-            rec = Recording(rid, str(label), Path(source_path).stem, source_path, False)
+            rec = Recording(rid, str(label), source_path, False)
             self.catalog.append(rec)
         self._trace_sources[rid] = {
             "trace": trace,
@@ -539,38 +488,30 @@ class EventCurationWidget:
         )
         self.load(rec.rid)
 
-    def open_array(self, arr) -> str:
-        """Point the curation at the array a viewer shows: every scan of a
-        PF folder (the folder itself, or the one beside an AOD ROI unit)
-        with the scan on screen selected first, or the raw ROIs of a file
-        without one scoped to that unit. Called again for another unit of
-        the same folder it only moves the selection.
-        Returns :func:`curation_source` of the array."""
-        from mbo_utilities.lazy_array import base_array
+    def scan_source(self, rec: Recording) -> tuple[str, str] | None:
+        """The ``(mesc path, unit)`` a recording's scan was read from: the
+        file a raw trace came from (its id is ``<stem>/<unit>/roi=<n>``), or
+        the PF folder's source line scan (named in its ``pipeline.json``, or
+        laid out beside it) and the scan's unit; None when no line scan is
+        reachable."""
+        source = self._trace_sources.get(rec.rid)
+        if source is not None:
+            path = Path(source["source_path"])
+            parts = rec.rid.split("/")
+            if path.suffix.lower() != ".mesc" or len(parts) < 3:
+                return None
+            return str(path), parts[1]
+        pf = self._pf
+        if not rec.pre_denoised or pf is None or pf.source_mesc is None:
+            return None
+        return str(pf.source_mesc), pf.source_units.get(rec.scan, f"MUnit_{rec.scan}")
 
-        arr = base_array(arr)
-        kind = curation_source(arr)
-        if kind == "pf":
-            pf_dir = getattr(arr, "pf_dir", None)
-            scan_id = getattr(arr, "scan", None)
-            if pf_dir is None:
-                pf_dir = pf_dir_for_mesc(arr.filenames[0])
-                scan_id = str(arr.unit_key).rsplit("_", 1)[-1]
-            self.scope = None
-            if self.data_path != str(pf_dir) or not self.catalog:
-                self.scan(pf_dir)
-            tag = f"scan={scan_id}"
-            first = next((r for r in self.shown if tag in r.rid.split("/") and r.pre_denoised), None)
-            if first is not None and first.rid != self.current:
-                self.load(first.rid)
-            elif first is None and self.catalog:
-                scans = sorted({part[5:] for r in self.catalog for part in r.rid.split("/") if part.startswith("scan=")})
-                self.status = f"scan {scan_id} is not in {pf_dir} (scans {', '.join(scans)}); showing them all"
-        elif kind == "raw":
-            self.scan_raw_mesc(arr.filenames[0])
-            munit = str(arr.unit_key).rsplit("/", 1)[-1]
-            self.scope = lambda rec: rec.rid.split("/")[1:2] == [munit]
-        return kind
+    @property
+    def rtmc_plot(self) -> RtmcPlot | None:
+        """The focused recording's motion-correction traces, once its scan
+        has been read and ran with RTMC; None otherwise."""
+        plot = self.rtmc.get(self._scan_keys.get(self.current))
+        return plot if plot else None
 
     def scan_raw_mesc(self, mesc_path, channel: int = 0) -> int:
         """Every ROI of every AOD ROI unit of a ``.mesc`` (line scans,
@@ -581,12 +522,9 @@ class EventCurationWidget:
         self._trace_sources.clear()
         self.catalog = []
         self.current = ""
+        self._pf = None
         n = 0
-        # per-unit loaders, so a viewer that already has a unit's traces
-        # (the Traces tab's background job) can hand them over
-        self.unit_traces = {}
         for unit in raw_linescan_traces(mesc_path, channel):
-            self.unit_traces[unit["munit"]] = unit["traces"]
             for i in range(unit["n_rois"]):
                 # read on the worker when the recording is clicked
                 self.add_trace(
@@ -609,6 +547,7 @@ class EventCurationWidget:
         key = (mode, rec.rid)
         self._busy.add(key)
         source = self._trace_sources.get(rec.rid)
+        pf = self._pf
         cutoff = self.slow_cutoff_hz
 
         def work():
@@ -620,7 +559,12 @@ class EventCurationWidget:
                     source["trace"] = source["trace"]()
                 message = session.load_trace(**source)
             else:
-                message = session.load(rec.rid)
+                message = session.load_pf(pf, rec.scan, rec.domain)
+            # the scan's RTMC traces, read once for all its recordings
+            scan_key = self.scan_source(rec)
+            self._scan_keys[rec.rid] = scan_key
+            if scan_key is not None and scan_key not in self.rtmc:
+                self.rtmc[scan_key] = RtmcPlot(unit_rtmc(*scan_key))
             return session, message
 
         self._jobs.put((key, rec.label, work))
@@ -827,36 +771,62 @@ class EventCurationWidget:
         """The Curation panel: the notebook's dashboard for one recording.
         The trace row (A with the threshold / auto-pass, Decision and
         Navigation cards) sits over the candidate row (B to D); the rows
-        share the height the strip gives in the ratio they asked for."""
+        share the height the strip gives in the ratio they asked for, the
+        trace row taking RTMC_HEIGHT more while the motion plot shows."""
         self._mark_hovered()
         self._draw_flip_row()
         session = self._ready()
         if session is None:
             imgui.text_disabled(self.status)
             return
+        rtmc = self.rtmc_plot
+        motion = rtmc is not None and rtmc.shown
+        if motion != self._motion_shown:
+            # in or out of the subplots the timeline is a new plot to implot
+            self._motion_shown = motion
+            self._fit_timeline = True
+            if rtmc is not None:
+                rtmc.refit()
+        timeline = TIMELINE_HEIGHT + (RTMC_HEIGHT if motion else 0)
+        self.panel.height = PANEL_HEIGHT + (RTMC_HEIGHT if motion else 0)
         avail = imgui.get_content_region_avail()
-        top = max(avail.y * TIMELINE_HEIGHT / PANEL_HEIGHT, em(6))
+        top = max(avail.y * timeline / self.panel.height, em(6))
         with imgui_ctx.begin_child("##curation_row_a", imgui.ImVec2(0, top)):
-            self._draw_timeline_row(session)
+            self._draw_timeline_row(session, rtmc)
         with imgui_ctx.begin_child("##curation_row_b", imgui.ImVec2(0, 0)):
             self._draw_candidate_row(session)
 
-    def _draw_timeline_row(self, session: CurationSession) -> None:
+    def _draw_timeline_row(self, session: CurationSession, rtmc: RtmcPlot | None) -> None:
         """A: the trace with its candidates, as wide as the row allows, and
-        the slider card (A1 to A4) beside it. Decision and Navigation live
-        in the controls column (``draw_tab``), not in this row."""
+        the slider card (A1 to A4) beside it. A scan that ran with RTMC gets
+        its motion plot over the trace, in linked subplots so the two share
+        one time axis and line up; its checkboxes sit on the title line.
+        Decision and Navigation live in the controls column (``draw_tab``),
+        not in this row."""
         kind = _mode_title(session.mode, self.slow_cutoff_hz)
         imgui.text_disabled(f"A. {kind}: {session.n} ({len(session.visible)} in view)")
         imgui.same_line(0, 12)
         if imgui.small_button("keybinds"):
             self.show_keybinds = not self.show_keybinds
         set_tooltip("k", show_mark=False)
+        if rtmc is not None:
+            imgui.same_line(0, em(1.2))
+            rtmc.draw_checkboxes("curation_rtmc")
         avail = imgui.get_content_region_avail()
         n_cols = 4 if session.seeded else 1
         card_w = em(SLIDER_COL_EM) * n_cols + em(SLIDER_GAP_EM) * (n_cols - 1) + em(SLIDER_CARD_PAD_EM)
         plot_w = max(avail.x - card_w - em(0.5), em(10))
         with imgui_ctx.begin_child("##curation_trace", imgui.ImVec2(plot_w, 0)):
-            self._draw_timeline(session)
+            if rtmc is None or not rtmc.shown:
+                self._draw_timeline(session)
+            else:
+                height = max(imgui.get_content_region_avail().y - 2, 60.0)
+                link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
+                with subplots("##curation_a", 2, 1, height, flags=link, ratios=self._rtmc_ratios) as ok:
+                    if ok:
+                        focus = float(session.times_s[session.current]) if session.n else None
+                        rtmc.draw("##curation_rtmc", cursor=focus, duration_s=float(session.t[-1]))
+                        self._draw_timeline(session)
         imgui.same_line(0, em(0.5))
         self._draw_slider_card(session, card_w, avail.y)
 
@@ -1261,9 +1231,7 @@ class EventCurationWidget:
     def draw_tab(self) -> None:
         """The controls column, two tabs: Decision (with the event, navigation,
         view filter and files under it) and Recordings (mode, source, the
-        table). It is the Curation tab on a figure's right bar, and the
-        column beside the dashboard in the standalone hosts."""
-        self.strip.report_right_tab("curation")
+        table): the column beside the dashboard in the curation window."""
         self._mark_hovered()
         self._draw_tabs(source=True)
 
@@ -1340,7 +1308,7 @@ class EventCurationWidget:
         imgui.same_line(0, em(0.6))
         if imgui.small_button("load all"):
             self.load_all(None)
-        set_tooltip("load every processed recording of every experiment", show_mark=False)
+        set_tooltip("load every scan / domain of the folder", show_mark=False)
         if self._busy:
             imgui.text_wrapped(self.loading_line())
         if self._trace_sources and not self._busy:
@@ -1352,9 +1320,9 @@ class EventCurationWidget:
             | imgui.TableFlags_.borders_inner_h
             | imgui.TableFlags_.sizing_fixed_fit
         )
-        if not imgui.begin_table("##curation_recordings", 4, flags):
+        if not imgui.begin_table("##curation_recordings", 3, flags):
             return
-        for name in ("experiment", "recording", "cand", "yes / no"):
+        for name in ("recording", "cand", "yes / no"):
             imgui.table_setup_column(name)
         imgui.table_headers_row()
         for rec in rows_shown:
@@ -1363,11 +1331,8 @@ class EventCurationWidget:
             ready = session is not None and session.loaded and key not in self._busy
             imgui.table_next_row()
             imgui.table_next_column()
-            imgui.text_disabled(rec.experiment)
-            imgui.table_next_column()
-            short = rec.label.rsplit(" / ", 2)[-2:] if " / " in rec.label else [rec.label]
             clicked, _ = imgui.selectable(
-                f"{' / '.join(short)}##rec{rec.rid}", rec.rid == self.current,
+                f"{rec.label}##rec{rec.rid}", rec.rid == self.current,
                 imgui.SelectableFlags_.span_all_columns,
             )
             if clicked:
@@ -1559,81 +1524,17 @@ class EventCurationWidget:
         return LABEL_RGBA.get(label, LABEL_RGBA["unlabeled"])
 
 
-def _build_catalog(root: Path, logger) -> list[Recording]:
-    """Every recording under ``root``: each experiment's scan / domain traces
-    for a spatial JEDI Data / animal / experiment / PF folder, else the raw
-    ``.mat`` recordings of a folder (or the one file)."""
-    from vnoiser.dataset import SpatialJediDataset, open_recording_dataset
-
-    if SpatialJediDataset.can_open(root):
-        dataset = SpatialJediDataset(root)
-        if dataset.requires_experiment_selection:
-            if dataset.scope == "data":
-                animals = [path for _, path in dataset.animal_options()]
-            else:
-                animals = [str(root)]
-            experiments = [
-                path for animal in animals for _, path in dataset.experiment_options(animal)
-            ]
-        else:
-            experiments = [str(dataset.fixed_experiment)]
-        catalog = []
-        for experiment in experiments:
-            try:
-                refs = dataset.select_experiment(experiment)
-            except Exception as error:
-                logger.warning("skipping %s: %s", experiment, error)
-                continue
-            catalog += [
-                Recording(ref.recording_id, ref.label, ref.experiment, str(ref.pf_dir), True)
-                for ref in refs
-            ]
-        return catalog
-    try:
-        dataset = open_recording_dataset(root)
-    except FileNotFoundError:
-        return []
+def _build_catalog(pf: PfArray) -> list[Recording]:
+    """Every scan / domain trace a PF folder holds, scans in the pipeline's
+    order and domains in the ROI table's; a scan without a sampling rate is
+    left out."""
     return [
-        Recording(value, label, root.name, str(root), False)
-        for label, value in dataset.recording_options()
-    ]
-
-
-def attach_curation_widget(parent: Any, focus: bool = False) -> EventCurationWidget | None:
-    """Turn the curation widget on for a ``PreviewDataWidget``. A PF folder
-    or a line scan on screen is opened in it (:meth:`EventCurationWidget.open_array`);
-    anything else reopens the last data path. Returns None (logged) when it
-    cannot be built."""
-    widget = getattr(parent, "event_curation", None)
-    if widget is not None:
-        widget.focus_tab = widget.focus_tab or focus
-        return widget
-    data = getattr(getattr(parent, "image_widget", None), "data", None)
-    arr = data[0] if data else None
-    kind = curation_source(arr) if arr is not None else ""
-    try:
-        widget = EventCurationWidget(
-            parent, strip=getattr(parent, "top_strip", None), data_path="" if kind else None,
+        Recording(
+            pf.recording_id(domain, scan), f"scan {scan} / {domain}", str(pf.pf_dir), True,
+            scan=scan, domain=domain,
         )
-    except Exception:
-        parent.logger.warning("event curation widget unavailable", exc_info=True)
-        parent.event_curation = None
-        return None
-    if kind:
-        widget.open_array(arr)
-    widget.focus_tab = focus
-    parent.event_curation = widget
-    return widget
-
-
-def detach_curation_widget(parent: Any) -> None:
-    """Turn the curation widget off; its sessions are dropped, the JSON stays."""
-    widget = getattr(parent, "event_curation", None)
-    if widget is None:
-        return
-    widget.close()
-    parent.event_curation = None
-
-
-def install_hint() -> str:
-    return f"vnoiser is not installed: {VNOISER_HINT}"
+        for scan in pf.scan_ids
+        if scan in pf.fs_by_scan
+        for domain in pf.domain_names
+        if domain in pf.traces.get(scan, {})
+    ]

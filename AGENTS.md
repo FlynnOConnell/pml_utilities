@@ -26,6 +26,7 @@ pml_utilities/
 │   │   └── isoview/          # IsoView light-sheet trees (four layouts, one class)
 │   ├── metadata/             # canonical vocabulary, alias resolution, OutputMetadata
 │   ├── pipeline_registry.py  # PipelineInfo + entry-point loading
+│   ├── results.py            # the results zarr every pipeline molds into (§7.5)
 │   ├── masknmf/  vnoiser/    # pipeline packages: params / runner / outputs / qc
 │   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
@@ -209,7 +210,11 @@ metadata placement are fixed:
 - Filenames come from `features/_dim_tags.OutputFilename`: tags in T, C, Z order,
   spatial dims omitted, `tp` zero-padded to 5, `zplane`/`ch` to 2, ranges as
   `start-stop[-step]`. The suite2p `.bin` layout is the one exception (`zplane` first,
-  to match `lbm_suite2p_python`).
+  to match `lbm_suite2p_python`). The same vocabulary (`TAG_REGISTRY` + `DIM_ALIASES`,
+  `session` is `S`) reads tags back out of a name with `filename_tags`
+  (`plane_03.bin` → `zplane03`, `mouse_V1_session1.tif` → `session01`; one-letter
+  labels and unknown words such as `stan112` are not tags); the results zarr is named
+  from them (§7.5). A new tag label goes in `TAG_REGISTRY`, never in a regex elsewhere.
 - Every writer computes its metadata through `OutputMetadata(source, source_shape,
   source_dims, selections)` so `dz`, `fs`, `num_zplanes`, `num_timepoints`, `Lx`,
   `Ly` follow the selection (§6.6). Never re-stamp those by hand.
@@ -419,6 +424,15 @@ mbo_utilities/<name>/
 - Provenance: settings and source metadata (after `strip_for_export`) are written next
   to the outputs (`pipeline.json`, `mbo_provenance` attr) and `processing_history`
   is appended.
+- Timing: the runner owns its step loop and closes every step (a plane, a scan's
+  read, a domain's denoising, each write) with one INFO line carrying wall time, CPU
+  time and process memory, one `processing_history` entry
+  (`add_processing_step`, `duration_seconds`) and a `timing` summary (totals per
+  step, per unit, peak memory) in the provenance; `timings.json` beside the outputs
+  holds the same with one flat row per step. The voltage runner
+  (`vnoiser/pipeline.py::_RunUsage`) is the model; suite2p's `plane_times` and
+  `hpc.write_timing_report` are the same record. Progress goes through
+  `progress_callback(fraction, message)`, never a heartbeat line.
 
 ### 7.2 Registration contract
 
@@ -474,6 +488,14 @@ was looking at:
 | `settings` | `Settings.to_dict()` |
 | `_uuid`, `_log_file` | injected by `ProcessManager.spawn`; read by `TaskMonitor` and `setup_logging` (§8.3) |
 
+The selection keys keep the 5D names whatever the axis means for the source; the
+runner translates through the array's metadata, never the widget. On a MESc AOD unit
+Z is the ROI index (`mesc_z_axis_meaning == "roi_index"`), so `planes` are the lines or
+patches to process: the voltage runner reads only those ROIs
+(`linescan_roi_read(rois=...)`), cuts every domain down to them, drops a domain left
+empty, and records `planes` in the provenance source block. The Voltage tab's slice
+popup labels the row "ROIs" but still sends `planes`.
+
 The worker does `arr = imread(input_path, **reader_kwargs)`, then
 `apply_read_features(arr, args)`, then calls the runner. Runners take a `LazyArray`
 or a path and the same 1-based selection kwargs; they never take GUI objects.
@@ -499,6 +521,73 @@ zeros for `Fneu`/`spks`). Anything pipeline-specific keeps its own name
 `hpc.toml` (`[io]`, `[slurm]`, `[pipeline]`, `[parameters]`); a second pipeline gets
 HPC support by exposing `run_volume(arr, save_path, **selection)` and a `pipeline`
 key in the config.
+
+### 7.5 The results zarr
+
+Native outputs differ per pipeline (§7.4's suite2p files, the voltage pipeline's `PF`
+pickles). `mbo_utilities/results.py` fixes the one shape they all mold into: a zarr
+v3 group, `<yyyy-mm-dd>_<tags>.zarr`, that a reader, a viewer or a notebook opens
+the same way whichever pipeline wrote it. It is the standard output format; a
+pipeline's native files stay its cache and its compatibility layer.
+
+```
+<yyyy-mm-dd>_<tags>.zarr/            zarr v3 group; attrs: mbo_results (schema version),
+                                     pipeline, created, tags, units, source, settings,
+                                     metadata (after strip_for_export), provenance
+  <unit>/                            one group per plane (zplane01) or scan (scan35)
+    attrs: kind, index, fs, n_rois, n_timepoints, roi_names, member_kind, image_shape,
+           + whatever the pipeline adds (scan_id, source_unit, plane_dir, ...)
+    traces/<kind>                    (n_rois, n_timepoints) float32; kinds: raw, neuropil,
+                                     dff, zscore, denoised, spikes (TRACE_KINDS)
+    rois/offsets  rois/member  rois/weight
+                                     ragged membership: ROI k is member[offsets[k]:offsets[k+1]];
+                                     pixels as flat y * X + x (member_kind "pixel") or line
+                                     indices ("line"); weight is suite2p's lam or 1.0
+    rois/iscell                      (n_rois, 2) float32
+    members/<kind>                   (n_members, n_timepoints) the members' own traces when
+                                     they have them (a line scan's lines)
+    events/frame  events/roi         detected events (peaks), sorted by ROI
+    images/<kind>                    (Y, X) float32; kinds: mean, max, corr, ref (IMAGE_KINDS)
+```
+
+- **Naming.** `results_name(source)` is today's date, then the tags the source
+  filename carries in the §5.6 vocabulary (`filename_tags`: `session01`, `zplane03`,
+  `tp00001-01574`; `session` is the `S` tag), then any `extra_tags`. A source with no
+  tags contributes its stem (`stan112_expt12.mesc` → `2026-09-16_stan112_expt12.zarr`)
+  so the file still says what it is. Unit groups are named by the same vocabulary
+  (`unit_name("plane", 1)` is `zplane01`; scans are `scan<id>`).
+- **Molding.** A pipeline builds one `ResultUnit` per plane or scan and calls
+  `write_results(path, units, pipeline=..., source=..., settings=..., metadata=...)`.
+  `results_from_suite2p(dir)` molds suite2p and MaskNMF folders (`F` → `raw`, `Fneu` →
+  `neuropil`, `spks` → `spikes`, `norm_traces` → `dff`, `stat` → pixel members,
+  `meanImg`/`max_proj`/`Vcorr`/`refImg` → images); `results_from_pf(dir)` molds the
+  voltage pipeline's `PF` folder (domains are the ROIs, their lines the members with
+  `members/raw`, `test.h5` gives `dff` and `zscore`, peaks are the events). Copy one of
+  them for a new pipeline; never invent a trace or image kind, add it to the registry.
+- **Writing.** The voltage pipeline writes it when `VoltageSettings.runtime.output_format`
+  is `"zarr"` (the Run tab's Output format, `mbo voltage --zarr`): the pickles are
+  deleted, `test.h5`, `traces/` and `pipeline.json` stay, and `PfArray` opens the folder
+  from the zarr (`pf_results_in`). `mbo results <dir>` converts an existing suite2p,
+  MaskNMF or PF folder. The curation window opens the folder through `PfArray`, so a
+  folder written as zarr curates like one written as pickles.
+- **Reading.** `read_results(path)` returns `Results` (`.units[name]` → `ResultUnit`,
+  every array in memory). `results_pipeline(path)` and `results_summary(path)` read
+  only `zarr.json` files and are what `can_open` and the run scanners use: `ZarrArray`
+  declines a results file, `PfArray` claims a voltage one. `imread` never returns a
+  results file as an image.
+- **Viewing.** The ROI widget's Traces tab takes a results file through the same door
+  as a run dir: `ManualRoiWidget.load_run(path)` (a file, or one unit as
+  `<file>.zarr/zplane01`) calls `load_results`. A pixel unit becomes a `RunResult`
+  (`roi_workflow.run_result_from_unit`) and loads as a derived set with its overlay,
+  exactly like `stat.npy` + `F.npy`; a line unit becomes an `external` `TraceSet` with
+  one row per ROI (its `denoised` trace, else `dff`, else `raw`) and one per member
+  line, each entry carrying its `label` and `fs`. `roi_runs.run_dir_complete` and
+  `scan_run_dirs` treat results files as run dirs, `roi_runs.json` restores them, a
+  finished `voltage` worker is adopted like a suite2p one, and the Voltage tab's
+  "Load into Traces" button does it on demand. A new pipeline that writes the results
+  zarr therefore reaches the Traces tab with no GUI code.
+
+Pinned by `tests/test_results.py`, `tests/test_voltage_pipeline.py`.
 
 ## 8. Logging and the Process Console
 

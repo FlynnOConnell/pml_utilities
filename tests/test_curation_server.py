@@ -32,8 +32,7 @@ def _keep_preferences(monkeypatch):
 
 @pytest.fixture
 def data_root(tmp_path):
-    _write_spatial_recording(tmp_path)
-    return tmp_path
+    return _write_spatial_recording(tmp_path)
 
 
 async def _get(app, path: str) -> tuple[int, bytes]:

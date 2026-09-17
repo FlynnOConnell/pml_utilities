@@ -949,10 +949,11 @@ def _run_gui_impl(
             fpl.loop.run()
             return None
         # a .mesc holding AOD ROI units (line scans, chessboard or ribbon
-        # patches) opens on the first one with no prompt: the curation widget
-        # and the Voltage pipeline follow the unit on screen and offer the
-        # other scans there. A PF or experiment
-        # folder opens as a PfArray through imread, like a suite2p folder.
+        # patches) opens on the first one with no prompt: the Voltage
+        # pipeline follows the unit on screen and offers the other scans
+        # there, and its Curate button opens the curation window. A PF or
+        # experiment folder opens as a PfArray through imread, like a suite2p
+        # folder.
         # Other .mesc files prompt for their unit once, here.
         if _is_mesc(data_in):
             if unit is None:
@@ -1068,7 +1069,7 @@ def _first_linescan_unit(path) -> str | None:
     """The key of the first AOD ROI unit (a line scan, chessboard or ribbon
     scan: ``ROI_LAYOUTS``) in a ``.mesc``, or None. With a PF folder beside
     the file (the voltage pipeline's output) the unit of its first scan wins,
-    so the curation opens on a processed scan."""
+    so the viewer opens on a processed scan."""
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
     from mbo_utilities.arrays.pf import TRACES_FILE, PfArray
 
@@ -1576,7 +1577,7 @@ def run_gui(
 
     A masknmf demixing result opens in masknmf's own viewer instead:
     ``vis`` picks ``demixing`` (default), ``compression`` or
-    ``classification``; a bar on the viewer switches between them.
+    ``classification`` before launch; the viewer window is masknmf's as is.
 
     The one-call form of ``DataVis``: it builds the viewer, picks the canvas
     and size for wherever it is running, and shows it. In a terminal or

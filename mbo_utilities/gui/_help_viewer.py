@@ -28,7 +28,6 @@ DOCS = [
 # not a file: the ROI tool writes its own guide, so it stays next to the
 # code it documents instead of drifting in a shipped markdown file
 ROI_DOC = "::roi::"
-CURATION_DOC = "::curation::"
 
 
 def docs_for(parent: Any) -> list[tuple[str, str]]:
@@ -37,8 +36,6 @@ def docs_for(parent: Any) -> list[tuple[str, str]]:
     docs = list(DOCS)
     if getattr(parent, "manual_roi", None) is not None:
         docs.append(("ROI Labeling", ROI_DOC))
-    if getattr(parent, "event_curation", None) is not None:
-        docs.append(("Event Curation", CURATION_DOC))
     return docs
 
 
@@ -51,10 +48,6 @@ def load_doc(filename: str) -> str:
     """load markdown doc from assets, with caching."""
     if filename == ROI_DOC:
         from mbo_utilities.gui.manual_roi import help_markdown
-
-        return help_markdown()
-    if filename == CURATION_DOC:
-        from mbo_utilities.gui.event_curation import help_markdown
 
         return help_markdown()
     if filename not in _doc_cache:

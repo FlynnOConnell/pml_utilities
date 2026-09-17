@@ -5,6 +5,8 @@ folder) and skip without it; the end-to-end one is marked slow (about 15
 minutes: eight wavelet transforms of a 120 s scan)."""
 
 import json
+import os
+from logging.handlers import BufferingHandler
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +37,13 @@ ARCHIVE = next(
 )
 archive = pytest.mark.skipif(ARCHIVE is None, reason="archive experiment not reachable")
 MESC = ARCHIVE / "stan112_expt12" / "stan112_expt12.mesc" if ARCHIVE else None
+
+
+class _Progress(list):
+    """Records the runner's ``progress_callback(fraction, message)`` calls."""
+
+    def __call__(self, fraction, message):
+        self.append((float(fraction), str(message)))
 
 
 def test_read_domains_json(tmp_path):
@@ -203,6 +212,179 @@ def test_the_viewer_opens_a_mesc_on_a_scan_its_pf_folder_holds(tmp_path):
     assert _first_linescan_unit(mesc) == "MSession_0/MUnit_2"
 
 
+def test_planes_pick_the_rois_and_cut_the_domains(tmp_path):
+    """The input contract's 1-based ``planes`` are ROIs on an AOD unit (its Z axis): only they are
+    read, every domain is cut down to them, an emptied domain is dropped."""
+    from vnoiser import read_pf
+
+    from mbo_utilities.roi_workflow import linescan_roi_read
+    from mbo_utilities.arrays.mesc import MescArray
+
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc)
+    arr = MescArray(mesc, unit="MUnit_1")
+    assert arr.metadata["mesc_z_axis_meaning"] == "roi_index"
+    full, _ = linescan_roi_read(arr, convert=False, dtype=np.float64)
+    part, _ = linescan_roi_read(arr, convert=False, dtype=np.float64, rois=[2, 0])
+    assert part.shape == (2, 1200) and np.array_equal(part, full[[2, 0]])
+    with pytest.raises(ValueError, match="outside"):
+        linescan_roi_read(arr, rois=[3])
+    scan = scan_traces_from_mesc(mesc, "MUnit_1", rois=[0, 2])
+    assert sorted(scan.traces) == [0, 2] and sorted(scan.weights) == [0, 2]
+    assert np.array_equal(scan.traces[2], full[2])
+    domains = {"roi0": [0], "roi1": [1], "roi2": [2], "pair": [1, 2]}
+    with pytest.raises(ValueError, match="outside 1..3"):
+        run_voltage_pipeline(mesc, domains=domains, units=["MUnit_1"], planes=[4], out=tmp_path / "PF_bad")
+    with pytest.raises(ValueError, match="no domain"):
+        run_voltage_pipeline(mesc, domains={"roi1": [1]}, units=["MUnit_1"], planes=[1], out=tmp_path / "PF_none")
+    paths = run_voltage_pipeline(mesc, domains=domains, units=["MUnit_1"], planes=[3, 1], out=tmp_path / "PF")
+    files = read_pf(tmp_path / "PF")
+    kept = {k: v for k, v in files.domains.items() if k != "All_domains"}
+    assert kept == {"roi0": [0], "roi2": [2], "pair": [2]}
+    assert files.rois["roi_list"] == {"1": [0, 2]}
+    assert files.provenance["source"]["planes"] == [3, 1]
+    assert set(files.traces["1"]) == {"roi0", "roi2", "pair"}
+    assert np.load(tmp_path / "PF" / "traces" / "scan1_rois.npy").shape == (2, 1200)
+    assert (tmp_path / "PF" / "traces" / "domains.csv").read_text().splitlines() == [
+        "row,domain,rois", "0,roi0,0", "1,roi2,2", "2,pair,2",
+    ]
+    assert "traces/scan1_denoised.npy" in paths
+
+
+def test_zarr_output_replaces_the_pickles(tmp_path):
+    """``output_format="zarr"``: the PF folder holds one <date>_<tags>.zarr results file
+    (AGENTS.md §7.5) and no pickles; PfArray, imread and the mesc-to-PF lookups open it
+    the same way they open the pickles."""
+    from mbo_utilities import imread
+    from mbo_utilities.arrays.pf import PfArray, pf_results_in
+    from mbo_utilities.results import read_results, results_name
+    from mbo_utilities.vnoiser import pf_dir_for_mesc, pf_scan_for_mesc
+
+    mesc = tmp_path / "chess_session1.mesc"
+    _chessboard_mesc(mesc)
+    doc = json.loads(write_domains_template(mesc, tmp_path / DOMAINS_FILE).read_text())
+    settings = VoltageSettings()
+    settings.runtime.output_format = "zarr"
+    paths = run_voltage_pipeline(
+        mesc, domains=doc["domains"], units=["MUnit_1"], first_env=["1"], out=tmp_path / "PF",
+        settings=settings, provenance={"settings": settings.to_dict()},
+    )
+    pf_dir, traces = tmp_path / "PF", tmp_path / "PF" / "traces"
+    zarr_name = results_name(mesc)
+    assert zarr_name.endswith("_session01.zarr") and paths[zarr_name] == pf_dir / zarr_name
+    assert not any(p.suffix == ".pkl" for p in pf_dir.iterdir()) and not any(k.endswith(".pkl") for k in paths)
+    assert (pf_dir / "test.h5").is_file() and (pf_dir / "pipeline.json").is_file() and (traces / "scan1_denoised.npy").is_file()
+    results = read_results(paths[zarr_name])
+    assert results.pipeline == "voltage" and list(results.units) == ["scan1"] and results.tags == ["session01"]
+    assert results.settings["runtime"]["output_format"] == "zarr"
+    assert results.source["units"] == {"1": "MSession_0/MUnit_1"} and results.provenance["fs_hz"] == {"1": 200.0}
+    scan = results["scan1"]
+    assert scan.kind == "scan" and scan.index == 1 and scan.fs == pytest.approx(200.0)
+    assert scan.roi_names == ["roi0", "roi1", "roi2"] and scan.member_kind == "line"
+    assert [m.tolist() for m in scan.members] == [[0], [1], [2]] and scan.attrs["member_ids"] == [0, 1, 2]
+    assert scan.attrs["source_unit"] == "MSession_0/MUnit_1" and scan.attrs["first_env"] is True
+    np.testing.assert_allclose(scan.traces["denoised"], np.load(traces / "scan1_denoised.npy"), rtol=1e-6)
+    np.testing.assert_allclose(scan.traces["dff"], np.load(traces / "scan1_dfof.npy"), rtol=1e-6)
+    np.testing.assert_allclose(scan.traces["zscore"], np.load(traces / "scan1_zscore.npy"), rtol=1e-6)
+    np.testing.assert_allclose(scan.member_traces["raw"], np.load(traces / "scan1_rois.npy"), rtol=1e-6)
+    assert any(abs(int(p) - 300) <= 3 for p in scan.events["roi0"])
+    # the folder still opens as a PfArray, now from the zarr
+    assert pf_results_in(pf_dir) == paths[zarr_name]
+    pf = PfArray(pf_dir, source=False)
+    assert pf.results_path == paths[zarr_name] and pf.scan_ids == ["1"] and pf.first_env == ["1"]
+    assert pf.domains == {"roi0": [0], "roi1": [1], "roi2": [2]} and pf.fs_by_scan == {"1": pytest.approx(200.0)}
+    assert pf.domain_names == ["roi0", "roi1", "roi2"] and pf.roi_list == {"1": [0, 1, 2]}
+    np.testing.assert_allclose(pf.trace("roi0"), scan.traces["denoised"][0])
+    assert pf.events("roi0").tolist() == scan.events["roi0"].tolist() and pf.events("roi1").size <= 5
+    assert pf.settings == results.settings and pf.source_units == {"1": "MSession_0/MUnit_1"}
+    assert isinstance(imread(paths[zarr_name]), PfArray) and isinstance(imread(pf_dir), PfArray)
+    assert pf_dir_for_mesc(mesc) == pf_dir
+    assert pf_scan_for_mesc(mesc, "MSession_0/MUnit_1").domains == pf.domains
+    assert pf_scan_for_mesc(mesc, "MUnit_2") is None
+    # a rerun the same day replaces the file; the traces folder is rewritten too
+    again = run_voltage_pipeline(
+        mesc, domains=doc["domains"], units=["MUnit_1"], out=pf_dir, settings=settings, overwrite=True,
+    )
+    assert again[zarr_name] == paths[zarr_name] and list(read_results(again[zarr_name]).units) == ["scan1"]
+
+
+def test_every_step_is_timed_and_logged(tmp_path):
+    """Each ROI read, each scan's dF/F, each domain's denoising and each write is logged with its
+    time and memory; the same record lands in pipeline.json (``timing``, ``processing_history``),
+    in timings.json, in the results zarr's provenance and in PfArray.metadata; the progress
+    callback runs from the first ROI to 1.0 in order."""
+    from mbo_utilities import log
+    from mbo_utilities.arrays.pf import PfArray
+    from mbo_utilities.results import read_results
+    from mbo_utilities.vnoiser.pipeline import TIMINGS_FILE
+
+    mesc = tmp_path / "chess_session2.mesc"
+    _chessboard_mesc(mesc)
+    doc = json.loads(write_domains_template(mesc, tmp_path / DOMAINS_FILE).read_text())
+    settings = VoltageSettings()
+    settings.runtime.output_format = "zarr"
+    logger = log.get("tests.voltage")
+    records = BufferingHandler(10_000)
+    logger.addHandler(records)
+    progress = _Progress()
+    try:
+        paths = run_voltage_pipeline(
+            mesc, domains=doc["domains"], units=["MUnit_1"], out=tmp_path / "PF", settings=settings,
+            progress_callback=progress, logger=logger,
+        )
+    finally:
+        logger.removeHandler(records)
+    pf_dir = tmp_path / "PF"
+    messages = [r.getMessage() for r in records.buffer]
+    assert any(m.startswith("voltage: 1 scan(s) x 3 domain(s)") and "cpus" in m for m in messages)
+    assert any(m.startswith("scan 1: read ROI 3/3") for m in messages)
+    assert any(m.startswith("scan 1: read 3 ROIs x 1200 frames in ") and "(cpu " in m and " GB" in m for m in messages)
+    assert any(m.startswith("scan 1: dF/F and z-score of roi2 (3/3) in ") for m in messages)
+    assert any(m == "scan 1: denoising roi1 (2/3)" for m in messages)
+    assert any(m.startswith("scan 1: denoised roi0 (1/3), ") and " events [cwt " in m and ", peaks " in m for m in messages)
+    assert any(m.startswith("wrote traces/ for 1 scan(s) in ") for m in messages)
+    assert any(m.startswith("voltage done in ") and "peak process memory" in m and "timings.json" in m for m in messages)
+
+    prov = json.loads((pf_dir / "pipeline.json").read_text())
+    timing, history = prov["timing"], prov["processing_history"]
+    assert list(timing["totals"]) == ["read", "dfof", "denoise", "write_pf", "traces", "figures", "results"]
+    assert all(seconds > 0 for seconds in timing["totals"].values())
+    assert timing["wall_seconds"] >= sum(timing["totals"].values()) - 0.01
+    assert timing["cpu_seconds"] > 0 and timing["peak_rss_gb"] > 0 and timing["cpu_count"] == os.cpu_count()
+    assert timing["started"] <= timing["finished"]
+    scan = timing["scans"]["1"]
+    assert scan["read"] > 0 and scan["dfof"] > 0 and list(scan["domains"]) == ["roi0", "roi1", "roi2"]
+    assert scan["denoise"] == pytest.approx(sum(d["denoise"] for d in scan["domains"].values()), abs=1e-2)
+    assert scan["dfof"] == pytest.approx(sum(d["dfof"] for d in scan["domains"].values()), abs=1e-2)
+    stages = ["cwt", "cluster", "reduce", "mask", "baseline", "baseline_100hz", "peaks"]
+    assert list(timing["denoise_stages"]) == stages and timing["denoise_stages"]["cwt"] > 0
+    assert timing["denoise_stages"]["cwt"] <= timing["totals"]["denoise"]
+    assert [h["step"] for h in history[:2]] == ["voltage_read", "voltage_dfof"] and history[-1]["step"] == "voltage_results"
+    denoise = [h for h in history if h["step"] == "voltage_denoise"]
+    assert [h["domain"] for h in denoise] == ["roi0", "roi1", "roi2"] and all(h["scan"] == "1" for h in denoise)
+    assert all({"timestamp", "duration_seconds", "cpu_seconds", "rss_gb", "peak_rss_gb", "n_events"} <= set(h) for h in denoise)
+    assert all({f"{s}_s" for s in stages} <= set(h) for h in denoise)
+    assert history[0]["unit"] == "MSession_0/MUnit_1" and history[0]["n_rois"] == 3 and history[0]["n_frames"] == 1200
+
+    assert paths[TIMINGS_FILE] == pf_dir / TIMINGS_FILE
+    timings = json.loads((pf_dir / TIMINGS_FILE).read_text())
+    assert timings["totals"] == timing["totals"] and timings["wall_seconds"] == timing["wall_seconds"]
+    assert [s["step"] for s in timings["steps"]] == [h["step"].removeprefix("voltage_") for h in history]
+    assert sum(s["seconds"] for s in timings["steps"] if s["step"] == "denoise") == pytest.approx(timing["totals"]["denoise"], abs=1e-2)
+
+    results = read_results(next(p for p in paths.values() if p.suffix == ".zarr"))
+    assert results.provenance["timing"] == timing and results.provenance["processing_history"] == history
+    md = PfArray(pf_dir, source=False).metadata
+    assert md["timing"] == timing and md["processing_history"] == history
+
+    fractions = [f for f, _ in progress]
+    assert fractions == sorted(fractions) and 0 < fractions[0] < 1 and fractions[-1] == 1.0
+    assert progress[0][1] == "scan 1: read ROI 1/3"
+    assert [m for _, m in progress if m.startswith("scan 1: dF/F")] == [f"scan 1: dF/F of roi{i} ({i + 1}/3)" for i in range(3)]
+    assert [m for _, m in progress if m.startswith("scan 1: denoising")] == [f"scan 1: denoising roi{i} ({i + 1}/3)" for i in range(3)]
+    assert any(m == "writing the results zarr" for _, m in progress)
+
+
 def test_task_and_widget_are_registered():
     pytest.importorskip("imgui_bundle")
     from types import SimpleNamespace
@@ -215,7 +397,7 @@ def test_task_and_widget_are_registered():
     import mbo_utilities.arrays.pf  # noqa: F401  registers the PF folder as the pipeline's output
 
     assert get_pipeline_info("voltage").marker_files == ["denoised_trace_scans.pkl"]
-    assert VoltagePipelineWidget.axis_mode("Z") == "all"
+    assert VoltagePipelineWidget.axis_mode("Z") == "range"  # Z is the ROI index on an AOD unit
     assert VoltagePipelineWidget.applies_to(SimpleNamespace(metadata={"mesc_layout": "packed"}))
     # chessboard patches and ribbon boxes are ROIs too
     assert VoltagePipelineWidget.applies_to(SimpleNamespace(metadata={"mesc_layout": "tiled"}))
@@ -287,7 +469,7 @@ def test_scan_35_from_the_mesc_reproduces_the_archive_pf(tmp_path):
     out = tmp_path / "stan112" / "stan112_expt12" / "PF"
     paths = run_voltage_pipeline(
         MESC, domains=spec["domains"], units=["MUnit_35"], first_env=["35"], out=out,
-        spike_cfg=SpikeDetectConfig.from_param_pickle(params), log=lambda *_: None,
+        spike_cfg=SpikeDetectConfig.from_param_pickle(params),
     )
     assert "denoised_trace_scans.pkl" in paths
     ours = read_pf(out)

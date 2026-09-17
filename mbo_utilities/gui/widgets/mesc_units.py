@@ -131,13 +131,6 @@ class MescUnitsWidget(Widget):
         manual_roi = getattr(parent, "manual_roi", None)
         if manual_roi is not None:
             manual_roi.rebind()
-        # the curation follows the unit: its scan in the PF folder, or its raw ROIs
-        curation = getattr(parent, "event_curation", None)
-        if curation is not None:
-            try:
-                curation.open_array(arr)
-            except Exception:
-                parent.logger.debug("curation did not follow the unit", exc_info=True)
 
         # the Traces tab is bound to the old unit's slider dims (ROI may not
         # exist on the new one at all); tear it down and let it re-derive

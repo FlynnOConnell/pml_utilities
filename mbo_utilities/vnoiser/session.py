@@ -23,14 +23,15 @@ from vnoiser.curation import (
     PIPELINE_CACHE_VERSION,
     EventCurationDashboard,
 )
-from vnoiser.dataset import RecordingSample, SpatialJediDataset
+from vnoiser.dataset import RecordingSample
+
+from mbo_utilities.arrays.pf import TRACES_FILE, PfArray, pf_results_in
 
 __all__ = [
     "LABEL_RGBA",
     "MODES",
     "PC1_SIDES",
     "CurationSession",
-    "PfScan",
     "hex_rgba",
     "pf_dir_for_mesc",
     "pf_scan_for_mesc",
@@ -58,13 +59,14 @@ def _text(html: str) -> str:
 
 
 class CurationSession:
-    """Curation of one mode over one data path.
+    """Curation of one mode over one recording.
 
     Parameters
     ----------
     data_path : str or Path
-        A vnoiser ``Data`` folder, animal folder, experiment / ``PF`` folder,
-        or a raw ``.mat`` recording.
+        Where the recording comes from: the ``PF`` folder (labels go to its
+        ``.curation``), or the file a raw trace was read from (labels go
+        beside it).
     mode : str
         ``"fast"``, ``"slow"`` or ``"manual"``.
     slow_cutoff_hz : float
@@ -84,7 +86,6 @@ class CurationSession:
             auto_load=False,
             **kwargs,
         )
-        self.experiment: str = ""
         self.recording_id: str = ""
 
     # ------------------------------------------------------------------
@@ -99,66 +100,23 @@ class CurationSession:
     def data_path(self) -> Path:
         return self.dash.data_path
 
-    @property
-    def dataset(self):
-        return self.dash.dataset
-
-    @property
-    def has_dataset(self) -> bool:
-        return self.dash.dataset is not None
-
-    @property
-    def hierarchical(self) -> bool:
-        """Whether an animal and experiment must be chosen before a recording."""
-        return (
-            isinstance(self.dash.dataset, SpatialJediDataset)
-            and self.dash.dataset.requires_experiment_selection
+    def load_pf(self, pf: PfArray, scan: str, domain: str) -> str:
+        """Curate the pipeline's denoised trace of one scan / domain of a
+        ``PF`` folder: no denoiser, labels in ``PF/.curation``. Returns the
+        status line; raises ``KeyError`` for a scan or domain the folder
+        does not hold."""
+        scan, domain = str(scan), str(domain)
+        if scan not in pf.traces or domain not in pf.traces[scan]:
+            raise KeyError(f"{pf.pf_dir} has no trace for scan {scan}, domain {domain}")
+        return self.load_trace(
+            pf.traces[scan][domain],
+            pf.fs_by_scan[scan],
+            recording_id=pf.recording_id(domain, scan),
+            label=f"scan {scan} / {domain}",
+            source_path=pf.results_path or pf.pf_dir / TRACES_FILE,
+            curation_dir=pf.pf_dir / ".curation",
+            pre_denoised=True,
         )
-
-    @property
-    def animals(self) -> list[tuple[str, str]]:
-        """``(label, path)`` per animal folder, for a hierarchical data path."""
-        if not self.hierarchical:
-            return []
-        return list(self.dash.dataset.animal_options())
-
-    def experiments(self, animal: str) -> list[tuple[str, str]]:
-        """``(label, path)`` per experiment folder under ``animal``."""
-        if not self.hierarchical or not animal:
-            return []
-        return list(self.dash.dataset.experiment_options(animal))
-
-    def select_experiment(self, experiment: str) -> str:
-        """Read one experiment's scan metadata; returns the status line."""
-        self.experiment = str(experiment)
-        self.recording_id = ""
-        self.dash._experiment_changed({"new": self.experiment})
-        return self.status
-
-    def scan(self, data_path) -> str:
-        """Point the session at another path; returns the status line."""
-        self.dash.path_text.value = str(Path(data_path).expanduser())
-        self.dash._scan_data_path(None)
-        self.experiment = ""
-        self.recording_id = ""
-        return self.status
-
-    @property
-    def recordings(self) -> list[tuple[str, str]]:
-        """``(label, id)`` per loadable recording."""
-        return [(label, value) for label, value in self.dash._recording_options() if value]
-
-    def load(self, recording_id: str) -> str:
-        """Load one recording and run or restore its pipeline; returns the
-        status line. Raises when vnoiser cannot load it."""
-        options = self.dash._recording_options()
-        if recording_id not in {value for _, value in options}:
-            raise KeyError(f"unknown recording: {recording_id}")
-        self.dash.recording_dropdown.options = options
-        self.dash.recording_dropdown.value = recording_id
-        self.dash._load_selected_recording(None)
-        self.recording_id = recording_id
-        return self.status
 
     def load_trace(
         self,
@@ -169,13 +127,14 @@ class CurationSession:
         label: str,
         source_path,
         curation_dir=None,
+        pre_denoised: bool = False,
     ) -> str:
         """Curate a trace held in memory: an ROI trace pulled from a line
-        scan, say. vnoiser's denoiser runs on it (the same pipeline a raw
-        ``.mat`` recording gets), cached under ``curation_dir/cache`` by
-        ``recording_id`` and the source file's size and mtime. Labels go to
-        ``curation_dir/<mode>_template_curation.json`` keyed by
-        ``recording_id``. Returns the status line."""
+        scan, say. vnoiser's denoiser runs on it, cached under
+        ``curation_dir/cache`` by ``recording_id`` and the source file's size
+        and mtime; ``pre_denoised`` takes the trace as the pipeline's output
+        instead. Labels go to ``curation_dir/<mode>_template_curation.json``
+        keyed by ``recording_id``. Returns the status line."""
         trace = np.asarray(trace, dtype=float).ravel()
         if trace.size < 2:
             raise ValueError(f"{label} has fewer than two samples")
@@ -200,15 +159,17 @@ class CurationSession:
                 "duration_s": float(t[-1]),
                 "n_samples": int(trace.size),
                 "curation_dir": str(curation_dir),
-                "pre_denoised": False,
-                "source_format": "trace",
+                "pre_denoised": bool(pre_denoised),
+                "source_format": "pf" if pre_denoised else "trace",
             },
         )
         dash = self.dash
         recording = dash._window_from_recording(full)
         dash._activate_recording_storage(recording)
-        cache_path = self._trace_cache_path(recording)
-        if cache_path is not None and cache_path.exists():
+        cache_path = None if pre_denoised else self._trace_cache_path(recording)
+        if pre_denoised:
+            dash._run_or_load_pipeline(recording)
+        elif cache_path is not None and cache_path.exists():
             dash._load_pipeline_cache(recording, cache_path)
             dash.pipeline_cache_status = f"loaded cache: {cache_path.name}"
         else:
@@ -639,78 +600,26 @@ class CurationSession:
 # the processed PF folder that belongs to a raw line-scan .mesc
 # ----------------------------------------------------------------------
 
-PF_TRACES = SpatialJediDataset.trace_filename
-
-
 def pf_dir_for_mesc(mesc_path) -> Path | None:
-    """The experiment's ``PF`` folder for a raw line scan laid out as
-    ``<animal>/<experiment>/<experiment>/<experiment>.mesc`` with the
-    processed traces in ``<animal>/<experiment>/PF``; None when absent."""
+    """The ``PF`` folder the voltage pipeline wrote for a line scan: beside
+    the file, or one folder up (the ``<expt>/<expt>/<expt>.mesc`` layout
+    keeps ``<expt>/PF``); None when neither holds one."""
     mesc_path = Path(mesc_path)
     for parent in (mesc_path.parent.parent, mesc_path.parent):
         pf = parent / "PF"
-        if (pf / PF_TRACES).is_file():
+        if (pf / TRACES_FILE).is_file() or pf_results_in(pf) is not None:
             return pf
     return None
 
 
-class PfScan:
-    """The processed traces of one line-scan unit: the PF scan whose id is
-    the unit's number (``MUnit_35`` is scan ``35``), its domains (groups of
-    lines the pipeline averaged) and which line ROIs each holds.
-
-    Parameters
-    ----------
-    pf_dir : Path
-        The experiment's ``PF`` folder.
-    scan_id : str
-        Scan id as the pipeline keys it.
-    domains : dict
-        ``{domain: [roi, ...]}`` from ``scanIDs_ROIs.pkl``.
-    """
-
-    def __init__(self, pf_dir: Path, scan_id: str, domains: dict[str, list[int]]):
-        self.pf_dir = Path(pf_dir)
-        self.scan_id = str(scan_id)
-        self.domains = {str(k): [int(v) for v in rois] for k, rois in domains.items()}
-        self.experiment = self.pf_dir.parent.name
-        self.animal = self.pf_dir.parent.parent.name
-
-    def domain_for_roi(self, roi: int) -> str | None:
-        """The domain that averages line ``roi``, or None."""
-        for domain, rois in self.domains.items():
-            if int(roi) in rois:
-                return domain
-        return None
-
-    def recording_id(self, domain: str) -> str:
-        """The dataset's id for a domain trace of this scan."""
-        return f"{self.animal}/{self.experiment}/scan={self.scan_id}/domain={domain}"
-
-
-def pf_scan_for_mesc(mesc_path, unit_key: str) -> PfScan | None:
-    """The :class:`PfScan` of a line-scan unit, or None when the PF folder
-    is missing or the pipeline never processed that scan."""
-    import pickle
-
+def pf_scan_for_mesc(mesc_path, unit_key: str) -> PfArray | None:
+    """The line scan's ``PF`` folder opened on that unit's scan (``MUnit_35``
+    is scan ``35``; the image is left closed), or None when there is no
+    folder or the pipeline never processed the scan."""
     pf_dir = pf_dir_for_mesc(mesc_path)
     if pf_dir is None:
         return None
-    munit = str(unit_key).rsplit("/", 1)[-1]
-    scan_id = munit.rsplit("_", 1)[-1]
-    fs_path, roi_path = pf_dir / "fs_scans.pkl", pf_dir / "scanIDs_ROIs.pkl"
-    if not fs_path.is_file() or not roi_path.is_file():
+    try:
+        return PfArray(pf_dir, unit=unit_key, source=False)
+    except ValueError:
         return None
-    with fs_path.open("rb") as handle:
-        fs_by_scan = {str(k): v for k, v in pickle.load(handle).items()}
-    if scan_id not in fs_by_scan:
-        return None
-    with roi_path.open("rb") as handle:
-        scan_metadata = pickle.load(handle)
-    domain_map = scan_metadata.get("domain_ROInumber", {})
-    domains = {
-        str(name): list(rois)
-        for name, rois in domain_map.items()
-        if str(name) != "All_domains"
-    }
-    return PfScan(pf_dir, scan_id, domains)

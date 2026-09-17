@@ -113,9 +113,12 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
     @classmethod
     def can_open(cls, file: Path | str) -> bool:
         p = Path(file)
-        if p.suffix == ".zarr":
-            return True
-        return p.is_dir() and (p / "zarr.json").exists()
+        if p.suffix != ".zarr" and not (p.is_dir() and (p / "zarr.json").exists()):
+            return False
+        # a pipeline's results file is a zarr group without an image
+        from mbo_utilities.results import results_pipeline
+
+        return results_pipeline(p) is None
 
     def __init__(
         self,

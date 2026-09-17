@@ -18,33 +18,39 @@ Two hosts draw the same layout:
 
 What opens:
 
-- a vnoiser ``Data`` folder, an animal, experiment or ``PF`` folder: every
-  scan / domain the pipeline processed is listed and the first experiment
-  loads (the notebook's animal / experiment / recording dropdowns);
-- a raw line-scan ``.mesc`` with a ``PF`` folder beside it: its experiment's
-  processed traces;
+- a ``PF`` folder the voltage pipeline wrote (the folder, its traces file,
+  or the experiment folder holding it): every scan / domain trace in it is
+  listed and loaded; the source line scan named in its ``pipeline.json``
+  (or laid out beside it) brings the scan's RTMC traces;
+- a raw line-scan ``.mesc`` with a ``PF`` folder beside it: that folder;
 - a raw AOD ``.mesc`` without one: every ROI of every line-scan, chessboard
   or ribbon unit as a raw recording; clicking one runs vnoiser's wavelet denoiser on its
   trace (minutes the first time, cached under ``.curation/cache`` beside the
-  file) and curates the result - the full pipeline vnoiser offers;
-- a folder of raw ``.mat`` recordings, or one file.
+  file) and curates the result - the full pipeline vnoiser offers.
 
 Usage:
-    mbo scan.mesc                       (line-scan .mesc files land here)
-    mbo <animal>/<expt>                 the notebook's experiment or PF folder
+    mbo curate <expt>/PF                a PF folder, or the folder holding it
+    mbo curate scan.mesc                a line scan, with or without a PF folder
     python -m mbo_utilities.gui.curation_viewer [path] [--channel 0]
         [--frames N --screenshot out.png]
     vis = open_curation_viewer(path)    in a notebook cell: the canvas shows
                                         in the cell; vis.widget is the dashboard
 
-The line-scan + Z-stack viewer that draws the lines on the stack is still
-``mbo linescan scan.mesc --view`` (``gui/linescan_viewer.py``).
+The image viewer (``mbo scan.mesc``, ``mbo <expt>/PF``) has no curation of
+its own: its Curate button (the Voltage pipeline, or File > Curate) runs
+:func:`launch_curation_window`, this window in a second process, since one
+imgui loop cannot host a second hello_imgui runner. The line-scan + Z-stack
+viewer that draws the lines on the stack is ``mbo linescan scan.mesc --view``
+(``gui/linescan_viewer.py``).
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
@@ -57,11 +63,14 @@ from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._edge_window import EdgeWindow
 from mbo_utilities.gui._theme import em
 from mbo_utilities.install import VNOISER_HINT
+from mbo_utilities.preferences import get_mbo_dirs
 
 __all__ = [
     "CurationApp",
     "CurationVis",
     "PanelHost",
+    "curation_target",
+    "launch_curation_window",
     "open_curation_viewer",
     "main",
 ]
@@ -194,7 +203,7 @@ class _Dashboard:
         if path.is_file() and path.suffix.lower() == ".mesc" and pf_dir_for_mesc(path) is None:
             self.open_raw_mesc(path)
         else:
-            # folders, PF, .mat, and a .mesc with a PF folder (redirected)
+            # a PF folder (or the folder holding it), and a .mesc with one beside it
             self.widget.scan(str(path))
 
     def open_raw_mesc(self, mesc_path) -> int:
@@ -396,10 +405,50 @@ def open_curation_viewer(path=None, *, channel: int = 0, run: bool = True, frame
     return app
 
 
+def curation_target(path) -> Path | None:
+    """What of a viewer's open path the curation window can take: a ``.mesc``
+    itself, or the ``PF`` folder a path names (the folder, its traces
+    pickle, or the experiment holding it); None for anything else."""
+    from mbo_utilities.arrays.pf import pf_dir_of
+
+    if isinstance(path, (list, tuple)):
+        path = path[0] if path else None
+    if not path:
+        return None
+    path = Path(str(path))
+    if path.is_file() and path.suffix.lower() == ".mesc":
+        return path
+    return pf_dir_of(path)
+
+
+def launch_curation_window(path, channel: int = 0) -> int:
+    """Open the curation window on ``path`` in its own process, what
+    ``mbo curate PATH`` does, and return its pid. The window outlives the
+    viewer that opened it; its output goes to ``~/.mbo/logs``."""
+    python = sys.executable
+    if sys.platform == "win32" and python.endswith("python.exe"):
+        # no console window beside the curation window
+        pythonw = python[:-10] + "pythonw.exe"
+        if Path(pythonw).exists():
+            python = pythonw
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = get_mbo_dirs()["logs"] / f"{stamp}_curate_{Path(str(path)).stem}.log"
+    cmd = [python, "-m", "mbo_utilities.gui.curation_viewer", str(path), "--channel", str(int(channel))]
+    with log_file.open("a", encoding="utf-8") as out:
+        if sys.platform == "win32":
+            proc = subprocess.Popen(
+                cmd, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+            )
+        else:
+            proc = subprocess.Popen(cmd, start_new_session=True, stdin=subprocess.DEVNULL, stdout=out, stderr=out)
+    return proc.pid
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("path", nargs="?", type=Path,
-                    help="Data / animal / experiment / PF folder, a .mat, or a line-scan .mesc "
+                    help="a PF folder (or the experiment folder holding it), or a line-scan .mesc "
                          "(default: the last data path)")
     ap.add_argument("--channel", type=int, default=0, help="channel averaged for raw line scans")
     ap.add_argument("--frames", type=int, default=None, help="exit after this many frames")

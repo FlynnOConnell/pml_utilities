@@ -75,13 +75,6 @@ def _toggle_manual_roi(parent: Any, enabled: bool) -> None:
         sync(enabled)
 
 
-def _toggle_event_curation(parent: Any, enabled: bool) -> None:
-    """Create or drop the vnoiser curation panels and tab when toggled."""
-    sync = getattr(parent, "sync_event_curation", None)
-    if sync is not None:
-        sync(enabled)
-
-
 WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
     WidgetEntry(
         key="preview",
@@ -89,6 +82,7 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         tooltip="The Image tab and the control panels stacked inside it.",
         subwidgets=(
             SubWidget("mesc_units", "MESc Units"),
+            SubWidget("mesc_overlay", "ROI Overlay"),
             SubWidget("window_functions", "Window Functions"),
             SubWidget("spatial_functions", "Spatial Functions"),
             SubWidget("scan_phase", "Scan-Phase Correction"),
@@ -131,15 +125,6 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
             SubWidget("table", "ROI table", tooltip="The ROIs tab in this panel."),
             SubWidget("traces", "Trace table", tooltip="The Traces tab: every collected trace with stats."),
         ),
-    ),
-    WidgetEntry(
-        key="vnoiser",
-        label="Event Curation",
-        tooltip="vnoiser event curation of voltage traces: the trace and "
-                "candidate panels on the top strip, the controls in the "
-                "Curation tab. Needs the vnoiser package.",
-        default=False,
-        on_toggle=_toggle_event_curation,
     ),
 )
 
