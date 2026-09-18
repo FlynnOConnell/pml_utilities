@@ -340,8 +340,24 @@ def main(
     help="For a masknmf demixing result: which of masknmf's viewers to open. "
          "Omitted: a prompt in the terminal, or the demixing viewer when there is none.",
 )
+@click.option(
+    "--raw",
+    "raw_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="For a masknmf demixing result: the raw movie, shown as a panel in the demixing viewer and as the "
+         "reference in the compression viewer. Omitted: data_raw.bin or a lone .tif beside the result, if any.",
+)
+@click.option(
+    "--motion-correction",
+    "motion_correction_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="For a masknmf demixing result: a motion correction hdf5 whose shifts plot above the traces. "
+         "Omitted: motion_correction.hdf5 beside the result, if any.",
+)
 def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=False,
-         unit=None, gpu_index=None, list_gpus=False, vis=None):
+         unit=None, gpu_index=None, list_gpus=False, vis=None, raw_path=None, motion_correction_path=None):
     r"""
     Open imaging data in the GUI viewer.
 
@@ -426,6 +442,8 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
         metadata_only=metadata,
         unit=_parse_unit(unit),
         vis=vis,
+        raw_path=raw_path,
+        motion_correction_path=motion_correction_path,
     )
 
 
