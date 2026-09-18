@@ -1363,22 +1363,24 @@ def _name_source(pf_dir, mesc, scan="10"):
     return units[scan]
 
 
-class TestRtmc:
-    """A scan that ran with real-time motion correction shows its RTMC
-    traces over the candidate trace, on the same time axis."""
+class TestMotion:
+    """A scan that went through motion correction (RTMC) shows it over the
+    candidate trace, on the same time axis, behind the MC checkbox."""
 
-    def test_rtmc_plot_decimates_and_shows_the_totals_first(self):
-        from mbo_utilities.gui.imgui.rtmc import RtmcPlot
+    def test_rtmc_totals_become_the_scans_motion_correction(self):
+        from mbo_utilities.arrays.mesc import rtmc_motion
+        from mbo_utilities.gui.imgui.motion import MotionPlot
 
         t = np.arange(20000) / 1000.0
         rtmc = {"X total": {"t": t, "um": np.sin(t)}, "X intercycle": {"t": t, "um": np.cos(t)}}
-        plot = RtmcPlot(rtmc, points=1000)
-        assert plot and sorted(plot.traces) == ["X intercycle", "X total"]
-        assert plot.show == {"X total": True, "X intercycle": False} and plot.shown
+        motion = rtmc_motion(rtmc)
+        assert motion.source == "RTMC" and motion.unit == "um" and list(motion.traces) == ["X"]
+        plot = MotionPlot(motion, points=1000)
+        assert plot and list(plot.traces) == ["X"]
         # a min and a max per bin
-        assert plot.traces["X total"][0].shape == plot.traces["X total"][1].shape == (2000,)
+        assert plot.traces["X"][0].shape == plot.traces["X"][1].shape == (2000,)
         assert plot.duration_s == pytest.approx(t[-1], abs=0.05)
-        assert not RtmcPlot({}) and not RtmcPlot({}).shown
+        assert rtmc_motion({}) is None and not MotionPlot(None)
 
     def test_scan_source_names_the_line_scan_behind_each_recording(self, tmp_path):
         from mbo_utilities.gui.curation_viewer import _Dashboard
@@ -1410,24 +1412,22 @@ class TestRtmc:
             widget.close()
 
     def test_a_pf_recording_reads_its_scans_motion_correction(self, curation, data_root):
-        from mbo_utilities.gui.event_curation import PANEL_HEIGHT, RTMC_HEIGHT
+        from mbo_utilities.gui.event_curation import MOTION_HEIGHT, PANEL_HEIGHT
 
         pf_dir = data_root / "expt1" / "PF"
         mesc = _mesc_with_rtmc(data_root / "src" / "expt.mesc")
         unit = _name_source(pf_dir, mesc)
         _load(curation, data_root)
         assert curation.scan_source(curation.recording(curation.current)) == (str(mesc), unit)
-        plot = curation.rtmc_plot
-        assert plot is not None and curation.rtmc[(str(mesc), unit)] is plot
-        assert sorted(plot.traces) == ["X intercycle", "X total", "Y total"]
-        assert plot.show == {"X total": True, "Y total": True, "X intercycle": False}
-        np.testing.assert_allclose(plot.traces["X total"][1], np.arange(50))
-        np.testing.assert_allclose(plot.traces["X total"][0], np.arange(50) * 0.03)
+        plot = curation.motion_plot
+        assert plot is not None and curation.motion[(str(mesc), unit)] is plot
+        assert sorted(plot.traces) == ["X", "Y"] and plot.y_label == "RTMC shift (um)"
+        np.testing.assert_allclose(plot.traces["X"][1], np.arange(50))
+        np.testing.assert_allclose(plot.traces["X"][0], np.arange(50) * 0.03)
         # the motion plot over the trace in linked subplots; the strip is asked for the room
         _each_panel(curation)
-        assert curation.panel.height == PANEL_HEIGHT + RTMC_HEIGHT
-        for label in plot.show:
-            plot.show[label] = False
+        assert curation.panel.height == PANEL_HEIGHT + MOTION_HEIGHT
+        curation.show_motion = False
         _each_panel(curation)
         assert curation.panel.height == PANEL_HEIGHT
 
@@ -1441,7 +1441,7 @@ class TestRtmc:
         mesc = write_mesc(data_root / "src" / "expt.mesc", munits=(10,))
         unit = _name_source(pf_dir, mesc)
         _load(curation, data_root)
-        assert curation.rtmc_plot is None
-        assert not curation.rtmc[(str(mesc), unit)]
+        assert curation.motion_plot is None
+        assert not curation.motion[(str(mesc), unit)]
         _each_panel(curation)
         assert curation.panel.height == PANEL_HEIGHT

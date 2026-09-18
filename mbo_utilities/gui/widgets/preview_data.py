@@ -729,14 +729,6 @@ class PreviewDataWidget(EdgeWindow):
         # honour a persisted / CLI-set "Manual ROI Labeling" toggle
         from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
         self.sync_manual_roi(widget_enabled("manual_roi"))
-        # a line-scan unit brings its per-ROI traces (PF, F.npy, or computed
-        # in the background when Options allows) as a Traces tab on the strip
-        from mbo_utilities.gui.linescan_viewer import attach_standard_traces
-
-        try:
-            attach_standard_traces(self)
-        except Exception:
-            self.logger.warning("line-scan traces tab unavailable", exc_info=True)
 
     def sync_manual_roi(self, enabled: bool) -> None:
         """Create or tear down the manual-ROI widget to match the toggle.
@@ -746,14 +738,28 @@ class PreviewDataWidget(EdgeWindow):
         first time the widget is switched on and dropped again when it is
         switched off.
         """
+        from mbo_utilities.gui.linescan_viewer import attach_standard_traces
         from mbo_utilities.gui.manual_roi import attach_roi_widget, detach_roi_widget
 
         current = getattr(self, "manual_roi", None)
-        if enabled and current is None:
+        if enabled == (current is not None):
+            return
+        # a line-scan unit's per-ROI traces live on the widget's Traces tab,
+        # so they come and go with it
+        traces = getattr(self, "linescan_traces", None)
+        if traces is not None:
+            traces.close()
+            self.linescan_traces = None
+        if enabled:
             # attach logs (never raises) when the widget cannot be built, and
             # adopts the store parked by the previous detach in this session
             attach_roi_widget(self)
-        elif not enabled and current is not None:
+            if getattr(self, "manual_roi", None) is not None:
+                try:
+                    attach_standard_traces(self)
+                except Exception:
+                    self.logger.warning("line-scan traces unavailable", exc_info=True)
+        else:
             try:
                 detach_roi_widget(self)
             except Exception:
@@ -1413,10 +1419,6 @@ class PreviewDataWidget(EdgeWindow):
         cleanup_pipelines(self)
         cleanup_all_widgets(self._widgets)
         self.sync_manual_roi(False)
-        traces = getattr(self, "linescan_traces", None)
-        if traces is not None:
-            traces.close()
-            self.linescan_traces = None
         strip = getattr(self, "top_strip", None)
         if strip is not None:
             strip.close()

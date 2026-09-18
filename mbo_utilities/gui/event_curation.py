@@ -10,7 +10,8 @@ at a time in the notebook's grid: the
 trace with its candidates (A) beside the threshold / slider card (A1 to A4),
 then the template, focused candidate and PCA (B to D) under it; the arrows
 flip through recordings. When the scan ran with real-time motion correction,
-its RTMC traces sit over the trace on the same time axis. The Decision and
+its motion correction (the RTMC shifts) sits over the trace on the same
+time axis, behind the ``MC`` checkbox. The Decision and
 Recordings tabs (labels, navigation, the table, the mode) are the column
 beside the dashboard in the curation window (``gui/curation_viewer.py``,
 ``mbo curate``) and the card under the ROI table in the line-scan viewer.
@@ -34,7 +35,7 @@ from typing import Any
 import numpy as np
 from imgui_bundle import imgui, imgui_ctx, implot, portable_file_dialogs as pfd
 
-from mbo_utilities.arrays.mesc import unit_rtmc
+from mbo_utilities.arrays.mesc import rtmc_motion, unit_rtmc
 from mbo_utilities.arrays.pf import TRACES_FILE, PfArray, pf_dir_of
 from mbo_utilities.gui import _theme as theme
 from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
@@ -45,7 +46,7 @@ from mbo_utilities.gui.imgui.lines import (
     decimate_minmax, dotted_vline, drag_hline, drag_vline, line, line_plot, subplots, vec4, vlines,
 )
 from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
-from mbo_utilities.gui.imgui.rtmc import RtmcPlot
+from mbo_utilities.gui.imgui.motion import MotionPlot
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.preferences import get_last_dir, set_last_dir
@@ -58,13 +59,13 @@ __all__ = [
 ]
 
 # the dashboard is two rows: the trace row (A with its cards) over the
-# candidate row (B to D); the strip asks for their sum, and for RTMC_HEIGHT
-# more while the motion plot sits over the trace, in RTMC_SHARE of its cell
+# candidate row (B to D); the strip asks for their sum, and for MOTION_HEIGHT
+# more while the motion plot sits over the trace, in MOTION_SHARE of its cell
 TIMELINE_HEIGHT = 260
 CANDIDATE_HEIGHT = 210
 PANEL_HEIGHT = TIMELINE_HEIGHT + CANDIDATE_HEIGHT
-RTMC_HEIGHT = 120
-RTMC_SHARE = 0.35
+MOTION_HEIGHT = 120
+MOTION_SHARE = 0.35
 # the slider card beside the trace: one column per rule (A1 threshold, A2
 # peak, A3 PC1, A4 cosine), each a vertical slider with its range
 # above and below and a short name and count under it
@@ -237,11 +238,13 @@ class EventCurationWidget:
         self._pf: PfArray | None = None
         # traces handed over in memory (line-scan ROIs), by recording id
         self._trace_sources: dict[str, dict] = {}
-        # the RTMC traces of each scan, by (mesc path, unit), read on the
-        # worker with the scan's first recording; which scan a recording is of
-        self.rtmc: dict[tuple[str, str], RtmcPlot] = {}
+        # the motion correction of each scan, by (mesc path, unit), read on
+        # the worker with the scan's first recording; which scan a recording
+        # is of; whether the MC checkbox shows it over the trace
+        self.motion: dict[tuple[str, str], MotionPlot] = {}
         self._scan_keys: dict[str, tuple[str, str] | None] = {}
-        self._rtmc_ratios = implot.SubplotsRowColRatios(row_ratios=[RTMC_SHARE, 1.0 - RTMC_SHARE])
+        self._motion_ratios = implot.SubplotsRowColRatios(row_ratios=[MOTION_SHARE, 1.0 - MOTION_SHARE])
+        self.show_motion = True
         self._motion_shown = False
         # called with the focused candidate's time (s) whenever it changes
         self.on_focus = None
@@ -507,10 +510,10 @@ class EventCurationWidget:
         return str(pf.source_mesc), pf.source_units.get(rec.scan, f"MUnit_{rec.scan}")
 
     @property
-    def rtmc_plot(self) -> RtmcPlot | None:
-        """The focused recording's motion-correction traces, once its scan
-        has been read and ran with RTMC; None otherwise."""
-        plot = self.rtmc.get(self._scan_keys.get(self.current))
+    def motion_plot(self) -> MotionPlot | None:
+        """The focused recording's motion correction, once its scan has been
+        read and went through one; None otherwise."""
+        plot = self.motion.get(self._scan_keys.get(self.current))
         return plot if plot else None
 
     def scan_raw_mesc(self, mesc_path, channel: int = 0) -> int:
@@ -560,11 +563,11 @@ class EventCurationWidget:
                 message = session.load_trace(**source)
             else:
                 message = session.load_pf(pf, rec.scan, rec.domain)
-            # the scan's RTMC traces, read once for all its recordings
+            # the scan's motion correction, read once for all its recordings
             scan_key = self.scan_source(rec)
             self._scan_keys[rec.rid] = scan_key
-            if scan_key is not None and scan_key not in self.rtmc:
-                self.rtmc[scan_key] = RtmcPlot(unit_rtmc(*scan_key))
+            if scan_key is not None and scan_key not in self.motion:
+                self.motion[scan_key] = MotionPlot(rtmc_motion(unit_rtmc(*scan_key)))
             return session, message
 
         self._jobs.put((key, rec.label, work))
@@ -772,35 +775,36 @@ class EventCurationWidget:
         The trace row (A with the threshold / auto-pass, Decision and
         Navigation cards) sits over the candidate row (B to D); the rows
         share the height the strip gives in the ratio they asked for, the
-        trace row taking RTMC_HEIGHT more while the motion plot shows."""
+        trace row taking MOTION_HEIGHT more while the motion plot shows."""
         self._mark_hovered()
         self._draw_flip_row()
         session = self._ready()
         if session is None:
             imgui.text_disabled(self.status)
             return
-        rtmc = self.rtmc_plot
-        motion = rtmc is not None and rtmc.shown
+        plot = self.motion_plot
+        motion = plot is not None and self.show_motion
         if motion != self._motion_shown:
             # in or out of the subplots the timeline is a new plot to implot
             self._motion_shown = motion
             self._fit_timeline = True
-            if rtmc is not None:
-                rtmc.refit()
-        timeline = TIMELINE_HEIGHT + (RTMC_HEIGHT if motion else 0)
-        self.panel.height = PANEL_HEIGHT + (RTMC_HEIGHT if motion else 0)
+            if plot is not None:
+                plot.refit()
+        timeline = TIMELINE_HEIGHT + (MOTION_HEIGHT if motion else 0)
+        self.panel.height = PANEL_HEIGHT + (MOTION_HEIGHT if motion else 0)
         avail = imgui.get_content_region_avail()
         top = max(avail.y * timeline / self.panel.height, em(6))
         with imgui_ctx.begin_child("##curation_row_a", imgui.ImVec2(0, top)):
-            self._draw_timeline_row(session, rtmc)
+            self._draw_timeline_row(session, plot)
         with imgui_ctx.begin_child("##curation_row_b", imgui.ImVec2(0, 0)):
             self._draw_candidate_row(session)
 
-    def _draw_timeline_row(self, session: CurationSession, rtmc: RtmcPlot | None) -> None:
+    def _draw_timeline_row(self, session: CurationSession, plot: MotionPlot | None) -> None:
         """A: the trace with its candidates, as wide as the row allows, and
-        the slider card (A1 to A4) beside it. A scan that ran with RTMC gets
-        its motion plot over the trace, in linked subplots so the two share
-        one time axis and line up; its checkboxes sit on the title line.
+        the slider card (A1 to A4) beside it. A scan that went through motion
+        correction gets its motion plot over the trace, in linked subplots so
+        the two share one time axis and line up; ``MC`` on the title line
+        shows it.
         Decision and Navigation live in the controls column (``draw_tab``),
         not in this row."""
         kind = _mode_title(session.mode, self.slow_cutoff_hz)
@@ -809,23 +813,28 @@ class EventCurationWidget:
         if imgui.small_button("keybinds"):
             self.show_keybinds = not self.show_keybinds
         set_tooltip("k", show_mark=False)
-        if rtmc is not None:
+        if plot is not None:
             imgui.same_line(0, em(1.2))
-            rtmc.draw_checkboxes("curation_rtmc")
+            _changed, self.show_motion = imgui.checkbox("MC##curation_motion", self.show_motion)
+            set_tooltip(
+                f"{plot.y_label}: the motion correction applied while the scan ran, "
+                "over the trace on the same time axis",
+                show_mark=False,
+            )
         avail = imgui.get_content_region_avail()
         n_cols = 4 if session.seeded else 1
         card_w = em(SLIDER_COL_EM) * n_cols + em(SLIDER_GAP_EM) * (n_cols - 1) + em(SLIDER_CARD_PAD_EM)
         plot_w = max(avail.x - card_w - em(0.5), em(10))
         with imgui_ctx.begin_child("##curation_trace", imgui.ImVec2(plot_w, 0)):
-            if rtmc is None or not rtmc.shown:
+            if plot is None or not self.show_motion:
                 self._draw_timeline(session)
             else:
                 height = max(imgui.get_content_region_avail().y - 2, 60.0)
                 link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
-                with subplots("##curation_a", 2, 1, height, flags=link, ratios=self._rtmc_ratios) as ok:
+                with subplots("##curation_a", 2, 1, height, flags=link, ratios=self._motion_ratios) as ok:
                     if ok:
                         focus = float(session.times_s[session.current]) if session.n else None
-                        rtmc.draw("##curation_rtmc", cursor=focus, duration_s=float(session.t[-1]))
+                        plot.draw("##curation_motion", cursor=focus, duration_s=float(session.t[-1]))
                         self._draw_timeline(session)
         imgui.same_line(0, em(0.5))
         self._draw_slider_card(session, card_w, avail.y)

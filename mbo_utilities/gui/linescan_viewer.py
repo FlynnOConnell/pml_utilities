@@ -89,11 +89,11 @@ START_DOT_SIZE = 9.0
 TRACE_SEPARATION = 1.4
 LINE_PANEL_WIDTH = 360
 TRACES_PANEL_HEIGHT = 260
-# with a motion-correction plot under the F plot
-TRACES_RTMC_PANEL_HEIGHT = 400
-# the F plot's share of the tab when the motion plot shows, until the
+# with the motion plot under the trace
+TRACES_MOTION_PANEL_HEIGHT = 400
+# the trace's share of the tab when the motion plot shows, until the
 # splitter between them is dragged
-TRACES_F_SHARE = 0.58
+TRACE_SHARE = 0.58
 
 
 def _console_pick_unit(
@@ -342,11 +342,12 @@ class TraceAttach:
             )
         from mbo_utilities.gui._top_strip import TopStrip
 
-        # the raw trace and the RTMC traces get a tab beside Curation on the
+        # the raw trace and the motion plot get a tab beside Curation on the
         # same strip, or their own strip without curation
         strip = TopStrip(self.ndw.figure) if line_curation is None else line_curation.widget.strip
         self.ndw.linescan_traces = LineTracesPanel(
-            self.ndw, self.overlay, traces, strip, line_curation is None, rtmc=self.ref_arr.rtmc,
+            self.ndw, self.overlay, traces, strip, line_curation is None,
+            motion=self.ref_arr.motion_correction,
         )
         if line_curation is not None:
             self.ndw.linescan_curation = line_curation
@@ -822,63 +823,71 @@ class LinePanel:
 
 
 
-class SliderSelection:
-    """What :class:`LineTracesPanel` needs of a line-scan overlay, read off
-    the standard viewer's sliders instead: the ROI slider is the selected
-    line, the Timepoint slider is the cursor. ``mbo file.mesc`` opens a
-    line-scan unit in that viewer, with no overlay."""
+class StandardTraces:
+    """A line-scan unit's per-ROI traces on the standard viewer (``mbo
+    file.mesc``): a :class:`TraceJob` for the traces, its progress on the
+    ROI widget's Traces tab until they are in, then one external
+    :class:`~mbo_utilities.gui.roi_runs.TraceSet` there, one row per ROI.
+    The plotted row follows the ROI slider and the slider follows a row
+    picked in the trace table; the unit's motion correction reaches the tab
+    through the array (``motion_correction``). Kept on
+    ``parent.linescan_traces``; ``close`` takes the set off."""
 
-    def __init__(self, image_widget, n: int, fs: float):
-        from mbo_utilities.annotation.store import CLASS_COLORS
-        from mbo_utilities.arrays.features import find_slider_name
+    def __init__(self, parent, arr):
+        from mbo_utilities.preferences import get_linescan_auto_traces
 
-        self.iw = image_widget
-        self.n = int(n)
-        self.fs = float(fs)
-        names = tuple(getattr(image_widget, "_slider_dim_names", None) or ())
-        self.t_dim = find_slider_name(names, "t")
+        self.parent = parent
+        self.arr = arr
+        self.roi = parent.manual_roi
+        self.strip = parent.top_strip
+        self.iw = parent.image_widget
+        names = tuple(getattr(self.iw, "_slider_dim_names", None) or ())
         self.roi_dim = next((d for d in names if d.lower() == "roi"), None)
-        self.colors = np.array(
-            [(*CLASS_COLORS[i % len(CLASS_COLORS)][:3], 1.0) for i in range(self.n)], dtype=np.float32
-        )
+        munit = arr.metadata["mesc_unit"].rsplit("/", 1)[-1]
+        self.name = f"{munit} lines"
+        self.job = TraceJob(arr, 0, None, auto=get_linescan_auto_traces())
+        self.attached = False
+        self._last_roi = None
+        self._last_sel = None
+        self.roi.pending_traces = self.draw_pending
+        # polled at the top of every frame the strip draws
+        self.strip.add_hook(self)
 
-    @property
-    def selected(self) -> int:
-        if self.roi_dim is None:
-            return 0
-        return min(max(int(self.iw.indices[self.roi_dim]), 0), self.n - 1)
+    def __call__(self) -> None:
+        if not self.attached:
+            if not (self.job.done and self.job.result is not None):
+                return
+            self._attach()
+        ts = self.roi.trace_sets.get(self.name)
+        if ts is None:
+            return
+        # the ROI slider and the trace table pick the same line
+        n = len(ts.data)
+        selected = min(max(int(self.iw.indices[self.roi_dim]), 0), n - 1) if self.roi_dim is not None else 0
+        sel = self.roi.trace_sel
+        if selected != self._last_roi:
+            self._last_roi = selected
+            self.roi.select_trace(("uid", self.name, selected))
+            self._last_sel = set(self.roi.trace_sel)
+        elif sel != self._last_sel:
+            self._last_sel = set(sel)
+            if len(sel) == 1:
+                origin, name, k = next(iter(sel))
+                if origin == "uid" and name == self.name and self.roi_dim is not None:
+                    self.iw.indices[self.roi_dim] = int(k)
+                    self._last_roi = int(k)
 
-    @property
-    def t_index(self) -> int:
-        return int(self.iw.indices[self.t_dim]) if self.t_dim is not None else 0
-
-    def goto_time(self, t_s: float) -> None:
-        if self.t_dim is not None:
-            self.iw.indices[self.t_dim] = max(0, int(round(float(t_s) * self.fs)))
-
-
-class PendingTracesPanel:
-    """The ``Traces`` tab while its :class:`TraceJob` has nothing to show:
-    progress while it computes, a ``compute traces`` button while it idles
-    (background computation off in Options)."""
-
-    def __init__(self, strip, job: TraceJob):
-        from mbo_utilities.gui._top_strip import TopPanel
-
-        self.strip = strip
-        self.job = job
-        strip.register(TopPanel("line_traces", "Line traces", self.draw, TRACES_PANEL_HEIGHT, None, 10))
-
-    def close(self) -> None:
-        self.strip.unregister("line_traces")
-
-    def draw(self) -> None:
+    def draw_pending(self) -> None:
+        """On the Traces tab while the job has nothing to show: progress
+        while it computes, a ``compute traces`` button while it idles
+        (background computation off in Options)."""
         from imgui_bundle import imgui
 
         if self.job.error is not None:
             imgui.text_disabled(f"traces failed: {self.job.error!r}")
         elif self.job.idle:
             imgui.text_disabled("no saved traces (F.npy or PF) for this unit")
+            imgui.same_line(0, 8)
             if imgui.button("compute traces"):
                 self.job.start()
             if imgui.is_item_hovered():
@@ -889,67 +898,37 @@ class PendingTracesPanel:
         else:
             done, total = self.job.progress
             imgui.text_disabled(f"computing traces  ROI {done}/{total}")
+            imgui.same_line(0, 8)
             imgui.progress_bar(done / total if total else 0.0, imgui.ImVec2(-1, 0), "")
 
-
-class StandardTraces:
-    """The ``Traces`` tab on the standard viewer (``mbo file.mesc``) for a
-    line-scan unit: a :class:`TraceJob` for the traces, a pending tab until
-    they are in, then :class:`LineTracesPanel` on the viewer's own top
-    strip, its cursor and line following the Timepoint and ROI sliders.
-    Kept on ``parent.linescan_traces``; ``close`` takes it off the strip."""
-
-    def __init__(self, parent, arr):
-        from mbo_utilities.preferences import get_linescan_auto_traces
-
-        self.parent = parent
-        self.arr = arr
-        self.strip = parent.top_strip
-        self.job = TraceJob(arr, 0, None, auto=get_linescan_auto_traces())
-        self.panel = None
-        self.pending = None
-        if self.job.done:
-            self._attach()
-        else:
-            self.pending = PendingTracesPanel(self.strip, self.job)
-            # polled at the top of every frame the strip draws
-            self.strip.add_hook(self)
-
-    def __call__(self) -> None:
-        if not self.job.done:
-            return
-        self.strip.remove_hook(self)
-        if self.pending is not None:
-            self.pending.close()
-            self.pending = None
-        if self.job.result is not None:
-            self._attach()
-        else:
-            self.pending = PendingTracesPanel(self.strip, self.job)
-
     def _attach(self) -> None:
+        from mbo_utilities.gui.roi_runs import TraceSet
+
         md = self.arr.metadata
         n = len(md.get("mesc_roi_extents") or []) or int(self.job.result.shape[0])
-        selection = SliderSelection(self.parent.image_widget, n, float(md.get("fs") or 1.0))
-        print_rtmc(self.arr)
-        self.panel = LineTracesPanel(
-            self.parent.image_widget, selection, self.job.result[:n], self.strip, False,
-            rtmc=self.arr.rtmc,
-        )
+        fs = float(self.arr.fs or 1.0)
+        traces = np.asarray(self.job.result[:n], dtype=np.float32)
+        ts = TraceSet(self.name, self.job.source, external=True)
+        for k in range(traces.shape[0]):
+            ts.data[k] = {"label": f"ROI {k}", "fs": fs, "F": traces[k]}
+        self.roi.trace_sets[self.name] = ts
+        self.roi.pending_traces = None
+        self.roi._traces_changed()
+        self.roi.focus_traces = True
+        self.attached = True
 
     def close(self) -> None:
-        if self.pending is not None:
-            self.pending.close()
-            self.pending = None
-        if self.panel is not None:
-            self.panel.close()
-            self.panel = None
         self.strip.remove_hook(self)
+        self.roi.pending_traces = None
+        if self.roi.trace_sets.pop(self.name, None) is not None:
+            self.roi._traces_changed()
 
 
 def attach_standard_traces(parent) -> StandardTraces | None:
-    """The ``Traces`` tab for a ``PreviewDataWidget`` showing a line-scan
-    ``.mesc`` unit; None (nothing registered) for anything else."""
+    """The line traces of a ``PreviewDataWidget`` showing a line-scan
+    ``.mesc`` unit, on its ROI widget's Traces tab; None (nothing added) for
+    anything else, and without the ROI widget (Widgets > Manual ROI
+    Labeling), whose tab they live on."""
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.lazy_array import base_array
 
@@ -958,7 +937,7 @@ def attach_standard_traces(parent) -> StandardTraces | None:
     arr = base_array(data[0]) if data else None
     if not isinstance(arr, MescArray) or arr.metadata.get("mesc_layout") != "packed":
         return None
-    if getattr(parent, "top_strip", None) is None:
+    if getattr(parent, "manual_roi", None) is None or getattr(parent, "top_strip", None) is None:
         return None
     traces = StandardTraces(parent, arr)
     parent.linescan_traces = traces
@@ -970,21 +949,21 @@ class LineTracesPanel:
     faint min/max band, a 25 ms smoothed line over it in the line's colour,
     and a time cursor tied to the Reference's Timepoint (drag it to scrub).
 
-    A scan that ran with real-time motion correction (``arr.rtmc``) gets its
-    motion plot (:class:`~mbo_utilities.gui.imgui.rtmc.RtmcPlot`) under it in
-    linked subplots: one time axis, the plot areas aligned, a splitter
-    between them, the same cursor, its own y range. Its own ``Traces`` tab,
+    A scan that went through motion correction (``arr.motion_correction``)
+    gets its motion plot under it in linked subplots: one time axis, the
+    plot areas aligned, a splitter between them, the same cursor, its own y
+    range; ``Trace`` and ``MC`` show either alone. Its own ``Traces`` tab,
     on the curation widget's strip when there is one.
     """
 
     def __init__(self, ndw, overlay: LineScanOverlay, traces: np.ndarray, strip, own_strip: bool,
-                 tab: bool = True, rtmc: dict | None = None):
+                 tab: bool = True, motion=None):
         from imgui_bundle import implot
 
         from mbo_utilities.gui._top_strip import TopPanel
-        from mbo_utilities.gui.imgui.rtmc import RtmcPlot
+        from mbo_utilities.gui.imgui.motion import MotionPlot
 
-        self.rtmc = RtmcPlot(rtmc or {})
+        self.motion = MotionPlot(motion)
         self.ndw = ndw
         self.overlay = overlay
         self.strip = strip
@@ -992,20 +971,23 @@ class LineTracesPanel:
         self.fs = float(overlay.fs)
         self.traces = np.asarray(traces, dtype=np.float32)
         self.n = int(self.traces.shape[0])
-        self.duration_s = float(max(self.traces.shape[1] - 1, 1)) / self.fs
+        # the x axis spans the whole recording, which the traces on disk may
+        # cover only part of (a pipeline run on a frame window)
+        self.duration_s = max(float(max(self.traces.shape[1] - 1, 1)) / self.fs, self.motion.duration_s)
         self._cache: dict[int, tuple] = {}
         self._fit = True
         self._last = None
-        self._show_f = True
+        self.show_trace = True
+        self.show_motion = True
         self._linked = False
-        # F's share of the tab over the motion plot; the splitter drags it
-        self._ratios = implot.SubplotsRowColRatios(row_ratios=[TRACES_F_SHARE, 1.0 - TRACES_F_SHARE])
+        # the trace's share of the tab over the motion plot; the splitter drags it
+        self._ratios = implot.SubplotsRowColRatios(row_ratios=[TRACE_SHARE, 1.0 - TRACE_SHARE])
         if tab:
-            height = TRACES_RTMC_PANEL_HEIGHT if self.rtmc else TRACES_PANEL_HEIGHT
-            self.strip.register(TopPanel("line_traces", "Line traces", self.draw_tab, height, None, 10))
+            height = TRACES_MOTION_PANEL_HEIGHT if self.motion else TRACES_PANEL_HEIGHT
+            self.strip.register(TopPanel("traces", "Traces", self.draw_tab, height, None, 10))
 
     def close(self) -> None:
-        self.strip.unregister("line_traces")
+        self.strip.unregister("traces")
         if self._own_strip:
             self.strip.close()
 
@@ -1033,40 +1015,42 @@ class LineTracesPanel:
         from mbo_utilities.gui.imgui.lines import subplots
 
         ov = self.overlay
+        _changed, self.show_trace = imgui.checkbox("Trace##line_traces", self.show_trace)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("the selected line's trace; off gives the motion plot the whole tab")
+        if self.motion:
+            imgui.same_line(0, 12)
+            _changed, self.show_motion = imgui.checkbox("MC##line_traces", self.show_motion)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    f"{self.motion.y_label}: the motion correction applied while the scan ran, "
+                    "under the trace on the same time axis"
+                )
+        imgui.same_line(0, 12)
         imgui.text_disabled(
             f"ROI {ov.selected} · t {ov.t_index / self.fs:.3f} s · raw F (band) and 25 ms mean; "
-            "drag the cursor to scrub, drag pans, scroll zooms"
+            "drag the cursor to scrub, drag pans, scroll zooms, double-click fits"
         )
-        imgui.same_line(0, 12)
-        if imgui.button("fit##line_traces"):
-            self._fit = True
-        if self.rtmc:
-            imgui.same_line(0, 12)
-            _changed, self._show_f = imgui.checkbox("F##line_traces_show", self._show_f)
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("show the F plot; off gives the motion plot the whole tab")
-            imgui.same_line(0, 12)
-            self.rtmc.draw_checkboxes("line_rtmc")
         avail = max(imgui.get_content_region_avail().y - 2, 60.0)
-        rtmc_on = self.rtmc.shown
-        linked = self._show_f and rtmc_on
+        show_motion = bool(self.motion) and self.show_motion
+        linked = self.show_trace and show_motion
         if linked != self._linked:
             # in or out of the subplots both plots are new to implot
             self._linked = linked
             self._fit = True
-            self.rtmc.refit()
+            self.motion.refit()
         if linked:
             link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
             with subplots("##line_traces_sub", 2, 1, avail, flags=link, ratios=self._ratios) as ok:
                 if ok:
                     self.draw(-1.0)
-                    self.draw_rtmc(-1.0)
-        elif self._show_f:
+                    self.draw_motion(-1.0)
+        elif self.show_trace:
             self.draw(avail)
-        elif rtmc_on:
-            self.draw_rtmc(avail)
+        elif show_motion:
+            self.draw_motion(avail)
         else:
-            imgui.text_disabled("nothing to plot: tick F or an RTMC trace")
+            imgui.text_disabled("nothing to plot: tick Trace or MC")
 
     def draw(self, height: float) -> None:
         from imgui_bundle import implot
@@ -1093,11 +1077,11 @@ class LineTracesPanel:
             if held:
                 ov.goto_time(cursor)
 
-    def draw_rtmc(self, height: float) -> None:
+    def draw_motion(self, height: float) -> None:
         """The motion plot with the Timepoint cursor; dragging it scrubs."""
         ov = self.overlay
-        cursor, held = self.rtmc.draw(
-            "##line_rtmc_plot", height, cursor=ov.t_index / self.fs, cursor_id=98, duration_s=self.duration_s,
+        cursor, held = self.motion.draw(
+            "##line_motion_plot", height, cursor=ov.t_index / self.fs, cursor_id=98, duration_s=self.duration_s,
         )
         if held:
             ov.goto_time(cursor)
@@ -1537,9 +1521,9 @@ def open_linescan_viewer(
     else:
         # the strip holds the curation panel, else the raw traces tab
         # sized for the panel the traces will bring, even while they compute
-        rtmc = bool(ref_arr.metadata.get("mesc_rtmc"))
+        motion = ref_arr.motion_correction is not None
         panel = (0 if job is None else CURATION_PANEL_HEIGHT if curation
-                 else TRACES_RTMC_PANEL_HEIGHT if rtmc else TRACES_PANEL_HEIGHT)
+                 else TRACES_MOTION_PANEL_HEIGHT if motion else TRACES_PANEL_HEIGHT)
         figure_kwargs = _figure_kwargs_for_here(
             fit=dict(
                 image_hw=ref_view.shape[-2:],
@@ -1609,11 +1593,11 @@ def open_linescan_viewer(
 
             if curation:
                 line_curation = LineCuration.build(ndw, overlay, ref_arr, traces, mesc_path, ref_key)
-            # the raw trace and the RTMC traces get a tab beside Curation on
+            # the raw trace and the motion plot get a tab beside Curation on
             # the same strip, or their own strip without curation
             strip = TopStrip(ndw.figure) if line_curation is None else line_curation.widget.strip
             traces_panel = LineTracesPanel(ndw, overlay, traces, strip, line_curation is None,
-                                           rtmc=ref_arr.rtmc)
+                                           motion=ref_arr.motion_correction)
 
         def switch(key: str) -> None:
             # a new window for the other scan on the running loop, then this

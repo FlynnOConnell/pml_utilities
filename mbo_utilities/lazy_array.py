@@ -16,7 +16,10 @@ from __future__ import annotations
 
 from os.path import commonpath
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from mbo_utilities.arrays.features import MotionCorrection
 
 # canonical dims by reported rank (OME-NGFF 0.5: time -> channel -> space)
 _DEFAULT_DIMS_BY_NDIM: dict[int, tuple[str, ...]] = {
@@ -280,6 +283,14 @@ class LazyArray:
 
     def has_dim(self, label: str) -> bool:
         return self.dim_index(label) is not None
+
+    @property
+    def motion_correction(self) -> MotionCorrection | None:
+        """The shifts a motion-correction stage applied over this recording
+        (``features.MotionCorrection``), or None when the source records none.
+        A reader whose format carries them overrides this: MESc's RTMC curves
+        today; a registration's per-frame offsets take the same shape."""
+        return None
 
     @property
     def source_path(self) -> Path | None:

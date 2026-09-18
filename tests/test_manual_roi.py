@@ -2749,7 +2749,7 @@ class TestTracePlotView:
         widget.select_trace(rows[0])
         assert self._fits(widget) >= 1
 
-    def test_fit_button_overrides_autofit_off(self, widget):
+    def test_a_forced_fit_overrides_autofit_off(self, widget):
         rows = self._two_traces(widget)
         widget.select_trace(rows[0])
         widget.autofit = False
@@ -2776,6 +2776,44 @@ class TestTracePlotView:
         widget.x_unit = "seconds"
         self._fits(widget)
         assert widget.x_unit == "frames"
+
+    def test_a_recordings_motion_correction_draws_under_the_trace(self, widget):
+        from mbo_utilities.arrays.features import MotionCorrection
+        from mbo_utilities.gui.imgui.motion import MotionPlot
+        from mbo_utilities.gui.manual_roi import MOTION_PANEL_HEIGHT, PANEL_HEIGHT
+
+        # a movie without one: no MC checkbox, the tab keeps its height
+        assert not widget.motion
+        rows = self._two_traces(widget)
+        widget.select_trace(rows[0])
+        self._fits(widget)
+        assert widget._traces_panel.height == PANEL_HEIGHT
+
+        t = np.arange(600) / 100.0
+        widget.motion = MotionPlot(MotionCorrection("RTMC", "um", {"X": (t, np.sin(t)), "Z": (t, t)}))
+        widget._fs_read, widget._fs_value = True, 10.0
+        # trace and motion in linked subplots, in frames, seconds and ms
+        for unit in ("frames", "seconds", "ms"):
+            widget.x_unit = unit
+            widget._force_fit = True
+            assert self._fits(widget) >= 1
+            assert widget._traces_panel.height == MOTION_PANEL_HEIGHT
+        # either plot alone, then neither
+        widget.show_trace = False
+        self._fits(widget)
+        assert widget._traces_panel.height == MOTION_PANEL_HEIGHT
+        widget.show_trace, widget.show_motion = True, False
+        self._fits(widget)
+        assert widget._traces_panel.height == PANEL_HEIGHT
+        widget.show_trace = False
+        self._fits(widget)
+        # the motion plot needs no trace at all
+        widget.show_motion = True
+        widget.trace_sel.clear()
+        widget.trace_sets.clear()
+        widget.selected = -1
+        self._fits(widget)
+        assert widget._traces_panel.height == MOTION_PANEL_HEIGHT
 
 
 class TestStripCollapse:
