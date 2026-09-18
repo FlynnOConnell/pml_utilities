@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import click
 import h5py
 import numpy as np
 from imgui_bundle import portable_file_dialogs as pfd
@@ -50,13 +51,23 @@ class MasknmfViewers:
     ``open(kind)`` builds the viewer once and shows it. The compression
     viewer needs the run's PMD export and a raw movie: the plane binary when
     the folder has one, otherwise ``raw_path`` or a file picked in a native
-    dialog before the viewer is built.
+    dialog before the viewer is built. The demixing viewer takes the same raw
+    movie as an extra panel when there is one, and the shifts of
+    ``motion_correction_path`` (or the motion export beside the result) as a
+    trace panel.
     """
 
-    def __init__(self, path: Path | str, device: str | None = None, raw_path: Path | str | None = None):
+    def __init__(
+        self,
+        path: Path | str,
+        device: str | None = None,
+        raw_path: Path | str | None = None,
+        motion_correction_path: Path | str | None = None,
+    ):
         self.files = run_files(path)
         self.path = self.files["demixing"]
         self.raw_path = None if raw_path is None else Path(raw_path)
+        self.motion_correction_path = None if motion_correction_path is None else Path(motion_correction_path)
         self._vis: dict[str, object] = {}
         with h5py.File(self.path, "r") as f:
             prov = json.loads(f.attrs["mbo_provenance"]) if "mbo_provenance" in f.attrs else {}
@@ -74,6 +85,27 @@ class MasknmfViewers:
     def timings(self) -> np.ndarray | None:
         return np.arange(self._nframes) / self._fs if self._fs else None
 
+    def _raw_movie(self, required: bool):
+        """The raw movie: the plane binary beside the result, else ``raw_path``, else a picked file when required, else None."""
+        if self.files["raw"] is not None and self.files["ops"] is not None:
+            ops = np.load(self.files["ops"], allow_pickle=True).item()
+            ly, lx = int(ops["Ly"]), int(ops["Lx"])
+            nframes = self.files["raw"].stat().st_size // (ly * lx * 2)
+            return np.memmap(self.files["raw"], dtype=np.int16, mode="r", shape=(nframes, ly, lx))
+        if self.raw_path is None:
+            if not required:
+                return None
+            picked = pfd.open_file("Raw movie for masknmf's compression viewer", str(self.path.parent)).result()
+            if not picked:
+                raise FileNotFoundError(f"no data_raw.bin beside {self.path.name} and no raw movie picked")
+            self.raw_path = Path(picked[0])
+        from mbo_utilities.reader import imread
+
+        raw = imread(self.raw_path).squeeze()
+        if raw.ndim != 3:
+            raise ValueError(f"{self.raw_path.name} is not a single-plane movie: shape {raw.shape}")
+        return raw
+
     def open(self, kind: str):
         """Show masknmf's ``kind`` viewer, building it on first use."""
         if kind not in KINDS:
@@ -88,33 +120,23 @@ class MasknmfViewers:
         if kind == "demixing":
             results = masknmf.DemixingResults.from_hdf5(str(self.path), device=self.device)
             vis = SingleSessionDemixingVis(
-                results, frame_timings=self.timings, device=self.device, source_path=self.path
+                results,
+                frame_timings=self.timings,
+                device=self.device,
+                source_path=self.path,
+                raw=self._raw_movie(required=False),
+                motion_correction_path=self.motion_correction_path,
             )
+            if vis.raw is None:
+                click.echo("no raw movie: `mbo view ... --raw <movie>` adds the raw panel")
+            if vis.shifts is None:
+                click.echo("no motion shifts: `mbo view ... --motion-correction <hdf5>` adds the shift traces")
         elif kind == "classification":
             vis = ClassificationVis.from_masknmf([str(self.path)])
         else:
             if self.files["compression"] is None:
                 raise FileNotFoundError(f"no {PMD_FILE} beside {self.path.name}")
-            if self.files["raw"] is not None and self.files["ops"] is not None:
-                ops = np.load(self.files["ops"], allow_pickle=True).item()
-                ly, lx = int(ops["Ly"]), int(ops["Lx"])
-                nframes = self.files["raw"].stat().st_size // (ly * lx * 2)
-                raw = np.memmap(self.files["raw"], dtype=np.int16, mode="r", shape=(nframes, ly, lx))
-            else:
-                if self.raw_path is None:
-                    picked = pfd.open_file(
-                        "Raw movie for masknmf's compression viewer", str(self.path.parent)
-                    ).result()
-                    if not picked:
-                        raise FileNotFoundError(
-                            f"no data_raw.bin beside {self.path.name} and no raw movie picked"
-                        )
-                    self.raw_path = Path(picked[0])
-                from mbo_utilities.reader import imread
-
-                raw = imread(self.raw_path).squeeze()
-                if raw.ndim != 3:
-                    raise ValueError(f"{self.raw_path.name} is not a single-plane movie: shape {raw.shape}")
+            raw = self._raw_movie(required=True)
             pmd = masknmf.PMDArray.from_hdf5(str(self.files["compression"]))
             moco = raw
             if self.files["motion"] is not None:

@@ -861,6 +861,8 @@ def _run_gui_impl(
     mode: str = "Fastplotlib viewer (default)",
     unit: int | str | None = None,
     vis: str = "demixing",
+    raw_path: str | Path | None = None,
+    motion_correction_path: str | Path | None = None,
 ):
     """Internal implementation of run_gui with all heavy imports."""
     # Apply persisted Options (GPU adapter, debug logging) before any
@@ -939,7 +941,9 @@ def _run_gui_impl(
                 )
             from mbo_utilities.gui.masknmf_vis import MasknmfViewers
 
-            viewers = MasknmfViewers(data_in)
+            viewers = MasknmfViewers(
+                data_in, raw_path=raw_path, motion_correction_path=motion_correction_path
+            )
             output = viewers.open(vis)
             if in_notebook():
                 display_widget(output)
@@ -1571,6 +1575,8 @@ def run_gui(
     runner_params: Any | None = None,
     unit: int | str | None = None,
     vis: str = "demixing",
+    raw_path: str | Path | None = None,
+    motion_correction_path: str | Path | None = None,
 ):
     """
     Open a GUI to preview data of any supported type.
@@ -1578,6 +1584,9 @@ def run_gui(
     A masknmf demixing result opens in masknmf's own viewer instead:
     ``vis`` picks ``demixing`` (default), ``compression`` or
     ``classification`` before launch; the viewer window is masknmf's as is.
+    ``raw_path`` and ``motion_correction_path`` give the demixing viewer its
+    raw panel and shift traces (and the compression viewer its raw movie);
+    omitted, the files beside the result are used when present.
 
     The one-call form of ``DataVis``: it builds the viewer, picks the canvas
     and size for wherever it is running, and shows it. In a terminal or
@@ -1657,6 +1666,8 @@ def run_gui(
         runner_params=runner_params,
         unit=unit,
         vis=vis,
+        raw_path=raw_path,
+        motion_correction_path=motion_correction_path,
     )
 
 
