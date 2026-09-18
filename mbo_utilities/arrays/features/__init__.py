@@ -61,6 +61,7 @@ from mbo_utilities.arrays.features._frame_average import (
     FrameAverageFeature,
     apply_read_features,
 )
+from mbo_utilities.arrays.features._motion import MOTION_AXES, MotionCorrection
 from mbo_utilities.arrays.features._phase_correction import (
     PhaseCorrectionFeature,
     PhaseCorrectionMixin,
@@ -120,6 +121,7 @@ __all__ = [
     "DIM_ALIASES",
     "DIM_DESCRIPTIONS",
     "KNOWN_ORDERINGS",
+    "MOTION_AXES",
     "SPATIAL_DIMS",
     "TAG_REGISTRY",
     # base
@@ -134,6 +136,8 @@ __all__ = [
     "get_ome_axis_type",
     "get_ome_axis_unit",
     "normalize_dims",
+    # motion correction
+    "MotionCorrection",
     # dim specs
     "DimRole",
     "DimensionSpec",

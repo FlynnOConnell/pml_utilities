@@ -81,6 +81,9 @@ from mbo_utilities.gui.imgui import (
 )
 from mbo_utilities import log
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
+from mbo_utilities.gui.imgui.lines import subplots
+from mbo_utilities.gui.imgui.motion import MotionPlot
+from mbo_utilities.lazy_array import base_array
 from mbo_utilities.annotation import UNLABELED, LabelsZarr, RoiLabelStore
 from mbo_utilities.arrays.features import find_slider_name
 from mbo_utilities.gui._imgui_helpers import (
@@ -151,6 +154,10 @@ PANEL_LOCATION = "top"
 # height the ROI / Traces bodies ask the top strip for (the strip adds the
 # menu row and its tab bar on top of this)
 PANEL_HEIGHT = 200
+# the Traces tab with the motion plot under the trace, and the trace's
+# share of it until the splitter between them is dragged
+MOTION_PANEL_HEIGHT = 340
+TRACE_SHARE = 0.6
 
 # a card narrower than this clips its controls, so instead of squeezing them
 # the row wraps and the panel asks the strip for another row's height (the
@@ -480,6 +487,7 @@ class ManualRoiWidget:
         self.zdim = find_slider_name(iw.dim_names, "z")
         self.tdim = find_slider_name(iw.dim_names, "t")
         self.cdim = find_slider_name(iw.dim_names, "c")
+        self._bind_motion()
         # every scrolling dim except time keys its own mask plane, so masks
         # follow the channel / z / any extra slider; z sits last in the flat
         # order so a z-only store keeps plane == z and old stores restore
@@ -614,6 +622,15 @@ class ManualRoiWidget:
         self.autofit = True
         self._force_fit = False
         self.x_unit = X_UNITS[0]
+        # the Traces tab shows the trace plot, and the motion plot under it
+        # in linked subplots when the recording went through motion
+        # correction (MC); the splitter's share is kept between frames
+        self.show_trace = True
+        self.show_motion = True
+        self._motion_linked = False
+        self._motion_ratios = implot.SubplotsRowColRatios(row_ratios=[TRACE_SHARE, 1.0 - TRACE_SHARE])
+        # drawn on the tab in place of "no traces" while a host computes them
+        self.pending_traces = None
         self._fs_value: float | None = None
         self._fs_read = False
 
@@ -641,9 +658,8 @@ class ManualRoiWidget:
             "roi", "ROI", self._draw_roi_panel, PANEL_HEIGHT, "rois", 10
         )
         self.tools_window.register(self._roi_panel)
-        self.tools_window.register(
-            TopPanel("traces", "Traces", self.draw_traces, PANEL_HEIGHT, "traces", 11)
-        )
+        self._traces_panel = TopPanel("traces", "Traces", self.draw_traces, PANEL_HEIGHT, "traces", 11)
+        self.tools_window.register(self._traces_panel)
 
         self._closed = False
         self._restore()
@@ -654,6 +670,12 @@ class ManualRoiWidget:
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
+
+    def _bind_motion(self) -> None:
+        """The motion correction of the array on screen, for the Traces tab."""
+        data = getattr(self.iw, "data", None)
+        arr = base_array(data[0]) if data else None
+        self.motion = MotionPlot(getattr(arr, "motion_correction", None))
 
     def rebind(self):
         """Re-derive dims and mask geometry after ``self.iw``'s array is
@@ -671,6 +693,7 @@ class ManualRoiWidget:
         self.zdim = find_slider_name(iw.dim_names, "z")
         self.tdim = find_slider_name(iw.dim_names, "t")
         self.cdim = find_slider_name(iw.dim_names, "c")
+        self._bind_motion()
 
         axes = []
         for name in iw.dim_names:
@@ -1282,6 +1305,9 @@ class ManualRoiWidget:
         self._trace_fit = True
         origin, name, k = key
         if origin == "uid":
+            ts = self.trace_sets.get(name)
+            if ts is not None and ts.external:
+                return
             index = self.store.uid_index(k)
             if index is not None:
                 self.trace_uid = k
@@ -3656,9 +3682,13 @@ class ManualRoiWidget:
         return None if hit is None else self._derived_entry(hit[1].result, k)
 
     def _key_to_pair(self, key) -> tuple[int, int] | None:
-        """``(si, k)`` behind one trace key, or None when the ROI is gone."""
+        """``(si, k)`` behind one trace key, or None when the ROI is gone
+        (an external set's rows stand for no ROI)."""
         origin, name, k = key
         if origin == "uid":
+            ts = self.trace_sets.get(name)
+            if ts is not None and ts.external:
+                return None
             index = self.store.uid_index(k)
             return (-1, index) if index is not None else None
         hit = self._set_by_name(name)
@@ -3713,14 +3743,22 @@ class ManualRoiWidget:
 
     def draw_traces(self):
         """The Traces tab: the trace-table selection (else the shown ROI)
-        as pannable, zoomable lines, the cursor bound to the viewer's t."""
+        as pannable, zoomable lines, the cursor bound to the viewer's t, and
+        under it, on the same time axis, the motion correction the recording
+        went through (``MC``) when it has one."""
         target = self._plot_lines()
-        if target is None:
-            imgui.text_disabled(
-                f"No traces yet. Use {TRACE_ICON} on a row of the ROIs tab, or run a process."
+        motion = self.motion if self.motion else None
+        _changed, self.show_trace = imgui.checkbox("Trace", self.show_trace)
+        set_tooltip("The selected traces; off gives the motion plot the whole tab.", show_mark=False)
+        if motion is not None:
+            imgui.same_line(0, 12)
+            _changed, self.show_motion = imgui.checkbox("MC", self.show_motion)
+            set_tooltip(
+                f"{motion.y_label}: the motion correction the recording went through, "
+                "under the trace on the same time axis.",
+                show_mark=False,
             )
-            return
-        header, lines = target
+        imgui.same_line(0, 12)
         changed, self.correct_neuropil = imgui.checkbox(
             "neuropil corrected", self.correct_neuropil
         )
@@ -3734,15 +3772,12 @@ class ManualRoiWidget:
         changed, self.autofit = imgui.checkbox("autofit", self.autofit)
         set_tooltip(
             "Refit the axes to whatever is plotted. Turn it off to keep the "
-            "stretch you zoomed to while stepping through ROIs.",
+            "stretch you zoomed to while stepping through ROIs; double-click "
+            "the plot to fit it once.",
             show_mark=False,
         )
         if changed and self.autofit:
             self._force_fit = True
-        imgui.same_line(0, 6)
-        if imgui.button("fit"):
-            self._force_fit = True
-        set_tooltip("Fit the axes to the plotted traces now", show_mark=False)
         imgui.same_line(0, 10)
         units = self.x_units()
         if self.x_unit not in units:
@@ -3760,15 +3795,64 @@ class ManualRoiWidget:
             # show anything sensible
             self._force_fit = True
         imgui.same_line(0, 12)
-        proj, size = self._window_spec()
-        window = f" · {proj} {size}" if size > 1 else ""
-        imgui.text_disabled(f"{header}, frame {self.current_frame()}{window}")
-        set_tooltip(
-            "drag pans, scroll zooms, double-click fits · "
-            "shift+scroll zooms x only, alt+scroll zooms y only",
-            show_mark=False,
-        )
+        if target is not None:
+            header, lines = target
+            proj, size = self._window_spec()
+            window = f" · {proj} {size}" if size > 1 else ""
+            imgui.text_disabled(f"{header}, frame {self.current_frame()}{window}")
+            set_tooltip(
+                "drag pans, scroll zooms, double-click fits · "
+                "shift+scroll zooms x only, alt+scroll zooms y only",
+                show_mark=False,
+            )
+        elif self.pending_traces is not None:
+            self.pending_traces()
+        else:
+            imgui.text_disabled(
+                f"No traces yet. Use {TRACE_ICON} on a row of the ROIs tab, or run a process."
+            )
+        show_trace = self.show_trace and target is not None
+        show_motion = motion is not None and self.show_motion
+        self._traces_panel.height = MOTION_PANEL_HEIGHT if show_motion else PANEL_HEIGHT
+        linked = show_trace and show_motion
+        if linked != self._motion_linked:
+            # in or out of the subplots both plots are new to implot
+            self._motion_linked = linked
+            self._trace_fit = True
+            if motion is not None:
+                motion.refit()
+        if not show_trace and not show_motion:
+            return
         height = max(imgui.get_content_region_avail().y - 4, 60.0)
+        if linked:
+            link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
+            with subplots("##roi_trace_sub", 2, 1, height, flags=link, ratios=self._motion_ratios) as ok:
+                if ok:
+                    self._draw_trace_plot(lines, -1.0)
+                    self._draw_motion_plot(motion, -1.0)
+        elif show_trace:
+            self._draw_trace_plot(lines, height)
+        else:
+            self._draw_motion_plot(motion, height)
+
+    def _draw_motion_plot(self, motion: MotionPlot, height: float) -> None:
+        """The motion plot in the trace plot's x units with the playhead on
+        it; dragging the playhead scrubs the movie."""
+        cursor = self._cursor_scale()
+        rate = self.fs()
+        if self.x_unit == "frames":
+            per_second = rate / int(getattr(self.host, "frame_average", 1) or 1) if rate else 1.0
+        else:
+            per_second = 1000.0 if self.x_unit == "ms" else 1.0
+        moved, held = motion.draw(
+            "##roi_motion_plot", height, cursor=float(self.current_frame()) * cursor, cursor_id=1,
+            x_per_second=per_second, x_label=X_AXIS_LABELS[self.x_unit],
+        )
+        if held and cursor:
+            self.set_frame(round(moved / cursor))
+
+    def _draw_trace_plot(self, lines, height: float) -> None:
+        """The trace plot; inside subplots ``height`` is the cell's."""
         if implot.get_current_context() is None:
             implot.create_context()
         key = tuple(label for label, _ in lines)

@@ -75,6 +75,7 @@ from mbo_utilities.arrays._base import (
     _normalize_key,
 )
 from mbo_utilities.arrays.features import (
+    MotionCorrection,
     PhaseCorrectionFeature,
     PhaseCorrectionMixin,
     RoiFeatureMixin,
@@ -468,6 +469,19 @@ def _rtmc_traces(curves: dict[str, dict]) -> dict[str, dict]:
         label = f"{m[1]} {m[2]}" + (f" layer {m[3]}" if m[3] else "")
         traces[label] = {"t": curve["timestamps"] / 1000.0, "um": curve["values"]}
     return traces
+
+
+def rtmc_motion(rtmc: dict[str, dict]) -> MotionCorrection | None:
+    """The RTMC traces as the motion correction the scan went through: the
+    ``total`` curves (the shift applied, per axis and per layer of a
+    z-stack) labelled by axis, in µm; None when RTMC never moved. The
+    ``intercycle`` increments stay in :attr:`MescArray.rtmc`."""
+    traces = {
+        label.replace(" total", ""): (np.asarray(tr["t"], dtype=np.float64), np.asarray(tr["um"], dtype=np.float64))
+        for label, tr in rtmc.items()
+        if " total" in label
+    }
+    return MotionCorrection("RTMC", "um", traces) if traces else None
 
 
 def unit_rtmc(path, unit: str) -> dict[str, dict]:
@@ -1341,6 +1355,11 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         one per axis and kind (``total`` / ``intercycle``, ``layer N`` for a
         z-stack). Empty when RTMC never ran or never moved."""
         return self._rtmc
+
+    @property
+    def motion_correction(self) -> MotionCorrection | None:
+        """The RTMC totals as a :class:`MotionCorrection` (``rtmc_motion``)."""
+        return rtmc_motion(self._rtmc)
 
     @property
     def metadata(self) -> dict:

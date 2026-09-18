@@ -377,6 +377,7 @@ sliders, labelled with the axis names the array reports.
 | `mesc_light_paths` / `mesc_dichroic` | interleaved light paths per scanner frame, and whether switching is on |
 | `mesc_raw_frame_rate` | scanner frame rate, `1000 / TStepInMs`, before the light-path split |
 | `mesc_flip_y` | whether Y was flipped on read |
+| `mesc_rtmc` | labels of the real-time motion-correction curves the unit carries (`X total`, `X intercycle`, `Z total layer 3`); `arr.rtmc` holds them in µm, `arr.motion_correction` the applied totals as the `MotionCorrection` every reader shares (the viewer's Traces tab draws it under the trace behind `MC`) |
 | `mesc_background_unit` / `mesc_rtmc_unit` | keys of the snapshot the ROIs were drawn on (`BackgroundImagePath`) and of the real-time motion-correction stream MEScan watched (`MotionCorrectionImagePath`); `None` when the scan links none. `mbo.imread(path, unit=md["mesc_rtmc_unit"])` opens the stream |
 
 #### Frame rate and dichroic switching

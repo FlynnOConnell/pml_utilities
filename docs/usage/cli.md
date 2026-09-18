@@ -449,9 +449,9 @@ progress follows each ROI read and each domain denoised, and its log lists
 every step with its time and memory. **Curate** opens the curation window
 (`mbo curate`, its own process) on the folder once it is written, before
 that on the file's raw lines. The curation window only reads results: every
-scan of the PF folder is listed, and a scan that ran with real-time motion
-correction shows its RTMC traces over the candidate trace on the same time
-axis. `mbo scan.mesc` opens on the first scan the folder holds.
+scan of the PF folder is listed, and a scan that went through motion
+correction (the AOD's RTMC) shows it over the candidate trace on the same time
+axis behind the `MC` checkbox. `mbo scan.mesc` opens on the first scan the folder holds.
 
 ## Formats
 

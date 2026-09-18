@@ -239,6 +239,31 @@ Pinned by `tests/test_roundtrip.py`, `tests/test_zarr_chunking.py`,
 
 Pinned by `tests/test_selection_canonical.py`.
 
+### 5.8 Motion correction
+
+A recording that went through motion correction reports the shifts the stage
+applied as `arr.motion_correction`, a `features.MotionCorrection` or `None`
+(`LazyArray` answers `None`; a reader overrides it):
+
+| Field | Meaning |
+|-------|---------|
+| `source` | the stage, as a plot labels it: `RTMC` today; `suite2p`, `masknmf` when their per-frame offsets land |
+| `unit` | `um` for the AOD's real-time correction, `px` for a registration's offsets |
+| `traces` | `{label: (t, shift)}`, `t` in seconds on the recording's T axis, one trace per axis; a label starts with its axis letter (`X`, `Z layer 3`) |
+
+- `MescArray.motion_correction` is the `total` RTMC curves (`rtmc_motion`); the
+  `intercycle` increments stay on `arr.rtmc`. A unit that armed RTMC without it
+  ever moving reports `None`.
+- One GUI consumer: `gui/imgui/motion.MotionPlot`, drawn under the trace in
+  linked subplots by the Traces tab (`manual_roi.draw_traces`), the line-scan
+  viewer's `LineTracesPanel` and the curation dashboard, behind one `MC`
+  checkbox. The plot never clamps its x axis to the traces on disk: a pipeline
+  run on a frame window leaves shorter traces than the recording.
+- Adding a source means overriding `motion_correction` on the reader; nothing in
+  `gui` names a source.
+
+Pinned by `tests/test_motion_plot.py`, `tests/test_mesc.py`.
+
 ## 6. Metadata: the canonical vocabulary
 
 `arr.metadata` is a plain dict. One **canonical key** per physical quantity is

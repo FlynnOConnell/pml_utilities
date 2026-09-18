@@ -866,6 +866,26 @@ def test_units_without_rtmc_report_none(mesc_path):
     arr = MescArray(mesc_path, unit="MUnit_2")
     assert arr.rtmc == {}
     assert arr.metadata["mesc_rtmc"] == []
+    assert arr.motion_correction is None
+    arr.close()
+
+
+def test_rtmc_totals_are_the_units_motion_correction(mesc_path):
+    from mbo_utilities.arrays.features import MotionCorrection
+    from mbo_utilities.arrays.mesc import rtmc_motion
+
+    arr = MescArray(mesc_path, unit="MUnit_1")
+    motion = arr.motion_correction
+    assert isinstance(motion, MotionCorrection) and motion
+    assert motion.source == "RTMC" and motion.unit == "um"
+    # the applied shift per axis (and per layer of a z-stack), labelled by
+    # axis; the intercycle increments stay on ``rtmc``
+    assert sorted(motion.traces) == ["X", "Y", "Y layer 3"]
+    t, um = motion.traces["X"]
+    np.testing.assert_allclose(um, np.arange(5))
+    np.testing.assert_allclose(t, np.arange(5) * 0.03 / 1000.0)
+    assert motion.duration_s == pytest.approx(4 * 0.03 / 1000.0)
+    assert rtmc_motion(arr.rtmc).traces.keys() == motion.traces.keys()
     arr.close()
 
 
