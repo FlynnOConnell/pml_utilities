@@ -62,12 +62,8 @@ __all__ = [
     "neighbour_slices",
     "um_to_pixels",
     "image_overlays",
+    "line_positions",
 ]
-
-
-# ---------------------------------------------------------------------------
-# raw attr readers
-# ---------------------------------------------------------------------------
 
 
 def _outlines_of(unit) -> list[np.ndarray] | None:
@@ -148,11 +144,6 @@ def zstack_depth_info(mesc_path, unit_key: str) -> dict | None:
             "max_z": float(unit.attrs["MaxZ"]),
             "zdim": int(unit.attrs["ZDim"]),
         }
-
-
-# ---------------------------------------------------------------------------
-# depth placement
-# ---------------------------------------------------------------------------
 
 
 def _z_step(depth: dict) -> float:
@@ -258,11 +249,6 @@ def neighbour_slices(current: int, occupied) -> tuple[int | None, int | None]:
     below = [s for s in occ if s < current]
     above = [s for s in occ if s > current]
     return (below[-1] if below else None, above[0] if above else None)
-
-
-# ---------------------------------------------------------------------------
-# XY placement
-# ---------------------------------------------------------------------------
 
 
 def um_to_pixels(
@@ -406,4 +392,55 @@ def image_overlays(
                         "on_plane": bool(on),
                     }
                 )
+    return out
+
+
+def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = None) -> list[dict] | None:
+    """Where each of a multi-ROI unit's scanned lines or patches sits, one
+    dict per ROI in ROI order, or None when the unit has no geometry.
+
+    Everything is in the file's absolute micron frame (the one every
+    ``ReferenceViewportJSON`` and ``driftEndPoints`` share)::
+
+        index       ROI index (the unit's ROI / Z axis position)
+        start_um    ``[x, y, z]`` of the first point
+        end_um      ``[x, y, z]`` of the last point (a patch: its second corner)
+        z_um        mean depth of the ROI
+        length_um   XY length first -> last point
+        sample_um   microns per pixel along the line, from ``sample_counts``
+                    (``mesc_roi_extents[i]["width"]``); None without them
+        dz_um       depth against the snapshot the lines were drawn on (the
+                    unit's ``BackgroundImagePath``); None without one
+
+    The snapshot's plane is where MESc draws every line whatever its depth;
+    ``dz_um`` says how far off that plane each one really is.
+    """
+    with h5py.File(mesc_path, "r") as f:
+        unit = f.get(unit_key)
+        if unit is None:
+            return None
+        outlines = _outlines_of(unit)
+        if not outlines:
+            return None
+        raw = unit.attrs.get("BackgroundImagePath")
+        path = raw.decode() if isinstance(raw, bytes) else raw
+        snapshot = _viewport_of(f[path]) if path and path in f else None
+    out = []
+    for i, seg in enumerate(outlines):
+        seg = np.asarray(seg, dtype=float)
+        end = 1 if seg.shape[1] == 4 else -1
+        length = float(np.hypot(*(seg[:2, end] - seg[:2, 0])))
+        n = None if sample_counts is None or i >= len(sample_counts) else int(sample_counts[i])
+        z_um = float(seg[2].mean())
+        out.append(
+            {
+                "index": i,
+                "start_um": [float(v) for v in seg[:, 0]],
+                "end_um": [float(v) for v in seg[:, end]],
+                "z_um": z_um,
+                "length_um": length,
+                "sample_um": (length / n) if n else None,
+                "dz_um": None if snapshot is None else z_um - snapshot["transl"][2],
+            }
+        )
     return out

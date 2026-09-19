@@ -100,6 +100,9 @@ def test_the_plot_draws_alone_in_frames_and_in_linked_subplots():
 
 class FakeOverlay:
     def __init__(self):
+        from mbo_utilities.gui.playhead import Playhead
+
+        self.playhead = Playhead()
         self.fs = 1000.0
         self.selected = 0
         self.t_index = 10
