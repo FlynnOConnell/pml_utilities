@@ -1726,9 +1726,10 @@ class TestTracesTab:
         right edge. The last column is the delete button, not a stat."""
         from mbo_utilities.gui.manual_roi import TRACE_COLUMNS
 
-        # "id", not "roi": beside an axis called ROI that reads as two of the same thing
+        # "id", not "roi": beside an axis called ROI that reads as two of the same thing;
+        # "pipeline", not "engine": a results file's rows say which pipeline wrote them
         assert [c[0] for c in TRACE_COLUMNS] == [
-            "id", "z", "c", "engine", "source", "frames", "peak", ""
+            "id", "z", "c", "pipeline", "source", "frames", "peak", ""
         ]
         assert [c[0] for c in TRACE_COLUMNS if c[2]] == ["source", "frames", "peak"]
 
@@ -1745,6 +1746,31 @@ class TestTracesTab:
         values = (widget._trace_shown(key)[0], *widget._trace_cells(key)[1:5], n, peak)
         assert len(values) == len(TRACE_COLUMNS) - 1
         assert widget._trace_cells(key) == ("0", "1", "1", "mean", "quick")
+
+    def test_results_rows_are_named_by_their_roi(self, widget, tmp_path):
+        """A line unit's rows read as the ROI: ``roi0`` for its denoised trace,
+        ``roi0 (raw)`` for its one line, and a line of a multi-line ROI adds
+        itself; every row carries its line on z and the pipeline's channel."""
+        from mbo_utilities.results import ResultUnit, write_results
+
+        unit = ResultUnit(
+            name="scan3", kind="scan", index=3, fs=1000.0, roi_names=["roi0", "roi1"],
+            traces={"denoised": np.zeros((2, 8), np.float32)}, member_kind="line",
+            members=[np.array([4]), np.array([5, 7])],
+            member_traces={"raw": np.ones((3, 8), np.float32)},
+            attrs={"member_ids": [4, 5, 7]},
+        )
+        path = write_results(
+            tmp_path / "2026-09-16_session01.zarr", [unit], pipeline="voltage", source={"channel": 1}
+        )
+        assert widget.load_results(path)
+        rows = {t.name: t for t in widget.traces if t.source.startswith("2026-09-16_session01.zarr/")}
+        assert sorted(rows) == ["roi0", "roi0 (raw)", "roi1", "roi1 line 5 (raw)", "roi1 line 7 (raw)"]
+        assert (rows["roi0"].z, rows["roi0 (raw)"].z, rows["roi1 line 7 (raw)"].z) == (4, 4, 7)
+        assert all(t.c == 1 and t.engine == "voltage" for t in rows.values())
+        assert rows["roi0"].extra == {"line": 4} and "line" not in rows["roi1"].extra
+        # the table's ROI column shows the line (1-based), as for any placed row
+        assert widget._trace_cells(rows["roi0 (raw)"].key)[1:3] == ("5", "2")
 
     def test_deleting_a_trace_row_keeps_its_roi(self, widget):
         widget.add_roi(square(10, 10, 9))
@@ -2719,6 +2745,44 @@ class TestTracePlotView:
     def test_autofit_starts_on_in_frames(self, widget):
         assert widget.autofit is True
         assert widget.x_unit == "frames"
+
+    def test_x_unit_opens_in_seconds_when_the_data_has_a_rate(self, widget):
+        widget._fs_read, widget._fs_value = True, 10.0
+        assert widget.x_unit == "seconds"
+        widget.x_unit = "frames"
+        assert widget.x_unit == "frames"
+
+    def test_the_plotted_rows_pipelines_decide_the_panels_offer(self, widget):
+        """kind combo, neuropil checkbox and y label all come from the rows'
+        trace profiles (AGENTS.md §7.6, Trace display)."""
+        from mbo_utilities.annotation import RoiTrace
+
+        rows = [widget.traces.get(k) for k in self._two_traces(widget)]
+        # quick traces are mean-engine rows without a ring: no neuropil to offer
+        assert widget.neuropil_offered(rows) is False
+        assert widget.kind_options(rows) == ("dff", "raw")
+        assert widget.plot_y_label(rows) == "dF/F (%)"
+        s2p = RoiTrace(uid=0, member=0, source="run", engine="suite2p",
+                       F=np.ones(6, np.float32), Fneu=np.ones(6, np.float32))
+        volt = RoiTrace(uid=0, member=1, source="res", engine="voltage",
+                        norm=np.ones(6, np.float32), kinds={"denoised": np.ones(6, np.float32)})
+        assert widget.neuropil_offered([s2p]) is True and widget.neuropil_offered([volt]) is False
+        assert widget.kind_options([volt]) == ("dff", "denoised")
+        assert widget.plot_y_label([volt]) == "denoised"
+        widget.kind = "dff"
+        assert widget.plot_y_label([s2p, volt]) == "dF/F (%)"
+        # a kind one row lacks: that row keeps its default and the label says both
+        widget.kind = "raw"
+        assert widget.plot_y_label([s2p, volt]) == "F (a.u.) / denoised"
+        widget.kind = None
+        # the display cache follows the kind
+        widget.kind = "raw"
+        y, _ = widget._display(rows[0].key)
+        np.testing.assert_array_equal(y, rows[0].F)
+        widget._redisplay()
+        widget.kind = None
+        y, _ = widget._display(rows[0].key)
+        assert not np.array_equal(y, rows[0].F)
 
     def test_time_units_need_a_sampling_rate(self, widget):
         widget._fs_read, widget._fs_value = True, None

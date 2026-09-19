@@ -13,27 +13,33 @@ from typing import Any
 
 from imgui_bundle import imgui, imgui_ctx
 
+from mbo_utilities.arrays.mesc_geometry import zstack_contents
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.widgets._base import Widget
 
 _ACCENT = imgui.ImVec4(0.8, 0.8, 0.2, 1.0)
 _ERROR = imgui.ImVec4(1.0, 0.4, 0.4, 1.0)
 
-# (header, stretch weight, hidden by default); right-click the header to show
+# (header, hidden by default); columns fit their content and the table scrolls
+# sideways; right-click a header to show or hide one
 UNIT_COLUMNS = (
-    ("unit", 1.0, False),
-    ("modality", 1.4, False),
-    ("layout", 1.0, True),
-    ("T", 0.7, False),
-    ("C", 0.5, False),
-    ("Z", 0.5, False),
-    ("Y", 0.7, False),
-    ("X", 0.7, False),
-    ("fs", 0.8, False),
-    ("duration", 0.9, False),
-    ("start", 1.6, False),
-    ("comment", 3.0, False),
+    ("session", False),
+    ("unit", False),
+    ("modality", False),
+    ("layout", True),
+    ("ROIs", False),
+    ("links", False),
+    ("T", False),
+    ("C", False),
+    ("Z", False),
+    ("Y", False),
+    ("X", False),
+    ("fs", False),
+    ("duration", False),
+    ("start", False),
+    ("comment", False),
 )
+LINKS_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "links")
 
 
 def mesc_array_of(obj):
@@ -235,18 +241,43 @@ class MescUnitsWidget(Widget):
         self.parent._mesc_unit_cache = None
 
 
-def unit_row(info: dict) -> tuple[tuple[str, ...], tuple]:
+def unit_links(info: dict, contains: list[str] | tuple[str, ...] = ()) -> list[tuple[str, str]]:
+    """The units one unit is paired with, as ``(role, key)`` pairs: a scan's
+    snapshot (``drawn on``) and RTMC stream, a snapshot's scans (``background
+    of``), a stream's scan (``RTMC of``) and a Z-stack's scans (``holds``:
+    ``contains``, from ``mesc_geometry.zstack_contents``)."""
+    links = []
+    if info.get("background_unit"):
+        links.append(("drawn on", info["background_unit"]))
+    if info.get("rtmc_unit"):
+        links.append(("RTMC stream", info["rtmc_unit"]))
+    links += [("background of", k) for k in info.get("scans", ())]
+    links += [("RTMC of", k) for k in info.get("rtmc_of", ())]
+    links += [("holds", k) for k in contains]
+    return links
+
+
+def unit_row(info: dict, contains: list[str] | tuple[str, ...] = ()) -> tuple[tuple[str, ...], tuple]:
     """One table row per `list_mesc_units` entry: the cell texts and the sort
-    keys, both in UNIT_COLUMNS order (numbers sort as numbers)."""
+    keys, both in UNIT_COLUMNS order (numbers sort as numbers). The ``links``
+    cell is how many units this one is paired with (:func:`unit_links`); the
+    tab draws it as a button that lists them."""
     t, c, z, y, x = info["shape"]
     fs = info.get("fs")
     dur = info.get("duration_s")
     start = (info.get("start_time") or "")[:19].replace("T", " ")
     comment = " / ".join(info.get("comment", "").splitlines())
+    n = info.get("n_outlines", 0)
+    nouns = {"line": ("line", "lines"), "patch": ("patch", "patches")}
+    rois = f"{n} {nouns[info['outline_kind']][n != 1]}" if n else "-"
+    links = len(unit_links(info, contains))
     cells = (
+        info["session"],
         info["munit"],
         info["modality_name"],
         info["kind"],
+        rois,
+        str(links) if links else "-",
         str(t),
         str(c),
         str(z),
@@ -258,9 +289,12 @@ def unit_row(info: dict) -> tuple[tuple[str, ...], tuple]:
         comment,
     )
     keys = (
+        info["session"],
         info["index"],
         info["modality_name"],
         info["kind"],
+        n,
+        links,
         t,
         c,
         z,
@@ -294,6 +328,22 @@ class MescTabWidget(Widget):
     def is_supported(cls, parent: Any) -> bool:
         return MescUnitsWidget.is_supported(parent)
 
+    def _contains(self, mesc) -> dict[str, list[str]]:
+        """Each Z-stack's scans, placed once per file and kept on the parent."""
+        path = str(mesc.filenames[0])
+        cached = getattr(self.parent, "_mesc_zstack_contents", None)
+        if cached is None or cached[0] != path:
+            try:
+                contents = zstack_contents(path, mesc.units)
+            except Exception:
+                self.parent.logger.warning(
+                    f"{Path(path).name}: cannot place its scans on its Z-stacks", exc_info=True
+                )
+                contents = {}
+            cached = (path, contents)
+            self.parent._mesc_zstack_contents = cached
+        return cached[1]
+
     def draw(self) -> None:
         with imgui_ctx.begin_child(
             "##MescContent", imgui.ImVec2(0, 0), imgui.ChildFlags_.none
@@ -303,6 +353,7 @@ class MescTabWidget(Widget):
                 imgui.text_disabled("No .mesc file is open.")
                 return
             units = mesc.units
+            contains = self._contains(mesc)
             self._units._cache().setdefault(mesc.unit_key, mesc)
             split = len(self.parent.image_widget.data) > 1
 
@@ -322,22 +373,26 @@ class MescTabWidget(Widget):
             flags = (
                 imgui.TableFlags_.sortable | imgui.TableFlags_.row_bg
                 | imgui.TableFlags_.borders_inner_h | imgui.TableFlags_.scroll_y
-                | imgui.TableFlags_.resizable | imgui.TableFlags_.hideable
-                | imgui.TableFlags_.sizing_stretch_prop
+                | imgui.TableFlags_.scroll_x | imgui.TableFlags_.resizable
+                | imgui.TableFlags_.hideable | imgui.TableFlags_.sizing_fixed_fit
             )
             avail = imgui.get_content_region_avail()
+            # a new table id whenever the columns change: imgui restores a
+            # saved layout by column index, so the old widths would land on
+            # the wrong columns
             if not imgui.begin_table(
-                "##mesc_units_table", len(UNIT_COLUMNS), flags, imgui.ImVec2(0, avail.y)
+                "##mesc_units_v2", len(UNIT_COLUMNS), flags, imgui.ImVec2(0, avail.y)
             ):
                 return
-            imgui.table_setup_scroll_freeze(0, 1)
-            for i, (name, weight, hidden) in enumerate(UNIT_COLUMNS):
-                column_flags = imgui.TableColumnFlags_.width_stretch
+            # the header row and the session and unit columns stay put while scrolling
+            imgui.table_setup_scroll_freeze(2, 1)
+            for i, (name, hidden) in enumerate(UNIT_COLUMNS):
+                column_flags = imgui.TableColumnFlags_.width_fixed
                 if i == 0:
                     column_flags |= imgui.TableColumnFlags_.default_sort
                 if hidden:
                     column_flags |= imgui.TableColumnFlags_.default_hide
-                imgui.table_setup_column(name, column_flags, weight)
+                imgui.table_setup_column(name, column_flags)
             imgui.table_headers_row()
             set_tooltip("Right-click a header to show or hide columns", show_mark=False)
             specs = imgui.table_get_sort_specs()
@@ -350,10 +405,11 @@ class MescTabWidget(Widget):
                 specs.specs_dirty = False
             column, ascending = self._sort
             rows = sorted(
-                ((*unit_row(u), u) for u in units),
+                ((*unit_row(u, contains.get(u["key"], ())), u) for u in units),
                 key=lambda row: row[1][column],
                 reverse=not ascending,
             )
+            by_key = {u["key"]: u for u in units}
             picked = None
             last = len(UNIT_COLUMNS) - 1
             for cells, _keys, info in rows:
@@ -362,15 +418,34 @@ class MescTabWidget(Widget):
                 clicked, _ = imgui.selectable(
                     f"{cells[0]}##unit_{info['key']}",
                     info["key"] == mesc.unit_key,
-                    imgui.SelectableFlags_.span_all_columns,
+                    # the row spans the links button's column too; without
+                    # overlap it takes the hover and the button never sees a click
+                    imgui.SelectableFlags_.span_all_columns | imgui.SelectableFlags_.allow_overlap,
                 )
                 if clicked and not split and info["key"] != mesc.unit_key:
                     picked = info
                 for i in range(1, len(cells)):
-                    if imgui.table_next_column():
+                    if not imgui.table_next_column():
+                        continue
+                    if i != LINKS_COLUMN:
                         imgui.text(cells[i])
                         if i == last and info["comment"] and imgui.is_item_hovered():
                             imgui.set_tooltip(info["comment"])
+                        continue
+                    links = unit_links(info, contains.get(info["key"], ()))
+                    if not links:
+                        imgui.text_disabled("-")
+                        continue
+                    if imgui.small_button(f"{cells[i]}##links_{info['key']}"):
+                        imgui.open_popup(f"##links_{info['key']}")
+                    set_tooltip("The units this one is paired with; click one to display it", show_mark=False)
+                    if imgui.begin_popup(f"##links_{info['key']}"):
+                        for role, key in links:
+                            other = by_key.get(key)
+                            text = f"{role}  {key}" + (f"  ·  {other['modality_name']}" if other else "")
+                            if imgui.selectable(f"{text}##{info['key']}", False)[0] and other is not None and not split:
+                                picked = other
+                        imgui.end_popup()
             imgui.end_table()
 
             if picked is None:

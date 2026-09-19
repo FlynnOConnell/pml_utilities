@@ -50,6 +50,10 @@ class RoiTrace:
     read), None for the whole recording or a gapped selection, which then
     lists its frames in ``extra["tp_indices"]``; ``frame_average`` is the
     temporal binning.
+    ``F`` is the raw trace, ``Fneu`` its neuropil, ``norm`` a dF/F the
+    source computed; any other kind the source produced (``denoised``,
+    ``zscore``, ``spikes``: ``annotation.display.DISPLAY_KINDS``) sits in
+    ``kinds`` under its name, and :meth:`array` reads any of them by kind.
     """
 
     uid: int
@@ -61,12 +65,23 @@ class RoiTrace:
     F: np.ndarray | None = None
     Fneu: np.ndarray | None = None
     norm: np.ndarray | None = None
+    kinds: dict[str, np.ndarray] = field(default_factory=dict)
     frames: tuple[int, int, int] | None = None
     frame_average: int = 1
     fs: float | None = None
     label: str = ""
     path: Path | None = None
     extra: dict = field(default_factory=dict)
+
+    def array(self, kind: str) -> np.ndarray | None:
+        """The trace the row carries under ``kind``, or None."""
+        if kind == "raw":
+            return self.F
+        if kind == "neuropil":
+            return self.Fneu
+        if kind == "dff":
+            return self.norm
+        return self.kinds.get(kind)
 
     @property
     def key(self) -> tuple:
@@ -76,8 +91,16 @@ class RoiTrace:
         return trace_key(self.uid, self.z, self.c, self.engine)
 
     @property
+    def name(self) -> str:
+        """The row's one display name: its ``label``, else its source and member."""
+        return self.label or f"{self.source} {self.member}"
+
+    @property
     def n_frames(self) -> int:
-        return 0 if self.F is None else int(np.shape(self.F)[-1])
+        for arr in (self.F, self.norm, *self.kinds.values()):
+            if arr is not None:
+                return int(np.shape(arr)[-1])
+        return 0
 
     @property
     def stands_for_roi(self) -> bool:

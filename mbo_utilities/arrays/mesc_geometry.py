@@ -62,6 +62,7 @@ __all__ = [
     "neighbour_slices",
     "um_to_pixels",
     "image_overlays",
+    "zstack_contents",
     "line_positions",
 ]
 
@@ -393,6 +394,21 @@ def image_overlays(
                     }
                 )
     return out
+
+
+def zstack_contents(mesc_path, units: list[dict] | None = None) -> dict[str, list[str]]:
+    """Which scans each Z-stack of the file holds: stack key -> the keys of
+    every multi-ROI unit with at least one outline inside the stack's field
+    (:func:`image_overlays`), in unit order. A snapshot's scans are its
+    ``scans`` entry from ``list_mesc_units``; a stack has no such link, only
+    geometry."""
+    if units is None:
+        units = list_mesc_units(mesc_path)
+    return {
+        u["key"]: list(dict.fromkeys(r["unit"] for r in image_overlays(mesc_path, u["key"], units)))
+        for u in units
+        if u["kind"] == "zstack"
+    }
 
 
 def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = None) -> list[dict] | None:

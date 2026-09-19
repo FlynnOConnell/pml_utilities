@@ -126,6 +126,13 @@ class ResultUnit:
             return int(np.shape(arr)[1])
         return 0
 
+    def member_roi(self, member) -> int | None:
+        """The index of the ROI whose members include ``member``, or None."""
+        for k, members in enumerate(self.members):
+            if member in members:
+                return k
+        return None
+
 
 @dataclass
 class Results:

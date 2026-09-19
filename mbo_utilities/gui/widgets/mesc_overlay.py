@@ -4,12 +4,12 @@ the image they were set up on.
 The MESc GUI draws every ROI of a scan on the raster snapshot it was placed
 on (the unit's ``BackgroundImagePath``), whatever its depth. This panel does
 the same when that snapshot, or a Z-stack containing the ROIs, is the
-displayed unit: a checkbox draws them from
+displayed unit: they are drawn as soon as the unit is on screen, from
 ``arrays.mesc_geometry.image_overlays`` in the colours MESc used, solid when
 on the plane on screen (a snapshot: within 1 um of it; a Z-stack: the slice
-the slider is on) and faint otherwise. The panel appears only when the file
-pairs ROIs with the image by metadata alone, so a drawn line is one MESc
-recorded for exactly this picture.
+the slider is on) and faint otherwise; a checkbox hides them for the session.
+The panel appears only when the file pairs ROIs with the image by metadata
+alone, so a drawn line is one MESc recorded for exactly this picture.
 """
 
 from __future__ import annotations
@@ -140,7 +140,7 @@ class MescOverlayWidget(Widget):
         if overlay is not None and overlay.unit_key != mesc.unit_key:
             close_overlay(parent)
             overlay = None
-        wanted = bool(getattr(parent, "_mesc_overlay_on", False))
+        wanted = bool(getattr(parent, "_mesc_overlay_on", True))
         ghosts = bool(getattr(parent, "_mesc_overlay_ghosts", True))
 
         imgui.spacing()

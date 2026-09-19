@@ -607,7 +607,10 @@ pipeline's native files stay its cache and its compatibility layer.
   (`roi_workflow.run_result_from_unit`) and loads as a derived set with its overlay,
   exactly like `stat.npy` + `F.npy`; a line unit becomes an `external` `TraceSet` with
   one row per ROI (its `denoised` trace, else `dff`, else `raw`) and one per member
-  line, each entry carrying its `label` and `fs`. `roi_runs.run_dir_complete` and
+  line, every row named by its ROI (`roi3`, `roi3 (raw)`; a line of a multi-line
+  ROI adds itself, `roi3 line 12 (raw)`) and carrying its `fs`, the line it was read
+  from on `z` (`extra["line"]`) and the pipeline's channel on `c`.
+  `roi_runs.run_dir_complete` and
   `scan_run_dirs` treat results files as run dirs, `roi_runs.json` restores them, a
   finished `voltage` worker is adopted like a suite2p one, and the Voltage tab's
   "Load into Traces" button does it on demand. A new pipeline that writes the results
@@ -643,6 +646,28 @@ the other.
   drawn ROI (an algorithm's component, a results file's line) are keyed
   `("member", source, k)` and are never pruned by ROI deletion. `frames` is the
   `(start, stop)` window read, `frame_average` the binning, `source` the run or origin.
+  `RoiTrace.name` is a row's one display name (`label`, else source and member); the
+  table, the legend and the sort key read it, nothing formats its own.
+- **Trace display.** `annotation/display.py` says how a row is shown, and the
+  pipeline that produced the row decides. One `TraceProfile` per pipeline
+  (`TRACE_PROFILES`, keyed by the row's `engine`, which a results file sets to its
+  `pipeline`; a plugin calls `register_trace_profile` beside its `PipelineInfo`;
+  anything else gets `DEFAULT_TRACE_PROFILE`) declares the kinds its rows can show
+  (`DISPLAY_KINDS`, the results zarr's `TRACE_KINDS`), the one shown first
+  (`voltage` opens on `denoised`, the rest on `dff`), whether a neuropil correction
+  is offered (only a pipeline that measured a real `Fneu`: `suite2p`, and `mean`'s
+  ring; never `masknmf`, whose `Fneu` is zeros), the `DffSettings` for a dF/F
+  computed from a raw row (`analysis/dff.py`: a rolling max-min baseline sized in
+  seconds, the percentile when the row has no `fs`), whether a stored dF/F is
+  percent or a fraction, and the raw trace's label. A row carries `F`, `Fneu`,
+  `norm` and every other kind in `kinds`, all read by `RoiTrace.array(kind)`. The
+  panel and the trace table read every row through
+  `display_trace(trace, kind, settings, neuropil)`; `displayed_kind` says which kind
+  that was (a kind the row lacks falls back to its profile's default) and `y_label`
+  names the axis for it. The panel offers the kinds the plotted rows have, shows the
+  neuropil checkbox only when a plotted row's profile offers it, a dF/F settings
+  popup only when a shown dF/F is computed here, labels the y axis from the rows
+  (joined when they differ) and opens in seconds whenever the data has a rate.
 - **Run coordinates.** `RoiModel.targets(indices, z=, c=)` says where each ROI is
   read: the mask always from the plane it was drawn on, the pixels from `z` / `c`
   when given, else from where it was drawn. The widget's `run_where` is `drawn`,
@@ -743,7 +768,7 @@ the other.
   dirs through `roi_runs.json`; quick traces, full-image rows and tints live for
   the session.
 
-Pinned by `tests/test_roi_model.py`, `tests/test_playhead.py`, `tests/test_manual_roi.py`
+Pinned by `tests/test_roi_model.py`, `tests/test_playhead.py`, `tests/test_trace_display.py`, `tests/test_manual_roi.py`
 (`TestRunCoordinates`, `TestAutoTrace`, `TestRoiPipelineTab`, `TestPlayheadWiring`,
 `TestColorBy`, `TestFullImage`, `TestSliderRoles`), `tests/test_roi_runs.py`.
 
