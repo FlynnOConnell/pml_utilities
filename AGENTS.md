@@ -1424,3 +1424,134 @@ Rule: shorter item shifted down by `curr_line_text_base_offset - baseline`; text
 | tree indent | `indent_spacing` (21 ~ `font_size + 2*frame_padding.x`) |
 | em | `hello_imgui.em_size(n)` = `n * get_font_size()` |
 | pixel snap | cursor truncated to int each `item_size`; pass integer sizes |
+
+## 17. Proposal: arrays and pipelines as GUI contributors
+
+**Status: a proposal, not a contract.** Nothing in this section is implemented, and
+the stages are sketches, not complete designs. Until a stage lands and moves its
+rules into §2 and §7, the code follows the sections above. Fill in the gaps when a
+stage is taken up; do not build against this section as if it were settled.
+
+The frame is model-view-controller with the immediate-mode twist: imgui keeps no
+view objects, so the split that matters is a GUI-free observable model, draw
+functions that only read it, and a command layer that mutates it or starts work.
+
+### 17.1 Where it stands
+
+Four places already have the shape and are the template:
+
+- `motion_correction` (§5.8): a reader answers a typed, GUI-free dataclass or None,
+  `MotionPlot` draws it, nothing in `gui` names a format.
+- `annotation`: `RoiModel` is `Observable`; `manual_roi.py` and the ROIs pipeline
+  are two views of it and neither polls the other.
+- `Playhead` (§7.6): one piece of shared state every view subscribes to.
+- `TraceProfile` (§7.6) and the results zarr (§7.5): the pipeline declares what its
+  data means, generic views render any pipeline.
+
+Everything else is the opposite shape (counts from 2026-09-19):
+
+- The host widget is a grab bag: 215 distinct `parent._x` attributes across `gui`,
+  and `_dialogs._reset_per_data_state` is a hand-kept list of which to clear when
+  the array changes. Every unit swap risks a leak.
+- Widgets sniff formats: `mesc_units`, `mesc_overlay`, `tile_grid` and
+  `isoview_align_views` decide `is_supported(parent)` by unwrapping the array and
+  checking its class. A new format has to write imgui code in `gui/widgets/` to
+  appear anywhere.
+- Discovery is a package scan (`gui/widgets/__init__._discover_widgets`), so no
+  reader and no plugin can contribute a panel, tab or table.
+- Pipelines are hardcoded widget classes (§15) drawing their settings by hand
+  (`pipelines/voltage.py` 875 lines, `pipelines/isoview.py` 3303).
+- Tables are written four times (MESc units, ROIs, Traces, runs), each with its own
+  sort, hide and action code.
+- Two side apps rebuild the viewer: `linescan_viewer.py` (1729 lines) and the
+  curation dashboard.
+
+### 17.2 Target shape
+
+Three GUI-free things an array or pipeline provides, and generic views that draw them.
+
+- **Facets.** Typed answers an array gives about itself beyond pixels, as properties
+  returning a dataclass or None: `units` (sibling units and their links),
+  `overlays(unit)` (ROI outlines in an image's pixels), `line_positions`, `views`
+  and `tiles` for IsoView, `scan_phase`, `motion_correction` (exists). `LazyArray`
+  answers None; a reader overrides. §5.8 generalized; `arrays` still never imports
+  `gui` (§2).
+- **Session.** One observable object per viewer (`mbo_utilities/session.py`,
+  GUI-free): the array, the indices, the playhead, the selection, the open-unit
+  cache, loaded runs and results, display options. It replaces the host widget's
+  attributes; `swap_viewer_array` becomes `session.open(arr)`, one event, and views
+  rebuild from it instead of a reset list.
+- **Contributions.** What a facet or a pipeline wants on screen, as data:
+  `Panel(section, controls)`, `Tab(table)`, `Table(columns, rows, actions, links)`,
+  `Overlay(records)`, `Form(dataclass)`. Controls are a small vocabulary: choice,
+  toggle, number, button, info, table, overlay, plot. A reader ships a
+  `contributions(session)` function beside its class, found through the entry point
+  that registers the reader. A pipeline's `PipelineInfo` gains `settings`,
+  `trace_profile`, `axes_consumed` and `applies_to`, so the Run tab draws it as a form.
+
+| Role | What | Rule |
+|------|------|------|
+| Model | arrays + facets, session, annotation, results, registries | GUI-free, observable, tested on synthetic files |
+| View | generic draw functions: `TableView`, `FormView`, `OverlayView`, the trace and motion plots | reads the session, emits intents, holds no state |
+| Controller | intent handlers and commands: `session.open_unit`, `ProcessManager.spawn`, worker tasks | the only code that mutates the model or starts work |
+
+For MESc this would read (illustrative; names not settled):
+
+```python
+class MescArray(LazyArray):
+    units: UnitSet | None                 # list_mesc_units + links as a dataclass
+    def overlays(self, unit) -> list[OverlayRecord]   # image_overlays
+
+def contributions(session):
+    a = session.array
+    return [
+        Panel("MESc Units", "image", [Choice(a.units, session.unit, session.open_unit)]),
+        Tab("MESc", Table(UNIT_COLUMNS, unit_rows(a.units), links=unit_links, on_row=session.open_unit)),
+        Overlay("ROI Overlay", a.overlays(session.unit), plane=session.indices),
+    ]
+```
+
+The voltage pipeline contributes the same way: a form from `VoltageSettings`, its
+domain table, its trace profile; its results tab already comes from the results zarr.
+
+### 17.3 Stages
+
+Ordered by what unblocks what. Each stage is shippable alone and lands with a pinned
+test; each one's rules move into §2 and §7 when it lands.
+
+1. **Session.** Move per-dataset state off the host widget; widgets take `session`,
+   not `parent`; `swap_viewer_array` and `_reset_per_data_state` collapse into
+   `session.open`. Pin: open two arrays in sequence, assert nothing leaks.
+2. **Facets.** `units`, `overlays`, `line_positions` on `MescArray`; `views`, `tiles`
+   on `IsoviewArray`. The four format widgets become views gated on
+   `session.array.units is not None`; `mesc_array_of` goes away. Pin: one test per
+   facet on the synthetic files `tests/test_mesc_geometry.py` builds.
+3. **Table and Panel vocabulary.** `Table` model and one `TableView`; port the MESc
+   table first, then runs, ROIs, Traces. Discovery moves from the package scan to
+   registries: built-ins, readers' `contributions`, pipelines' infos. Pin: a Table
+   model test plus one bare-context draw test (the `tests/test_mesc_tab.py` pattern).
+4. **Declarative pipelines.** Entry points as the only registration (§15).
+   `PipelineInfo` carries `settings`, `trace_profile`, `axes_consumed`, `applies_to`;
+   a `FormView` draws any settings dataclass; a widget class keeps only sections a
+   form cannot express (voltage's domains and curation). Pin: a pipeline registered
+   only through an entry point shows up with a runnable form.
+5. **Fold the side apps.** The line-scan viewer's snapshot, stack and reference
+   panels and the curation dashboard become contributions on the standard viewer,
+   bound to the session's playhead; `viewers.get_viewer_class` (pollen) becomes one too.
+
+Rules to add to §2 when stage 1 lands: a `gui` module never names a format, it asks
+the session for a facet; state lives on the session, never on the host widget; a
+table is a `Table` model drawn by `TableView`; a pipeline appears through its
+`PipelineInfo`, never by editing the Run tab.
+
+Open questions, deliberately unanswered here: where a format's `contributions`
+module lives and how the reader entry point points at it; whether `Session` is one
+class or a small tree (viewer, annotation, runs); how a contribution declares its
+imgui-only escape hatch; what a `Form` does with nested dataclasses and tri-state
+stage toggles; how the side apps' own sliders map onto the session's indices.
+
+Two cautions. Do not start in `manual_roi.py` (4390 lines) or `pipelines/isoview.py`;
+stages 1 to 3 shrink them by subtraction. Keep the control vocabulary small: choice
+and table cover every format need seen so far, forms cover most pipeline settings,
+and anything else stays hand-written imgui behind a contribution rather than a new
+abstraction.
