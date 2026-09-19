@@ -5,15 +5,27 @@ the imgui/pygfx shell; everything here imports numpy/zarr only.
 
 ## Modules
 
-- `store.py` — `RoiLabelStore`: `(Z, Y, X)` uint16 label volume following the
-  canonical TCZYX rules (any `LazyArray`'s `nz/ny/nx`; depthless data gets
-  `Z == 1`; T/C are ignored), per-ROI records (plane, area, class index,
-  free-text note), the user-defined class-label set, and the display palettes
-  (`CLASS_COLORS` is the same tab10 set as masknmf's classification GUI, so a
-  shared label set looks the same in both tools). Mutations track
-  `dirty_planes` for incremental saving. Each record also carries a
-  persistent `uid` (never reused; `next_uid` round-trips through the zarr)
-  and a `source` string (`""` = drawn by hand).
+- `events.py` — `Observable` / `ModelEvent`: the event model the rest of the
+  package uses, after fastplotlib's `GraphicFeature` (`add_event_handler(fn,
+  "rois")`, `block_events` around bulk edits). Handlers run inside the mutation.
+- `store.py` — `RoiLabelStore`: `(P, Y, X)` uint16 label volume, one plane per
+  combination of the data's scrolling dims (`plane_axes`, z last; depthless data
+  gets one plane; T never keys a plane), per-ROI records (`plane`, area, class
+  index, free-text note), the user-defined class-label set, and the display
+  palettes (`CLASS_COLORS` is the same tab10 set as masknmf's classification GUI,
+  so a shared label set looks the same in both tools). The store owns the plane
+  arithmetic: `plane_of(pos)`, `plane_pos(plane)`, `plane_label(plane)`,
+  `roi_z(i)` / `roi_c(i)`. Mutations emit `rois` events and track `dirty_planes`
+  for incremental saving. Each record also carries a persistent `uid` (never
+  reused; `next_uid` round-trips through the zarr) and a `source` string (`""` =
+  drawn by hand).
+- `traces.py` — `RoiTrace` / `RoiTraceTable`: one row per measurement, keyed by
+  `(uid, z, c, engine)` for a drawn ROI (re-running replaces the row) or
+  `(source, member)` for rows that stand for no drawn ROI. `ENGINES` names the
+  extraction engines.
+- `model.py` — `RoiModel`: the store, the trace table and the slider position in
+  one observable object; `targets(indices, z=, c=)` says where a run reads each
+  ROI, `traced(index, ...)` what it has been measured with.
 - `ngff.py` — `LabelsZarr`: OME-NGFF-style labels zarr, layout matched to
   `arrays/suite2p.py::_add_suite2p_labels` (`{"version": "0.5", "labels":
   ["0"]}` root attrs, `0` = `(Z, Y, X)` uint32 with `image-label` attrs).

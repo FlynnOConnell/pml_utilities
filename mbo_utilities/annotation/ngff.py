@@ -11,8 +11,8 @@ that:
   render the same colors as the GUI.
 - ``image-label.properties`` holds one entry per label value with the
   mbo-specific per-ROI state: ``class-index`` / ``class`` (name), ``note``,
-  ``z``, ``area``, ``uid`` and ``source``. That is where the annotation
-  round-trips from.
+  ``plane`` (the flat plane; older stores wrote it as ``z``), ``area``,
+  ``uid`` and ``source``. That is where the annotation round-trips from.
 - the root ``mbo`` attr carries the label-name set, ``next_uid`` and the
   source image path (a sidecar store has no ``../../0`` image group to
   point at, so it lives here instead of ``image-label.source``).
@@ -45,10 +45,6 @@ class LabelsZarr:
         self.path = Path(path)
         self._root = None
         self._array = None
-
-    # ------------------------------------------------------------------
-    # writing
-    # ------------------------------------------------------------------
 
     def _open_for_write(self, store: RoiLabelStore):
         import zarr
@@ -84,7 +80,7 @@ class LabelsZarr:
                     store.label_names[r.class_index] if r.class_index >= 0 else ""
                 ),
                 "note": r.note,
-                "z": int(r.z),
+                "plane": int(r.plane),
                 "area": int(r.area),
                 "uid": int(r.uid),
                 "source": r.source,
@@ -134,10 +130,6 @@ class LabelsZarr:
             self._array[z] = store.labels[z].astype(np.uint32)
         self._write_attrs(store, source_path)
         store.dirty_planes.clear()
-
-    # ------------------------------------------------------------------
-    # reading
-    # ------------------------------------------------------------------
 
     @staticmethod
     def load(path) -> RoiLabelStore:
@@ -192,7 +184,7 @@ class LabelsZarr:
             color = props.get("color")
             rois.append(
                 RoiRecord(
-                    z=int(props.get("z", z)),
+                    plane=int(props.get("plane", props.get("z", z))),
                     area=int(props.get("area", area)),
                     class_index=class_index,
                     note=str(props.get("note", "")),
