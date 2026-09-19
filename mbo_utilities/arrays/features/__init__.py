@@ -100,8 +100,8 @@ from mbo_utilities.arrays.features._slicing import (
     read_chunk,
 )
 from mbo_utilities.arrays.features._selection import (
-    canonical_axis_sizes,
-    selection_to_canonical,
+    axis_sizes,
+    selection_to_indices,
     to_isoview_kwargs,
     to_lsp_kwargs,
 )
@@ -190,8 +190,8 @@ __all__ = [
     "parse_timepoint_selection",
     "read_chunk",
     # canonical selection conversion
-    "canonical_axis_sizes",
-    "selection_to_canonical",
+    "axis_sizes",
+    "selection_to_indices",
     "to_isoview_kwargs",
     "to_lsp_kwargs",
     # pyramid
