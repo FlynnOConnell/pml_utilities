@@ -55,7 +55,7 @@ def _write_plane(tmp_path: Path, name: str, plane: int, store: RoiLabelStore, nf
     mov = rng.integers(90, 110, size=(nframes, LY, LX)).astype(np.int16)
     z = plane - 1
     for i, rec in enumerate(store.rois):
-        if rec.z != z:
+        if rec.plane != z:
             continue
         mask = store.labels[z] == (i + 1)
         # ROI i lights up with amplitude 100*(i+1) on every 10th frame
@@ -772,3 +772,64 @@ def test_plane_movie_resolves_axes_by_name():
     np.testing.assert_array_equal(movie[1], data[2, 1])
     np.testing.assert_array_equal(movie[:, 1:3, 0], data[2, :, 1:3, 0])
     assert movie_dims(data) == ("T", "Z", "Y", "X")
+
+
+def test_plane_movie_window_shifts_t_keys():
+    data = np.arange(10 * 4 * 5, dtype=np.float32).reshape(10, 4, 5)
+    movie = rw.PlaneMovie(data)
+    assert movie.t_range is None
+    win = movie.window(3, 7)
+    assert win.shape == (4, 4, 5) and win.t_range == (3, 7)
+    np.testing.assert_array_equal(win[:], data[3:7])
+    np.testing.assert_array_equal(win[1], data[4])
+    np.testing.assert_array_equal(win[-1, 1:3, 2], data[6, 1:3, 2])
+    # crops keep the window and windows of windows compose
+    crop = win.crop(1, 3, 0, 2)
+    np.testing.assert_array_equal(crop[:], data[3:7, 1:3, 0:2])
+    again = win.window(1, 3)
+    assert again.t_range == (4, 6)
+    np.testing.assert_array_equal(again.frames(0, 2), data[4:6])
+    with pytest.raises(IndexError):
+        movie.window(8, 12)
+    assert rw._source_path(movie) is None
+
+
+def test_plane_movie_select_reads_any_frame_selection():
+    from mbo_utilities.arrays.features._slicing import index_window, parse_timepoint_selection
+
+    data = np.arange(10 * 4 * 5, dtype=np.float32).reshape(10, 4, 5)
+    movie = rw.PlaneMovie(data)
+    assert movie.t_indices is None and movie.select(None) is movie
+    # the selection string every Save As / pipeline row takes: "1:9:2,5:6"
+    sel = parse_timepoint_selection("1:9:2,5:6", 10)
+    picked = movie.select(sel.final_indices)
+    assert picked.t_indices == [0, 2, 6, 8] and picked.shape == (4, 4, 5)
+    np.testing.assert_array_equal(picked[:], data[[0, 2, 6, 8]])
+    np.testing.assert_array_equal(picked[1:3], data[[2, 6]])
+    np.testing.assert_array_equal(picked[[0, 3]], data[[0, 8]])
+    assert picked.t_range is None and index_window(picked.t_indices) is None
+    # a stride is a window with a step; a contiguous one has a range too
+    strided = movie.select(range(0, 10, 2))
+    assert index_window(strided.t_indices) == (0, 9, 2) and strided.t_range is None
+    assert movie.window(3, 7).t_range == (3, 7)
+    # selections of selections compose, and crops keep them
+    inner = strided.select([1, 2])
+    assert inner.t_indices == [2, 4]
+    np.testing.assert_array_equal(inner.crop(1, 3, 0, 2)[:], data[[2, 4], 1:3, 0:2])
+    with pytest.raises(IndexError):
+        movie.select([0, 10])
+    assert rw._frames_info(picked) == {"frames": None, "tp_indices": [0, 2, 6, 8]}
+    assert rw._frames_info(strided) == {"frames": [0, 9, 2], "tp_indices": [0, 2, 4, 6, 8]}
+    assert rw._frames_info(movie) == {"frames": None, "tp_indices": None}
+    assert rw._frames_tuple([2, 5]) == (2, 5, 1) and rw._frames_tuple([2, 9, 2]) == (2, 9, 2)
+
+
+def test_plane_dirs_are_read_through_the_tag_vocabulary(tmp_path):
+    assert rw.plane_index(Path("x/ch02_zplane03")) == 2
+    assert rw.plane_index(Path("x/zplane07_tp00001-00100")) == 6
+    for name, z in (("ch01_zplane02", 1), ("zplane03", 2), ("z04", 3), ("plane2", 2)):
+        d = tmp_path / name
+        d.mkdir()
+        np.save(d / "ops.npy", {"Ly": 4, "Lx": 4}, allow_pickle=True)
+        np.save(d / "stat.npy", np.array([{"ypix": np.array([0]), "xpix": np.array([0]), "lam": np.array([1.0])}], object))
+        assert rw.load_run_dir(d).z == z, name

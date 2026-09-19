@@ -59,6 +59,8 @@ import numpy as np
 from mbo_utilities import log
 from mbo_utilities.annotation.ngff import LabelsZarr
 from mbo_utilities.annotation.store import RoiLabelStore
+from mbo_utilities.arrays.features._dim_tags import filename_tags
+from mbo_utilities.arrays.features._slicing import index_window
 
 __all__ = [
     "PlaneMovie",
@@ -96,7 +98,6 @@ DiscoverEngine = Literal["masknmf", "suite2p"]
 
 OUT_PREFIX = "rois_"
 SAVE_NAME = "manual_labels.zarr"  # same as gui.manual_roi.SAVE_NAME
-_ZPLANE_RE = re.compile(r"zplane(\d+)")
 _Z_RE = re.compile(r"z(\d+)")
 
 
@@ -106,11 +107,6 @@ def labels_path(fpath) -> Path:
     without importing the GUI)."""
     base = Path.cwd() if fpath is None else Path(fpath)
     return (base.parent if base.suffix else base) / SAVE_NAME
-
-
-# ---------------------------------------------------------------------------
-# the movie view
-# ---------------------------------------------------------------------------
 
 
 def _index_len(key, n: int) -> int | None:
@@ -146,7 +142,7 @@ _RANK_DIMS = {2: "YX", 3: "TYX", 4: "TZYX", 5: "TCZYX"}
 
 def movie_dims(arr) -> tuple[str, ...]:
     """Axis names of ``arr``: its own ``dims`` when they match its rank and
-    name Y and X, else the canonical letters for that rank."""
+    name Y and X, else the rank's default letters."""
     nd = getattr(arr, "ndim", None)
     nd = int(np.ndim(arr) if nd is None else nd)
     dims = tuple(str(d).upper() for d in (getattr(arr, "dims", None) or ()))
@@ -167,11 +163,15 @@ class PlaneMovie:
     the ROI pipeline, masknmf compression and the viewer's traces rely on:
     if the array slices in y and x, everything here works. ``crop`` returns
     a rectangular view whose keys shift into the source frame on the way
-    through; ``box`` records where that view sits.
+    through; ``box`` records where that view sits. ``select`` does the same
+    along T for any frame selection (the ``tp_indices`` every worker task
+    takes); ``t_indices`` records it and ``t_range`` the contiguous case.
     """
 
     y0 = 0
     x0 = 0
+    # the source frames this view covers, in order; None = every frame
+    t_map: np.ndarray | None = None
 
     def __init__(self, arr, z: int = 0, c: int = 0):
         self.arr = arr
@@ -205,22 +205,74 @@ class PlaneMovie:
             return None
         return (self.y0, self.y0 + ny, self.x0, self.x0 + nx)
 
+    def _view(self) -> PlaneMovie:
+        out = PlaneMovie(self.arr, z=self.z, c=self.c)
+        out.y0, out.x0, out.t_map = self.y0, self.x0, self.t_map
+        out.shape = self.shape
+        return out
+
     def crop(self, y0: int, y1: int, x0: int, x1: int) -> PlaneMovie:
         """View of rows ``y0:y1`` and columns ``x0:x1`` sharing this movie's
         array; crops of crops compose."""
         _, ny, nx = self.shape
         if not (0 <= y0 < y1 <= ny and 0 <= x0 < x1 <= nx):
             raise IndexError(f"crop ({y0}:{y1}, {x0}:{x1}) outside {ny}x{nx}")
-        out = PlaneMovie(self.arr, z=self.z, c=self.c)
+        out = self._view()
         out.y0, out.x0 = self.y0 + int(y0), self.x0 + int(x0)
         out.shape = (self.shape[0], int(y1 - y0), int(x1 - x0))
         return out
 
+    @property
+    def t_indices(self) -> list[int] | None:
+        """The 0-based source frames this view reads, in order; None when
+        it reads every frame. The same list a worker task's ``tp_indices``
+        carries."""
+        return None if self.t_map is None else [int(t) for t in self.t_map]
+
+    @property
+    def t_range(self) -> tuple[int, int] | None:
+        """``(t0, t1)`` when the view is one contiguous window of the
+        source's T; None for every frame or a strided / gapped selection."""
+        window = index_window(self.t_indices)
+        if window is None or window[2] != 1:
+            return None
+        return (window[0], window[1])
+
+    def select(self, indices) -> PlaneMovie:
+        """View over the source frames ``indices`` (0-based, in the order
+        given: a ``parse_timepoint_selection`` result, a range, a list),
+        sharing this movie's array and crop; selections of selections
+        compose. Every frame (None) is this movie."""
+        if indices is None:
+            return self
+        idx = np.asarray(list(indices), dtype=np.int64).reshape(-1)
+        nt = self.shape[0]
+        if idx.size == 0 or idx.min() < 0 or idx.max() >= nt:
+            raise IndexError(f"frame selection outside {nt} frames")
+        out = self._view()
+        out.t_map = idx if self.t_map is None else self.t_map[idx]
+        out.shape = (int(idx.size), self.shape[1], self.shape[2])
+        return out
+
+    def window(self, t0: int, t1: int) -> PlaneMovie:
+        """View of frames ``t0:t1`` sharing this movie's array and crop."""
+        nt = self.shape[0]
+        if not 0 <= t0 < t1 <= nt:
+            raise IndexError(f"window ({t0}:{t1}) outside {nt} frames")
+        return self.select(range(int(t0), int(t1)))
+
     def _full_key(self, t, y, x):
+        nt, ny, nx = self.shape
         if self.box is not None:
-            _, ny, nx = self.shape
             y = _shift(y, self.y0, ny)
             x = _shift(x, self.x0, nx)
+        if self.t_map is not None:
+            if isinstance(t, (int, np.integer)):
+                t = int(self.t_map[int(t)])
+            elif isinstance(t, slice):
+                t = self.t_map[t]
+            else:
+                t = self.t_map[np.asarray(t).reshape(-1)]
         axes = {"T": t, "C": self.c, "Z": self.z, "Y": y, "X": x}
         return tuple(axes.get(d, 0) for d in self.dims)
 
@@ -260,11 +312,6 @@ def as_movie(source, z: int = 0, c: int = 0) -> PlaneMovie:
 
 def _source_nz(arr) -> int:
     return int(dict(zip(movie_dims(arr), arr.shape)).get("Z", 1))
-
-
-# ---------------------------------------------------------------------------
-# ROI selection
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -323,7 +370,7 @@ def select_rois(
         keep = [i for i in keep if i in wanted]
     if planes:
         zs = set(int(z) for z in planes)
-        keep = [i for i in keep if store.rois[i].z in zs]
+        keep = [i for i in keep if store.rois[i].plane in zs]
     if labels:
         names = list(store.label_names)
         unknown = [n for n in labels if n not in names]
@@ -343,7 +390,7 @@ def plane_masks(
     ``kept`` order (suite2p / cellpose mask convention); ``kept`` holds the
     store indices in that order.
     """
-    kept = [i for i in indices if store.rois[i].z == int(z)]
+    kept = [i for i in indices if store.rois[i].plane == int(z)]
     plane = store.labels[int(z)]
     out = np.zeros(plane.shape, np.uint16)
     for k, i in enumerate(kept, start=1):
@@ -501,8 +548,8 @@ def plane_index(plane_dir: str | Path, ops: dict | None = None) -> int:
     p = (ops or {}).get("plane")
     if p is not None:
         return int(p) - 1
-    m = _ZPLANE_RE.search(plane_dir.name)
-    return int(m.group(1)) - 1 if m else 0
+    z_tags = [t for t in filename_tags(plane_dir.name) if t.definition.label == "zplane"]
+    return z_tags[0].start - 1 if z_tags else 0
 
 
 def _find_plane_dirs(root: str | Path) -> list[Path]:
@@ -566,6 +613,14 @@ class RunResult:
     #: which detector produced these rows ("s2p-sparsery", "masknmf", ...);
     #: "" for a result built without ops (tests, hand-made results)
     algo: str = ""
+    #: the extraction engine of a rois_<tag> run (``ENGINES``), "" otherwise
+    engine: str = ""
+    #: 0-based z and c the pixels were read from (``ops["roi_workflow"]``); None for a plain plane dir
+    read_z: int | None = None
+    read_c: int | None = None
+    #: ``(start, stop, step)`` the run read; None for every frame or a gapped selection
+    frames: tuple[int, int, int] | None = None
+    tp_indices: list[int] | None = None
 
 
 def detection_algo(ops: dict) -> str:
@@ -617,13 +672,18 @@ def load_run_dir(path: str | Path, *, iscell_only: bool = True, logger=None) -> 
     if wf.get("plane") is not None:
         z = int(wf["plane"])
     else:
-        m = _Z_RE.search(path.name)
-        if m:
-            z = int(m.group(1)) - 1
+        # vanilla suite2p's plane0, plane1... are 0-based, unlike the tag vocabulary
+        vanilla = re.fullmatch(r"plane(\d+)", path.name)
+        z_tags = [t for t in filename_tags(path.name) if t.definition.label == "zplane"]
+        legacy = _Z_RE.search(path.name)  # z03 children of runs written before the tag vocabulary
+        if vanilla:
+            z = int(vanilla.group(1))
+        elif z_tags:
+            z = z_tags[0].start - 1
+        elif legacy:
+            z = int(legacy.group(1)) - 1
         else:
-            # vanilla suite2p names planes 0-based: suite2p/plane0, plane1...
-            m = re.fullmatch(r"plane(\d+)", path.name)
-            z = int(m.group(1)) if m else plane_index(path, ops)
+            z = plane_index(path, ops)
     stat = np.load(path / "stat.npy", allow_pickle=True)
 
     def _opt(name):
@@ -674,7 +734,20 @@ def load_run_dir(path: str | Path, *, iscell_only: bool = True, logger=None) -> 
         path=path, kind=str(kind), z=z, shape=(int(ops["Ly"]), int(ops["Lx"])),
         stat=stat, F=F, Fneu=Fneu, norm=norm, iscell=iscell,
         uids=uids, store_indices=store_indices, algo=detection_algo(ops),
+        engine=str(wf.get("engine") or ""),
+        read_z=None if wf.get("z") is None else int(wf["z"]),
+        read_c=None if wf.get("c", wf.get("channel")) is None else int(wf.get("c", wf.get("channel"))),
+        frames=_frames_tuple(wf.get("frames")),
+        tp_indices=None if not wf.get("tp_indices") else [int(t) for t in wf["tp_indices"]],
     )
+
+
+def _frames_tuple(value) -> tuple[int, int, int] | None:
+    """``[start, stop]`` (an older run) or ``[start, stop, step]`` -> a 3-tuple."""
+    if not value:
+        return None
+    start, stop = int(value[0]), int(value[1])
+    return (start, stop, int(value[2]) if len(value) > 2 else 1)
 
 
 def run_result_from_unit(unit, path, pipeline: str = "") -> RunResult:
@@ -710,11 +783,6 @@ def run_result_from_unit(unit, path, pipeline: str = "") -> RunResult:
         iscell=None if unit.iscell is None else np.asarray(unit.iscell, np.float32),
         uids=None, store_indices=None, algo=kind,
     )
-
-
-# ---------------------------------------------------------------------------
-# registration
-# ---------------------------------------------------------------------------
 
 
 def register(
@@ -850,14 +918,23 @@ def _drop_run_gates(ops_path: Path, logger) -> None:
         logger.warning(f"roi_workflow: could not clean {ops_path}: {error}")
 
 
-# ---------------------------------------------------------------------------
-# source bookkeeping shared by extract / demix
-# ---------------------------------------------------------------------------
+def _frames_info(movie: PlaneMovie) -> dict:
+    """What a run records about the frames it read: ``frames`` as
+    ``[start, stop, step]`` when the selection is a window, ``tp_indices``
+    (the worker-task spelling) whenever it is a subset."""
+    indices = movie.t_indices
+    window = index_window(indices)
+    return {
+        "frames": None if window is None else [int(v) for v in window],
+        "tp_indices": None if indices is None else [int(t) for t in indices],
+    }
 
 
 def _source_path(source) -> Path | None:
     if isinstance(source, (str, Path)):
         return Path(source)
+    if isinstance(source, PlaneMovie):
+        source = source.arr
     p = getattr(source, "source_path", None) or getattr(source, "fpath", None)
     try:
         return Path(p) if p else None
@@ -880,6 +957,10 @@ def _movie_fingerprint(movie: PlaneMovie, src: Path | None) -> str:
     box = movie.box
     if box is not None:
         fp += ":{}:{}:{}:{}".format(*box)
+    indices = movie.t_indices
+    if indices is not None:
+        window = index_window(indices)
+        fp += ":t{}:{}:{}".format(*window) if window else f":tn{len(indices)}:{hash(tuple(indices))}"
     return fp
 
 
@@ -913,9 +994,17 @@ def _ops_for(source, movie: PlaneMovie) -> dict:
     ops = {"Ly": ly, "Lx": lx, "nframes": nt, "processing_history": []}
     meta = getattr(movie.arr, "metadata", None) or {}
     try:
-        from mbo_utilities.metadata import get_param
+        from mbo_utilities.metadata import OutputMetadata, get_param
 
         fs = get_param(dict(meta), "fs")
+        shape5d = getattr(movie.arr, "_shape5d", None)
+        if movie.t_indices is not None and shape5d is not None:
+            # a strided selection changes the rate; the writers' layer says by how much
+            scaled = OutputMetadata(
+                source=dict(meta), source_shape=tuple(shape5d()), source_dims=("T", "C", "Z", "Y", "X"),
+                selections={"T": movie.t_indices},
+            ).to_dict(include_aliases=False)
+            fs = scaled.get("fs", fs)
         if fs:
             ops["fs"] = float(fs)
     except Exception:
@@ -978,7 +1067,9 @@ def _write_subset_outputs(
         {
             "index": int(i),
             "uid": int(store.rois[i].uid),
-            "z": int(store.rois[i].z),
+            "plane": int(store.rois[i].plane),
+            "z": int(store.roi_z(i)),
+            "c": int(store.roi_c(i)),
             "area": int(store.rois[i].area),
             "label": names[store.rois[i].class_index]
             if 0 <= store.rois[i].class_index < len(names)
@@ -1046,11 +1137,6 @@ def _write_discovery_outputs(
         updates["reg_file"] = str(reg_file)
     merge_ops(out_dir, updates)
     return out_dir
-
-
-# ---------------------------------------------------------------------------
-# extraction (suite2p-style, masks given)
-# ---------------------------------------------------------------------------
 
 
 def _roi_pixels(label_image: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
@@ -1244,6 +1330,9 @@ def extract_rois(
         "roi_indices": [int(i) for i in kept],
         "plane": int(z),
         "channel": int(c),
+        "z": int(movie.z),
+        "c": int(movie.c),
+        **_frames_info(movie),
         "seconds": round(time.time() - t0, 3),
     }
     out = _write_subset_outputs(
@@ -1252,11 +1341,6 @@ def extract_rois(
     )
     logger.info(f"roi_workflow: wrote {K} traces -> {out} ({info['seconds']}s)")
     return out
-
-
-# ---------------------------------------------------------------------------
-# cropping an existing PMD decomposition
-# ---------------------------------------------------------------------------
 
 
 def pmd_crop(pmd, y0: int, y1: int, x0: int, x1: int):
@@ -1357,11 +1441,6 @@ def _cached_pmd_crop(source, movie: PlaneMovie, cfg, logger) -> tuple[object, st
     y0, y1, x0, x1 = box
     logger.info(f"roi_workflow: cropping cached {pmd_path.name} to ({y0}:{y1}, {x0}:{x1})")
     return pmd_crop(pmd, y0, y1, x0, x1), f"pmd_crop:{pmd_path}:{box}"
-
-
-# ---------------------------------------------------------------------------
-# demixing (masknmf, seeded with the drawn masks)
-# ---------------------------------------------------------------------------
 
 
 def demix_rois(
@@ -1475,6 +1554,9 @@ def demix_rois(
         "roi_indices": [int(i) for i in kept],
         "plane": int(z),
         "channel": int(c),
+        "z": int(movie.z),
+        "c": int(movie.c),
+        **_frames_info(movie),
         "settings": _runner._stage_hash(cfg, "do_demixing"),
         "input": pmd_key,
         "fs": fs,
@@ -1497,7 +1579,8 @@ def demix_rois(
         [
             {
                 "index": int(i), "uid": int(store.rois[i].uid),
-                "z": int(store.rois[i].z), "area": int(store.rois[i].area),
+                "plane": int(store.rois[i].plane), "z": int(store.roi_z(i)), "c": int(store.roi_c(i)),
+                "area": int(store.rois[i].area),
                 "label": names[store.rois[i].class_index] if 0 <= store.rois[i].class_index < len(names) else None,
                 "note": store.rois[i].note,
             }
@@ -1527,11 +1610,6 @@ def demix_rois(
         )
     logger.info(f"roi_workflow: demixed -> {out_dir} ({info['seconds']}s)")
     return out_dir
-
-
-# ---------------------------------------------------------------------------
-# discovery (unseeded, inside a region)
-# ---------------------------------------------------------------------------
 
 
 def _shift_stat(out_dir: Path, y0: int, x0: int, shape: tuple[int, int]) -> np.ndarray:
@@ -1712,11 +1790,6 @@ def discover_rois(
     )
     logger.info(f"roi_workflow: discovered {len(stat)} ROIs -> {out} ({info['seconds']}s)")
     return out
-
-
-# ---------------------------------------------------------------------------
-# line-scan trace extraction (AOD/.mesc units where Z is already the ROI axis)
-# ---------------------------------------------------------------------------
 
 
 def _maxmin_baseline(
@@ -2129,11 +2202,6 @@ def extract_linescan_units(
             arr, channel=channel, out_dir=out_dir, **kwargs
         )
     return outputs
-
-
-# ---------------------------------------------------------------------------
-# the whole chain
-# ---------------------------------------------------------------------------
 
 
 def run(
