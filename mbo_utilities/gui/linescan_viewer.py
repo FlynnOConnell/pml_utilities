@@ -498,6 +498,10 @@ class LineScanOverlay:
         self.trace_stack = None
         self.selector = None
         self.fs = fs
+        from mbo_utilities.gui.playhead import Playhead
+
+        self.playhead = Playhead()
+        self.playhead.add_event_handler(self._on_playhead, "time")
         if traces is not None and trace_index is not None and len(ndw.figure) > trace_index:
             tr_sp = ndw[trace_index].subplot
             self.trace_subplot = tr_sp
@@ -513,7 +517,6 @@ class LineScanOverlay:
         self.goto_slice(self.placements[0]["slice"])
         self._update_titles()
 
-    # ----------------------------------------------------------------- traces
     def _build_traces(self, subplot, traces: np.ndarray) -> None:
         T = traces.shape[1]
         stride = max(1, T // 250_000)
@@ -546,14 +549,32 @@ class LineScanOverlay:
     def _on_selector(self, ev) -> None:
         if self._busy or self.t_dim is None:
             return
-        t_index = int(round(float(self.selector.selection) * self.fs))
+        self.playhead.seek(float(self.selector.selection), source=self.selector)
+
+    def _on_playhead(self, event) -> None:
+        """The playhead moved: the Timepoint slider follows, then the selector
+        follows the slider (the slider's own move comes back through
+        ``_on_indices`` with this overlay as the source)."""
+        t_s = float(event.info["seconds"])
+        if event.info.get("source") is self:
+            if self.selector is not None and not self._busy:
+                self._busy = True
+                try:
+                    self.selector.selection = t_s
+                finally:
+                    self._busy = False
+            return
+        if self.t_dim is None:
+            return
+        index = max(0, int(round(t_s * self.fs)))
+        if index == self.t_index:
+            return
         self._busy = True
         try:
-            self.ndw.indices.set_dim_index(self.t_dim, t_index + 1)
+            self.ndw.indices.set_dim_index(self.t_dim, index + 1)
         finally:
             self._busy = False
 
-    # --------------------------------------------------------------- styling
     def _label_text(self, p: dict) -> str:
         # a ghost (another slice) gets its index only: seventeen full labels
         # on one panel are unreadable, and the side table has the numbers
@@ -621,7 +642,6 @@ class LineScanOverlay:
             f"{z_name}  slice {self.slice + 1}/{self.zdim}  z {z_here:+.1f} um  |  {where}"
         )
 
-    # ---------------------------------------------------------------- events
     def _on_indices(self, indices: dict) -> None:
         if self.z_dim is not None:
             k = self._ref_to_index(indices[self.z_dim])
@@ -636,12 +656,7 @@ class LineScanOverlay:
                     self.goto_slice(self.placements[i]["slice"])
         if self.t_dim is not None:
             self.t_index = self._ref_to_index(indices[self.t_dim])
-        if self.t_dim is not None and self.selector is not None and not self._busy:
-            self._busy = True
-            try:
-                self.selector.selection = self.t_index / self.fs
-            finally:
-                self._busy = False
+            self.playhead.seek(self.t_index / self.fs, source=self)
         self._update_titles()
 
     def _on_line_click(self, i: int, ev) -> None:
@@ -662,7 +677,6 @@ class LineScanOverlay:
         elif key == "p":
             self.select_roi((self.selected - 1) % self.n)
 
-    # ------------------------------------------------------------ public api
     def goto_slice(self, k: int) -> None:
         k = int(np.clip(k, 0, self.zdim - 1))
         if self.z_dim is None:
@@ -695,11 +709,8 @@ class LineScanOverlay:
             self._apply_selection(self.selected)
 
     def goto_time(self, t_s: float) -> None:
-        """Move the Reference's Timepoint (and the trace cursor) to ``t_s``."""
-        if self.t_dim is None:
-            return
-        index = max(0, int(round(float(t_s) * self.fs)))
-        self.ndw.indices.set_dim_index(self.t_dim, index + 1)
+        """Move the playhead (the Timepoint slider and every cursor) to ``t_s``."""
+        self.playhead.seek(float(t_s))
 
 
 class LinePanel:
@@ -822,16 +833,16 @@ class LinePanel:
             self.curation.draw()
 
 
-
 class StandardTraces:
     """A line-scan unit's per-ROI traces on the standard viewer (``mbo
     file.mesc``): a :class:`TraceJob` for the traces, its progress on the
-    ROI widget's Traces tab until they are in, then one external
-    :class:`~mbo_utilities.gui.roi_runs.TraceSet` there, one row per ROI.
-    The plotted row follows the ROI slider and the slider follows a row
-    picked in the trace table; the unit's motion correction reaches the tab
-    through the array (``motion_correction``). Kept on
-    ``parent.linescan_traces``; ``close`` takes the set off."""
+    ROI widget's Traces tab until they are in, then one
+    :class:`~mbo_utilities.annotation.RoiTrace` row per ROI in its trace
+    table (``member`` rows under this unit's source name). The plotted row
+    follows the ROI slider and the slider follows a row picked in the trace
+    table; the unit's motion correction reaches the tab through the array
+    (``motion_correction``). Kept on ``parent.linescan_traces``; ``close``
+    takes the rows off."""
 
     def __init__(self, parent, arr):
         from mbo_utilities.preferences import get_linescan_auto_traces
@@ -858,24 +869,24 @@ class StandardTraces:
             if not (self.job.done and self.job.result is not None):
                 return
             self._attach()
-        ts = self.roi.trace_sets.get(self.name)
-        if ts is None:
+        rows = self.roi.traces.from_source(self.name)
+        if not rows:
             return
         # the ROI slider and the trace table pick the same line
-        n = len(ts.data)
+        n = len(rows)
         selected = min(max(int(self.iw.indices[self.roi_dim]), 0), n - 1) if self.roi_dim is not None else 0
         sel = self.roi.trace_sel
         if selected != self._last_roi:
             self._last_roi = selected
-            self.roi.select_trace(("uid", self.name, selected))
+            self.roi.select_trace(("member", self.name, selected))
             self._last_sel = set(self.roi.trace_sel)
         elif sel != self._last_sel:
             self._last_sel = set(sel)
             if len(sel) == 1:
-                origin, name, k = next(iter(sel))
-                if origin == "uid" and name == self.name and self.roi_dim is not None:
-                    self.iw.indices[self.roi_dim] = int(k)
-                    self._last_roi = int(k)
+                key = next(iter(sel))
+                if key[0] == "member" and key[1] == self.name and self.roi_dim is not None:
+                    self.iw.indices[self.roi_dim] = int(key[2])
+                    self._last_roi = int(key[2])
 
     def draw_pending(self) -> None:
         """On the Traces tab while the job has nothing to show: progress
@@ -902,26 +913,42 @@ class StandardTraces:
             imgui.progress_bar(done / total if total else 0.0, imgui.ImVec2(-1, 0), "")
 
     def _attach(self) -> None:
-        from mbo_utilities.gui.roi_runs import TraceSet
+        from mbo_utilities.annotation import RoiTrace
+        from mbo_utilities.arrays.mesc_geometry import line_positions
+        from mbo_utilities.lazy_array import base_array
 
         md = self.arr.metadata
-        n = len(md.get("mesc_roi_extents") or []) or int(self.job.result.shape[0])
+        extents = md.get("mesc_roi_extents") or []
+        n = len(extents) or int(self.job.result.shape[0])
         fs = float(self.arr.fs or 1.0)
         traces = np.asarray(self.job.result[:n], dtype=np.float32)
-        ts = TraceSet(self.name, self.job.source, external=True)
+        # positions come from the scan geometry, never from the row
+        src = base_array(self.arr)
+        files = getattr(src, "filenames", None) or []
+        unit_key = getattr(src, "unit_key", None)
+        positions = None
+        if files and unit_key:
+            positions = line_positions(files[0], unit_key, [int(e["width"]) for e in extents])
+        self.roi.traces.drop_source(self.name)
         for k in range(traces.shape[0]):
-            ts.data[k] = {"label": f"ROI {k}", "fs": fs, "F": traces[k]}
-        self.roi.trace_sets[self.name] = ts
+            extra = {"line": k}
+            label = f"ROI {k}"
+            if positions is not None and k < len(positions):
+                extra.update(positions[k])
+                if extra["dz_um"] is not None:
+                    label += f" · {extra['dz_um']:+.1f} um"
+            self.roi.traces.add(RoiTrace(
+                uid=0, member=k, source=self.name, engine=str(self.job.source),
+                label=label, fs=fs, z=k, c=int(self.job.channel), F=traces[k], extra=extra,
+            ))
         self.roi.pending_traces = None
-        self.roi._traces_changed()
         self.roi.focus_traces = True
         self.attached = True
 
     def close(self) -> None:
         self.strip.remove_hook(self)
         self.roi.pending_traces = None
-        if self.roi.trace_sets.pop(self.name, None) is not None:
-            self.roi._traces_changed()
+        self.roi.traces.drop_source(self.name)
 
 
 def attach_standard_traces(parent) -> StandardTraces | None:
@@ -1028,7 +1055,7 @@ class LineTracesPanel:
                 )
         imgui.same_line(0, 12)
         imgui.text_disabled(
-            f"ROI {ov.selected} · t {ov.t_index / self.fs:.3f} s · raw F (band) and 25 ms mean; "
+            f"ROI {ov.selected} · t {ov.playhead.time:.3f} s · raw F (band) and 25 ms mean; "
             "drag the cursor to scrub, drag pans, scroll zooms, double-click fits"
         )
         avail = max(imgui.get_content_region_avail().y - 2, 60.0)
@@ -1073,18 +1100,18 @@ class LineTracesPanel:
             r, g, b = (float(v) for v in ov.colors[i][:3])
             line(f"ROI {i} raw", band, x=t_band, color=(r, g, b, 0.28), weight=0.8)
             line(f"ROI {i}", smooth, x=ts, color=(r, g, b, 1.0), weight=1.8)
-            cursor, held = drag_vline(99, ov.t_index / self.fs, (1.0, 0.85, 0.3, 0.9), 1.5)
+            cursor, held = drag_vline(99, ov.playhead.time, (1.0, 0.85, 0.3, 0.9), 1.5)
             if held:
-                ov.goto_time(cursor)
+                ov.playhead.seek(cursor, source="line_traces")
 
     def draw_motion(self, height: float) -> None:
         """The motion plot with the Timepoint cursor; dragging it scrubs."""
         ov = self.overlay
         cursor, held = self.motion.draw(
-            "##line_motion_plot", height, cursor=ov.t_index / self.fs, cursor_id=98, duration_s=self.duration_s,
+            "##line_motion_plot", height, cursor=ov.playhead.time, cursor_id=98, duration_s=self.duration_s,
         )
-        if held:
-            ov.goto_time(cursor)
+        if held and cursor is not None:
+            ov.playhead.seek(cursor, source="line_motion")
 
 
 class LineCuration:
