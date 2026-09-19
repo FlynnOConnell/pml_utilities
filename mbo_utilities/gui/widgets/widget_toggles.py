@@ -114,14 +114,14 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         key="manual_roi",
         label="Manual ROI Labeling",
         tooltip="Freehand ROI drawing and labelling: control cards and the trace "
-                "plot in a top panel; the ROI and trace tables in their own tabs.",
+                "plot in a top panel; the ROI and trace tables in their own tabs. "
+                "Running ROIs is the Process tab's ROIs pipeline.",
         default=False,
         on_toggle=_toggle_manual_roi,
         subwidgets=(
             SubWidget("tools", "Drawing tools"),
             SubWidget("overlay", "Overlay controls"),
             SubWidget("labels", "Label editor"),
-            SubWidget("process", "Process card"),
             SubWidget("table", "ROI table", tooltip="The ROIs tab in this panel."),
             SubWidget("traces", "Trace table", tooltip="The Traces tab: every collected trace with stats."),
         ),
