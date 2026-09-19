@@ -438,31 +438,6 @@ def test_component_color_is_class_color_when_labeled():
     assert rr.component_color(s, 0) == class_color(1) != hue
 
 
-def test_display_trace_matches_the_lsp_recipe():
-    from mbo_utilities.annotation import RoiTrace
-
-    F = np.array([10.0, 10.0, 30.0, 10.0], np.float32)
-    Fneu = np.array([2.0, 2.0, 2.0, 2.0], np.float32)
-    corr = F - 0.7 * Fneu
-    f0 = float(np.percentile(corr, 20))
-    expected = (corr - f0) / f0 * 100.0
-    got = rr.display_trace(RoiTrace(uid=1, F=F, Fneu=Fneu))
-    np.testing.assert_allclose(got, expected, rtol=1e-5)
-    # correction off: raw F baseline
-    f0 = float(np.percentile(F, 20))
-    np.testing.assert_allclose(
-        rr.display_trace(RoiTrace(uid=1, F=F, Fneu=Fneu), correct_neuropil=False),
-        (F - f0) / f0 * 100.0, rtol=1e-5,
-    )
-    # the run's own norm_traces win outright
-    norm = np.array([0.0, 5.0, 50.0, 0.0], np.float32)
-    np.testing.assert_array_equal(rr.display_trace(RoiTrace(uid=1, F=F, norm=norm)), norm)
-    # neuropil rides the same percent scale; absent -> None
-    assert rr.display_fneu(RoiTrace(uid=1, F=F)) is None
-    yneu = rr.display_fneu(RoiTrace(uid=1, F=F, Fneu=Fneu))
-    np.testing.assert_allclose(yneu, np.zeros(4), atol=1e-3)
-
-
 def test_result_traces_carry_the_read_coordinates(tmp_path):
     stat = np.array([_row([0], [0], [1.0])] * 2, object)
     res = rw.RunResult(

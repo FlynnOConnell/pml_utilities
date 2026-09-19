@@ -57,6 +57,7 @@ from typing import Literal
 import numpy as np
 
 from mbo_utilities import log
+from mbo_utilities.analysis.dff import maxmin_baseline
 from mbo_utilities.annotation.ngff import LabelsZarr
 from mbo_utilities.annotation.store import RoiLabelStore
 from mbo_utilities.arrays.features._dim_tags import filename_tags
@@ -1792,37 +1793,6 @@ def discover_rois(
     return out
 
 
-def _maxmin_baseline(
-    F: np.ndarray, fs: float, window_s: float = 5.0, sigma_s: float = 0.05
-) -> np.ndarray:
-    """Rolling max-min baseline, sized in seconds via ``fs``.
-
-    Same two-pass smooth -> rolling-max -> rolling-min baseline as a
-    suite2p-style dF/F, but sized in seconds rather than a fixed frame
-    count: a line-scan's frame rate (~1-2.5 kHz) is one to two orders of
-    magnitude higher than a raster-scanned movie's (~10-30 Hz), so a fixed
-    frame-count window would be the wrong number of seconds here. Uses
-    ``scipy.ndimage``'s O(T) sliding max/min filters rather than a per-frame
-    python loop, since a line-scan run has far more timepoints.
-    """
-    from scipy.ndimage import gaussian_filter1d, maximum_filter1d, minimum_filter1d
-
-    fs = float(fs)
-    window = max(3, int(round(window_s * fs)))
-    sigma = max(0.5, sigma_s * fs)
-    smoothed = gaussian_filter1d(F, sigma=sigma, axis=1)
-    rolled_max = maximum_filter1d(smoothed, size=window, axis=1, mode="nearest")
-    return minimum_filter1d(rolled_max, size=window, axis=1, mode="nearest")
-
-
-def _dfof_maxmin(
-    F: np.ndarray, fs: float, window_s: float = 5.0, sigma_s: float = 0.05
-) -> np.ndarray:
-    """Rolling max-min baseline dF/F, no neuropil term (see :func:`_maxmin_baseline`)."""
-    baseline = _maxmin_baseline(F, fs, window_s, sigma_s)
-    return ((F - baseline) / baseline).astype(np.float32)
-
-
 def _bridge_frames(F: np.ndarray, frames: np.ndarray) -> np.ndarray:
     """Copy of ``F`` with the listed frames replaced by linear interpolation
     between their nearest untouched neighbours (edges hold the neighbour)."""
@@ -2099,7 +2069,7 @@ def extract_linescan_traces(
         np.save(out / "stim_frames.npy", stim["frames"])
     dfof = None
     if compute_dfof:
-        baseline = _maxmin_baseline(F_clean, fs=fs, window_s=dfof_window_s)
+        baseline = maxmin_baseline(F_clean, fs=fs, window_s=dfof_window_s)
         low = np.flatnonzero((baseline <= 0).any(axis=1))
         if low.size:
             # a non-positive baseline flips or blows up dF/F; typical of a

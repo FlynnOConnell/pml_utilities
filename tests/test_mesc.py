@@ -972,5 +972,9 @@ def test_linked_units_and_leading_slash_keys(tmp_path):
     assert units["MSession_0/MUnit_0"]["rtmc_unit"] == "MSession_1/MUnit_1"
     assert units["MSession_1/MUnit_1"]["rtmc_unit"] is None
     assert units["MSession_1/MUnit_1"]["background_unit"] is None
+    # the snapshot and stream know which scan they belong to
+    assert units["MSession_1/MUnit_0"]["scans"] == ["MSession_0/MUnit_0"]
+    assert units["MSession_1/MUnit_1"]["rtmc_of"] == ["MSession_0/MUnit_0"]
+    assert units["MSession_0/MUnit_0"]["scans"] == [] and units["MSession_0/MUnit_0"]["rtmc_of"] == []
     for a in (arr, ref, snap):
         a.close()

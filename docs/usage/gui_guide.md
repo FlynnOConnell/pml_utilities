@@ -234,9 +234,13 @@ Readout for the temporal binning set with **Apply to dataset** above: frames per
 
 Also hosts piezo z-stack averaging. When `frames_per_slice > 1`, toggle averaging based on ScanImage's `logAverageFactor`. This changes the effective shape of the data.
 
+### MESc Units
+
+Femtonics MESc files only. A `.mesc` holds one measurement unit per scan the operator ran, and `mbo scan.mesc` opens the first AOD scan (line scan, chessboard or ribbon), or the first unit when there is none. The **MESc Units** dropdown on the Image tab switches units without leaving the viewer. The **MESc** tab lists every unit as a table: session and unit (MESc numbers each session's units from scratch, so `MSession_0/MUnit_3` and `MSession_1/MUnit_3` are different recordings), modality, shape, rate, duration, start time and comment. **ROIs** is the lines or patches a scan recorded (`15 lines`, `7 patches`). **links** counts the units this one is paired with, as a button that lists them: a scan's snapshot (*drawn on*, its `BackgroundImagePath`) and RTMC stream, a snapshot's scans (*background of*), a stream's scan (*RTMC of*), and for a Z-stack every scan whose ROIs fall inside its field (*holds*). Click a row, or a unit in that list, to display it; a snapshot or Z-stack opens with its ROIs already overlaid.
+
 ### ROI Overlay
 
-Femtonics MESc files only. When the displayed unit is the snapshot a multi-ROI scan was set up on (the scan's `BackgroundImagePath`), or a Z-stack whose field contains the scan's ROIs, **Overlay ROIs** draws the lines (line scan) or patches (chessboard, ribbon) MESc actually scanned, in the colours MESc used. Solid ROIs are on the plane shown: within 1 µm of the snapshot, or on the Z-stack slice the slider is at. Faint ones sit at another depth; **Show off-plane ROIs** hides them. Each scan gets one line of text with how many of its ROIs are on the current plane; hover it for every ROI's depth offset.
+Femtonics MESc files only. When the displayed unit is the snapshot a multi-ROI scan was set up on (the scan's `BackgroundImagePath`), or a Z-stack whose field contains the scan's ROIs, the lines (line scan) or patches (chessboard, ribbon) MESc actually scanned are drawn on it as soon as it is on screen, in the colours MESc used; **Overlay ROIs** hides them for the session. Solid ROIs are on the plane shown: within 1 µm of the snapshot, or on the Z-stack slice the slider is at. Faint ones sit at another depth; **Show off-plane ROIs** hides them. Each scan gets one line of text with how many of its ROIs are on the current plane; hover it for every ROI's depth offset.
 
 The pairing is by the file's own metadata (`CoordinateMapJSON` outlines, `ReferenceViewportJSON` placement, `BackgroundImagePath`), so the panel does not appear for a unit MESc did not record ROIs for. A scan whose ROI list was edited after acquisition falls back to the viewer's own colours.
 
@@ -418,7 +422,19 @@ the same instant, each trace drawn where it was recorded (its own frame window a
 binning).
 
 Every measurement is one row of the **Traces** tab: which ROI, on which z-plane and
-channel, with which engine, from which run. Running the same ROI the same way again
+channel, with which engine (the **pipeline** column: `mean`, `suite2p`, `masknmf`, or
+the pipeline that wrote a results file), from which run. A results file's rows are
+named by their ROI (`roi3` for its trace, `roi3 (raw)` for its line; a line of a
+multi-line ROI adds itself, `roi3 line 12 (raw)`) and put the line on the ROI axis
+column. The plot shows the checked rows the way their pipeline says: the **kind**
+combo picks `raw`, the pipeline's own `dF/F` (or one computed here over a rolling
+max-min baseline sized in seconds; the **dF/F** button sets its window and smoothing
+or switches to a percentile baseline), `denoised` or `z-score`, and a row without
+that kind shows its pipeline's default (the voltage pipeline's curated trace, dF/F
+elsewhere); the y axis is labelled from what is on it. **neuropil corrected** appears
+only when a plotted row's pipeline measured a neuropil (suite2p, or the mean engine's
+ring). The x axis opens in seconds whenever the data has a sampling rate. Running
+the same ROI the same way again
 replaces its row; reading it on another channel, z-plane or with another engine adds
 one. Click a row to plot it, ctrl+click to plot several; the plot follows the ROI
 the image shows. The ROIs tab's row buttons and the `t` key run one ROI exactly the

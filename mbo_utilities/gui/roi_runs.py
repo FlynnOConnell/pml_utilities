@@ -42,8 +42,6 @@ __all__ = [
     "derived_comps",
     "derived_outline",
     "derived_rgba",
-    "display_fneu",
-    "display_trace",
     "feathered_rgba",
     "footprint_center",
     "footprint_edges",
@@ -508,32 +506,6 @@ def derived_outline(
     """
     comps, _sel, halo = derived_comps(sets_on_z, 1.0, selected, grouped)
     return outline_data(comps, mode, halo, scale, segments)
-
-
-def display_trace(trace: RoiTrace, correct_neuropil: bool = True) -> np.ndarray:
-    """A trace the way lbm_suite2p_python plots it: the run's norm_traces
-    when present, else percent dF/F over a static 20th-percentile baseline,
-    neuropil-corrected (``F - 0.7 * Fneu``) unless turned off."""
-    if trace.norm is not None:
-        return np.asarray(trace.norm, np.float32)
-    f = np.asarray(trace.F, np.float32)
-    if correct_neuropil and trace.Fneu is not None:
-        f = f - 0.7 * np.asarray(trace.Fneu, np.float32)
-    if not f.size or not np.any(f):
-        return np.zeros_like(f)
-    f0 = max(float(np.percentile(f, 20)), 1e-6)
-    return (f - f0) / f0 * 100.0
-
-
-def display_fneu(trace: RoiTrace) -> np.ndarray | None:
-    """The neuropil trace on the same percent scale, or None without one."""
-    if trace.Fneu is None:
-        return None
-    f = np.asarray(trace.Fneu, np.float32)
-    if not f.size or not np.any(f):
-        return np.zeros_like(f)
-    f0 = max(float(np.percentile(f, 20)), 1e-6)
-    return (f - f0) / f0 * 100.0
 
 
 def result_traces(res: RunResult, uids=None) -> list[RoiTrace]:

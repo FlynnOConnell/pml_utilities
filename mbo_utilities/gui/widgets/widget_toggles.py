@@ -96,8 +96,10 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
     WidgetEntry(
         key="mesc",
         label="MESc",
-        tooltip="Every measurement unit in the open .mesc file, with its comment; "
-                "click a row to display it.",
+        tooltip="Every measurement unit in the open .mesc file: shape, rate, the "
+                "lines or patches it scanned and the units it is paired with "
+                "(its snapshot, its RTMC stream, the scans on an image); click a "
+                "row to display it.",
     ),
     WidgetEntry(
         key="signal_quality",

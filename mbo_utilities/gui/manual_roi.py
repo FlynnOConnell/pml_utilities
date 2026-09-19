@@ -100,15 +100,24 @@ from mbo_utilities.gui.imgui.lines import subplots
 from mbo_utilities.gui.imgui.motion import MotionPlot
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.annotation import (
+    DISPLAY_KINDS,
     ENGINES,
     FULL_IMAGE,
     UNLABELED,
+    DffSettings,
     LabelsZarr,
     RoiLabelStore,
     RoiModel,
     RoiTrace,
     RoiTraceTable,
+    available_kinds,
+    display_trace,
+    displayed_kind,
+    neuropil_overlay,
+    trace_profile,
+    y_label,
 )
+from mbo_utilities.annotation.display import DFF_METHODS
 from mbo_utilities.gui._imgui_helpers import (
     fit_width,
     selected_button_style,
@@ -134,8 +143,6 @@ from mbo_utilities.gui.roi_runs import (
     component_color,
     derived_outline,
     derived_rgba,
-    display_fneu,
-    display_trace,
     feathered_rgba,
     finished_dirs,
     full_plane_args,
@@ -201,7 +208,7 @@ TRACE_COLUMNS = (
     ("id", 1.4, False),
     ("z", 0.7, False),
     ("c", 0.7, False),
-    ("engine", 1.2, False),
+    ("pipeline", 1.2, False),
     ("source", 1.6, True),
     ("frames", 1.0, True),
     ("peak", 1.0, True),
@@ -668,6 +675,12 @@ class ManualRoiWidget:
         # one entry: the last windowed line, so panning does not recompute it
         self._trace_window_cache: dict[tuple, np.ndarray] = {}
         self.correct_neuropil = True
+        # what the plot shows of each row (a DISPLAY_KINDS name); None lets
+        # every row's pipeline pick, and a kind a row lacks falls back the same way
+        self._kind: str | None = None
+        # the panel's own dF/F baseline for rows that compute one; None keeps
+        # each pipeline's
+        self.dff: DffSettings | None = None
         self._trace_sort = (0, True)
         self._trace_fit = True
         self._plot_key = None
@@ -675,7 +688,8 @@ class ManualRoiWidget:
         # off to hold a zoomed-in stretch while stepping through ROIs
         self.autofit = True
         self._force_fit = False
-        self.x_unit = X_UNITS[0]
+        # None until picked: seconds whenever the data has a rate
+        self._x_unit: str | None = None
         # the Traces tab shows the trace plot, and the motion plot under it
         # in linked subplots when the recording went through motion
         # correction (MC); the splitter's share is kept between frames
@@ -1896,8 +1910,12 @@ class ManualRoiWidget:
         (suite2p, masknmf) load as derived sets exactly like a run dir; line
         units (the voltage pipeline's scans) go straight to the Traces tab,
         one row per ROI plotting its denoised trace and one per member line
-        plotting the line's raw trace. ``path`` may name one unit inside the
-        file (``<file>.zarr/zplane01``). Returns True when anything loaded."""
+        plotting the line's raw trace. Every row is named by its ROI
+        (``roi3``, ``roi3 (raw)``; a line of a multi-line ROI adds itself,
+        ``roi3 line 12 (raw)``) and carries the line it was read from on Z
+        and the pipeline's channel on C. ``path`` may name one unit inside
+        the file (``<file>.zarr/zplane01``). Returns True when anything
+        loaded."""
         from mbo_utilities.results import read_results, results_pipeline
 
         path = Path(path)
@@ -1924,21 +1942,41 @@ class ManualRoiWidget:
             name = f"{file.name}/{unit.name}"
             rows: list[RoiTrace] = []
             n = unit.n_rois
+            lines = unit.member_kind == "line"
+            channel = int(results.source.get("channel") or 0)
             for k, roi in enumerate(unit.roi_names):
-                entry = {"label": str(roi), "fs": unit.fs}
-                for kind, field in (("raw", "F"), ("neuropil", "Fneu"), ("dff", "norm"), ("denoised", "norm")):
-                    if kind in unit.traces:
-                        entry[field] = np.asarray(unit.traces[kind][k], np.float32)
-                if "F" not in entry:
-                    entry["F"] = entry.get("norm", np.zeros(unit.n_timepoints, np.float32))
+                entry = {"label": str(roi), "fs": unit.fs, "c": channel, "kinds": {}}
+                members = unit.members[k] if k < len(unit.members) else ()
+                if lines and len(members) == 1:
+                    entry["z"] = int(members[0])
+                    entry["extra"] = {"line": int(members[0])}
+                # every kind the unit wrote, under the row's field for it
+                for kind, arr in unit.traces.items():
+                    row = np.asarray(arr[k], np.float32)
+                    if kind == "raw":
+                        entry["F"] = row
+                    elif kind == "neuropil":
+                        entry["Fneu"] = row
+                    elif kind == "dff":
+                        entry["norm"] = row
+                    else:
+                        entry["kinds"][kind] = row
                 rows.append(RoiTrace(uid=0, member=k, source=name, engine=results.pipeline, path=file, **entry))
             ids = list(unit.attrs.get("member_ids") or [])
             for kind, arr in unit.member_traces.items():
                 for i, row in enumerate(np.asarray(arr, np.float32)):
                     member = ids[i] if i < len(ids) else i
+                    k = unit.member_roi(member)
+                    if k is None:
+                        label = f"{unit.member_kind} {member} ({kind})"
+                    elif len(unit.members[k]) == 1:
+                        label = f"{unit.roi_names[k]} ({kind})"
+                    else:
+                        label = f"{unit.roi_names[k]} {unit.member_kind} {member} ({kind})"
+                    where = {"z": int(member), "extra": {"line": int(member)}} if lines else {}
                     rows.append(RoiTrace(
                         uid=0, member=n + i, source=name, engine=results.pipeline, path=file,
-                        label=f"{unit.member_kind} {member} ({kind})", fs=unit.fs, F=row,
+                        label=label, fs=unit.fs, F=row, c=channel, **where,
                     ))
             if not rows:
                 continue
@@ -3601,7 +3639,7 @@ class ManualRoiWidget:
         """Legend text for one row: the engine, then where it was read when
         that is not where the ROI was drawn, then a frame window."""
         if not trace.stands_for_roi:
-            return trace.label or f"{trace.source} {trace.member}"
+            return trace.name
         parts = [trace.engine]
         index = self.store.uid_index(trace.uid)
         if index is not None:
@@ -3705,6 +3743,52 @@ class ManualRoiWidget:
         """X axis units on offer: frames always, time only with an ``fs``."""
         return X_UNITS if self.fs() else X_UNITS[:1]
 
+    @property
+    def x_unit(self) -> str:
+        """The x axis unit: the one picked, else seconds when the data has a rate."""
+        if self._x_unit is None:
+            return "seconds" if self.fs() else "frames"
+        return self._x_unit
+
+    @x_unit.setter
+    def x_unit(self, unit: str) -> None:
+        self._x_unit = unit
+
+    @property
+    def kind(self) -> str | None:
+        """The kind the plot shows of each row; None lets every row's pipeline pick."""
+        return self._kind
+
+    @kind.setter
+    def kind(self, kind: str | None) -> None:
+        if kind != self._kind:
+            self._kind = kind
+            self._redisplay()
+
+    def kind_options(self, rows) -> tuple[str, ...]:
+        """The kinds on offer for ``rows``: every kind any of them can show,
+        in ``DISPLAY_KINDS`` order."""
+        offered = {kind for trace in rows for kind in available_kinds(trace)}
+        return tuple(kind for kind in DISPLAY_KINDS if kind in offered)
+
+    def neuropil_offered(self, rows) -> bool:
+        """Whether a plotted row's pipeline measured a neuropil to correct with."""
+        return any(trace_profile(t.engine).neuropil and t.Fneu is not None for t in rows)
+
+    def plot_y_label(self, rows) -> str:
+        """The y axis label of what the rows show: one when they agree, else joined."""
+        labels = list(dict.fromkeys(y_label(t, self.kind) for t in rows))
+        return " / ".join(label for label in labels if label) or DISPLAY_KINDS["dff"]
+
+    def _plotted_rows(self, lines) -> list[RoiTrace]:
+        return [t for t in (self.traces.get(key) for _label, key in lines) if t is not None]
+
+    def _redisplay(self) -> None:
+        """The rows read differently now: drop the cached arrays and refit."""
+        self._trace_display.clear()
+        self._trace_stats.clear()
+        self._trace_fit = True
+
     def _window_spec(self) -> tuple[str, int]:
         """``(projection, size)`` of the viewer's window function.
 
@@ -3736,19 +3820,20 @@ class ManualRoiWidget:
         return out
 
     def _display(self, key) -> tuple:
-        """Cached ``(trace, neuropil)`` display arrays for one trace key."""
+        """Cached ``(trace, neuropil)`` display arrays for one trace key, in
+        the panel's kind and dF/F settings (``annotation.display``)."""
         got = self._trace_display.get(key)
         if got is None:
             trace = self.traces.get(key)
-            if trace is None or trace.F is None:
+            if trace is None:
                 return None, None
-            y = np.ascontiguousarray(
-                display_trace(trace, self.correct_neuropil), np.float32
-            )
-            yneu = display_fneu(trace)
+            y = display_trace(trace, self.kind, self.dff, self.correct_neuropil)
+            if y is None:
+                return None, None
+            yneu = neuropil_overlay(trace, self.kind, self.dff)
             if yneu is not None:
                 yneu = np.ascontiguousarray(yneu, np.float32)
-            got = (y, yneu)
+            got = (np.ascontiguousarray(y, np.float32), yneu)
             self._trace_display[key] = got
         return got
 
@@ -3793,7 +3878,7 @@ class ManualRoiWidget:
             return float((1 << 30) + trace.uid), f"uid {trace.uid}"
         if self._set_by_name(trace.source) is None:
             # rows that stand for no ROI sort after the drawn ones, in table order
-            return float((1 << 30) + self.traces.keys.index(key)), str(trace.label or trace.member)
+            return float((1 << 30) + self.traces.keys.index(key)), trace.name
         index = self._promoted.get((trace.source, trace.member))
         if index is not None:
             return float(index), f"{index}"
@@ -3840,16 +3925,41 @@ class ManualRoiWidget:
                 "under the trace on the same time axis.",
                 show_mark=False,
             )
-        imgui.same_line(0, 12)
-        changed, self.correct_neuropil = imgui.checkbox(
-            "neuropil corrected", self.correct_neuropil
-        )
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("subtract 0.7 x Fneu before dF/F (suite2p results)")
-        if changed:
-            self._trace_display.clear()
-            self._trace_stats.clear()
-            self._trace_fit = True
+        rows = [] if target is None else self._plotted_rows(target[1])
+        # the pipelines behind the plotted rows decide what the panel offers
+        if self.neuropil_offered(rows):
+            imgui.same_line(0, 12)
+            changed, self.correct_neuropil = imgui.checkbox(
+                "neuropil corrected", self.correct_neuropil
+            )
+            set_tooltip(
+                "subtract the pipeline's neuropil (0.7 x Fneu) from the raw trace before "
+                "dF/F; offered by suite2p and the mean engine's ring, never by masknmf",
+                show_mark=False,
+            )
+            if changed:
+                self._redisplay()
+        kinds = self.kind_options(rows)
+        if kinds:
+            imgui.same_line(0, 12)
+            shown = [displayed_kind(t, self.kind) for t in rows]
+            current = self.kind if self.kind in kinds else shown[0]
+            imgui.set_next_item_width(em(6.5))
+            changed, sel = imgui.combo("##trace_kind", kinds.index(current), list(kinds))
+            set_tooltip(
+                "What each row shows: raw, its pipeline's dF/F (or one computed here), "
+                "denoised, z-score. A row without that kind shows its pipeline's default.",
+                show_mark=False,
+            )
+            if changed:
+                self.kind = kinds[sel]
+                self._redisplay()
+            if any(s == "dff" and t.norm is None for t, s in zip(rows, shown)):
+                imgui.same_line(0, 6)
+                if imgui.small_button("dF/F##dff_settings"):
+                    imgui.open_popup("##dff_settings")
+                set_tooltip("The baseline of a dF/F computed here from a raw trace", show_mark=False)
+                self._draw_dff_settings(rows)
         imgui.same_line(0, 12)
         changed, self.autofit = imgui.checkbox("autofit", self.autofit)
         set_tooltip(
@@ -3917,6 +4027,40 @@ class ManualRoiWidget:
         else:
             self._draw_motion_plot(motion, height)
 
+    def _draw_dff_settings(self, rows) -> None:
+        """The popup editing the panel's dF/F baseline; it starts from the
+        first plotted row's pipeline settings and can go back to them."""
+        if not imgui.begin_popup("##dff_settings"):
+            return
+        if self.dff is None:
+            self.dff = replace(trace_profile(rows[0].engine).dff)
+        d = self.dff
+        imgui.set_next_item_width(em(9))
+        changed, idx = imgui.combo("baseline", DFF_METHODS.index(d.method), ["rolling max-min", "percentile"])
+        if changed:
+            d.method = DFF_METHODS[idx]
+        if d.method == "maxmin":
+            imgui.set_next_item_width(em(6))
+            moved, d.window_s = imgui.input_float("window (s)", d.window_s, 0.5, 5.0, "%.1f")
+            d.window_s = max(0.1, d.window_s)
+            changed |= moved
+            imgui.set_next_item_width(em(6))
+            moved, d.sigma_s = imgui.input_float("smoothing (s)", d.sigma_s, 0.01, 0.1, "%.3f")
+            d.sigma_s = max(0.0, d.sigma_s)
+            changed |= moved
+            if not all(t.fs for t in rows):
+                imgui.text_disabled("a row without a sampling rate uses the percentile")
+        else:
+            imgui.set_next_item_width(em(6))
+            moved, d.percentile = imgui.slider_float("percentile", d.percentile, 1.0, 50.0, "%.0f")
+            changed |= moved
+        if imgui.small_button("pipeline defaults"):
+            self.dff = None
+            changed = True
+        if changed:
+            self._redisplay()
+        imgui.end_popup()
+
     def _draw_motion_plot(self, motion: MotionPlot, height: float) -> None:
         """The motion plot in the trace plot's x units with the playhead on
         it; dragging the playhead scrubs the movie."""
@@ -3959,7 +4103,7 @@ class ManualRoiWidget:
             locked = implot.AxisFlags_.lock
             implot.setup_axes(
                 X_AXIS_LABELS[self.x_unit],
-                "dF/F (%)",
+                self.plot_y_label(self._plotted_rows(lines)),
                 locked if io.key_alt else none,
                 locked if io.key_shift else none,
             )
@@ -4048,7 +4192,7 @@ class ManualRoiWidget:
         )
 
     def _trace_stat(self, key) -> tuple[int, float, float, float]:
-        """``(frames, mean, peak, snr)`` of the displayed (dF/F) trace,
+        """``(frames, mean, peak, snr)`` of the displayed trace,
         cached until the trace sets change; snr is peak over baseline in
         robust sd units."""
         got = self._trace_stats.get(key)

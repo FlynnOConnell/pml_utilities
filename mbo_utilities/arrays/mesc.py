@@ -802,8 +802,12 @@ def list_mesc_units(path: Path | str) -> list[dict]:
         scan the operator ran, ``"background"`` and ``"motionCorrection"``
         for the snapshot and RTMC stream it saves beside one; ``""`` when
         unset), ``background_unit`` and ``rtmc_unit`` (the keys of that
-        snapshot and stream, None when the scan links none), ``comment``
-        and ``start_time``.
+        snapshot and stream, None when the scan links none), ``scans`` and
+        ``rtmc_of`` (the reverse: the keys of the scans drawn on this
+        snapshot, or whose RTMC this stream watched), ``n_outlines`` and
+        ``outline_kind`` (the ROI outlines the scan recorded in
+        ``CoordinateMapJSON``: ``"line"`` ends or ``"patch"`` corners; 0 and
+        None for a unit without them), ``comment`` and ``start_time``.
 
     Examples
     --------
@@ -839,6 +843,14 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                     planned_ms = float(_attr(unit, "MeasurementLengthInMs") or 0)
                 except (TypeError, ValueError):
                     planned_ms = 0.0
+                maps = (_json_attr(unit, "CoordinateMapJSON") or {}).get("maps") or []
+                outlines = maps[0] if maps else {}
+                if outlines.get("driftEndPoints"):
+                    outline_kind, n_outlines = "line", len(outlines["driftEndPoints"])
+                elif outlines.get("contours"):
+                    outline_kind, n_outlines = "patch", len(outlines["contours"])
+                else:
+                    outline_kind, n_outlines = None, 0
                 units.append(
                     {
                         "session": session_key,
@@ -868,10 +880,20 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                         "role": str(_attr(unit, "ImageRoleDebugString", "") or ""),
                         "background_unit": _linked_unit(unit, "BackgroundImagePath"),
                         "rtmc_unit": _linked_unit(unit, "MotionCorrectionImagePath"),
+                        "scans": [],
+                        "rtmc_of": [],
+                        "n_outlines": n_outlines,
+                        "outline_kind": outline_kind,
                         "comment": _attr(unit, "Comment", "") or "",
                         "start_time": _iso_time(_attr(unit, "MeasurementDatePosix")),
                     }
                 )
+    by_key = {u["key"]: u for u in units}
+    for u in units:
+        for link, field in (("background_unit", "scans"), ("rtmc_unit", "rtmc_of")):
+            target = by_key.get(u[link])
+            if target is not None:
+                target[field].append(u["key"])
     return units
 
 

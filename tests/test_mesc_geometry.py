@@ -25,6 +25,7 @@ from mbo_utilities.arrays.mesc_geometry import (
     slices_with_rois,
     um_to_pixels,
     viewport_geometry,
+    zstack_contents,
     zstack_depth_info,
 )
 
@@ -242,6 +243,25 @@ def test_zstack_overlay_places_lines_and_patches_on_slices(mesc_path):
     patch = recs[4]
     assert patch["kind"] == "patch" and patch["color"] is None
     assert np.allclose(patch["pixels"], [[20, 20], [60, 20], [60, 60], [20, 60], [20, 20]])
+
+
+def test_list_mesc_units_reports_outlines_and_links(mesc_path):
+    from mbo_utilities.arrays.mesc import list_mesc_units
+
+    units = {u["munit"]: u for u in list_mesc_units(mesc_path)}
+    assert (units["MUnit_1"]["outline_kind"], units["MUnit_1"]["n_outlines"]) == ("line", 4)
+    assert (units["MUnit_3"]["outline_kind"], units["MUnit_3"]["n_outlines"]) == ("patch", 2)
+    assert (units["MUnit_0"]["outline_kind"], units["MUnit_0"]["n_outlines"]) == (None, 0)
+    assert units["MUnit_1"]["background_unit"] == "MSession_0/MUnit_4"
+    assert units["MUnit_4"]["scans"] == ["MSession_0/MUnit_1"]
+    assert units["MUnit_0"]["scans"] == [] and units["MUnit_1"]["scans"] == []
+    assert all(u["rtmc_of"] == [] for u in units.values())
+
+
+def test_zstack_contents_lists_the_scans_inside_each_stack(mesc_path):
+    assert zstack_contents(mesc_path) == {
+        "MSession_0/MUnit_0": ["MSession_0/MUnit_1", "MSession_0/MUnit_3"]
+    }
 
 
 def test_overlay_skips_a_unit_whose_outlines_do_not_pair_with_its_rois(mesc_path):
