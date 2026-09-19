@@ -82,6 +82,7 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         tooltip="The Image tab and the control panels stacked inside it.",
         subwidgets=(
             SubWidget("mesc_units", "MESc Units"),
+            SubWidget("mesc_overlay", "ROI Overlay"),
             SubWidget("window_functions", "Window Functions"),
             SubWidget("spatial_functions", "Spatial Functions"),
             SubWidget("scan_phase", "Scan-Phase Correction"),
@@ -91,6 +92,12 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
             SubWidget("projections", "Projections"),
             SubWidget("tile_grid", "Tile Grid"),
         ),
+    ),
+    WidgetEntry(
+        key="mesc",
+        label="MESc",
+        tooltip="Every measurement unit in the open .mesc file, with its comment; "
+                "click a row to display it.",
     ),
     WidgetEntry(
         key="signal_quality",

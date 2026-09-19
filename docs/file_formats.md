@@ -56,8 +56,10 @@ the 5D array underneath for writers and the viewer.
 | ↳ Standard/ImageJ | `TiffArray` | `(T, C, Z, Y, X)` | All TIFFs including ImageJ hyperstacks |
 | **`.bin`** | `BinArray` | as-passed, e.g. `(T, Y, X)` | Suite2p binary (requires shape) |
 | **`.h5`** | `H5Array` | `(T, C, Z, Y, X)` | HDF5 datasets |
+| ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
 | **`.zarr`** | `ZarrArray` | `(T, C, Z, Y, X)` | Zarr v3 / OME-Zarr |
+| ↳ `<date>_<tags>.zarr` results | `PfArray` (voltage) / `read_results` | traces, not an image | A pipeline's results file (`mbo_utilities.results`); suite2p and masknmf ones are read with `read_results` |
 | **`.npy`** | `NumpyArray` | `(T, C, Z, Y, X)` | Memory-mapped numpy |
 | **`np.ndarray`** | `NumpyArray` | `(T, C, Z, Y, X)` | In-memory wrapper |
 | **Directory** | | | |
@@ -72,7 +74,9 @@ imread(path)
 │
 ├── np.ndarray ───────────────────────────► NumpyArray (in-memory)
 ├── .npy ─────────────────────────────────► NumpyArray (mmap)
-├── .h5 / .hdf5 ──────────────────────────► H5Array
+├── .h5 / .hdf5
+│   ├── DemixingResults group ────────────► DemixingArray (masknmf)
+│   └── else ─────────────────────────────► H5Array
 ├── .mesc ─────────────────────────────────► MescArray (one MUnit)
 ├── .zarr ────────────────────────────────► ZarrArray
 ├── .bin (with ops.npy nearby) ───────────► Suite2pArray
@@ -258,6 +262,35 @@ On write, the dataset rank follows the channel count: one channel gives a 4D
 canonical 5D shape, and the dataset carries a `dims` attribute recording which
 it is.
 
+(demixingarray)=
+### DemixingArray
+
+An hdf5 with a `DemixingResults` group: what masknmf's demixing exports, either
+`demixing_results.hdf5` from the MaskNMF pipeline (one per `zplaneNN/`) or
+`<channel>_<pass>_demixing.hdf5` from a glutamate/calcium spine run. The file
+holds factors rather than pixels, so C selects which reconstruction to
+render: `0` the PMD movie (`u v`), `1` the demixed signals (`a c`), `2` the
+residual. Frames are rebuilt from the factors on first read: with numpy on
+the cpu, or with masknmf when the compute-GPU policy selects a CUDA device.
+
+```python
+arr = mbo.imread("run/calcium_spine_demixing.hdf5")
+print(arr.shape)        # (T, 3, 1, Y, X)
+arr.num_rois            # number of demixed components
+arr.roi_labels          # class name per ROI, "-" when the file has none
+arr.traces              # c as (T, num_rois)
+arr.footprint(k)        # ROI k's footprint as a (Y, X) image
+
+# every result file of the run: one per channel and pass, or one per plane
+from mbo_utilities.arrays import list_demixing_results
+for entry in list_demixing_results("run/calcium_spine_demixing.hdf5"):
+    print(entry["label"], entry["channel"], entry["num_rois"])
+```
+
+`fs` comes from the `mbo_provenance` attribute the MaskNMF pipeline stamps;
+files from other runs report no rate. `mbo <file>` opens these in masknmf's
+own viewers rather than the Studio viewer (see the GUI guide).
+
 (mescarray)=
 ### MescArray
 
@@ -344,6 +377,8 @@ sliders, labelled with the axis names the array reports.
 | `mesc_light_paths` / `mesc_dichroic` | interleaved light paths per scanner frame, and whether switching is on |
 | `mesc_raw_frame_rate` | scanner frame rate, `1000 / TStepInMs`, before the light-path split |
 | `mesc_flip_y` | whether Y was flipped on read |
+| `mesc_rtmc` | labels of the real-time motion-correction curves the unit carries (`X total`, `X intercycle`, `Z total layer 3`); `arr.rtmc` holds them in µm, `arr.motion_correction` the applied totals as the `MotionCorrection` every reader shares (the viewer's Traces tab draws it under the trace behind `MC`) |
+| `mesc_background_unit` / `mesc_rtmc_unit` | keys of the snapshot the ROIs were drawn on (`BackgroundImagePath`) and of the real-time motion-correction stream MEScan watched (`MotionCorrectionImagePath`); `None` when the scan links none. `mbo.imread(path, unit=md["mesc_rtmc_unit"])` opens the stream |
 
 #### Frame rate and dichroic switching
 

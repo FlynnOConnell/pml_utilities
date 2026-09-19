@@ -49,6 +49,13 @@ class TimeSeriesViewer(BaseViewer):
             self._tab_widgets = get_tab_widgets(self.parent)
         return self._tab_widgets
 
+    def cleanup(self) -> None:
+        """Release what the tabs put on the figure before the viewer is rebuilt."""
+        from mbo_utilities.gui.widgets import cleanup_all_widgets
+
+        cleanup_all_widgets(self._tab_widgets or [])
+        self._tab_widgets = None
+
     def _draw_tab(self, widget) -> None:
         """Draw one tab, unless the Widgets menu has it switched off."""
         from mbo_utilities.gui.widgets import widget_is_visible

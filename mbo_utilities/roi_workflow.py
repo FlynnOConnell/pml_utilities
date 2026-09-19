@@ -350,12 +350,6 @@ def plane_masks(
         out[plane == (i + 1)] = k
     return out, kept
 
-
-# ---------------------------------------------------------------------------
-# quick traces
-# ---------------------------------------------------------------------------
-
-
 def _bbox(mask: np.ndarray) -> tuple[int, int, int, int]:
     rows, cols = np.nonzero(mask)
     if rows.size == 0:
@@ -469,11 +463,6 @@ def pixel_trace(source, row: int, col: int, t=slice(None), *, z: int = 0, c: int
     return out
 
 
-# ---------------------------------------------------------------------------
-# registered plane dirs
-# ---------------------------------------------------------------------------
-
-
 def open_registered(plane_dir: str | Path) -> tuple[np.memmap, dict]:
     """``(movie (T, Y, X) int16 memmap, ops)`` for a suite2p-shaped plane dir.
 
@@ -549,11 +538,6 @@ def plane_store(
         st = LabelsZarr.load(local)
         return st, (0 if st.nz == 1 else z_global)
     return fallback, z_global
-
-
-# ---------------------------------------------------------------------------
-# run dirs
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -690,6 +674,41 @@ def load_run_dir(path: str | Path, *, iscell_only: bool = True, logger=None) -> 
         path=path, kind=str(kind), z=z, shape=(int(ops["Ly"]), int(ops["Lx"])),
         stat=stat, F=F, Fneu=Fneu, norm=norm, iscell=iscell,
         uids=uids, store_indices=store_indices, algo=detection_algo(ops),
+    )
+
+
+def run_result_from_unit(unit, path, pipeline: str = "") -> RunResult:
+    """One pixel unit of a results file (``mbo_utilities.results``) as a
+    :class:`RunResult`, so the ROI widget shows it like a run dir.
+
+    Members become ``stat`` rows (``ypix``, ``xpix``, ``lam``) on the unit's
+    ``image_shape``; ``raw`` / ``neuropil`` / ``dff`` become ``F`` / ``Fneu``
+    / ``norm``. ``path`` is the identity the widget keys the set by, normally
+    ``<file>.zarr/<unit name>``.
+    """
+    if unit.member_kind != "pixel" or unit.image_shape is None:
+        raise ValueError(f"{unit.name}: only pixel units with an image shape load as ROIs")
+    ly, lx = (int(v) for v in unit.image_shape)
+    weights = unit.weights if unit.weights is not None else [None] * unit.n_rois
+    stat = np.empty(unit.n_rois, dtype=object)
+    for k, (members, lam) in enumerate(zip(unit.members, weights, strict=True)):
+        ypix, xpix = np.divmod(np.asarray(members, np.int64).ravel(), lx)
+        stat[k] = {
+            "ypix": ypix.astype(np.int32),
+            "xpix": xpix.astype(np.int32),
+            "lam": np.ones(ypix.size, np.float32) if lam is None else np.asarray(lam, np.float32),
+            "med": (float(np.median(ypix)), float(np.median(xpix))) if ypix.size else (0.0, 0.0),
+            "npix": int(ypix.size),
+        }
+    kind = str(pipeline or unit.attrs.get("pipeline") or "suite2p")
+    return RunResult(
+        path=Path(path), kind=kind, z=int(unit.index) - 1 if unit.kind == "plane" else 0,
+        shape=(ly, lx), stat=stat,
+        F=None if "raw" not in unit.traces else np.asarray(unit.traces["raw"], np.float32),
+        Fneu=None if "neuropil" not in unit.traces else np.asarray(unit.traces["neuropil"], np.float32),
+        norm=None if "dff" not in unit.traces else np.asarray(unit.traces["dff"], np.float32),
+        iscell=None if unit.iscell is None else np.asarray(unit.iscell, np.float32),
+        uids=None, store_indices=None, algo=kind,
     )
 
 
@@ -1756,10 +1775,14 @@ def linescan_roi_read(
     batch_size: int = 5000,
     bin_frames: int | None = None,
     convert: bool = True,
+    dtype=np.float32,
     progress=None,
+    rois=None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """One pass over a linescan unit: ``(K, T)`` per-ROI means and, when
     ``bin_frames`` is set, ``(K, ceil(T / bin_frames), W)`` kymographs.
+    ``rois`` (0-based ROI indices, the unit's Z axis) reads only those, in
+    that order; the others are never touched.
 
     With ``convert`` (default) the file's own linear conversion for the
     channel (``metadata["mesc_channel_conversion"]``, ``raw * scale +
@@ -1773,32 +1796,40 @@ def linescan_roi_read(
     zeros, which would pull the mean down. The kymograph averages over the
     ROI's lines (its height) and over ``bin_frames`` consecutive frames;
     ``W`` is the widest ROI and narrower ROIs are NaN beyond their width.
-    Reads ``batch_size`` frames at a time. ``progress(i, K, seconds)`` is
-    called after each ROI when given.
+    Reads ``batch_size`` frames at a time; the means are accumulated and
+    returned in ``dtype`` (``float64`` reproduces a pixel mean exactly).
+    ``progress(i, K, seconds)`` is called after each ROI when given.
     """
     md = arr.metadata
     extents = md["mesc_roi_extents"]
+    if rois is not None:
+        rois = [int(r) for r in rois]
+        bad = [r for r in rois if not 0 <= r < len(extents)]
+        if bad:
+            raise ValueError(f"ROI {bad[0]} is outside 0..{len(extents) - 1}")
+        extents = [extents[r] for r in rois]
     K = len(extents)
     scale, offset = 1.0, 0.0
     conv = md.get("mesc_channel_conversion") or []
     if convert and channel < len(conv):
         scale, offset = float(conv[channel]["scale"]), float(conv[channel]["offset"])
-    movies = [as_movie(arr, z=i, c=channel) for i in range(K)]
+    movies = [as_movie(arr, z=int(e["index"]), c=channel) for e in extents]
     T = movies[0].shape[0]
-    F = np.zeros((K, T), np.float32)
+    dtype = np.dtype(dtype)
+    F = np.zeros((K, T), dtype)
     kymo = None
     if bin_frames:
         bin_frames = int(bin_frames)
         batch_size = max(bin_frames, (batch_size // bin_frames) * bin_frames)
         nb = int(np.ceil(T / bin_frames))
         W = max(int(e["width"]) for e in extents)
-        kymo = np.full((K, nb, W), np.nan, np.float32)
+        kymo = np.full((K, nb, W), np.nan, dtype)
     t0 = time.time()
     for i, (movie, ext) in enumerate(zip(movies, extents)):
         h, w = int(ext["height"]), int(ext["width"])
         for tt0 in range(0, T, batch_size):
             tt1 = min(T, tt0 + batch_size)
-            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(np.float32, copy=False)
+            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(dtype, copy=False)
             if scale != 1.0 or offset != 0.0:
                 blk = blk * scale + offset
             F[i, tt0:tt1] = blk.reshape(blk.shape[0], -1).mean(axis=1)

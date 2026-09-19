@@ -7,11 +7,13 @@ GUI-related imports are deferred until actually needed.
 Usage patterns:
   mbo                           # Open GUI with file dialog
   mbo /path/to/data             # Open GUI with specific file
+  mbo run/demixing_results.hdf5 # masknmf demixing results in masknmf's viewer
   mbo /path/to/data --metadata  # Show only metadata
   mbo convert INPUT OUTPUT      # Convert with CLI args
   mbo info INPUT                # Show array info (CLI only)
   mbo linescan FILE.mesc        # Per-ROI traces from AOD line-scan units
 """
+import logging
 import sys
 import threading
 import time
@@ -26,6 +28,8 @@ if sys.platform == "win32":
         pass
 
 import click
+
+from mbo_utilities import log
 
 
 class PathAwareGroup(click.Group):
@@ -329,8 +333,31 @@ def main(
     is_flag=True,
     help="List available GPU adapters and exit.",
 )
+@click.option(
+    "--vis",
+    type=click.Choice(["demixing", "compression", "classification"]),
+    default=None,
+    help="For a masknmf demixing result: which of masknmf's viewers to open. "
+         "Omitted: a prompt in the terminal, or the demixing viewer when there is none.",
+)
+@click.option(
+    "--raw",
+    "raw_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="For a masknmf demixing result: the raw movie, shown as a panel in the demixing viewer and as the "
+         "reference in the compression viewer. Omitted: data_raw.bin or a lone .tif beside the result, if any.",
+)
+@click.option(
+    "--motion-correction",
+    "motion_correction_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="For a masknmf demixing result: a motion correction hdf5 whose shifts plot above the traces. "
+         "Omitted: motion_correction.hdf5 beside the result, if any.",
+)
 def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=False,
-         unit=None, gpu_index=None, list_gpus=False):
+         unit=None, gpu_index=None, list_gpus=False, vis=None, raw_path=None, motion_correction_path=None):
     r"""
     Open imaging data in the GUI viewer.
 
@@ -342,6 +369,8 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
       mbo view /data --roi 0 --roi 2 View specific ROIs
       mbo view /data --widget manualroi  Open with the ROIs widget on (draw + label by hand)
       mbo view /data/scan.mesc --unit 2   Open one MESc measurement unit
+      mbo view /data/scan.mesc --unit MUnit_35   A line-scan unit opens the line-scan viewer
+      mbo view run/demixing_results.hdf5 --vis compression   masknmf's compression viewer
       mbo view --list-gpus           Show available GPU adapters
       mbo view /data/raw --gpu 0     Force GPU index 0
     """
@@ -372,6 +401,22 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
         info = getattr(adapters[gpu_index], "info", {}) or {}
         click.echo(f"Using GPU {gpu_index}: {info.get('device', info.get('description', '?'))}")
 
+    # a masknmf demixing result opens in one of masknmf's viewers: ask which
+    # before anything heavy loads
+    if vis is None and data_in and not metadata:
+        from mbo_utilities.arrays.demixing import has_demixing_results
+
+        if has_demixing_results(data_in):
+            vis = "demixing"
+            if sys.stdin.isatty():
+                vis = click.prompt(
+                    "masknmf viewer",
+                    type=click.Choice(["demixing", "compression", "classification"]),
+                    default="demixing",
+                    show_choices=True,
+                )
+    vis = vis or "demixing"
+
     # show first-run warning
     first_run = _is_first_run()
     if first_run:
@@ -396,6 +441,9 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
         widget="none" if no_widget else widget,
         metadata_only=metadata,
         unit=_parse_unit(unit),
+        vis=vis,
+        raw_path=raw_path,
+        motion_correction_path=motion_correction_path,
     )
 
 
@@ -895,11 +943,11 @@ def _echo_mesc_units(input_path, unit):
     units = list_mesc_units(path)
     click.echo("")
     click.secho(f"Measurement units ({len(units)})", fg="cyan")
-    click.echo(f"  {'idx':<5}{'unit':<12}{'type':<20}{'shape (T,C,Z,Y,X)':<26}comment")
+    click.echo(f"  {'idx':<5}{'unit':<12}{'type':<20}{'role':<18}{'shape (T,C,Z,Y,X)':<26}comment")
     for u in units:
         shape = ",".join(str(v) for v in u["shape"])
         click.echo(
-            f"  {u['index']:<5}{u['munit']:<12}{u['modality_name']:<20}"
+            f"  {u['index']:<5}{u['munit']:<12}{u['modality_name']:<20}{(u.get('role') or '-'):<18}"
             f"({shape}){'':<{max(0, 24 - len(shape))}}{u['comment']}"
         )
     if unit is None and len(units) > 1:
@@ -1736,7 +1784,7 @@ def roi_run(input_path, output_dir, register_method, process, rois, planes, roi_
 
 
 @main.command("linescan")
-@click.argument("mesc_path", type=click.Path(exists=True, dir_okay=False))
+@click.argument("mesc_path", type=click.Path(exists=True))
 @click.option("-o", "--output", "out_root", type=click.Path(), default=None,
               help="Root for the per-unit output dirs (<root>/<MUnit_n>/). "
                    "Default: rois_<tag>/<MUnit_n>/ beside the .mesc file.")
@@ -1750,7 +1798,15 @@ def roi_run(input_path, output_dir, register_method, process, rois, planes, roi_
 @click.option("--flip-y", is_flag=True, default=False,
               help="Mirror the lines vertically on the reference Z-stack figure.")
 @click.option("--tag", default="linescan", show_default=True, help="Output dir name: rois_<tag>/.")
-def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figures, flip_y, tag):
+@click.option("--view", is_flag=True, default=False,
+              help="Open the line-scan + Z-stack viewer (with vnoiser curation when installed) "
+                   "instead of writing outputs. Same as `mbo scan.mesc` and picking the unit.")
+@click.option("--zstack", default=None, help="With --view: the Z-stack unit, e.g. MUnit_3.")
+@click.option("--zstack-file", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="With --view: the .mesc holding the Z-stack when saved separately "
+                   "(default: <name>_zstack.mesc beside the file, else the file itself).")
+def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figures, flip_y, tag,
+             view, zstack, zstack_file):
     """Per-ROI traces from every AOD line-scan unit of a Femtonics .mesc file.
 
     Each line the scientist drew is its own ROI; its kymograph is averaged
@@ -1762,10 +1818,38 @@ def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figur
     aligned response, per-ROI metrics, motion correction). Ribbon,
     chessboard, Z-stack and other units in the same file are skipped.
 
+    MESC_PATH may also be an experiment folder laid out the curation
+    notebook's way (<expt>/<expt>/<expt>.mesc with PF/ beside it): its line
+    scan is used.
+
     \b
       mbo linescan scan.mesc
       mbo linescan scan.mesc -o results/linescan --unit MUnit_3 --channel 1
+      mbo linescan scan.mesc --view --unit MUnit_35
+      mbo linescan X:/data/asako/stan112/stan112_expt12 --view
     """
+    if Path(mesc_path).is_dir():
+        from mbo_utilities.analysis.linescan import experiment_linescan_mesc
+
+        found = experiment_linescan_mesc(mesc_path)
+        if found is None:
+            raise click.BadParameter(
+                f"{mesc_path} is a folder with no <name>/<name>.mesc line scan in it",
+                param_hint="MESC_PATH",
+            )
+        click.echo(f"line scan: {found}")
+        mesc_path = str(found)
+    if view:
+        from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
+
+        if len(units) > 1:
+            raise click.BadParameter("--view opens one unit; pass a single --unit", param_hint="--unit")
+        open_linescan_viewer(
+            mesc_path, ref_key=units[0] if units else None, zstack_key=zstack,
+            zstack_path=zstack_file, channel=channel, flip_y=flip_y,
+        )
+        return
+
     from mbo_utilities.roi_workflow import extract_linescan_units
 
     try:
@@ -1821,6 +1905,198 @@ def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figur
 from mbo_utilities.hpc.cli import hpc as _hpc_group  # noqa: E402
 
 main.add_command(_hpc_group)
+
+@main.command("curate")
+@click.argument("path", type=click.Path(exists=True), required=False)
+@click.option("--serve", is_flag=True, default=False,
+              help="Serve the dashboard to browsers over HTTP instead of opening a window.")
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="With --serve: interface to listen on (0.0.0.0 for the network).")
+@click.option("--port", type=int, default=60649, show_default=True, help="With --serve: port.")
+@click.option("--channel", type=int, default=0, show_default=True,
+              help="Channel averaged for a raw line scan's traces.")
+def curate(path, serve, host, port, channel):
+    """vnoiser event curation of PATH: a PF folder the voltage pipeline
+    wrote (or the experiment folder holding it), or a line-scan .mesc, with
+    a PF folder beside it or raw (default: the last data path).
+
+    Opens the desktop window, the one the viewer's Curate button opens
+    (the Voltage pipeline, or File > Curate). With --serve the
+    dashboard is rendered here and streamed to any browser that opens the
+    printed URL: run it on the machine that holds the data and a GPU, and
+    curate from a laptop. No login: keep --host on localhost and tunnel
+    (ssh -L 60649:localhost:60649 server), or put a proxy in front.
+
+    
+      mbo curate X:/data/asako/stan112/stan112_expt12
+      mbo curate /data/stan112/stan112_expt12 --serve
+      mbo curate /data/stan112 --serve --host 0.0.0.0 --port 8080
+    """
+    if serve:
+        from mbo_utilities.gui.curation_server import serve_curation
+
+        serve_curation(path, channel=channel, host=host, port=port)
+        return
+    from mbo_utilities.gui.curation_viewer import open_curation_viewer
+
+    open_curation_viewer(path, channel=channel)
+
+
+@main.command("voltage")
+@click.argument("mesc_path", type=click.Path(exists=True))
+@click.option("--domains", "domains_path", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="domains.json (or an archive scanIDs_ROIs.pkl) naming which ROIs make each domain. "
+                   "Default: domains.json beside the file.")
+@click.option("--unit", "units", multiple=True,
+              help="Unit(s) to process, in scan order (MUnit_35 or MSession_0/MUnit_35): line scans, "
+                   "chessboard or ribbon patches. Default: the domains file's scans, else every such unit.")
+@click.option("-o", "--out", type=click.Path(file_okay=False), default=None,
+              help="The PF folder to write. Default: <animal>/<expt>/PF for the archive layout "
+                   "(<expt>/<expt>/<expt>.mesc), else PF beside the file.")
+@click.option("--channel", type=int, default=0, show_default=True, help="Channel averaged per line.")
+@click.option("--convert", is_flag=True, default=False,
+              help="Apply the file's linear conversion so zero means no photons. Off reproduces "
+                   "the archive, which worked on raw counts.")
+@click.option("--events", default=None, metavar="LO,HI,BP_SD,AMP_SD,DUR_MS",
+              help="Peak detector thresholds: band-pass Hz, SD on the band-passed trace, SD on the "
+                   "trace, minimum duration ms. Default 2,400,3.5,4,5 (the archive's).")
+@click.option("--save-cwt", is_flag=True, default=False,
+              help="Also write cwts.h5, the wavelet coefficients (about 20 bytes per sample per domain).")
+@click.option("--overwrite", is_flag=True, default=False, help="Replace an existing PF folder's files.")
+@click.option("--zarr", "as_zarr", is_flag=True, default=False,
+              help="Write the results as one <date>_<tags>.zarr file (mbo_utilities.results) instead of "
+                   "the archive's pickles; the curation window opens either.")
+@click.option("-p", "--planes", type=int, multiple=True,
+              help="ROI to process (1-based; the unit's Z axis), repeat for several: -p 1 -p 3. Only these "
+                   "are read and every domain is cut down to them. Default: every ROI.")
+@click.option("--init", is_flag=True, default=False,
+              help="Write a domains.json template beside the file (one domain per ROI) and exit.")
+def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_cwt, overwrite, as_zarr, planes, init):
+    """The spatial JEDI voltage pipeline on a .mesc with AOD ROI units (line
+    scans, chessboard or ribbon patches): per-ROI traces, domain dF/F and
+    z-score, wavelet denoising, peaks, written as a PF folder that
+    `mbo curate` opens.
+
+    Each unit is one scan (its MUnit number is the scan id). The domains
+    file says which ROIs make each domain: the lines of a soma or branch,
+    the patch of a cell. Run with --init first to get a template, edit the
+    names and groups, then run again. Settings are the archive's, written
+    for its 1075 Hz and scaled to each scan's frame rate; at the archive's
+    rate the traces match its PF folders.
+
+    \b
+      mbo voltage stan112_expt12.mesc --init
+      mbo voltage stan112_expt12.mesc --unit MUnit_35 --unit MUnit_38
+      mbo voltage stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl -o PF_new
+      mbo curate X:/data/asako/stan112/stan112_expt12
+    """
+    from mbo_utilities.gui._availability import HAS_VNOISER
+    from mbo_utilities.install import VNOISER_HINT
+
+    if not HAS_VNOISER:
+        raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
+    from mbo_utilities.vnoiser.params import VoltageSettings
+    from mbo_utilities.vnoiser.pipeline import (
+        DOMAINS_FILE,
+        read_domains,
+        run_voltage_pipeline,
+        write_domains_template,
+    )
+
+    mesc_path = Path(mesc_path)
+    if mesc_path.is_dir():
+        from mbo_utilities.analysis.linescan import experiment_linescan_mesc
+
+        found = experiment_linescan_mesc(mesc_path)
+        if found is None:
+            raise click.BadParameter(
+                f"{mesc_path} is a folder with no <name>/<name>.mesc line scan in it",
+                param_hint="MESC_PATH",
+            )
+        mesc_path = Path(found)
+    if init:
+        path = write_domains_template(mesc_path, units=list(units) or None)
+        click.echo(f"wrote {path}; name the domains and group the ROIs, then run `mbo voltage` again")
+        return
+    domains_path = Path(domains_path) if domains_path else mesc_path.parent / DOMAINS_FILE
+    if not domains_path.exists():
+        raise click.BadParameter(
+            f"{domains_path} not found; write one with `mbo voltage {mesc_path.name} --init`",
+            param_hint="--domains",
+        )
+    spec = read_domains(domains_path)
+    settings = VoltageSettings()
+    if events:
+        try:
+            lo, hi, bp_sd, amp_sd, dur = (float(v) for v in events.split(","))
+        except ValueError:
+            raise click.BadParameter("expected LO,HI,BP_SD,AMP_SD,DUR_MS", param_hint="--events")
+        settings.events.bp_low, settings.events.bp_high = lo, hi
+        settings.events.thres_bp_sd, settings.events.thres_amp_sd = bp_sd, amp_sd
+        settings.events.duration_thres_ms = dur
+    if as_zarr:
+        settings.runtime.output_format = "zarr"
+    chosen = list(units) or [f"MUnit_{s}" for s in spec["scan_ids"]] or None
+    # the runner narrates every step through the mbo logger; give its console lines a clock
+    logger = log.get()
+    for handler in logger.handlers:
+        handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%H:%M:%S"))
+    try:
+        paths = run_voltage_pipeline(
+            mesc_path, domains=spec["domains"], units=chosen, first_env=spec["first_env"], out=out,
+            channel=channel, convert=convert, planes=list(planes) or None, save_cwt=save_cwt,
+            settings=settings, overwrite=overwrite, logger=logger, provenance={"settings": settings.to_dict()},
+        )
+    except (ValueError, KeyError, FileExistsError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise click.Abort
+    pf_dir = next(iter(paths.values())).parent
+    click.echo(f"wrote {len(paths)} files to {pf_dir}")
+    if as_zarr:
+        click.echo(f"results: {next(p for p in paths.values() if p.suffix == '.zarr')}")
+    else:
+        click.echo(f"curate with: mbo curate {pf_dir.parent}")
+
+
+@main.command("results")
+@click.argument("path", type=click.Path(exists=True, file_okay=False))
+@click.option("-o", "--out", type=click.Path(dir_okay=False), default=None,
+              help="The .zarr to write. Default: <date>_<tags>.zarr inside PATH, tags from PATH's name.")
+@click.option("--overwrite", is_flag=True, default=False, help="Replace an existing results file.")
+def results(path, out, overwrite):
+    """Mold a pipeline's output folder into one results zarr.
+
+    PATH is a suite2p or masknmf output folder (one plane dir, or a folder
+    of zplaneNN dirs) or the voltage pipeline's PF folder. The file holds
+    every plane or scan as a group of (roi, t) traces, ROI membership,
+    events and summary images; `mbo_utilities.results.read_results` reads
+    it back.
+
+    \b
+      mbo results run/zplane01_tp00001-01574
+      mbo results stan112_expt12/PF -o stan112_expt12/PF/2026-09-16_stan112_expt12.zarr
+    """
+    from mbo_utilities.arrays.pf import pf_dir_of
+    from mbo_utilities.results import results_from_pf, results_from_suite2p, results_name, write_results
+
+    path = Path(path)
+    pf_dir = pf_dir_of(path)
+    if pf_dir is not None:
+        units, root = results_from_pf(pf_dir)
+        source = (root["source"] or {}).get("mesc") or pf_dir
+    else:
+        try:
+            units, root = results_from_suite2p(path)
+        except FileNotFoundError as e:
+            raise click.BadParameter(str(e), param_hint="PATH")
+        source = path
+    target = Path(out) if out else path / results_name(source)
+    try:
+        written = write_results(target, units, overwrite=overwrite, **root)
+    except (FileExistsError, ValueError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise click.Abort
+    click.echo(f"wrote {len(units)} unit(s) to {written}")
 
 
 if __name__ == "__main__":

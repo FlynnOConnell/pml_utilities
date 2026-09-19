@@ -105,6 +105,27 @@ Features:
 - z-stats signal quality analysis
 - suite2p pipeline integration
 
+### masknmf viewers
+
+A masknmf demixing result (`mbo run/demixing_results.hdf5`, or any
+`*_demixing.hdf5` from a glutamate/calcium spine run) does not open in the
+Studio viewer. It opens in one of masknmf's own viewers, chosen before launch
+(`--vis`, or a prompt in the terminal when `--vis` is omitted); the viewer
+window is masknmf's, with nothing added:
+
+- **Demixing**: `SingleSessionDemixingVis`, the PMD movie, signals, background,
+  residual and colourful signals, with masknmf's ROI and signal curation tools.
+- **Compression**: `CompressionVis`, motion-corrected vs compressed movies and
+  the lag-1 autocorrelation diagnostics. Needs `compression.hdf5` beside the
+  result and the raw movie: the pipeline's `data_raw.bin` + `ops.npy` when
+  they are there, otherwise a native file dialog asks for a single-plane movie
+  before the viewer opens.
+- **Classification**: `ClassificationVis`, accept / reject and class labels
+  one ROI at a time; labels save to `<file>.labels.hdf5` beside the result.
+
+`mbo view run/demixing_results.hdf5 --vis compression` skips the prompt. Torch and masknmf must be installed; the device follows the
+compute-GPU policy (`MBO_GPU`, `CUDA_VISIBLE_DEVICES`, File > Options).
+
 ### Pollen Calibration Viewer
 
 Specialized viewer for LBM beamlet calibration data (`stack_type == "pollen"`). Automatically selected when pollen calibration data is loaded.
@@ -212,6 +233,12 @@ Preview bidirectional raster-scan phase correction before saving. Only available
 Readout for the temporal binning set with **Apply to dataset** above: frames per averaged frame, the frame count and frame rate before and after.
 
 Also hosts piezo z-stack averaging. When `frames_per_slice > 1`, toggle averaging based on ScanImage's `logAverageFactor`. This changes the effective shape of the data.
+
+### ROI Overlay
+
+Femtonics MESc files only. When the displayed unit is the snapshot a multi-ROI scan was set up on (the scan's `BackgroundImagePath`), or a Z-stack whose field contains the scan's ROIs, **Overlay ROIs** draws the lines (line scan) or patches (chessboard, ribbon) MESc actually scanned, in the colours MESc used. Solid ROIs are on the plane shown: within 1 µm of the snapshot, or on the Z-stack slice the slider is at. Faint ones sit at another depth; **Show off-plane ROIs** hides them. Each scan gets one line of text with how many of its ROIs are on the current plane; hover it for every ROI's depth offset.
+
+The pairing is by the file's own metadata (`CoordinateMapJSON` outlines, `ReferenceViewportJSON` placement, `BackgroundImagePath`), so the panel does not appear for a unit MESc did not record ROIs for. A scan whose ROI list was edited after acquisition falls back to the viewer's own colours.
 
 (gui-metadata)=
 ## Metadata Viewer

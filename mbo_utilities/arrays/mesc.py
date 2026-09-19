@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -74,6 +75,7 @@ from mbo_utilities.arrays._base import (
     _normalize_key,
 )
 from mbo_utilities.arrays.features import (
+    MotionCorrection,
     PhaseCorrectionFeature,
     PhaseCorrectionMixin,
     RoiFeatureMixin,
@@ -120,6 +122,10 @@ _PACKED_MODALITIES = frozenset({6, 7})
 # Modalities where axis 0 interleaves z-slices within each timepoint
 # (frame i = timepoint i//Slices, slice i%Slices).
 _VOLUME_MODALITIES = frozenset({11})
+# Layouts whose Z axis holds AOD ROIs scanned within one frame period: the
+# lines of a line scan, the patches of a chessboard, the boxes of a ribbon
+# scan. The voltage pipeline and the curation widget take any of them.
+ROI_LAYOUTS = frozenset({"packed", "tiled", "boxes"})
 
 # Y is flipped on read for these, matching lab4.convert. The flip corrects
 # MEScan's save orientation; whether it also belongs on linescan/multiline is
@@ -135,15 +141,18 @@ CURVE_NAMES = frozenset(
         "PatternSeq_AO1",
         "DichroSw_AO1",
         "Amplitude_AO1",
-        "RTMC X correction (total)",
-        "RTMC Y correction (total)",
-        "RTMC Z correction (total)",
         "disUG",
         "disUR",
         "DiI1",
         "DiI2",
     }
 )
+
+# Real-time motion correction curves MEScan writes when RTMC ran: the
+# correction applied per axis, "total" (cumulative) or "intercycle" (per
+# cycle), and one per layer for a z-stack. A unit that armed RTMC without
+# it ever moving carries the curve with a single sample.
+_RTMC_NAME = re.compile(r"^RTMC ([XYZ]) correction \((total|intercycle)\)(?: layer (\d+))?$")
 
 SYNC_KEY_DEFAULT = "DiI2"
 SYNC_EDGE_DEFAULT = "falling"
@@ -182,6 +191,19 @@ def _attr(group, name, default=None):
     return value
 
 
+def _linked_unit(unit, attr: str) -> str | None:
+    """The ``MSession_N/MUnit_M`` key an image-path attr names, or None.
+
+    MEScan links a scan to the snapshot it was set up on
+    (``BackgroundImagePath``) and to the stream its real-time motion
+    correction watched (``MotionCorrectionImagePath``) as absolute HDF5
+    paths; an empty string means it kept none.
+    """
+    raw = _attr(unit, attr)
+    key = str(raw).strip().strip("/") if raw else ""
+    return key or None
+
+
 def _json_attr(group, name):
     """Parse a JSON-valued attribute, or return None if missing/malformed."""
     raw = _attr(group, name)
@@ -195,14 +217,26 @@ def _json_attr(group, name):
 
 
 def _scan_pattern(unit) -> dict | None:
-    """The imaging scan pattern this unit was acquired with, if declared."""
+    """The imaging scan pattern this unit was acquired with, if declared.
+
+    MESc 4.6.0 keeps a 1-based ``mainPatternIndex`` on the single ``scanners``
+    dict; 4.6.2 stores ``scanners`` as a list and a 0-based
+    ``protocol.mainPatternIndex`` beside it (the index
+    ``CoordinateMapJSON.maps[0].patternIdx`` names too).
+    """
     protocol = _json_attr(unit, "MultiROIProtocolJSON")
     if not protocol:
         return None
     try:
-        idx = protocol["protocol"]["scanners"]["mainPatternIndex"] - 1  # MATLAB 1-based
+        proto = protocol["protocol"]
+        if "mainPatternIndex" in proto:
+            idx = int(proto["mainPatternIndex"])
+        else:
+            scanners = proto["scanners"]
+            scanners = scanners[0] if isinstance(scanners, list) else scanners
+            idx = int(scanners["mainPatternIndex"]) - 1
         return protocol["scanPatterns"]["patterns"][idx]
-    except (KeyError, IndexError, TypeError) as e:
+    except (KeyError, IndexError, TypeError, ValueError) as e:
         logger.debug(f"no main scan pattern in {unit.name}: {e}")
         return None
 
@@ -373,9 +407,12 @@ def _spatial_info(unit, modality: int) -> dict:
         if modality in (8, 11):  # chessboard, multicube
             centroids = _as_points(np.asarray(pattern["centerPoints"]).T.tolist())
             n = len(centroids)
+            # 4.6.0 wraps the quaternion as {"e": [...]}, 4.6.2 stores the list
+            rotation = pattern["rotation"]
+            rotation = rotation["e"] if isinstance(rotation, dict) else rotation
             return {
                 "centroids": centroids,
-                "rotations": _extend_to_rois(pattern["rotation"]["e"], n),
+                "rotations": _extend_to_rois(rotation, n),
                 "pixel_size_um": _extend_to_rois(pattern["pixelSizeX"], n)[0],
             }
     except (KeyError, IndexError, TypeError, ValueError) as e:
@@ -387,10 +424,13 @@ def _spatial_info(unit, modality: int) -> dict:
 
 
 def _parse_curves(unit) -> dict[str, dict]:
-    """Timing curves for one unit, keyed by curve name.
+    """Timing and RTMC curves for one unit, keyed by curve name.
 
-    Each entry is ``{"timestamps": ms array, "values": raw array}``. Curves are
-    small (one sample per scanner event), so they are read eagerly.
+    Each entry is ``{"timestamps": ms array, "values": array}``. Curves are
+    run-length encoded: sample ``i`` holds from its timestamp until
+    ``CurveDataYIdxNextSample[i]``. Values are stored as counts with a linear
+    conversion (``CurveDataYConversionType == 1``) when the curve has a unit,
+    which is applied here so RTMC curves come back in µm.
     """
     curves: dict[str, dict] = {}
     for key in unit:
@@ -399,18 +439,63 @@ def _parse_curves(unit) -> dict[str, dict]:
         curve = unit[key]
         try:
             name = _attr(curve, "Name")
-            if name not in CURVE_NAMES:
+            if name not in CURVE_NAMES and not _RTMC_NAME.match(name or ""):
                 continue
             delta = float(curve.attrs["CurveDataXRawDelta"])
             ts = np.roll(curve["CurveDataYIdxNextSample"][:], 1)
             ts[0] = 0
+            values = curve["CurveDataYRawData"][:]
+            if int(_attr(curve, "CurveDataYConversionType", 0) or 0) == 1:
+                scale = float(_attr(curve, "CurveDataYConversionConversionLinearScale", 1.0))
+                offset = float(_attr(curve, "CurveDataYConversionConversionLinearOffset", 0.0))
+                values = values * scale + offset
             curves[name] = {
                 "timestamps": ts * delta,  # ms
-                "values": curve["CurveDataYRawData"][:],
+                "values": values,
             }
         except (KeyError, TypeError, ValueError):
             continue
     return curves
+
+
+def _rtmc_traces(curves: dict[str, dict]) -> dict[str, dict]:
+    """One trace per RTMC curve that has samples, ``{"X total": {"t": s,
+    "um": µm}, "Z intercycle layer 3": ...}``."""
+    traces: dict[str, dict] = {}
+    for name, curve in curves.items():
+        m = _RTMC_NAME.match(name)
+        if m is None or len(curve["values"]) < 2:
+            continue
+        label = f"{m[1]} {m[2]}" + (f" layer {m[3]}" if m[3] else "")
+        traces[label] = {"t": curve["timestamps"] / 1000.0, "um": curve["values"]}
+    return traces
+
+
+def rtmc_motion(rtmc: dict[str, dict]) -> MotionCorrection | None:
+    """The RTMC traces as the motion correction the scan went through: the
+    ``total`` curves (the shift applied, per axis and per layer of a
+    z-stack) labelled by axis, in µm; None when RTMC never moved. The
+    ``intercycle`` increments stay in :attr:`MescArray.rtmc`."""
+    traces = {
+        label.replace(" total", ""): (np.asarray(tr["t"], dtype=np.float64), np.asarray(tr["um"], dtype=np.float64))
+        for label, tr in rtmc.items()
+        if " total" in label
+    }
+    return MotionCorrection("RTMC", "um", traces) if traces else None
+
+
+def unit_rtmc(path, unit: str) -> dict[str, dict]:
+    """:attr:`MescArray.rtmc` of one unit (``MUnit_35`` or
+    ``MSession_0/MUnit_35``) read from its curves alone, no array: ``{}`` for
+    a unit the file lacks, or a file that is not a ``.mesc`` at all."""
+    path = Path(path)
+    key = str(unit) if "/" in str(unit) else f"MSession_0/{unit}"
+    if not path.is_file() or not h5py.is_hdf5(path):
+        return {}
+    with h5py.File(path, "r") as f:
+        if key not in f:
+            return {}
+        return _rtmc_traces(_parse_curves(f[key]))
 
 
 def _find_sync_frame(curves, frame_period_ms, sync_key, sync_edge) -> int:
@@ -566,12 +651,21 @@ def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
         rois = []
         for box in boxes:
             n_lines = box["row1"] - box["row0"]
-            width = box["col1"] - box["col0"]
+            # BreakView/CoordinateMap pixel coords are in the scanner's
+            # configured canvas, which can run wider than what actually got
+            # written to the raw page for a given ROI (chessboard/ribbon
+            # scans in particular) -- clamp so `_read_packed`'s col0:col1
+            # slice never runs past the real page and comes back empty.
+            col0 = max(0, min(box["col0"], page_x))
+            col1 = max(col0, min(box["col1"], page_x))
+            width = col1 - col0
             if n_lines <= 0 or width <= 0:
                 continue
             rois.append(
                 {
                     **box,
+                    "col0": col0,
+                    "col1": col1,
                     "n_lines": n_lines,
                     "width": width,
                     "nframes": page_y // n_lines,
@@ -701,8 +795,15 @@ def list_mesc_units(path: Path | str) -> list[dict]:
         ``nchannels``, ``nrois``, ``fs`` (timepoint rate in Hz, from
         ``TStepInMs``), ``duration_s`` (``nframes / fs``; None for
         single-timepoint units, and an underestimate for dichroic multiline
-        units, whose ``nframes`` counts channel pairs), ``comment`` and
-        ``start_time``.
+        units, whose ``nframes`` counts channel pairs), ``planned_s`` (the
+        length the operator set, ``MeasurementLengthInMs``; a shorter
+        ``duration_s`` means the run was stopped early; None when unset),
+        ``role`` (MEScan's ``ImageRoleDebugString``: ``"measurement"`` for a
+        scan the operator ran, ``"background"`` and ``"motionCorrection"``
+        for the snapshot and RTMC stream it saves beside one; ``""`` when
+        unset), ``background_unit`` and ``rtmc_unit`` (the keys of that
+        snapshot and stream, None when the scan links none), ``comment``
+        and ``start_time``.
 
     Examples
     --------
@@ -734,6 +835,10 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                 except (TypeError, ValueError):
                     step_ms = 0.0
                 fs = 1000.0 / step_ms if step_ms > 0 else None
+                try:
+                    planned_ms = float(_attr(unit, "MeasurementLengthInMs") or 0)
+                except (TypeError, ValueError):
+                    planned_ms = 0.0
                 units.append(
                     {
                         "session": session_key,
@@ -759,6 +864,10 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                         "duration_s": (
                             layout.nt / fs if fs and layout.nt > 1 else None
                         ),
+                        "planned_s": planned_ms / 1000.0 if planned_ms > 0 else None,
+                        "role": str(_attr(unit, "ImageRoleDebugString", "") or ""),
+                        "background_unit": _linked_unit(unit, "BackgroundImagePath"),
+                        "rtmc_unit": _linked_unit(unit, "MotionCorrectionImagePath"),
                         "comment": _attr(unit, "Comment", "") or "",
                         "start_time": _iso_time(_attr(unit, "MeasurementDatePosix")),
                     }
@@ -906,6 +1015,11 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         self.modality = selected["modality"]
         self._unit = self._f[self.unit_key]
         self._curves = _parse_curves(self._unit)
+        self._rtmc = _rtmc_traces(self._curves)
+        if self._rtmc:
+            logger.info(f"{self.unit_key}: RTMC traces {sorted(self._rtmc)}")
+        else:
+            logger.info(f"{self.unit_key}: no RTMC motion correction detected")
         self._layout = _resolve_layout(
             self._unit, self.modality, self._curves, flip_y=flip_y
         )
@@ -990,7 +1104,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
                 )
             return self.units[int(unit)]
 
-        key = str(unit)
+        key = str(unit).strip("/")
         if "/" not in key:
             key = f"{session or 'MSession_0'}/{key}"
         for entry in self.units:
@@ -1124,6 +1238,9 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
                 for c in range(layout.nc)
             ],
             "mesc_dichroic": layout.frame_maps is not None,
+            "mesc_rtmc": sorted(self._rtmc),
+            "mesc_background_unit": _linked_unit(self._unit, "BackgroundImagePath"),
+            "mesc_rtmc_unit": _linked_unit(self._unit, "MotionCorrectionImagePath"),
             "channel_names": channel_names,
             "comment": _attr(self._unit, "Comment", "") or "",
             "start_time": _iso_time(_attr(self._unit, "MeasurementDatePosix")),
@@ -1229,8 +1346,20 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
     def curves(self) -> dict[str, dict]:
         """Timing curves of this unit, ``{name: {"timestamps": ms, "values"}}``
         (see ``CURVE_NAMES``): the pattern sequence, dichroic switching,
-        sync lines and RTMC motion-correction totals."""
+        sync lines, plus every RTMC curve under its MEScan name."""
         return self._curves
+
+    @property
+    def rtmc(self) -> dict[str, dict]:
+        """Real-time motion correction traces, ``{"X total": {"t": s, "um": µm}, ...}``,
+        one per axis and kind (``total`` / ``intercycle``, ``layer N`` for a
+        z-stack). Empty when RTMC never ran or never moved."""
+        return self._rtmc
+
+    @property
+    def motion_correction(self) -> MotionCorrection | None:
+        """The RTMC totals as a :class:`MotionCorrection` (``rtmc_motion``)."""
+        return rtmc_motion(self._rtmc)
 
     @property
     def metadata(self) -> dict:
@@ -1313,6 +1442,13 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         """Unpack frames stored as consecutive row blocks of a single raw page."""
         roi = self._layout.rois[z]
         n_lines, col0, col1 = roi["n_lines"], roi["col0"], roi["col1"]
+        # the layout clamps col0/col1 to Channel_0's width at open time, but a
+        # different channel index can point at a narrower physical dataset
+        # (dichroic switching, mismatched Channel_N shapes) -- reclamp here so
+        # a stale bound can't slice past this dataset's actual width.
+        page_cols = dataset.shape[2]
+        if col1 > page_cols:
+            col0, col1 = min(col0, page_cols), page_cols
         src = self._source_frames(c, frames)
         if src.size == 0:
             return np.empty((0, n_lines, col1 - col0), dtype=dataset.dtype)

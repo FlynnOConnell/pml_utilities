@@ -51,6 +51,7 @@ every slider that plane encodes. Only the first subplot is drawable.
 
 from __future__ import annotations
 
+import math
 import queue
 import threading
 import time
@@ -80,6 +81,9 @@ from mbo_utilities.gui.imgui import (
 )
 from mbo_utilities import log
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
+from mbo_utilities.gui.imgui.lines import subplots
+from mbo_utilities.gui.imgui.motion import MotionPlot
+from mbo_utilities.lazy_array import base_array
 from mbo_utilities.annotation import UNLABELED, LabelsZarr, RoiLabelStore
 from mbo_utilities.arrays.features import find_slider_name
 from mbo_utilities.gui._imgui_helpers import (
@@ -131,6 +135,7 @@ from mbo_utilities.roi_workflow import (
     feather_mask,
     load_run_dir,
     roi_trace,
+    run_result_from_unit,
 )
 
 __all__ = [
@@ -149,10 +154,15 @@ PANEL_LOCATION = "top"
 # height the ROI / Traces bodies ask the top strip for (the strip adds the
 # menu row and its tab bar on top of this)
 PANEL_HEIGHT = 200
+# the Traces tab with the motion plot under the trace, and the trace's
+# share of it until the splitter between them is dragged
+MOTION_PANEL_HEIGHT = 340
+TRACE_SHARE = 0.6
 
 # a card narrower than this clips its controls, so instead of squeezing them
-# the row wraps and the panel asks the strip for another row's height
-MIN_CARD_EM = 20.0
+# the row wraps and the panel asks the strip for another row's height (the
+# PROCESS card's rows need 300 px after the DRAW card gives up its share)
+MIN_CARD_EM = 20.5
 # DRAW holds one small grid of buttons; the width it does not need goes to
 # the cards beside it (LABELS above all, whose buttons carry class names)
 DRAW_CARD_WEIGHT = 0.7
@@ -316,6 +326,14 @@ def _line_colormap(rgb) -> int:
     return int(idx)
 
 
+def roi_panel_min_width() -> int:
+    """Canvas width that keeps the ROI cards on one row, at the 14 px font
+    the figure loads; for sizing the window before a frame exists. The strip
+    window's padding and indent take 22 px of the canvas width."""
+    n = 1 + sum(sub_enabled("manual_roi", s) for s in ("tools", "overlay", "labels", "process"))
+    return math.ceil(14.0 * (n * MIN_CARD_EM + (n - 1) * 0.6)) + 22
+
+
 def card_grid(n: int, avail: float, min_w: float, gap: float) -> tuple[int, int, float]:
     """Lay ``n`` cards out across ``avail`` px.
 
@@ -469,6 +487,7 @@ class ManualRoiWidget:
         self.zdim = find_slider_name(iw.dim_names, "z")
         self.tdim = find_slider_name(iw.dim_names, "t")
         self.cdim = find_slider_name(iw.dim_names, "c")
+        self._bind_motion()
         # every scrolling dim except time keys its own mask plane, so masks
         # follow the channel / z / any extra slider; z sits last in the flat
         # order so a z-only store keeps plane == z and old stores restore
@@ -555,12 +574,11 @@ class ManualRoiWidget:
         # the vector overlays, one line per source. Thickness is in screen
         # pixels, so a hairline stays a hairline at any zoom, and the paths
         # of every ROI ride in one buffer split by NaN rows. They start on
-        # five dummy vertices: fastplotlib reads a shorter color array as
-        # one flat color, and per-vertex colors are the whole point
+        # a few dummy vertices with an [n, 4] colors array, which makes the
+        # colors per-vertex; _set_line reallocates both on every refresh
         self.outline = self.subplot.add_line(
             np.zeros((5, 3), np.float32),
             colors=np.zeros((5, 4), np.float32),
-            color_mode="vertex",
             thickness=self.line_width,
             size_space="screen",
             name="manual_roi_outline",
@@ -570,7 +588,6 @@ class ManualRoiWidget:
         self.derived_outline = self.subplot.add_line(
             np.zeros((5, 3), np.float32),
             colors=np.zeros((5, 4), np.float32),
-            color_mode="vertex",
             thickness=self.line_width,
             size_space="screen",
             name="manual_roi_derived_outline",
@@ -605,6 +622,15 @@ class ManualRoiWidget:
         self.autofit = True
         self._force_fit = False
         self.x_unit = X_UNITS[0]
+        # the Traces tab shows the trace plot, and the motion plot under it
+        # in linked subplots when the recording went through motion
+        # correction (MC); the splitter's share is kept between frames
+        self.show_trace = True
+        self.show_motion = True
+        self._motion_linked = False
+        self._motion_ratios = implot.SubplotsRowColRatios(row_ratios=[TRACE_SHARE, 1.0 - TRACE_SHARE])
+        # drawn on the tab in place of "no traces" while a host computes them
+        self.pending_traces = None
         self._fs_value: float | None = None
         self._fs_read = False
 
@@ -618,6 +644,8 @@ class ManualRoiWidget:
         # _adopt_finished_runs, and when it last looked
         self._adopted: set[int] = set()
         self._adopt_checked = 0.0
+        # results files (mbo_utilities.results) already loaded, by path
+        self._results_loaded: set[str] = set()
         self._restoring = False
 
         # the top edge is shared (menu row, Signal Quality plot, these two
@@ -630,9 +658,8 @@ class ManualRoiWidget:
             "roi", "ROI", self._draw_roi_panel, PANEL_HEIGHT, "rois", 10
         )
         self.tools_window.register(self._roi_panel)
-        self.tools_window.register(
-            TopPanel("traces", "Traces", self.draw_traces, PANEL_HEIGHT, "traces", 11)
-        )
+        self._traces_panel = TopPanel("traces", "Traces", self.draw_traces, PANEL_HEIGHT, "traces", 11)
+        self.tools_window.register(self._traces_panel)
 
         self._closed = False
         self._restore()
@@ -643,6 +670,62 @@ class ManualRoiWidget:
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
+
+    def _bind_motion(self) -> None:
+        """The motion correction of the array on screen, for the Traces tab."""
+        data = getattr(self.iw, "data", None)
+        arr = base_array(data[0]) if data else None
+        self.motion = MotionPlot(getattr(arr, "motion_correction", None))
+
+    def rebind(self):
+        """Re-derive dims and mask geometry after ``self.iw``'s array is
+        swapped in place (an MESc unit switch): each unit is an unrelated
+        recording, so ``tdim``/``zdim``/``cdim`` and the store's (ny, nx)
+        go stale exactly like a fresh :meth:`__init__` would derive them.
+        The store (and anything keyed off its rows) is only replaced when
+        its shape no longer fits the new frame; same-shape units keep
+        their masks, same as an adopted store on re-attach.
+        """
+        iw = self.iw
+        self.image = iw.graphics[0]
+        self.ny, self.nx = self.image.data.value.shape[:2]
+
+        self.zdim = find_slider_name(iw.dim_names, "z")
+        self.tdim = find_slider_name(iw.dim_names, "t")
+        self.cdim = find_slider_name(iw.dim_names, "c")
+        self._bind_motion()
+
+        axes = []
+        for name in iw.dim_names:
+            if name == self.tdim:
+                continue
+            rr = iw.ndwidget.indices.ref_ranges.get(name)
+            n = max(int(rr.stop - rr.start), 1) if rr is not None else 1
+            if n > 1:
+                axes.append((name, n))
+        axes.sort(key=lambda a: a[0] == self.zdim)
+        self.plane_axes = tuple(axes)
+        nz = int(np.prod([n for _, n in axes])) if axes else 1
+
+        if (self.store.nz, self.store.ny, self.store.nx) != (nz, self.ny, self.nx):
+            label_names = self.store.label_names
+            self.store = RoiLabelStore(nz, self.ny, self.nx, min_pixels=MIN_ROI_PIXELS)
+            for name in label_names:
+                self.store.add_label_name(name)
+            self.selected = -1
+            self.selected_derived = None
+            self.buffer = []
+            self._feathers = {}
+            self.derived = []
+            self.trace_sets = {}
+            self.overlay.data = np.zeros((self.ny, self.nx, 4), np.uint8)
+            self.derived_overlay.data = np.zeros((self.ny, self.nx, 4), np.uint8)
+        self.store.plane_axes = self.plane_axes
+
+        self.z = self._current_z()
+        self._resync()
+        self.refresh_overlay()
+        self.refresh_derived_overlay()
 
     def close(self):
         """Take everything back off the figure: panel, overlays, handlers."""
@@ -715,10 +798,15 @@ class ManualRoiWidget:
         if not self.plane_axes:
             return 0
         sizes = [n for _, n in self.plane_axes]
-        idx = [
-            int(np.clip(self.iw.indices[name], 0, n - 1))
-            for name, n in self.plane_axes
-        ]
+        idx = []
+        for name, n in self.plane_axes:
+            # a unit switch (MESc) can drop a scroll dim the store was keyed
+            # on; that dim then sits at plane 0 rather than taking the GUI down
+            try:
+                value = self.iw.indices[name]
+            except KeyError:
+                value = 0
+            idx.append(int(np.clip(value, 0, n - 1)))
         return int(np.ravel_multi_index(idx, sizes))
 
     def _plane_pos(self, plane: int) -> dict[str, int]:
@@ -1217,6 +1305,9 @@ class ManualRoiWidget:
         self._trace_fit = True
         origin, name, k = key
         if origin == "uid":
+            ts = self.trace_sets.get(name)
+            if ts is not None and ts.external:
+                return
             index = self.store.uid_index(k)
             if index is not None:
                 self.trace_uid = k
@@ -1539,7 +1630,7 @@ class ManualRoiWidget:
         run dir they belong to."""
         path = Path(path)
         name = path.name
-        if name[:1] == "z" and name[1:].isdigit():
+        if (name[:1] == "z" and name[1:].isdigit()) or path.parent.suffix == ".zarr":
             name = f"{path.parent.name}/{name}"
         while any(s.name == name for s in self.derived):
             name += "~"
@@ -1596,8 +1687,16 @@ class ManualRoiWidget:
     def load_run(self, path, discarded=(), classes=None, colors=None) -> bool:
         """Read one run dir into the widget: extract runs merge their
         traces, everything else loads as a derived set (every row, the
-        rejected ones included - curation happens here)."""
+        rejected ones included - curation happens here). A results file
+        (``mbo_utilities.results``), or one unit inside one, goes through
+        :meth:`load_results`."""
+        from mbo_utilities.results import results_pipeline
+
         path = Path(path)
+        if results_pipeline(path) is not None or (
+            path.parent.suffix == ".zarr" and results_pipeline(path.parent) is not None
+        ):
+            return self.load_results(path, discarded, classes, colors)
         try:
             res = load_run_dir(path, iscell_only=False, logger=self.logger)
         except Exception as e:  # noqa: BLE001 - shown in the status row
@@ -1620,6 +1719,71 @@ class ManualRoiWidget:
             self._save_registry()
             return True
         return self._add_derived(res, discarded, classes, colors) is not None
+
+    def load_results(self, path, discarded=(), classes=None, colors=None) -> bool:
+        """Read a results file (AGENTS.md §7.5) into the widget. Pixel units
+        (suite2p, masknmf) load as derived sets exactly like a run dir; line
+        units (the voltage pipeline's scans) go straight to the Traces tab,
+        one row per ROI plotting its denoised trace and one per member line
+        plotting the line's raw trace. ``path`` may name one unit inside the
+        file (``<file>.zarr/zplane01``). Returns True when anything loaded."""
+        from mbo_utilities.results import read_results, results_pipeline
+
+        path = Path(path)
+        if path.parent.suffix == ".zarr" and results_pipeline(path) is None:
+            file, only = path.parent, path.name
+        else:
+            file, only = path, None
+        try:
+            results = read_results(file)
+        except Exception as e:  # noqa: BLE001 - shown in the status row
+            self._run_error = f"could not load {file.name}: {e}"
+            return False
+        loaded = 0
+        for unit in results.units.values():
+            if only is not None and unit.name != only:
+                continue
+            if unit.member_kind == "pixel" and unit.image_shape is not None:
+                res = run_result_from_unit(unit, file / unit.name, results.pipeline)
+                if self.store.nz == 1 and res.z != 0 and self.fpath is not None and file.parent == labels_path(self.fpath).parent:
+                    # the movie on screen IS this plane, whatever plane the file recorded
+                    res = replace(res, z=0)
+                loaded += self._add_derived(res, discarded, classes, colors) is not None
+                continue
+            name = f"{file.name}/{unit.name}"
+            ts = TraceSet(name, results.pipeline, external=True)
+            n = unit.n_rois
+            for k, roi in enumerate(unit.roi_names):
+                entry = {"label": str(roi), "fs": unit.fs}
+                for kind, field in (("raw", "F"), ("neuropil", "Fneu"), ("dff", "norm"), ("denoised", "norm")):
+                    if kind in unit.traces:
+                        entry[field] = np.asarray(unit.traces[kind][k], np.float32)
+                if "F" not in entry:
+                    entry["F"] = entry.get("norm", np.zeros(unit.n_timepoints, np.float32))
+                ts.data[k] = entry
+            ids = list(unit.attrs.get("member_ids") or [])
+            for kind, arr in unit.member_traces.items():
+                for i, row in enumerate(np.asarray(arr, np.float32)):
+                    member = ids[i] if i < len(ids) else i
+                    ts.data[n + i] = {"label": f"{unit.member_kind} {member} ({kind})", "fs": unit.fs, "F": row}
+            if not ts.data:
+                continue
+            self.trace_sets[name] = ts
+            self.trace_uid = None
+            loaded += 1
+        if not loaded:
+            if not self._run_error:
+                self._run_error = f"{file.name} has no unit this view can show"
+            return False
+        self._results_loaded.add(str(file))
+        if any(ts.external and ts.name.startswith(f"{file.name}/") for ts in self.trace_sets.values()):
+            self.focus_traces = True
+            if not any(str(e["path"]) == str(file) for e in self._registry_extra):
+                self._registry_extra.append({"path": str(file), "kind": results.pipeline, "discarded": []})
+        self._traces_changed()
+        self._save_registry()
+        self.status = f"loaded {loaded} unit(s) of {file.name}"
+        return True
 
     def unload_set(self, si: int):
         s = self.derived.pop(si)
@@ -2445,13 +2609,13 @@ class ManualRoiWidget:
             return
         root = labels_path(self.fpath).parent
         mine = {r.pid for r in self.manager.runs if r.pid is not None}
-        loaded = {str(s.result.path) for s in self.derived}
+        loaded = {str(s.result.path) for s in self.derived} | self._results_loaded
         for info in get_process_manager().get_running():
             if (
                 info.pid in mine
                 or info.pid in self._adopted
                 or info.status != "completed"
-                or info.task_type not in ("suite2p", "masknmf")
+                or info.task_type not in ("suite2p", "masknmf", "voltage")
             ):
                 continue
             self._adopted.add(info.pid)
@@ -2462,10 +2626,17 @@ class ManualRoiWidget:
             out = Path(out)
             if root not in (out, *out.parents) and out not in root.parents:
                 continue  # another dataset's run
-            dirs = [
-                d for d in finished_dirs(out, args.get("planes"))
-                if str(d) not in loaded
-            ]
+            if info.task_type == "voltage":
+                # a zarr-format voltage run leaves one results file in the PF folder
+                from mbo_utilities.arrays.pf import pf_results_in
+
+                found = pf_results_in(out)
+                dirs = [found] if found is not None and str(found) not in loaded else []
+            else:
+                dirs = [
+                    d for d in finished_dirs(out, args.get("planes"))
+                    if str(d) not in loaded
+                ]
             # a volume run writes a dir per plane and this widget shows one:
             # the planes it cannot take are the Process tab's business, not
             # an error to put in front of the user here
@@ -2604,13 +2775,19 @@ class ManualRoiWidget:
         gap = em(0.6)
         min_w = em(MIN_CARD_EM)
         fewest = -(-len(cards) // MAX_CARD_ROWS)
+        avail = imgui.get_content_region_avail().x
+        # the canvas width that puts every card on one row; the strip widens
+        # the window to it. The strip spans the canvas, and its rect is what
+        # this frame's avail was measured in
+        self._roi_panel.min_width = (
+            len(cards) * min_w + (len(cards) - 1) * gap + (float(self.tools_window.width) - avail)
+        )
         with fit_width(
             "ROI tools", min_width=fewest * min_w + (fewest - 1) * gap
         ) as shown:
             if not shown:
                 self._roi_panel.height = PANEL_HEIGHT
                 return
-            avail = imgui.get_content_region_avail().x
             per_row, rows, w = card_grid(len(cards), avail, min_w, gap)
             self._roi_panel.height = PANEL_HEIGHT * rows
             vgap = imgui.get_style().item_spacing.y
@@ -3426,10 +3603,11 @@ class ManualRoiWidget:
         acquired frames, so its samples sit ``A / fs`` seconds apart - traces
         binned differently still line up in time.
         """
-        rate = self.fs()
+        entry = self._trace_entry(key) or {}
+        # a results file's traces carry their own rate (a scan's, not the movie's)
+        rate = entry.get("fs") or self.fs()
         if self.x_unit == "frames" or not rate:
             return 1.0
-        entry = self._trace_entry(key) or {}
         per_sample = int(entry.get("frame_average", 1) or 1) / rate
         return per_sample * (1000.0 if self.x_unit == "ms" else 1.0)
 
@@ -3504,9 +3682,13 @@ class ManualRoiWidget:
         return None if hit is None else self._derived_entry(hit[1].result, k)
 
     def _key_to_pair(self, key) -> tuple[int, int] | None:
-        """``(si, k)`` behind one trace key, or None when the ROI is gone."""
+        """``(si, k)`` behind one trace key, or None when the ROI is gone
+        (an external set's rows stand for no ROI)."""
         origin, name, k = key
         if origin == "uid":
+            ts = self.trace_sets.get(name)
+            if ts is not None and ts.external:
+                return None
             index = self.store.uid_index(k)
             return (-1, index) if index is not None else None
         hit = self._set_by_name(name)
@@ -3527,6 +3709,9 @@ class ManualRoiWidget:
         """``(sort value, display text)`` for a key's roi column."""
         origin, name, k = key
         if origin == "uid":
+            ts = self.trace_sets.get(name)
+            if ts is not None and ts.external:
+                return float((1 << 30) + k), str(ts.data.get(k, {}).get("label") or k)
             index = self.store.uid_index(k)
             if index is not None:
                 return float(index), f"{index}"
@@ -3558,14 +3743,22 @@ class ManualRoiWidget:
 
     def draw_traces(self):
         """The Traces tab: the trace-table selection (else the shown ROI)
-        as pannable, zoomable lines, the cursor bound to the viewer's t."""
+        as pannable, zoomable lines, the cursor bound to the viewer's t, and
+        under it, on the same time axis, the motion correction the recording
+        went through (``MC``) when it has one."""
         target = self._plot_lines()
-        if target is None:
-            imgui.text_disabled(
-                f"No traces yet. Use {TRACE_ICON} on a row of the ROIs tab, or run a process."
+        motion = self.motion if self.motion else None
+        _changed, self.show_trace = imgui.checkbox("Trace", self.show_trace)
+        set_tooltip("The selected traces; off gives the motion plot the whole tab.", show_mark=False)
+        if motion is not None:
+            imgui.same_line(0, 12)
+            _changed, self.show_motion = imgui.checkbox("MC", self.show_motion)
+            set_tooltip(
+                f"{motion.y_label}: the motion correction the recording went through, "
+                "under the trace on the same time axis.",
+                show_mark=False,
             )
-            return
-        header, lines = target
+        imgui.same_line(0, 12)
         changed, self.correct_neuropil = imgui.checkbox(
             "neuropil corrected", self.correct_neuropil
         )
@@ -3579,15 +3772,12 @@ class ManualRoiWidget:
         changed, self.autofit = imgui.checkbox("autofit", self.autofit)
         set_tooltip(
             "Refit the axes to whatever is plotted. Turn it off to keep the "
-            "stretch you zoomed to while stepping through ROIs.",
+            "stretch you zoomed to while stepping through ROIs; double-click "
+            "the plot to fit it once.",
             show_mark=False,
         )
         if changed and self.autofit:
             self._force_fit = True
-        imgui.same_line(0, 6)
-        if imgui.button("fit"):
-            self._force_fit = True
-        set_tooltip("Fit the axes to the plotted traces now", show_mark=False)
         imgui.same_line(0, 10)
         units = self.x_units()
         if self.x_unit not in units:
@@ -3605,15 +3795,64 @@ class ManualRoiWidget:
             # show anything sensible
             self._force_fit = True
         imgui.same_line(0, 12)
-        proj, size = self._window_spec()
-        window = f" · {proj} {size}" if size > 1 else ""
-        imgui.text_disabled(f"{header}, frame {self.current_frame()}{window}")
-        set_tooltip(
-            "drag pans, scroll zooms, double-click fits · "
-            "shift+scroll zooms x only, alt+scroll zooms y only",
-            show_mark=False,
-        )
+        if target is not None:
+            header, lines = target
+            proj, size = self._window_spec()
+            window = f" · {proj} {size}" if size > 1 else ""
+            imgui.text_disabled(f"{header}, frame {self.current_frame()}{window}")
+            set_tooltip(
+                "drag pans, scroll zooms, double-click fits · "
+                "shift+scroll zooms x only, alt+scroll zooms y only",
+                show_mark=False,
+            )
+        elif self.pending_traces is not None:
+            self.pending_traces()
+        else:
+            imgui.text_disabled(
+                f"No traces yet. Use {TRACE_ICON} on a row of the ROIs tab, or run a process."
+            )
+        show_trace = self.show_trace and target is not None
+        show_motion = motion is not None and self.show_motion
+        self._traces_panel.height = MOTION_PANEL_HEIGHT if show_motion else PANEL_HEIGHT
+        linked = show_trace and show_motion
+        if linked != self._motion_linked:
+            # in or out of the subplots both plots are new to implot
+            self._motion_linked = linked
+            self._trace_fit = True
+            if motion is not None:
+                motion.refit()
+        if not show_trace and not show_motion:
+            return
         height = max(imgui.get_content_region_avail().y - 4, 60.0)
+        if linked:
+            link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
+            with subplots("##roi_trace_sub", 2, 1, height, flags=link, ratios=self._motion_ratios) as ok:
+                if ok:
+                    self._draw_trace_plot(lines, -1.0)
+                    self._draw_motion_plot(motion, -1.0)
+        elif show_trace:
+            self._draw_trace_plot(lines, height)
+        else:
+            self._draw_motion_plot(motion, height)
+
+    def _draw_motion_plot(self, motion: MotionPlot, height: float) -> None:
+        """The motion plot in the trace plot's x units with the playhead on
+        it; dragging the playhead scrubs the movie."""
+        cursor = self._cursor_scale()
+        rate = self.fs()
+        if self.x_unit == "frames":
+            per_second = rate / int(getattr(self.host, "frame_average", 1) or 1) if rate else 1.0
+        else:
+            per_second = 1000.0 if self.x_unit == "ms" else 1.0
+        moved, held = motion.draw(
+            "##roi_motion_plot", height, cursor=float(self.current_frame()) * cursor, cursor_id=1,
+            x_per_second=per_second, x_label=X_AXIS_LABELS[self.x_unit],
+        )
+        if held and cursor:
+            self.set_frame(round(moved / cursor))
+
+    def _draw_trace_plot(self, lines, height: float) -> None:
+        """The trace plot; inside subplots ``height`` is the cell's."""
         if implot.get_current_context() is None:
             implot.create_context()
         key = tuple(label for label, _ in lines)

@@ -6,7 +6,7 @@ Offscreen contract battery for the NDWidget-backed viewer adapter.
 against. These tests pin that contract end-to-end on a real offscreen
 figure: construction, the name/letter/positional ``indices`` semantics,
 data swaps (same-rank and rank-changing), window/spatial func routing
-through the per-graphic processors, both contrast resets, the playback-bar
+through the per-graphic slicers, both contrast resets, the playback-bar
 adapter (fps seeding, loop fan-out, the space-bar toggle), and offscreen
 ``close()``.
 
@@ -96,7 +96,7 @@ def drain(passes: int = 30):
     cumulative running the loop-task would see "no canvases" and stop —
     cancelling just-created fetch tasks before their first step, which
     skips ``_fetch_request``'s finally block and permanently wedges
-    ``ReferenceIndex._fetch_request_active`` for that graphic. Holding
+    ``ReferenceIndices._fetch_request_active`` for that graphic. Holding
     ``_stop_when_no_canvases`` off during the pump avoids that (test-only
     concern; GUI loops always have a registered canvas).
     """
@@ -299,12 +299,12 @@ class TestWindowFuncs:
     def test_legacy_dict_routed_with_window_order(self, viewer5d):
         # preview_data's legacy path sets {"t": (func, size)}; funcs for
         # dims absent from window_order are silently ignored by fastplotlib,
-        # so BOTH must land on the processor
+        # so BOTH must land on the slicer
         iw = viewer5d
         iw.indices = [20, 0, 0]
         drain()
         iw.window_funcs = {"t": (np.mean, 10)}
-        proc = iw.ndgraphics[0].processor
+        proc = iw.ndgraphics[0].slicer
         assert proc.window_funcs["Timepoint"][0] is np.mean
         assert proc.window_order == ("Timepoint",)
 
@@ -313,7 +313,7 @@ class TestWindowFuncs:
         iw.indices = [20, 0, 0]
         iw.window_funcs = {"t": (np.mean, 10)}
         drain()
-        proc = iw.ndgraphics[0].processor
+        proc = iw.ndgraphics[0].slicer
         got = np.asarray(iw.ndgraphics[0].graphic.data.value)
         # the indexer takes 1-based reference values
         idx = proc._get_slider_dims_indexer(
@@ -329,7 +329,7 @@ class TestWindowFuncs:
         iw = viewer5d
         iw.window_funcs = {"t": (np.mean, 10)}
         iw.window_funcs = None
-        proc = iw.ndgraphics[0].processor
+        proc = iw.ndgraphics[0].slicer
         assert proc.window_order == tuple()
         assert all(v == (None, None) for v in proc.window_funcs.values())
         drain()
@@ -337,7 +337,7 @@ class TestWindowFuncs:
     def test_frame_apply_routes_to_spatial_func(self, viewer5d):
         iw = viewer5d
         iw.frame_apply = {0: lambda a: a * 0 + 7.0}
-        proc = iw.ndgraphics[0].processor
+        proc = iw.ndgraphics[0].slicer
         assert proc.spatial_func is not None
         # frame_apply renders synchronously — no drain needed
         got = np.asarray(iw.ndgraphics[0].graphic.data.value)
@@ -347,7 +347,7 @@ class TestWindowFuncs:
         iw = viewer5d
         iw.frame_apply = {0: lambda a: a * 0 + 7.0}
         iw.frame_apply = None
-        assert iw.ndgraphics[0].processor.spatial_func is None
+        assert iw.ndgraphics[0].slicer.spatial_func is None
         assert iw.frame_apply == {}
         drain()
 
@@ -404,12 +404,12 @@ class TestSlidersUI:
     def test_loop_fans_out_per_dim(self, viewer5d):
         sl = viewer5d._sliders_ui
         sl._loop = True
-        assert all(viewer5d.ndwidget._sliders_ui._loop.values())
+        assert all(viewer5d.ndwidget.ui_sliders._loop.values())
         assert sl._loop is True
 
     def test_seed_fps_semantics(self, viewer5d):
         sl = viewer5d._sliders_ui
-        ndui = viewer5d.ndwidget._sliders_ui
+        ndui = viewer5d.ndwidget.ui_sliders
         sl.seed_fps("t", 15.7)
         assert sl._fps["t"] == 16
         assert abs(ndui._frame_time["Timepoint"] - 1 / 16) < 1e-9
@@ -425,7 +425,7 @@ class TestSlidersUI:
 
     def test_seed_fps_never_overrides_user_typed(self, viewer5d):
         sl = viewer5d._sliders_ui
-        ndui = viewer5d.ndwidget._sliders_ui
+        ndui = viewer5d.ndwidget.ui_sliders
         ndui._fps["Timepoint"] = 33  # simulate the user typing into the bar
         sl.seed_fps("t", 10)
         assert sl._fps["t"] == 33
@@ -433,7 +433,7 @@ class TestSlidersUI:
 
     def test_playing_accepts_int_and_name_keys(self, viewer5d):
         sl = viewer5d._sliders_ui
-        ndui = viewer5d.ndwidget._sliders_ui
+        ndui = viewer5d.ndwidget.ui_sliders
         sl._playing[0] = True
         assert ndui._playing["Timepoint"] is True
         sl._playing["Timepoint"] = False
@@ -448,7 +448,7 @@ class TestSlidersUI:
         from mbo_utilities.gui._keyboard import toggle_playback
 
         parent = _StubParent(viewer5d)
-        ndui = viewer5d.ndwidget._sliders_ui
+        ndui = viewer5d.ndwidget.ui_sliders
         ndui._playing["Timepoint"] = False
         ndui._last_frame_time["Timepoint"] = 123.0
 
@@ -474,9 +474,9 @@ class TestSlidersUI:
         from mbo_utilities.gui._keyboard import toggle_playback
 
         parent = _StubParent(viewer5d)
-        before = dict(viewer5d.ndwidget._sliders_ui._playing)
+        before = dict(viewer5d.ndwidget.ui_sliders._playing)
         toggle_playback(parent, dim_index=99)
-        assert dict(viewer5d.ndwidget._sliders_ui._playing) == before
+        assert dict(viewer5d.ndwidget.ui_sliders._playing) == before
 
 
 class TestTogglePlaybackVendoredShape:
@@ -563,7 +563,7 @@ class TestSameDimsSwap:
             drain()
 
             old_graphic = iw.graphics[0]
-            old_executor = iw.ndgraphics[0].processor._executor
+            old_executor = iw.ndgraphics[0].slicer._executor
             arr2 = LazyStandIn(
                 rng.normal(100, 10, size=base.shape).astype(np.float32)
             )
@@ -575,7 +575,7 @@ class TestSameDimsSwap:
             assert list(iw.indices) == [0, 0, 0]
             assert iw.window_funcs is None and iw.frame_apply == {}
             assert iw.graphics[0] is not None and iw.graphics[0] is not old_graphic
-            # replaced processor's executor must not leak
+            # replaced slicer's executor must not leak
             assert old_executor._shutdown
             # exactly one live ndgraphic remains registered
             assert len(iw.ndwidget.ndgraphics) == 1
@@ -766,9 +766,9 @@ class TestProtocolOnly2D:
             iw.close()
 
     def test_non_numeric_sample_degrades_to_no_histogram(self):
-        from mbo_utilities.gui._ndviewer import MboNDImageProcessor
+        from mbo_utilities.gui._ndviewer import MboNDImageSlicer
 
-        proc = object.__new__(MboNDImageProcessor)
+        proc = object.__new__(MboNDImageSlicer)
         proc._compute_histogram = True
         proc._data = np.array([[object(), object()]], dtype=object)
         proc._recompute_histogram()  # must not raise
@@ -796,7 +796,7 @@ class TestWindowSpanContract:
         iw = _make_viewer(LazyStandIn(base), slider_dim_names=("Timepoint",))
         try:
             iw.window_funcs = {"t": (np.mean, size)}
-            proc = iw.ndgraphics[0].processor
+            proc = iw.ndgraphics[0].slicer
             # ref value 11 = array frame 10
             sel = proc._get_slider_dims_indexer({"Timepoint": 11})["Timepoint"]
             half = (size - 1) // 2
@@ -814,7 +814,7 @@ class TestWindowSpanContract:
         iw = _make_viewer(LazyStandIn(base), slider_dim_names=("Timepoint",))
         try:
             iw.window_funcs = {"t": (np.mean, size)}
-            proc = iw.ndgraphics[0].processor
+            proc = iw.ndgraphics[0].slicer
             for ref in range(1, 13):
                 sel = proc._get_slider_dims_indexer({"Timepoint": ref})["Timepoint"]
                 assert 0 <= sel.start < sel.stop <= 12, (ref, sel)
@@ -824,7 +824,7 @@ class TestWindowSpanContract:
     def test_last_frame_is_not_all_nan(self):
         """The empty end-of-range slice rendered a NaN frame from a numpy array
         and killed the fetch outright on a lazy reader
-        ("windowed_slice.ndim != len(spatial_dims): 0 != 2").
+        ("windowed_slice.ndim != len(display_dims): 0 != 2").
         """
         base = self._ramp(n_t=12)
         iw = _make_viewer(LazyStandIn(base), slider_dim_names=("Timepoint",))
@@ -940,7 +940,7 @@ class TestIntegerTextureUpgrade:
 
 class TestIndexBounds:
     """The vendored widget raised on out-of-range and negative indices; the
-    upstream ReferenceIndex silently clamps. The adapter keeps the raise."""
+    upstream ReferenceIndices silently clamps. The adapter keeps the raise."""
 
     def test_out_of_range_raises_naming_dim_and_size(self, viewer5d):
         with pytest.raises(IndexError, match=r"2500.*Timepoint.*40"):
@@ -1067,7 +1067,7 @@ class TestFpsSeedingFromData:
         iw = _make_viewer(_WithFs(base))
         try:
             t_dim = iw._dim_names[0]
-            iw.ndwidget._sliders_ui._fps[t_dim] = 33  # user typed into the bar
+            iw.ndwidget.ui_sliders._fps[t_dim] = 33  # user typed into the bar
             iw._sliders_ui.seed_fps("t", 10)  # flags the user override
             iw.data[0] = _WithFs(base.copy())
             assert iw._sliders_ui._fps["t"] == 33
@@ -1134,7 +1134,7 @@ class TestClose:
     def test_close_offscreen_shuts_executors_and_is_idempotent(self, base5d):
         arr = LazyStandIn(base5d[:, 0])  # (T, Z, Y, X)
         iw = _make_viewer(arr, slider_dim_names=("Timepoint", "Z-plane"))
-        executors = [ndg.processor._executor for ndg in iw.ndgraphics]
+        executors = [ndg.slicer._executor for ndg in iw.ndgraphics]
         iw.close()  # offscreen: Figure._output is None; must not raise
         assert all(ex._shutdown for ex in executors)
         iw.close()  # idempotent

@@ -78,11 +78,6 @@ def set_color(index: int) -> tuple[float, float, float]:
     return SET_COLORS[index % len(SET_COLORS)]
 
 
-# ---------------------------------------------------------------------------
-# runs
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class RoiRun:
     """One background run: an in-process job (``job``) or a spawn (``pid``)."""
@@ -288,15 +283,20 @@ class DerivedSet:
 @dataclass
 class TraceSet:
     """Traces of one origin ("quick" or a run), keyed by store uid so a
-    delete only prunes - other ROIs' rows never move."""
+    delete only prunes - other ROIs' rows never move. An ``external`` set
+    (a results file's scans) keys its own rows and is never pruned; each
+    entry then carries its ``label`` and ``fs``."""
 
     name: str
     kind: str
     data: dict[int, dict] = field(default_factory=dict)
     visible: bool = True
+    external: bool = False
 
     def prune(self, uids) -> None:
         """Drop entries whose uid is not in ``uids``."""
+        if self.external:
+            return
         keep = {int(u) for u in uids}
         for uid in [u for u in self.data if u not in keep]:
             del self.data[uid]
@@ -311,19 +311,6 @@ def _rim(mask: np.ndarray) -> np.ndarray:
     core[:, :-1] &= mask[:, 1:]
     return mask & ~core
 
-
-# ---------------------------------------------------------------------------
-# vector overlays: thin paths instead of a filled raster
-# ---------------------------------------------------------------------------
-
-# A filled mask hides the pixels it covers, and at a handful of pixels per
-# cell even the 1-px rim above eats the whole footprint. suite2p and cellpose
-# get around that by drawing the mask boundary rather than its body, which is
-# what "outline" mode does here. The stand-in "circle" mode goes further: it
-# drops the footprint shape and just rings the cell, so nothing under the ROI
-# is covered at all. Both come out as line geometry, whose stroke stays one
-# screen pixel wide at any zoom instead of growing with the data pixels the
-# way a raster overlay does.
 
 MASK_MODES = ("circle", "outline", "fill")
 RING_SEGMENTS = 36  # reads as round at any sane zoom
@@ -635,9 +622,17 @@ def _kind_of(ops: dict) -> str:
 
 
 def run_dir_complete(d) -> bool:
-    """True when ``d`` holds a loadable run (``stat.npy`` + ``ops.npy``)."""
+    """True when ``d`` holds a loadable run: ``stat.npy`` + ``ops.npy``, a
+    results file (``mbo_utilities.results``), or one unit inside one
+    (``<file>.zarr/zplane01``)."""
+    from mbo_utilities.results import results_pipeline
+
     d = Path(d)
-    return (d / "stat.npy").exists() and (d / "ops.npy").exists()
+    if (d / "stat.npy").exists() and (d / "ops.npy").exists():
+        return True
+    if results_pipeline(d) is not None:
+        return True
+    return d.parent.suffix == ".zarr" and results_pipeline(d.parent) is not None and (d / "zarr.json").is_file()
 
 
 def finished_dirs(out_root, planes=None) -> list[Path]:
@@ -714,6 +709,22 @@ def scan_run_dirs(fpath) -> list[dict]:
                 "mtime": (d / "ops.npy").stat().st_mtime,
             }
         )
+    # results files (mbo_utilities.results) beside the data, in a run dir, or in a PF folder
+    from mbo_utilities.results import results_summary
+
+    for pattern in ("*.zarr", f"{OUT_PREFIX}*/*.zarr", "zplane*/*.zarr", "PF/*.zarr"):
+        for z in sorted(base.glob(pattern)):
+            summary = results_summary(z)
+            if summary is None:
+                continue
+            rows.append(
+                {
+                    "path": z,
+                    "kind": summary["pipeline"],
+                    "n_rois": int(summary["n_rois"]),
+                    "mtime": (z / "zarr.json").stat().st_mtime,
+                }
+            )
     rows.sort(key=lambda r: r["mtime"], reverse=True)
     return rows
 
