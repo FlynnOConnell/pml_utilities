@@ -123,9 +123,9 @@ class MasknmfViewers:
                 results,
                 frame_timings=self.timings,
                 device=self.device,
-                source_path=self.path,
+                results_path=self.path,
                 raw=self._raw_movie(required=False),
-                motion_correction_path=self.motion_correction_path,
+                shifts=self.motion_correction_path,
             )
             if vis.raw is None:
                 click.echo("no raw movie: `mbo view ... --raw <movie>` adds the raw panel")
