@@ -31,11 +31,12 @@ pml_utilities/
 │   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # Miller Brain Studio (imgui + fastplotlib)
+│   │   ├── playhead.py       # one time in seconds shared by every view (§7.6)
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
 │   ├── analysis/             # scan-phase, linescan, phasecorr math
-│   ├── annotation/           # GUI-free manual-ROI label store + NGFF labels zarr
+│   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr
 │   ├── cli.py                # `mbo` (click)
 │   └── assets/docs/          # in-app help pages
 ├── pollen/                   # pollen calibration (console script `pollen`)
@@ -228,7 +229,7 @@ Pinned by `tests/test_roundtrip.py`, `tests/test_zarr_chunking.py`,
 - Public: `planes`, `timepoints`, `channels` (1-based int, list, or `"start:stop:step"`),
   `num_timepoints`, `num_zplanes`. `frames` and `num_frames` are deprecated aliases
   that warn.
-- Internal: `selection_to_canonical(arr, {...})` → `{"T": [...], "C": [...], "Z": [...]}`
+- Internal: `selection_to_indices(arr, {...})` → `{"T": [...], "C": [...], "Z": [...]}`
   0-based; `to_lsp_kwargs` re-emits 1-based `timepoints`/`planes`/`channels` for
   `imwrite` and `lbm_suite2p_python`; `to_isoview_kwargs` emits 0-based
   `timepoints`/`cameras`. Axis aliases (`view`, `cam`, `plane`, `tile`, ...) resolve
@@ -237,7 +238,7 @@ Pinned by `tests/test_roundtrip.py`, `tests/test_zarr_chunking.py`,
   those ROIs. `imwrite(roi_mode=RoiMode.concat_y | separate)`; `separate` fans out
   one `roiNN/` directory per ROI.
 
-Pinned by `tests/test_selection_canonical.py`.
+Pinned by `tests/test_selection_indices.py`.
 
 ### 5.8 Motion correction
 
@@ -614,6 +615,138 @@ pipeline's native files stay its cache and its compatibility layer.
 
 Pinned by `tests/test_results.py`, `tests/test_voltage_pipeline.py`.
 
+### 7.6 Manual ROIs
+
+Hand-drawn ROIs are a session model in `mbo_utilities/annotation/`, GUI-free and
+observable (`events.Observable`, after fastplotlib's `GraphicFeature`: a view
+subscribes with `add_event_handler(fn, "rois")` and redraws from the event). The
+ROI widget (`gui/manual_roi.py`) and the Process tab's ROIs pipeline
+(`gui/widgets/pipelines/rois.py`) are two views of one `RoiModel`; neither polls
+the other.
+
+| Object | Holds | Emits |
+|--------|-------|-------|
+| `RoiLabelStore` | the `(P, Y, X)` uint16 label volume, one `RoiRecord` per ROI (`plane`, `area`, `class_index`, `note`, `uid`, `source`, `color`), the label-name set, `plane_axes` | `rois` with `action` `add` `delete` `clear` `class` `note` `color` `labels` |
+| `RoiTraceTable` | one `RoiTrace` per measurement | `traces` with `action` `add` `remove` `clear` |
+| `RoiModel` | the two above plus the slider position (`view`, `plane`, `z`, `c`) | the two above forwarded, plus `view` when the plane changes |
+
+- **Planes.** `RoiRecord.plane` is the flat index into the volume. `plane_axes`
+  records which scrolling dims key planes (`(("c", 2), ("z", 3))`, z last, so a
+  z-only store keeps `plane == z`); the store owns the arithmetic (`plane_of(pos)`,
+  `plane_pos(plane)`, `plane_label(plane)`) and decodes an ROI's `roi_z(i)` /
+  `roi_c(i)`. Axis roles resolve through `find_slider_name`, so IsoView's `Cam` /
+  `Zplane` sliders key planes too. T never keys a plane.
+- **Traces.** A drawn ROI's trace is keyed `("roi", uid, z, c, engine)`: the mask,
+  where its pixels were read, how (`ENGINES` = `mean`, `suite2p`, `masknmf`). Running
+  the same measurement again replaces the row; reading the same mask on another
+  channel, z-plane or with another engine is another row. Rows that stand for no
+  drawn ROI (an algorithm's component, a results file's line) are keyed
+  `("member", source, k)` and are never pruned by ROI deletion. `frames` is the
+  `(start, stop)` window read, `frame_average` the binning, `source` the run or origin.
+- **Run coordinates.** `RoiModel.targets(indices, z=, c=)` says where each ROI is
+  read: the mask always from the plane it was drawn on, the pixels from `z` / `c`
+  when given, else from where it was drawn. The widget's `run_where` is `drawn`,
+  `screen` (the slice the sliders show when the run starts) or `fixed` (`run_z`,
+  `run_c`); `run_frames` cuts T (`PlaneMovie.window`). `run_rois` groups targets by
+  `(plane, z, c)` and writes one `rois_<tag>/` child per read (`zplane02`,
+  `zplane02_ch01`) when there is more than one. Every run records `plane`
+  (store plane), `z`, `c`, `frames` and `engine` in `ops["roi_workflow"]` and
+  `plane` / `z` / `c` per row in `rois.json`; `RunResult.read_z` / `read_c` /
+  `frames` / `engine` read them back and `roi_runs.result_traces` turns a result
+  into table rows.
+- **Draw -> run.** `ManualRoiWidget(auto_trace=True)` traces every ROI the moment it
+  is drawn (its mean at the run coordinates) and focuses the Traces panel. The row
+  buttons on the ROIs tab, the `t` key and the Process tab all run one ROI the way
+  the Process tab is set (`engine`, `run_where`, `run_frames`, `run_tag`).
+- **The ROIs pipeline** (`RoiPipelineWidget`, name `ROIs`, `axes_consumed`
+  `T: range, Z: select-one, C: select-one`) applies to any array with a time axis.
+  It picks which ROIs (selected / group, listed, this slice, all), where they are
+  read, the engine and tag, runs them, and shows the trace table cut down to those
+  ROIs (`ManualRoiWidget.draw_trace_table(keys=...)`). Region and full-plane
+  detection live there too. It turns Manual ROI Labeling on when it is off. The
+  top strip keeps only NAVIGATE, DRAW (with the region tool and the trace-on-draw
+  switch), VIEW and LABELS.
+- **Any slice.** The viewer's sliders are the array's T, C, Z axes by position
+  (`manual_roi.slider_roles`), whatever the array labels them (`Timepoint` /
+  `Channel` / `ROI` for a MESc AOD unit, `Tile` / `View` for IsoView); the widget
+  hands the store `axis_roles = {"z": <slider>, "c": <slider>}` so `roi_z` / `roi_c`
+  and every run decode the right slice. Every `LazyArray` is indexable in y and x
+  by the 5D contract (§5.3), and `PlaneMovie` reads only `arr[t, c, z, y, x]`, so
+  no reader needs anything more for the ROI tool; whether a read touches only the
+  bounding box is the reader's laziness, not the contract. Wherever the widget
+  names an axis (trace legends, table headers, tooltips) it uses the slider's own
+  word (`ManualRoiWidget.axis_label`): on an AOD unit the Z axis reads `ROI 3`,
+  never `z3`, because R is not Z (`mesc_z_axis_meaning == "roi_index"`).
+- **Line positions.** Where a MESc scan line or patch sits is
+  `arrays/mesc_geometry.py`'s business and nothing else re-derives it: the segment
+  the AOD scanned (`CoordinateMapJSON.maps[0].driftEndPoints`, or `contours` for
+  patches; never the shorter hand-drawn `guideLine`, never `ROIJSON`, whose vertices
+  are in the unrolled scan's pixels) in the file's absolute micron frame, where
+  `ReferenceViewportJSON.geomTransTransl` is the `[0, 0]` corner of an image, rows
+  grow with +y, and a stack's slice `k` sits at `geomTransTransl[2] + MinZ + k·step`
+  (verified on two rigs: brightness ranking of the lines on their own snapshot, and
+  cross-correlation of background frames against a stack). `line_positions(path,
+  unit)` gives each ROI its `start_um` / `end_um`, `z_um`, `length_um`, `sample_um`
+  and `dz_um` against the snapshot the lines were drawn on; `roi_placements` puts
+  them on a stack's slices; `image_overlays` draws them. A line-scan row of the
+  trace table (`linescan_viewer.StandardTraces`) is keyed `("member", "<MUnit> lines",
+  k)`, carries `z = k` (the unit's ROI axis), `c` = the channel read, and that
+  position in `extra` (`line`, `z_um`, `dz_um`, ...); its label shows `dz_um`.
+  MESc draws every line on the snapshot whatever its depth; the overlay's solid /
+  faint rule and the tab's `dz_um` say how far off the plane each one is.
+- **Full image.** The ROIs pipeline's `full image` target is the whole frame as
+  one mask at the run coordinates: with `mean` a `FULL_IMAGE` row of the trace
+  table (`ManualRoiWidget.trace_full`, keyed `("member", "full image", "z<z>c<c>")`
+  so the same slice replaces itself); with `suite2p` / `masknmf` a full detection
+  of that z-plane and channel (`run_full_plane`, whose worker args carry `channel`
+  1-based and `tp_indices` for a frame window). No store mask is involved, so it
+  never claims pixels.
+- **Playhead.** `gui/playhead.Playhead` is the one time on screen, in seconds on the
+  recording's clock (raw frames when `fs` is unknown); it emits `time` with its
+  `source`. Every view keeps a `TimeAxis` (`per_second`, `offset`) and converts
+  through it: the viewer's T slider (`viewer_axis`, `fs / frame_average`), each trace
+  row (`trace_axis`: its own `fs` else the movie's, its `frame_average`, its frame
+  window as the offset), the plot's unit (`plot_axis`: frames, seconds or ms).
+  `TimeAxis.on(other)` gives the `(xscale, xstart)` a row is plotted with, so a
+  windowed trace sits where it was recorded. The trace plot and the motion plot
+  seek the playhead; the widget's handler moves the viewer's T, whose indices event
+  snaps the playhead to the frame. The ROI widget shares its host's playhead
+  (`PreviewDataWidget.playhead`); the line-scan viewer's `LineScanOverlay` owns one
+  for its Timepoint slider, kymograph selector, trace and motion cursors. A new
+  time-bound view subscribes to the playhead; it never reads another view's cursor.
+- **Color by.** `RoiModel.column(name)` gives one number per uid (`plane`, `z`, `c`,
+  `area`, `class`); `RoiModel.colorize(values, cmap, categorical)` maps them through
+  a `cmap` colormap into `RoiLabelStore.tint`, a display-only color per uid that
+  `roi_rgb` prefers while set (never saved; `set_tint(None)` clears). VIEW > color
+  by drives it (`ManualRoiWidget.set_color_by`; `peak` uses the trace table) and
+  reapplies it as ROIs, labels or traces change, so the overlay, the table and the
+  trace legend agree without any view knowing why.
+- **Shared vocabularies.** Nothing in the ROI work spells a name or a selection
+  of its own: run children and full-image row keys are `OutputFilename` tags in
+  T, C, Z order (`ch01_zplane02`; `build("")` names a folder), a single ROI's run
+  is the R tag (`rois_roi02` for store index 1, 1-based like every tag), a full
+  plane's dir is `results.unit_name("plane", n)`, and a run dir's per-slice child
+  is recognised with `filename_tags`, never a regex. The frame selection is the
+  string every Save As and pipeline row takes (`parse_timepoint_selection`,
+  1-based `start:stop:step,exclude`), kept as the 0-based `run_tp` index list the
+  worker tasks call `tp_indices`; `PlaneMovie.select(indices)` reads it (`window`
+  is the contiguous case), `_slicing.index_window` says whether it is a
+  `(start, stop, step)` window (stamped as `frames` on rows and runs) or a gapped
+  list (stamped as `tp_indices`), and `_ops_for` scales `fs` for a stride through
+  `OutputMetadata` (§6.6). 1-based plane / channel worker args come from
+  `to_lsp_kwargs`. Slider roles come from `_dim_labels.slider_roles` (positional,
+  the same table the viewer names its sliders from), which `resolve_dim_labels`
+  and the ROI widget both use, so every slice popup and the ROI tool call an AOD
+  unit's Z axis `ROI`.
+- **Persistence.** The store autosaves to `manual_labels.zarr` (`plane` per ROI;
+  older stores wrote `z` and load unchanged). Run rows reload from `rois_<tag>/`
+  dirs through `roi_runs.json`; quick traces, full-image rows and tints live for
+  the session.
+
+Pinned by `tests/test_roi_model.py`, `tests/test_playhead.py`, `tests/test_manual_roi.py`
+(`TestRunCoordinates`, `TestAutoTrace`, `TestRoiPipelineTab`, `TestPlayheadWiring`,
+`TestColorBy`, `TestFullImage`, `TestSliderRoles`), `tests/test_roi_runs.py`.
+
 ## 8. Logging and the Process Console
 
 One logger tree, one console sink per process, one log file per background task.
@@ -813,7 +946,7 @@ MBO_PIPELINE_TIFF=/path/to/raw uv run pytest tests/local/ -v   # needs real Scan
 - Contract tests to keep green when touching the three systems above:
   `test_lazyarray_contract.py`, `test_shape5d.py`, `test_natural_rank.py`,
   `test_numpy_dims.py`, `test_squeeze.py`, `test_imagej_stack.py`,
-  `test_selection_canonical.py`, `test_metadata_module.py`, `test_effective_rate.py`,
+  `test_selection_indices.py`, `test_metadata_module.py`, `test_effective_rate.py`,
   `test_roundtrip.py`, `test_masknmf_pipeline.py`.
 - No functions defined inside tests. Do not mock file formats; write a small real
   file to `tmp_path`.
@@ -930,10 +1063,11 @@ ones. Remove an entry when its fix lands.
 **Pipelines**
 
 - Built-in widgets are hardcoded in `gui/widgets/pipelines/__init__.py:51-73` and
-  built-in tasks in `gui/tasks.py:1608-1619`; none of the four widgets declares
-  `info`, `task_type`, or `task_func`; `pyproject.toml` has no
-  `mbo_utilities.pipelines` table. Target: §7.2 for every built-in, entry points as
-  the only registration path.
+  built-in tasks in `gui/tasks.py:1608-1619`; of the five widgets only `ROIs`
+  declares `info` and has a `pyproject.toml` `mbo_utilities.pipelines` entry (it is
+  also in the hardcoded list so a checkout finds it); none declares `task_type` or
+  `task_func`. Target: §7.2 for every built-in, entry points as the only
+  registration path.
 - Suite2p's `PipelineInfo` is registered from the reader module with category
   `segmentation` (`arrays/suite2p.py:31-54`); MaskNMF, ROI workflow, and the IsoView
   processing modes have no `PipelineInfo` at all (the four `isoview-*` infos are

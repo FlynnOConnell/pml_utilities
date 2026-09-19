@@ -370,6 +370,60 @@ The save dialog includes a metadata editor:
 - missing recommended fields are highlighted
 
 (gui-process-manager)=
+## Manual ROIs
+
+**Widgets > Manual ROI Labeling** (or `mbo <path> --widget manualroi`) adds the ROI
+cards to the strip over the image and the **ROIs** and **Traces** tabs to the right
+bar. Arm **Add ROI** (`a`), drag a closed stroke around a cell, release: the enclosed
+pixels become a mask on the exact slice on screen (z-plane, channel, any extra
+slider) and, with **trace on draw** ticked, its mean trace appears on the Traces
+panel at once. Masks autosave beside the data as `manual_labels.zarr`.
+
+Running ROIs is the **Process tab > ROIs** pipeline:
+
+- **Which ROIs**: the selected one (or the ctrl / shift click group), the rows the
+  ROIs tab lists (its filters apply), every ROI drawn on the slice on screen, all of
+  them, or the **full image**: the whole frame as one mask. With `mean` that is the
+  frame's mean trace; with `suite2p` or `masknmf` it is a full detection of that
+  z-plane and channel.
+- **Read from**: **as drawn** reads each mask on the z-plane and channel it was drawn
+  on; **slice on screen** reads it wherever the sliders are when you press Run, so
+  a cell drawn on the structural channel is traced on the functional one by
+  scrolling there and running again; **fixed** picks a z-plane and channel. A
+  **frames** window (`start:stop`, 1-based) cuts T.
+- **Engine**: `mean` (raw mask mean plus a neuropil ring, no pipeline), `suite2p`
+  (suite2p's extractor), `masknmf` (seeded demixing). `suite2p` and `masknmf` use
+  the settings of their own tab, including the skip / run / force toggles; **Open**
+  jumps there. The **tag** names the output folder `rois_<tag>/` beside the data.
+- **Run** writes suite2p-shaped outputs (`F.npy`, `Fneu.npy`, `stat.npy`,
+  `rois.json`, `ops.npy` with `roi_workflow` recording `z`, `c`, `frames` and
+  `engine`); **Trace** computes an in-memory mean without writing.
+- **Find cells in a region**: draw a region (`r`) and let suite2p or masknmf look
+  for cells inside it. Results arrive as algo overlays: promote (`y`) or discard
+  (`n`) each component.
+
+The sliders are the array's axes whatever they are called: a MESc AOD unit's
+**ROI** slider or an IsoView **View** slider keys masks and runs like any z-plane
+or channel, and the trace table and legends name the axis the same way (`ROI 3`,
+not `z3`). A line-scan unit's lines land on the Traces tab with their index,
+channel and position: how far each really sits from the snapshot it was drawn on
+(`+7.4 um`), from the scan's own geometry (see **ROI Overlay**).
+
+**VIEW > color by** tints every ROI by a value through a colormap: its class,
+z-plane or channel (one color per level), its area, or the peak of its traces (a
+gradient). The overlay, the ROI table and the trace legend all follow; **none**
+restores the class / group colors. The time cursor on the trace and motion plots is
+one playhead: drag either, scrub the T slider, and every plot and the image land on
+the same instant, each trace drawn where it was recorded (its own frame window and
+binning).
+
+Every measurement is one row of the **Traces** tab: which ROI, on which z-plane and
+channel, with which engine, from which run. Running the same ROI the same way again
+replaces its row; reading it on another channel, z-plane or with another engine adds
+one. Click a row to plot it, ctrl+click to plot several; the plot follows the ROI
+the image shows. The ROIs tab's row buttons and the `t` key run one ROI exactly the
+way the ROIs pipeline is set.
+
 ## Process Manager
 
 Click the status indicator in the menu bar to open the process console.
