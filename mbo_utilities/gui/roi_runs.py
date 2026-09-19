@@ -7,10 +7,11 @@ through their sidecars). GPU-heavy runs serialize on one lock so two
 demixes never fight over the device.
 
 ``DerivedSet`` wraps a loaded :class:`~mbo_utilities.roi_workflow.RunResult`
-for display - per-set color, visibility, discarded rows and a pick map -
-and ``TraceSet`` holds traces keyed by store uid so deleting an ROI never
-remaps anyone else's rows. Everything here is figure-free and imports
-without masknmf, so it is unit-testable with a stub process manager.
+for display - per-set color, visibility, discarded rows and a pick map.
+Traces live in the session model's :class:`~mbo_utilities.annotation.RoiTraceTable`,
+keyed by store uid so deleting an ROI never remaps anyone else's rows.
+Everything here is figure-free and imports without masknmf, so it is
+unit-testable with a stub process manager.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from mbo_utilities import log
-from mbo_utilities.annotation import ROI_COLORS, class_color
+from mbo_utilities.annotation import ROI_COLORS, RoiTrace, class_color
 from mbo_utilities.gui.widgets.process_manager import LocalJob, get_process_manager
 from mbo_utilities.roi_workflow import OUT_PREFIX, RunResult, labels_path
 
@@ -36,7 +37,6 @@ __all__ = [
     "RoiRunManager",
     "SELECTED_ALPHA",
     "SET_COLORS",
-    "TraceSet",
     "build_pick_map",
     "component_color",
     "derived_comps",
@@ -53,6 +53,7 @@ __all__ = [
     "outline_data",
     "outline_paths",
     "registry_path",
+    "result_traces",
     "ring",
     "save_run_registry",
     "scan_run_dirs",
@@ -225,11 +226,6 @@ class RoiRunManager:
         return bool(self.active)
 
 
-# ---------------------------------------------------------------------------
-# derived sets and traces
-# ---------------------------------------------------------------------------
-
-
 def build_pick_map(stat: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     """``(Y, X)`` int32 row index per pixel, -1 background.
 
@@ -278,28 +274,6 @@ class DerivedSet:
                 self.accepted = np.asarray(iscell)[:, 0] > 0
             else:
                 self.accepted = np.ones(len(self.result.stat), bool)
-
-
-@dataclass
-class TraceSet:
-    """Traces of one origin ("quick" or a run), keyed by store uid so a
-    delete only prunes - other ROIs' rows never move. An ``external`` set
-    (a results file's scans) keys its own rows and is never pruned; each
-    entry then carries its ``label`` and ``fs``."""
-
-    name: str
-    kind: str
-    data: dict[int, dict] = field(default_factory=dict)
-    visible: bool = True
-    external: bool = False
-
-    def prune(self, uids) -> None:
-        """Drop entries whose uid is not in ``uids``."""
-        if self.external:
-            return
-        keep = {int(u) for u in uids}
-        for uid in [u for u in self.data if u not in keep]:
-            del self.data[uid]
 
 
 def _rim(mask: np.ndarray) -> np.ndarray:
@@ -536,30 +510,63 @@ def derived_outline(
     return outline_data(comps, mode, halo, scale, segments)
 
 
-def display_trace(entry: dict, correct_neuropil: bool = True) -> np.ndarray:
+def display_trace(trace: RoiTrace, correct_neuropil: bool = True) -> np.ndarray:
     """A trace the way lbm_suite2p_python plots it: the run's norm_traces
     when present, else percent dF/F over a static 20th-percentile baseline,
     neuropil-corrected (``F - 0.7 * Fneu``) unless turned off."""
-    if "norm" in entry:
-        return np.asarray(entry["norm"], np.float32)
-    f = np.asarray(entry["F"], np.float32)
-    if correct_neuropil and "Fneu" in entry:
-        f = f - 0.7 * np.asarray(entry["Fneu"], np.float32)
+    if trace.norm is not None:
+        return np.asarray(trace.norm, np.float32)
+    f = np.asarray(trace.F, np.float32)
+    if correct_neuropil and trace.Fneu is not None:
+        f = f - 0.7 * np.asarray(trace.Fneu, np.float32)
     if not f.size or not np.any(f):
         return np.zeros_like(f)
     f0 = max(float(np.percentile(f, 20)), 1e-6)
     return (f - f0) / f0 * 100.0
 
 
-def display_fneu(entry: dict) -> np.ndarray | None:
+def display_fneu(trace: RoiTrace) -> np.ndarray | None:
     """The neuropil trace on the same percent scale, or None without one."""
-    if "Fneu" not in entry:
+    if trace.Fneu is None:
         return None
-    f = np.asarray(entry["Fneu"], np.float32)
+    f = np.asarray(trace.Fneu, np.float32)
     if not f.size or not np.any(f):
         return np.zeros_like(f)
     f0 = max(float(np.percentile(f, 20)), 1e-6)
     return (f - f0) / f0 * 100.0
+
+
+def result_traces(res: RunResult, uids=None) -> list[RoiTrace]:
+    """One :class:`RoiTrace` per row of a run result that carries traces,
+    keyed by the store uid ``uids`` gives for that row (``res.uids`` when
+    None); rows without a uid are skipped. ``z`` / ``c`` are the read
+    coordinates the run recorded, else its store plane."""
+    if res.F is None:
+        return []
+    uids = res.uids if uids is None else uids
+    if uids is None:
+        return []
+    out = []
+    for row, uid in enumerate(uids):
+        uid = int(uid)
+        if uid <= 0 or row >= len(res.F):
+            continue
+        out.append(
+            RoiTrace(
+                uid=uid,
+                z=res.z if res.read_z is None else int(res.read_z),
+                c=0 if res.read_c is None else int(res.read_c),
+                engine=res.engine or ("masknmf" if res.kind in ("demix", "masknmf") else "mean"),
+                source=res.path.name,
+                F=np.asarray(res.F[row], np.float32),
+                Fneu=None if res.Fneu is None else np.asarray(res.Fneu[row], np.float32),
+                norm=None if res.norm is None else np.asarray(res.norm[row], np.float32),
+                frames=res.frames,
+                path=res.path,
+                extra={} if res.tp_indices is None or res.frames is not None else {"tp_indices": list(res.tp_indices)},
+            )
+        )
+    return out
 
 
 def component_color(s: DerivedSet, k: int) -> tuple[float, float, float]:
@@ -606,11 +613,6 @@ def feathered_rgba(shape: tuple[int, int], comps, selected=None) -> np.ndarray:
         rgba[mask, 3] = fill
         rgba[_rim(mask)] = (255, 255, 255, fill)
     return rgba
-
-
-# ---------------------------------------------------------------------------
-# disk: run dirs and the registry sidecar
-# ---------------------------------------------------------------------------
 
 
 def _kind_of(ops: dict) -> str:
@@ -729,7 +731,7 @@ def scan_run_dirs(fpath) -> list[dict]:
     return rows
 
 
-def full_plane_args(kind: str, fpath, plane_1based: int, iw, host=None) -> dict:
+def full_plane_args(kind: str, fpath, plane_1based: int, iw, host=None, channel: int | None = None, tp_indices=None) -> dict:
     """``task_suite2p`` / ``task_masknmf`` worker args for one plane.
 
     Parameters
@@ -747,6 +749,10 @@ def full_plane_args(kind: str, fpath, plane_1based: int, iw, host=None) -> dict:
         uses exactly the parameters configured there - including the
         Registration / Detection skip / run / force toggles - instead of the
         pipeline's defaults.
+    channel : int, optional
+        1-based channel to read; None reads the source as is.
+    tp_indices : list of int, optional
+        0-based frames to read; None reads every frame.
 
     Returns
     -------
@@ -765,6 +771,11 @@ def full_plane_args(kind: str, fpath, plane_1based: int, iw, host=None) -> dict:
         "planes": [int(plane_1based)],
         "reader_kwargs": widget_reader_kwargs(iw),
     }
+    if channel is not None:
+        args["channel"] = int(channel)
+    if tp_indices is not None:
+        args["tp_indices"] = [int(t) for t in tp_indices]
+        args["selected_planes_0based"] = [int(plane_1based) - 1]
     if kind == "masknmf":
         args["settings"] = masknmf_settings(host) or _default_masknmf_settings()
         return args
