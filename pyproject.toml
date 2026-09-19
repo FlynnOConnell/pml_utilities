@@ -23,6 +23,7 @@ dependencies = [
 	"imageio[ffmpeg]",
 	"ffmpeg-python",
 	"matplotlib>=3.10.1",
+	"cmap>=0.7.2",
 	"opencv-contrib-python-headless",
 	"h5py",
 	"psutil>=7.0",
