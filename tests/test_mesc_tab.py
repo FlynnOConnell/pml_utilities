@@ -317,42 +317,44 @@ def stack_mesc_path(tmp_path_factory):
     return path
 
 
-def test_depth_column_says_where_the_rois_sit(stack_mesc_path):
-    """With the Z-stack on screen, the line scan's row says which slices its
-    lines sit on and how many were scanned outside the stack, whatever slice
-    the slider is on; a snapshot's row gives the offsets from its plane."""
+def test_depth_column_says_where_every_unit_sits(stack_mesc_path):
+    """Every unit's depth, whatever unit is on screen: a scan's ROIs (their
+    spread), a Z-stack's slice range, a snapshot's plane. The geometry is
+    absolute; the tab counts from the first Z-stack's origin, as MESc does."""
     from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
+    from mbo_utilities.arrays.mesc_geometry import unit_depths
     from mbo_utilities.gui.widgets.mesc_units import (
         DEPTH_COLUMN,
         MescTabWidget,
         display_wrap,
-        overlay_records,
         unit_row,
     )
 
     stack, scan = list_mesc_units(stack_mesc_path)
-    arr = MescArray(stack_mesc_path, unit=0)
-    parent = FakeParent([display_wrap(arr)], arr.slider_dim_labels, z=3)
-    records = overlay_records(parent)
-    assert [r["slice"] for r in records] == [3, 7, 3, 0]
-    cells, keys = unit_row(scan, drawn=records)
-    assert cells[DEPTH_COLUMN] == "slices 4-8 (1 outside)" and keys[DEPTH_COLUMN] == 3.0
-    assert unit_row(stack)[0][DEPTH_COLUMN] == "-"
-    # a snapshot's records carry offsets, not slices
-    snap = [dict(r, slice=None, dz_um=dz) for r, dz in zip(records, (0.0, 8.0, 0.1, -16.0))]
-    assert unit_row(scan, drawn=snap)[0][DEPTH_COLUMN] == "-16.0..+8.0 um"
-    assert unit_row(scan, drawn=snap[:1])[0][DEPTH_COLUMN] == "+0.0 um"
+    depths = unit_depths(stack_mesc_path)
+    # no snapshot in this file: depths, no offsets
+    assert depths[scan["key"]] == {"z_um": [-54.0, -46.0, -53.9, -70.0], "dz_um": None}
+    assert depths[stack["key"]] == {"range_um": (-60.0, -40.0), "zdim": 11, "origin_um": -50.0}
+    cells, keys = unit_row(scan, depth=depths[scan["key"]])
+    assert cells[DEPTH_COLUMN] == "-70.0..-46.0 um" and keys[DEPTH_COLUMN] == -70.0
+    cells, keys = unit_row(stack, depth=depths[stack["key"]])
+    assert cells[DEPTH_COLUMN] == "-60.0..-40.0 um" and keys[DEPTH_COLUMN] == -60.0
+    assert unit_row(scan)[0][DEPTH_COLUMN] == "-"
+    # ROIs at one depth read as one number; a snapshot gives its plane
+    assert unit_row(scan, depth={"z_um": [-54.01, -54.0], "dz_um": [2.99, 3.0]})[0][DEPTH_COLUMN] == "-54.0 um"
+    assert unit_row(stack, depth={"plane_um": -97.0})[0] [DEPTH_COLUMN] == "-97.0 um"
 
+    # the scan is on screen: its own row and the stack's still say where they
+    # sit, counted from the stack's origin (-50 um) the way MESc shows depth
+    arr = MescArray(stack_mesc_path, unit=1)
+    parent = FakeParent([display_wrap(arr)], arr.slider_dim_labels)
     widget = MescTabWidget(parent)
+    assert widget._depths(arr)[1] == stack["key"]
     TEXTS.clear()
     imgui.text = spy_text
     try:
         draw_frames(widget)
-        assert "slices 4-8 (1 outside)" in TEXTS
-        TEXTS.clear()
-        parent.image_widget.indices = dict.fromkeys(parent.image_widget.dim_names, 7)
-        draw_frames(widget)
-        assert "slices 4-8 (1 outside)" in TEXTS
+        assert "-20.0..+4.0 um" in TEXTS and "-10.0..+10.0 um" in TEXTS
     finally:
         imgui.text = REAL_TEXT
         arr.close()

@@ -714,10 +714,14 @@ the other.
   cross-correlation of background frames against a stack). `line_positions(path,
   unit)` gives each ROI its `start_um` / `end_um`, `z_um`, `length_um`, `sample_um`
   and `dz_um` against the snapshot the lines were drawn on; `roi_placements` puts
-  them on a stack's slices; `image_overlays` draws them. A line-scan row of the
-  trace table (`linescan_viewer.StandardTraces`) is keyed `("member", "<MUnit> lines",
-  k)`, carries `z = k` (the unit's ROI axis), `c` = the channel read, and that
-  position in `extra` (`line`, `z_um`, `dz_um`, ...); its label shows `dz_um`.
+  them on a stack's slices; `image_overlays` draws them; `unit_depths` reads
+  every unit's depth in one pass (a scan's ROI depths and their offsets from its
+  snapshot, a stack's slice range, a snapshot's plane). An AOD unit's rows of the
+  trace table (`linescan_viewer.StandardTraces`, for every `ROI_LAYOUTS` layout:
+  the mean of each line or patch, computed in the background unless `F.npy` or PF
+  traces exist) are keyed `("member", "<MUnit> lines", k)` or `("member", "<MUnit>
+  patches", k)`, carry `z = k` (the unit's ROI axis), `c` = the channel read, and
+  that position in `extra` (`line`, `z_um`, `dz_um`, ...); the label shows `dz_um`.
   MESc draws every line on the snapshot whatever its depth; the overlay's solid /
   faint rule and the tab's `dz_um` say how far off the plane each one is.
 - **Outer view.** `gui/mesc_outer_view.py` puts an AOD unit back in its field:
@@ -735,8 +739,11 @@ the other.
   hands the host `outer_view` (a callable), which the Traces panel offers as a
   button. Solid / faint (`on_plane`): every ROI placed on a snapshot draws solid,
   its offset being the depth column's business; on a Z-stack only the ROIs on the
-  slice shown. The MESc tab's `depth` column says where a scan's ROIs sit (slices
-  in a stack, offsets from a snapshot) and the trace table's `depth` column shows
+  slice shown. The MESc tab's `depth` column says where every unit sits, counted
+  from the first Z-stack's z origin as MESc does, else the first snapshot's plane
+  (`unit_depths` is absolute; the tab rebases it and names the origin in the tooltip,
+  which adds each ROI's offset from its snapshot and its slice on the shown stack)
+  and the trace table's `depth` column shows
   a row's `extra["dz_um"]`, which `MescArray.line_positions` (the reader's cached
   facet over `mesc_geometry.line_positions`, which also places each line on the
   first Z-stack holding it: `stack`, `slice`, `slice_dz_um`, `in_stack`) supplies

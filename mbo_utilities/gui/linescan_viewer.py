@@ -834,8 +834,9 @@ class LinePanel:
 
 
 class StandardTraces:
-    """A line-scan unit's per-ROI traces on the standard viewer (``mbo
-    file.mesc``): a :class:`TraceJob` for the traces, its progress on the
+    """An AOD unit's per-ROI traces on the standard viewer (``mbo
+    file.mesc``), a line scan's lines or a chessboard / ribbon scan's
+    patches, one per Z index: a :class:`TraceJob` for the traces, its progress on the
     ROI widget's Traces tab until they are in, then one
     :class:`~mbo_utilities.annotation.RoiTrace` row per ROI in its trace
     table (``member`` rows under this unit's source name). The plotted row
@@ -855,7 +856,8 @@ class StandardTraces:
         names = tuple(getattr(self.iw, "_slider_dim_names", None) or ())
         self.roi_dim = next((d for d in names if d.lower() == "roi"), None)
         munit = arr.metadata["mesc_unit"].rsplit("/", 1)[-1]
-        self.name = f"{munit} lines"
+        # the rows' source names what the unit's ROIs are
+        self.name = f"{munit} lines" if arr.metadata.get("mesc_layout") == "packed" else f"{munit} patches"
         self.job = TraceJob(arr, 0, None, auto=get_linescan_auto_traces())
         self.attached = False
         self._last_roi = None
@@ -945,17 +947,18 @@ class StandardTraces:
 
 
 def attach_standard_traces(parent) -> StandardTraces | None:
-    """The line traces of a ``PreviewDataWidget`` showing a line-scan
-    ``.mesc`` unit, on its ROI widget's Traces tab; None (nothing added) for
+    """The per-ROI traces of a ``PreviewDataWidget`` showing an AOD ``.mesc``
+    unit (a line scan, chessboard or ribbon scan: ``ROI_LAYOUTS``, one ROI
+    per Z index), on its ROI widget's Traces tab; None (nothing added) for
     anything else, and without the ROI widget (Widgets > Manual ROI
     Labeling), whose tab they live on."""
-    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray
     from mbo_utilities.lazy_array import base_array
 
     data = getattr(getattr(parent, "image_widget", None), "data", None)
     # the viewer wraps the array in proxies; the traces come from the file
     arr = base_array(data[0]) if data else None
-    if not isinstance(arr, MescArray) or arr.metadata.get("mesc_layout") != "packed":
+    if not isinstance(arr, MescArray) or arr.metadata.get("mesc_layout") not in ROI_LAYOUTS:
         return None
     if getattr(parent, "manual_roi", None) is None or getattr(parent, "top_strip", None) is None:
         return None
