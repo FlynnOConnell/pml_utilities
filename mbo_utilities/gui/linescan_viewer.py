@@ -914,7 +914,6 @@ class StandardTraces:
 
     def _attach(self) -> None:
         from mbo_utilities.annotation import RoiTrace
-        from mbo_utilities.arrays.mesc_geometry import line_positions
         from mbo_utilities.lazy_array import base_array
 
         md = self.arr.metadata
@@ -922,13 +921,8 @@ class StandardTraces:
         n = len(extents) or int(self.job.result.shape[0])
         fs = float(self.arr.fs or 1.0)
         traces = np.asarray(self.job.result[:n], dtype=np.float32)
-        # positions come from the scan geometry, never from the row
-        src = base_array(self.arr)
-        files = getattr(src, "filenames", None) or []
-        unit_key = getattr(src, "unit_key", None)
-        positions = None
-        if files and unit_key:
-            positions = line_positions(files[0], unit_key, [int(e["width"]) for e in extents])
+        # positions come from the scan geometry (the reader's facet), never from the row
+        positions = getattr(base_array(self.arr), "line_positions", None)
         self.roi.traces.drop_source(self.name)
         for k in range(traces.shape[0]):
             extra = {"line": k}
@@ -942,7 +936,6 @@ class StandardTraces:
                 label=label, fs=fs, z=k, c=int(self.job.channel), F=traces[k], extra=extra,
             ))
         self.roi.pending_traces = None
-        self.roi.focus_traces = True
         self.attached = True
 
     def close(self) -> None:
@@ -1011,7 +1004,7 @@ class LineTracesPanel:
         self._ratios = implot.SubplotsRowColRatios(row_ratios=[TRACE_SHARE, 1.0 - TRACE_SHARE])
         if tab:
             height = TRACES_MOTION_PANEL_HEIGHT if self.motion else TRACES_PANEL_HEIGHT
-            self.strip.register(TopPanel("traces", "Traces", self.draw_tab, height, None, 10))
+            self.strip.register(TopPanel("traces", "Traces", self.draw_tab, height, 10))
 
     def close(self) -> None:
         self.strip.unregister("traces")

@@ -784,7 +784,7 @@ def _create_image_widget(
         from fastplotlib.utils import calculate_figure_shape
 
         from mbo_utilities.gui._top_strip import MENU_HEIGHT, MENU_MIN_WIDTH, strip_height
-        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT, roi_panel_min_width
+        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
         from mbo_utilities.gui.widgets.preview_data import ZSTATS_PANEL_HEIGHT
 
         rgb = bool(getattr(arrays[0], "rgb", False))
@@ -792,11 +792,11 @@ def _create_image_widget(
         top, right, min_width = 0, 0, 0.0
         if widget != "none":
             top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
-        # the strip is as tall as the tab that will be selected: the ROI panel
-        # registers first, else the Signal Quality plot once its stats are in
+        # the strip is as tall as the tab that will be selected: the Traces
+        # panel registers first, else the Signal Quality plot once its stats
+        # are in; the ROI controls are a right-bar tab and need no width
         if manual_roi:
             top = strip_height(PANEL_HEIGHT)
-            min_width = max(min_width, roi_panel_min_width())
         elif signal_quality:
             top = strip_height(ZSTATS_PANEL_HEIGHT)
         figure_kwargs = _figure_kwargs_for_here(
@@ -996,8 +996,8 @@ def _resolve_mesc_unit(data_in, unit):
 
     Every ``.mesc`` opens straight to its first measurement unit, no prompt.
     A file with more than one MUnit (unrelated scans the operator ran back
-    to back) is switched between from the Image tab's MESc Units combo
-    (``mbo_utilities.gui.widgets.mesc_units.MescUnitsWidget``), an ImGui
+    to back) is switched between from the MESc tab
+    (``mbo_utilities.gui.widgets.mesc_units.MescTabWidget``), an ImGui
     widget like the rest of the viewer — no Qt involved anywhere in this
     path. An explicit ``unit`` is the deliberate bypass.
 
@@ -1029,7 +1029,7 @@ def _resolve_mesc_unit(data_in, unit):
     if len(units) > 1:
         logger.info(
             f"{path.name} holds {len(units)} measurement units; opening "
-            f"{units[0]['key']} (switch from the Image tab)."
+            f"{units[0]['key']} (switch from the MESc tab)."
         )
     return {"unit": units[0]["key"]}, True
 

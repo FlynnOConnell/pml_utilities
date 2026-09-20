@@ -1,11 +1,12 @@
 """The figure's top edge, shared by everything that wants the full canvas width.
 
 fastplotlib keeps one imgui window per edge, so the menu row, Manual ROI's
-control cards and the Signal Quality plot cannot each own the top. They
-register a :class:`TopPanel` here instead: the strip draws the menu row,
-then a tab bar over whatever is registered, and shrinks back to the menu row
-alone when nothing is. A panel names the right-bar tab it belongs with, so
-selecting one selects the other (``report_right_tab`` / ``take_right_focus``).
+trace plot, the Signal Quality plot, the line-scan viewer's traces and the
+curation dashboard cannot each own the top. They register a :class:`TopPanel`
+here instead: the strip
+draws the menu row, then a tab bar over whatever is registered, and shrinks
+back to the menu row alone when nothing is. Selecting a panel never selects
+anything in the right bar, and nothing there selects a panel.
 
 Work a feature needs every frame regardless of which tab is on top — polling
 jobs, keyboard handling, its own floating windows — goes in a frame hook, not
@@ -47,10 +48,6 @@ TAB_BAR_HEIGHT = 24
 PANEL_PAD = 8 + 4 + TAB_BAR_HEIGHT + 8
 # the grab bar along the bottom edge
 HANDLE_HEIGHT = 14
-# frames to ignore right-bar reports for after the top switches: the right bar
-# redraws its old tab for a frame or two before it follows
-SYNC_HOLD = 3
-
 # never size or drag the strip so far down that the canvas has less than
 # this left to render into, after the other edge windows (the NDWidget's
 # slider block along the bottom) have taken theirs
@@ -78,8 +75,6 @@ class TopPanel:
         Body, called only while the tab is selected.
     height : int
         Pixels the body wants; the strip sizes itself to the tallest panel.
-    right_tab : str, optional
-        The right-bar tab this panel pairs with, for two-way selection sync.
     priority : int
         Tab order, lower first.
     min_width : float
@@ -91,7 +86,6 @@ class TopPanel:
     label: str
     draw: Callable[[], None]
     height: int = 200
-    right_tab: str | None = None
     priority: int = 100
     min_width: float = 0.0
 
@@ -107,10 +101,6 @@ class TopStrip(ImguiWindow):
         self.hooks: list[Callable[[], None]] = []
         self.active: str | None = None
         self._focus: str | None = None
-        self._right_now = ""
-        self._right_last = ""
-        self._right_focus: str | None = None
-        self._hold = 0
         self._closed = False
         # our own resize state: ImguiWindow._collapsed drives its edge-window
         # drawing, so shutting the strip must not touch it
@@ -166,24 +156,13 @@ class TopStrip(ImguiWindow):
             self.figure.remove_imgui_window("top")
 
     # ------------------------------------------------------------------
-    # selection, and its sync with the right bar
+    # selection
     # ------------------------------------------------------------------
 
     def focus(self, key: str) -> None:
         """Select ``key`` on the next frame."""
         if self.has(key):
             self._focus = key
-
-    def report_right_tab(self, name: str) -> None:
-        """Called by a right-bar tab body as it draws, to say it is on top."""
-        self._right_now = name
-
-    def take_right_focus(self, name: str) -> bool:
-        """True once when the right bar should select ``name`` to follow us."""
-        if self._right_focus != name:
-            return False
-        self._right_focus = None
-        return True
 
     def _panel(self, key: str | None) -> TopPanel | None:
         return next((p for p in self.panels if p.key == key), None)
@@ -375,21 +354,6 @@ class TopStrip(ImguiWindow):
 
     def _draw_tabs(self) -> None:
         focus, self._focus = self._focus, None
-        # a fresh report from the right bar means the user switched over there
-        if self._right_now and self._right_now != self._right_last:
-            self._right_last = self._right_now
-            pair = next(
-                (p.key for p in self.panels if p.right_tab == self._right_now), None
-            )
-            if (
-                pair is not None
-                and pair != self.active
-                and focus is None
-                and imgui.get_frame_count() >= self._hold
-            ):
-                focus = pair
-
-        before = self.active
         reopen = False
         if imgui.begin_tab_bar("##top_strip_tabs"):
             active = None
@@ -413,9 +377,3 @@ class TopStrip(ImguiWindow):
                 self.active = active
         if reopen:
             self.toggle_collapsed()
-
-        if self.active != before:
-            panel = self._panel(self.active)
-            if panel is not None and panel.right_tab and self._right_last != panel.right_tab:
-                self._right_focus = panel.right_tab
-                self._hold = imgui.get_frame_count() + SYNC_HOLD

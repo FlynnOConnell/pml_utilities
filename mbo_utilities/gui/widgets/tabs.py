@@ -6,12 +6,13 @@ Signal Quality tabs delegate to ``PreviewDataWidget``, Process to the pipelines
 package, Cloud to ``gui/_cloud.py`` — so these classes are only the seam
 between a tab and its panel.
 
-Manual ROI labelling is split: its controls and trace plot hang off the
-figure's top edge (``gui/manual_roi.py``), while its ROI table and trace
-table are the ROIs and Traces tabs here, beside Image and Signal Quality.
-The top panel's tab selection and these tabs follow each other. Runs report
-through the process manager (the status button and its console), not a tab
-of their own.
+Manual ROI labelling is split: its control sections sit over the ROI table
+in the ROIs tab here and the trace table is the Traces tab, beside Image and
+Signal Quality, while its trace plot and the plot's controls are a panel on
+the figure's top strip (``gui/manual_roi.py``), which has the width for it.
+Nothing selects a tab or a panel for the user; the one exception is the ROIs
+tab the moment Manual ROI Labeling is switched on. Runs report through the
+process manager (the status button and its console), not a tab of their own.
 
 Tab order is ``priority``; the viewer draws them in that order.
 """
@@ -51,15 +52,10 @@ class PreviewTabWidget(Widget):
         self.parent.draw_preview_section()
 
 
-def _strip(parent: Any):
-    """The figure's top strip, or None when this parent has none."""
-    return getattr(parent, "top_strip", None)
-
-
 class SignalQualityTabWidget(Widget):
     """The Signal Quality tab: the metric table, once the z-stats have been
     computed. Its plot is the top strip's Signal Quality panel, which has the
-    canvas's full width; the two selections follow each other."""
+    canvas's full width."""
 
     name = "Signal Quality"
     tab_label = "Signal Quality"
@@ -76,14 +72,7 @@ class SignalQualityTabWidget(Widget):
             return None
         return ""
 
-    def wants_focus(self) -> bool:
-        strip = _strip(self.parent)
-        return strip is not None and strip.take_right_focus("signal_quality")
-
     def draw(self) -> None:
-        strip = _strip(self.parent)
-        if strip is not None:
-            strip.report_right_tab("signal_quality")
         with imgui_ctx.begin_child(
             "##StatsContent", imgui.ImVec2(0, 0), imgui.ChildFlags_.none
         ):
@@ -146,11 +135,12 @@ class RunTabWidget(Widget):
 
 
 class RoiTableTabWidget(Widget):
-    """The ROIs tab: the manual-ROI table, with its per-row trace actions.
+    """The ROIs tab: the manual-ROI control sections (NAVIGATE, DRAW, VIEW,
+    LABELS), the status row and the ROI table with its per-row trace actions.
 
     The panel itself is built by ``PreviewDataWidget.sync_manual_roi`` when
-    the menu entry is switched on; the ROI *controls* stay in the top edge
-    window, so only the table lives here.
+    the menu entry is switched on; switching it on is the one time this tab
+    selects itself.
     """
 
     name = "ROIs"
@@ -170,16 +160,12 @@ class RoiTableTabWidget(Widget):
         return None
 
     def wants_focus(self) -> bool:
-        # one-shot programmatic focus (menu toggle, --widget manualroi,
-        # or the top panel switching to its ROI tab)
+        # one-shot programmatic focus: the menu toggle or --widget manualroi
         roi = getattr(self.parent, "manual_roi", None)
         if roi is None:
             return False
         if getattr(roi, "focus_tab", False):
             roi.focus_tab = False
-            return True
-        if getattr(roi, "_focus_right", None) == "rois":
-            roi._focus_right = None
             return True
         return False
 
@@ -188,22 +174,15 @@ class RoiTableTabWidget(Widget):
         if roi is None:
             imgui.text_disabled("Manual ROI Labeling is off.")
             return
-        roi._right_tab_now = "rois"
-        # lazy: manual_roi pulls in masknmf, only needed once it is on
-        from mbo_utilities.gui._imgui_helpers import fit_width
-        from mbo_utilities.gui.manual_roi import MIN_TAB_WIDTH
-
         with imgui_ctx.begin_child(
             "##RoiTableContent", imgui.ImVec2(0, 0), imgui.ChildFlags_.none
         ):
-            with fit_width("ROI table", min_width=MIN_TAB_WIDTH) as shown:
-                if shown:
-                    roi.draw_tab()
+            roi.draw_rois()
 
 
 class TraceTableTabWidget(Widget):
-    """The Traces tab: every collected trace with stats; the selection here
-    is what the top panel's Traces tab plots."""
+    """The Traces tab: every collected trace with stats; the rows selected
+    here are what the top strip's Traces panel plots."""
 
     name = "Traces"
     tab_label = "Traces"
@@ -223,20 +202,10 @@ class TraceTableTabWidget(Widget):
             return "No traces yet: use the trace button on a row of the ROIs tab, or run extract / demix."
         return None
 
-    def wants_focus(self) -> bool:
-        roi = getattr(self.parent, "manual_roi", None)
-        if roi is not None and getattr(roi, "_focus_right", None) == "traces":
-            roi._focus_right = None
-            return True
-        return False
-
     def draw(self) -> None:
         roi = getattr(self.parent, "manual_roi", None)
         if roi is None:
             imgui.text_disabled("Manual ROI Labeling is off.")
             return
-        roi._right_tab_now = "traces"
         with imgui_ctx.begin_child("##TraceTableContent", imgui.ImVec2(0, 0), imgui.ChildFlags_.none):
             roi.draw_trace_table()
-
-

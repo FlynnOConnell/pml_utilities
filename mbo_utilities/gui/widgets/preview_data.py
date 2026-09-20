@@ -683,8 +683,8 @@ class PreviewDataWidget(EdgeWindow):
         """Claim the figure's top edge for the menu row.
 
         The strip spans the canvas's full width, so it is also where the
-        panels that want that width register themselves — Manual ROI's ROI
-        and Traces cards, the Signal Quality plot.
+        panels that want that width register themselves: Manual ROI's trace
+        plot, the Signal Quality plot.
         """
         from mbo_utilities.gui._top_strip import TopStrip
 
@@ -702,7 +702,7 @@ class PreviewDataWidget(EdgeWindow):
             self.top_strip.register(
                 TopPanel(
                     "zstats", "Signal Quality", self.draw_stats_plot,
-                    height=ZSTATS_PANEL_HEIGHT, right_tab="signal_quality", priority=20,
+                    height=ZSTATS_PANEL_HEIGHT, priority=20,
                 )
             )
         elif not want:
@@ -733,8 +733,9 @@ class PreviewDataWidget(EdgeWindow):
     def sync_manual_roi(self, enabled: bool) -> None:
         """Create or tear down the manual-ROI widget to match the toggle.
 
-        Building it attaches an overlay graphic to the subplot and claims the
-        figure's top strip and right-widget tabs, so it is created lazily the
+        Building it attaches an overlay graphic to the subplot, puts its
+        Traces panel on the figure's top strip and fills the right widget's
+        ROIs and Traces tabs, so it is created lazily the
         first time the widget is switched on and dropped again when it is
         switched off.
         """

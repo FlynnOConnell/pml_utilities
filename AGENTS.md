@@ -680,7 +680,7 @@ the other.
   `frames` / `engine` read them back and `roi_runs.result_traces` turns a result
   into table rows.
 - **Draw -> run.** `ManualRoiWidget(auto_trace=True)` traces every ROI the moment it
-  is drawn (its mean at the run coordinates) and focuses the Traces panel. The row
+  is drawn (its mean at the run coordinates); no tab is selected for the user. The row
   buttons on the ROIs tab, the `t` key and the Process tab all run one ROI the way
   the Process tab is set (`engine`, `run_where`, `run_frames`, `run_tag`).
 - **The ROIs pipeline** (`RoiPipelineWidget`, name `ROIs`, `axes_consumed`
@@ -689,8 +689,9 @@ the other.
   read, the engine and tag, runs them, and shows the trace table cut down to those
   ROIs (`ManualRoiWidget.draw_trace_table(keys=...)`). Region and full-plane
   detection live there too. It turns Manual ROI Labeling on when it is off. The
-  top strip keeps only NAVIGATE, DRAW (with the region tool and the trace-on-draw
-  switch), VIEW and LABELS.
+  ROIs tab keeps only NAVIGATE, DRAW (with the region tool and the trace-on-draw
+  switch), VIEW and LABELS, as sections over its table; the trace plot and its
+  controls stay a panel on the top strip.
 - **Any slice.** The viewer's sliders are the array's T, C, Z axes by position
   (`manual_roi.slider_roles`), whatever the array labels them (`Timepoint` /
   `Channel` / `ROI` for a MESc AOD unit, `Tile` / `View` for IsoView); the widget
@@ -719,6 +720,32 @@ the other.
   position in `extra` (`line`, `z_um`, `dz_um`, ...); its label shows `dz_um`.
   MESc draws every line on the snapshot whatever its depth; the overlay's solid /
   faint rule and the tab's `dz_um` say how far off the plane each one is.
+- **Outer view.** `gui/mesc_outer_view.py` puts an AOD unit back in its field:
+  `outer_images(mesc, open_unit, c, z)` (GUI-free) is the unit's quick `mean` /
+  `max` / `std` over time at the slice on screen (`unit_projections`, at most
+  `MAX_ELEMENTS` samples; a one-row slice on a unit with several projects every
+  ROI, lines by samples) followed by each reference image carrying its ROIs: the
+  snapshot it was drawn on, then every Z-stack holding it (mean and max over
+  depth, then the slices its ROIs sit on), each with the unit's `image_overlays`
+  records. `OuterView` is that set in a `SummaryImageViewer` popup (masknmf's
+  full-FOV viewer, `roi_provider(key)` returning `(points, rgba, thickness)`
+  polylines: MESc's colours, the slider's ROI `SELECTED_THICKNESS`, off-plane
+  ones `GHOST_ALPHA` or hidden by the ROI Overlay panel's switch). The MESc tab
+  opens it, redraws it from the top strip's hook, reopens it on a unit switch and
+  hands the host `outer_view` (a callable), which the Traces panel offers as a
+  button. Solid / faint (`on_plane`): every ROI placed on a snapshot draws solid,
+  its offset being the depth column's business; on a Z-stack only the ROIs on the
+  slice shown. The MESc tab's `depth` column says where a scan's ROIs sit (slices
+  in a stack, offsets from a snapshot) and the trace table's `depth` column shows
+  a row's `extra["dz_um"]`, which `MescArray.line_positions` (the reader's cached
+  facet over `mesc_geometry.line_positions`, which also places each line on the
+  first Z-stack holding it: `stack`, `slice`, `slice_dz_um`, `in_stack`) supplies
+  through `ManualRoiWidget._line_position(trace)`: the row's `extra["line"]`, else
+  its `z` on an AOD unit, indexes the recording's placements, under the row's own
+  `extra` (`POSITION_KEYS`); a results file's line rows get theirs stamped at load
+  when the shown recording is their scan. Hovering a row lists the line's ends,
+  length, sample spacing, depth and stack slice. A click on a line in the outer
+  view (`SummaryImageViewer.on_pick`, `OuterView.pick`) moves the ROI slider to it.
 - **Full image.** The ROIs pipeline's `full image` target is the whole frame as
   one mask at the run coordinates: with `mean` a `FULL_IMAGE` row of the trace
   table (`ManualRoiWidget.trace_full`, keyed `("member", "full image", "z<z>c<c>")`
@@ -766,7 +793,14 @@ the other.
 - **Persistence.** The store autosaves to `manual_labels.zarr` (`plane` per ROI;
   older stores wrote `z` and load unchanged). Run rows reload from `rois_<tag>/`
   dirs through `roi_runs.json`; quick traces, full-image rows and tints live for
-  the session.
+  the session. A file holding several recordings (a `.mesc`) keeps all of it per
+  recording: the widget's `unit_key` (`manual_roi.unit_key`, the base array's)
+  names the sidecars `manual_labels_<tag>.zarr`, `roi_runs_<tag>.json` and
+  `rois_<tag>_<run>/` (`labels_path(fpath, tag)`, `registry_path`, `run_prefix`,
+  tag `MSession_0_MUnit_3`), and a unit switch (`MescTabWidget._install`) parks
+  the outgoing widget's store and runs under its unit and rebuilds the widget for
+  the incoming one, so the ROIs, runs and traces on screen are the shown
+  recording's.
 
 Pinned by `tests/test_roi_model.py`, `tests/test_playhead.py`, `tests/test_trace_display.py`, `tests/test_manual_roi.py`
 (`TestRunCoordinates`, `TestAutoTrace`, `TestRoiPipelineTab`, `TestPlayheadWiring`,
@@ -1453,7 +1487,7 @@ Everything else is the opposite shape (counts from 2026-09-19):
 - The host widget is a grab bag: 215 distinct `parent._x` attributes across `gui`,
   and `_dialogs._reset_per_data_state` is a hand-kept list of which to clear when
   the array changes. Every unit swap risks a leak.
-- Widgets sniff formats: `mesc_units`, `mesc_overlay`, `tile_grid` and
+- Widgets sniff formats: the two `mesc_units` widgets, `tile_grid` and
   `isoview_align_views` decide `is_supported(parent)` by unwrapping the array and
   checking its class. A new format has to write imgui code in `gui/widgets/` to
   appear anywhere.
@@ -1505,7 +1539,6 @@ class MescArray(LazyArray):
 def contributions(session):
     a = session.array
     return [
-        Panel("MESc Units", "image", [Choice(a.units, session.unit, session.open_unit)]),
         Tab("MESc", Table(UNIT_COLUMNS, unit_rows(a.units), links=unit_links, on_row=session.open_unit)),
         Overlay("ROI Overlay", a.overlays(session.unit), plane=session.indices),
     ]

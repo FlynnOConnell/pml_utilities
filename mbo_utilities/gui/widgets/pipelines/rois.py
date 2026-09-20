@@ -30,7 +30,13 @@ from imgui_bundle import hello_imgui, imgui, imgui_ctx
 
 from mbo_utilities.annotation import ENGINES, FULL_IMAGE
 from mbo_utilities.arrays.features._slicing import parse_timepoint_selection
-from mbo_utilities.gui._imgui_helpers import selected_button_style, set_tooltip
+from mbo_utilities.gui._imgui_helpers import (
+    right_aligned_text,
+    selected_button_style,
+    set_tooltip,
+    settings_row,
+    settings_table,
+)
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 from mbo_utilities.gui.widgets.pipelines.settings import _MISSING_COLOR
 from mbo_utilities.pipeline_registry import PipelineInfo
@@ -68,14 +74,6 @@ _CAPTIONS = ("Which ROIs", "Read from", "Frames", "Engine", "Settings")
 
 def _em(x: float) -> float:
     return hello_imgui.em_size(x)
-
-
-def _right_aligned(text: str) -> None:
-    """``text`` flush with the right edge of the current cell or window."""
-    room = imgui.get_content_region_avail().x - imgui.calc_text_size(text).x
-    if room > 0:
-        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + room)
-    imgui.text_disabled(text)
 
 
 class RoiPipelineWidget(PipelineWidget):
@@ -206,24 +204,20 @@ class RoiPipelineWidget(PipelineWidget):
         """The run settings as one table: captions in a fixed column exactly
         as wide as the longest of them, controls in the stretch column, every
         caption on the frame baseline of its row's widgets."""
-        caption_w = max(imgui.calc_text_size(c).x for c in _CAPTIONS) + _em(0.8)
-        flags = imgui.TableFlags_.sizing_stretch_prop | imgui.TableFlags_.no_pad_outer_x
-        with imgui_ctx.begin_table("##rois_settings", 2, flags) as table:
+        with settings_table("##rois_settings", _CAPTIONS) as table:
             if not table:
                 return
-            imgui.table_setup_column("caption", imgui.TableColumnFlags_.width_fixed, caption_w)
-            imgui.table_setup_column("control", imgui.TableColumnFlags_.width_stretch)
-            self._settings_row("Which ROIs")
+            settings_row("Which ROIs")
             self._draw_target_row(roi)
-            self._settings_row("Read from")
+            settings_row("Read from")
             self._draw_where_row(roi)
-            self._settings_row("Frames")
+            settings_row("Frames")
             self._draw_frames_row(roi)
-            self._settings_row("Engine")
+            settings_row("Engine")
             self._draw_engine_row(roi)
             kind = roi.pipeline_for()
             if kind is not None:
-                self._settings_row("Settings")
+                settings_row("Settings")
                 self._draw_pipeline_row(roi, kind)
         imgui.text_disabled(f"reads {roi._where_label()}")
         set_tooltip(
@@ -232,14 +226,6 @@ class RoiPipelineWidget(PipelineWidget):
             "the frame window when one is set.",
             show_mark=False,
         )
-
-    @staticmethod
-    def _settings_row(caption: str) -> None:
-        imgui.table_next_row()
-        imgui.table_next_column()
-        imgui.align_text_to_frame_padding()
-        imgui.text_disabled(caption)
-        imgui.table_next_column()
 
     def _draw_target_row(self, roi) -> None:
         for i, (key, label, tip) in enumerate(TARGETS):
@@ -251,7 +237,7 @@ class RoiPipelineWidget(PipelineWidget):
                 imgui.set_tooltip(tip)
         count = "the whole frame" if self.target == "full" else f"{len(self.target_indices())} ROI(s)"
         imgui.same_line(0, _em(0.6))
-        _right_aligned(count)
+        right_aligned_text(count)
 
     def _draw_where_row(self, roi) -> None:
         for i, (key, label, tip) in enumerate(WHERE):
@@ -320,7 +306,7 @@ class RoiPipelineWidget(PipelineWidget):
             imgui.text_disabled(f"all {max_frames}")
 
     def _draw_engine_row(self, roi) -> None:
-        from mbo_utilities.gui.manual_roi import ENGINE_HELP, OUT_PREFIX
+        from mbo_utilities.gui.manual_roi import ENGINE_HELP
 
         imgui.set_next_item_width(_em(6.5))
         changed, sel = imgui.combo("##rois_engine", ENGINES.index(roi.engine), list(ENGINES))
@@ -337,7 +323,7 @@ class RoiPipelineWidget(PipelineWidget):
         imgui.set_next_item_width(_em(6.5))
         _, roi.run_tag = imgui.input_text_with_hint("##rois_tag", "manual", roi.run_tag)
         set_tooltip(
-            f"Names the output folder: {OUT_PREFIX}{roi.effective_tag}/ beside the data. "
+            f"Names the output folder: {roi.run_prefix}{roi.effective_tag}/ beside the data. "
             "Leave it empty for the default.",
             show_mark=False,
         )

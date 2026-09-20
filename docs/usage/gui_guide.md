@@ -234,13 +234,15 @@ Readout for the temporal binning set with **Apply to dataset** above: frames per
 
 Also hosts piezo z-stack averaging. When `frames_per_slice > 1`, toggle averaging based on ScanImage's `logAverageFactor`. This changes the effective shape of the data.
 
-### MESc Units
+### MESc
 
-Femtonics MESc files only. A `.mesc` holds one measurement unit per scan the operator ran, and `mbo scan.mesc` opens the first AOD scan (line scan, chessboard or ribbon), or the first unit when there is none. The **MESc Units** dropdown on the Image tab switches units without leaving the viewer. The **MESc** tab lists every unit as a table: session and unit (MESc numbers each session's units from scratch, so `MSession_0/MUnit_3` and `MSession_1/MUnit_3` are different recordings), modality, shape, rate, duration, start time and comment. **ROIs** is the lines or patches a scan recorded (`15 lines`, `7 patches`). **links** counts the units this one is paired with, as a button that lists them: a scan's snapshot (*drawn on*, its `BackgroundImagePath`) and RTMC stream, a snapshot's scans (*background of*), a stream's scan (*RTMC of*), and for a Z-stack every scan whose ROIs fall inside its field (*holds*). Click a row, or a unit in that list, to display it; a snapshot or Z-stack opens with its ROIs already overlaid.
+Femtonics MESc files only. A `.mesc` holds one measurement unit per scan the operator ran, and `mbo scan.mesc` opens the first AOD scan (line scan, chessboard or ribbon), or the first unit when there is none. The **MESc** tab, the first tab for a `.mesc`, is how the rest are opened: it lists every unit as a table, with session and unit (MESc numbers each session's units from scratch, so `MSession_0/MUnit_3` and `MSession_1/MUnit_3` are different recordings), modality, shape, rate, duration, start time and comment. **ROIs** is the lines or patches a scan recorded (`15 lines`, `7 patches`). **depth** is, for every scan whose ROIs are drawn on the displayed snapshot or Z-stack, where they sit: the slices they are on in a Z-stack (`slices 12-20`, and how many were scanned outside it) or their offsets from a snapshot's plane (`-2.1..+3.4 um`); hover it for each ROI's offset and slice and, on a stack, how many are on the slice shown. **links** counts the units this one is paired with, as a button that lists them by role: for a scan, the *snapshot it was drawn on* (its `BackgroundImagePath`) and *its RTMC motion stream* (the stage shifts recorded while it ran); for a snapshot, each *scan drawn on it*; for a stream, the *scan it is the RTMC stream of*; for a Z-stack, each *scan inside this Z-stack* (its ROIs fall inside the stack's field). Click a row, or a unit in that list, to display it; a snapshot or Z-stack opens with its ROIs already overlaid, whichever tab is on screen. The Manual ROI widget follows the unit: the ROIs, runs and traces on screen are always the shown unit's, parked when you switch away and back when you return, and autosaved per unit (`manual_labels_MSession_0_MUnit_3.zarr`, `roi_runs_MSession_0_MUnit_3.json`, `rois_MSession_0_MUnit_3_<tag>/`).
+
+**Outer view** (a button on the MESc tab) opens a popup around the shown unit. It holds the unit's quick **mean**, **max** and **std** over time at the slice on screen, sampled so a long recording opens in a moment (a line scan projects every line, lines by samples), and, for a scan, the snapshot it was drawn on and every Z-stack holding its ROIs, with the lines or patches drawn in MESc's colours: the ROI the slider is on thicker, off-plane ones faint (the **off-plane** switch is the ROI Overlay panel's). A Z-stack contributes its mean and max over depth and each slice an ROI sits on, and the caption says how far the slider's ROI sits off the image shown. Pan, zoom, colormap, contrast and pixel values work as in **Open full FOV**; the popup follows a unit switch while it is open.
 
 ### ROI Overlay
 
-Femtonics MESc files only. When the displayed unit is the snapshot a multi-ROI scan was set up on (the scan's `BackgroundImagePath`), or a Z-stack whose field contains the scan's ROIs, the lines (line scan) or patches (chessboard, ribbon) MESc actually scanned are drawn on it as soon as it is on screen, in the colours MESc used; **Overlay ROIs** hides them for the session. Solid ROIs are on the plane shown: within 1 µm of the snapshot, or on the Z-stack slice the slider is at. Faint ones sit at another depth; **Show off-plane ROIs** hides them. Each scan gets one line of text with how many of its ROIs are on the current plane; hover it for every ROI's depth offset.
+Femtonics MESc files only. When the displayed unit is the snapshot a multi-ROI scan was set up on (the scan's `BackgroundImagePath`), or a Z-stack whose field contains the scan's ROIs, the lines (line scan) or patches (chessboard, ribbon) MESc actually scanned are drawn on it as soon as it is on screen, in the colours MESc used; **Overlay ROIs** hides them for the session. Every ROI placed on a snapshot is solid: MESc drew them all there, and how far each really sits off that plane is the MESc tab's **depth** column (and the trace table's). On a Z-stack the ROIs on the slice shown are solid and the rest faint; **Show off-plane ROIs** hides them.
 
 The pairing is by the file's own metadata (`CoordinateMapJSON` outlines, `ReferenceViewportJSON` placement, `BackgroundImagePath`), so the panel does not appear for a unit MESc did not record ROIs for. A scan whose ROI list was edited after acquisition falls back to the viewer's own colours.
 
@@ -376,12 +378,18 @@ The save dialog includes a metadata editor:
 (gui-process-manager)=
 ## Manual ROIs
 
-**Widgets > Manual ROI Labeling** (or `mbo <path> --widget manualroi`) adds the ROI
-cards to the strip over the image and the **ROIs** and **Traces** tabs to the right
-bar. Arm **Add ROI** (`a`), drag a closed stroke around a cell, release: the enclosed
-pixels become a mask on the exact slice on screen (z-plane, channel, any extra
-slider) and, with **trace on draw** ticked, its mean trace appears on the Traces
-panel at once. Masks autosave beside the data as `manual_labels.zarr`.
+**Widgets > Manual ROI Labeling** (or `mbo <path> --widget manualroi`) adds the
+**ROIs** and **Traces** tabs to the right bar and the **Traces** panel to the strip
+over the image: the ROIs tab holds the NAVIGATE, DRAW, VIEW and LABELS sections
+(captioned settings rows like the Process tab's, each switched off from the
+Widgets menu) over the ROI table, the Traces tab lists every trace,
+and the panel plots the selected ones under its controls. Nothing switches tabs or
+panels for you. Arm **Add ROI** (`a`), drag a closed stroke around a cell, release:
+the enclosed pixels become a mask on the exact slice on screen (z-plane, channel,
+any extra slider) and, with **trace on draw** ticked, its mean trace appears on the
+Traces panel at once. Masks autosave beside the data as `manual_labels.zarr`; a
+`.mesc` gets one per unit (`manual_labels_MSession_0_MUnit_3.zarr`), and the ROIs and
+traces on screen are always the shown unit's.
 
 Running ROIs is the **Process tab > ROIs** pipeline:
 
@@ -411,7 +419,14 @@ The sliders are the array's axes whatever they are called: a MESc AOD unit's
 or channel, and the trace table and legends name the axis the same way (`ROI 3`,
 not `z3`). A line-scan unit's lines land on the Traces tab with their index,
 channel and position: how far each really sits from the snapshot it was drawn on
-(`+7.4 um`), from the scan's own geometry (see **ROI Overlay**).
+(`+7.4 um`), from the scan's own geometry (see **ROI Overlay**). Every row read on
+an AOD unit knows its line, whether a quick trace of a drawn ROI, a line-scan trace or
+a pipeline's denoised row: the **depth** column shows the line's offset from the
+snapshot it was drawn on, else the Z-stack slice it sits on, else its depth in the
+file's frame, and hovering the row lists the line's ends, length, sample spacing,
+depth and stack slice. **Outer view** on the Traces panel opens the snapshot with the
+slider's line thick and its depth in the caption; click a line there to select its
+ROI.
 
 **VIEW > color by** tints every ROI by a value through a colormap: its class,
 z-plane or channel (one color per level), its area, or the peak of its traces (a

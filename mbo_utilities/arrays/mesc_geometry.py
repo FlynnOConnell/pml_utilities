@@ -427,6 +427,11 @@ def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = N
                     (``mesc_roi_extents[i]["width"]``); None without them
         dz_um       depth against the snapshot the lines were drawn on (the
                     unit's ``BackgroundImagePath``); None without one
+        stack       the first Z-stack whose field holds the line
+                    (:func:`image_overlays`); ``slice`` its 0-based slice
+                    nearest the line, ``slice_dz_um`` the line's offset from
+                    it, ``in_stack`` False when the line was scanned above or
+                    below the stack; all None without such a stack
 
     The snapshot's plane is where MESc draws every line whatever its depth;
     ``dz_um`` says how far off that plane each one really is.
@@ -457,6 +462,21 @@ def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = N
                 "length_um": length,
                 "sample_um": (length / n) if n else None,
                 "dz_um": None if snapshot is None else z_um - snapshot["transl"][2],
+                "stack": None,
+                "slice": None,
+                "slice_dz_um": None,
+                "in_stack": None,
             }
         )
+    # the first Z-stack whose field holds each line: its slice and offset
+    units = list_mesc_units(mesc_path)
+    key = str(unit_key).strip("/")
+    for stack in (u["key"] for u in units if u["kind"] == "zstack"):
+        placed = {
+            r["roi"]: r for r in image_overlays(mesc_path, stack, units) if r["unit"].strip("/") == key
+        }
+        for p in out:
+            r = placed.get(p["index"])
+            if r is not None and p["stack"] is None:
+                p.update(stack=stack, slice=r["slice"], slice_dz_um=r["dz_um"], in_stack=r["on_plane"])
     return out
