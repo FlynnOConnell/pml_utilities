@@ -33,7 +33,7 @@ import numpy as np
 from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities import log
-from mbo_utilities.arrays.mesc_geometry import image_overlays, zstack_contents
+from mbo_utilities.arrays.mesc_geometry import image_overlays, unit_depths, zstack_contents
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.mesc_outer_view import (
     GHOST_ALPHA,
@@ -273,15 +273,15 @@ def unit_links(info: dict, contains: list[str] | tuple[str, ...] = ()) -> list[t
 def unit_row(
     info: dict,
     contains: list[str] | tuple[str, ...] = (),
-    drawn: list[dict] | tuple[dict, ...] = (),
+    depth: dict | None = None,
 ) -> tuple[tuple[str, ...], tuple]:
     """One table row per `list_mesc_units` entry: the cell texts and the sort
     keys, both in UNIT_COLUMNS order (numbers sort as numbers). The ``links``
     cell is how many units this one is paired with (:func:`unit_links`); the
-    tab draws it as a button that lists them. ``drawn`` is this unit's overlay
-    records on the displayed image (:func:`overlay_records`); the ``depth``
-    cell says where they sit: the slices they are on in a Z-stack (and how
-    many were scanned outside it), or their offsets from a snapshot's plane."""
+    tab draws it as a button that lists them. ``depth`` is this unit's entry
+    of :func:`unit_depths`; the ``depth`` cell is where the unit sits in the
+    file's micron frame: the depth of a scan's ROIs (their spread when they
+    differ), a Z-stack's slice range, a snapshot's plane."""
     t, c, z_size, y, x = info["shape"]
     fs = info.get("fs")
     dur = info.get("duration_s")
@@ -290,23 +290,16 @@ def unit_row(
     n = info.get("n_outlines", 0)
     nouns = {"line": ("line", "lines"), "patch": ("patch", "patches")}
     rois = f"{n} {nouns[info['outline_kind']][n != 1]}" if n else "-"
-    depth, depth_key = "-", float("inf")
-    if drawn and drawn[0]["slice"] is None:
-        dzs = sorted(r["dz_um"] for r in drawn)
-        depth = f"{dzs[0]:+.1f} um" if dzs[-1] - dzs[0] < 0.05 else f"{dzs[0]:+.1f}..{dzs[-1]:+.1f} um"
-        depth_key = dzs[0]
-    elif drawn:
-        slices = sorted({r["slice"] for r in drawn if r["on_plane"]})
-        outside = sum(not r["on_plane"] for r in drawn)
-        if not slices:
-            depth = "outside"
-        elif len(slices) == 1:
-            depth = f"slice {slices[0] + 1}"
-        else:
-            depth = f"slices {slices[0] + 1}-{slices[-1] + 1}"
-        if slices and outside:
-            depth += f" ({outside} outside)"
-        depth_key = float(slices[0]) if slices else float("inf")
+    depth_text, depth_key = "-", float("inf")
+    if depth and depth.get("z_um"):
+        zs = sorted(depth["z_um"])
+        depth_text = f"{zs[0]:+.1f} um" if zs[-1] - zs[0] < 0.05 else f"{zs[0]:+.1f}..{zs[-1]:+.1f} um"
+        depth_key = zs[0]
+    elif depth and depth.get("range_um"):
+        lo, hi = depth["range_um"]
+        depth_text, depth_key = f"{lo:+.1f}..{hi:+.1f} um", float(lo)
+    elif depth and depth.get("plane_um") is not None:
+        depth_text, depth_key = f"{depth['plane_um']:+.1f} um", float(depth["plane_um"])
     links = len(unit_links(info, contains))
     cells = (
         info["session"],
@@ -314,7 +307,7 @@ def unit_row(
         info["modality_name"],
         info["kind"],
         rois,
-        depth,
+        depth_text,
         str(links) if links else "-",
         str(t),
         str(c),
@@ -492,6 +485,36 @@ class MescTabWidget(Widget):
             self.parent._mesc_zstack_contents = cached
         return cached[1]
 
+    def _depths(self, mesc) -> tuple[dict[str, dict], str | None]:
+        """Every unit's depth (:func:`unit_depths`) counted from one origin, the
+        way the MESc GUI shows depth: the first Z-stack's, else the first
+        snapshot's plane, else the file's own frame. Read once per file and
+        kept on the parent with the origin unit's key."""
+        path = str(mesc.filenames[0])
+        cached = getattr(self.parent, "_mesc_unit_depths", None)
+        if cached is None or cached[0] != path:
+            try:
+                depths = unit_depths(path, mesc.units)
+            except Exception:
+                self.parent.logger.warning(
+                    f"{Path(path).name}: cannot read where its units sit", exc_info=True
+                )
+                depths = {}
+            ref = next((k for k, d in depths.items() if "range_um" in d), None)
+            if ref is None:
+                ref = next((k for k, d in depths.items() if "plane_um" in d), None)
+            origin = 0.0 if ref is None else depths[ref].get("origin_um", depths[ref].get("plane_um", 0.0))
+            for d in depths.values():
+                if "z_um" in d:
+                    d["z_um"] = [z - origin for z in d["z_um"]]
+                elif "range_um" in d:
+                    d["range_um"] = (d["range_um"][0] - origin, d["range_um"][1] - origin)
+                else:
+                    d["plane_um"] -= origin
+            cached = (path, depths, ref)
+            self.parent._mesc_unit_depths = cached
+        return cached[1], cached[2]
+
     def draw(self) -> None:
         with imgui_ctx.begin_child(
             "##MescContent", imgui.ImVec2(0, 0), imgui.ChildFlags_.none
@@ -502,6 +525,8 @@ class MescTabWidget(Widget):
                 return
             units = mesc.units
             contains = self._contains(mesc)
+            depths, ref = self._depths(mesc)
+            frame = f"from {ref.rsplit('/', 1)[-1]}'s z origin" if ref else "in the file's frame"
             # the unit opened at launch belongs in the cache too, so switching
             # away and back reuses it instead of opening the file a second time
             self._cache().setdefault(mesc.unit_key, mesc)
@@ -573,7 +598,7 @@ class MescTabWidget(Widget):
             column, ascending = self._sort
             rows = sorted(
                 (
-                    (*unit_row(u, contains.get(u["key"], ()), drawn.get(u["key"], ())), u)
+                    (*unit_row(u, contains.get(u["key"], ()), depths.get(u["key"])), u)
                     for u in units
                 ),
                 key=lambda row: row[1][column],
@@ -597,26 +622,41 @@ class MescTabWidget(Widget):
                 for i in range(1, len(cells)):
                     if not imgui.table_next_column():
                         continue
-                    if i == DEPTH_COLUMN and drawn.get(info["key"]):
-                        rs = drawn[info["key"]]
+                    if i == DEPTH_COLUMN and (depths.get(info["key"]) or drawn.get(info["key"])):
                         imgui.text(cells[i])
-                        stack = rs[0]["slice"] is not None
-                        header = (
-                            f"{shown} slice {z + 1}: {sum(on_plane(r, z) for r in rs)} of {len(rs)} on it"
-                            if stack else f"{shown}: {len(rs)} ROIs placed on it, offsets from its plane"
-                        )
-                        set_tooltip(
-                            "\n".join(
-                                [header]
-                                + [
-                                    f"ROI {r['roi'] + 1}: z {r['z_um']:+.1f} um, {r['dz_um']:+.1f} um off"
-                                    + ("" if r["slice"] is None else f", slice {r['slice'] + 1}")
-                                    + ("" if r["on_plane"] or not stack else " (outside the stack)")
-                                    for r in rs
-                                ]
-                            ),
-                            show_mark=False,
-                        )
+                        depth = depths.get(info["key"]) or {}
+                        rs = drawn.get(info["key"], ())
+                        placed = {r["roi"]: r for r in rs}
+                        stack = bool(rs) and rs[0]["slice"] is not None
+                        lines = []
+                        if depth.get("range_um"):
+                            lo, hi = depth["range_um"]
+                            lines.append(
+                                f"{info['munit']}: {depth['zdim']} slices, {lo:+.1f} to {hi:+.1f} um {frame}"
+                            )
+                        elif depth.get("plane_um") is not None:
+                            lines.append(f"{info['munit']}: the plane of this image, {frame}")
+                        else:
+                            zs = depth.get("z_um") or [r["z_um"] for r in rs]
+                            dzs = depth.get("dz_um")
+                            lines.append(
+                                f"{info['munit']}: {len(zs)} ROIs, depth {frame}"
+                                + ("; off = from the snapshot they were drawn on" if dzs else "")
+                            )
+                            for k, zk in enumerate(zs):
+                                r = placed.get(k)
+                                line = f"ROI {k + 1}: z {zk:+.1f} um"
+                                if dzs:
+                                    line += f", {dzs[k]:+.1f} um off"
+                                if r is not None and stack:
+                                    line += f", slice {r['slice'] + 1} of {shown}"
+                                    line += "" if r["on_plane"] else " (outside the stack)"
+                                lines.append(line)
+                        if stack:
+                            lines.append(
+                                f"{shown} slice {z + 1}: {sum(on_plane(r, z) for r in rs)} of {len(rs)} on it"
+                            )
+                        set_tooltip("\n".join(lines), show_mark=False)
                         continue
                     if i != LINKS_COLUMN:
                         imgui.text(cells[i])

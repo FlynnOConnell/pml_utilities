@@ -113,6 +113,90 @@ def test_line_traces_are_one_external_set_following_the_roi_slider(viewer):
     assert roi.trace_sel == set()
 
 
+def write_chessboard_mesc(path, frames=8):
+    """A ``.mesc`` with one chessboard unit, ``MUnit_9``: 3 patches of 6 x 8 px
+    tiled along X at three depths, drawn on a snapshot 2 um above the first."""
+    import json
+
+    import h5py
+
+    with h5py.File(path, "w") as f:
+        u = f.create_group("MSession_0").create_group("MUnit_9")
+        u.attrs.update({
+            "MethodType": 8, "VecChannelsSize": 1, "TStepInMs": 5.0, "MeasurementDatePosix": 1,
+            "Comment": "soma", "BackgroundImagePath": "/MSession_1/MUnit_9",
+        })
+        u.attrs["MultiROIProtocolJSON"] = json.dumps({
+            "protocol": {"scanners": {"mainPatternIndex": 1}},
+            "scanPatterns": {"patterns": [{
+                "centerPoints": [[4.0, 14.0, 24.0], [3.0, 3.0, 3.0], [-50.0, -52.0, -54.0]],
+                "pixelSizeX": 1.0,
+                "rotation": [0, 0, 0, 1],
+            }]},
+        })
+        u.attrs["CoordinateMapJSON"] = json.dumps({"maps": [{"measurementROIs": [], "contours": [
+            [[x, x + 8, x + 8, x], [0.0, 0.0, 6.0, 6.0], [z] * 4]
+            for x, z in ((0.0, -50.0), (10.0, -52.0), (20.0, -54.0))
+        ]}]})
+        u.create_dataset("Channel_0", data=np.arange(frames * 6 * 24, dtype=np.uint16).reshape(frames, 6, 24))
+        snap = f.create_group("MSession_1").create_group("MUnit_9")
+        snap.attrs.update({"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 10.0, "MeasurementDatePosix": 1})
+        snap.attrs["ReferenceViewportJSON"] = json.dumps(
+            {"viewports": [{"geomTransTransl": [0.0, 0.0, -48.0], "width": 64.0, "height": 64.0}]}
+        )
+        snap.create_dataset("Channel_0", data=np.zeros((1, 8, 8), np.uint16))
+    return path
+
+
+@pytest.fixture
+def patch_viewer(tmp_path):
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui._ndviewer import MboNDViewer
+    from mbo_utilities.gui.manual_roi import ManualRoiWidget
+    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+
+    arr = MescArray(write_chessboard_mesc(tmp_path / "chess.mesc"), unit="MUnit_9")
+    iw = MboNDViewer(data=display_wrap(arr), slider_dim_names=arr.slider_dim_labels, figure_kwargs={"size": FIGURE_SIZE})
+    iw.show()
+    roi = ManualRoiWidget(iw, fpath=None)
+    yield _Parent(iw, roi), arr
+    roi.close()
+    iw.close()
+
+
+def test_patch_traces_attach_for_a_chessboard_unit(patch_viewer):
+    """A chessboard (or ribbon) unit gets its per-patch mean traces the way a
+    line scan gets its lines: computed in the background as soon as the unit
+    is shown, one row per patch carrying its depth, and a dF/F the panel
+    computes from the raw mean over a configurable baseline."""
+    from mbo_utilities.annotation import DffSettings, available_kinds, display_trace
+    from mbo_utilities.gui.linescan_viewer import attach_standard_traces
+
+    parent, arr = patch_viewer
+    roi = parent.manual_roi
+    assert arr.metadata["mesc_layout"] == "tiled" and arr.shape == (8, 1, 3, 6, 8)
+    traces = attach_standard_traces(parent)
+    assert traces is not None and traces.name == "MUnit_9 patches"
+    if traces.job.idle:
+        traces.job.start()
+    traces.job.wait()
+    traces()
+    rows = roi.traces.from_source("MUnit_9 patches")
+    assert sorted(t.member for t in rows) == [0, 1, 2]
+    first = roi.traces.get(("member", "MUnit_9 patches", 0))
+    # the patch's own pixel mean per frame, placed by the scan geometry
+    assert np.allclose(first.F, arr[:, 0, 0].reshape(8, -1).mean(axis=1))
+    assert first.extra["z_um"] == -50.0 and first.extra["dz_um"] == pytest.approx(-2.0)
+    assert first.label == "ROI 0 · -2.0 um"
+    assert roi._trace_cells(first.key)[5] == "-2.0 um"
+    # a dF/F over a configurable baseline comes from the raw mean on the panel
+    assert available_kinds(first) == ("dff", "raw")
+    dff = display_trace(first, "dff", DffSettings(method="percentile", percentile=10.0))
+    assert dff is not None and dff.shape == (8,)
+    traces.close()
+    assert "MUnit_9 patches" not in roi.traces.sources()
+
+
 def test_nothing_attaches_without_the_roi_widget_or_for_another_unit(viewer, tmp_path):
     from mbo_utilities.gui.linescan_viewer import attach_standard_traces
 
@@ -130,7 +214,7 @@ def test_lines_with_geometry_carry_their_position(tmp_path):
 
     import h5py
 
-    from mbo_utilities.arrays.mesc_geometry import line_positions
+    from mbo_utilities.arrays.mesc_geometry import line_positions, unit_depths
 
     path = write_mesc(tmp_path / "scan.mesc", munits=(35,), frames=8)
     with h5py.File(path, "a") as f:
@@ -156,6 +240,11 @@ def test_lines_with_geometry_carry_their_position(tmp_path):
     assert rows[3]["dz_um"] == pytest.approx(0.0) and rows[6]["dz_um"] == pytest.approx(3.0)
     # no Z-stack in this file holds the lines
     assert rows[0]["stack"] is None and rows[0]["slice"] is None
+    # the MESc tab reads the same depths for every unit in one pass
+    depths = unit_depths(path)
+    assert depths["MSession_0/MUnit_35"]["z_um"] == [-100.0 + i for i in range(7)]
+    assert depths["MSession_0/MUnit_35"]["dz_um"] == pytest.approx([-3.0 + i for i in range(7)])
+    assert depths["MSession_1/MUnit_35"] == {"plane_um": -97.0}
     # no geometry at all: None, so a caller draws nothing rather than guessing
     assert line_positions(path, "MSession_1/MUnit_35") is None
     assert line_positions(path, "MSession_0/MUnit_99") is None
