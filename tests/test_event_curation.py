@@ -519,7 +519,7 @@ class TestWidget:
     def test_registers_one_top_panel(self, curation):
         # the notebook's dashboard is a single tab: no separate Candidates tab
         assert [p.key for p in curation.strip.panels] == ["curation"]
-        assert curation.strip.panels[0] is curation.panel and curation.panel.right_tab is None
+        assert curation.strip.panels[0] is curation.panel
         _frames(curation)
 
     def test_scope_narrows_what_is_shown_and_flipped(self, curation, data_root, tmp_path):

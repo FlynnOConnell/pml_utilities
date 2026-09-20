@@ -92,15 +92,14 @@ class PanelHost:
     """Stands in for a figure's ``TopStrip`` when there is no figure.
 
     The curation widget registers its panel and a frame hook here exactly as
-    it would on the strip; the app draws the panel itself, so the tab bar,
-    resizing and right-bar sync the strip does are not needed.
+    it would on the strip; the app draws the panel itself, so the tab bar
+    and resizing the strip does are not needed.
     """
 
     def __init__(self) -> None:
         self.panels: list = []
         self.hooks: list[Callable[[], None]] = []
         self.active: str | None = None
-        self.right_tab = ""
 
     def register(self, panel) -> None:
         self.panels = [p for p in self.panels if p.key != panel.key] + [panel]
@@ -126,12 +125,6 @@ class PanelHost:
     def focus(self, key: str) -> None:
         if self.has(key):
             self.active = key
-
-    def report_right_tab(self, name: str) -> None:
-        self.right_tab = name
-
-    def take_right_focus(self, name: str) -> bool:
-        return False
 
     def close(self) -> None:
         self.panels = []

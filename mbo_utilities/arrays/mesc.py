@@ -1038,6 +1038,8 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         self._unit = self._f[self.unit_key]
         self._curves = _parse_curves(self._unit)
         self._rtmc = _rtmc_traces(self._curves)
+        self._line_positions: list[dict] | None = None
+        self._line_positions_read = False
         if self._rtmc:
             logger.info(f"{self.unit_key}: RTMC traces {sorted(self._rtmc)}")
         else:
@@ -1382,6 +1384,23 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
     def motion_correction(self) -> MotionCorrection | None:
         """The RTMC totals as a :class:`MotionCorrection` (``rtmc_motion``)."""
         return rtmc_motion(self._rtmc)
+
+    @property
+    def line_positions(self) -> list[dict] | None:
+        """Where each scanned line or patch of an AOD unit sits, from the
+        file's geometry (``mesc_geometry.line_positions``): one dict per ROI
+        with ``z_um``, ``dz_um`` against the snapshot it was drawn on,
+        ``start_um`` / ``end_um``, ``length_um``, ``sample_um``; None for a
+        unit without ROIs or geometry. Read once."""
+        if not self._line_positions_read:
+            from mbo_utilities.arrays.mesc_geometry import line_positions
+
+            extents = self._metadata.get("mesc_roi_extents") or []
+            self._line_positions = line_positions(
+                self.filenames[0], self.unit_key, [int(e["width"]) for e in extents] or None
+            )
+            self._line_positions_read = True
+        return self._line_positions
 
     @property
     def metadata(self) -> dict:

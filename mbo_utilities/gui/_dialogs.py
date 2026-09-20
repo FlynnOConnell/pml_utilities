@@ -459,7 +459,7 @@ def _reset_per_data_state(parent: Any) -> None:
     parent._saveas_selected_roi = set()
     parent._saveas_rois = False
     # the MESc ROI overlay draws on the outgoing unit's subplot
-    from mbo_utilities.gui.widgets.mesc_overlay import close_overlay
+    from mbo_utilities.gui.widgets.mesc_units import close_overlay
 
     close_overlay(parent)
 

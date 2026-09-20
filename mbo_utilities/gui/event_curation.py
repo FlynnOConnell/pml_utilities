@@ -226,7 +226,7 @@ class EventCurationWidget:
         self._own_strip = strip is None
         self.strip = TopStrip(self.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
-        self.panel = TopPanel("curation", "Curation", self.draw_panel, PANEL_HEIGHT, None, 12)
+        self.panel = TopPanel("curation", "Curation", self.draw_panel, PANEL_HEIGHT, 12)
         self.strip.register(self.panel)
 
         self.mode = "fast"

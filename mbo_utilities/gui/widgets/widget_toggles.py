@@ -75,14 +75,22 @@ def _toggle_manual_roi(parent: Any, enabled: bool) -> None:
         sync(enabled)
 
 
+def _toggle_mesc_overlay(parent: Any, _enabled: bool) -> None:
+    """Rebuild the Image tab's panels: the MESc ROI overlay draws or drops
+    itself from the toggles when its widget is made."""
+    refresh = getattr(parent, "_refresh_widgets", None)
+    if refresh is not None:
+        refresh()
+
+
 WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
     WidgetEntry(
         key="preview",
         label="Image",
         tooltip="The Image tab and the control panels stacked inside it.",
+        on_toggle=_toggle_mesc_overlay,
         subwidgets=(
-            SubWidget("mesc_units", "MESc Units"),
-            SubWidget("mesc_overlay", "ROI Overlay"),
+            SubWidget("mesc_overlay", "ROI Overlay", on_toggle=_toggle_mesc_overlay),
             SubWidget("window_functions", "Window Functions"),
             SubWidget("spatial_functions", "Spatial Functions"),
             SubWidget("scan_phase", "Scan-Phase Correction"),
@@ -115,16 +123,17 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
     WidgetEntry(
         key="manual_roi",
         label="Manual ROI Labeling",
-        tooltip="Freehand ROI drawing and labelling: control cards and the trace "
-                "plot in a top panel; the ROI and trace tables in their own tabs. "
-                "Running ROIs is the Process tab's ROIs pipeline.",
+        tooltip="Freehand ROI drawing and labelling: the ROIs tab holds the "
+                "controls over the ROI table, the trace plot is a panel over the "
+                "image and the Traces tab lists every trace. Running ROIs is the "
+                "Process tab's ROIs pipeline.",
         default=False,
         on_toggle=_toggle_manual_roi,
         subwidgets=(
             SubWidget("tools", "Drawing tools"),
             SubWidget("overlay", "Overlay controls"),
             SubWidget("labels", "Label editor"),
-            SubWidget("table", "ROI table", tooltip="The ROIs tab in this panel."),
+            SubWidget("table", "ROI table", tooltip="The ROIs tab: the controls over the ROI table."),
             SubWidget("traces", "Trace table", tooltip="The Traces tab: every collected trace with stats."),
         ),
     ),

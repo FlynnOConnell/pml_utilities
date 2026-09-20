@@ -98,16 +98,18 @@ ExtractEngine = Literal["mean", "suite2p"]
 DiscoverEngine = Literal["masknmf", "suite2p"]
 
 OUT_PREFIX = "rois_"
-SAVE_NAME = "manual_labels.zarr"  # same as gui.manual_roi.SAVE_NAME
+SAVE_NAME = "manual_labels.zarr"
 _Z_RE = re.compile(r"z(\d+)")
 
 
-def labels_path(fpath) -> Path:
+def labels_path(fpath, tag: str = "") -> Path:
     """Where ``fpath``'s annotations live: ``manual_labels.zarr`` beside a
-    file, or inside a directory (mirrors ``gui.manual_roi.labels_path``
-    without importing the GUI)."""
+    file, or inside a directory; with a ``tag`` (one recording of a file
+    holding several: a MESc unit's ``MSession_0_MUnit_3``)
+    ``manual_labels_<tag>.zarr``, so each recording keeps its own ROIs."""
     base = Path.cwd() if fpath is None else Path(fpath)
-    return (base.parent if base.suffix else base) / SAVE_NAME
+    name = f"{SAVE_NAME[:-5]}_{tag}.zarr" if tag else SAVE_NAME
+    return (base.parent if base.suffix else base) / name
 
 
 def _index_len(key, n: int) -> int | None:

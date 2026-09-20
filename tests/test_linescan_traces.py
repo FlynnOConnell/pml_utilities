@@ -24,7 +24,7 @@ class _Parent:
     def __init__(self, iw, roi):
         self.image_widget = iw
         self.manual_roi = roi
-        self.top_strip = roi.tools_window
+        self.top_strip = roi.strip
         self.logger = logging.getLogger("test_linescan_traces")
         self.fpath = None
 
@@ -85,7 +85,7 @@ def test_line_traces_are_one_external_set_following_the_roi_slider(viewer):
     assert [t.z for t in sorted(rows, key=lambda t: t.member)] == list(range(7))
     assert all(t.c == 0 and t.extra == {"line": t.member} for t in rows)
     assert roi._trace_cells(first.key)[:3] == ("ROI 0", "1", "1")
-    assert roi.pending_traces is None and roi.focus_traces
+    assert roi.pending_traces is None
     assert roi.trace_sel == {("member", name, 0)}
     # a line row stands for no drawn ROI
     assert roi._key_to_pair(("member", name, 0)) is None
@@ -101,7 +101,7 @@ def test_line_traces_are_one_external_set_following_the_roi_slider(viewer):
     assert roi.trace_sel == {("member", name, 5)}
 
     draw = _DrawTraces(roi)
-    roi.tools_window._update_calls[:] = [draw]
+    roi.strip._update_calls[:] = [draw]
     for _ in range(2):
         parent.image_widget.figure.canvas.draw()
     assert not draw.errors, draw.errors[0]
@@ -154,6 +154,8 @@ def test_lines_with_geometry_carry_their_position(tmp_path):
     assert rows[0]["length_um"] == pytest.approx(2.0) and rows[0]["sample_um"] == pytest.approx(0.5)
     assert rows[0]["z_um"] == -100.0 and rows[0]["dz_um"] == pytest.approx(-3.0)
     assert rows[3]["dz_um"] == pytest.approx(0.0) and rows[6]["dz_um"] == pytest.approx(3.0)
+    # no Z-stack in this file holds the lines
+    assert rows[0]["stack"] is None and rows[0]["slice"] is None
     # no geometry at all: None, so a caller draws nothing rather than guessing
     assert line_positions(path, "MSession_1/MUnit_35") is None
     assert line_positions(path, "MSession_0/MUnit_99") is None

@@ -798,9 +798,11 @@ def masknmf_settings(host) -> dict | None:
         return None
 
 
-def registry_path(fpath) -> Path:
-    """``roi_runs.json`` beside ``manual_labels.zarr``."""
-    return labels_path(fpath).parent / REGISTRY_NAME
+def registry_path(fpath, tag: str = "") -> Path:
+    """``roi_runs.json`` beside ``manual_labels.zarr``; ``roi_runs_<tag>.json``
+    for one recording of a file holding several (``labels_path``)."""
+    name = f"{REGISTRY_NAME[:-5]}_{tag}.json" if tag else REGISTRY_NAME
+    return labels_path(fpath).parent / name
 
 
 def load_run_registry(path) -> list[dict]:

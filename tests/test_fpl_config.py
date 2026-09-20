@@ -80,7 +80,7 @@ class TestFitFigureSize:
         from mbo_utilities.arrays.numpy import NumpyArray
         from mbo_utilities.gui._ndviewer import sliders_height
         from mbo_utilities.gui._top_strip import MENU_HEIGHT, MENU_MIN_WIDTH, strip_height
-        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT, roi_panel_min_width
+        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
         from mbo_utilities.gui.run_gui import _create_image_widget, fit_figure_size
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled, widget_enabled
 
@@ -90,14 +90,13 @@ class TestFitFigureSize:
         set_widget_enabled("signal_quality", False, persist=False)
         data = np.random.default_rng(0).random((4, 1, 3, 40, 80)).astype(np.float32)
         try:
-            # the ROI panel on the strip is planned for: its height and a width
-            # that keeps its cards on one row (the card count reads the same
-            # toggles the widget does, so it is taken before the toggle goes back)
+            # the Traces panel on the strip is planned for: its height; the ROI
+            # controls are a right-bar tab, so no extra width
             want = fit_figure_size(
                 (1000, 1000), (40, 80),
                 top=strip_height(PANEL_HEIGHT) if roi else MENU_HEIGHT,
                 bottom=sliders_height(2), right=300,
-                min_width=max(MENU_MIN_WIDTH, roi_panel_min_width()) if roi else MENU_MIN_WIDTH,
+                min_width=MENU_MIN_WIDTH,
             )
             iw = _create_image_widget(NumpyArray(data, dims="TCZYX"), widget="preview")
             try:
@@ -107,7 +106,8 @@ class TestFitFigureSize:
                 for _ in range(3):
                     iw.figure.canvas.draw()
                 panels = [(p.key, p.height) for p in strip.panels]
-                assert strip.size == (strip_height(PANEL_HEIGHT) if roi else MENU_HEIGHT), panels
+                assert panels == ([("traces", PANEL_HEIGHT)] if roi else [])
+                assert strip.size == (strip_height(PANEL_HEIGHT) if roi else MENU_HEIGHT)
             finally:
                 iw.close()
         finally:

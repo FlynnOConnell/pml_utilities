@@ -119,9 +119,13 @@ class SummaryImageViewer:
     Popup over a {name: 2D array} image set, with optional lazy movies.
 
     Call open() to show and draw() every imgui frame; it is a no-op while
-    closed. Host-specific extras attach through the hooks: roi_provider draws
-    contour overlays, on_export receives (key, array), extra_toolbar adds
-    controls to the top row.
+    closed. Host-specific extras attach through the hooks: roi_provider(key)
+    returns the overlays to draw on the image ``key``, each an (N, 2) [y, x]
+    polyline (closed when its last point repeats the first) or a
+    (polyline, rgba, thickness) tuple; on_pick(key, y, x) gets a click on
+    the image (a press and release without a drag) in image pixels;
+    on_export receives (key, array); extra_toolbar adds controls to the top
+    row. Two popups on one figure need different ``window_id``s.
     """
 
     def __init__(
@@ -133,11 +137,17 @@ class SummaryImageViewer:
         roi_provider: Optional[Callable] = None,
         on_export: Optional[Callable] = None,
         extra_toolbar: Optional[Callable] = None,
+        window_id: str = "summary_image_popup",
+        show_rois: bool = False,
+        on_pick: Optional[Callable] = None,
     ):
         self._figure = figure
         self._explicit_backend = backend
         self._title = title
+        self._window_id = window_id
         self.roi_provider = roi_provider
+        self.on_pick = on_pick
+        self._press = None
         self.on_export = on_export
         self.extra_toolbar = extra_toolbar
 
@@ -157,7 +167,7 @@ class SummaryImageViewer:
         self._pan_y = 0.0
         self._needs_fit = True
         self._show_pixel_values = False
-        self._show_rois = False
+        self._show_rois = show_rois
         self._highlight = None
         self._gpu: dict = {}
         self._manual_lo: dict = {}
@@ -171,6 +181,17 @@ class SummaryImageViewer:
     @property
     def images(self) -> dict:
         return self._images
+
+    @property
+    def zoom(self) -> float:
+        """Screen pixels per image pixel."""
+        return float(self._zoom)
+
+    @property
+    def current_key(self) -> Optional[str]:
+        """The image the combo is on, or None with nothing to show."""
+        keys = list(self._images) + list(self._movies)
+        return keys[self._selected] if self._selected < len(keys) else None
 
     def open(self):
         self._popup_open = True
@@ -349,23 +370,23 @@ class SummaryImageViewer:
                 txt = format_value(float(arr[y, x]), arr.dtype)
                 draw_list.add_text(imgui.ImVec2(sx - len(txt) * 3.0, sy - 6.5), theme.text_on(luma[y, x]), txt)
 
-    def _draw_rois(self, draw_list, img_min):
-        contours = self.roi_provider()
+    def _draw_rois(self, draw_list, img_min, key: str):
+        contours = self.roi_provider(key)
         if not contours:
             return
-        color = theme.u32(theme.CONTOUR)
+        default = theme.u32(theme.CONTOUR)
         z = self._zoom
         for contour in contours:
-            pts = np.asarray(contour)
+            pts, rgba, thickness = (contour, None, 1.0) if isinstance(contour, np.ndarray) else contour
+            pts = np.asarray(pts)
             if pts.ndim != 2 or pts.shape[0] < 2:
                 continue
-            for i in range(len(pts)):
-                y0, x0 = pts[i]
-                y1, x1 = pts[(i + 1) % len(pts)]
+            color = default if rgba is None else imgui.get_color_u32(imgui.ImVec4(*rgba))
+            for (y0, x0), (y1, x1) in zip(pts[:-1], pts[1:]):
                 draw_list.add_line(
                     imgui.ImVec2(img_min.x + x0 * z, img_min.y + y0 * z),
                     imgui.ImVec2(img_min.x + x1 * z, img_min.y + y1 * z),
-                    color, 1.0,
+                    color, float(thickness),
                 )
 
     def draw(self):
@@ -386,7 +407,7 @@ class SummaryImageViewer:
             viewport.get_center(), imgui.Cond_.first_use_ever, pivot=imgui.ImVec2(0.5, 0.5)
         )
         opened, self._popup_open = imgui.begin(
-            f"{self._title}###summary_image_popup",
+            f"{self._title}###{self._window_id}",
             self._popup_open,
             flags=imgui.WindowFlags_.no_saved_settings,
         )
@@ -439,6 +460,19 @@ class SummaryImageViewer:
             scale = self._zoom / old
             self._pan_x = mx - (mx - self._pan_x) * scale
             self._pan_y = my - (my - self._pan_y) * scale
+        # a press and release in place is a pick; a drag is a pan
+        if self.on_pick is not None and imgui.is_item_hovered():
+            if imgui.is_mouse_clicked(0):
+                self._press = (io.mouse_pos.x, io.mouse_pos.y)
+            if imgui.is_mouse_released(0) and self._press is not None:
+                sx, sy = self._press
+                self._press = None
+                if abs(io.mouse_pos.x - sx) < 4 and abs(io.mouse_pos.y - sy) < 4:
+                    self.on_pick(
+                        key,
+                        (io.mouse_pos.y - canvas_pos.y - self._pan_y) / max(self._zoom, 1e-6),
+                        (io.mouse_pos.x - canvas_pos.x - self._pan_x) / max(self._zoom, 1e-6),
+                    )
 
         img_min = imgui.ImVec2(canvas_pos.x + self._pan_x, canvas_pos.y + self._pan_y)
         img_max = imgui.ImVec2(img_min.x + w * self._zoom, img_min.y + h * self._zoom)
@@ -451,7 +485,7 @@ class SummaryImageViewer:
             p1 = imgui.ImVec2(p0.x + ww * self._zoom, p0.y + hh * self._zoom)
             draw_list.add_rect(p0, p1, theme.u32(theme.HIGHLIGHT), 0.0, 2.0)
         if self._show_rois and self.roi_provider is not None:
-            self._draw_rois(draw_list, img_min)
+            self._draw_rois(draw_list, img_min, key)
         if self._show_pixel_values:
             self._draw_pixel_values(draw_list, arr, canvas_pos, canvas_size, gpu)
         draw_list.pop_clip_rect()

@@ -1,10 +1,10 @@
 """Offscreen tests for the manual ROI drawing GUI.
 
 ``ManualRoiWidget`` (mbo_utilities/gui/manual_roi.py) paints masks into a
-uint16 label volume over a real ``MboNDViewer`` figure. It hangs a card
-strip off the top edge of the figure and, when PreviewDataWidget hosts it
-(the ``Widgets > Manual ROI Labeling`` toggle), adds ROIs / Traces / Runs
-tabs to the right widget. These tests pin the mask bookkeeping (fill,
+uint16 label volume over a real ``MboNDViewer`` figure. It hooks the
+figure's top strip for its per-frame work and, when PreviewDataWidget hosts
+it (the ``Widgets > Manual ROI Labeling`` toggle), fills the ROIs and Traces
+tabs of the right widget. These tests pin the mask bookkeeping (fill,
 overlap rejection, delete + renumber), the pointer-event wiring through the
 real pygfx renderer, persistence, z-planes, the overlay controls (fill,
 outline and circle mask modes), region
@@ -754,25 +754,23 @@ class TestMaskModes:
 
 
 class TestImguiWindows:
-    def test_registers_the_top_panel_only(self, widget):
-        from mbo_utilities.gui.manual_roi import PANEL_LOCATION
-
-        # the controls are two panels on the shared top strip; the tables are
-        # tabs of the host's right widget, not edge windows of their own
-        assert PANEL_LOCATION == "top"
+    def test_hooks_the_strip_and_owns_no_edge_windows(self, widget):
+        # the controls are the host's ROIs tab and the trace table its Traces
+        # tab; the plot is the one panel on the shared top strip, which also
+        # runs the per-frame hook
         windows = widget.iw.figure.imgui_windows
-        assert windows["top"] is widget.tools_window
-        assert [p.key for p in widget.tools_window.panels] == ["roi", "traces"]
+        assert windows["top"] is widget.strip
+        assert [p.key for p in widget.strip.panels] == ["traces"]
+        assert widget._frame in widget.strip.hooks
         assert windows.get("left") is None
         assert windows.get("right") is None
 
-    def test_closing_gives_the_panels_back(self, widget):
-        strip = widget.tools_window
+    def test_closing_gives_the_strip_back(self, widget):
+        strip = widget.strip
         widget.close()
-        assert [p.key for p in strip.panels] == []
-        assert strip.hooks == []
+        assert strip.panels == [] and strip.hooks == []
 
-    def test_panel_draws_the_cards_and_popups(self, widget):
+    def test_rois_tab_draws_the_sections_and_popups(self, widget):
         from imgui_bundle import imgui
 
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
@@ -788,21 +786,28 @@ class TestImguiWindows:
 
         seen = []
         real = imgui.begin_child
+        real_header = imgui.separator_text
 
         def spy(name, *args, **kwargs):
             if isinstance(name, str):
                 seen.append(name)
             return real(name, *args, **kwargs)
 
+        def spy_header(label, *args, **kwargs):
+            seen.append(label)
+            return real_header(label, *args, **kwargs)
+
         set_widget_enabled("manual_roi", True, persist=False)
         imgui.begin_child = spy
+        imgui.separator_text = spy_header
         try:
             errors = draw_frames(widget, 4)
         finally:
             imgui.begin_child = real
+            imgui.separator_text = real_header
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
-        assert {"##nav", "##draw", "##view", "##labels"} <= set(seen)
+        assert {"NAVIGATE", "DRAW", "VIEW", "LABELS"} <= set(seen)
         assert "##process" not in seen, "running ROIs is the Process tab's business now"
         assert "##roi_counts" in seen  # the status row's right-aligned counts
 
@@ -1060,7 +1065,6 @@ class TestTraces:
         np.testing.assert_allclose(trace.F, expected, rtol=1e-5)
         assert trace.key == ("roi", uid, 0, 0, "mean") and trace.source == "quick"
         assert widget.trace_uid == uid
-        assert widget.focus_traces
         assert widget.has_traces()
 
     def test_two_rois_trace_at_once(self, widget):
@@ -1181,7 +1185,7 @@ class TestRuns:
             assert trace.source == "rois_roi02" and trace.engine == "mean"
             np.testing.assert_allclose(trace.F, F[0])
             assert trace.Fneu is not None
-            assert w.trace_uid == uid1 and w.focus_traces
+            assert w.trace_uid == uid1
 
             # the same measurement again replaces the rows instead of doubling them
             w.run_in_view()
@@ -1539,7 +1543,7 @@ class TestDerived:
             except Exception:
                 errors.append(traceback.format_exc())
 
-        widget.tools_window._update_calls[:] = [body]
+        widget.strip._update_calls[:] = [body]
         widget.iw.figure.canvas.draw()
         assert not errors, errors[0]
         assert 0 in widget.derived[0].discarded
@@ -1567,7 +1571,6 @@ class TestTracesTab:
         widget.add_roi(square(10, 10, 9))
         widget.quick_trace(0)
         pump(widget)
-        assert widget.focus_traces
         plotted = []
         real = implot.plot_line
 
@@ -1582,12 +1585,10 @@ class TestTracesTab:
             implot.plot_line = real
         assert not errors, errors[0]
         assert plotted, "the Traces tab never plotted a line"
-        assert not widget.focus_traces
 
     def test_a_derived_selection_renders_its_trace(self, widget):
         widget._add_derived(make_result(widget, [disc(40, 40)], with_traces=True))
         widget.select_derived(0, 0)
-        widget.focus_traces = True
         errors = draw_frames(widget, 3)
         assert not errors, errors[0]
 
@@ -1628,7 +1629,6 @@ class TestTracesTab:
         widget.quick_trace(1)
         pump(widget)
         widget.trace_sel = set(widget._trace_rows())
-        widget.focus_traces = True
         plotted = []
         real = implot.plot_line
 
@@ -1658,13 +1658,13 @@ class TestTracesTab:
             except Exception:
                 errors.append(traceback.format_exc())
 
-        widget.tools_window._update_calls[:] = [body]
+        widget.strip._update_calls[:] = [body]
         widget.iw.figure.canvas.draw()
         assert not errors, errors[0]
 
-    def test_arrows_step_traces_on_the_traces_panel(self, widget):
-        """Up / down walk the trace table when it is what the top panel is
-        showing, and the ROI order otherwise."""
+    def test_arrows_step_traces_while_the_traces_panel_is_up(self, widget):
+        """Up / down walk the trace table while the Traces panel is the one
+        the strip shows, and the ROI order otherwise."""
         for i in range(3):
             widget.add_roi(square(4 + 12 * i, 4, 9))
             widget.quick_trace(i)
@@ -1672,7 +1672,7 @@ class TestTracesTab:
         rows = widget._sorted_trace_rows()
         assert len(rows) == 3
 
-        widget.tools_window.active = "traces"
+        widget.strip.active = "traces"
         widget.select_trace(rows[0])
         widget.step(1)
         assert widget.trace_sel == {rows[1]}
@@ -1682,7 +1682,7 @@ class TestTracesTab:
         widget.step(-1)  # clamps at the top
         assert widget.trace_sel == {rows[0]}
 
-        widget.tools_window.active = "roi"
+        widget.strip.active = "zstats"
         widget.select_roi(0)
         widget.step(1)
         assert widget.selected == 1
@@ -1729,23 +1729,26 @@ class TestTracesTab:
         # "id", not "roi": beside an axis called ROI that reads as two of the same thing;
         # "pipeline", not "engine": a results file's rows say which pipeline wrote them
         assert [c[0] for c in TRACE_COLUMNS] == [
-            "id", "z", "c", "pipeline", "source", "frames", "peak", ""
+            "id", "z", "c", "depth", "pipeline", "source", "frames", "peak", ""
         ]
         assert [c[0] for c in TRACE_COLUMNS if c[2]] == ["source", "frames", "peak"]
 
     def test_trace_sort_keys_line_up_with_the_columns(self, widget):
-        """draw_trace_table indexes one tuple by the clicked column index;
-        the trailing button column has no key of its own."""
+        """Every column sorts by its own name, the trailing button column
+        included without a key of its own; a row's depth (how far its line
+        sits off the snapshot it was drawn on) is its own cell and sort value."""
         from mbo_utilities.gui.manual_roi import TRACE_COLUMNS
 
         widget.add_roi(square(10, 10, 9))
         widget.quick_trace(0)
         pump(widget)
         key = widget._trace_rows()[0]
-        n, _mean, peak, _snr = widget._trace_stat(key)
-        values = (widget._trace_shown(key)[0], *widget._trace_cells(key)[1:5], n, peak)
-        assert len(values) == len(TRACE_COLUMNS) - 1
-        assert widget._trace_cells(key) == ("0", "1", "1", "mean", "quick")
+        assert widget._trace_cells(key) == ("0", "1", "1", "mean", "quick", "")
+        for col in range(len(TRACE_COLUMNS)):
+            widget._trace_sort = (col, True)
+            assert widget._sorted_trace_rows() == [key]
+        widget.traces.get(key).extra["dz_um"] = 7.4
+        assert widget._trace_cells(key)[5] == "+7.4 um"
 
     def test_results_rows_are_named_by_their_roi(self, widget, tmp_path):
         """A line unit's rows read as the ROI: ``roi0`` for its denoised trace,
@@ -1814,37 +1817,6 @@ class TestTracesTab:
         widget.delete_trace_row(("member", "find01", 1))
         assert 1 in widget.derived[0].discarded
         assert ("member", "find01", 1) not in widget._trace_rows()
-
-    def test_top_choice_survives_stale_right_reports(self, widget):
-        # the right bar redraws its old tab for a frame or two after the top
-        # switches; those reports must not yank the top back (the ping-pong
-        # that made switching to Traces flicker)
-        widget._right_tab_now = "rois"
-        draw_frames(widget, 2)
-        widget.focus_top = "traces"
-        draw_frames(widget, 2)  # set_selected lands on the second frame
-        assert widget.top_tab == "traces"
-        widget._right_tab_now = "runs"
-        draw_frames(widget, 1)
-        widget._right_tab_now = "rois"  # stale edge inside the hold window
-        draw_frames(widget, 1)
-        assert widget.top_tab == "traces"
-        draw_frames(widget, 4)  # and it stays put once the hold expires
-        assert widget.top_tab == "traces"
-
-    def test_top_and_right_tabs_sync(self, widget):
-        # a right-bar tab reporting itself pulls the top panel over
-        widget._right_tab_now = "traces"
-        errors = draw_frames(widget, 2)
-        assert not errors, errors[0]
-        assert widget.top_tab == "traces"
-        # and a top change asks the right bar to follow
-        widget.focus_top = "roi"
-        errors = draw_frames(widget, 2)
-        assert not errors, errors[0]
-        assert widget.top_tab == "roi"
-        assert widget._focus_right == "rois"
-
 
 class TestPipelineTraceExtraction:
     def test_the_base_pipeline_declines_by_default(self):
@@ -1930,7 +1902,21 @@ class TestSorting:
         assert list(codes) == sorted(codes, reverse=True)
 
 
-def draw_frames(widget, n=4):
+def in_window(name, draw, size=(600, 760)):
+    """Draw a tab body in a window of its own, with the room a plot needs:
+    the strip window is only the menu row tall."""
+    from imgui_bundle import imgui
+
+    imgui.set_next_window_size(imgui.ImVec2(*size))
+    imgui.set_next_window_pos(imgui.ImVec2(0, 0))
+    imgui.begin(name)
+    try:
+        draw()
+    finally:
+        imgui.end()
+
+
+def draw_frames(widget, n=4, tabs=True):
     """Render n frames with the top strip guarded; returns its tracebacks.
 
     A raise inside an imgui update call is swallowed by rendercanvas, so
@@ -1940,11 +1926,13 @@ def draw_frames(widget, n=4):
 
     errors = []
 
-    strip = widget.tools_window
+    strip = widget.strip
 
     def guarded(*_args):
         try:
             strip.update()
+            if tabs:
+                in_window("##rois_tab", widget.draw_rois)
         except Exception:
             errors.append(traceback.format_exc())
 
@@ -1955,7 +1943,7 @@ def draw_frames(widget, n=4):
 
 
 def draw_tab_frames(widget, n=2):
-    """Same as draw_frames for the ROIs tab body, which the tools window is
+    """Same as draw_frames for the ROIs tab body, which the strip window is
     happy to host: it only needs to sit inside some imgui window."""
     import traceback
 
@@ -1967,7 +1955,7 @@ def draw_tab_frames(widget, n=2):
         except Exception:
             errors.append(traceback.format_exc())
 
-    widget.tools_window._update_calls[:] = [guarded]
+    widget.strip._update_calls[:] = [guarded]
     for _ in range(n):
         widget.iw.figure.canvas.draw()
     return errors
@@ -2147,7 +2135,7 @@ class TestWidgetAttach:
             gui = self._preview(iw)
             assert gui is not None, "manualroi must keep PreviewDataWidget"
             assert gui.manual_roi is not None
-            assert gui.manual_roi.tools_window is gui.top_strip
+            assert gui.manual_roi.strip is gui.top_strip
             assert iw.figure.imgui_windows["top"] is gui.top_strip
             assert iw.figure.imgui_windows.get("left") is None
         finally:
@@ -2287,7 +2275,7 @@ class TestWidgetAttach:
         ts.imgui.begin_tab_item = spy
         roi.draw_tab = guarded
         try:
-            panel_errors = draw_frames(roi, 4)
+            panel_errors = draw_frames(roi, 4, tabs=False)
         finally:
             ts.imgui.begin_tab_item = real
             iw.close()
@@ -2485,223 +2473,6 @@ class TestGroupBuffer:
         assert widget._trace_color(key) == rgb
 
 
-class TestCardGrid:
-    """Cards wrap onto more rows rather than shrink past the width their
-    controls need, so nothing clips off the right edge."""
-
-    def _grid(self, n, avail, min_w=280.0, gap=10.0):
-        from mbo_utilities.gui.manual_roi import card_grid
-
-        return card_grid(n, avail, min_w, gap)
-
-    def test_one_row_when_they_all_fit(self):
-        assert self._grid(5, 2000)[:2] == (5, 1)
-
-    def test_wraps_instead_of_shrinking(self):
-        per_row, rows, w = self._grid(5, 900)
-        assert (per_row, rows) == (3, 2)
-        assert w >= 280
-
-    def test_rows_are_evened_out(self):
-        # room for four to a row still goes 3 + 2, not 4 + 1
-        assert self._grid(5, 1200)[:2] == (3, 2)
-
-    def test_single_card_takes_the_whole_width(self):
-        assert self._grid(1, 900) == (1, 1, 900)
-
-    def test_never_narrower_than_the_minimum(self):
-        for avail in range(200, 2400, 37):
-            for n in range(1, 6):
-                per_row, rows, w = self._grid(n, float(avail))
-                assert w >= 280, (n, avail, w)
-                assert per_row * rows >= n
-
-
-class TestPanelWrapping:
-    def _widget(self, width):
-        from mbo_utilities.gui._ndviewer import MboNDViewer
-        from mbo_utilities.gui.manual_roi import ManualRoiWidget
-
-        data = np.random.default_rng(0).random((6, 64, 64)).astype(np.float32)
-        iw = MboNDViewer(data=data, figure_kwargs={"size": (width, 900)})
-        iw.show()
-        return iw, ManualRoiWidget(iw, fpath=None, auto_trace=False)
-
-    def _drawn(self, widget, frames=6):
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
-        set_widget_enabled("manual_roi", True, persist=False)
-        try:
-            return draw_frames(widget, frames)
-        finally:
-            set_widget_enabled("manual_roi", False, persist=False)
-
-    def test_wide_window_keeps_one_row(self):
-        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
-
-        iw, w = self._widget(1800)
-        try:
-            assert not self._drawn(w)
-            assert w._roi_panel.height == PANEL_HEIGHT
-        finally:
-            iw.close()
-
-    def test_narrow_window_widens_to_one_row(self):
-        """The panel says how wide its row is and the strip widens the
-        window to it when the screen has the room."""
-        import math
-
-        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
-
-        iw, w = self._widget(1000)
-        try:
-            assert not self._drawn(w)
-            assert w._roi_panel.height == PANEL_HEIGHT
-            width = iw.figure.canvas.get_logical_size()[0]
-            assert width == math.ceil(w._roi_panel.min_width) > 1000
-        finally:
-            iw.close()
-
-    def test_narrow_screen_wraps_and_asks_for_more_height(self, monkeypatch):
-        from mbo_utilities.gui import run_gui
-        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
-
-        # a screen no wider than the window: the strip cannot widen it
-        monkeypatch.setattr(run_gui, "screen_box", lambda: (1000, 900))
-        iw, w = self._widget(1000)
-        try:
-            assert not self._drawn(w)
-            # cards wrapped onto a second row, so the strip is asked for
-            # a second row's height instead of clipping them
-            assert w._roi_panel.height == 2 * PANEL_HEIGHT
-            assert iw.figure.canvas.get_logical_size()[0] == 1000
-        finally:
-            iw.close()
-
-    def test_no_card_clips_at_any_width(self):
-        import contextlib
-
-        from imgui_bundle import imgui
-
-        from mbo_utilities.gui import manual_roi as mr
-
-        real_card = mr.card
-        seen = {}
-
-        @contextlib.contextmanager
-        def spy(name, title, height, width=0.0, *args, **kwargs):
-            with real_card(name, title, height, width, *args, **kwargs):
-                yield
-                # scroll_max_x is the previous frame's overflow, so only the
-                # last frame of a settled layout is meaningful
-                seen[name] = imgui.get_scroll_max_x()
-
-        for width in (1800, 1200, 1000, 800):
-            iw, w = self._widget(width)
-            seen.clear()
-            mr.card = spy
-            try:
-                errors = self._drawn(w)
-            finally:
-                mr.card = real_card
-                iw.close()
-            assert not errors, errors[0]
-            assert seen, f"no cards drawn at {width}"
-            clipped = {n: o for n, o in seen.items() if o > 0.5}
-            assert not clipped, f"cards clip at window width {width}: {clipped}"
-
-
-class TestRunAll:
-    """The row pinned under the ROI table runs every listed ROI, either
-    through the picked process or as quick traces."""
-
-    def test_listed_drawn_follows_the_table_filters(self, widget):
-        for i in range(3):
-            widget.add_roi(square(2 + 14 * i, 2, 9))
-        widget.store.add_label_name("soma")
-        label(widget, 1, 0)
-        assert widget.listed_drawn() == [0, 1, 2]
-        widget.order.filter_label = 0
-        widget.order.rebuild()
-        assert widget.listed_drawn() == [1]
-
-    def test_listed_drawn_skips_algo_rows(self, widget):
-        widget.add_roi(square(10, 10, 9))
-        widget._add_derived(make_result(widget, [disc(40, 40), disc(52, 52)]))
-        assert len(widget.rows) == 3
-        assert widget.listed_drawn() == [0]
-
-    def test_trace_all_runs_every_listed_roi_on_one_thread(self, widget):
-        for i in range(3):
-            widget.add_roi(square(2 + 14 * i, 2, 9))
-        widget.trace_in_view()
-        assert len(widget._trace_threads) == 1, "one job for the whole list"
-        pump(widget)
-        assert {t.uid for t in widget.traces} == {r.uid for r in widget.store.rois}
-
-    def test_trace_all_reports_one_job(self, widget):
-        from mbo_utilities.gui.widgets.process_manager import get_process_manager
-
-        pm = get_process_manager()
-        before = {j.job_id for j in pm.get_jobs()}
-        for i in range(3):
-            widget.add_roi(square(2 + 14 * i, 2, 9))
-        widget.trace_in_view()
-        new = [j for j in pm.get_jobs() if j.job_id not in before]
-        assert len(new) == 1
-        assert "3 ROIs" in new[0].description
-        pump(widget)
-        assert new[0].status == "completed"
-        assert new[0].status_message == "3 traces"
-
-    def test_trace_all_with_nothing_listed_is_a_no_op(self, widget):
-        widget.trace_in_view()
-        assert widget._trace_threads == []
-
-    def test_run_all_sends_the_listed_rois_to_the_process(self, widget, monkeypatch):
-        sent = {}
-        monkeypatch.setattr(
-            type(widget), "run_rois",
-            lambda self, indices, tag, **kw: sent.update(indices=list(indices), tag=tag),
-        )
-        for i in range(3):
-            widget.add_roi(square(2 + 14 * i, 2, 9))
-        widget.run_tag = "batch"
-        widget.run_in_view()
-        assert sent == {"indices": [0, 1, 2], "tag": "batch"}
-
-    def test_the_tab_draws_the_run_all_row(self, widget):
-        import traceback
-
-        from imgui_bundle import imgui
-
-        from mbo_utilities.gui.manual_roi import RUN_ICON, TRACE_ICON
-
-        widget.add_roi(square(10, 10, 9))
-        seen, errors = [], []
-        real = imgui.button
-
-        def spy(label, *args, **kwargs):
-            seen.append(label)
-            return real(label, *args, **kwargs)
-
-        def body(*_args):
-            try:
-                widget.draw_tab()
-            except Exception:
-                errors.append(traceback.format_exc())
-
-        widget.tools_window._update_calls[:] = [body]
-        imgui.button = spy
-        try:
-            widget.iw.figure.canvas.draw()
-        finally:
-            imgui.button = real
-        assert not errors, errors[0]
-        assert f"{RUN_ICON} run all" in seen
-        assert f"{TRACE_ICON} trace all" in seen
-
-
 class TestTracePlotView:
     """The trace plot's autofit toggle and x axis units."""
 
@@ -2724,7 +2495,7 @@ class TestTracePlotView:
             except Exception:
                 errors.append(traceback.format_exc())
 
-        widget.tools_window._update_calls[:] = [body]
+        widget.strip._update_calls[:] = [body]
         implot.set_next_axes_to_fit = spy
         try:
             for _ in range(frames):
@@ -2867,7 +2638,7 @@ class TestTracePlotView:
         from mbo_utilities.gui.imgui.motion import MotionPlot
         from mbo_utilities.gui.manual_roi import MOTION_PANEL_HEIGHT, PANEL_HEIGHT
 
-        # a movie without one: no MC checkbox, the tab keeps its height
+        # a movie without one: no MC checkbox, the panel keeps its height
         assert not widget.motion
         rows = self._two_traces(widget)
         widget.select_trace(rows[0])
@@ -2899,56 +2670,6 @@ class TestTracePlotView:
         widget.selected = -1
         self._fits(widget)
         assert widget._traces_panel.height == MOTION_PANEL_HEIGHT
-
-
-class TestStripCollapse:
-    """The strip's grab bar shuts the panels away without unregistering them."""
-
-    def test_collapsing_hides_the_cards_and_brings_them_back(self, widget):
-        from imgui_bundle import imgui
-
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
-        seen = []
-        real = imgui.begin_child
-
-        def spy(name, *args, **kwargs):
-            if isinstance(name, str):
-                seen.append(name)
-            return real(name, *args, **kwargs)
-
-        strip = widget.tools_window
-        set_widget_enabled("manual_roi", True, persist=False)
-        imgui.begin_child = spy
-        try:
-            assert not draw_frames(widget, 3)
-            assert "##nav" in seen, "the cards draw while the strip is open"
-
-            seen.clear()
-            strip.toggle_collapsed()
-            assert not draw_frames(widget, 3)
-            assert "##nav" not in seen, "shut: no card bodies"
-            # the window is still drawn and the panels stay registered, so
-            # reopening does not have to rebuild anything
-            assert "##main_ui" in seen
-            assert [p.key for p in strip.panels] == ["roi", "traces"]
-
-            seen.clear()
-            strip.toggle_collapsed()
-            assert not draw_frames(widget, 3)
-            assert "##nav" in seen
-        finally:
-            imgui.begin_child = real
-            set_widget_enabled("manual_roi", False, persist=False)
-
-    def test_a_pinned_height_survives_a_panel_asking_for_more(self, widget):
-        strip = widget.tools_window
-        strip.resize_to(260)
-        widget._roi_panel.height = 800
-        strip._resize()
-        assert strip.size == 260
-        strip.reset_size()
-        assert strip.size != 260
 
 
 class _StubSettings:
@@ -3126,7 +2847,6 @@ class TestAutoTrace:
             pump(w)
             (trace,) = w.traces.for_roi(w.store.rois[0].uid)
             assert trace.engine == "mean" and trace.n_frames == 6
-            assert w.focus_traces
             w.auto_trace = False
             w.add_roi(square(30, 30, 9))
             assert not w.traces.for_roi(w.store.rois[1].uid)
@@ -3398,7 +3118,7 @@ class TestAdoptingRunsStartedElsewhere:
             except Exception:
                 errors.append(traceback.format_exc())
 
-        widget.tools_window._update_calls[:] = [body]
+        widget.strip._update_calls[:] = [body]
         imgui.selectable = spy
         try:
             for _ in range(2):
@@ -3554,7 +3274,7 @@ def draw_pipeline_frames(widget, pipeline, n=2):
         except Exception:
             errors.append(traceback.format_exc())
 
-    widget.tools_window._update_calls[:] = [guarded]
+    widget.strip._update_calls[:] = [guarded]
     for _ in range(n):
         widget.iw.figure.canvas.draw()
     return errors
@@ -3849,7 +3569,6 @@ class TestFullImage:
         assert row.label == "full image z3 c2"
         assert cwidget._trace_cells(row.key)[:4] == ("full image z3 c2", "3", "2", "mean")
         assert cwidget.model.column("z") == {}  # the full image is not a drawn ROI
-        assert cwidget.focus_traces
         # the same slice again replaces the row; a window is stamped
         cwidget.run_tp = [1, 2]
         cwidget.trace_full()
