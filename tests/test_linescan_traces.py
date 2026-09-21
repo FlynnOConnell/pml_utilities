@@ -187,8 +187,8 @@ def test_patch_traces_attach_for_a_chessboard_unit(patch_viewer):
     # the patch's own pixel mean per frame, placed by the scan geometry
     assert np.allclose(first.F, arr[:, 0, 0].reshape(8, -1).mean(axis=1))
     assert first.extra["z_um"] == -50.0 and first.extra["dz_um"] == pytest.approx(-2.0)
-    assert first.label == "ROI 0 · -2.0 um"
-    assert roi._trace_cells(first.key)[5] == "-2.0 um"
+    # the label is the ROI alone; where it sits is a hover, not a number in its name
+    assert first.label == "ROI 0"
     # a dF/F over a configurable baseline comes from the raw mean on the panel
     assert available_kinds(first) == ("dff", "raw")
     dff = display_trace(first, "dff", DffSettings(method="percentile", percentile=10.0))
@@ -214,7 +214,7 @@ def test_lines_with_geometry_carry_their_position(tmp_path):
 
     import h5py
 
-    from mbo_utilities.arrays.mesc_geometry import line_positions, unit_depths
+    from mbo_utilities.arrays.mesc_geometry import line_positions
 
     path = write_mesc(tmp_path / "scan.mesc", munits=(35,), frames=8)
     with h5py.File(path, "a") as f:
@@ -240,11 +240,6 @@ def test_lines_with_geometry_carry_their_position(tmp_path):
     assert rows[3]["dz_um"] == pytest.approx(0.0) and rows[6]["dz_um"] == pytest.approx(3.0)
     # no Z-stack in this file holds the lines
     assert rows[0]["stack"] is None and rows[0]["slice"] is None
-    # the MESc tab reads the same depths for every unit in one pass
-    depths = unit_depths(path)
-    assert depths["MSession_0/MUnit_35"]["z_um"] == [-100.0 + i for i in range(7)]
-    assert depths["MSession_0/MUnit_35"]["dz_um"] == pytest.approx([-3.0 + i for i in range(7)])
-    assert depths["MSession_1/MUnit_35"] == {"plane_um": -97.0}
     # no geometry at all: None, so a caller draws nothing rather than guessing
     assert line_positions(path, "MSession_1/MUnit_35") is None
     assert line_positions(path, "MSession_0/MUnit_99") is None

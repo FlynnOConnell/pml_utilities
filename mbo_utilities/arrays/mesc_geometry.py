@@ -63,7 +63,6 @@ __all__ = [
     "um_to_pixels",
     "image_overlays",
     "zstack_contents",
-    "unit_depths",
     "line_positions",
 ]
 
@@ -91,11 +90,13 @@ def _viewport_of(unit) -> dict | None:
     if not viewports:
         return None
     vp = viewports[0]
-    return {
-        "transl": tuple(float(v) for v in vp["geomTransTransl"]),
-        "width": float(vp["width"]),
-        "height": float(vp["height"]),
-    }
+    transl = tuple(float(v) for v in vp["geomTransTransl"])
+    width, height = float(vp["width"]), float(vp["height"])
+    # MEScan stamps an RTMC reference unit with a 1 um square at the origin:
+    # a placeholder, not where the reference region was scanned
+    if transl == (0.0, 0.0, 0.0) and width == 1.0 and height == 1.0:
+        return None
+    return {"transl": transl, "width": width, "height": height}
 
 
 def roi_outlines_um(mesc_path, unit_key: str) -> list[np.ndarray] | None:
@@ -119,7 +120,8 @@ linescan_endpoints_um = roi_outlines_um
 def viewport_geometry(mesc_path, unit_key: str) -> dict | None:
     """``{"transl": (x, y, z), "width": um, "height": um}`` for a unit's FOV.
 
-    ``None`` if this unit has no ``ReferenceViewportJSON``.
+    ``None`` if this unit has no ``ReferenceViewportJSON``, or only the
+    1 um placeholder MEScan writes on an RTMC reference unit.
     """
     with h5py.File(mesc_path, "r") as f:
         unit = f.get(unit_key)
@@ -410,58 +412,6 @@ def zstack_contents(mesc_path, units: list[dict] | None = None) -> dict[str, lis
         for u in units
         if u["kind"] == "zstack"
     }
-
-
-def unit_depths(mesc_path, units: list[dict] | None = None) -> dict[str, dict]:
-    """Where every unit of a file sits along z, in the file's absolute micron
-    frame, from one pass over the attrs: unit key -> one of::
-
-        {"z_um": [...], "dz_um": [...] | None}   a multi-ROI unit: the depth of
-                                                each ROI (a line's, a patch's)
-                                                and its offset from the snapshot
-                                                it was drawn on (the unit's
-                                                ``BackgroundImagePath``), None
-                                                without one
-        {"range_um": (lo, hi), "zdim": n,        a Z-stack: its first and last slice,
-         "origin_um": z}                         and its own z origin (the frame the
-                                                MESc GUI counts its depths in)
-        {"plane_um": z}                          a snapshot or stream: its plane
-
-    A unit with neither outlines nor a viewport has no entry. ``units`` is
-    ``list_mesc_units(mesc_path)`` when the caller already holds it.
-    """
-    if units is None:
-        units = list_mesc_units(mesc_path)
-    out: dict[str, dict] = {}
-    with h5py.File(mesc_path, "r") as f:
-        for u in units:
-            unit = f.get(u["key"])
-            if unit is None:
-                continue
-            outlines = _outlines_of(unit)
-            if outlines:
-                raw = unit.attrs.get("BackgroundImagePath")
-                path = raw.decode() if isinstance(raw, bytes) else raw
-                snapshot = _viewport_of(f[path]) if path and path in f else None
-                zs = [float(np.asarray(seg, dtype=float)[2].mean()) for seg in outlines]
-                out[u["key"]] = {
-                    "z_um": zs,
-                    "dz_um": None if snapshot is None else [z - snapshot["transl"][2] for z in zs],
-                }
-                continue
-            vp = _viewport_of(unit)
-            if vp is None:
-                continue
-            tz = vp["transl"][2]
-            if {"MinZ", "MaxZ", "ZDim"} <= set(unit.attrs.keys()):
-                out[u["key"]] = {
-                    "range_um": (tz + float(unit.attrs["MinZ"]), tz + float(unit.attrs["MaxZ"])),
-                    "zdim": int(unit.attrs["ZDim"]),
-                    "origin_um": tz,
-                }
-            else:
-                out[u["key"]] = {"plane_um": tz}
-    return out
 
 
 def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = None) -> list[dict] | None:

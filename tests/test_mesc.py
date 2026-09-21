@@ -792,6 +792,10 @@ def test_rtmc_traces_are_read_in_um_and_empty_curves_dropped(mesc_path):
     assert "RTMC Z correction (total)" in arr.curves
     assert "Z total" not in arr.rtmc
     arr.close()
+    # the listing carries the same verdict without opening the unit
+    units = {u["munit"]: u for u in list_mesc_units(mesc_path)}
+    assert units["MUnit_1"]["rtmc"] == sorted(arr.rtmc) and units["MUnit_1"]["rtmc_armed"] is True
+    assert units["MUnit_2"]["rtmc"] == [] and units["MUnit_2"]["rtmc_armed"] is False
 
 
 def test_units_without_rtmc_report_none(mesc_path):
@@ -904,6 +908,8 @@ def test_linked_units_and_leading_slash_keys(tmp_path):
     assert units["MSession_0/MUnit_0"]["rtmc_unit"] == "MSession_1/MUnit_1"
     assert units["MSession_1/MUnit_1"]["rtmc_unit"] is None
     assert units["MSession_1/MUnit_1"]["background_unit"] is None
+    # a reference unit alone says nothing about whether RTMC moved
+    assert units["MSession_0/MUnit_0"]["rtmc"] == [] and units["MSession_0/MUnit_0"]["rtmc_armed"] is False
     # the snapshot and stream know which scan they belong to
     assert units["MSession_1/MUnit_0"]["scans"] == ["MSession_0/MUnit_0"]
     assert units["MSession_1/MUnit_1"]["rtmc_of"] == ["MSession_0/MUnit_0"]

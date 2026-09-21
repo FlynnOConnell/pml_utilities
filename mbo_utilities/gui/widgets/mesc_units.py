@@ -1,26 +1,25 @@
-"""MESc widgets: the MESc tab and the ROI overlay.
+"""The MESc tab: every recording in a ``.mesc`` file, as a table.
 
 A ``.mesc`` holds one measurement unit per scan the operator ran — a z-stack,
-a ribbon time series, a snapshot — and they are unrelated recordings with
-different shapes. The launch picker chooses the first one to open; the MESc
-tab lists every unit and switches the viewer between them in place, keeping
-the units it opened.
+a line scan, a picture — and they are unrelated recordings with different
+shapes. The launch picker chooses the first one to open; the MESc tab lists
+every unit and switches the viewer between them in place, keeping the units
+it opened.
 
-The MESc GUI draws every ROI of a scan on the raster snapshot it was placed
-on (the unit's ``BackgroundImagePath``), whatever its depth. The ROI overlay
-does the same when that snapshot, or a Z-stack containing the ROIs, is the
-displayed unit: the lines and patches are drawn the moment the unit is on
-screen, from ``arrays.mesc_geometry.image_overlays`` in the colours MESc
-used, solid on the snapshot they were placed on and on the Z-stack slice
-they sit on, faint on any other slice. The Image tab's ROI Overlay panel
-hides them for the session; the MESc tab's ``depth`` column says where each
-scan's ROIs sit. The overlay
-exists only when the file pairs ROIs with the image by metadata alone, so a
-drawn line is one MESc recorded for exactly this picture.
+The table has one row per recording. The two units MEScan saves beside a
+scan on its own, the picture its lines or patches were drawn on
+(``BackgroundImagePath``, role ``background``) and the small reference region
+RTMC re-scanned every cycle (``MotionCorrectionImagePath``, role
+``motionCorrection``), fold into the scan's row (:func:`companions`) as its
+``picture`` and ``RTMC`` cells. ``RTMC`` is yes or no. ``Z-stack`` names the
+Z-stack whose field holds the scan's lines or patches. ``COLUMN_HELP`` puts
+each column's meaning on its header, :func:`describe_unit` puts a
+recording's on its name, and the ``?`` opens ``assets/docs/mesc.md``.
 
-The tab's Outer view button opens ``gui.mesc_outer_view``: the shown unit's
-quick projections and the snapshot and Z-stacks it was scanned on, its ROIs
-drawn, in a popup the top strip's hook redraws every frame.
+The tab's Reference image button opens ``gui.mesc_reference``: the picture
+the shown scan's lines or patches were drawn on and the max projection of
+the Z-stack around it, with them drawn, in a popup the top strip's hook
+redraws every frame.
 """
 
 from __future__ import annotations
@@ -29,30 +28,18 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities import log
-from mbo_utilities.arrays.mesc_geometry import image_overlays, unit_depths, zstack_contents
+from mbo_utilities.arrays.mesc_geometry import zstack_contents
 from mbo_utilities.gui._imgui_helpers import set_tooltip
-from mbo_utilities.gui.mesc_outer_view import (
-    GHOST_ALPHA,
-    GHOST_THICKNESS,
-    ON_THICKNESS,
-    OuterView,
-    current_z,
-    on_plane,
-    z_slider,
-)
+from mbo_utilities.gui.mesc_reference import ReferenceView
 from mbo_utilities.gui.widgets._base import Widget
-from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
 
 logger = log.get("gui.mesc_units")
 
 _ACCENT = imgui.ImVec4(0.8, 0.8, 0.2, 1.0)
 _ERROR = imgui.ImVec4(1.0, 0.4, 0.4, 1.0)
-# in front of the image (0) and the manual-ROI masks (1 .. 1.75)
-OVERLAY_Z = 2.0
 
 # (header, hidden by default); columns fit their content and the table scrolls
 # sideways; right-click a header to show or hide one
@@ -62,8 +49,9 @@ UNIT_COLUMNS = (
     ("modality", False),
     ("layout", True),
     ("ROIs", False),
-    ("depth", False),
-    ("links", False),
+    ("picture", False),
+    ("RTMC", False),
+    ("Z-stack", False),
     ("T", False),
     ("C", False),
     ("Z", False),
@@ -74,8 +62,96 @@ UNIT_COLUMNS = (
     ("start", False),
     ("comment", False),
 )
-DEPTH_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "depth")
-LINKS_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "links")
+UNIT_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "unit")
+MODALITY_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "modality")
+PICTURE_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "picture")
+RTMC_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "RTMC")
+STACK_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "Z-stack")
+
+# what each column means, on its header
+COLUMN_HELP = {
+    "session": (
+        "MESc groups recordings into sessions. MSession_0 holds what the operator "
+        "ran. MEScan saves the picture and the RTMC reference pixels of each scan "
+        "into MSession_1 on its own. Units are numbered from 0 in every session, so "
+        "MSession_0/MUnit_3 and MSession_1/MUnit_3 are different recordings."
+    ),
+    "unit": "One recording. Hover a name for what it is. Click the row to display it.",
+    "modality": (
+        "How the laser moved. A raster scan sweeps the whole field (timeseries, "
+        "zstack). An AOD scan visits only the lines or patches the operator drew "
+        "(linescan, chessboard, ribbon). Hover a value for details."
+    ),
+    "layout": (
+        "How the reader unpacks the raw pixels: frames (one picture per timepoint), "
+        "zstack (one picture per depth), packed (every line's samples stacked into "
+        "one tall page), tiled (patches side by side on one page), boxes (patches "
+        "cut out of a page), multicube (slices interleaved along time)."
+    ),
+    "ROIs": (
+        "What the AOD scanned: the count of lines (line scan) or patches (chessboard, "
+        "ribbon: a patch is one small rectangle) the operator drew on the picture. "
+        "Each one is a step of the viewer's ROI slider."
+    ),
+    "picture": (
+        "The raster picture MEScan took just before the scan; the operator drew the "
+        "lines or patches on it. MESc calls it the background image and saves it as "
+        "its own unit, which this table folds into the scan's row. Click to display "
+        "it, or to see this scan's lines or patches drawn on it."
+    ),
+    "RTMC": (
+        "Real-time motion correction: whether it was on for this recording. yes: "
+        "the microscope tracked the tissue while scanning, and if it moved the "
+        "scan the X, Y, Z shifts are the MC plot under the traces. no: it was off."
+    ),
+    "Z-stack": (
+        "For a scan: the Z-stack whose field covers its lines or patches. For a "
+        "Z-stack: how many scans it covers. MESc records no such link; it is worked "
+        "out from the micron positions. Click for options."
+    ),
+    "T": "Timepoints.",
+    "C": "Colors: the detector channels (UG green, UR red).",
+    "Z": "Slices of a Z-stack, or the lines or patches of an AOD scan.",
+    "Y": "Rows per frame. A line scan has 1: each cycle records one row of samples per line.",
+    "X": "Columns per frame: samples along a line, or pixels across a patch.",
+    "fs": "Timepoints per second.",
+    "duration": "Recorded length. Shorter than the planned length when the run was stopped early.",
+    "start": "Acquisition start, UTC-05:00.",
+    "comment": "The comment typed in MESc.",
+}
+
+MODALITY_HELP = {
+    "timeseries": (
+        "A raster scan of the whole field, one frame per timepoint. With one frame it "
+        "is a picture."
+    ),
+    "zstack": "A raster scan repeated at each depth: one frame per slice, no time axis.",
+    "linescan": (
+        "An AOD scan along straight lines drawn on the picture. Every cycle the "
+        "laser runs along each line once and records one row of samples per line, "
+        "so each line becomes a (time, samples) image, a kymograph."
+    ),
+    "multiline": (
+        "An AOD line scan with dichroic switching: alternate cycles go to the green "
+        "and the red light path, so the two colors are recorded at different "
+        "timepoints."
+    ),
+    "chessboard": (
+        "An AOD scan of small squares (patches) drawn on the picture. Every cycle the "
+        "laser rasters each square once, so each square is a small movie. MESc packs "
+        "the squares side by side on disk; the reader cuts them apart onto the Z "
+        "axis."
+    ),
+    "ribbon_transverse": (
+        "An AOD scan of a bent strip drawn along a dendrite, swept across its width "
+        "every cycle; each strip is a patch on the Z axis."
+    ),
+    "ribbon_longitudinal": "An AOD scan of a bent strip swept along its length every cycle.",
+    "multicube": "An AOD scan of small volumes, each scanned slice by slice, so Z is real depth.",
+}
+
+# the help page the (?) opens, under assets/docs
+MESC_DOC = "mesc.md"
 
 
 def mesc_array_of(obj):
@@ -106,182 +182,82 @@ def display_wrap(arr):
     return _ScrubTimingProxy(arr)
 
 
-def overlay_records(parent: Any) -> list[dict]:
-    """:func:`image_overlays` for the displayed unit, cached on the parent per unit."""
-    mesc = mesc_array_of(parent.image_widget.data[0])
-    if mesc is None or mesc.modality not in (1, 2):
-        return []
-    key = (str(mesc.filenames[0]), mesc.unit_key)
-    cached = getattr(parent, "_mesc_overlay_records", None)
-    if cached is None or cached[0] != key:
-        cached = (key, image_overlays(mesc.filenames[0], mesc.unit_key, mesc.units))
-        parent._mesc_overlay_records = cached
-    return cached[1]
+def companions(units: list[dict]) -> dict[str, str]:
+    """The units the table folds into a scan's row: every picture
+    (``BackgroundImagePath``) and RTMC reference unit
+    (``MotionCorrectionImagePath``) a scan names, as ``{companion key: scan
+    key}``. A scan named by another scan, or a Z-stack, is never folded."""
+    out = {}
+    for u in units:
+        owners = [*u["scans"], *u["rtmc_of"]]
+        if owners and u["role"] != "measurement" and u["kind"] == "frames":
+            out[u["key"]] = owners[0]
+    return out
 
 
-def close_overlay(parent: Any) -> None:
-    """Drop the live overlay graphics, if any; a unit swap or file load calls this."""
-    overlay = getattr(parent, "_mesc_overlay", None)
-    if overlay is not None:
-        overlay.close()
-    parent._mesc_overlay = None
+def rtmc_on(info: dict) -> bool:
+    """Whether RTMC was on for a recording: it carries correction curves,
+    with samples (it moved the scan) or without (it never had to)."""
+    return bool(info.get("rtmc_armed") or info.get("rtmc"))
 
 
-class MescOverlay:
-    """The line graphics of one image unit's ROI outlines on the viewer's subplot.
-
-    Kept on the parent (``parent._mesc_overlay``) so it outlives the widget
-    rebuild every unit swap triggers.
-    """
-
-    def __init__(self, iw, unit_key: str, records: list[dict], show_ghosts: bool):
-        from mbo_utilities.annotation.store import CLASS_COLORS
-
-        self.iw = iw
-        self.unit_key = unit_key
-        self.records = records
-        self.show_ghosts = show_ghosts
-        self.subplot = iw.figure[0, 0]
-        self.zdim = z_slider(iw.dim_names)
-        units = sorted({r["unit"] for r in records})
-        self.colors = np.array(
-            [
-                (*(r["color"] or CLASS_COLORS[units.index(r["unit"]) % len(CLASS_COLORS)])[:3], 1.0)
-                for r in records
-            ],
-            dtype=np.float32,
+def describe_unit(info: dict, by_key: dict[str, dict]) -> str:
+    """One recording in plain words, for the unit cell's tooltip: what the
+    laser did, how much was recorded, and the picture and RTMC reference
+    unit MEScan saved beside it."""
+    t, c, z, y, x = info["shape"]
+    fs = info.get("fs")
+    dur = info.get("duration_s")
+    colors = f"{c} color" + ("s" if c != 1 else "")
+    rate = f"{fs:.0f} times a second" if fs else "at an unknown rate"
+    length = f" for {dur:.0f} s" if dur else ""
+    name = info["modality_name"]
+    n = info.get("n_outlines", 0)
+    if info["role"] == "background":
+        head = f"The picture the lines or patches were drawn on: one raster frame of {y} x {x} px, {colors}."
+    elif info["role"] == "motionCorrection":
+        head = (
+            "RTMC reference pixels: the small region the microscope re-scanned every "
+            f"cycle to measure drift. {t} frames of {y} x {x} px; a line scan's are two "
+            "reference lines stored as rows, not a movie of the field."
         )
-        self.lines = self.subplot.add_line_collection(
-            [r["pixels"].astype(np.float32) for r in records],
-            colors=self.colors,
-            thickness=ON_THICKNESS,
-            name="mesc_roi_overlay",
-            offset=(0, 0, OVERLAY_Z),
+    elif name in ("linescan", "multiline"):
+        head = (
+            f"Line scan: {n or z} lines of {x} samples, 1 px wide, {rate}{length}, "
+            f"{colors}. Each line is a (time, samples) image."
         )
-        if self.zdim is not None:
-            iw.ndwidget.indices.add_event_handler(self._on_indices)
-        self.refresh()
-
-    def _on_indices(self, _indices) -> None:
-        self.refresh()
-
-    def refresh(self) -> None:
-        z = current_z(self.iw)
-        for record, graphic, color in zip(self.records, self.lines.graphics, self.colors):
-            on = on_plane(record, z)
-            graphic.visible = on or self.show_ghosts
-            graphic.colors = (*color[:3], 1.0 if on else GHOST_ALPHA)
-            graphic.thickness = ON_THICKNESS if on else GHOST_THICKNESS
-
-    def close(self) -> None:
-        if self.zdim is not None:
-            self.iw.ndwidget.indices.remove_event_handler(self._on_indices)
-        self.subplot.delete_graphic(self.lines)
-
-
-class MescOverlayWidget(Widget):
-    """Checkboxes for the ROIs MESc recorded for the displayed snapshot or Z-stack.
-
-    The graphics are built when the widget is, so a unit opens with its ROIs
-    drawn whichever tab is on screen; the panel only hides them.
-    """
-
-    name = "ROI Overlay"
-    priority = 5
-    toggle_key = "preview.mesc_overlay"
-
-    def __init__(self, parent: Any):
-        super().__init__(parent)
-        self.sync()
-
-    @classmethod
-    def is_supported(cls, parent: Any) -> bool:
-        iw = getattr(parent, "image_widget", None)
-        data = getattr(iw, "data", None) or []
-        # `--roi 0` fans one unit over several subplots; the overlay draws on one
-        return len(data) == 1 and bool(overlay_records(parent))
-
-    def sync(self) -> None:
-        """Build or drop the graphics to match the displayed unit, the
-        Overlay ROIs checkbox and the Widgets menu."""
-        parent = self.parent
-        mesc = mesc_array_of(parent.image_widget.data[0])
-        overlay = getattr(parent, "_mesc_overlay", None)
-        if overlay is not None and overlay.unit_key != mesc.unit_key:
-            close_overlay(parent)
-            overlay = None
-        wanted = widget_enabled(self.toggle_key) and bool(getattr(parent, "_mesc_overlay_on", True))
-        if wanted and overlay is None:
-            parent._mesc_overlay = MescOverlay(
-                parent.image_widget,
-                mesc.unit_key,
-                overlay_records(parent),
-                bool(getattr(parent, "_mesc_overlay_ghosts", True)),
-            )
-        elif not wanted and overlay is not None:
-            close_overlay(parent)
-
-    def draw(self) -> None:
-        parent = self.parent
-        imgui.spacing()
-        imgui.text_colored(_ACCENT, "ROI Overlay")
-        imgui.spacing()
-        changed, wanted = imgui.checkbox(
-            "Overlay ROIs", bool(getattr(parent, "_mesc_overlay_on", True))
+    elif name in ("chessboard", "ribbon_transverse", "ribbon_longitudinal"):
+        head = (
+            f"{name.split('_')[0].capitalize()}: {n or z} patches of {y} x {x} px, "
+            f"{rate}{length}, {colors}. Each patch is a small movie."
         )
-        set_tooltip(
-            "Draw the lines and patches MESc scanned on this image, in the "
-            "colours it used. Solid: placed on this snapshot, or on the slice shown "
-            "of a Z-stack. Faint: on another slice. The MESc tab's depth column "
-            "says where each scan's ROIs sit."
-        )
-        if changed:
-            parent._mesc_overlay_on = wanted
-            self.sync()
-        overlay = getattr(parent, "_mesc_overlay", None)
-        if overlay is None:
-            return
-        changed, ghosts = imgui.checkbox("Show off-plane ROIs", overlay.show_ghosts)
-        set_tooltip("Keep ROIs scanned at another depth visible, faint.")
-        if changed:
-            parent._mesc_overlay_ghosts = overlay.show_ghosts = ghosts
-            overlay.refresh()
-
-    def cleanup(self) -> None:
-        close_overlay(self.parent)
-        self.parent._mesc_overlay_records = None
+    elif name == "zstack":
+        head = f"Z-stack: {z} raster frames of {y} x {x} px, one per depth, {colors}."
+    elif t == 1:
+        head = f"Picture: one raster frame of {y} x {x} px, {colors}."
+    else:
+        head = f"Raster movie: {t} frames of {y} x {x} px, {rate}{length}, {colors}."
+    lines = [info["key"], head]
+    bg = info.get("background_unit")
+    if bg:
+        lines.append(f"Picture: {bg}" + ("" if bg in by_key else " (not in this file)"))
+    ref = info.get("rtmc_unit")
+    if rtmc_on(info) or ref:
+        lines.append(f"RTMC {'on' if rtmc_on(info) else 'off'}" + (f"; reference pixels {ref}" if ref else ""))
+    for role, field in (("Picture of", "scans"), ("RTMC reference pixels of", "rtmc_of")):
+        if info.get(field):
+            lines.append(f"{role} " + ", ".join(info[field]))
+    if info.get("comment"):
+        lines.append(f"Comment: {info['comment']}")
+    return "\n".join(lines)
 
 
-def unit_links(info: dict, contains: list[str] | tuple[str, ...] = ()) -> list[tuple[str, str]]:
-    """The units one unit is paired with, as ``(role, key)`` pairs, the role
-    worded from this unit's side: a scan's snapshot (the image its ROIs were
-    placed on, its ``BackgroundImagePath``) and its RTMC stream (the stage
-    shifts recorded while it ran), a snapshot's scans, a stream's scan, and
-    a Z-stack's scans (``contains``, from ``mesc_geometry.zstack_contents``:
-    every scan whose ROIs fall inside the stack's field)."""
-    links = []
-    if info.get("background_unit"):
-        links.append(("snapshot it was drawn on", info["background_unit"]))
-    if info.get("rtmc_unit"):
-        links.append(("its RTMC motion stream", info["rtmc_unit"]))
-    links += [("scan drawn on it", k) for k in info.get("scans", ())]
-    links += [("scan it is the RTMC stream of", k) for k in info.get("rtmc_of", ())]
-    links += [("scan inside this Z-stack", k) for k in contains]
-    return links
-
-
-def unit_row(
-    info: dict,
-    contains: list[str] | tuple[str, ...] = (),
-    depth: dict | None = None,
-) -> tuple[tuple[str, ...], tuple]:
+def unit_row(info: dict, stacks: list[str] | tuple = ()) -> tuple[tuple[str, ...], tuple]:
     """One table row per `list_mesc_units` entry: the cell texts and the sort
-    keys, both in UNIT_COLUMNS order (numbers sort as numbers). The ``links``
-    cell is how many units this one is paired with (:func:`unit_links`); the
-    tab draws it as a button that lists them. ``depth`` is this unit's entry
-    of :func:`unit_depths`; the ``depth`` cell is where the unit sits in the
-    file's micron frame: the depth of a scan's ROIs (their spread when they
-    differ), a Z-stack's slice range, a snapshot's plane."""
+    keys, both in UNIT_COLUMNS order (numbers sort as numbers). ``stacks`` is
+    the keys of the Z-stacks whose field holds this scan's ROIs, or of the
+    scans a Z-stack holds; the ``Z-stack`` cell names the stacks
+    (``MUnit_64``) or counts a stack's scans."""
     t, c, z_size, y, x = info["shape"]
     fs = info.get("fs")
     dur = info.get("duration_s")
@@ -290,25 +266,23 @@ def unit_row(
     n = info.get("n_outlines", 0)
     nouns = {"line": ("line", "lines"), "patch": ("patch", "patches")}
     rois = f"{n} {nouns[info['outline_kind']][n != 1]}" if n else "-"
-    depth_text, depth_key = "-", float("inf")
-    if depth and depth.get("z_um"):
-        zs = sorted(depth["z_um"])
-        depth_text = f"{zs[0]:+.1f} um" if zs[-1] - zs[0] < 0.05 else f"{zs[0]:+.1f}..{zs[-1]:+.1f} um"
-        depth_key = zs[0]
-    elif depth and depth.get("range_um"):
-        lo, hi = depth["range_um"]
-        depth_text, depth_key = f"{lo:+.1f}..{hi:+.1f} um", float(lo)
-    elif depth and depth.get("plane_um") is not None:
-        depth_text, depth_key = f"{depth['plane_um']:+.1f} um", float(depth["plane_um"])
-    links = len(unit_links(info, contains))
+    picture = info.get("background_unit")
+    picture_text = picture.rsplit("/", 1)[-1] if picture else "-"
+    if not stacks:
+        stack_text = "-"
+    elif info["kind"] == "zstack":
+        stack_text = f"{len(stacks)} scan" + ("s" if len(stacks) != 1 else "")
+    else:
+        stack_text = ", ".join(key.rsplit("/", 1)[-1] for key in stacks)
     cells = (
         info["session"],
         info["munit"],
         info["modality_name"],
         info["kind"],
         rois,
-        depth_text,
-        str(links) if links else "-",
+        picture_text,
+        "yes" if rtmc_on(info) else "no",
+        stack_text,
         str(t),
         str(c),
         str(z_size),
@@ -325,8 +299,9 @@ def unit_row(
         info["modality_name"],
         info["kind"],
         n,
-        depth_key,
-        links,
+        picture_text,
+        int(rtmc_on(info)),
+        len(stacks),
         t,
         c,
         z_size,
@@ -359,12 +334,14 @@ class MescTabWidget(Widget):
         self._error: str | None = None
         self._note: str | None = None
         self._sort = (0, True)
+        # pictures and RTMC reference units as rows of their own, not cells
+        self._show_companions = False
         # the Manual ROI state of every unit left for another, by (file, unit)
         self._parked: dict[tuple[str, str], tuple] = {}
-        # the outer-view popup, drawn from the strip's hook whatever tab is up;
-        # the host offers it wherever a recording's ROIs are on screen
-        self._outer: OuterView | None = None
-        parent.outer_view = self.open_outer_view
+        # the reference-image popup, drawn from the strip's hook whatever tab
+        # is up; the host offers it wherever a recording's ROIs are on screen
+        self._reference: ReferenceView | None = None
+        parent.reference_view = self.open_reference
         strip = getattr(parent, "top_strip", None)
         if strip is not None:
             strip.add_hook(self._frame)
@@ -376,20 +353,20 @@ class MescTabWidget(Widget):
         return bool(len(data)) and mesc_array_of(data[0]) is not None
 
     def _frame(self) -> None:
-        if self._outer is not None:
-            self._outer.draw()
+        if self._reference is not None:
+            self._reference.draw()
 
-    def open_outer_view(self) -> None:
-        """The popup around the shown unit (``mesc_outer_view``); the tab
-        says so when there is nothing to show."""
+    def open_reference(self, select: str | None = None) -> None:
+        """The popup with the shown unit's lines or patches drawn on the
+        picture (``mesc_reference``), on image ``select`` when given; the
+        tab says so when no image of the file carries them."""
         mesc = self._mesc
-        if self._outer is None:
-            self._outer = OuterView(self.parent)
+        if self._reference is None:
+            self._reference = ReferenceView(self.parent)
         self._note = None
-        if not self._outer.open(mesc, partial(self._open_unit, mesc.filenames[0])):
+        if not self._reference.open(mesc, partial(self._open_unit, mesc.filenames[0]), select=select):
             self._note = (
-                f"nothing around {mesc.unit_key.rsplit('/', 1)[-1]}: one frame, "
-                "and no snapshot or Z-stack holds it"
+                f"no picture or Z-stack in this file carries {mesc.unit_key.rsplit('/', 1)[-1]}'s ROIs"
             )
 
     @property
@@ -455,8 +432,8 @@ class MescTabWidget(Widget):
             attach_standard_traces(parent)
         except Exception:
             parent.logger.warning("line-scan traces tab unavailable", exc_info=True)
-        if self._outer is not None and self._outer.is_open:
-            self.open_outer_view()
+        if self._reference is not None and self._reference.is_open:
+            self.open_reference()
         parent.logger.info(f"MESc unit: {arr.unit_key}  shape={arr.shape}")
 
     def _switch(self, info: dict) -> None:
@@ -469,51 +446,28 @@ class MescTabWidget(Widget):
             self._error = str(e)
             self.parent.logger.exception(f"MESc unit switch to {info['key']} failed: {e}")
 
-    def _contains(self, mesc) -> dict[str, list[str]]:
-        """Each Z-stack's scans, placed once per file and kept on the parent."""
+    def _stacks(self, mesc) -> dict[str, list[str]]:
+        """Which scans each Z-stack of the file covers, from the micron
+        positions alone (:func:`zstack_contents`): under a stack's key its
+        scans, under a scan's key the stacks holding it. Placed once per
+        file and kept on the parent."""
         path = str(mesc.filenames[0])
         cached = getattr(self.parent, "_mesc_zstack_contents", None)
         if cached is None or cached[0] != path:
+            table: dict[str, list[str]] = {}
             try:
-                contents = zstack_contents(path, mesc.units)
+                for stack, scans in zstack_contents(path, mesc.units).items():
+                    table[stack] = list(scans)
+                    for scan in scans:
+                        table.setdefault(scan, []).append(stack)
             except Exception:
                 self.parent.logger.warning(
                     f"{Path(path).name}: cannot place its scans on its Z-stacks", exc_info=True
                 )
-                contents = {}
-            cached = (path, contents)
+                table = {}
+            cached = (path, table)
             self.parent._mesc_zstack_contents = cached
         return cached[1]
-
-    def _depths(self, mesc) -> tuple[dict[str, dict], str | None]:
-        """Every unit's depth (:func:`unit_depths`) counted from one origin, the
-        way the MESc GUI shows depth: the first Z-stack's, else the first
-        snapshot's plane, else the file's own frame. Read once per file and
-        kept on the parent with the origin unit's key."""
-        path = str(mesc.filenames[0])
-        cached = getattr(self.parent, "_mesc_unit_depths", None)
-        if cached is None or cached[0] != path:
-            try:
-                depths = unit_depths(path, mesc.units)
-            except Exception:
-                self.parent.logger.warning(
-                    f"{Path(path).name}: cannot read where its units sit", exc_info=True
-                )
-                depths = {}
-            ref = next((k for k, d in depths.items() if "range_um" in d), None)
-            if ref is None:
-                ref = next((k for k, d in depths.items() if "plane_um" in d), None)
-            origin = 0.0 if ref is None else depths[ref].get("origin_um", depths[ref].get("plane_um", 0.0))
-            for d in depths.values():
-                if "z_um" in d:
-                    d["z_um"] = [z - origin for z in d["z_um"]]
-                elif "range_um" in d:
-                    d["range_um"] = (d["range_um"][0] - origin, d["range_um"][1] - origin)
-                else:
-                    d["plane_um"] -= origin
-            cached = (path, depths, ref)
-            self.parent._mesc_unit_depths = cached
-        return cached[1], cached[2]
 
     def draw(self) -> None:
         with imgui_ctx.begin_child(
@@ -524,31 +478,42 @@ class MescTabWidget(Widget):
                 imgui.text_disabled("No .mesc file is open.")
                 return
             units = mesc.units
-            contains = self._contains(mesc)
-            depths, ref = self._depths(mesc)
-            frame = f"from {ref.rsplit('/', 1)[-1]}'s z origin" if ref else "in the file's frame"
+            by_key = {u["key"]: u for u in units}
+            stacks = self._stacks(mesc)
             # the unit opened at launch belongs in the cache too, so switching
             # away and back reuses it instead of opening the file a second time
             self._cache().setdefault(mesc.unit_key, mesc)
             # `--roi 0` fans the ROIs of one unit across several subplots;
             # swapping would replace only the first and strand the rest
             split = len(self.parent.image_widget.data) > 1
+            paired = companions(units)
+            folded = {} if self._show_companions else paired
+            # a folded picture or reference unit on screen highlights its scan's row
+            owner = folded.get(mesc.unit_key)
+            highlight = owner or mesc.unit_key
             shown = mesc.unit_key.rsplit("/", 1)[-1]
-            drawn: dict[str, list[dict]] = {}
-            records = overlay_records(self.parent) if not split else []
-            for r in records:
-                drawn.setdefault(r["unit"], []).append(r)
-            z = current_z(self.parent.image_widget) if records else 0
+            if owner is not None:
+                what = "picture" if by_key[owner].get("background_unit") == mesc.unit_key else "RTMC reference pixels"
+                shown = f"{shown}, the {what} of {owner.rsplit('/', 1)[-1]}"
 
             imgui.text_colored(_ACCENT, Path(mesc.filenames[0]).name)
             imgui.same_line(0, 12)
-            imgui.text_disabled(f"{len(units)} units · showing {shown}")
-            if imgui.small_button("Outer view##outer"):
-                self.open_outer_view()
+            imgui.text_disabled(f"{len(units) - len(folded)} recordings · showing {shown}")
+            imgui.same_line(0, 12)
+            if imgui.small_button("?##mesc_help"):
+                self.parent._show_help_popup = True
+                self.parent._help_select_doc = MESC_DOC
             set_tooltip(
-                "Where this unit sits: its quick mean / max / std over time at the slice "
-                "on screen, and the snapshot and Z-stacks it was scanned on with its ROIs "
-                "drawn, the slider's ROI thicker.",
+                "What a .mesc holds: sessions, scans, pictures, RTMC, and how each "
+                "column reads. Every column header and most cells carry their own tip.",
+                show_mark=False,
+            )
+            if imgui.small_button("Reference image##reference"):
+                self.open_reference()
+            set_tooltip(
+                "The picture this scan's lines or patches were drawn on, and the max "
+                "projection of the Z-stack around it, with them drawn: the slider's "
+                "ROI thick. Click one there to move the slider to it.",
                 show_mark=False,
             )
             imgui.same_line(0, 12)
@@ -556,6 +521,16 @@ class MescTabWidget(Widget):
                 imgui.text_disabled("Split ROIs: reopen without --roi to switch units.")
             else:
                 imgui.text_disabled("Click a row to display that unit.")
+            if paired:
+                imgui.same_line(0, 12)
+                changed, on = imgui.checkbox("companion units as rows", self._show_companions)
+                set_tooltip(
+                    "Give each scan's picture and RTMC reference pixels a row of their "
+                    "own instead of the picture and RTMC cells of the scan's row.",
+                    show_mark=False,
+                )
+                if changed:
+                    self._show_companions = on
             if self._note:
                 imgui.text_disabled(self._note)
             if self._error:
@@ -573,7 +548,7 @@ class MescTabWidget(Widget):
             # saved layout by column index, so the old widths would land on
             # the wrong columns
             if not imgui.begin_table(
-                "##mesc_units_v3", len(UNIT_COLUMNS), flags, imgui.ImVec2(0, avail.y)
+                "##mesc_units_v5", len(UNIT_COLUMNS), flags, imgui.ImVec2(0, avail.y)
             ):
                 return
             # the header row and the session and unit columns stay put while scrolling
@@ -585,8 +560,16 @@ class MescTabWidget(Widget):
                 if hidden:
                     column_flags |= imgui.TableColumnFlags_.default_hide
                 imgui.table_setup_column(name, column_flags)
-            imgui.table_headers_row()
-            set_tooltip("Right-click a header to show or hide columns", show_mark=False)
+            # the header row by hand, so each header carries its column's meaning
+            imgui.table_next_row(imgui.TableRowFlags_.headers)
+            for i, (name, _hidden) in enumerate(UNIT_COLUMNS):
+                if not imgui.table_set_column_index(i):
+                    continue
+                imgui.table_header(name)
+                set_tooltip(
+                    COLUMN_HELP[name] + "\n\nRight-click a header to show or hide columns.",
+                    show_mark=False,
+                )
             specs = imgui.table_get_sort_specs()
             if specs is not None and specs.specs_dirty:
                 if specs.specs_count > 0:
@@ -598,23 +581,25 @@ class MescTabWidget(Widget):
             column, ascending = self._sort
             rows = sorted(
                 (
-                    (*unit_row(u, contains.get(u["key"], ()), depths.get(u["key"])), u)
+                    (*unit_row(u, stacks.get(u["key"], ())), u)
                     for u in units
+                    if u["key"] not in folded
                 ),
                 key=lambda row: row[1][column],
                 reverse=not ascending,
             )
-            by_key = {u["key"]: u for u in units}
             picked = None
+            reference = None
             last = len(UNIT_COLUMNS) - 1
             for cells, _keys, info in rows:
+                what = {"line": "lines", "patch": "patches"}.get(info.get("outline_kind"), "ROIs")
                 imgui.table_next_row()
                 imgui.table_next_column()
                 clicked, _ = imgui.selectable(
                     f"{cells[0]}##unit_{info['key']}",
-                    info["key"] == mesc.unit_key,
-                    # the row spans the links button's column too; without
-                    # overlap it takes the hover and the button never sees a click
+                    info["key"] == highlight,
+                    # the row spans the buttons' columns too; without overlap
+                    # it takes the hover and a button never sees a click
                     imgui.SelectableFlags_.span_all_columns | imgui.SelectableFlags_.allow_overlap,
                 )
                 if clicked and not split and info["key"] != mesc.unit_key:
@@ -622,75 +607,115 @@ class MescTabWidget(Widget):
                 for i in range(1, len(cells)):
                     if not imgui.table_next_column():
                         continue
-                    if i == DEPTH_COLUMN and (depths.get(info["key"]) or drawn.get(info["key"])):
+                    if i == UNIT_COLUMN:
                         imgui.text(cells[i])
-                        depth = depths.get(info["key"]) or {}
-                        rs = drawn.get(info["key"], ())
-                        placed = {r["roi"]: r for r in rs}
-                        stack = bool(rs) and rs[0]["slice"] is not None
-                        lines = []
-                        if depth.get("range_um"):
-                            lo, hi = depth["range_um"]
-                            lines.append(
-                                f"{info['munit']}: {depth['zdim']} slices, {lo:+.1f} to {hi:+.1f} um {frame}"
-                            )
-                        elif depth.get("plane_um") is not None:
-                            lines.append(f"{info['munit']}: the plane of this image, {frame}")
-                        else:
-                            zs = depth.get("z_um") or [r["z_um"] for r in rs]
-                            dzs = depth.get("dz_um")
-                            lines.append(
-                                f"{info['munit']}: {len(zs)} ROIs, depth {frame}"
-                                + ("; off = from the snapshot they were drawn on" if dzs else "")
-                            )
-                            for k, zk in enumerate(zs):
-                                r = placed.get(k)
-                                line = f"ROI {k + 1}: z {zk:+.1f} um"
-                                if dzs:
-                                    line += f", {dzs[k]:+.1f} um off"
-                                if r is not None and stack:
-                                    line += f", slice {r['slice'] + 1} of {shown}"
-                                    line += "" if r["on_plane"] else " (outside the stack)"
-                                lines.append(line)
-                        if stack:
-                            lines.append(
-                                f"{shown} slice {z + 1}: {sum(on_plane(r, z) for r in rs)} of {len(rs)} on it"
-                            )
-                        set_tooltip("\n".join(lines), show_mark=False)
+                        set_tooltip(describe_unit(info, by_key), show_mark=False)
                         continue
-                    if i != LINKS_COLUMN:
+                    if i == MODALITY_COLUMN:
                         imgui.text(cells[i])
-                        if i == last and info["comment"] and imgui.is_item_hovered():
-                            imgui.set_tooltip(info["comment"])
+                        if cells[i] in MODALITY_HELP:
+                            set_tooltip(MODALITY_HELP[cells[i]], show_mark=False)
                         continue
-                    links = unit_links(info, contains.get(info["key"], ()))
-                    if not links:
-                        imgui.text_disabled("-")
-                        continue
-                    if imgui.small_button(f"{cells[i]}##links_{info['key']}"):
-                        imgui.open_popup(f"##links_{info['key']}")
-                    set_tooltip("The units this one is paired with; click one to display it", show_mark=False)
-                    if imgui.begin_popup(f"##links_{info['key']}"):
-                        for role, key in links:
-                            other = by_key.get(key)
-                            text = f"{role}  {key}" + (f"  ·  {other['modality_name']}" if other else "")
-                            if imgui.selectable(f"{text}##{info['key']}", False)[0] and other is not None and not split:
+                    if i == PICTURE_COLUMN and info.get("background_unit"):
+                        bg = info["background_unit"]
+                        other = by_key.get(bg)
+                        if other is None:
+                            imgui.text_disabled(cells[i])
+                            set_tooltip(f"{bg} is not in this file.", show_mark=False)
+                            continue
+                        if imgui.small_button(f"{cells[i]}##pic_{info['key']}"):
+                            imgui.open_popup(f"##pic_{info['key']}")
+                        _t, c, _z, y, x = other["shape"]
+                        set_tooltip(
+                            f"The picture the {what} were drawn on: {bg}, one raster frame of "
+                            f"{y} x {x} px, {c} color{'s' if c != 1 else ''}, taken just before "
+                            "the scan. Click for options.",
+                            show_mark=False,
+                        )
+                        if imgui.begin_popup(f"##pic_{info['key']}"):
+                            if imgui.selectable(f"Display {bg}##{info['key']}", False)[0] and not split:
                                 picked = other
-                        imgui.end_popup()
+                            if (
+                                imgui.selectable(
+                                    f"Reference image: this scan's {what} on {other['munit']}##{info['key']}", False
+                                )[0]
+                                and not split
+                            ):
+                                reference = (info, f"{other['munit']} picture")
+                            imgui.end_popup()
+                        continue
+                    if i == RTMC_COLUMN:
+                        imgui.text(cells[i])
+                        if info.get("rtmc"):
+                            tip = (
+                                "RTMC was on and moved the scan to follow the tissue. The X, Y, Z "
+                                "shifts in microns are the MC plot under the traces."
+                            )
+                        elif info.get("rtmc_armed"):
+                            tip = "RTMC was on; the tissue never moved, so there are no shifts to plot."
+                        else:
+                            tip = "RTMC was off."
+                        ref = info.get("rtmc_unit")
+                        if ref:
+                            tip += (
+                                f"\nThe reference region it re-scanned every cycle is {ref}; "
+                                "companion units as rows lists it."
+                            )
+                        set_tooltip(tip, show_mark=False)
+                        continue
+                    if i == STACK_COLUMN and stacks.get(info["key"]):
+                        held = stacks[info["key"]]
+                        if imgui.small_button(f"{cells[i]}##stack_{info['key']}"):
+                            imgui.open_popup(f"##stack_{info['key']}")
+                        if info["kind"] == "zstack":
+                            set_tooltip(
+                                "The scans whose lines or patches lie within this stack's field: "
+                                + ", ".join(key.rsplit("/", 1)[-1] for key in held)
+                                + "\nClick for options.",
+                                show_mark=False,
+                            )
+                        else:
+                            set_tooltip(
+                                f"The Z-stack whose field covers this scan's {what}. Click to display "
+                                "it, or to see them drawn on its max projection.",
+                                show_mark=False,
+                            )
+                        if imgui.begin_popup(f"##stack_{info['key']}"):
+                            for key in held:
+                                other = by_key.get(key)
+                                if other is None:
+                                    continue
+                                name = key.rsplit("/", 1)[-1]
+                                if imgui.selectable(f"Display {name}##{info['key']}", False)[0] and not split:
+                                    picked = other
+                                if info["kind"] == "zstack":
+                                    continue
+                                if imgui.selectable(f"Reference image: this scan's {what} on {name}##{info['key']}", False)[0] and not split:
+                                    reference = (info, f"{name} Z-stack max")
+                            imgui.end_popup()
+                        continue
+                    imgui.text(cells[i])
+                    if i == last and info["comment"] and imgui.is_item_hovered():
+                        imgui.set_tooltip(info["comment"])
             imgui.end_table()
 
             # swapping rebuilds the panel widgets; finish the frame on the old ones
             if picked is not None:
                 self._switch(picked)
+            if reference is not None:
+                info, select = reference
+                if info["key"] != mesc.unit_key:
+                    self._switch(info)
+                self.open_reference(select)
 
     def cleanup(self) -> None:
         strip = getattr(self.parent, "top_strip", None)
         if strip is not None:
             strip.remove_hook(self._frame)
-        if self._outer is not None:
-            self._outer.cleanup()
-            self._outer = None
-        self.parent.outer_view = None
+        if self._reference is not None:
+            self._reference.cleanup()
+            self._reference = None
+        self.parent.reference_view = None
         for arr in (getattr(self.parent, "_mesc_unit_cache", None) or {}).values():
             try:
                 arr.close()

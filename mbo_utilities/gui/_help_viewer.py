@@ -28,12 +28,19 @@ DOCS = [
 # not a file: the ROI tool writes its own guide, so it stays next to the
 # code it documents instead of drifting in a shipped markdown file
 ROI_DOC = "::roi::"
+# what a .mesc holds; the MESc tab's (?) opens it
+MESC_DOC = "mesc.md"
 
 
 def docs_for(parent: Any) -> list[tuple[str, str]]:
-    """The doc tabs to show: the shipped ones, plus the ROI tool's guide as
-    a section when that widget is on. One Help button for the whole app."""
+    """The doc tabs to show: the shipped ones, the MESc page while a
+    ``.mesc`` unit is on screen, plus the ROI tool's guide as a section when
+    that widget is on. One Help button for the whole app."""
     docs = list(DOCS)
+    data = getattr(getattr(parent, "image_widget", None), "data", None) or []
+    md = getattr(data[0], "metadata", None) if len(data) else None
+    if isinstance(md, dict) and "mesc_unit" in md:
+        docs.append(("MESc files", MESC_DOC))
     if getattr(parent, "manual_roi", None) is not None:
         docs.append(("ROI Labeling", ROI_DOC))
     return docs
@@ -95,12 +102,16 @@ def draw_help_popup(parent: Any) -> None:
         else:
             # doc selector tabs
             docs = docs_for(parent)
+            # a widget's (?) asks for its page by file name, for one frame
+            wanted = getattr(parent, "_help_select_doc", None)
             if imgui.begin_tab_bar("##HelpTabs"):
                 for i, (name, filename) in enumerate(docs):
-                    if imgui.begin_tab_item(name)[0]:
+                    flags = imgui.TabItemFlags_.set_selected if filename == wanted else imgui.TabItemFlags_.none
+                    if imgui.begin_tab_item(name, None, flags)[0]:
                         parent._help_selected_doc = i
                         imgui.end_tab_item()
                 imgui.end_tab_bar()
+            parent._help_select_doc = None
 
             imgui.separator()
             imgui.spacing()

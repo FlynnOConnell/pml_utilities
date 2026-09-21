@@ -75,22 +75,12 @@ def _toggle_manual_roi(parent: Any, enabled: bool) -> None:
         sync(enabled)
 
 
-def _toggle_mesc_overlay(parent: Any, _enabled: bool) -> None:
-    """Rebuild the Image tab's panels: the MESc ROI overlay draws or drops
-    itself from the toggles when its widget is made."""
-    refresh = getattr(parent, "_refresh_widgets", None)
-    if refresh is not None:
-        refresh()
-
-
 WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
     WidgetEntry(
         key="preview",
         label="Image",
         tooltip="The Image tab and the control panels stacked inside it.",
-        on_toggle=_toggle_mesc_overlay,
         subwidgets=(
-            SubWidget("mesc_overlay", "ROI Overlay", on_toggle=_toggle_mesc_overlay),
             SubWidget("window_functions", "Window Functions"),
             SubWidget("spatial_functions", "Spatial Functions"),
             SubWidget("scan_phase", "Scan-Phase Correction"),
@@ -104,10 +94,9 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
     WidgetEntry(
         key="mesc",
         label="MESc",
-        tooltip="Every measurement unit in the open .mesc file: shape, rate, the "
-                "lines or patches it scanned and the units it is paired with "
-                "(its snapshot, its RTMC stream, the scans on an image); click a "
-                "row to display it.",
+        tooltip="Every recording in the open .mesc file: shape, rate, the lines "
+                "or patches it scanned, the picture they were drawn on, whether "
+                "RTMC was on and the Z-stack around it; click a row to display it.",
     ),
     WidgetEntry(
         key="signal_quality",
