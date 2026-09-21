@@ -298,8 +298,11 @@ def image_overlays(
     2). A snapshot carries the ROIs of every multi-ROI unit whose
     ``BackgroundImagePath`` names it, which is what the MESc GUI draws on it:
     all of them, whatever their depth. A Z-stack carries the ROIs of every
-    multi-ROI unit whose outlines fall inside its field, each on the slice
-    nearest its depth (:func:`roi_placements`).
+    multi-ROI unit whose outlines fall inside its field **and its depth
+    range**, each on the slice nearest its depth (:func:`roi_placements`).
+    An ROI scanned above or below the stack is left out: the stack holds no
+    picture of it, and drawing it on an edge slice puts an outline on tissue
+    it was never scanned in.
 
     One dict per ROI, unit order then ROI order::
 
@@ -313,8 +316,8 @@ def image_overlays(
         dz_um      snapshot: offset from its plane; stack: from the slice it
                    is drawn on
         slice      0-based Z-stack slice, None on a snapshot
-        on_plane   snapshot: ``|dz_um| <= plane_tol_um``; stack: scanned
-                   inside the depth range
+        on_plane   snapshot: ``|dz_um| <= plane_tol_um``; stack: always True,
+                   an ROI outside the depth range having been left out
 
     A unit whose outline count differs from its ROI count is left out:
     pairing them by order would be a guess. ``units`` is
@@ -370,7 +373,9 @@ def image_overlays(
             for i, seg in enumerate(outlines):
                 x, y = float(seg[0].mean()), float(seg[1].mean())
                 if depth is not None and not (
-                    tx <= x <= tx + vp["width"] and ty <= y <= ty + vp["height"]
+                    tx <= x <= tx + vp["width"]
+                    and ty <= y <= ty + vp["height"]
+                    and placements[i]["in_range"]
                 ):
                     continue
                 kind = "patch" if seg.shape[1] == 4 else "line"
@@ -381,7 +386,7 @@ def image_overlays(
                 if placements is None:
                     dz, k, on = z_um - tz, None, abs(z_um - tz) <= plane_tol_um
                 else:
-                    dz, k, on = placements[i]["dz_um"], placements[i]["slice"], placements[i]["in_range"]
+                    dz, k, on = placements[i]["dz_um"], placements[i]["slice"], True
                 out.append(
                     {
                         "unit": u["key"],
@@ -402,9 +407,9 @@ def image_overlays(
 def zstack_contents(mesc_path, units: list[dict] | None = None) -> dict[str, list[str]]:
     """Which scans each Z-stack of the file holds: stack key -> the keys of
     every multi-ROI unit with at least one outline inside the stack's field
-    (:func:`image_overlays`), in unit order. A snapshot's scans are its
-    ``scans`` entry from ``list_mesc_units``; a stack has no such link, only
-    geometry."""
+    and depth range (:func:`image_overlays`), in unit order. A snapshot's
+    scans are its ``scans`` entry from ``list_mesc_units``; a stack has no
+    such link, only geometry."""
     if units is None:
         units = list_mesc_units(mesc_path)
     return {
@@ -430,11 +435,11 @@ def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = N
                     (``mesc_roi_extents[i]["width"]``); None without them
         dz_um       depth against the snapshot the lines were drawn on (the
                     unit's ``BackgroundImagePath``); None without one
-        stack       the first Z-stack whose field holds the line
-                    (:func:`image_overlays`); ``slice`` its 0-based slice
-                    nearest the line, ``slice_dz_um`` the line's offset from
-                    it, ``in_stack`` False when the line was scanned above or
-                    below the stack; all None without such a stack
+        stack       the first Z-stack whose field and depth range hold the
+                    line (:func:`image_overlays`); ``slice`` its 0-based
+                    slice nearest the line, ``slice_dz_um`` the line's offset
+                    from it, ``in_stack`` True; all None when no stack was
+                    scanned around the line
 
     The snapshot's plane is where MESc draws every line whatever its depth;
     ``dz_um`` says how far off that plane each one really is.

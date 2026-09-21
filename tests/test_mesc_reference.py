@@ -2,8 +2,9 @@
 and the Z-stack around it, max projected, with the lines drawn.
 
 Fixture: a Z-stack (11 slices, 2 um apart, slice k filled with k) whose
-field holds a four-line scan (6 frames; one line scanned below the stack)
-drawn on a picture focused 4 um under the stack's origin.
+field holds a four-line scan (6 frames; lines on slices 3, 7 and 3, and a
+fourth scanned 10 um below the stack) drawn on a picture focused 4 um under
+the stack's origin.
 """
 
 from __future__ import annotations
@@ -80,8 +81,9 @@ def open_unit(path, key):
 
 
 def test_reference_images_of_a_line_scan(mesc_path):
-    """The picture the lines were drawn on, then the Z-stack holding them,
-    each a max projection carrying every line whatever its depth."""
+    """The picture the lines were drawn on carries every line whatever its
+    depth; the Z-stack carries only the lines scanned inside it, and is
+    projected over the slices they sit on, not over the whole stack."""
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui.mesc_reference import reference_images
 
@@ -90,16 +92,20 @@ def test_reference_images_of_a_line_scan(mesc_path):
         images = reference_images(mesc, partial(open_unit, mesc_path), 0)
     finally:
         mesc.close()
-    assert [im.key for im in images] == ["MUnit_4 picture", "MUnit_0 Z-stack max"]
+    assert [im.key for im in images] == ["MUnit_4 picture", "MUnit_0 slices 4-8"]
     picture, stack = images
+    # each image says which unit it is and, for a stack, the slice to open it at
+    assert (picture.unit, picture.slice) == ("MSession_0/MUnit_4", None)
+    assert (stack.unit, stack.slice) == ("MSession_0/MUnit_0", 3)
     # the picture is the max over its frames
     assert picture.image.shape == (64, 80) and picture.image.dtype == np.float32
     assert float(picture.image[0, 0]) == 7.0 and float(picture.image[10, 10]) == 9.0
     assert [r["roi"] for r in picture.records] == [0, 1, 2, 3]
     assert all(r["pixels"].shape == (2, 2) for r in picture.records)
-    # slice k holds the value k, so the max over depth is the last slice
-    np.testing.assert_allclose(stack.image, 10.0)
-    assert [r["roi"] for r in stack.records] == [0, 1, 2, 3]
+    # slice k holds the value k: slices 3..7 project to 7, not the stack's 10
+    np.testing.assert_allclose(stack.image, 7.0)
+    assert [r["roi"] for r in stack.records] == [0, 1, 2]
+    assert [r["slice"] for r in stack.records] == [3, 7, 3]
 
 
 def test_a_sampled_projection_stays_a_max(mesc_path, monkeypatch):
@@ -117,7 +123,7 @@ def test_a_sampled_projection_stays_a_max(mesc_path, monkeypatch):
     finally:
         mesc.close()
     assert picture.image.shape == (64, 80) and float(picture.image[10, 10]) == 9.0
-    np.testing.assert_allclose(stack.image, 10.0)
+    np.testing.assert_allclose(stack.image, 7.0)
 
 
 def test_the_reader_places_its_lines(mesc_path):
@@ -131,10 +137,11 @@ def test_the_reader_places_its_lines(mesc_path):
         positions = scan.line_positions
         assert [p["index"] for p in positions] == [0, 1, 2, 3]
         np.testing.assert_allclose([p["dz_um"] for p in positions], [0.0, 8.0, 0.1, -16.0])
-        # and on the Z-stack holding them: the slice each sits on, one below it
-        assert [p["stack"] for p in positions] == ["MSession_0/MUnit_0"] * 4
-        assert [p["slice"] for p in positions] == [3, 7, 3, 0]
-        assert [p["in_stack"] for p in positions] == [True, True, True, False]
+        # and on the Z-stack holding them: the slice each sits on. The fourth
+        # was scanned below the stack, so no stack holds it
+        assert [p["stack"] for p in positions] == ["MSession_0/MUnit_0"] * 3 + [None]
+        assert [p["slice"] for p in positions] == [3, 7, 3, None]
+        assert [p["in_stack"] for p in positions] == [True, True, True, None]
         assert scan.line_positions is positions
         assert stack.line_positions is None
     finally:
@@ -169,6 +176,7 @@ def test_trace_rows_on_a_line_scan_know_their_line(mesc_path):
         drawn_row = widget.traces.add(RoiTrace(uid=5, F=np.zeros(6, np.float32), z=2, c=0))
         assert widget._line_position(results_row)["start_um"] == [120.0, 204.0, -46.0]
         assert widget._line_position(drawn_row)["start_um"] == [105.0, 220.0, -53.9]
+        assert widget._line_position(results_row)["slice"] == 7
         assert widget._trace_cells(results_row.key)[1:4] == ("2", "1", "voltage")
         assert len(widget._trace_cells(drawn_row.key)) == 5
         # a row's own record wins over the recording's
@@ -192,6 +200,13 @@ def test_a_stack_or_picture_has_no_reference_image(mesc_path):
     finally:
         stack.close()
         snap.close()
+
+
+SHOWN = []
+
+
+def record_show(unit, at):
+    SHOWN.append((unit, at))
 
 
 class ViewerHost:
@@ -220,7 +235,8 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
     iw.show()
     strip = TopStrip(iw.figure)
     host = ViewerHost(iw)
-    view = ReferenceView(host)
+    SHOWN.clear()
+    view = ReferenceView(host, on_show=record_show)
     errors = []
 
     def guarded(*_args):
@@ -242,9 +258,9 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         assert [t for _p, _c, t in lines] == [SELECTED_THICKNESS, ON_THICKNESS, ON_THICKNESS, ON_THICKNESS]
         assert [c[3] for _p, c, _t in lines] == [1.0, 1.0, 1.0, 1.0]
         assert all(p.shape == (2, 2) for p, _c, _t in lines)
-        # the line scanned below the stack is drawn on the stack's max all the same
-        assert [t for _p, _c, t in view.contours("MUnit_0 Z-stack max")] == [
-            SELECTED_THICKNESS, ON_THICKNESS, ON_THICKNESS, ON_THICKNESS,
+        # the stack draws the three lines scanned inside it, not the fourth
+        assert [t for _p, _c, t in view.contours("MUnit_0 slices 4-8")] == [
+            SELECTED_THICKNESS, ON_THICKNESS, ON_THICKNESS,
         ]
         # clicking a line in the popup selects its ROI: the slider (found by
         # position on a line scan) moves and the highlight follows
@@ -257,10 +273,10 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         assert view.pick("MUnit_4 picture", -40.0, -40.0) is None
         assert view.pick("nowhere", 0.0, 0.0) is None
         assert view.contours("nowhere") == []
-        # the same unit again is not rebuilt; a named image is selected
+        # the same unit again is not rebuilt, and opens on the picture
         built = view._built
-        assert view.open(arr, partial(open_unit, mesc_path), select="MUnit_0 Z-stack max")
-        assert view._built is built and view.viewer.current_key == "MUnit_0 Z-stack max"
+        assert view.open(arr, partial(open_unit, mesc_path))
+        assert view._built is built and view.viewer.current_key == "MUnit_4 picture"
         view.close()
         assert not view.is_open
     finally:

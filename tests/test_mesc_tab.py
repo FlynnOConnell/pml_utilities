@@ -95,17 +95,17 @@ def test_unit_row_reports_shape_rate_and_comment(mesc_path):
     assert len(cells) == len(keys) == len(UNIT_COLUMNS)
     assert cells[:2] == ("MSession_0", "MUnit_0")
     assert cells[2] == "timeseries"
-    # no outlines, no picture, no Z-stack: those columns stay empty; RTMC is off
-    assert cells[4:8] == ("-", "-", "no", "-")
-    assert cells[8:13] == ("8", "1", "1", "16", "24")
-    assert cells[13] == "20.0 Hz"
-    assert cells[14] == "0 s"
-    assert cells[15].startswith("2023-11-14 ") and "T" not in cells[15]
-    assert cells[16] == "baseline / second line"
+    # no outlines and no picture: those columns stay empty; RTMC is off
+    assert cells[4:7] == ("-", "-", "no")
+    assert cells[7:12] == ("8", "1", "1", "16", "24")
+    assert cells[12] == "20.0 Hz"
+    assert cells[13] == "0 s"
+    assert cells[14].startswith("2023-11-14 ") and "T" not in cells[14]
+    assert cells[15] == "baseline / second line"
     # numeric columns sort as numbers, not strings
-    assert keys[4] == 0 and keys[6] == 0 and keys[7] == 0
-    assert keys[8] == 8 and keys[13] == 20.0
-    assert unit_row(second)[1][8] == 16
+    assert keys[4] == 0 and keys[6] == 0
+    assert keys[7] == 8 and keys[12] == 20.0
+    assert unit_row(second)[1][7] == 16
 
 
 @pytest.fixture(scope="module")
@@ -166,7 +166,7 @@ def test_companions_fold_into_the_scans_row(linked_mesc_path):
     open their options go through the real ``selectable``; the checkbox
     gives the companions rows again."""
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+    from mbo_utilities.gui.widgets.mesc_units import IMAGE_ICON, MescTabWidget, display_wrap
 
     arr = MescArray(linked_mesc_path, unit=0)
     widget = MescTabWidget(FakeParent([display_wrap(arr)]))
@@ -187,18 +187,12 @@ def test_companions_fold_into_the_scans_row(linked_mesc_path):
         imgui.begin_popup, imgui.end_popup = REAL_BEGIN_POPUP, REAL_END_POPUP
         imgui.selectable = REAL_SELECTABLE
         arr.close()
-    assert "MUnit_0##pic" in BUTTONS and "?##mesc" in BUTTONS and "Reference image##reference" in BUTTONS
-    # RTMC is plain text, never a button
-    assert not any(b.endswith("##rtmc") for b in BUTTONS)
-    assert folded[-3:] == [
-        ("MSession_0", True),
-        ("Display MSession_1/MUnit_0", False),
-        ("Reference image: this scan's lines on MUnit_0", False),
-    ]
-    assert [r[0] for r in unfolded[-5:]] == [
-        "MSession_0", "Display MSession_1/MUnit_0", "Reference image: this scan's lines on MUnit_0",
-        "MSession_1", "MSession_1",
-    ]
+    # the picture cell is one button, which opens the reference image. No
+    # popup, and RTMC is plain text, never a button
+    assert f"{IMAGE_ICON} MUnit_0##pic" in BUTTONS and "?##mesc" in BUTTONS
+    assert not any(b.endswith(("##rtmc", "##picimg", "##stack", "##stackimg")) for b in BUTTONS)
+    assert folded[-1:] == [("MSession_0", True)]
+    assert [r[0] for r in unfolded[-3:]] == ["MSession_0", "MSession_1", "MSession_1"]
 
 
 def test_unit_row_names_the_companions(linked_mesc_path):
@@ -206,7 +200,6 @@ def test_unit_row_names_the_companions(linked_mesc_path):
     from mbo_utilities.gui.widgets.mesc_units import (
         PICTURE_COLUMN,
         RTMC_COLUMN,
-        STACK_COLUMN,
         companions,
         describe_unit,
         rtmc_on,
@@ -222,14 +215,9 @@ def test_unit_row_names_the_companions(linked_mesc_path):
     cells, keys = unit_row(scan)
     assert cells[:2] == ("MSession_0", "MUnit_0")
     assert cells[4] == "4 lines" and cells[PICTURE_COLUMN] == "MUnit_0" and cells[RTMC_COLUMN] == "no"
-    assert keys[4] == 4 and keys[RTMC_COLUMN] == 0 and cells[STACK_COLUMN] == "-"
+    assert keys[4] == 4 and keys[RTMC_COLUMN] == 0
     moved = unit_row({**scan, "rtmc": ["X total"], "rtmc_armed": True})
     assert moved[0][RTMC_COLUMN] == "yes" and moved[1][RTMC_COLUMN] == 1
-    # a Z-stack's scans come from the geometry, handed in by the tab
-    cells, keys = unit_row(scan, stacks=["MSession_0/MUnit_9"])
-    assert cells[STACK_COLUMN] == "MUnit_9" and keys[STACK_COLUMN] == 1
-    stack = {**snap, "kind": "zstack"}
-    assert unit_row(stack, stacks=[scan["key"], "x"])[0][STACK_COLUMN] == "2 scans"
     assert unit_row(snap)[0][:2] == ("MSession_1", "MUnit_0")
     assert unit_row(snap)[0][PICTURE_COLUMN] == "-"
     by_key = {u["key"]: u for u in (scan, snap, stream)}
@@ -350,43 +338,60 @@ def stack_mesc_path(tmp_path_factory):
     return path
 
 
-def test_zstack_column_names_the_stack_around_a_scan(stack_mesc_path):
-    """A scan's row names the Z-stack whose field holds its lines, worked
-    out from the micron positions; the stack's row counts its scans. Both
-    are buttons whose popup displays the other unit; a scan's also opens
-    the reference image on the stack."""
-    from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
-    from mbo_utilities.gui.widgets.mesc_units import (
-        STACK_COLUMN,
-        MescTabWidget,
-        display_wrap,
-        unit_row,
-    )
+def test_the_table_says_nothing_about_z_stacks(stack_mesc_path):
+    """A scan's row names only the picture its lines were drawn on. Where the
+    stack around them is, and which slice they sit on, belongs to the
+    reference image, next to the lines themselves."""
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui.widgets.mesc_units import UNIT_COLUMNS, MescTabWidget, display_wrap
 
-    stack, scan = list_mesc_units(stack_mesc_path)
+    assert "Z-stack" not in [name for name, _hidden in UNIT_COLUMNS]
     arr = MescArray(stack_mesc_path, unit=1)
     parent = FakeParent([display_wrap(arr)], arr.slider_dim_labels)
     widget = MescTabWidget(parent)
-    stacks = widget._stacks(arr)
-    assert stacks == {stack["key"]: [scan["key"]], scan["key"]: [stack["key"]]}
-    assert unit_row(scan, stacks[scan["key"]])[0][STACK_COLUMN] == "MUnit_0"
-    assert unit_row(stack, stacks[stack["key"]])[0][STACK_COLUMN] == "1 scan"
     BUTTONS.clear()
-    ROWS.clear()
     imgui.small_button = spy_small_button
-    imgui.begin_popup, imgui.end_popup = spy_begin_popup, spy_end_popup
-    imgui.selectable = spy_selectable
     try:
         draw_frames(widget)
     finally:
         imgui.small_button = REAL_SMALL_BUTTON
-        imgui.begin_popup, imgui.end_popup = REAL_BEGIN_POPUP, REAL_END_POPUP
-        imgui.selectable = REAL_SELECTABLE
         arr.close()
-    assert "MUnit_0##stack" in BUTTONS and "1 scan##stack" in BUTTONS
-    labels = [r[0] for r in ROWS]
-    assert "Display MUnit_0" in labels and "Reference image: this scan's lines on MUnit_0" in labels
-    assert "Display MUnit_1" in labels and "Reference image: this scan's lines on MUnit_1" not in labels
+    # this file's scan has no picture, so it has no button either
+    assert not any("##stack" in b or "##pic" in b for b in BUTTONS)
+
+
+def test_the_reference_popups_button_opens_a_stack_at_its_slice(stack_mesc_path):
+    """The one place the Z-stack is offered: the popup's display button hands
+    the tab a unit and a slice, and the tab applies it on the next frame, so
+    the viewer lands on the tissue the lines were scanned in, not on slice 1."""
+    pytest.importorskip("fastplotlib.widgets.nd_widget")
+    from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
+    from mbo_utilities.gui.mesc_reference import roi_slider
+    from mbo_utilities.gui.run_gui import _create_image_widget
+    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
+    from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+
+    stack, scan = list_mesc_units(stack_mesc_path)
+    arr = MescArray(stack_mesc_path, unit=1)
+    iw = _create_image_widget(arr, widget="preview", figure_kwargs_override={"size": (640, 480)})
+    try:
+        gui = next(w for w in iw.figure.imgui_windows.values() if isinstance(w, PreviewDataWidget))
+        tab = MescTabWidget(gui)
+        # nothing happens inside the popup's own draw; the frame after applies it
+        tab._show_reference_unit(stack["key"], 3)
+        assert tab._pending is not None
+        tab._frame()
+        assert tab._pending is None
+        zdim = roi_slider(gui.image_widget.dim_names)
+        assert zdim is not None and int(gui.image_widget.indices[zdim]) == 3
+        # a picture carries no slice, so the viewer opens it where it opens
+        tab._switch(scan)
+        tab._show_reference_unit(stack["key"], None)
+        tab._frame()
+        assert int(gui.image_widget.indices[roi_slider(gui.image_widget.dim_names)]) == 0
+    finally:
+        iw.close()
+        arr.close()
 
 
 def pump(widget, seconds: float = 60.0):

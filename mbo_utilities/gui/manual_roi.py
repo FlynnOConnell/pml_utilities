@@ -100,7 +100,7 @@ from mbo_utilities.arrays.features._slicing import index_window
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
 from mbo_utilities.results import unit_name
 from mbo_utilities.gui.playhead import Playhead, TimeAxis
-from mbo_utilities.gui.imgui.lines import subplots
+from mbo_utilities.gui.imgui.lines import plot_style, subplots
 from mbo_utilities.gui.imgui.motion import MotionPlot
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.annotation import (
@@ -207,7 +207,6 @@ TRACE_COLUMNS = (
     ("id", 1.4, False),
     ("z", 0.7, False),
     ("c", 0.7, False),
-    ("pipeline", 1.2, False),
     ("source", 1.6, True),
     ("frames", 1.0, True),
     ("peak", 1.0, True),
@@ -286,7 +285,8 @@ KEYBINDS = (
     ("y", "promote the selected algo ROI"),
     ("n", "discard the selected algo ROI"),
     ("x", "accept / reject the selected algo ROI"),
-    ("t", "trace the selected ROI (as the Process tab's ROIs pipeline is set)"),
+    ("t", "quick trace the selected ROI: its mean, read where the Process tab points it"),
+    ("shift+t", "run the selection through the Process tab's engine"),
     ("b", "toggle the drawn overlay"),
     ("d", "toggle the algo overlay"),
     ("o", "cycle how masks draw: circle / outline / fill"),
@@ -344,6 +344,8 @@ def help_markdown() -> str:
 
 
 _CURSOR_COLOR = imgui.ImVec4(1.0, 0.85, 0.3, 0.9)
+# the trace reads over the neuropil under it, which keeps implot's 1.0
+_TRACE_WEIGHT = 1.5
 _FNEU_COLOR = (0.25, 0.55, 1.0, 1.0)
 _fneu_cmap: int | None = None
 
@@ -2669,6 +2671,26 @@ class ManualRoiWidget:
         self._run_error = None
         self.status = f"{run.description} started"
 
+    def selection_indices(self) -> list[int]:
+        """Drawn ROIs the selection covers: the group if there is one, else the selected ROI."""
+        grouped = [k for si, k in self.buffer if si < 0]
+        return grouped or ([self.selected] if self.selected >= 0 else [])
+
+    def run_selection(self, indices: list[int] | None = None):
+        """Run the selection through the engine the Process tab's ROIs pipeline is set to.
+
+        One ROI goes to its own ``rois_roiNN/`` as the row button does; a group
+        goes to the tab's tag in one job, as picking "selected" there does.
+        """
+        indices = self.selection_indices() if indices is None else indices
+        if not indices:
+            self.status = "select an ROI first"
+            return
+        if len(indices) == 1:
+            self.run_roi(indices[0])
+        else:
+            self.run_rois(indices, self.effective_tag)
+
     def run_roi(self, index: int):
         """Run one drawn ROI into ``rois_roiNN/`` (the R tag, 1-based)."""
         self.run_rois([index], DimensionTag(TAG_REGISTRY["R"], index + 1, None).to_string())
@@ -2921,8 +2943,10 @@ class ManualRoiWidget:
             self.toggle_derived_overlay()
         if imgui.is_key_pressed(imgui.Key.o, False):
             self.cycle_mask_mode()
-        if imgui.is_key_pressed(imgui.Key.t, False) and self.selected >= 0:
-            if self.trace_disabled(self.selected) is None:
+        if imgui.is_key_pressed(imgui.Key.t, False):
+            if imgui.get_io().key_shift:
+                self.run_selection()
+            elif self.selected >= 0 and self.trace_disabled(self.selected) is None:
                 self.quick_trace(self.selected)
         if self.selected_derived is not None:
             if imgui.is_key_pressed(imgui.Key.y, False):
@@ -3427,6 +3451,7 @@ class ManualRoiWidget:
             if imgui.small_button("ungroup"):
                 self.buffer_clear()
             set_tooltip("Empty the group (esc)", show_mark=False)
+            self._draw_run_selection("run group")
             imgui.text_disabled("label buttons and keys 1-9 apply to the whole group")
         elif self.selected >= 0:
             imgui.set_next_item_width(-1)
@@ -3437,6 +3462,8 @@ class ManualRoiWidget:
                 self._autosave()
             if imgui.button("Delete selected", imgui.ImVec2(em(9), 0)):
                 self.delete_roi(self.selected)
+            imgui.same_line(0, em(0.6))
+            self._draw_run_selection("run selected")
         elif self.selected_derived is not None:
             si, k = self.selected_derived
             s = self.derived[si]
@@ -3460,6 +3487,25 @@ class ManualRoiWidget:
             imgui.button("Delete selected", imgui.ImVec2(em(9), 0))
             imgui.end_disabled()
         self._draw_run_all()
+
+    def _draw_run_selection(self, label: str):
+        """Run the selection through the engine, from where the selection already is."""
+        indices = self.selection_indices()
+        why = "no data path to write beside" if self.fpath is None else None
+        if why is None and not indices:
+            why = "nothing selected"
+        if why is not None:
+            imgui.begin_disabled()
+        if imgui.button(f"{RUN_ICON} {label} ({self.engine})", imgui.ImVec2(em(12), 0)):
+            self.run_selection(indices)
+        if why is not None:
+            imgui.end_disabled()
+        if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+            imgui.set_tooltip(
+                why
+                or f"Run {len(indices)} ROI(s) through {self.engine} ({self._where_label()});"
+                   f" the rows land in the Traces tab (shift+T)"
+            )
 
     def _draw_run_all(self):
         """The run-all row pinned under the table.
@@ -3966,16 +4012,19 @@ class ManualRoiWidget:
         if not show_trace and not show_motion:
             return
         height = max(imgui.get_content_region_avail().y - 4, 60.0)
-        if linked:
-            link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
-            with subplots("##roi_trace_sub", 2, 1, height, flags=link, ratios=self._motion_ratios) as ok:
-                if ok:
-                    self._draw_trace_plot(lines, -1.0)
-                    self._draw_motion_plot(motion, -1.0)
-        elif show_trace:
-            self._draw_trace_plot(lines, height)
-        else:
-            self._draw_motion_plot(motion, height)
+        # one scope over both plots: they stack in the same panel, so a frame
+        # around either would be a box around half of it
+        with plot_style():
+            if linked:
+                link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
+                with subplots("##roi_trace_sub", 2, 1, height, flags=link, ratios=self._motion_ratios) as ok:
+                    if ok:
+                        self._draw_trace_plot(lines, -1.0)
+                        self._draw_motion_plot(motion, -1.0)
+            elif show_trace:
+                self._draw_trace_plot(lines, height)
+            else:
+                self._draw_motion_plot(motion, height)
 
     def _draw_dff_settings(self, rows) -> None:
         """The popup editing the panel's dF/F baseline; it starts from the
@@ -4068,7 +4117,10 @@ class ManualRoiWidget:
                 rgb = self._trace_color(tkey)
                 if rgb is not None:
                     implot.push_colormap(_line_colormap(rgb))
-                implot.plot_line(label, self._windowed(y), xscale=xscale, xstart=xstart)
+                implot.plot_line(
+                    label, self._windowed(y), xscale=xscale, xstart=xstart,
+                    spec=implot.Spec(line_weight=_TRACE_WEIGHT),
+                )
                 if rgb is not None:
                     implot.pop_colormap()
                 if yneu is not None:
@@ -4115,7 +4167,7 @@ class ManualRoiWidget:
             _shown, z, c, engine, source = self._trace_cells(key)
             values = {
                 "id": self._trace_shown(key)[0], "z": z, "c": c,
-                "pipeline": engine, "source": source, "frames": n, "peak": peak,
+                "source": source, "frames": n, "peak": peak,
             }
             return values.get(TRACE_COLUMNS[min(col, len(TRACE_COLUMNS) - 1)][0], 0)
 
@@ -4140,7 +4192,7 @@ class ManualRoiWidget:
         if not placed:
             return (shown, "", "", trace.engine, trace.source)
         return (
-            shown, f"{trace.z + 1}", f"{trace.c + 1}", trace.engine,
+            shown, f"{trace.z + 1}", f"{trace.c}", trace.engine,
             trace.source + self._binning_tag(key),
         )
 
@@ -4224,11 +4276,8 @@ class ManualRoiWidget:
             return
         imgui.table_setup_scroll_freeze(0, 1)
         stretch = imgui.TableColumnFlags_.width_stretch
-        # z and c only say something on data with more than one of them
-        flat = {
-            "z": self.store.axis_size("z") <= 1,
-            "c": self.store.axis_size("c") <= 1,
-        }
+        # z only says something on data with more than one plane
+        flat = {"z": self.store.axis_size("z") <= 1}
         for i, (name, weight, hidden) in enumerate(TRACE_COLUMNS):
             column_flags = stretch
             if i == 0:
@@ -4279,18 +4328,23 @@ class ManualRoiWidget:
                     self.select_trace(key)
             trace = self.traces.get(key)
             pos = self._line_position(trace) if trace is not None else {}
-            if pos.get("start_um") is not None and imgui.is_item_hovered():
-                # what was collected on this row and where: the line's ends,
-                # length and sample spacing
-                (x0, y0), (x1, y1) = pos["start_um"][:2], pos["end_um"][:2]
-                imgui.set_tooltip(
-                    f"{shown}: {trace.name}\n"
-                    f"line ({x0:.0f}, {y0:.0f}) -> ({x1:.0f}, {y1:.0f}) um, {pos['length_um']:.1f} um long"
-                    + (f", {pos['sample_um']:.2f} um per sample" if pos.get("sample_um") else "")
-                )
+            if trace is not None and imgui.is_item_hovered():
+                # what this row is and how it was extracted, and for a line row
+                # where it was collected: the line's ends, length and spacing
+                tip = f"{shown}: {trace.name}"
+                if engine:
+                    tip += f"\nextracted with {engine}"
+                if pos.get("start_um") is not None:
+                    (x0, y0), (x1, y1) = pos["start_um"][:2], pos["end_um"][:2]
+                    tip += (
+                        f"\nline ({x0:.0f}, {y0:.0f}) -> ({x1:.0f}, {y1:.0f}) um, "
+                        f"{pos['length_um']:.1f} um long"
+                        + (f", {pos['sample_um']:.2f} um per sample" if pos.get("sample_um") else "")
+                    )
+                imgui.set_tooltip(tip)
             n, _mean, peak, _snr = self._trace_stat(key)
             for text, numeric in (
-                (z_text, True), (c_text, True), (engine, False),
+                (z_text, True), (c_text, True),
                 (source, False), (f"{n}", True), (f"{peak:.1f}", True),
             ):
                 if not imgui.table_next_column():

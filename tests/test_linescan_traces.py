@@ -84,7 +84,7 @@ def test_line_traces_are_one_external_set_following_the_roi_slider(viewer):
     # each row is its line on the unit's ROI axis; the synthetic file has no scan geometry
     assert [t.z for t in sorted(rows, key=lambda t: t.member)] == list(range(7))
     assert all(t.c == 0 and t.extra == {"line": t.member} for t in rows)
-    assert roi._trace_cells(first.key)[:3] == ("ROI 0", "1", "1")
+    assert roi._trace_cells(first.key)[:3] == ("ROI 0", "1", "0")
     assert roi.pending_traces is None
     assert roi.trace_sel == {("member", name, 0)}
     # a line row stands for no drawn ROI

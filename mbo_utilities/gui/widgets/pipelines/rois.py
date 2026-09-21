@@ -131,10 +131,7 @@ class RoiPipelineWidget(PipelineWidget):
         if roi is None or self.target == "full":
             return []
         if self.target == "selected":
-            grouped = [k for si, k in roi.buffer if si < 0]
-            if grouped:
-                return grouped
-            return [roi.selected] if roi.selected >= 0 else []
+            return roi.selection_indices()
         if self.target == "listed":
             return roi.listed_drawn()
         if self.target == "plane":
