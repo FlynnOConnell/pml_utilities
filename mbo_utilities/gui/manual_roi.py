@@ -207,7 +207,6 @@ TRACE_COLUMNS = (
     ("id", 1.4, False),
     ("z", 0.7, False),
     ("c", 0.7, False),
-    ("depth", 0.9, False),
     ("pipeline", 1.2, False),
     ("source", 1.6, True),
     ("frames", 1.0, True),
@@ -3926,17 +3925,15 @@ class ManualRoiWidget:
             # the axis means something else now, so the old range would not
             # show anything sensible
             self._force_fit = True
-        # a host showing a file of several recordings offers the view around
-        # this one (the MESc tab's outer view): the image the slider's ROI
-        # was placed on, that ROI thick, with its depth
-        if callable(getattr(self.host, "outer_view", None)):
+        # a host showing a file of several recordings offers the picture this
+        # one's lines or patches were drawn on (the MESc tab's reference image)
+        if callable(getattr(self.host, "reference_view", None)):
             imgui.same_line(0, 12)
-            if imgui.small_button("Outer view##traces"):
-                self.host.outer_view()
+            if imgui.small_button("Reference image##traces"):
+                self.host.reference_view()
             set_tooltip(
-                "The snapshot and Z-stacks this recording's ROIs were placed on, the "
-                "slider's ROI thick with its depth, and the recording's quick "
-                "mean / max / std.",
+                "The picture this recording's lines or patches were drawn on, with "
+                "them drawn and the slider's ROI thick. Click one there to select it.",
                 show_mark=False,
             )
         imgui.same_line(0, 12)
@@ -4115,13 +4112,9 @@ class ManualRoiWidget:
 
         def sort_key(key):
             n, _mean, peak, _snr = self._trace_stat(key)
-            _shown, z, c, engine, source, _depth = self._trace_cells(key)
-            trace = self.traces.get(key)
-            pos = self._line_position(trace) if trace is not None else {}
-            dz = pos.get("dz_um", pos.get("z_um"))
+            _shown, z, c, engine, source = self._trace_cells(key)
             values = {
                 "id": self._trace_shown(key)[0], "z": z, "c": c,
-                "depth": float("inf") if dz is None else float(dz),
                 "pipeline": engine, "source": source, "frames": n, "peak": peak,
             }
             return values.get(TRACE_COLUMNS[min(col, len(TRACE_COLUMNS) - 1)][0], 0)
@@ -4134,34 +4127,21 @@ class ManualRoiWidget:
         return self.traces.keys
 
     def _trace_cells(self, key) -> tuple:
-        """The text of one row's roi / z / c / engine / source / depth
-        columns; depth is how far the row's line sits off the snapshot it
-        was drawn on (``extra["dz_um"]``), blank without one."""
+        """The text of one row's roi / z / c / engine / source columns."""
         trace = self.traces.get(key)
         _v, shown = self._trace_shown(key)
         if trace is None:
-            return (shown, "", "", "", "", "")
-        # the offset from the snapshot the line was drawn on; else the Z-stack
-        # slice it sits on; else its depth in the file's frame
-        pos = self._line_position(trace)
-        if pos.get("dz_um") is not None:
-            depth = f"{pos['dz_um']:+.1f} um"
-        elif pos.get("slice") is not None:
-            depth = f"slice {pos['slice'] + 1}" if pos.get("in_stack") else "outside stack"
-        elif pos.get("z_um") is not None:
-            depth = f"z {pos['z_um']:+.1f} um"
-        else:
-            depth = ""
+            return (shown, "", "", "", "")
         # a results file's rows have no slice to name
         placed = (
             trace.stands_for_roi or trace.source == FULL_IMAGE
             or "line" in trace.extra or self._set_by_name(trace.source) is not None
         )
         if not placed:
-            return (shown, "", "", trace.engine, trace.source, depth)
+            return (shown, "", "", trace.engine, trace.source)
         return (
             shown, f"{trace.z + 1}", f"{trace.c + 1}", trace.engine,
-            trace.source + self._binning_tag(key), depth,
+            trace.source + self._binning_tag(key),
         )
 
     def _trace_stat(self, key) -> tuple[int, float, float, float]:
@@ -4248,7 +4228,6 @@ class ManualRoiWidget:
         flat = {
             "z": self.store.axis_size("z") <= 1,
             "c": self.store.axis_size("c") <= 1,
-            "depth": all(not self._line_position(t) for t in self.traces),
         }
         for i, (name, weight, hidden) in enumerate(TRACE_COLUMNS):
             column_flags = stretch
@@ -4279,7 +4258,7 @@ class ManualRoiWidget:
             tag = "_".join(str(part) for part in key)
             imgui.table_next_row()
             imgui.table_next_column()
-            shown, z_text, c_text, engine, source, depth = self._trace_cells(key)
+            shown, z_text, c_text, engine, source = self._trace_cells(key)
             picked = key in self.trace_sel
             rgb = self._trace_color(key)
             if rgb is not None:
@@ -4300,31 +4279,18 @@ class ManualRoiWidget:
                     self.select_trace(key)
             trace = self.traces.get(key)
             pos = self._line_position(trace) if trace is not None else {}
-            if pos and imgui.is_item_hovered():
+            if pos.get("start_um") is not None and imgui.is_item_hovered():
                 # what was collected on this row and where: the line's ends,
-                # length and sample spacing, its depth, and the stack slice
-                where = [f"{shown}: {trace.name}"]
-                if pos.get("start_um") is not None:
-                    (x0, y0), (x1, y1) = pos["start_um"][:2], pos["end_um"][:2]
-                    where.append(
-                        f"line ({x0:.0f}, {y0:.0f}) -> ({x1:.0f}, {y1:.0f}) um, {pos['length_um']:.1f} um long"
-                        + (f", {pos['sample_um']:.2f} um per sample" if pos.get("sample_um") else "")
-                    )
-                if pos.get("z_um") is not None:
-                    where.append(
-                        f"depth z {pos['z_um']:+.1f} um"
-                        + (f", {pos['dz_um']:+.1f} um off the snapshot it was drawn on" if pos.get("dz_um") is not None else "")
-                    )
-                if pos.get("stack"):
-                    stack = pos["stack"].rsplit("/", 1)[-1]
-                    where.append(
-                        f"{stack} slice {pos['slice'] + 1} ({pos['slice_dz_um']:+.1f} um)"
-                        if pos.get("in_stack") else f"outside {stack} by {abs(pos['slice_dz_um']):.1f} um"
-                    )
-                imgui.set_tooltip("\n".join(where))
+                # length and sample spacing
+                (x0, y0), (x1, y1) = pos["start_um"][:2], pos["end_um"][:2]
+                imgui.set_tooltip(
+                    f"{shown}: {trace.name}\n"
+                    f"line ({x0:.0f}, {y0:.0f}) -> ({x1:.0f}, {y1:.0f}) um, {pos['length_um']:.1f} um long"
+                    + (f", {pos['sample_um']:.2f} um per sample" if pos.get("sample_um") else "")
+                )
             n, _mean, peak, _snr = self._trace_stat(key)
             for text, numeric in (
-                (z_text, True), (c_text, True), (depth, True), (engine, False),
+                (z_text, True), (c_text, True), (engine, False),
                 (source, False), (f"{n}", True), (f"{peak:.1f}", True),
             ):
                 if not imgui.table_next_column():

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import time
 
 import h5py
@@ -71,13 +70,14 @@ def draw_frames(widget, n=2):
     """Draw ``widget`` for ``n`` frames on a bare imgui context."""
     ctx = imgui.create_context()
     io = imgui.get_io()
-    io.display_size = imgui.ImVec2(1400, 700)
+    # wide enough for every column: a clipped column draws nothing
+    io.display_size = imgui.ImVec2(2400, 700)
     # imgui 1.92 builds fonts lazily once a renderer claims texture support
     io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
     try:
         for _ in range(n):
             imgui.new_frame()
-            imgui.set_next_window_size(imgui.ImVec2(1300, 600))
+            imgui.set_next_window_size(imgui.ImVec2(2300, 600))
             imgui.begin("host")
             widget.draw()
             imgui.end()
@@ -95,17 +95,17 @@ def test_unit_row_reports_shape_rate_and_comment(mesc_path):
     assert len(cells) == len(keys) == len(UNIT_COLUMNS)
     assert cells[:2] == ("MSession_0", "MUnit_0")
     assert cells[2] == "timeseries"
-    # no outlines, nothing drawn on the shown image, no links: those columns stay empty
-    assert cells[4:7] == ("-", "-", "-")
-    assert cells[7:12] == ("8", "1", "1", "16", "24")
-    assert cells[12] == "20.0 Hz"
-    assert cells[13] == "0 s"
-    assert cells[14].startswith("2023-11-14 ") and "T" not in cells[14]
-    assert cells[15] == "baseline / second line"
-    # numeric columns sort as numbers, not strings; nothing drawn sorts last
-    assert keys[4] == 0 and keys[5] == float("inf") and keys[6] == 0 and keys[7] == 8
-    assert keys[12] == 20.0
-    assert unit_row(second)[1][7] == 16
+    # no outlines, no picture, no Z-stack: those columns stay empty; RTMC is off
+    assert cells[4:8] == ("-", "-", "no", "-")
+    assert cells[8:13] == ("8", "1", "1", "16", "24")
+    assert cells[13] == "20.0 Hz"
+    assert cells[14] == "0 s"
+    assert cells[15].startswith("2023-11-14 ") and "T" not in cells[15]
+    assert cells[16] == "baseline / second line"
+    # numeric columns sort as numbers, not strings
+    assert keys[4] == 0 and keys[6] == 0 and keys[7] == 0
+    assert keys[8] == 8 and keys[13] == 20.0
+    assert unit_row(second)[1][8] == 16
 
 
 @pytest.fixture(scope="module")
@@ -145,8 +145,8 @@ def spy_small_button(label):
 
 
 def spy_begin_popup(str_id, flags=0):
-    # pretend every links popup is open so its rows draw in the host window
-    return str_id.startswith("##links_")
+    # pretend every cell popup is open so its options draw in the host window
+    return str_id.startswith(("##pic_", "##rtmc_", "##stack_"))
 
 
 def spy_end_popup():
@@ -159,10 +159,12 @@ REAL_BEGIN_POPUP = imgui.begin_popup
 REAL_END_POPUP = imgui.end_popup
 
 
-def test_table_draws_a_links_button_only_for_paired_units(linked_mesc_path):
-    """The links cell is a button carrying the count, or a dash: the scan
-    has two (snapshot, RTMC stream), its snapshot and stream one each. With
-    the popups forced open their rows go through the real ``selectable``."""
+def test_companions_fold_into_the_scans_row(linked_mesc_path):
+    """The scan's picture and RTMC reference unit are cells of its row, not
+    rows of their own: the picture cell is a button naming the picture, the
+    RTMC cell says no (a reference unit, no curves). With the popups forced
+    open their options go through the real ``selectable``; the checkbox
+    gives the companions rows again."""
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
 
@@ -175,41 +177,72 @@ def test_table_draws_a_links_button_only_for_paired_units(linked_mesc_path):
     imgui.selectable = spy_selectable
     try:
         draw_frames(widget)
+        folded = [r for r in ROWS]
+        widget._show_companions = True
+        ROWS.clear()
+        draw_frames(widget)
+        unfolded = [r for r in ROWS]
     finally:
         imgui.small_button = REAL_SMALL_BUTTON
         imgui.begin_popup, imgui.end_popup = REAL_BEGIN_POPUP, REAL_END_POPUP
         imgui.selectable = REAL_SELECTABLE
         arr.close()
-    assert BUTTONS[-3:] == ["2##links", "1##links", "1##links"]
-    assert [r[0] for r in ROWS[-7:]] == [
-        "MSession_0", "snapshot it was drawn on  MSession_1/MUnit_0  ·  timeseries",
-        "its RTMC motion stream  MSession_1/MUnit_1  ·  timeseries",
-        "MSession_1", "scan drawn on it  MSession_0/MUnit_0  ·  linescan",
-        "MSession_1", "scan it is the RTMC stream of  MSession_0/MUnit_0  ·  linescan",
+    assert "MUnit_0##pic" in BUTTONS and "?##mesc" in BUTTONS and "Reference image##reference" in BUTTONS
+    # RTMC is plain text, never a button
+    assert not any(b.endswith("##rtmc") for b in BUTTONS)
+    assert folded[-3:] == [
+        ("MSession_0", True),
+        ("Display MSession_1/MUnit_0", False),
+        ("Reference image: this scan's lines on MUnit_0", False),
+    ]
+    assert [r[0] for r in unfolded[-5:]] == [
+        "MSession_0", "Display MSession_1/MUnit_0", "Reference image: this scan's lines on MUnit_0",
+        "MSession_1", "MSession_1",
     ]
 
 
-def test_unit_links_and_row_counts(linked_mesc_path):
+def test_unit_row_names_the_companions(linked_mesc_path):
     from mbo_utilities.arrays.mesc import list_mesc_units
-    from mbo_utilities.gui.widgets.mesc_units import LINKS_COLUMN, unit_links, unit_row
+    from mbo_utilities.gui.widgets.mesc_units import (
+        PICTURE_COLUMN,
+        RTMC_COLUMN,
+        STACK_COLUMN,
+        companions,
+        describe_unit,
+        rtmc_on,
+        unit_row,
+    )
 
     scan, snap, stream = list_mesc_units(linked_mesc_path)
-    assert unit_links(scan) == [
-        ("snapshot it was drawn on", "MSession_1/MUnit_0"),
-        ("its RTMC motion stream", "MSession_1/MUnit_1"),
-    ]
-    assert unit_links(snap) == [("scan drawn on it", "MSession_0/MUnit_0")]
-    assert unit_links(stream) == [("scan it is the RTMC stream of", "MSession_0/MUnit_0")]
-    # a Z-stack's scans come from the geometry, handed in by the tab
-    assert unit_links(snap, ["MSession_0/MUnit_2"])[-1] == (
-        "scan inside this Z-stack", "MSession_0/MUnit_2",
-    )
+    assert companions([scan, snap, stream]) == {snap["key"]: scan["key"], stream["key"]: scan["key"]}
+    # a reference unit alone is not RTMC on; curves are, with or without samples
+    assert rtmc_on(scan) is False and rtmc_on(snap) is False
+    assert rtmc_on({"rtmc": ["X total", "Z total"], "rtmc_armed": True}) is True
+    assert rtmc_on({"rtmc": [], "rtmc_armed": True}) is True
     cells, keys = unit_row(scan)
     assert cells[:2] == ("MSession_0", "MUnit_0")
-    assert cells[4] == "4 lines" and cells[LINKS_COLUMN] == "2"
-    assert keys[4] == 4 and keys[LINKS_COLUMN] == 2
+    assert cells[4] == "4 lines" and cells[PICTURE_COLUMN] == "MUnit_0" and cells[RTMC_COLUMN] == "no"
+    assert keys[4] == 4 and keys[RTMC_COLUMN] == 0 and cells[STACK_COLUMN] == "-"
+    moved = unit_row({**scan, "rtmc": ["X total"], "rtmc_armed": True})
+    assert moved[0][RTMC_COLUMN] == "yes" and moved[1][RTMC_COLUMN] == 1
+    # a Z-stack's scans come from the geometry, handed in by the tab
+    cells, keys = unit_row(scan, stacks=["MSession_0/MUnit_9"])
+    assert cells[STACK_COLUMN] == "MUnit_9" and keys[STACK_COLUMN] == 1
+    stack = {**snap, "kind": "zstack"}
+    assert unit_row(stack, stacks=[scan["key"], "x"])[0][STACK_COLUMN] == "2 scans"
     assert unit_row(snap)[0][:2] == ("MSession_1", "MUnit_0")
-    assert unit_row(snap)[0][LINKS_COLUMN] == "1"
+    assert unit_row(snap)[0][PICTURE_COLUMN] == "-"
+    by_key = {u["key"]: u for u in (scan, snap, stream)}
+    text = describe_unit(scan, by_key)
+    assert text.startswith("MSession_0/MUnit_0\nLine scan: 4 lines of 2 samples, 1 px wide, 500 times a second")
+    assert "Picture: MSession_1/MUnit_0" in text
+    assert "RTMC off; reference pixels MSession_1/MUnit_1" in text
+    assert "RTMC on; reference pixels MSession_1/MUnit_1" in describe_unit(
+        {**scan, "rtmc": [], "rtmc_armed": True}, by_key
+    )
+    assert describe_unit(snap, by_key).splitlines()[1].startswith("The picture the lines or patches were drawn on")
+    assert "Picture of MSession_0/MUnit_0" in describe_unit(snap, by_key)
+    assert "RTMC reference pixels of MSession_0/MUnit_0" in describe_unit(stream, by_key)
 
 
 def test_tab_appears_first_and_only_for_mesc_data(mesc_path):
@@ -317,125 +350,43 @@ def stack_mesc_path(tmp_path_factory):
     return path
 
 
-def test_depth_column_says_where_every_unit_sits(stack_mesc_path):
-    """Every unit's depth, whatever unit is on screen: a scan's ROIs (their
-    spread), a Z-stack's slice range, a snapshot's plane. The geometry is
-    absolute; the tab counts from the first Z-stack's origin, as MESc does."""
+def test_zstack_column_names_the_stack_around_a_scan(stack_mesc_path):
+    """A scan's row names the Z-stack whose field holds its lines, worked
+    out from the micron positions; the stack's row counts its scans. Both
+    are buttons whose popup displays the other unit; a scan's also opens
+    the reference image on the stack."""
     from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
-    from mbo_utilities.arrays.mesc_geometry import unit_depths
     from mbo_utilities.gui.widgets.mesc_units import (
-        DEPTH_COLUMN,
+        STACK_COLUMN,
         MescTabWidget,
         display_wrap,
         unit_row,
     )
 
     stack, scan = list_mesc_units(stack_mesc_path)
-    depths = unit_depths(stack_mesc_path)
-    # no snapshot in this file: depths, no offsets
-    assert depths[scan["key"]] == {"z_um": [-54.0, -46.0, -53.9, -70.0], "dz_um": None}
-    assert depths[stack["key"]] == {"range_um": (-60.0, -40.0), "zdim": 11, "origin_um": -50.0}
-    cells, keys = unit_row(scan, depth=depths[scan["key"]])
-    assert cells[DEPTH_COLUMN] == "-70.0..-46.0 um" and keys[DEPTH_COLUMN] == -70.0
-    cells, keys = unit_row(stack, depth=depths[stack["key"]])
-    assert cells[DEPTH_COLUMN] == "-60.0..-40.0 um" and keys[DEPTH_COLUMN] == -60.0
-    assert unit_row(scan)[0][DEPTH_COLUMN] == "-"
-    # ROIs at one depth read as one number; a snapshot gives its plane
-    assert unit_row(scan, depth={"z_um": [-54.01, -54.0], "dz_um": [2.99, 3.0]})[0][DEPTH_COLUMN] == "-54.0 um"
-    assert unit_row(stack, depth={"plane_um": -97.0})[0] [DEPTH_COLUMN] == "-97.0 um"
-
-    # the scan is on screen: its own row and the stack's still say where they
-    # sit, counted from the stack's origin (-50 um) the way MESc shows depth
     arr = MescArray(stack_mesc_path, unit=1)
     parent = FakeParent([display_wrap(arr)], arr.slider_dim_labels)
     widget = MescTabWidget(parent)
-    assert widget._depths(arr)[1] == stack["key"]
-    TEXTS.clear()
-    imgui.text = spy_text
+    stacks = widget._stacks(arr)
+    assert stacks == {stack["key"]: [scan["key"]], scan["key"]: [stack["key"]]}
+    assert unit_row(scan, stacks[scan["key"]])[0][STACK_COLUMN] == "MUnit_0"
+    assert unit_row(stack, stacks[stack["key"]])[0][STACK_COLUMN] == "1 scan"
+    BUTTONS.clear()
+    ROWS.clear()
+    imgui.small_button = spy_small_button
+    imgui.begin_popup, imgui.end_popup = spy_begin_popup, spy_end_popup
+    imgui.selectable = spy_selectable
     try:
         draw_frames(widget)
-        assert "-20.0..+4.0 um" in TEXTS and "-10.0..+10.0 um" in TEXTS
     finally:
-        imgui.text = REAL_TEXT
+        imgui.small_button = REAL_SMALL_BUTTON
+        imgui.begin_popup, imgui.end_popup = REAL_BEGIN_POPUP, REAL_END_POPUP
+        imgui.selectable = REAL_SELECTABLE
         arr.close()
-
-
-def always_on(_key):
-    return True
-
-
-def always_off(_key):
-    return False
-
-
-class ViewerParent:
-    """A host with a real viewer: what the ROI Overlay widget reads."""
-
-    def __init__(self, iw):
-        self.image_widget = iw
-        self.logger = logging.getLogger("test_mesc_tab")
-
-
-def test_zstack_opens_with_its_rois_drawn_before_any_tab_draws(stack_mesc_path, monkeypatch):
-    """The overlay graphics exist the moment the ROI Overlay widget is built
-    (a unit swap and the launch path build it), not on the Image tab's first
-    draw; they follow the Z slider, and the Widgets menu or the Overlay ROIs
-    checkbox drops them."""
-    pytest.importorskip("fastplotlib.widgets.nd_widget")
-    from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui._ndviewer import MboNDViewer
-    from mbo_utilities.gui.widgets import mesc_units
-    from mbo_utilities.gui.widgets.mesc_units import (
-        GHOST_THICKNESS,
-        ON_THICKNESS,
-        MescOverlayWidget,
-        display_wrap,
-    )
-
-    monkeypatch.setattr(mesc_units, "widget_enabled", always_on)
-    arr = MescArray(stack_mesc_path, unit=0)
-    iw = MboNDViewer(
-        data=display_wrap(arr),
-        slider_dim_names=arr.slider_dim_labels,
-        figure_kwargs={"size": (320, 240)},
-    )
-    iw.show()
-    parent = ViewerParent(iw)
-    try:
-        assert MescOverlayWidget.is_supported(parent)
-        widget = MescOverlayWidget(parent)
-        overlay = parent._mesc_overlay
-        assert overlay is not None and overlay.unit_key == arr.unit_key
-        assert len(overlay.lines.graphics) == 4 and overlay.zdim is not None
-        # slices 3, 7, 3 and one line below the stack: solid follows the slider
-        iw.indices[overlay.zdim] = 3
-        assert [g.thickness for g in overlay.lines.graphics] == [
-            ON_THICKNESS, GHOST_THICKNESS, ON_THICKNESS, GHOST_THICKNESS,
-        ]
-        iw.indices[overlay.zdim] = 7
-        assert [g.thickness for g in overlay.lines.graphics] == [
-            GHOST_THICKNESS, ON_THICKNESS, GHOST_THICKNESS, GHOST_THICKNESS,
-        ]
-        assert all(g.visible for g in overlay.lines.graphics)
-        parent._mesc_overlay_ghosts = overlay.show_ghosts = False
-        overlay.refresh()
-        assert [g.visible for g in overlay.lines.graphics] == [False, True, False, False]
-        # the Widgets menu drops the graphics; a rebuilt widget restores them
-        monkeypatch.setattr(mesc_units, "widget_enabled", always_off)
-        widget.sync()
-        assert parent._mesc_overlay is None
-        monkeypatch.setattr(mesc_units, "widget_enabled", always_on)
-        MescOverlayWidget(parent)
-        assert parent._mesc_overlay is not None
-        assert not parent._mesc_overlay.show_ghosts
-        # so does the Overlay ROIs checkbox, for the session
-        parent._mesc_overlay_on = False
-        MescOverlayWidget(parent)
-        assert parent._mesc_overlay is None
-    finally:
-        mesc_units.close_overlay(parent)
-        iw.close()
-        arr.close()
+    assert "MUnit_0##stack" in BUTTONS and "1 scan##stack" in BUTTONS
+    labels = [r[0] for r in ROWS]
+    assert "Display MUnit_0" in labels and "Reference image: this scan's lines on MUnit_0" in labels
+    assert "Display MUnit_1" in labels and "Reference image: this scan's lines on MUnit_1" not in labels
 
 
 def pump(widget, seconds: float = 60.0):

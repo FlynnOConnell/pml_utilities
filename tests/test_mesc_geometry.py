@@ -273,3 +273,21 @@ def test_overlay_skips_a_unit_whose_outlines_do_not_pair_with_its_rois(mesc_path
             u["nrois"] = 3
     recs = image_overlays(mesc_path, "MSession_0/MUnit_0", units)
     assert {r["munit"] for r in recs} == {"MUnit_3"}
+
+
+def test_a_reference_units_placeholder_viewport_is_no_position(tmp_path):
+    """MEScan stamps an RTMC reference unit with a 1 um square at the origin;
+    that is not where anything was scanned, so it has no viewport."""
+    path = tmp_path / "ref.mesc"
+    with h5py.File(path, "w") as f:
+        u = f.create_group("MSession_1").create_group("MUnit_0")
+        u.attrs.update(
+            {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 1.0,
+             "MeasurementDatePosix": 0, "ImageRoleDebugString": "motionCorrection"}
+        )
+        u.attrs["ReferenceViewportJSON"] = json.dumps(
+            {"viewports": [{"geomTransTransl": [0, 0, 0], "width": 1, "height": 1}]}
+        )
+        u.create_dataset("Channel_0", data=np.zeros((3, 20, 20), np.uint16))
+    assert viewport_geometry(path, "MSession_1/MUnit_0") is None
+    assert image_overlays(path, "MSession_1/MUnit_0") == []

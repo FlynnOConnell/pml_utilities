@@ -807,7 +807,12 @@ def list_mesc_units(path: Path | str) -> list[dict]:
         snapshot, or whose RTMC this stream watched), ``n_outlines`` and
         ``outline_kind`` (the ROI outlines the scan recorded in
         ``CoordinateMapJSON``: ``"line"`` ends or ``"patch"`` corners; 0 and
-        None for a unit without them), ``comment`` and ``start_time``.
+        None for a unit without them), ``rtmc`` (the RTMC curves that moved,
+        ``["X total", "Y total", "Z total"]``, per layer on a Z-stack; empty
+        when RTMC never moved) and ``rtmc_armed`` (True when the scan carries
+        RTMC curves at all: a scan that armed RTMC without the tissue ever
+        moving keeps one-sample curves and an empty ``rtmc``), ``comment``
+        and ``start_time``.
 
     Examples
     --------
@@ -829,8 +834,9 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                 if "Channel_0" not in unit:
                     continue
                 modality = int(_attr(unit, "MethodType", 0) or 0)
+                curves = _parse_curves(unit)
                 try:
-                    layout = _resolve_layout(unit, modality, _parse_curves(unit))
+                    layout = _resolve_layout(unit, modality, curves)
                 except (ValueError, KeyError) as e:
                     logger.warning(f"skipping {session_key}/{munit_key}: {e}")
                     continue
@@ -884,6 +890,8 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                         "rtmc_of": [],
                         "n_outlines": n_outlines,
                         "outline_kind": outline_kind,
+                        "rtmc": sorted(_rtmc_traces(curves)),
+                        "rtmc_armed": any(_RTMC_NAME.match(name) for name in curves),
                         "comment": _attr(unit, "Comment", "") or "",
                         "start_time": _iso_time(_attr(unit, "MeasurementDatePosix")),
                     }

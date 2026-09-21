@@ -714,45 +714,43 @@ the other.
   cross-correlation of background frames against a stack). `line_positions(path,
   unit)` gives each ROI its `start_um` / `end_um`, `z_um`, `length_um`, `sample_um`
   and `dz_um` against the snapshot the lines were drawn on; `roi_placements` puts
-  them on a stack's slices; `image_overlays` draws them; `unit_depths` reads
-  every unit's depth in one pass (a scan's ROI depths and their offsets from its
-  snapshot, a stack's slice range, a snapshot's plane). An AOD unit's rows of the
+  them on a stack's slices; `image_overlays` draws them. An AOD unit's rows of the
   trace table (`linescan_viewer.StandardTraces`, for every `ROI_LAYOUTS` layout:
   the mean of each line or patch, computed in the background unless `F.npy` or PF
   traces exist) are keyed `("member", "<MUnit> lines", k)` or `("member", "<MUnit>
   patches", k)`, carry `z = k` (the unit's ROI axis), `c` = the channel read, and
-  that position in `extra` (`line`, `z_um`, `dz_um`, ...); the label shows `dz_um`.
-  MESc draws every line on the snapshot whatever its depth; the overlay's solid /
-  faint rule and the tab's `dz_um` say how far off the plane each one is.
-- **Outer view.** `gui/mesc_outer_view.py` puts an AOD unit back in its field:
-  `outer_images(mesc, open_unit, c, z)` (GUI-free) is the unit's quick `mean` /
-  `max` / `std` over time at the slice on screen (`unit_projections`, at most
-  `MAX_ELEMENTS` samples; a one-row slice on a unit with several projects every
-  ROI, lines by samples) followed by each reference image carrying its ROIs: the
-  snapshot it was drawn on, then every Z-stack holding it (mean and max over
-  depth, then the slices its ROIs sit on), each with the unit's `image_overlays`
-  records. `OuterView` is that set in a `SummaryImageViewer` popup (masknmf's
-  full-FOV viewer, `roi_provider(key)` returning `(points, rgba, thickness)`
-  polylines: MESc's colours, the slider's ROI `SELECTED_THICKNESS`, off-plane
-  ones `GHOST_ALPHA` or hidden by the ROI Overlay panel's switch). The MESc tab
-  opens it, redraws it from the top strip's hook, reopens it on a unit switch and
-  hands the host `outer_view` (a callable), which the Traces panel offers as a
-  button. Solid / faint (`on_plane`): every ROI placed on a snapshot draws solid,
-  its offset being the depth column's business; on a Z-stack only the ROIs on the
-  slice shown. The MESc tab's `depth` column says where every unit sits, counted
-  from the first Z-stack's z origin as MESc does, else the first snapshot's plane
-  (`unit_depths` is absolute; the tab rebases it and names the origin in the tooltip,
-  which adds each ROI's offset from its snapshot and its slice on the shown stack)
-  and the trace table's `depth` column shows
-  a row's `extra["dz_um"]`, which `MescArray.line_positions` (the reader's cached
-  facet over `mesc_geometry.line_positions`, which also places each line on the
-  first Z-stack holding it: `stack`, `slice`, `slice_dz_um`, `in_stack`) supplies
-  through `ManualRoiWidget._line_position(trace)`: the row's `extra["line"]`, else
-  its `z` on an AOD unit, indexes the recording's placements, under the row's own
-  `extra` (`POSITION_KEYS`); a results file's line rows get theirs stamped at load
-  when the shown recording is their scan. Hovering a row lists the line's ends,
-  length, sample spacing, depth and stack slice. A click on a line in the outer
-  view (`SummaryImageViewer.on_pick`, `OuterView.pick`) moves the ROI slider to it.
+  that position in `extra` (`line`, `z_um`, `dz_um`, ...); the label is the ROI
+  alone. Depth is never a column, a label or a caption: the GUI shows where a
+  line was drawn (the reference image), not how deep it sits. Hovering a trace
+  row lists the line's ends, length and sample spacing
+  (`ManualRoiWidget._line_position`: the row's `extra["line"]`, else its `z` on
+  an AOD unit, indexes the recording's `MescArray.line_positions`, the reader's
+  cached facet over `mesc_geometry.line_positions`, under the row's own `extra`,
+  `POSITION_KEYS`; a results file's line rows get theirs stamped at load when
+  the shown recording is their scan).
+- **Reference image.** `gui/mesc_reference.py` shows where an AOD unit's lines
+  or patches were drawn: `reference_images(mesc, open_unit, c)` (GUI-free) is the
+  picture the unit's ROIs were drawn on (`background_unit`), then every Z-stack
+  whose field holds them (`zstack_contents`), each the max projection over its
+  frames and depth in channel `c` (at most `MAX_ELEMENTS` samples read), carrying
+  the unit's `image_overlays` records. `ReferenceView` is that set in a
+  `SummaryImageViewer` popup (masknmf's full-FOV viewer, `roi_provider(key)`
+  returning `(points, rgba, thickness)` polylines: MESc's colours, every ROI solid
+  whatever its depth, the slider's ROI `SELECTED_THICKNESS`). The MESc tab opens
+  it (its Reference image button, the picture and Z-stack cells' popups), redraws
+  it from the top strip's hook, reopens it on a unit switch and hands the host
+  `reference_view` (a callable), which the Traces panel offers as a button. A
+  click on a line in it (`SummaryImageViewer.on_pick`, `ReferenceView.pick`)
+  moves the ROI slider to it. Nothing draws ROIs on the viewer's own image, and
+  no projection of the unit itself is offered. The MESc tab lists one row per
+  recording: a scan's picture (`background_unit`) and RTMC reference unit
+  (`rtmc_unit`) fold into its row (`mesc_units.companions`); the `picture` cell's
+  popup displays it or opens the reference image on it; the `RTMC` cell is `yes`
+  or `no` (`rtmc_on`: the scan carries RTMC curves, `list_mesc_units`' `rtmc` or
+  `rtmc_armed`), the detail on hover; the `Z-stack` cell names the stacks holding
+  a scan (`zstack_contents`) or counts a stack's scans; every header carries its
+  meaning (`COLUMN_HELP`) and `?` opens `assets/docs/mesc.md`, the plain-words
+  page on what a `.mesc` holds.
 - **Full image.** The ROIs pipeline's `full image` target is the whole frame as
   one mask at the run coordinates: with `mean` a `FULL_IMAGE` row of the trace
   table (`ManualRoiWidget.trace_full`, keyed `("member", "full image", "z<z>c<c>")`
@@ -1494,7 +1492,7 @@ Everything else is the opposite shape (counts from 2026-09-19):
 - The host widget is a grab bag: 215 distinct `parent._x` attributes across `gui`,
   and `_dialogs._reset_per_data_state` is a hand-kept list of which to clear when
   the array changes. Every unit swap risks a leak.
-- Widgets sniff formats: the two `mesc_units` widgets, `tile_grid` and
+- Widgets sniff formats: the `mesc_units` tab, `tile_grid` and
   `isoview_align_views` decide `is_supported(parent)` by unwrapping the array and
   checking its class. A new format has to write imgui code in `gui/widgets/` to
   appear anywhere.

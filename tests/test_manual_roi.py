@@ -1729,26 +1729,23 @@ class TestTracesTab:
         # "id", not "roi": beside an axis called ROI that reads as two of the same thing;
         # "pipeline", not "engine": a results file's rows say which pipeline wrote them
         assert [c[0] for c in TRACE_COLUMNS] == [
-            "id", "z", "c", "depth", "pipeline", "source", "frames", "peak", ""
+            "id", "z", "c", "pipeline", "source", "frames", "peak", ""
         ]
         assert [c[0] for c in TRACE_COLUMNS if c[2]] == ["source", "frames", "peak"]
 
     def test_trace_sort_keys_line_up_with_the_columns(self, widget):
         """Every column sorts by its own name, the trailing button column
-        included without a key of its own; a row's depth (how far its line
-        sits off the snapshot it was drawn on) is its own cell and sort value."""
+        included without a key of its own."""
         from mbo_utilities.gui.manual_roi import TRACE_COLUMNS
 
         widget.add_roi(square(10, 10, 9))
         widget.quick_trace(0)
         pump(widget)
         key = widget._trace_rows()[0]
-        assert widget._trace_cells(key) == ("0", "1", "1", "mean", "quick", "")
+        assert widget._trace_cells(key) == ("0", "1", "1", "mean", "quick")
         for col in range(len(TRACE_COLUMNS)):
             widget._trace_sort = (col, True)
             assert widget._sorted_trace_rows() == [key]
-        widget.traces.get(key).extra["dz_um"] = 7.4
-        assert widget._trace_cells(key)[5] == "+7.4 um"
 
     def test_results_rows_are_named_by_their_roi(self, widget, tmp_path):
         """A line unit's rows read as the ROI: ``roi0`` for its denoised trace,

@@ -931,8 +931,6 @@ class StandardTraces:
             label = f"ROI {k}"
             if positions is not None and k < len(positions):
                 extra.update(positions[k])
-                if extra["dz_um"] is not None:
-                    label += f" · {extra['dz_um']:+.1f} um"
             self.roi.traces.add(RoiTrace(
                 uid=0, member=k, source=self.name, engine=str(self.job.source),
                 label=label, fs=fs, z=k, c=int(self.job.channel), F=traces[k], extra=extra,
