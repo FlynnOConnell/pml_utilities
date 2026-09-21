@@ -11,15 +11,17 @@ scan on its own, the picture its lines or patches were drawn on
 (``BackgroundImagePath``, role ``background``) and the small reference region
 RTMC re-scanned every cycle (``MotionCorrectionImagePath``, role
 ``motionCorrection``), fold into the scan's row (:func:`companions`) as its
-``picture`` and ``RTMC`` cells. ``RTMC`` is yes or no. ``Z-stack`` names the
-Z-stack whose field holds the scan's lines or patches. ``COLUMN_HELP`` puts
+``picture`` and ``RTMC`` cells. ``RTMC`` is yes or no. ``COLUMN_HELP`` puts
 each column's meaning on its header, :func:`describe_unit` puts a
 recording's on its name, and the ``?`` opens ``assets/docs/mesc.md``.
 
-The tab's Reference image button opens ``gui.mesc_reference``: the picture
-the shown scan's lines or patches were drawn on and the max projection of
-the Z-stack around it, with them drawn, in a popup the top strip's hook
-redraws every frame.
+The ``picture`` cell is one button: it opens ``gui.mesc_reference``, the
+picture the scan's lines or patches were drawn on with them drawn, in a popup
+the top strip's hook redraws every frame. Everything about where a scan sits
+lives in that popup, the Z-stack around it included: the table says only
+which picture it was drawn on. The popup's own button displays the image's
+unit in the viewer, a Z-stack at the slice the ROIs sit on, which the tab
+applies after the popup has drawn (``_pending``) rather than mid-frame.
 """
 
 from __future__ import annotations
@@ -28,15 +30,17 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import imgui, imgui_ctx
+from imgui_bundle import icons_fontawesome_6 as fa, imgui, imgui_ctx
 
 from mbo_utilities import log
-from mbo_utilities.arrays.mesc_geometry import zstack_contents
 from mbo_utilities.gui._imgui_helpers import set_tooltip
-from mbo_utilities.gui.mesc_reference import ReferenceView
+from mbo_utilities.gui.mesc_reference import ReferenceView, roi_slider
 from mbo_utilities.gui.widgets._base import Widget
 
 logger = log.get("gui.mesc_units")
+
+# opens the reference image on the picture or Z-stack the cell names
+IMAGE_ICON = fa.ICON_FA_IMAGE
 
 _ACCENT = imgui.ImVec4(0.8, 0.8, 0.2, 1.0)
 _ERROR = imgui.ImVec4(1.0, 0.4, 0.4, 1.0)
@@ -51,7 +55,6 @@ UNIT_COLUMNS = (
     ("ROIs", False),
     ("picture", False),
     ("RTMC", False),
-    ("Z-stack", False),
     ("T", False),
     ("C", False),
     ("Z", False),
@@ -66,7 +69,6 @@ UNIT_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name =
 MODALITY_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "modality")
 PICTURE_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "picture")
 RTMC_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "RTMC")
-STACK_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "Z-stack")
 
 # what each column means, on its header
 COLUMN_HELP = {
@@ -95,19 +97,14 @@ COLUMN_HELP = {
     ),
     "picture": (
         "The raster picture MEScan took just before the scan; the operator drew the "
-        "lines or patches on it. MESc calls it the background image and saves it as "
-        "its own unit, which this table folds into the scan's row. Click to display "
-        "it, or to see this scan's lines or patches drawn on it."
+        "lines or patches on it. Click to see them drawn on it, and on the Z-stack "
+        "taken around them when there is one. MESc calls it the background image "
+        "and saves it as its own unit, which this table folds into the scan's row."
     ),
     "RTMC": (
         "Real-time motion correction: whether it was on for this recording. yes: "
         "the microscope tracked the tissue while scanning, and if it moved the "
         "scan the X, Y, Z shifts are the MC plot under the traces. no: it was off."
-    ),
-    "Z-stack": (
-        "For a scan: the Z-stack whose field covers its lines or patches. For a "
-        "Z-stack: how many scans it covers. MESc records no such link; it is worked "
-        "out from the micron positions. Click for options."
     ),
     "T": "Timepoints.",
     "C": "Colors: the detector channels (UG green, UR red).",
@@ -252,12 +249,9 @@ def describe_unit(info: dict, by_key: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
-def unit_row(info: dict, stacks: list[str] | tuple = ()) -> tuple[tuple[str, ...], tuple]:
+def unit_row(info: dict) -> tuple[tuple[str, ...], tuple]:
     """One table row per `list_mesc_units` entry: the cell texts and the sort
-    keys, both in UNIT_COLUMNS order (numbers sort as numbers). ``stacks`` is
-    the keys of the Z-stacks whose field holds this scan's ROIs, or of the
-    scans a Z-stack holds; the ``Z-stack`` cell names the stacks
-    (``MUnit_64``) or counts a stack's scans."""
+    keys, both in UNIT_COLUMNS order (numbers sort as numbers)."""
     t, c, z_size, y, x = info["shape"]
     fs = info.get("fs")
     dur = info.get("duration_s")
@@ -268,12 +262,6 @@ def unit_row(info: dict, stacks: list[str] | tuple = ()) -> tuple[tuple[str, ...
     rois = f"{n} {nouns[info['outline_kind']][n != 1]}" if n else "-"
     picture = info.get("background_unit")
     picture_text = picture.rsplit("/", 1)[-1] if picture else "-"
-    if not stacks:
-        stack_text = "-"
-    elif info["kind"] == "zstack":
-        stack_text = f"{len(stacks)} scan" + ("s" if len(stacks) != 1 else "")
-    else:
-        stack_text = ", ".join(key.rsplit("/", 1)[-1] for key in stacks)
     cells = (
         info["session"],
         info["munit"],
@@ -282,7 +270,6 @@ def unit_row(info: dict, stacks: list[str] | tuple = ()) -> tuple[tuple[str, ...
         rois,
         picture_text,
         "yes" if rtmc_on(info) else "no",
-        stack_text,
         str(t),
         str(c),
         str(z_size),
@@ -301,7 +288,6 @@ def unit_row(info: dict, stacks: list[str] | tuple = ()) -> tuple[tuple[str, ...
         n,
         picture_text,
         int(rtmc_on(info)),
-        len(stacks),
         t,
         c,
         z_size,
@@ -341,6 +327,8 @@ class MescTabWidget(Widget):
         # the reference-image popup, drawn from the strip's hook whatever tab
         # is up; the host offers it wherever a recording's ROIs are on screen
         self._reference: ReferenceView | None = None
+        # a unit the popup's button asked for, applied once it has drawn
+        self._pending: tuple[dict, int | None] | None = None
         parent.reference_view = self.open_reference
         strip = getattr(parent, "top_strip", None)
         if strip is not None:
@@ -355,16 +343,27 @@ class MescTabWidget(Widget):
     def _frame(self) -> None:
         if self._reference is not None:
             self._reference.draw()
+        # switching rebuilds the panel widgets, so never inside the popup's draw
+        if self._pending is not None:
+            info, z = self._pending
+            self._pending = None
+            self._switch(info, z)
 
-    def open_reference(self, select: str | None = None) -> None:
+    def _show_reference_unit(self, key: str, z: int | None) -> None:
+        """The popup's display button: show that picture or Z-stack next frame."""
+        info = next((u for u in self._mesc.units if u["key"] == key), None)
+        if info is not None and len(self.parent.image_widget.data) == 1:
+            self._pending = (info, z)
+
+    def open_reference(self) -> None:
         """The popup with the shown unit's lines or patches drawn on the
-        picture (``mesc_reference``), on image ``select`` when given; the
-        tab says so when no image of the file carries them."""
+        picture they were drawn on and the Z-stack around them
+        (``mesc_reference``); the tab says so when neither exists."""
         mesc = self._mesc
         if self._reference is None:
-            self._reference = ReferenceView(self.parent)
+            self._reference = ReferenceView(self.parent, on_show=self._show_reference_unit)
         self._note = None
-        if not self._reference.open(mesc, partial(self._open_unit, mesc.filenames[0]), select=select):
+        if not self._reference.open(mesc, partial(self._open_unit, mesc.filenames[0])):
             self._note = (
                 f"no picture or Z-stack in this file carries {mesc.unit_key.rsplit('/', 1)[-1]}'s ROIs"
             )
@@ -394,8 +393,9 @@ class MescTabWidget(Widget):
             cache[key] = arr
         return arr
 
-    def _install(self, arr) -> None:
-        """Show `arr` in the viewer, re-deriving every per-dataset display state.
+    def _install(self, arr, z: int | None = None) -> None:
+        """Show `arr` in the viewer at slice ``z``, re-deriving every
+        per-dataset display state.
 
         Each unit is an unrelated recording, so the Manual ROI widget is
         rebuilt for it: the outgoing unit's ROIs, runs and traces are parked
@@ -426,6 +426,12 @@ class MescTabWidget(Widget):
         unit = arr.unit_key.rsplit("/", 1)[-1]
         swap_viewer_array(parent, arr, title=f"{Path(path).stem[:16]} · {unit}")
 
+        # a Z-stack opened from a scan's row lands on the slice its ROIs sit
+        # on; the swap reset the sliders, so this follows it
+        zdim = roi_slider(parent.image_widget.dim_names) if z is not None else None
+        if zdim is not None:
+            parent.image_widget.indices[zdim] = int(z)
+
         if roi_on:
             attach_roi_widget(parent)
         try:
@@ -436,38 +442,16 @@ class MescTabWidget(Widget):
             self.open_reference()
         parent.logger.info(f"MESc unit: {arr.unit_key}  shape={arr.shape}")
 
-    def _switch(self, info: dict) -> None:
-        """Open the unit ``info`` describes and show it; a failure is shown in the tab."""
+    def _switch(self, info: dict, z: int | None = None) -> None:
+        """Open the unit ``info`` describes and show it at slice ``z``; a
+        failure is shown in the tab."""
         mesc = self._mesc
         self._error = None
         try:
-            self._install(self._open_unit(mesc.filenames[0], info["key"]))
+            self._install(self._open_unit(mesc.filenames[0], info["key"]), z)
         except Exception as e:
             self._error = str(e)
             self.parent.logger.exception(f"MESc unit switch to {info['key']} failed: {e}")
-
-    def _stacks(self, mesc) -> dict[str, list[str]]:
-        """Which scans each Z-stack of the file covers, from the micron
-        positions alone (:func:`zstack_contents`): under a stack's key its
-        scans, under a scan's key the stacks holding it. Placed once per
-        file and kept on the parent."""
-        path = str(mesc.filenames[0])
-        cached = getattr(self.parent, "_mesc_zstack_contents", None)
-        if cached is None or cached[0] != path:
-            table: dict[str, list[str]] = {}
-            try:
-                for stack, scans in zstack_contents(path, mesc.units).items():
-                    table[stack] = list(scans)
-                    for scan in scans:
-                        table.setdefault(scan, []).append(stack)
-            except Exception:
-                self.parent.logger.warning(
-                    f"{Path(path).name}: cannot place its scans on its Z-stacks", exc_info=True
-                )
-                table = {}
-            cached = (path, table)
-            self.parent._mesc_zstack_contents = cached
-        return cached[1]
 
     def draw(self) -> None:
         with imgui_ctx.begin_child(
@@ -479,7 +463,6 @@ class MescTabWidget(Widget):
                 return
             units = mesc.units
             by_key = {u["key"]: u for u in units}
-            stacks = self._stacks(mesc)
             # the unit opened at launch belongs in the cache too, so switching
             # away and back reuses it instead of opening the file a second time
             self._cache().setdefault(mesc.unit_key, mesc)
@@ -506,14 +489,6 @@ class MescTabWidget(Widget):
             set_tooltip(
                 "What a .mesc holds: sessions, scans, pictures, RTMC, and how each "
                 "column reads. Every column header and most cells carry their own tip.",
-                show_mark=False,
-            )
-            if imgui.small_button("Reference image##reference"):
-                self.open_reference()
-            set_tooltip(
-                "The picture this scan's lines or patches were drawn on, and the max "
-                "projection of the Z-stack around it, with them drawn: the slider's "
-                "ROI thick. Click one there to move the slider to it.",
                 show_mark=False,
             )
             imgui.same_line(0, 12)
@@ -581,7 +556,7 @@ class MescTabWidget(Widget):
             column, ascending = self._sort
             rows = sorted(
                 (
-                    (*unit_row(u, stacks.get(u["key"], ())), u)
+                    (*unit_row(u), u)
                     for u in units
                     if u["key"] not in folded
                 ),
@@ -603,7 +578,7 @@ class MescTabWidget(Widget):
                     imgui.SelectableFlags_.span_all_columns | imgui.SelectableFlags_.allow_overlap,
                 )
                 if clicked and not split and info["key"] != mesc.unit_key:
-                    picked = info
+                    picked = (info, None)
                 for i in range(1, len(cells)):
                     if not imgui.table_next_column():
                         continue
@@ -623,26 +598,15 @@ class MescTabWidget(Widget):
                             imgui.text_disabled(cells[i])
                             set_tooltip(f"{bg} is not in this file.", show_mark=False)
                             continue
-                        if imgui.small_button(f"{cells[i]}##pic_{info['key']}"):
-                            imgui.open_popup(f"##pic_{info['key']}")
+                        if imgui.small_button(f"{IMAGE_ICON} {cells[i]}##pic_{info['key']}") and not split:
+                            reference = info
                         _t, c, _z, y, x = other["shape"]
                         set_tooltip(
-                            f"The picture the {what} were drawn on: {bg}, one raster frame of "
-                            f"{y} x {x} px, {c} color{'s' if c != 1 else ''}, taken just before "
-                            "the scan. Click for options.",
+                            f"Show this scan's {what} drawn on {bg}, the picture MEScan took "
+                            f"just before it ({y} x {x} px, {c} color{'s' if c != 1 else ''}), "
+                            "and on the Z-stack taken around them when there is one.",
                             show_mark=False,
                         )
-                        if imgui.begin_popup(f"##pic_{info['key']}"):
-                            if imgui.selectable(f"Display {bg}##{info['key']}", False)[0] and not split:
-                                picked = other
-                            if (
-                                imgui.selectable(
-                                    f"Reference image: this scan's {what} on {other['munit']}##{info['key']}", False
-                                )[0]
-                                and not split
-                            ):
-                                reference = (info, f"{other['munit']} picture")
-                            imgui.end_popup()
                         continue
                     if i == RTMC_COLUMN:
                         imgui.text(cells[i])
@@ -663,37 +627,6 @@ class MescTabWidget(Widget):
                             )
                         set_tooltip(tip, show_mark=False)
                         continue
-                    if i == STACK_COLUMN and stacks.get(info["key"]):
-                        held = stacks[info["key"]]
-                        if imgui.small_button(f"{cells[i]}##stack_{info['key']}"):
-                            imgui.open_popup(f"##stack_{info['key']}")
-                        if info["kind"] == "zstack":
-                            set_tooltip(
-                                "The scans whose lines or patches lie within this stack's field: "
-                                + ", ".join(key.rsplit("/", 1)[-1] for key in held)
-                                + "\nClick for options.",
-                                show_mark=False,
-                            )
-                        else:
-                            set_tooltip(
-                                f"The Z-stack whose field covers this scan's {what}. Click to display "
-                                "it, or to see them drawn on its max projection.",
-                                show_mark=False,
-                            )
-                        if imgui.begin_popup(f"##stack_{info['key']}"):
-                            for key in held:
-                                other = by_key.get(key)
-                                if other is None:
-                                    continue
-                                name = key.rsplit("/", 1)[-1]
-                                if imgui.selectable(f"Display {name}##{info['key']}", False)[0] and not split:
-                                    picked = other
-                                if info["kind"] == "zstack":
-                                    continue
-                                if imgui.selectable(f"Reference image: this scan's {what} on {name}##{info['key']}", False)[0] and not split:
-                                    reference = (info, f"{name} Z-stack max")
-                            imgui.end_popup()
-                        continue
                     imgui.text(cells[i])
                     if i == last and info["comment"] and imgui.is_item_hovered():
                         imgui.set_tooltip(info["comment"])
@@ -701,12 +634,11 @@ class MescTabWidget(Widget):
 
             # swapping rebuilds the panel widgets; finish the frame on the old ones
             if picked is not None:
-                self._switch(picked)
+                self._switch(*picked)
             if reference is not None:
-                info, select = reference
-                if info["key"] != mesc.unit_key:
-                    self._switch(info)
-                self.open_reference(select)
+                if reference["key"] != mesc.unit_key:
+                    self._switch(reference)
+                self.open_reference()
 
     def cleanup(self) -> None:
         strip = getattr(self.parent, "top_strip", None)

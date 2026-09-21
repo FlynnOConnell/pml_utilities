@@ -1726,10 +1726,11 @@ class TestTracesTab:
         right edge. The last column is the delete button, not a stat."""
         from mbo_utilities.gui.manual_roi import TRACE_COLUMNS
 
-        # "id", not "roi": beside an axis called ROI that reads as two of the same thing;
-        # "pipeline", not "engine": a results file's rows say which pipeline wrote them
+        # "id", not "roi": beside an axis called ROI that reads as two of the same thing.
+        # the extraction engine is not a column: it reads the same on every row of a
+        # session, so it lives in the row's tooltip
         assert [c[0] for c in TRACE_COLUMNS] == [
-            "id", "z", "c", "pipeline", "source", "frames", "peak", ""
+            "id", "z", "c", "source", "frames", "peak", ""
         ]
         assert [c[0] for c in TRACE_COLUMNS if c[2]] == ["source", "frames", "peak"]
 
@@ -1742,7 +1743,8 @@ class TestTracesTab:
         widget.quick_trace(0)
         pump(widget)
         key = widget._trace_rows()[0]
-        assert widget._trace_cells(key) == ("0", "1", "1", "mean", "quick")
+        # the channel cell is the channel index itself, z is 1-based
+        assert widget._trace_cells(key) == ("0", "1", "0", "mean", "quick")
         for col in range(len(TRACE_COLUMNS)):
             widget._trace_sort = (col, True)
             assert widget._sorted_trace_rows() == [key]
@@ -1770,7 +1772,7 @@ class TestTracesTab:
         assert all(t.c == 1 and t.engine == "voltage" for t in rows.values())
         assert rows["roi0"].extra == {"line": 4} and "line" not in rows["roi1"].extra
         # the table's ROI column shows the line (1-based), as for any placed row
-        assert widget._trace_cells(rows["roi0 (raw)"].key)[1:3] == ("5", "2")
+        assert widget._trace_cells(rows["roi0 (raw)"].key)[1:3] == ("5", "1")
 
     def test_deleting_a_trace_row_keeps_its_roi(self, widget):
         widget.add_roi(square(10, 10, 9))
@@ -2872,7 +2874,7 @@ class TestRunCoordinates:
         assert set(rows) == {("roi", uid, 2, 0, "mean"), ("roi", uid, 2, 1, "mean")}
         np.testing.assert_allclose(rows[("roi", uid, 2, 1, "mean")].F, data[:, 1, 2][:, mask] @ (w / w.sum()), rtol=1e-5)
         np.testing.assert_allclose(rows[("roi", uid, 2, 0, "mean")].F, data[:, 0, 2][:, mask] @ (w / w.sum()), rtol=1e-5)
-        assert cwidget._trace_cells(("roi", uid, 2, 1, "mean"))[1:4] == ("3", "2", "mean")
+        assert cwidget._trace_cells(("roi", uid, 2, 1, "mean"))[1:4] == ("3", "1", "mean")
 
     def test_the_slice_on_screen_mode_follows_the_sliders(self, cwidget):
         cwidget.add_roi(square(10, 10, 9))  # c0 z0
@@ -3564,7 +3566,7 @@ class TestFullImage:
         data = np.asarray(cwidget.iw.data[0])
         np.testing.assert_allclose(row.F, data[:, 1, 2].mean(axis=(1, 2)), rtol=1e-5)
         assert row.label == "full image z3 c2"
-        assert cwidget._trace_cells(row.key)[:4] == ("full image z3 c2", "3", "2", "mean")
+        assert cwidget._trace_cells(row.key)[:4] == ("full image z3 c2", "3", "1", "mean")
         assert cwidget.model.column("z") == {}  # the full image is not a drawn ROI
         # the same slice again replaces the row; a window is stamped
         cwidget.run_tp = [1, 2]

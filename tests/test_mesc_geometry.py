@@ -233,14 +233,17 @@ def test_snapshot_overlay_is_every_line_drawn_on_it(mesc_path):
 
 
 def test_zstack_overlay_places_lines_and_patches_on_slices(mesc_path):
+    """Each ROI on the slice nearest its depth. The line and the patch scanned
+    20 um below the stack are left out: the stack holds no picture of them, and
+    drawing them on slice 0 would put an outline on tissue they never touched."""
     recs = image_overlays(mesc_path, "MSession_0/MUnit_0")
     assert [(r["munit"], r["roi"]) for r in recs] == [
-        ("MUnit_1", 0), ("MUnit_1", 1), ("MUnit_1", 2), ("MUnit_1", 3), ("MUnit_3", 0), ("MUnit_3", 1),
+        ("MUnit_1", 0), ("MUnit_1", 1), ("MUnit_1", 2), ("MUnit_3", 0),
     ]
-    assert [r["slice"] for r in recs] == [3, 7, 3, 0, 7, 0]
-    assert [r["on_plane"] for r in recs] == [True, True, True, False, True, False]
-    assert np.allclose([r["dz_um"] for r in recs], [0.0, 0.0, 0.1, -10.0, 0.0, -10.0])
-    patch = recs[4]
+    assert [r["slice"] for r in recs] == [3, 7, 3, 7]
+    assert all(r["on_plane"] for r in recs)
+    assert np.allclose([r["dz_um"] for r in recs], [0.0, 0.0, 0.1, 0.0])
+    patch = recs[3]
     assert patch["kind"] == "patch" and patch["color"] is None
     assert np.allclose(patch["pixels"], [[20, 20], [60, 20], [60, 60], [20, 60], [20, 20]])
 
@@ -262,6 +265,27 @@ def test_zstack_contents_lists_the_scans_inside_each_stack(mesc_path):
     assert zstack_contents(mesc_path) == {
         "MSession_0/MUnit_0": ["MSession_0/MUnit_1", "MSession_0/MUnit_3"]
     }
+
+
+def test_a_scan_recorded_outside_every_stack_is_in_none_of_them(mesc_path, tmp_path):
+    """A scan whose ROIs were all recorded above or below the stack is not
+    listed as inside it, however well their x and y line up: the file's one
+    chessboard box sits 720 um under the stack on the 2026-09-14 rig, and
+    drawing it on an edge slice put it on unrelated tissue."""
+    import shutil
+
+    path = tmp_path / "far.mesc"
+    shutil.copy(mesc_path, path)
+    with h5py.File(path, "a") as f:
+        unit = f["MSession_0/MUnit_3"]
+        maps = json.loads(unit.attrs["CoordinateMapJSON"])
+        for patch in maps["maps"][0]["contours"]:
+            patch[2] = [-770.0] * len(patch[2])
+        unit.attrs["CoordinateMapJSON"] = json.dumps(maps)
+    assert zstack_contents(path) == {"MSession_0/MUnit_0": ["MSession_0/MUnit_1"]}
+    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_0")} == {"MUnit_1"}
+    # it is still drawn on the picture it was drawn on, whatever its depth
+    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_4")} == {"MUnit_1"}
 
 
 def test_overlay_skips_a_unit_whose_outlines_do_not_pair_with_its_rois(mesc_path):

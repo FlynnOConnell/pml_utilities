@@ -20,6 +20,7 @@ __all__ = [
     "line",
     "line_plot",
     "packed_colors",
+    "plot_style",
     "subplots",
     "vec4",
     "vlines",
@@ -72,6 +73,50 @@ def decimate_minmax(y, n_bins: int = 4000) -> tuple[np.ndarray, np.ndarray]:
     idx[0::2] = base + first
     idx[1::2] = base + second
     return idx, y[idx.astype(int)]
+
+
+CLEAR = imgui.ImVec4(0.0, 0.0, 0.0, 0.0)
+# a plot drawn straight onto the panel behind it. implot takes its frame
+# colour from imgui's, which `style_imgui_opaque` makes a blue-grey, so every
+# plot sat in a blue box; grid lines go by colour rather than by axis flag so
+# one scope covers a plot and the subplots around it.
+PLOT_COLORS = {
+    "frame_bg": CLEAR,
+    "plot_bg": CLEAR,
+    "plot_border": CLEAR,
+    "axis_tick": imgui.ImVec4(0.80, 0.82, 0.86, 0.35),
+    "axis_text": imgui.ImVec4(0.78, 0.80, 0.84, 1.00),
+    "legend_bg": imgui.ImVec4(0.04, 0.05, 0.06, 0.80),
+    "legend_border": CLEAR,
+    "legend_text": imgui.ImVec4(0.88, 0.89, 0.92, 1.00),
+    "inlay_text": imgui.ImVec4(0.80, 0.82, 0.86, 1.00),
+}
+
+
+@contextmanager
+def plot_style(grid: bool = False):
+    """implot colours for a plot with no box of its own: transparent frame,
+    background and border, faint ticks and labels, a dim legend, and no grid
+    lines unless ``grid``. Wraps ``begin_plot`` or ``begin_subplots``, which
+    is where the frame is drawn."""
+    # the style stack lives on the context, and pushing onto no context is a
+    # segfault, not an error: this runs before the plot that would make one
+    if implot.get_current_context() is None:
+        implot.create_context()
+    colors = dict(PLOT_COLORS)
+    colors["axis_grid"] = imgui.ImVec4(1.0, 1.0, 1.0, 0.06) if grid else CLEAR
+    pushed = 0
+    for name, color in colors.items():
+        col = getattr(implot.Col_, name, None)
+        if col is not None:
+            implot.push_style_color(col, color)
+            pushed += 1
+    implot.push_style_var(implot.StyleVar_.plot_border_size, 0.0)
+    try:
+        yield
+    finally:
+        implot.pop_style_var()
+        implot.pop_style_color(pushed)
 
 
 @contextmanager

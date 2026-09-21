@@ -29,8 +29,9 @@ A `.mesc` is one HDF5 file holding every recording of a session at a Femtonics A
 
 Every picture and Z-stack records the micron position of its top-left pixel and its width and height in microns. Every AOD scan records the micron coordinates of each line's two ends, or of each patch's four corners. From those the tab draws the lines and patches back on the picture:
 
-- **Reference image** (the button, or the **picture** and **Z-stack** cells' popups) opens a popup with the picture the scan's lines or patches were drawn on and the max projection over depth of every Z-stack whose field holds them, with them drawn in MESc's colours, the one the ROI slider is on thicker. Every line is drawn whatever its depth. Click a line there to move the ROI slider to it.
-- **Z-stack**: for a scan, the Z-stack whose field covers its lines or patches. For a Z-stack, how many scans it covers. MESc records no such link; it is worked out from the micron positions.
+- **picture**: one button per scan, naming the picture it was drawn on. Click it to open the reference image: the picture with the scan's lines or patches drawn on it in MESc's colours, the one the ROI slider is on thicker, and every Z-stack holding them, projected over the slices they were scanned on. Click a line there to move the ROI slider to it.
+- The picture shows every line whatever its depth, because that is where the operator drew them. A Z-stack shows only the lines actually scanned inside it (a stack counts only when its field *and* its depth range hold them), and the caption says how many of the scan's lines those are.
+- The popup's **display** button puts that picture or Z-stack in the viewer, a stack at the slice the lines sit on. That is the only place a Z-stack is offered; the table has no column for it.
 
 ## Rows and clicks
 

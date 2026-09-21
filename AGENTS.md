@@ -668,6 +668,13 @@ the other.
   neuropil checkbox only when a plotted row's profile offers it, a dF/F settings
   popup only when a shown dF/F is computed here, labels the y axis from the rows
   (joined when they differ) and opens in seconds whenever the data has a rate.
+  The plot has no box of its own: `imgui/lines.plot_style` makes implot's frame,
+  plot background and border transparent, its grid lines invisible (by colour,
+  so one scope covers the subplots too) and its ticks and legend dim, so the
+  traces sit on the panel. implot takes its frame colour from imgui's, which
+  `style_imgui_opaque` makes a blue-grey, so a plot drawn without that scope
+  sits in a blue box. One scope wraps the trace and motion plots together,
+  a frame around either being a box around half the panel.
 - **Run coordinates.** `RoiModel.targets(indices, z=, c=)` says where each ROI is
   read: the mask always from the plane it was drawn on, the pixels from `z` / `c`
   when given, else from where it was drawn. The widget's `run_where` is `drawn`,
@@ -731,24 +738,47 @@ the other.
 - **Reference image.** `gui/mesc_reference.py` shows where an AOD unit's lines
   or patches were drawn: `reference_images(mesc, open_unit, c)` (GUI-free) is the
   picture the unit's ROIs were drawn on (`background_unit`), then every Z-stack
-  whose field holds them (`zstack_contents`), each the max projection over its
-  frames and depth in channel `c` (at most `MAX_ELEMENTS` samples read), carrying
-  the unit's `image_overlays` records. `ReferenceView` is that set in a
+  holding them (`zstack_contents`), each a max projection in channel `c` (at most
+  `MAX_ELEMENTS` samples read), carrying the unit's `image_overlays` records. A
+  picture projects over its frames; a Z-stack projects **only over the slices its
+  ROIs were scanned on**, never the whole stack, whose full max is a wall of
+  tissue with the ROI's own plane lost in it. `ReferenceView` is that set in a
   `SummaryImageViewer` popup (masknmf's full-FOV viewer, `roi_provider(key)`
-  returning `(points, rgba, thickness)` polylines: MESc's colours, every ROI solid
-  whatever its depth, the slider's ROI `SELECTED_THICKNESS`). The MESc tab opens
-  it (its Reference image button, the picture and Z-stack cells' popups), redraws
-  it from the top strip's hook, reopens it on a unit switch and hands the host
-  `reference_view` (a callable), which the Traces panel offers as a button. A
-  click on a line in it (`SummaryImageViewer.on_pick`, `ReferenceView.pick`)
-  moves the ROI slider to it. Nothing draws ROIs on the viewer's own image, and
-  no projection of the unit itself is offered. The MESc tab lists one row per
-  recording: a scan's picture (`background_unit`) and RTMC reference unit
-  (`rtmc_unit`) fold into its row (`mesc_units.companions`); the `picture` cell's
-  popup displays it or opens the reference image on it; the `RTMC` cell is `yes`
-  or `no` (`rtmc_on`: the scan carries RTMC curves, `list_mesc_units`' `rtmc` or
-  `rtmc_armed`), the detail on hover; the `Z-stack` cell names the stacks holding
-  a scan (`zstack_contents`) or counts a stack's scans; every header carries its
+  returning `(points, rgba, thickness)` polylines: MESc's colours, every ROI
+  solid, the slider's ROI `SELECTED_THICKNESS`); its caption says how many of the
+  unit's ROIs a Z-stack holds when some were scanned outside it. Each
+  `ReferenceImage` carries its `unit` and, for a stack, the `slice` its ROIs sit
+  on, so the popup's one button (`on_show(unit, slice)`) displays that unit in
+  the viewer at that slice. The MESc tab opens the popup from the picture cell's
+  single button, redraws it from the top strip's hook, reopens it on a unit
+  switch and hands the host `reference_view` (a callable), which the Traces panel
+  offers as a button. A click on a line in it (`SummaryImageViewer.on_pick`,
+  `ReferenceView.pick`) moves the ROI slider to it. Nothing draws ROIs on the
+  viewer's own image, and no projection of the unit itself is offered.
+- **A stack holds a scan only where it was scanned.** `image_overlays` on a
+  Z-stack keeps an ROI only when its outline falls inside the stack's field
+  **and** its depth range (`roi_placements`' `in_range`); one scanned above or
+  below is left out rather than clamped onto an edge slice, which drew outlines
+  on tissue the scan never touched (2026-09-14 rig: one chessboard box 720 um
+  under the only stack, landing on slice 0 over unrelated cells). `on_plane` on a
+  stack is therefore always True, `zstack_contents` lists only stacks that really
+  hold a scan, and `line_positions` reports `stack`/`slice`/`in_stack` as None
+  when no stack was scanned around the line. The micron-to-pixel mapping itself
+  is verified: the 2026-09-14 pictures cross-correlate 0.86 against the stack
+  slice at their own depth, peaking exactly at zero offset.
+- **The MESc table.** One row per recording: a scan's picture
+  (`background_unit`) and RTMC reference unit (`rtmc_unit`) fold into its row
+  (`mesc_units.companions`). The `picture` cell is **one** button, naming the
+  picture behind an `IMAGE_ICON`, and it opens the reference image; there is no
+  second button and no popup, and the table has no Z-stack column, because
+  everything about where a scan sits belongs next to the lines drawn on it.
+  The `RTMC` cell is `yes` or `no` (`rtmc_on`: the scan carries RTMC curves,
+  `list_mesc_units`' `rtmc` or `rtmc_armed`), the detail on hover. The popup's
+  display button reaches the tab through `_show_reference_unit`, which parks the
+  request on `_pending` for `_frame` to apply once the popup has drawn: a switch
+  rebuilds the panel widgets, so it never happens inside another widget's draw.
+  `_install(arr, z)` sets the viewer's `roi_slider` index after the swap, so a
+  Z-stack opens on the tissue the ROIs were scanned in. Every header carries its
   meaning (`COLUMN_HELP`) and `?` opens `assets/docs/mesc.md`, the plain-words
   page on what a `.mesc` holds.
 - **Full image.** The ROIs pipeline's `full image` target is the whole frame as
