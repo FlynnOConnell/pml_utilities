@@ -857,10 +857,19 @@ One logger tree, one console sink per process, one log file per background task.
   `StreamHandler`; `log.attach(handler)` adds a process-wide sink (the GUI panel, the
   worker file); `log.set_global_level(level)` sets every `mbo*` logger;
   `log.get_package_loggers()` lists them. Library code never adds a handler.
-- Level: `MBO_DEBUG=1` selects DEBUG, else INFO, decided once at import. The GUI
-  "Debug logging" toggle (`_options_popup`, `file_dialog`) persists the preference,
-  sets `os.environ["MBO_DEBUG"]` so spawned workers inherit it, and calls
-  `set_global_level`; `run_gui` applies the persisted value at launch.
+- Level: `MBO_DEBUG` selects DEBUG, else INFO, at import. `log.set_debug(enabled)`
+  is the one way to change it afterwards: it writes `os.environ["MBO_DEBUG"]` (so
+  spawned workers inherit it) and calls `set_global_level`, and `log.debug_enabled()`
+  reads it back. `mbo --debug` / `mbo view --debug` set it for a run; the GUI
+  "Debug logging" toggle (`_options_popup`, `file_dialog`) also persists the
+  preference, which `run_gui` applies at launch unless `MBO_DEBUG` is already set.
+- Debug-only UI: a `WidgetEntry(debug_only=True)` is absent from the Widgets menu
+  and off whatever the stored state says while `log.debug_enabled()` is False. The
+  ImGui tab (`gui/widgets/imgui_debug.py`) is the one today: switches for Dear
+  ImGui's metrics/debugger, debug log, ID stack tool, demo and about windows,
+  which `PreviewDataWidget.draw` draws every frame so they survive a tab switch.
+  The style editor is not among them: it is always available at File > Style
+  Editor (§14).
 - The GUI's Debug panel (`gui_logger.GuiLogger`) receives every `mbo.*` record through
   a `GuiLogHandler` attached in `preview_data._init_logging`; it filters by level and
   logger, and its master level dropdown calls `set_global_level`.
@@ -1063,6 +1072,16 @@ When they disagree, fix the docs.
 - User state under `~/.mbo/`: `settings/preferences.json`, `logs/` (§8.5),
   `cache/`, `imgui/`, `hpc/runs/`, `tests/` (test data), `templates/`. Resolve with
   `get_mbo_dirs()`, never hardcode.
+- The imgui style is the user's, not the theme's. `gui/widgets/style_editor.py`
+  holds the one `imgui_debugger.StyleEditor` for the process, opened from File >
+  Style Editor and backed by an `imgui_debugger.ConfigStore` at
+  `get_mbo_dirs()["imgui"]`: `state.json` (the style as last left, plus the
+  panel's own state), `styles/<name>.json` (named presets). It autosaves a
+  second after the last slider moves; `apply_saved_style()` runs in
+  `PreviewDataWidget.__init__` right after `style_imgui_opaque()`, so a saved
+  style wins over the shipped theme. Window geometry stays imgui's, in
+  `imgui/assets/app_settings/preview_settings.ini`. Nothing else writes the
+  style; `imgui_debug.py` deliberately has no style entry.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,
   `KEEP_TEST_OUTPUT`, `MBO_PIPELINE_TIFF`; logging and retention variables are
   listed in §8.5.
@@ -1149,8 +1168,8 @@ ones. Remove an entry when its fix lands.
   `mbo.writers` (`writer.py:33,233-239`, `_writers.py:21`), and `debug=True` hides
   the tqdm bars (`_writers.py:319`). `mbo convert --debug` (`cli.py:592`) inherits
   both.
-- No `--log-level` or `-v` on `mbo` or `mbo hpc`; `MBO_DEBUG` is read once at import
-  (`log.py:29-30`).
+- No `--log-level` or `-v` on `mbo` or `mbo hpc`: `mbo --debug` is DEBUG-or-nothing,
+  and `mbo hpc` has neither.
 - `docs/development.md:98-99,117-118` document `log.enable` and `log.disable`, which
   do not exist.
 

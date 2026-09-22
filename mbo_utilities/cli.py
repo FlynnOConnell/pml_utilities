@@ -14,6 +14,7 @@ Usage patterns:
   mbo linescan FILE.mesc        # Per-ROI traces from AOD line-scan units
 """
 import logging
+import os
 import sys
 import threading
 import time
@@ -184,6 +185,13 @@ def _version_callback(ctx: click.Context, param: click.Parameter, value: bool) -
     help="Set and persist GPU adapter index. `mbo --gpu N` saves + exits; "
          "`mbo --gpu N <path>` saves then opens. See `mbo view --list-gpus`.",
 )
+@click.option(
+    "--debug/--no-debug",
+    default=None,
+    help="Debug logging for this run (sets MBO_DEBUG): verbose logs, the "
+         "Widgets > ImGui Debug tools, and every worker spawned after. "
+         "Omitted: the persisted Options setting.",
+)
 @click.pass_context
 def main(
     ctx,
@@ -191,6 +199,7 @@ def main(
     no_cache=False,
     clear_cache=False,
     gpu_index_arg=None,
+    debug=None,
 ):
     """
     MBO Utilities - preview and process imaging data.
@@ -213,6 +222,10 @@ def main(
     Verify install:
       mbo --check-install
     """
+    if debug is not None:
+        from mbo_utilities import log as _log
+        _log.set_debug(debug)
+
     # handle --clear-cache early
     if clear_cache:
         from mbo_utilities.env_cache import clear_cache as do_clear, get_cache_path
@@ -356,8 +369,16 @@ def main(
     help="For a masknmf demixing result: a motion correction hdf5 whose shifts plot above the traces. "
          "Omitted: motion_correction.hdf5 beside the result, if any.",
 )
+@click.option(
+    "--debug/--no-debug",
+    default=None,
+    help="Debug logging for this run (sets MBO_DEBUG): verbose logs, the "
+         "Widgets > ImGui Debug tools, and every worker spawned after. "
+         "Omitted: the persisted Options setting.",
+)
 def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=False,
-         unit=None, gpu_index=None, list_gpus=False, vis=None, raw_path=None, motion_correction_path=None):
+         unit=None, gpu_index=None, list_gpus=False, vis=None, raw_path=None,
+         motion_correction_path=None, debug=None):
     r"""
     Open imaging data in the GUI viewer.
 
@@ -374,6 +395,10 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
       mbo view --list-gpus           Show available GPU adapters
       mbo view /data/raw --gpu 0     Force GPU index 0
     """
+    if debug is not None:
+        from mbo_utilities import log as _log
+        _log.set_debug(debug)
+
     if list_gpus:
         import fastplotlib as fpl
         adapters = fpl.enumerate_adapters()
@@ -2097,6 +2122,32 @@ def results(path, out, overwrite):
         click.echo(f"error: {e}", err=True)
         raise click.Abort
     click.echo(f"wrote {len(units)} unit(s) to {written}")
+
+
+@main.command("app")
+@click.argument("path", type=click.Path(exists=True), required=False)
+@click.option("--nt", type=int, default=500, show_default=True,
+              help="Timepoints read from PATH into memory.")
+@click.option("--frames", type=int, default=0,
+              help="Draw N frames on an offscreen canvas and exit, for a smoke test.")
+def app(path, nt, frames):
+    r"""The app host: apps drawn on one canvas, swappable between its areas.
+
+    Opens PATH as (T, Y, X) from its first z-plane and colour channel, or a
+    synthetic movie when no path is given. The Apps menu switches each app on
+    and off, and each subplot's menu says which app draws on it.
+
+    
+    Examples:
+      mbo app                          Synthetic movie, traces and image viewer
+      mbo app /data/raw.tiff --nt 200  The first 200 timepoints of a file
+      mbo app --frames 5               Draw 5 frames offscreen and exit
+    """
+    if frames > 0:
+        os.environ["RENDERCANVAS_FORCE_OFFSCREEN"] = "1"
+    from mbo_utilities.gui.app import run_app
+
+    run_app(path, nt=nt, frames=frames)
 
 
 if __name__ == "__main__":

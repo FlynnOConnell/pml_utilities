@@ -13,6 +13,21 @@ def set_global_level(level: int):
             lg.setLevel(level)
 
 
+def debug_enabled() -> bool:
+    """Whether debug logging is on for this process (the MBO_DEBUG flag)."""
+    return os.environ.get("MBO_DEBUG", "0").strip().lower() not in ("", "0", "false", "no")
+
+
+def set_debug(enabled: bool) -> None:
+    """Turn debug logging on or off here and in every worker spawned after.
+
+    Workers copy ``os.environ`` at spawn (``ProcessManager.spawn``), so the
+    flag has to live in the environment, not just in the logger levels.
+    """
+    os.environ["MBO_DEBUG"] = "1" if enabled else "0"
+    set_global_level(logging.DEBUG if enabled else logging.INFO)
+
+
 def get(subname: str | None = None) -> logging.Logger:
     name = "mbo" if subname is None else f"mbo.{subname}"
     lg = logging.getLogger(name)

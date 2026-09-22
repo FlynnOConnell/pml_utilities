@@ -9,7 +9,6 @@ Live GPU usage lives in the Process Console's System panel; the compute
 """
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any
 
@@ -382,13 +381,7 @@ def draw_options_popup(parent: Any) -> None:
         if changed:
             parent._options_debug = new_debug
             set_debug_logging(new_debug)
-            # workers copy os.environ at spawn (ProcessManager.spawn), so set
-            # MBO_DEBUG here to carry the toggle into the next isoview run —
-            # the worker's isoview log bridge reads it to forward DEBUG.
-            os.environ["MBO_DEBUG"] = "1" if new_debug else "0"
-            _mbo_log.set_global_level(
-                logging.DEBUG if new_debug else logging.INFO
-            )
+            _mbo_log.set_debug(new_debug)
 
         draw_memory_options(parent)
         draw_linescan_options(parent)
