@@ -40,6 +40,7 @@ dependencies = [
 	"uvicorn>=0.30",
 	"websockets>=13",
 	"imgui-bundle>=1.92.801,<1.92.900",
+	"imgui_debugger>=0.2,<0.3",
 	"wgpu>=0.28.1",
 	"submitit>=1.5.0",
 	"imagecodecs>=2026.6.6",
@@ -110,6 +111,10 @@ docs = [
     "pygfx>=0.14.0",
 ]
 all = ["pml_utilities[napari,notebooks]"]
+
+[tool.uv.sources]
+# imgui_debugger is not on PyPI yet; resolve it from the sibling checkout
+imgui_debugger = { path = "../imgui_debugger", editable = true }
 
 [tool.uv]
 default-groups = ["dev", "suite2p", "napari", "notebooks", "docs"]

@@ -9,6 +9,7 @@ from imgui_bundle import (
     portable_file_dialogs as pfd,
     icons_fontawesome_6 as fa,
 )
+from mbo_utilities import log as _mbo_log
 from mbo_utilities.gui import _setup  # triggers setup on import
 from mbo_utilities.preferences import (
     get_default_open_dir,
@@ -333,15 +334,8 @@ class FileDialog:
             if changed:
                 self.debug_logging = new_debug
                 set_debug_logging(self.debug_logging)
-                # Apply immediately so the dialog itself sees the new level.
-                try:
-                    import logging
-                    from mbo_utilities import log as _mbo_log
-                    _mbo_log.set_global_level(
-                        logging.DEBUG if self.debug_logging else logging.INFO
-                    )
-                except Exception:
-                    pass
+                # applies now, and to every worker spawned after
+                _mbo_log.set_debug(self.debug_logging)
 
             draw_memory_options(self, tooltip=wrapped_tooltip)
             draw_linescan_options(self, tooltip=wrapped_tooltip)

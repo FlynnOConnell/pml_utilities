@@ -5,6 +5,7 @@ This module is designed for fast startup - heavy imports are deferred until need
 Operations like --check-install should be near-instant.
 """
 import functools
+import os
 import math
 import sys
 from pathlib import Path
@@ -880,10 +881,10 @@ def _run_gui_impl(
         if _gpu_idx >= 0 and 0 <= _gpu_idx < len(_adapters):
             import fastplotlib as fpl
             fpl.select_adapter(_adapters[_gpu_idx])
-        if get_debug_logging():
-            import logging
+        # an explicit MBO_DEBUG (mbo --debug / --no-debug) wins over the preference
+        if get_debug_logging() and "MBO_DEBUG" not in os.environ:
             from mbo_utilities import log as _mbo_log
-            _mbo_log.set_global_level(logging.DEBUG)
+            _mbo_log.set_debug(True)
     except Exception:
         pass
 
