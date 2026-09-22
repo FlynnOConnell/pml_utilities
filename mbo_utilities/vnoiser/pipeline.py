@@ -43,7 +43,7 @@ import numpy as np
 import psutil
 import zarr
 from vnoiser import DfofConfig, ScanTraces, SpikeDetectConfig, read_pf
-from vnoiser.pf import DFOF_FILE, PIPELINE_FILES, PROVENANCE_FILE, PfWriter, final_domain_name
+from vnoiser.pf import DFOF_FILE, PROVENANCE_FILE, PfWriter, final_domain_name
 from vnoiser.pipeline import load_scan_rois, process_domain
 from vnoiser.preprocess import DomainTraces, domain_names, domain_zscore
 
@@ -303,12 +303,30 @@ def write_domains_template(mesc_path, path=None, *, units=None, per_domain: int 
 
 
 def default_pf_dir(mesc_path) -> Path:
-    """Where the PF folder goes: ``<animal>/<expt>/PF`` for the archive's
-    ``<animal>/<expt>/<expt>/<expt>.mesc`` layout, else ``PF`` beside the file."""
+    """Where a ``pkl`` run's PF folder goes: ``<animal>/<expt>/PF`` for the
+    archive's ``<animal>/<expt>/<expt>/<expt>.mesc`` layout, else ``PF``
+    beside the file."""
     mesc_path = Path(mesc_path)
     if mesc_path.parent.name == mesc_path.stem and mesc_path.parent.parent != mesc_path.parent:
         return mesc_path.parent.parent / "PF"
     return mesc_path.parent / "PF"
+
+
+def default_results_path(mesc_path, out=None) -> Path:
+    """The results zarr a ``zarr`` run writes: ``out`` when it names one, a
+    fresh name inside ``out`` when it names a folder, else beside the file.
+
+    Named after its input (:func:`mbo_utilities.results.results_name`), so a
+    run lands as ``session1.2026-09-21-14-30-22.voltage.zarr`` next to
+    ``session1.mesc`` and never overwrites an earlier one.
+    """
+    from mbo_utilities.results import results_name
+
+    mesc_path = Path(mesc_path)
+    out = mesc_path.parent if out is None else Path(out)
+    if out.suffix == ".zarr":
+        return out
+    return out / results_name(mesc_path, pipeline="voltage")
 
 
 def run_voltage_pipeline(
@@ -433,7 +451,13 @@ def run_voltage_pipeline(
         if dropped:
             logger.info(f"voltage: planes {[r + 1 for r in rois]} leave no ROI in domain(s) {dropped}; dropped")
     names = domain_names(domains)
-    pf_dir = Path(out) if out is not None else default_pf_dir(mesc_path)
+    # a zarr run works in a scratch folder the pipeline's own writers need and
+    # folds it into the results file at the end; a pkl run works in PF itself
+    as_zarr = settings.runtime.output_format == "zarr"
+    results_path = default_results_path(mesc_path, out) if as_zarr else None
+    pf_dir = results_path.with_suffix(".work") if as_zarr else (
+        Path(out) if out is not None else default_pf_dir(mesc_path)
+    )
 
     mbo_version = None
     for dist in ("pml_utilities", "mbo_utilities"):
@@ -452,7 +476,7 @@ def run_voltage_pipeline(
     usage = _RunUsage(logger)
     system = mem_snapshot(usage.proc)
     logger.info(
-        f"voltage: {len(chosen)} scan(s) x {len(names)} domain(s) -> {pf_dir} "
+        f"voltage: {len(chosen)} scan(s) x {len(names)} domain(s) -> {results_path or pf_dir} "
         f"({settings.runtime.output_format}); {os.cpu_count()} cpus, {system['total_gb']:.0f} GB RAM "
         f"({system['sys_pct']:.0f}% in use); vnoiser {versions['vnoiser']}, mbo_utilities {mbo_version}"
     )
@@ -620,24 +644,37 @@ def run_voltage_pipeline(
         usage.end(f"wrote {2 * len(scans)} figures")
         paths.update({f"{TRACES_DIR}/{p.name}": p for p in sorted(traces_dir.iterdir())})
         prov = _write_timing(pf_dir, usage)
-        if settings.runtime.output_format == "zarr":
-            from mbo_utilities.results import results_from_pf, results_name, write_results
+        if as_zarr:
+            import shutil
+
+            from mbo_utilities.results import SIDECAR, results_from_pf, write_results
 
             if progress_callback is not None:
                 progress_callback(0.97, "writing the results zarr")
             usage.begin("results")
             result_units, root = results_from_pf(pf_dir)
-            results_path = write_results(pf_dir / results_name(mesc_path), result_units, overwrite=True, **root)
-            # the results file replaces the archive's pickles; the h5, the traces folder and pipeline.json stay
-            for name in PIPELINE_FILES:
-                if name.endswith(".pkl"):
-                    (pf_dir / name).unlink(missing_ok=True)
-                    paths.pop(name, None)
-            paths[results_path.name] = results_path
+            results_path = write_results(results_path, result_units, overwrite=True, **root)
             usage.end(f"wrote {results_path.name}")
             prov = _write_timing(pf_dir, usage)
+            # the results file replaces the pickles; everything else the run
+            # made moves inside it, so one path is the whole output
+            sidecar = results_path / SIDECAR
+            sidecar.mkdir()
+            paths = {}
+            for name in (DFOF_FILE, PROVENANCE_FILE, TIMINGS_FILE, TRACES_DIR):
+                source = pf_dir / name
+                if source.exists():
+                    shutil.move(str(source), str(sidecar / name))
+            shutil.rmtree(pf_dir, ignore_errors=True)
+            for item in sorted(sidecar.rglob("*")):
+                if item.is_file():
+                    paths[f"{SIDECAR}/{item.relative_to(sidecar).as_posix()}"] = item
+            paths[results_path.name] = results_path
             zarr.open_group(str(results_path), mode="r+").attrs["provenance"] = prov
-        paths[TIMINGS_FILE] = pf_dir / TIMINGS_FILE
+            timings_at = sidecar / TIMINGS_FILE
+        else:
+            timings_at = pf_dir / TIMINGS_FILE
+            paths[TIMINGS_FILE] = timings_at
         timing = prov["timing"]
         wall, cpu = timing["wall_seconds"], timing["cpu_seconds"]
         totals = ", ".join(f"{step} {seconds:.1f} s" for step, seconds in timing["totals"].items())
@@ -645,10 +682,10 @@ def run_voltage_pipeline(
         logger.info(
             f"voltage done in {int(wall // 60)}m {wall % 60:04.1f}s (cpu {cpu:.0f} s, {cpu / max(wall, 1e-9):.1f} cores); "
             f"peak process memory {timing['peak_rss_gb']:.2f} GB; {totals}; denoise stages: {stages}; "
-            f"timings in {pf_dir / TIMINGS_FILE}"
+            f"timings in {timings_at}"
         )
         if progress_callback is not None:
-            progress_callback(1.0, f"wrote {len(paths)} files to {pf_dir}")
+            progress_callback(1.0, f"wrote {len(paths)} files to {results_path or pf_dir}")
         return paths
     finally:
         usage.close()

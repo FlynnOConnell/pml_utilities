@@ -107,9 +107,9 @@ class VoltageRuntimeSettings:
     save_cwt: bool = False
     overwrite: bool = True
     reference_fs: float = 1075.2688
-    # "pkl": the archive's PF pickles, which the curation window reads;
-    # "zarr": one <date>_<tags>.zarr results file (mbo_utilities.results) and no pickles
-    output_format: str = "pkl"
+    # "zarr": one <stem>.<stamp>.voltage.zarr results file (mbo_utilities.results),
+    # its own files under _sidecar/; "pkl": the archive's PF folder of pickles
+    output_format: str = "zarr"
 
 
 OUTPUT_FORMATS = ("pkl", "zarr")
