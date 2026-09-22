@@ -39,7 +39,7 @@ _PF_INFO = PipelineInfo(
     name="voltage",
     description="Spatial JEDI voltage pipeline: AOD ROI traces, dF/F, wavelet denoising, peaks (a PF folder)",
     input_patterns=["**/*.mesc"],
-    output_patterns=[f"**/PF/{TRACES_FILE}", f"**/PF/{PROVENANCE_FILE}", "**/PF/test.h5", "**/PF/*.zarr"],
+    output_patterns=["**/*.voltage.zarr", f"**/PF/{TRACES_FILE}", f"**/PF/{PROVENANCE_FILE}", "**/PF/test.h5"],
     input_extensions=["mesc"],
     output_extensions=["pkl", "h5", "json", "zarr"],
     marker_files=[TRACES_FILE],
@@ -49,39 +49,41 @@ register_pipeline(_PF_INFO)
 
 
 def pf_results_in(folder) -> Path | None:
-    """The voltage results zarr in ``folder`` (``<date>_<tags>.zarr``, the
-    newest when several), or None."""
-    from mbo_utilities.results import results_pipeline
+    """The newest voltage results zarr directly in ``folder``, or None."""
+    from mbo_utilities.results import newest_results
 
-    folder = Path(folder)
-    if not folder.is_dir():
-        return None
-    found = [p for p in folder.glob("*.zarr") if results_pipeline(p) == "voltage"]
-    return max(found, key=lambda p: p.name) if found else None
+    return newest_results(folder, "voltage")
+
+
+def pf_files(pf_dir) -> Path:
+    """Where a run's own files (``pipeline.json``, ``timings.json``, its h5 and
+    ``traces/``) sit: ``_sidecar`` inside a results zarr, the folder itself for
+    a ``PF`` folder of pickles."""
+    from mbo_utilities.results import SIDECAR
+
+    pf_dir = Path(pf_dir)
+    return pf_dir / SIDECAR if pf_dir.suffix == ".zarr" else pf_dir
 
 
 def pf_dir_of(path) -> Path | None:
-    """The ``PF`` folder ``path`` names: the folder itself, its traces pickle
-    or results zarr, or an experiment folder holding ``PF``; None for
-    anything else."""
+    """What a voltage run left, from anything naming it: a results zarr
+    itself, a ``PF`` folder of pickles, or a folder holding either (its own
+    ``*.zarr``, or a ``PF`` beside it). None for anything else."""
+    from mbo_utilities.results import results_pipeline
+
     p = Path(path)
     if p.is_file():
         return p.parent if p.name == TRACES_FILE else None
     if not p.is_dir():
         return None
+    if p.suffix == ".zarr":
+        return p if results_pipeline(p) == "voltage" else None
     if (p / TRACES_FILE).is_file():
         return p
     if (p / "PF" / TRACES_FILE).is_file():
         return p / "PF"
-    if p.suffix == ".zarr":
-        from mbo_utilities.results import results_pipeline
-
-        return p.parent if results_pipeline(p) == "voltage" else None
-    if pf_results_in(p) is not None:
-        return p
-    if pf_results_in(p / "PF") is not None:
-        return p / "PF"
-    return None
+    found = pf_results_in(p) or pf_results_in(p / "PF")
+    return found
 
 
 def pf_source(pf_dir, provenance: dict | None = None) -> tuple[Path | None, dict[str, str]]:
@@ -93,8 +95,9 @@ def pf_source(pf_dir, provenance: dict | None = None) -> tuple[Path | None, dict
     pf_dir = Path(pf_dir)
     if provenance is None:
         provenance = {}
-        if (pf_dir / PROVENANCE_FILE).is_file():
-            provenance = json.loads((pf_dir / PROVENANCE_FILE).read_text())
+        prov_file = pf_files(pf_dir) / PROVENANCE_FILE
+        if prov_file.is_file():
+            provenance = json.loads(prov_file.read_text())
     block = provenance.get("source") or {}
     units = {str(s): str(u) for s, u in (block.get("units") or {}).items()}
     named = block.get("mesc")
@@ -145,7 +148,11 @@ class PfArray(ReductionMixin, LazyArray):
         self.pf_dir = pf_dir
         self.filenames = [pf_dir]
         self._metadata: dict = {}
-        self.results_path = None if (pf_dir / TRACES_FILE).is_file() else pf_results_in(pf_dir)
+        self.results_path = (
+            pf_dir if pf_dir.suffix == ".zarr"
+            else None if (pf_dir / TRACES_FILE).is_file()
+            else pf_results_in(pf_dir)
+        )
         try:
             from vnoiser import read_pf
         except ImportError:

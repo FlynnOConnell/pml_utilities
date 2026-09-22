@@ -1,40 +1,77 @@
 # MESc files
 
-A `.mesc` is one HDF5 file holding every recording of a session at a Femtonics AOD two-photon microscope. The MESc tab lists them. This page says what each kind of recording is and how the columns read.
+One HDF5 file, one unit per recording, all from a Femtonics AOD two-photon
+microscope. The MESc tab lists them, one row each.
 
-## What the microscope did, in order
+| session | holds |
+|---|---|
+| `MSession_0` | what the operator ran |
+| `MSession_1` | what MEScan saved beside each run, on its own |
 
-- **Took one picture of the tissue**: an ordinary raster frame, the whole field (512 x 512 px, both colors). MEScan saves it as its own unit with the role `background`. The table calls it the **picture**.
-- **The operator drew on that picture where to record**: straight lines or small rectangles (patches). The laser then jumps only between those spots, hundreds or thousands of times a second, and never records the rest of the field. That is an AOD scan.
-- **Line scan**: each line is one pixel wide and a few tens of pixels long. Every cycle the laser runs along each line once and records one row of samples per line. Over time each line becomes a (time, samples) image, a kymograph. The viewer puts the lines on its ROI slider.
-- **Chessboard**: each patch is a small square, say 20 x 20 px. Every cycle the laser rasters each square once, so each square is a small movie. On disk MESc writes the squares side by side in one wide row per timepoint; the reader cuts them apart onto the ROI slider.
-- **Ribbon**: a bent strip drawn along a dendrite, swept every cycle; each strip is a patch.
-- **While recording, the microscope tracked drift**: that is RTMC, real-time motion correction. Every cycle it also scans a small reference region, compares it with the first cycle and shifts the scan to follow the tissue.
-- **Z-stack**: ordinary raster frames taken at each depth, a micron or so apart, with no time axis. The stack is a picture of the whole volume the scans were placed in.
+Units number from 0 in every session, so `MSession_0/MUnit_3` and
+`MSession_1/MUnit_3` are different recordings.
 
-## What MEScan saves beside each scan
+## Kinds of recording
 
-- **The picture**: the scan's `BackgroundImagePath` attribute names it. The table folds it into the scan's row as the **picture** cell.
-- **The RTMC reference pixels**: the small region re-scanned every cycle, saved as its own unit with the role `motionCorrection`; the scan's `MotionCorrectionImagePath` names it. For a line scan it is two reference lines written as rows, for a chessboard one reference square per cycle. It is the reference target, not a movie of the field, so it is rarely worth displaying. The table folds it into the scan's row behind the **RTMC** cell.
-- **The RTMC shifts**: how far the scan was moved, in microns, X, Y and Z, once per cycle. These are curves on the scan unit itself and are what the Traces tab's MC plot draws.
-- Sessions: `MSession_0` holds what the operator ran; `MSession_1` holds what MEScan saved beside each run. Units are numbered from 0 in every session, so `MSession_0/MUnit_3` and `MSession_1/MUnit_3` are different recordings.
+| modality | the laser | what you get |
+|---|---|---|
+| `timeseries` | rasters the whole field | one frame per timepoint; a single frame is a **picture** |
+| `zstack` | rasters at each depth | one frame per slice, no time axis |
+| `linescan` | runs along each drawn line | one row of samples per line per cycle: a kymograph |
+| `chessboard` | rasters each drawn square | each patch is a small movie |
+| `ribbon` | sweeps a bent strip along a dendrite | each strip is a patch |
+| `multicube` | scans small volumes slice by slice | Z is real depth |
 
-## The RTMC cell
+The last four are AOD scans: the operator drew lines or patches on a picture,
+and the laser jumps only between those spots, thousands of times a second,
+never recording the rest of the field. Each line or patch is one step of the
+viewer's ROI slider.
 
-- **yes**: real-time motion correction was on for this recording. Hover the cell: if the tissue moved, the scan was shifted to follow it and the X, Y, Z shifts in microns are the MC plot under the traces; if it never moved there is nothing to plot.
-- **no**: it was off.
-- The reference region RTMC re-scanned is its own unit, folded into the row; **companion units as rows** lists it.
+## What MEScan saves beside a scan
+
+| in the table | what it is |
+|---|---|
+| the **picture** cell | the picture the lines were drawn on: its own unit, role `background`, named by the scan's `BackgroundImagePath` |
+| behind the **RTMC** cell | the region RTMC re-scanned each cycle: its own unit, role `motionCorrection`, named by `MotionCorrectionImagePath` |
+| the MC plot under the traces | the X, Y, Z microns RTMC moved the scan, once per cycle: curves on the scan unit itself |
+
+**companion units as rows** gives the two units rows of their own.
+
+## Columns
+
+| column | means |
+|---|---|
+| session, unit | which recording; hover a name for what it is |
+| modality | how the laser moved |
+| layout | how the reader unpacks the raw pixels |
+| ROIs | lines or patches the operator drew |
+| picture | the picture they were drawn on; click to see them on it |
+| RTMC | real-time motion correction was on (`yes`) or off (`no`) |
+| T C Z Y X | the 5D shape: timepoints, colors, slices or ROIs, rows, columns |
+| fs, duration | timepoints per second; recorded length, short if stopped early |
+| start, comment | acquisition time (UTC-05:00) and the comment typed in MESc |
+
+Hover a header for the long version. Right-click one to show or hide columns.
 
 ## Where the lines were drawn
 
-Every picture and Z-stack records the micron position of its top-left pixel and its width and height in microns. Every AOD scan records the micron coordinates of each line's two ends, or of each patch's four corners. From those the tab draws the lines and patches back on the picture:
+Every picture and Z-stack records the micron position of its top-left pixel
+and its size; every AOD scan records the micron coordinates of each line's
+ends or each patch's corners. The **picture** button draws them back on:
 
-- **picture**: one button per scan, naming the picture it was drawn on. Click it to open the reference image: the picture with the scan's lines or patches drawn on it in MESc's colours, the one the ROI slider is on thicker, and every Z-stack holding them, projected over the slices they were scanned on. Click a line there to move the ROI slider to it.
-- The picture shows every line whatever its depth, because that is where the operator drew them. A Z-stack shows only the lines actually scanned inside it (a stack counts only when its field *and* its depth range hold them), and the caption says how many of the scan's lines those are.
-- The popup's **display** button puts that picture or Z-stack in the viewer, a stack at the slice the lines sit on. That is the only place a Z-stack is offered; the table has no column for it.
+| image | shows |
+|---|---|
+| the picture | every line, whatever its depth, because that is where they were drawn |
+| a Z-stack | only the lines scanned inside it, in field **and** depth range; the caption says how many of the scan's lines those are |
 
-## Rows and clicks
+The ROI slider's line is drawn thicker; click a line to move the slider to it.
+The popup's **display** button puts that image in the viewer, a Z-stack at the
+slice the lines sit on. That is the only place a Z-stack is offered.
 
-- One row per recording. A scan's picture and RTMC reference pixels are cells of its row; **companion units as rows** gives them rows of their own.
-- Click a row to display that recording. Its ROIs, runs and traces are parked when you switch away and come back when you return.
-- Right-click a column header to show or hide columns; hover one for what it means.
+## Clicks
+
+| do | gets |
+|---|---|
+| click a row | displays that recording; its ROIs, runs and traces are parked and come back when you return |
+| click the picture cell | the reference image |
+| right-click a header | show or hide columns |

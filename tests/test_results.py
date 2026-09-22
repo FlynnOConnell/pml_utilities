@@ -2,18 +2,21 @@
 round trip, and molding suite2p-shaped folders into it. The voltage
 pipeline's PF conversion is in ``test_voltage_pipeline.py``."""
 
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 import pytest
+import zarr
 
 from mbo_utilities.arrays.features._dim_tags import filename_tags, parse_tag
 from mbo_utilities.results import (
     ResultUnit,
     read_results,
+    newest_results,
     results_from_suite2p,
     results_name,
     results_pipeline,
+    results_stamp,
     unit_name,
     write_results,
 )
@@ -32,17 +35,52 @@ def test_filename_tags_follow_the_dim_tag_vocabulary():
     assert (tag.start, tag.stop, tag.step) == (1, 3, 2)
 
 
-def test_results_name_is_date_then_tags():
-    when = date(2026, 9, 16)
-    assert results_name("mouse_V1_session1.tif", when) == "2026-09-16_session01.zarr"
-    assert results_name("run/zplane01_tp00001-01574", when) == "2026-09-16_zplane01_tp00001-01574.zarr"
-    assert results_name("stan112_expt12.mesc", when, extra_tags=["scan35"]) == "2026-09-16_scan35.zarr"
-    # a name without tags contributes its stem so the file still says what it is
-    assert results_name("stan112_expt12.mesc", when) == "2026-09-16_stan112_expt12.zarr"
-    assert results_name("a b/c.zarr", when) == "2026-09-16_c.zarr"
+def test_results_name_is_the_input_then_a_stamp_then_the_pipeline():
+    when = datetime(2026, 9, 16, 14, 30, 22)
+    assert results_name("d/session1.mesc", when, pipeline="voltage") == "session1.2026-09-16-14-30-22.voltage.zarr"
+    assert results_name("run/zplane01_tp00001-01574", when, pipeline="suite2p") == (
+        "zplane01_tp00001-01574.2026-09-16-14-30-22.suite2p.zarr"
+    )
+    assert results_name("stan112_expt12.mesc", when, extra_tags=["scan35"]) == (
+        "stan112_expt12.scan35.2026-09-16-14-30-22.zarr"
+    )
+    # the dot separates the fields, so it cannot survive inside one
+    assert results_name("a b/c.d.zarr", when) == "c_d.2026-09-16-14-30-22.zarr"
     assert unit_name("plane", 3) == "zplane03" and unit_name("scan", 35) == "scan35"
     with pytest.raises(ValueError):
         unit_name("tile", 1)
+
+
+def test_results_stamp_reads_the_timestamp_back():
+    when = datetime(2026, 9, 16, 14, 30, 22)
+    assert results_stamp(results_name("session1.mesc", when, pipeline="voltage")) == when
+    assert results_stamp("d/session1.2026-09-16-14-30-22.voltage.zarr") == when
+    # a name from before the convention, and one whose stem is not a stamp
+    assert results_stamp("2026-09-16_session01.zarr") is None
+    assert results_stamp("session1.zarr") is None
+
+
+def test_newest_results_picks_the_latest_run_of_a_pipeline(tmp_path):
+    unit = ResultUnit(
+        name="scan35", kind="scan", index=35, roi_names=["a"],
+        traces={"raw": np.zeros((1, 4))}, member_kind="line", members=[np.array([0])],
+    )
+    made = {}
+    for stamp, pipeline in (
+        (datetime(2026, 9, 16, 9, 0, 0), "voltage"),
+        (datetime(2026, 9, 16, 17, 5, 0), "voltage"),
+        (datetime(2026, 9, 17, 8, 0, 0), "suite2p"),
+    ):
+        name = results_name("session1.mesc", stamp, pipeline=pipeline)
+        made[name] = write_results(tmp_path / name, [unit], pipeline=pipeline)
+    assert newest_results(tmp_path, "voltage").name == "session1.2026-09-16-17-05-00.voltage.zarr"
+    assert newest_results(tmp_path, "suite2p").name == "session1.2026-09-17-08-00-00.suite2p.zarr"
+    assert newest_results(tmp_path).name == "session1.2026-09-17-08-00-00.suite2p.zarr"
+    assert newest_results(tmp_path, "masknmf") is None
+    assert newest_results(tmp_path / "nope") is None
+    # a plain zarr in the folder is not a results file and never wins
+    zarr.open_group(str(tmp_path / "plain.zarr"), mode="w", zarr_format=3)
+    assert newest_results(tmp_path, "voltage").name == "session1.2026-09-16-17-05-00.voltage.zarr"
 
 
 def test_write_and_read_round_trip(tmp_path):
@@ -64,11 +102,11 @@ def test_write_and_read_round_trip(tmp_path):
         images={"mean": rng.normal(size=(4, 5))},
     )
     path = write_results(
-        tmp_path / results_name("mouse_session1.tif", date(2026, 9, 16)), [scan, plane],
+        tmp_path / results_name("mouse_session1.tif", datetime(2026, 9, 16, 14, 30, 22)), [scan, plane],
         pipeline="test", source={"path": "mouse_session1.tif"}, settings={"a": (1, 2)},
         metadata={"fs": 10.0, "si": {"x": np.arange(3)}, "meanImg": np.zeros((4, 5))},
     )
-    assert path.name == "2026-09-16_session01.zarr" and results_pipeline(path) == "test"
+    assert path.name == "mouse_session1.2026-09-16-14-30-22.zarr" and results_pipeline(path) == "test"
     assert results_pipeline(tmp_path) is None
     back = read_results(path)
     assert back.pipeline == "test" and back.tags == ["session01"] and list(back.units) == ["scan35", "zplane01"]
@@ -159,8 +197,8 @@ def test_suite2p_and_masknmf_folders_mold_into_results(tmp_path):
     np.testing.assert_allclose(first.weights[1], [2.0])
     assert set(first.traces) == {"raw", "neuropil", "spikes", "dff"} and set(units[1].traces) == {"raw", "neuropil", "spikes"}
     assert set(first.images) == {"mean", "max"} and first.attrs["plane_dir"].endswith("zplane01_tp00001-00030")
-    path = write_results(run / results_name(run, date(2026, 9, 16)), units, **root)
-    assert path.name == "2026-09-16_run.zarr"
+    path = write_results(run / results_name(run, datetime(2026, 9, 16, 14, 30, 22), pipeline="masknmf"), units, **root)
+    assert path.name == "run.2026-09-16-14-30-22.masknmf.zarr"
     back = read_results(path)
     assert back.pipeline == "masknmf" and list(back.units) == ["zplane01", "zplane02"]
     np.testing.assert_allclose(back["zplane01"].traces["dff"], 3.0)
@@ -170,7 +208,9 @@ def test_suite2p_and_masknmf_folders_mold_into_results(tmp_path):
     # one plane dir on its own works too, named from its tags
     single, root = results_from_suite2p(run / "zplane02_tp00001-00030")
     assert len(single) == 1 and root["pipeline"] == "suite2p"
-    assert results_name(run / "zplane02_tp00001-00030", date(2026, 9, 16)) == "2026-09-16_zplane02_tp00001-00030.zarr"
+    assert results_name(run / "zplane02_tp00001-00030", datetime(2026, 9, 16, 14, 30, 22)) == (
+        "zplane02_tp00001-00030.2026-09-16-14-30-22.zarr"
+    )
     with pytest.raises(FileNotFoundError):
         results_from_suite2p(tmp_path)
 

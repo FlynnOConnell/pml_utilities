@@ -1,4 +1,5 @@
-"""One results file for every pipeline: a zarr v3 group named ``<yyyy-mm-dd>_<tags>.zarr``.
+"""One results file for every pipeline: a zarr v3 group named
+``<input stem>.<yyyy-mm-dd-HH-MM-SS>.<pipeline>.zarr``.
 
 A pipeline's native outputs (suite2p's ``F.npy`` and ``stat.npy``, masknmf's
 suite2p-shaped plane dirs, the voltage pipeline's ``PF`` pickles) differ in
@@ -6,7 +7,7 @@ every detail; this module fixes one shape they all mold into so a reader,
 a viewer or a notebook opens any of them the same way. The contract is
 AGENTS.md §7.5; the schema is::
 
-    <yyyy-mm-dd>_<tags>.zarr/           zarr v3 group
+    <stem>.<stamp>.<pipeline>.zarr/     zarr v3 group
       attrs: mbo_results, pipeline, created, tags, units, source, settings,
              metadata, provenance
       <unit>/                           one group per plane (zplane01) or scan (scan35)
@@ -21,13 +22,18 @@ AGENTS.md §7.5; the schema is::
         members/<kind>                  (n_members, n_timepoints) float32, the members'
                                         own traces when they have them (a line scan's lines)
         events/frame events/roi         detected events, (n_events,), sorted by ROI
+      _sidecar/                         the pipeline's own files (pipeline.json,
+                                        timings.json, its native h5 and npy)
         images/<kind>                   (Y, X) float32 summary images, IMAGE_KINDS
 
 :func:`results_from_suite2p` molds suite2p and masknmf output folders,
 :func:`results_from_pf` the voltage pipeline's ``PF`` folder; a new pipeline
-builds :class:`ResultUnit` objects and calls :func:`write_results`. The file
-is named by :func:`results_name` from the source filename's tags
-(``session01``, ``zplane03``; ``arrays.features._dim_tags.filename_tags``).
+builds :class:`ResultUnit` objects and calls :func:`write_results`.
+
+:func:`results_name` names the file after its input so it sits beside it,
+:func:`results_stamp` reads the timestamp back with ``datetime.strptime``
+and :func:`newest_results` picks the latest run in a folder. Nothing matches
+a results name by pattern: ask those three.
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -51,15 +57,18 @@ __all__ = [
     "MEMBER_KINDS",
     "RESULTS_ATTR",
     "RESULTS_VERSION",
+    "SIDECAR",
     "TRACE_KINDS",
     "UNIT_KINDS",
     "ResultUnit",
     "Results",
+    "newest_results",
     "read_results",
     "results_from_pf",
     "results_from_suite2p",
     "results_name",
     "results_pipeline",
+    "results_stamp",
     "results_summary",
     "unit_name",
     "write_results",
@@ -69,6 +78,10 @@ logger = log.get("results")
 
 RESULTS_VERSION = 1
 RESULTS_ATTR = "mbo_results"
+# a pipeline's own files live inside the results file, beside its groups
+SIDECAR = "_sidecar"
+# strftime both ways; results_stamp parses it, nothing matches it by pattern
+RESULTS_STAMP = "%Y-%m-%d-%H-%M-%S"
 TRACE_KINDS = {
     "raw": "fluorescence in the recording's units (suite2p F; a line's mean counts)",
     "neuropil": "neuropil fluorescence (suite2p Fneu)",
@@ -162,21 +175,60 @@ def unit_name(kind: str, index: int) -> str:
     raise ValueError(f"kind must be one of {UNIT_KINDS}, got {kind!r}")
 
 
-def results_name(source, when: date | None = None, extra_tags=()) -> str:
-    """``<yyyy-mm-dd>_<tags>.zarr`` for the results of ``source``.
+def _clean(part: str) -> str:
+    """``part`` as one dot-separated field of a results filename."""
+    return re.sub(r"[^A-Za-z0-9-]+", "_", part).strip("_")
 
-    The tags are the ones the source filename carries (``session01``,
-    ``zplane03``, ``tp00001-01574``) followed by ``extra_tags``; a name with
-    none of them contributes its whole stem instead, so
-    ``stan112_expt12.mesc`` gives ``2026-09-16_stan112_expt12.zarr``.
+
+def results_name(source, when: datetime | None = None, extra_tags=(), pipeline: str = "") -> str:
+    """``<stem>.<yyyy-mm-dd-HH-MM-SS>.<pipeline>.zarr`` for ``source``.
+
+    The stem is the source filename's, so the file sits beside its input
+    under the input's own name (``session1.mesc`` ->
+    ``session1.2026-09-21-14-30-22.voltage.zarr``); ``extra_tags`` follow it.
+    The timestamp is local time to the second, so two runs in a day are two
+    files and a listing sorts chronologically; :func:`results_stamp` reads it
+    back with ``datetime.strptime``.
     """
-    when = when or date.today()
-    tags = [t.to_string() for t in filename_tags(source)] + [str(t) for t in extra_tags]
-    if not tags:
-        name = Path(source).name
-        stem = name[: -len(".zarr")] if name.endswith(".zarr") else Path(name).stem
-        tags = [re.sub(r"[^A-Za-z0-9.-]+", "_", stem).strip("_") or "results"]
-    return f"{when:%Y-%m-%d}_{'_'.join(tags)}.zarr"
+    when = when or datetime.now()
+    name = Path(source).name
+    stem = name[: -len(".zarr")] if name.endswith(".zarr") else Path(name).stem
+    parts = [_clean(stem) or "results"]
+    parts += [c for c in (_clean(str(t)) for t in extra_tags) if c]
+    parts.append(f"{when:{RESULTS_STAMP}}")
+    if pipeline:
+        parts.append(_clean(str(pipeline)))
+    return ".".join(parts) + ".zarr"
+
+
+def results_stamp(path) -> datetime | None:
+    """When a results file was written, from the timestamp in its name, or
+    None when the name carries none."""
+    for part in Path(path).name.split("."):
+        try:
+            return datetime.strptime(part, RESULTS_STAMP)
+        except ValueError:
+            continue
+    return None
+
+
+def newest_results(folder, pipeline: str | None = None) -> Path | None:
+    """The newest results file directly in ``folder`` by the timestamp in its
+    name, limited to one ``pipeline`` when given; None when there is none.
+
+    A file named before this convention has no timestamp and sorts oldest.
+    """
+    folder = Path(folder)
+    if not folder.is_dir():
+        return None
+    found = [
+        p
+        for p in folder.glob("*.zarr")
+        if (kind := results_pipeline(p)) is not None and pipeline in (None, kind)
+    ]
+    if not found:
+        return None
+    return max(found, key=lambda p: (results_stamp(p) or datetime.min, p.name))
 
 
 def results_pipeline(path) -> str | None:

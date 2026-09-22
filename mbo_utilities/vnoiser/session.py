@@ -606,10 +606,14 @@ class CurationSession:
 # ----------------------------------------------------------------------
 
 def pf_dir_for_mesc(mesc_path) -> Path | None:
-    """The ``PF`` folder the voltage pipeline wrote for a line scan: beside
-    the file, or one folder up (the ``<expt>/<expt>/<expt>.mesc`` layout
-    keeps ``<expt>/PF``); None when neither holds one."""
+    """What the voltage pipeline last left for a line scan: the newest results
+    zarr beside the file, else a ``PF`` folder of pickles beside it or one
+    folder up (the ``<expt>/<expt>/<expt>.mesc`` layout keeps ``<expt>/PF``);
+    None when there is none."""
     mesc_path = Path(mesc_path)
+    found = pf_results_in(mesc_path.parent)
+    if found is not None:
+        return found
     for parent in (mesc_path.parent.parent, mesc_path.parent):
         pf = parent / "PF"
         if (pf / TRACES_FILE).is_file() or pf_results_in(pf) is not None:

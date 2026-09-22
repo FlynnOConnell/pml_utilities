@@ -552,12 +552,12 @@ key in the config.
 
 Native outputs differ per pipeline (§7.4's suite2p files, the voltage pipeline's `PF`
 pickles). `mbo_utilities/results.py` fixes the one shape they all mold into: a zarr
-v3 group, `<yyyy-mm-dd>_<tags>.zarr`, that a reader, a viewer or a notebook opens
-the same way whichever pipeline wrote it. It is the standard output format; a
+v3 group, `<input stem>.<yyyy-mm-dd-HH-MM-SS>.<pipeline>.zarr`, that a reader, a
+viewer or a notebook opens the same way whichever pipeline wrote it. It is the standard output format; a
 pipeline's native files stay its cache and its compatibility layer.
 
 ```
-<yyyy-mm-dd>_<tags>.zarr/            zarr v3 group; attrs: mbo_results (schema version),
+<stem>.<stamp>.<pipeline>.zarr/      zarr v3 group; attrs: mbo_results (schema version),
                                      pipeline, created, tags, units, source, settings,
                                      metadata (after strip_for_export), provenance
   <unit>/                            one group per plane (zplane01) or scan (scan35)
@@ -574,14 +574,19 @@ pipeline's native files stay its cache and its compatibility layer.
                                      they have them (a line scan's lines)
     events/frame  events/roi         detected events (peaks), sorted by ROI
     images/<kind>                    (Y, X) float32; kinds: mean, max, corr, ref (IMAGE_KINDS)
+  _sidecar/                          the pipeline's own files (SIDECAR): pipeline.json,
+                                     timings.json, its native h5 and npy, traces/
 ```
 
-- **Naming.** `results_name(source)` is today's date, then the tags the source
-  filename carries in the §5.6 vocabulary (`filename_tags`: `session01`, `zplane03`,
-  `tp00001-01574`; `session` is the `S` tag), then any `extra_tags`. A source with no
-  tags contributes its stem (`stan112_expt12.mesc` → `2026-09-16_stan112_expt12.zarr`)
-  so the file still says what it is. Unit groups are named by the same vocabulary
-  (`unit_name("plane", 1)` is `zplane01`; scans are `scan<id>`).
+- **Naming.** `results_name(source, when, extra_tags, pipeline)` is the source
+  filename's stem, then `extra_tags`, then the timestamp, then the pipeline, dot
+  separated: `session1.mesc` → `session1.2026-09-21-14-30-22.voltage.zarr`, written
+  beside its input. The stamp is local time to the second (`RESULTS_STAMP`), so a
+  rerun is a new file and a listing sorts chronologically. Nothing matches a
+  results name by pattern: `results_stamp(path)` reads the stamp back with
+  `datetime.strptime` and `newest_results(folder, pipeline)` picks the latest run.
+  Unit groups keep the §5.6 vocabulary (`unit_name("plane", 1)` is `zplane01`;
+  scans are `scan<id>`).
 - **Molding.** A pipeline builds one `ResultUnit` per plane or scan and calls
   `write_results(path, units, pipeline=..., source=..., settings=..., metadata=...)`.
   `results_from_suite2p(dir)` molds suite2p and MaskNMF folders (`F` → `raw`, `Fneu` →
@@ -590,12 +595,15 @@ pipeline's native files stay its cache and its compatibility layer.
   voltage pipeline's `PF` folder (domains are the ROIs, their lines the members with
   `members/raw`, `test.h5` gives `dff` and `zscore`, peaks are the events). Copy one of
   them for a new pipeline; never invent a trace or image kind, add it to the registry.
-- **Writing.** The voltage pipeline writes it when `VoltageSettings.runtime.output_format`
-  is `"zarr"` (the Run tab's Output format, `mbo voltage --zarr`): the pickles are
-  deleted, `test.h5`, `traces/` and `pipeline.json` stay, and `PfArray` opens the folder
-  from the zarr (`pf_results_in`). `mbo results <dir>` converts an existing suite2p,
-  MaskNMF or PF folder. The curation window opens the folder through `PfArray`, so a
-  folder written as zarr curates like one written as pickles.
+- **Writing.** It is the voltage pipeline's default
+  (`VoltageSettings.runtime.output_format == "zarr"`, the Run tab's Output format):
+  the run works in a `<name>.work` scratch folder, writes the results file beside the
+  input, moves `test.h5`, `traces/`, `pipeline.json` and `timings.json` into its
+  `_sidecar/` (`pf_files`) and deletes the scratch folder, so one path is the whole
+  output and no `PF` folder is left. `mbo voltage --pkl` (`output_format == "pkl"`)
+  writes the archive's PF folder of pickles instead. `PfArray` opens the results file
+  itself, and the curation window opens either. `mbo results <dir>` converts an
+  existing suite2p, MaskNMF or PF folder.
 - **Reading.** `read_results(path)` returns `Results` (`.units[name]` → `ResultUnit`,
   every array in memory). `results_pipeline(path)` and `results_summary(path)` read
   only `zarr.json` files and are what `can_open` and the run scanners use: `ZarrArray`

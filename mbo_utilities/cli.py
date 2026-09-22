@@ -1962,20 +1962,21 @@ def curate(path, serve, host, port, channel):
                    "trace, minimum duration ms. Default 2,400,3.5,4,5 (the archive's).")
 @click.option("--save-cwt", is_flag=True, default=False,
               help="Also write cwts.h5, the wavelet coefficients (about 20 bytes per sample per domain).")
-@click.option("--overwrite", is_flag=True, default=False, help="Replace an existing PF folder's files.")
-@click.option("--zarr", "as_zarr", is_flag=True, default=False,
-              help="Write the results as one <date>_<tags>.zarr file (mbo_utilities.results) instead of "
-                   "the archive's pickles; the curation window opens either.")
+@click.option("--overwrite", is_flag=True, default=False, help="Replace an existing output of the same name.")
+@click.option("--pkl", "as_pkl", is_flag=True, default=False,
+              help="Write the archive's PF folder of pickles instead of the results zarr; the curation "
+                   "window opens either.")
 @click.option("-p", "--planes", type=int, multiple=True,
               help="ROI to process (1-based; the unit's Z axis), repeat for several: -p 1 -p 3. Only these "
                    "are read and every domain is cut down to them. Default: every ROI.")
 @click.option("--init", is_flag=True, default=False,
               help="Write a domains.json template beside the file (one domain per ROI) and exit.")
-def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_cwt, overwrite, as_zarr, planes, init):
+def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_cwt, overwrite, as_pkl, planes, init):
     """The spatial JEDI voltage pipeline on a .mesc with AOD ROI units (line
     scans, chessboard or ribbon patches): per-ROI traces, domain dF/F and
-    z-score, wavelet denoising, peaks, written as a PF folder that
-    `mbo curate` opens.
+    z-score, wavelet denoising, peaks, written as one
+    `<input>.<timestamp>.voltage.zarr` beside the input that `mbo curate`
+    opens.
 
     Each unit is one scan (its MUnit number is the scan id). The domains
     file says which ROIs make each domain: the lines of a soma or branch,
@@ -2034,8 +2035,8 @@ def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_
         settings.events.bp_low, settings.events.bp_high = lo, hi
         settings.events.thres_bp_sd, settings.events.thres_amp_sd = bp_sd, amp_sd
         settings.events.duration_thres_ms = dur
-    if as_zarr:
-        settings.runtime.output_format = "zarr"
+    if as_pkl:
+        settings.runtime.output_format = "pkl"
     chosen = list(units) or [f"MUnit_{s}" for s in spec["scan_ids"]] or None
     # the runner narrates every step through the mbo logger; give its console lines a clock
     logger = log.get()

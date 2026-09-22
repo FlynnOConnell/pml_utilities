@@ -177,7 +177,7 @@ class VoltagePipelineWidget(PipelineWidget):
         from mbo_utilities.arrays.mesc import list_mesc_units
         from mbo_utilities.vnoiser import pf_dir_for_mesc
         from mbo_utilities.vnoiser.params import VoltageSettings
-        from mbo_utilities.vnoiser.pipeline import default_pf_dir, read_domains
+        from mbo_utilities.vnoiser.pipeline import read_domains
 
         fpath = getattr(self.parent, "fpath", None)
         if fpath == self._last_fpath:
@@ -210,7 +210,7 @@ class VoltagePipelineWidget(PipelineWidget):
         self._voltage_c_error = ""
         arr = self._array()
         pf = arr.pf_dir if isinstance(arr, PfArray) else pf_dir_for_mesc(mesc)
-        self._outdir = str(pf if isinstance(arr, PfArray) else default_pf_dir(mesc))
+        self._outdir = str(arr.pf_dir) if isinstance(arr, PfArray) else self._default_outdir()
         domains, scan_ids, first_env = {}, [], []
         if pf is not None:
             try:
@@ -343,6 +343,18 @@ class VoltagePipelineWidget(PipelineWidget):
             if comment:
                 imgui.text_disabled(f"Comment: {comment}")
 
+    def _default_outdir(self) -> str:
+        """Where this format's output belongs: the folder beside the file for
+        a zarr run, which the runner names its file in, else the PF folder."""
+        from mbo_utilities.vnoiser.pipeline import default_pf_dir
+
+        mesc = self._mesc_path()
+        if mesc is None:
+            return ""
+        if self.settings.runtime.output_format == "zarr":
+            return str(mesc.parent)
+        return str(default_pf_dir(mesc))
+
     def _draw_output_row(self) -> None:
         if self._outdir_dialog is not None and self._outdir_dialog.ready():
             result = self._outdir_dialog.result()
@@ -350,8 +362,14 @@ class VoltagePipelineWidget(PipelineWidget):
                 self._outdir = result
                 set_last_dir("voltage_outdir", result)
             self._outdir_dialog = None
-        imgui.text_colored(_SUBSECTION_COLOR, "Output folder (PF)")
-        set_tooltip("The PF folder the curation window opens: <animal>/<expt>/PF for the archive layout, else PF beside the file.")
+        zarr_out = self.settings.runtime.output_format == "zarr"
+        imgui.text_colored(_SUBSECTION_COLOR, "Output folder" if zarr_out else "Output folder (PF)")
+        set_tooltip(
+            "The folder the results file goes in; it is named after the input with a timestamp, "
+            "so a run never overwrites an earlier one."
+            if zarr_out else
+            "The PF folder the curation window opens: <animal>/<expt>/PF for the archive layout, else PF beside the file."
+        )
         btn_w = hello_imgui.em_size(6)
         imgui.set_next_item_width(max(imgui.get_content_region_avail().x - btn_w - imgui.get_style().item_spacing.x, hello_imgui.em_size(6)))
         _, self._outdir = imgui.input_text("##voltage_outdir", self._outdir)
@@ -360,7 +378,7 @@ class VoltagePipelineWidget(PipelineWidget):
         imgui.same_line()
         if imgui.button("Browse##voltage_outdir_btn", imgui.ImVec2(btn_w, 0)):
             start = str(get_last_dir("voltage_outdir") or Path.home())
-            self._outdir_dialog = pfd.select_folder("Select PF folder", start)
+            self._outdir_dialog = pfd.select_folder("Select output folder", start)
 
     def _draw_slice_row(self) -> None:
         max_frames, n_lines, num_channels = self._dims()
@@ -607,12 +625,16 @@ class VoltagePipelineWidget(PipelineWidget):
                 if pushed:
                     imgui.pop_style_color()
                 if changed:
+                    was = self._default_outdir()
                     rt.output_format = OUTPUT_FORMATS[chosen]
+                    # an untouched folder follows the format; a chosen one stays
+                    if self._outdir in ("", was):
+                        self._outdir = self._default_outdir()
                 self._row_tail(
                     rt, "output_format", "Output format",
-                    "pkl: the archive's PF pickles. zarr: one "
-                    "<date>_<tags>.zarr results file (the shape every pipeline's results share) and no "
-                    "pickles; the traces folder, test.h5 and pipeline.json are written either way.",
+                    "zarr: one <input>.<timestamp>.voltage.zarr results file beside the input (the shape "
+                    "every pipeline's results share), the run's own files under _sidecar/ inside it. "
+                    "pkl: the archive's PF folder of pickles.",
                 )
                 imgui.spacing()
                 imgui.separator()
