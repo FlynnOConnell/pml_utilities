@@ -52,6 +52,11 @@ from mbo_utilities.arrays import ScanImageArray
 from mbo_utilities.gui._availability import HAS_SUITE2P
 from mbo_utilities.gui._imgui_helpers import push_font_safe
 from mbo_utilities.gui.widgets.gui_logger import GuiLogger, GuiLogHandler
+from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_windows
+from mbo_utilities.gui.widgets.style_editor import (
+    apply_saved_style,
+    draw_style_editor_window,
+)
 from mbo_utilities.gui.widgets.progress_bar import start_output_capture
 from mbo_utilities.gui.widgets import get_supported_widgets, draw_all_widgets
 from mbo_utilities import log
@@ -253,9 +258,11 @@ class PreviewDataWidget(EdgeWindow):
         if implot.get_current_context() is None:
             implot.create_context()
 
-        # apply opaque imgui style (idempotent, runs once per process)
+        # apply opaque imgui style (idempotent, runs once per process), then
+        # whatever the style editor last saved, so a user style wins over it
         from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
         style_imgui_opaque()
+        apply_saved_style()
 
         # Setup ImGui fonts
         self._init_fonts()
@@ -1295,6 +1302,8 @@ class PreviewDataWidget(EdgeWindow):
         draw_keybinds_popup(self)
         draw_help_popup(self)
         draw_options_popup(self)
+        draw_imgui_debug_windows(self)
+        draw_style_editor_window(self)
         from mbo_utilities.gui._cloud import draw_cloud_popup
         from mbo_utilities.gui.widgets.biohpc import draw_biohpc_popup
 

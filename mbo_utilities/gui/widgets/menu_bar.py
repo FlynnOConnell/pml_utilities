@@ -15,6 +15,7 @@ from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._dialogs import start_open_prompt
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
+from mbo_utilities.gui.widgets.style_editor import draw_style_menu_item
 from mbo_utilities.gui.widgets.widget_toggles import draw_widgets_menu
 from mbo_utilities.install import VNOISER_HINT
 
@@ -66,6 +67,12 @@ def draw_menu_bar(parent: Any):
                 imgui.separator()
                 if imgui.menu_item("Options", "", p_selected=False, enabled=True)[0]:
                     parent._show_options_popup = True
+                draw_style_menu_item()
+                if imgui.is_item_hovered():
+                    imgui.set_tooltip(
+                        "Sizes, spacing and colours of the running imgui style. "
+                        "Saved under ~/.mbo/imgui and applied at the next launch."
+                    )
                 imgui.end_menu()
             draw_widgets_menu(parent)
             if imgui.begin_menu("Docs", True):
