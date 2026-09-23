@@ -13,10 +13,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import mbo_utilities as mbo
 import numpy as np
 import pytest
-
-import mbo_utilities as mbo
 
 _TEST_DATA_ROOT = Path.home() / ".mbo" / "tests" / "lbm" / "mbo_utilities"
 TEST_INPUT = _TEST_DATA_ROOT / "test_input.tif"
@@ -30,6 +29,7 @@ SUITE2P_PLANE = 7
 @dataclass
 class TimingResult:
     """timing result for a single operation."""
+
     operation: str
     format: str
     elapsed_ms: float
@@ -42,6 +42,7 @@ class TimingResult:
 @dataclass
 class PipelineResults:
     """aggregated results from the full pipeline test."""
+
     timings: list[TimingResult] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     write_paths: dict = field(default_factory=dict)
@@ -78,7 +79,7 @@ class PipelineResults:
             fmt_totals[t.format] += t.elapsed_ms
 
         for fmt, total in sorted(fmt_totals.items(), key=lambda x: x[1]):
-            print(f"  {fmt:6s}: {total:8.1f} ms ({total/1000:.2f} s)")
+            print(f"  {fmt:6s}: {total:8.1f} ms ({total / 1000:.2f} s)")
 
         if self.errors:
             print("\n" + "-" * 40)
@@ -90,7 +91,7 @@ class PipelineResults:
 
 
 def time_operation(func, *args, **kwargs):
-    """time a function call, return (result, elapsed_ms)."""
+    """Time a function call, return (result, elapsed_ms)."""
     t0 = time.perf_counter()
     result = func(*args, **kwargs)
     elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -99,7 +100,7 @@ def time_operation(func, *args, **kwargs):
 
 @pytest.fixture(scope="module")
 def source_array():
-    """load source array once per module."""
+    """Load source array once per module."""
     if not TEST_INPUT.exists():
         pytest.skip(f"Test input not found: {TEST_INPUT}")
     return mbo.imread(TEST_INPUT)
@@ -107,7 +108,7 @@ def source_array():
 
 @pytest.fixture(scope="module")
 def output_root():
-    """create clean output directory."""
+    """Create clean output directory."""
     if OUTPUT_ROOT.exists():
         shutil.rmtree(OUTPUT_ROOT, ignore_errors=True)
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -116,7 +117,7 @@ def output_root():
 
 @pytest.fixture(scope="module")
 def pipeline_results():
-    """shared results collector."""
+    """Shared results collector."""
     return PipelineResults()
 
 
@@ -124,7 +125,7 @@ class TestFullPipeline:
     """test full pipeline: write all formats, read back, run suite2p."""
 
     def test_01_source_info(self, source_array, pipeline_results):
-        """verify source array properties."""
+        """Verify source array properties."""
         arr = source_array
         print(f"\nSource array: {arr.shape}, dtype={arr.dtype}")
         print(f"  Type: {type(arr).__name__}")
@@ -136,7 +137,7 @@ class TestFullPipeline:
 
     @pytest.mark.parametrize("ext", WRITE_FORMATS)
     def test_02_write_format(self, source_array, output_root, pipeline_results, ext):
-        """write source to each format."""
+        """Write source to each format."""
         out_dir = output_root / f"write_{ext.lstrip('.')}"
         out_dir.mkdir(exist_ok=True)
 
@@ -162,7 +163,7 @@ class TestFullPipeline:
 
     @pytest.mark.parametrize("ext", WRITE_FORMATS)
     def test_03_read_format(self, output_root, pipeline_results, ext):
-        """read back each format and verify shape."""
+        """Read back each format and verify shape."""
         out_dir = output_root / f"write_{ext.lstrip('.')}"
 
         if not out_dir.exists():
@@ -190,7 +191,7 @@ class TestFullPipeline:
 
     @pytest.mark.parametrize("ext", WRITE_FORMATS)
     def test_04_suite2p_plane7(self, output_root, pipeline_results, ext):
-        """run suite2p on plane 7 from each format."""
+        """Run suite2p on plane 7 from each format."""
         pytest.importorskip("lbm_suite2p_python")
         from lbm_suite2p_python import run_plane
 
@@ -283,7 +284,7 @@ class TestFullPipeline:
         )
 
         pipeline_results.add_timing("suite2p", ext, s2p_ms)
-        print(f"  Suite2p completed in {s2p_ms:.1f} ms ({s2p_ms/1000:.1f} s)")
+        print(f"  Suite2p completed in {s2p_ms:.1f} ms ({s2p_ms / 1000:.1f} s)")
 
         # verify suite2p outputs
         stat_file = bin_dir / "stat.npy"
@@ -293,11 +294,14 @@ class TestFullPipeline:
             pipeline_results.suite2p_results[ext] = {"n_cells": n_cells}
             print(f"  Found {n_cells} cells")
         else:
-            pipeline_results.suite2p_results[ext] = {"n_cells": 0, "error": "no stat.npy"}
+            pipeline_results.suite2p_results[ext] = {
+                "n_cells": 0,
+                "error": "no stat.npy",
+            }
             print("  Warning: no stat.npy found")
 
     def _find_readable_path(self, out_dir: Path, ext: str) -> Path | None:
-        """find the path to read from a write output directory."""
+        """Find the path to read from a write output directory."""
         ext_clean = ext.lstrip(".").lower()
 
         if ext_clean in ("tif", "tiff"):
@@ -335,7 +339,7 @@ class TestFullPipeline:
         return None
 
     def _find_plane_path(self, out_dir: Path, ext: str, plane_idx: int) -> Path | None:
-        """find path to a specific plane from write output."""
+        """Find path to a specific plane from write output."""
         ext_clean = ext.lstrip(".").lower()
         # plane naming: plane01, plane02, ... (1-indexed in filenames)
         plane_num = plane_idx + 1

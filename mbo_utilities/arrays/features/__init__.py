@@ -36,23 +36,23 @@ from mbo_utilities.arrays.features._dim_labels import (
     infer_dims,
     parse_dims,
 )
+from mbo_utilities.arrays.features._dim_spec import (
+    DimensionSpec,
+    DimensionSpecs,
+    DimRole,
+)
 from mbo_utilities.arrays.features._dim_tags import (
     DIM_ALIASES,
-    DimensionTag,
-    OutputFilename,
     SPATIAL_DIMS,
     TAG_REGISTRY,
+    DimensionTag,
+    OutputFilename,
     TagDefinition,
     dim_to_ome_axis,
     dims_to_ome_axes,
     get_ome_axis_type,
     get_ome_axis_unit,
     normalize_dims,
-)
-from mbo_utilities.arrays.features._dim_spec import (
-    DimRole,
-    DimensionSpec,
-    DimensionSpecs,
 )
 from mbo_utilities.arrays.features._frame_average import (
     FRAME_AVERAGE_KEY,
@@ -67,10 +67,33 @@ from mbo_utilities.arrays.features._phase_correction import (
     PhaseCorrectionMixin,
     PhaseCorrMethod,
 )
+from mbo_utilities.arrays.features._pyramid import (
+    DownsampleMethod,
+    PyramidConfig,
+    PyramidLevel,
+    compute_pyramid_shapes,
+    downsample_block,
+)
 from mbo_utilities.arrays.features._roi import RoiFeatureMixin
 from mbo_utilities.arrays.features._segmentation import (
     masks_to_stat,
     stat_to_masks,
+)
+from mbo_utilities.arrays.features._selection import (
+    axis_sizes,
+    selection_to_indices,
+    to_isoview_kwargs,
+    to_lsp_kwargs,
+)
+from mbo_utilities.arrays.features._slicing import (
+    ArraySlicing,
+    ChunkInfo,
+    DimSelection,
+    TimeSelection,
+    normalize_dim_key,
+    parse_selection,
+    parse_timepoint_selection,
+    read_chunk,
 )
 from mbo_utilities.arrays.features._stats import (
     PlaneStats,
@@ -88,29 +111,6 @@ from mbo_utilities.arrays.features._summary_stats import (
     canonical_axis,
     default_dim_role,
     subsample_indices,
-)
-from mbo_utilities.arrays.features._slicing import (
-    ArraySlicing,
-    ChunkInfo,
-    DimSelection,
-    TimeSelection,
-    normalize_dim_key,
-    parse_selection,
-    parse_timepoint_selection,
-    read_chunk,
-)
-from mbo_utilities.arrays.features._selection import (
-    axis_sizes,
-    selection_to_indices,
-    to_isoview_kwargs,
-    to_lsp_kwargs,
-)
-from mbo_utilities.arrays.features._pyramid import (
-    DownsampleMethod,
-    PyramidConfig,
-    PyramidLevel,
-    compute_pyramid_shapes,
-    downsample_block,
 )
 
 __all__ = [

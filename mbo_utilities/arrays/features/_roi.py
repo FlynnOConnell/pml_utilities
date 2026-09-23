@@ -49,6 +49,7 @@ class RoiMode(str, Enum):
         }
         return descriptions.get(self, self.value)
 
+
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
 

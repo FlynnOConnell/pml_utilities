@@ -92,7 +92,9 @@ def test_cloud_opens_as_a_popup_not_a_tab():
     )
     drawn = []
     real = _cloud.draw_cloud_tab
-    _cloud.draw_cloud_tab = lambda parent, fpath=None: drawn.append(fpath) or real(parent, fpath)
+    _cloud.draw_cloud_tab = lambda parent, fpath=None: drawn.append(fpath) or real(
+        parent, fpath
+    )
     try:
         iw.figure.canvas.draw()
         assert not drawn, "the popup must stay closed until asked for"

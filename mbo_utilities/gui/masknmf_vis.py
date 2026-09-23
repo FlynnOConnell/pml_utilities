@@ -76,10 +76,16 @@ class MasknmfViewers:
         self.files = run_files(path)
         self.path = self.files["demixing"]
         self.raw_path = None if raw_path is None else Path(raw_path)
-        self.motion_correction_path = None if motion_correction_path is None else Path(motion_correction_path)
+        self.motion_correction_path = (
+            None if motion_correction_path is None else Path(motion_correction_path)
+        )
         self._vis: dict[str, object] = {}
         with h5py.File(self.path, "r") as f:
-            prov = json.loads(f.attrs["mbo_provenance"]) if "mbo_provenance" in f.attrs else {}
+            prov = (
+                json.loads(f.attrs["mbo_provenance"])
+                if "mbo_provenance" in f.attrs
+                else {}
+            )
             self._nframes = int(f["DemixingResults"]["shape"][0])
         self._fs = float(prov["fs"]) if prov.get("fs") else None
         if device is None:
@@ -100,19 +106,27 @@ class MasknmfViewers:
             ops = np.load(self.files["ops"], allow_pickle=True).item()
             ly, lx = int(ops["Ly"]), int(ops["Lx"])
             nframes = self.files["raw"].stat().st_size // (ly * lx * 2)
-            return np.memmap(self.files["raw"], dtype=np.int16, mode="r", shape=(nframes, ly, lx))
+            return np.memmap(
+                self.files["raw"], dtype=np.int16, mode="r", shape=(nframes, ly, lx)
+            )
         if self.raw_path is None:
             if not required:
                 return None
-            picked = pfd.open_file("Raw movie for masknmf's compression viewer", str(self.path.parent)).result()
+            picked = pfd.open_file(
+                "Raw movie for masknmf's compression viewer", str(self.path.parent)
+            ).result()
             if not picked:
-                raise FileNotFoundError(f"no data_raw.bin beside {self.path.name} and no raw movie picked")
+                raise FileNotFoundError(
+                    f"no data_raw.bin beside {self.path.name} and no raw movie picked"
+                )
             self.raw_path = Path(picked[0])
         from mbo_utilities.reader import imread
 
         raw = imread(self.raw_path).squeeze()
         if raw.ndim != 3:
-            raise ValueError(f"{self.raw_path.name} is not a single-plane movie: shape {raw.shape}")
+            raise ValueError(
+                f"{self.raw_path.name} is not a single-plane movie: shape {raw.shape}"
+            )
         return raw
 
     def open(self, kind: str):
@@ -122,12 +136,19 @@ class MasknmfViewers:
         vis = self._vis.get(kind)
         if vis is not None:
             return vis.show()
+        from masknmf.visualization import (
+            ClassificationVis,
+            CompressionVis,
+            SingleSessionDemixingVis,
+        )
+
         import masknmf
-        from masknmf.visualization import ClassificationVis, CompressionVis, SingleSessionDemixingVis
 
         logger.info(f"opening masknmf {kind} viewer for {self.path} on {self.device}")
         if kind == "demixing":
-            results = masknmf.DemixingResults.from_hdf5(str(self.path), device=self.device)
+            results = masknmf.DemixingResults.from_hdf5(
+                str(self.path), device=self.device
+            )
             vis = SingleSessionDemixingVis(
                 results,
                 frame_timings=self.timings,
@@ -137,9 +158,13 @@ class MasknmfViewers:
                 shifts=self.motion_correction_path,
             )
             if vis.raw is None:
-                click.echo("no raw movie: `mbo view ... --raw <movie>` adds the raw panel")
+                click.echo(
+                    "no raw movie: `mbo view ... --raw <movie>` adds the raw panel"
+                )
             if vis.shifts is None:
-                click.echo("no motion shifts: `mbo view ... --motion-correction <hdf5>` adds the shift traces")
+                click.echo(
+                    "no motion shifts: `mbo view ... --motion-correction <hdf5>` adds the shift traces"
+                )
         elif kind == "classification":
             vis = ClassificationVis.from_masknmf([str(self.path)])
         else:
@@ -157,8 +182,12 @@ class MasknmfViewers:
                 with h5py.File(self.files["motion"], "r") as f:
                     names = [n for n in SHIFT_GROUPS if n in f]
                 if names:
-                    moco = getattr(masknmf, names[0]).from_hdf5(str(self.files["motion"]), input_movie=raw)
+                    moco = getattr(masknmf, names[0]).from_hdf5(
+                        str(self.files["motion"]), input_movie=raw
+                    )
                     moco.output_device = torch.device(self.device)
-            vis = CompressionVis(moco, pmd, device=self.device, frame_timings=self.timings)
+            vis = CompressionVis(
+                moco, pmd, device=self.device, frame_timings=self.timings
+            )
         self._vis[kind] = vis
         return vis.show()

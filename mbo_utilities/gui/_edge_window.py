@@ -1,8 +1,7 @@
 """EdgeWindow: ImguiWindow that self-registers on a figure edge."""
 
-from imgui_bundle import imgui
-
 from fastplotlib.ui import ImguiWindow
+from imgui_bundle import imgui
 
 
 class EdgeWindow(ImguiWindow):

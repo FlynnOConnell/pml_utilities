@@ -65,11 +65,18 @@ def setup_logging(log_file: str | None = None) -> logging.Logger:
     return logger
 
 
-def _update_status(pid: int, status: str, message: str | None = None, details: str | dict | None = None, uuid: str | None = None):
+def _update_status(
+    pid: int,
+    status: str,
+    message: str | None = None,
+    details: str | dict | None = None,
+    uuid: str | None = None,
+):
     """Ensure process status is reported to sidecar file."""
     try:
         # Match location used by TaskMonitor and ProcessManager
         from mbo_utilities.preferences import get_mbo_dirs
+
         log_dir = get_mbo_dirs()["logs"]
         if uuid:
             sidecar = log_dir / f"progress_{uuid}.json"
@@ -133,10 +140,14 @@ def _atomic_replace(src: Path, dst: Path, attempts: int = 10, delay: float = 0.0
         raise last_err
 
 
-def _start_watchdog(uuid: str | None, logger: logging.Logger, log_file: str | None = None):
-    """daemon thread that kills this process if progress stalls."""
+def _start_watchdog(
+    uuid: str | None, logger: logging.Logger, log_file: str | None = None
+):
+    """Daemon thread that kills this process if progress stalls."""
+
     def _watchdog():
         from mbo_utilities.preferences import get_mbo_dirs
+
         log_dir = get_mbo_dirs()["logs"]
         last_progress = 0.0
         last_log_mtime = 0.0
@@ -203,6 +214,7 @@ def _resolve_mem_settings() -> tuple[float, float, float]:
       MBO_MEM_LOG_EVERY     seconds between log lines (0 = every tick)
       MBO_MEM_WARN_PCT      warn at/above this system-memory percent (0 = off)
     """
+
     def _env(name: str) -> float | None:
         raw = os.environ.get(name)
         if raw is None:
@@ -219,11 +231,12 @@ def _resolve_mem_settings() -> tuple[float, float, float]:
     if tick is None or log_s is None or warn is None:
         try:
             from mbo_utilities.preferences import (
+                get_mem_log_interval,
                 get_mem_monitor,
                 get_mem_monitor_interval,
-                get_mem_log_interval,
                 get_mem_warn_pct,
             )
+
             if tick is None:
                 tick = float(get_mem_monitor_interval()) if get_mem_monitor() else 0.0
             if log_s is None:
@@ -300,9 +313,12 @@ def _contain_in_job():
             _fields_ = [
                 (n, ctypes.c_ulonglong)
                 for n in (
-                    "ReadOperationCount", "WriteOperationCount",
-                    "OtherOperationCount", "ReadTransferCount",
-                    "WriteTransferCount", "OtherTransferCount",
+                    "ReadOperationCount",
+                    "WriteOperationCount",
+                    "OtherOperationCount",
+                    "ReadTransferCount",
+                    "WriteTransferCount",
+                    "OtherTransferCount",
                 )
             ]
 
@@ -320,7 +336,10 @@ def _contain_in_job():
         k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
         k32.GetCurrentProcess.restype = wintypes.HANDLE
         k32.SetInformationJobObject.argtypes = [
-            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
         ]
         k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
 
@@ -333,8 +352,10 @@ def _contain_in_job():
         info = _EXT()
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         if not k32.SetInformationJobObject(
-            job, JobObjectExtendedLimitInformation,
-            ctypes.byref(info), ctypes.sizeof(info),
+            job,
+            JobObjectExtendedLimitInformation,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
         ):
             k32.CloseHandle(job)
             return None
@@ -417,7 +438,10 @@ def main():
     print(f"Worker starting (pid={os.getpid()})", file=sys.stderr, flush=True)
 
     if len(sys.argv) < 3:
-        print("Usage: python -m mbo_utilities.gui._worker <task_type> <args_json>", file=sys.stderr)
+        print(
+            "Usage: python -m mbo_utilities.gui._worker <task_type> <args_json>",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     task_type = sys.argv[1]
@@ -431,7 +455,7 @@ def main():
         candidate = Path(args_source)
         if candidate.is_file() and candidate.suffix == ".json":
             args_file = candidate
-            with open(args_file, "r", encoding="utf-8") as f:
+            with open(args_file, encoding="utf-8") as f:
                 args = json.load(f)
         else:
             args = json.loads(args_source)
@@ -481,7 +505,9 @@ def main():
     if task_type not in TASKS:
         logger.error(f"Unknown task type: {task_type}")
         print(f"Unknown task type: {task_type}", file=sys.stderr)
-        _update_status(os.getpid(), "error", f"Unknown task type: {task_type}", uuid=uuid)
+        _update_status(
+            os.getpid(), "error", f"Unknown task type: {task_type}", uuid=uuid
+        )
         sys.exit(1)
 
     task_func = TASKS[task_type]
@@ -494,12 +520,19 @@ def main():
         sys.exit(0)
     except Exception as e:
         try:
-            from mbo_utilities._sysmem import mem_snapshot, format_mem_line
+            from mbo_utilities._sysmem import format_mem_line, mem_snapshot
+
             logger.error("memory at failure: " + format_mem_line(mem_snapshot()))
         except Exception:
             pass
         logger.exception(f"Task failed: {e}")
-        _update_status(os.getpid(), "error", message=str(e), details=traceback.format_exc(), uuid=uuid)
+        _update_status(
+            os.getpid(),
+            "error",
+            message=str(e),
+            details=traceback.format_exc(),
+            uuid=uuid,
+        )
         sys.exit(1)
 
 

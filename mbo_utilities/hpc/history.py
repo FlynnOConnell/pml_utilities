@@ -65,8 +65,9 @@ def _runs_dir() -> Path:
     return d
 
 
-def record_run(*, target=None, mode: str = "single", output_dir=None,
-               job_id=None, config_path=None) -> None:
+def record_run(
+    *, target=None, mode: str = "single", output_dir=None, job_id=None, config_path=None
+) -> None:
     """Append a run record to the registry and trim to the newest ``MAX_RUNS``.
 
     ``target`` is what ``watch`` / ``status`` resolve later — a SLURM job id when
@@ -81,8 +82,11 @@ def record_run(*, target=None, mode: str = "single", output_dir=None,
             "output_dir": str(output_dir) if output_dir else None,
             "config_path": str(config_path) if config_path else None,
             "target": (
-                str(target) if target
-                else (str(job_id) if job_id else str(output_dir) if output_dir else None)
+                str(target)
+                if target
+                else (
+                    str(job_id) if job_id else str(output_dir) if output_dir else None
+                )
             ),
         }
         if rec["target"] is None:
@@ -104,8 +108,11 @@ def last_run() -> dict | None:
     """The most recent run record, or None if the registry is empty."""
     try:
         runs = _runs_dir()
-        files = sorted((f for f in runs.glob("*.json") if f.is_file()),
-                       key=lambda f: (_mtime(f), f.name), reverse=True)
+        files = sorted(
+            (f for f in runs.glob("*.json") if f.is_file()),
+            key=lambda f: (_mtime(f), f.name),
+            reverse=True,
+        )
     except OSError:
         return None
     for f in files:

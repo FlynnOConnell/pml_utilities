@@ -29,5 +29,7 @@ def movie_data(nt: int = 240, ny: int = 128, nx: int = 128) -> np.ndarray:
         cy = ny * (0.5 + radius * np.sin(2 * np.pi * t / period + k))
         cx = nx * (0.5 + radius * np.cos(2 * np.pi * t / period + k))
         for i in range(nt):
-            movie[i] += np.exp(-(((y - cy[i]) ** 2 + (x - cx[i]) ** 2) / (2 * sigma**2)))
+            movie[i] += np.exp(
+                -(((y - cy[i]) ** 2 + (x - cx[i]) ** 2) / (2 * sigma**2))
+            )
     return movie

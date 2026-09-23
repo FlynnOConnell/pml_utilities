@@ -19,6 +19,7 @@ Cache key for the convolution result is
 changes reuse the cached filter; gauss_sigma / gauss_kernel changes
 re-run the convolution.
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -26,11 +27,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from imgui_bundle import imgui, icons_fontawesome_6 as fa
+from imgui_bundle import icons_fontawesome_6 as fa
+from imgui_bundle import imgui
 from scipy.ndimage import convolve1d
 
 from mbo_utilities.gui._imgui_helpers import button_width, draw_toolbar_row
-
 
 _DEFAULT_CAMERA_VIEW_MAP = {0: 0, 1: 0, 2: 90, 3: 90}
 _VIEW_COLORS = {0: (1.0, 0.35, 0.35, 1.0), 90: (1.0, 0.95, 0.4, 1.0)}
@@ -44,10 +45,10 @@ _TINT_RGB = (0.2, 0.95, 0.6)  # foreground overlay color (cyan-green)
 
 _SLIDER_W = 220
 _DISPLAY_DRAG_W = 110
-_MAX_FILTER_CACHE = 8       # (view, tp, sigma, kernel) entries
-_MAX_GPU_TEXTURES = 4       # one per view typically, headroom for switches
-_SUBSAMPLE_FACTOR = 100     # matches isoview's percentile subsample
-_TARGET_PROJ_PX = 512       # preview math runs at <= this longest side
+_MAX_FILTER_CACHE = 8  # (view, tp, sigma, kernel) entries
+_MAX_GPU_TEXTURES = 4  # one per view typically, headroom for switches
+_SUBSAMPLE_FACTOR = 100  # matches isoview's percentile subsample
+_TARGET_PROJ_PX = 512  # preview math runs at <= this longest side
 
 
 def _camera_view_map(arr: Any) -> dict[int, int]:
@@ -69,6 +70,7 @@ def _view_int_from_label(label: str) -> int | None:
         return None
     if label.startswith("VW") and label[2:].isdigit():
         from mbo_utilities.arrays.isoview.array import camera_from_view_label
+
         cam = camera_from_view_label(label)
         return cam if cam is not None else int(label[2:])
     if label.startswith("CM") and label[2:].isdigit():
@@ -85,7 +87,8 @@ def _is_raw(arr: Any) -> bool:
 
 def _tp_label(slot, arr=None) -> str:
     """Display label for a tiled projection slot: the tile's specimen_name
-    grid token (e.g. TL010) when the array can resolve it, else SPM##."""
+    grid token (e.g. TL010) when the array can resolve it, else SPM##.
+    """
     fn = getattr(arr, "tile_label", None)
     if callable(fn):
         try:
@@ -96,7 +99,8 @@ def _tp_label(slot, arr=None) -> str:
 
 
 def _build_projection_index(
-    arr: Any, projections: dict | None,
+    arr: Any,
+    projections: dict | None,
 ) -> dict[int, dict[int, Path]]:
     """``{key: {timepoint: xy_projection_path}}``.
 
@@ -155,16 +159,21 @@ def _percentile_interp(data: np.ndarray, percentile: float) -> float:
     sorted_data = np.sort(data)
     n = sorted_data.size
     p_rank = 100.0 * (np.arange(n) + 0.5) / n
-    return float(np.interp(
-        percentile, p_rank, sorted_data,
-        left=sorted_data[0], right=sorted_data[-1],
-    ))
+    return float(
+        np.interp(
+            percentile,
+            p_rank,
+            sorted_data,
+            left=sorted_data[0],
+            right=sorted_data[-1],
+        )
+    )
 
 
 def _make_gauss_kernel(sigma: float, size: int) -> np.ndarray:
     half = int(np.ceil(size / 2))
     x = np.arange(-half, half + 1)
-    k = np.exp(-(x ** 2) / (2 * sigma ** 2))
+    k = np.exp(-(x**2) / (2 * sigma**2))
     return k / k.sum()
 
 
@@ -178,7 +187,9 @@ def _gauss_2d(proj: np.ndarray, sigma: float, size: int) -> np.ndarray:
     return np.round(f).astype(np.uint16)
 
 
-def _downsample_mean(proj: np.ndarray, cap: int = _TARGET_PROJ_PX) -> tuple[np.ndarray, int]:
+def _downsample_mean(
+    proj: np.ndarray, cap: int = _TARGET_PROJ_PX
+) -> tuple[np.ndarray, int]:
     """Box-mean downsample so the longest side is <= ``cap``.
 
     Mean pooling is itself a low-pass, so it is consistent with the
@@ -198,7 +209,9 @@ def _downsample_mean(proj: np.ndarray, cap: int = _TARGET_PROJ_PX) -> tuple[np.n
 
 
 def _adaptive_level(
-    filtered: np.ndarray, mask_percentile: float, threshold: float,
+    filtered: np.ndarray,
+    mask_percentile: float,
+    threshold: float,
 ) -> tuple[float, float, float]:
     """Return ``(min_intensity, mean_intensity, level)`` for the mask."""
     sub = filtered.ravel()[::_SUBSAMPLE_FACTOR]
@@ -210,7 +223,10 @@ def _adaptive_level(
 
 
 def _compose_rgba(
-    proj: np.ndarray, mask: np.ndarray, vmin: float, vmax: float,
+    proj: np.ndarray,
+    mask: np.ndarray,
+    vmin: float,
+    vmax: float,
 ) -> np.ndarray:
     """Grayscale projection with foreground tinted by :data:`_TINT_RGB`."""
     denom = max(1e-6, float(vmax) - float(vmin))
@@ -241,6 +257,7 @@ class _GpuRGBA:
 
     def __init__(self, backend, rgba: np.ndarray):
         import wgpu
+
         self._wgpu = wgpu
         self.backend = backend
         self.h, self.w = int(rgba.shape[0]), int(rgba.shape[1])
@@ -347,6 +364,7 @@ def _get_iso_array(parent: Any) -> Any | None:
     arr = iw.data[0]
     try:
         from mbo_utilities.gui.widgets.pipelines.isoview import _unwrap_array
+
         return _unwrap_array(arr)
     except Exception:
         return arr
@@ -426,7 +444,11 @@ def _get_projection(parent: Any, view: int, tp: int) -> np.ndarray | None:
 
 
 def _get_filtered(
-    parent: Any, view: int, tp: int, sigma: float, kernel: int,
+    parent: Any,
+    view: int,
+    tp: int,
+    sigma: float,
+    kernel: int,
 ) -> np.ndarray | None:
     """Cached 2D gaussian. Re-runs when sigma or kernel changes.
 
@@ -518,8 +540,12 @@ def _restore_snapshot(parent: Any) -> None:
 @contextmanager
 def _apply_button_style():
     imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.13, 0.55, 0.13, 1.0))
-    imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0))
-    imgui.push_style_color(imgui.Col_.button_active, imgui.ImVec4(0.10, 0.45, 0.10, 1.0))
+    imgui.push_style_color(
+        imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0)
+    )
+    imgui.push_style_color(
+        imgui.Col_.button_active, imgui.ImVec4(0.10, 0.45, 0.10, 1.0)
+    )
     try:
         yield
     finally:
@@ -563,7 +589,9 @@ def draw_window(parent: Any) -> None:
         | imgui.WindowFlags_.no_saved_settings
     )
     expanded, parent._iso_seg_window_open = imgui.begin(
-        title, p_open=parent._iso_seg_window_open, flags=flags,
+        title,
+        p_open=parent._iso_seg_window_open,
+        flags=flags,
     )
     try:
         if not expanded:
@@ -613,12 +641,22 @@ def _draw_display_controls(parent: Any) -> None:
 
     def _vmin():
         _, parent._iso_seg_vmin = imgui.drag_float(
-            "##iso_seg_vmin", float(parent._iso_seg_vmin), speed, 0.0, 0.0, "%.0f",
+            "##iso_seg_vmin",
+            float(parent._iso_seg_vmin),
+            speed,
+            0.0,
+            0.0,
+            "%.0f",
         )
 
     def _vmax():
         _, parent._iso_seg_vmax = imgui.drag_float(
-            "##iso_seg_vmax", float(parent._iso_seg_vmax), speed, 0.0, 0.0, "%.0f",
+            "##iso_seg_vmax",
+            float(parent._iso_seg_vmax),
+            speed,
+            0.0,
+            0.0,
+            "%.0f",
         )
 
     def _auto():
@@ -650,10 +688,15 @@ def _draw_display_controls(parent: Any) -> None:
 
         def _tp():
             ch, v = imgui.slider_int(
-                "##iso_seg_tp", cur_idx, 0, max(0, len(tps) - 1), value_fmt,
+                "##iso_seg_tp",
+                cur_idx,
+                0,
+                max(0, len(tps) - 1),
+                value_fmt,
             )
             if ch:
                 parent._iso_seg_current_tp = tps[max(0, min(v, len(tps) - 1))]
+
         items.append((label, 220.0, _tp))
 
     draw_toolbar_row(items)
@@ -679,7 +722,10 @@ def _draw_param_controls(parent: Any, iso: Any) -> None:
     imgui.set_next_item_width(_SLIDER_W)
     _, iso._correct_segment_threshold = imgui.slider_float(
         "threshold##iso_seg",
-        float(iso._correct_segment_threshold), 0.0, 1.0, "%.3f",
+        float(iso._correct_segment_threshold),
+        0.0,
+        1.0,
+        "%.3f",
     )
     dragging |= imgui.is_item_active()
     imgui.same_line()
@@ -691,7 +737,10 @@ def _draw_param_controls(parent: Any, iso: Any) -> None:
     imgui.set_next_item_width(_SLIDER_W)
     _, iso._correct_mask_percentile = imgui.slider_float(
         "mask percentile##iso_seg",
-        float(iso._correct_mask_percentile), 0.0, 100.0, "%.2f",
+        float(iso._correct_mask_percentile),
+        0.0,
+        100.0,
+        "%.2f",
     )
     dragging |= imgui.is_item_active()
     imgui.same_line()
@@ -703,7 +752,10 @@ def _draw_param_controls(parent: Any, iso: Any) -> None:
     imgui.set_next_item_width(_SLIDER_W)
     _, iso._correct_gauss_sigma = imgui.slider_float(
         "gauss sigma##iso_seg",
-        float(iso._correct_gauss_sigma), 0.5, 10.0, "%.2f",
+        float(iso._correct_gauss_sigma),
+        0.5,
+        10.0,
+        "%.2f",
     )
     dragging |= imgui.is_item_active()
     imgui.same_line()
@@ -715,7 +767,10 @@ def _draw_param_controls(parent: Any, iso: Any) -> None:
     imgui.set_next_item_width(_SLIDER_W)
     _, iso._correct_gauss_kernel = imgui.slider_int(
         "gauss kernel##iso_seg",
-        int(iso._correct_gauss_kernel), 1, 31, "%d",
+        int(iso._correct_gauss_kernel),
+        1,
+        31,
+        "%d",
     )
     dragging |= imgui.is_item_active()
     imgui.same_line()
@@ -767,8 +822,11 @@ def _draw_view_previews(parent: Any, iso: Any) -> None:
             imgui.end_group()
 
 
-def _draw_one_view(parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bool = False) -> None:
+def _draw_one_view(
+    parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bool = False
+) -> None:
     from mbo_utilities.arrays.isoview.array import camera_view_label
+
     color = _CAMERA_COLORS.get(view, _VIEW_COLORS.get(view, (0.6, 0.8, 1.0, 1.0)))
     label_text = camera_view_label(view)
     imgui.text_colored(imgui.ImVec4(*color), label_text)
@@ -813,9 +871,15 @@ def _draw_one_view(parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bo
         min_i, mean_i, level = _adaptive_level(filtered, mask_pct, threshold)
         mask = filtered > level
         shown = {
-            "tp": tp, "sigma": sigma, "kernel": kernel,
-            "threshold": threshold, "mask_pct": mask_pct,
-            "min_i": min_i, "mean_i": mean_i, "level": level, "mask": mask,
+            "tp": tp,
+            "sigma": sigma,
+            "kernel": kernel,
+            "threshold": threshold,
+            "mask_pct": mask_pct,
+            "min_i": min_i,
+            "mean_i": mean_i,
+            "level": level,
+            "mask": mask,
         }
         parent._iso_seg_shown[view] = shown
 
@@ -824,8 +888,12 @@ def _draw_one_view(parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bo
     kept_pct = 100.0 * mask.sum() / mask.size if mask.size else 0.0
 
     compose_key = (
-        view, shown["tp"], shown["sigma"], shown["kernel"],
-        round(shown["threshold"], 5), round(shown["mask_pct"], 4),
+        view,
+        shown["tp"],
+        shown["sigma"],
+        shown["kernel"],
+        round(shown["threshold"], 5),
+        round(shown["mask_pct"], 4),
         round(float(parent._iso_seg_vmin), 4),
         round(float(parent._iso_seg_vmax), 4),
     )
@@ -839,8 +907,10 @@ def _draw_one_view(parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bo
 
     if parent._iso_seg_compose_key.get(view) != compose_key:
         rgba = _compose_rgba(
-            proj, mask,
-            float(parent._iso_seg_vmin), float(parent._iso_seg_vmax),
+            proj,
+            mask,
+            float(parent._iso_seg_vmin),
+            float(parent._iso_seg_vmax),
         )
         gpu = parent._iso_seg_gpu.get(view)
         if gpu is None:

@@ -60,14 +60,25 @@ class ImageViewerApp(App):
             frame = host.data[host.index]
             span = float(frame.max() - frame.min()) or 1.0
             imgui.set_next_item_width(-imgui.FLT_MIN)
-            _, self.lo = imgui.slider_float("##lo", self.lo, float(frame.min()), float(frame.max()), "low %.3g")
+            _, self.lo = imgui.slider_float(
+                "##lo", self.lo, float(frame.min()), float(frame.max()), "low %.3g"
+            )
             imgui.set_next_item_width(-imgui.FLT_MIN)
-            _, self.hi = imgui.slider_float("##hi", self.hi, float(frame.min()), float(frame.min()) + span, "high %.3g")
+            _, self.hi = imgui.slider_float(
+                "##hi",
+                self.hi,
+                float(frame.min()),
+                float(frame.min()) + span,
+                "high %.3g",
+            )
 
     def draw_canvas(self, host, size: imgui.ImVec2) -> None:
         frame = np.asarray(host.data[host.index])
         if self.auto:
-            self.lo, self.hi = float(np.nanpercentile(frame, 1.0)), float(np.nanpercentile(frame, 99.0))
+            self.lo, self.hi = (
+                float(np.nanpercentile(frame, 1.0)),
+                float(np.nanpercentile(frame, 99.0)),
+            )
         if self.texture is None:
             self.texture = Texture(host.figure)
         self.texture.set(frame, self.lo, max(self.hi, self.lo + 1e-9), self.cmap)
@@ -75,9 +86,14 @@ class ImageViewerApp(App):
         origin = imgui.get_cursor_screen_pos()
         imgui.invisible_button("##canvas", size)
         if imgui.is_item_active():
-            self.pan = imgui.ImVec2(self.pan.x + imgui.get_io().mouse_delta.x, self.pan.y + imgui.get_io().mouse_delta.y)
+            self.pan = imgui.ImVec2(
+                self.pan.x + imgui.get_io().mouse_delta.x,
+                self.pan.y + imgui.get_io().mouse_delta.y,
+            )
         if imgui.is_item_hovered() and imgui.get_io().mouse_wheel:
-            self.zoom = max(0.1, self.zoom * (1.1 if imgui.get_io().mouse_wheel > 0 else 0.9))
+            self.zoom = max(
+                0.1, self.zoom * (1.1 if imgui.get_io().mouse_wheel > 0 else 0.9)
+            )
 
         fit = min(size.x / self.texture.width, size.y / self.texture.height)
         scale = fit if self.zoom <= 0.0 else self.zoom
@@ -88,7 +104,9 @@ class ImageViewerApp(App):
         )
         p_max = imgui.ImVec2(p_min.x + width, p_min.y + height)
         draw_list = imgui.get_window_draw_list()
-        draw_list.push_clip_rect(origin, imgui.ImVec2(origin.x + size.x, origin.y + size.y), True)
+        draw_list.push_clip_rect(
+            origin, imgui.ImVec2(origin.x + size.x, origin.y + size.y), True
+        )
         draw_list.add_image(self.texture.ref, p_min, p_max)
         draw_list.pop_clip_rect()
 

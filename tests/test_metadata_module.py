@@ -10,24 +10,23 @@ Tests the centralized metadata parameter handling including:
 import numpy as np
 import pytest
 from mbo_utilities.metadata import (
+    METADATA_PARAMS,
     MetadataParameter,
     VoxelSize,
-    METADATA_PARAMS,
-    ALIAS_MAP,
-    get_canonical_name,
-    get_param,
-    get_voxel_size,
-    normalize_resolution,
-    normalize_metadata,
     detect_stack_type,
-    is_lbm_stack,
-    is_piezo_stack,
-    get_saved_channel_ports,
-    get_num_color_channels,
-    get_num_zplanes,
+    get_canonical_name,
     get_frames_per_slice,
     get_log_average_factor,
+    get_num_color_channels,
+    get_num_zplanes,
+    get_param,
+    get_saved_channel_ports,
+    get_voxel_size,
     get_z_step_size,
+    is_lbm_stack,
+    is_piezo_stack,
+    normalize_metadata,
+    normalize_resolution,
 )
 
 
@@ -150,12 +149,12 @@ class TestGetParam:
         assert result == 128
 
     def test_pixel_resolution_tuple_dx(self):
-        """dx can be extracted from pixel_resolution tuple."""
+        """Dx can be extracted from pixel_resolution tuple."""
         meta = {"pixel_resolution": (0.5, 0.6)}
         assert get_param(meta, "dx") == 0.5
 
     def test_pixel_resolution_tuple_dy(self):
-        """dy can be extracted from pixel_resolution tuple."""
+        """Dy can be extracted from pixel_resolution tuple."""
         meta = {"pixel_resolution": (0.5, 0.6)}
         assert get_param(meta, "dy") == 0.6
 
@@ -168,7 +167,7 @@ class TestTransformAliases:
         assert get_param({"finterval": 0.1}, "fs") == 10.0
 
     def test_finterval_from_fs(self):
-        """fs resolves back to finterval."""
+        """Fs resolves back to finterval."""
         assert get_param({"fs": 10.0}, "finterval") == 0.1
 
     def test_direct_value_wins_over_transform(self):
@@ -203,8 +202,9 @@ class TestTransformAliases:
         import numpy as np
         from mbo_utilities.arrays import NumpyArray
 
-        arr = NumpyArray(np.zeros((4, 1, 1, 8, 8), dtype=np.int16),
-                         metadata={"finterval": 0.25})
+        arr = NumpyArray(
+            np.zeros((4, 1, 1, 8, 8), dtype=np.int16), metadata={"finterval": 0.25}
+        )
         assert arr.fs == 4.0
 
 
@@ -280,13 +280,7 @@ class TestGetVoxelSize:
 
     def test_from_scanimage_nested(self):
         """Extract dz from ScanImage nested structure."""
-        meta = {
-            "si": {
-                "hStackManager": {
-                    "stackZStepSize": 5.0
-                }
-            }
-        }
+        meta = {"si": {"hStackManager": {"stackZStepSize": 5.0}}}
         vs = get_voxel_size(meta)
         assert vs.dz == 5.0
 
@@ -321,11 +315,8 @@ class TestGetVoxelSize:
         meta = {
             "lbm_stack": True,
             "si": {
-                "hStackManager": {
-                    "stackZStepSize": 5.0,
-                    "actualStackZStepSize": 5.0
-                }
-            }
+                "hStackManager": {"stackZStepSize": 5.0, "actualStackZStepSize": 5.0}
+            },
         }
         vs = get_voxel_size(meta)
         assert vs.dz is None  # should NOT be 5.0
@@ -365,7 +356,7 @@ class TestScanImageDetection:
         meta = {
             "si": {
                 "hStackManager": {"enable": True, "numSlices": 10},
-                "hChannels": {"channelSave": 1}
+                "hChannels": {"channelSave": 1},
             }
         }
         assert detect_stack_type(meta) == "piezo"
@@ -375,10 +366,7 @@ class TestScanImageDetection:
     def test_detect_single_plane(self):
         """Single plane when neither LBM nor piezo."""
         meta = {
-            "si": {
-                "hChannels": {"channelSave": 1},
-                "hStackManager": {"enable": False}
-            }
+            "si": {"hChannels": {"channelSave": 1}, "hStackManager": {"enable": False}}
         }
         assert detect_stack_type(meta) == "single_plane"
 
@@ -399,7 +387,7 @@ class TestLbmColorChannels:
                     "virtualChannelSettings__1": {"source": "AI0"},
                     "virtualChannelSettings__2": {"source": "AI0"},
                     "virtualChannelSettings__3": {"source": "AI0"},
-                }
+                },
             }
         }
         sources = get_saved_channel_ports(meta)
@@ -417,7 +405,7 @@ class TestLbmColorChannels:
                     "virtualChannelSettings__2": {"source": "AI0"},
                     "virtualChannelSettings__15": {"source": "AI1"},
                     "virtualChannelSettings__16": {"source": "AI1"},
-                }
+                },
             }
         }
         sources = get_saved_channel_ports(meta)
@@ -430,49 +418,33 @@ class TestPiezoStackParams:
     """Test piezo stack parameter extraction."""
 
     def test_get_num_zplanes_piezo(self):
-        """numSlices from hStackManager."""
+        """NumSlices from hStackManager."""
         meta = {
             "si": {
                 "hStackManager": {"enable": True, "numSlices": 17},
-                "hChannels": {"channelSave": 1}
+                "hChannels": {"channelSave": 1},
             }
         }
         assert get_num_zplanes(meta) == 17
 
     def test_get_num_zplanes_lbm(self):
-        """channelSave length for LBM."""
-        meta = {
-            "si": {
-                "hChannels": {"channelSave": list(range(1, 15))}
-            }
-        }
+        """ChannelSave length for LBM."""
+        meta = {"si": {"hChannels": {"channelSave": list(range(1, 15))}}}
         assert get_num_zplanes(meta) == 14
 
     def test_get_frames_per_slice(self):
-        """framesPerSlice from hStackManager."""
-        meta = {
-            "si": {
-                "hStackManager": {"framesPerSlice": 10}
-            }
-        }
+        """FramesPerSlice from hStackManager."""
+        meta = {"si": {"hStackManager": {"framesPerSlice": 10}}}
         assert get_frames_per_slice(meta) == 10
 
     def test_get_log_average_factor(self):
-        """logAverageFactor from hScan2D."""
-        meta = {
-            "si": {
-                "hScan2D": {"logAverageFactor": 5}
-            }
-        }
+        """LogAverageFactor from hScan2D."""
+        meta = {"si": {"hScan2D": {"logAverageFactor": 5}}}
         assert get_log_average_factor(meta) == 5
 
     def test_get_z_step_size(self):
-        """stackZStepSize from hStackManager."""
-        meta = {
-            "si": {
-                "hStackManager": {"stackZStepSize": 2.5}
-            }
-        }
+        """StackZStepSize from hStackManager."""
+        meta = {"si": {"hStackManager": {"stackZStepSize": 2.5}}}
         assert get_z_step_size(meta) == 2.5
 
 
@@ -516,7 +488,7 @@ class TestRoiInfo:
                     "linesPerFrame": 68,
                     "pixelsPerLine": 68,
                 }
-            }
+            },
         }
         info = get_roi_info(meta)
         assert info["num_mrois"] == 7
@@ -533,7 +505,7 @@ class TestRoiInfo:
                     "linesPerFrame": 100,
                     "pixelsPerLine": 100,
                 }
-            }
+            },
         }
         info = get_roi_info(meta)
         assert info["num_mrois"] == 4
@@ -547,13 +519,7 @@ class TestFrameRate:
         """Get frame rate from scanFrameRate."""
         from mbo_utilities.metadata import get_frame_rate
 
-        meta = {
-            "si": {
-                "hRoiManager": {
-                    "scanFrameRate": 30.5
-                }
-            }
-        }
+        meta = {"si": {"hRoiManager": {"scanFrameRate": 30.5}}}
         assert get_frame_rate(meta) == 30.5
 
     def test_get_frame_rate_from_period(self):
@@ -590,7 +556,7 @@ class TestColorChannelsUnified:
                 "hScan2D": {
                     "virtualChannelSettings__1": {"source": "AI0"},
                     "virtualChannelSettings__2": {"source": "AI1"},
-                }
+                },
             }
         }
         # both channels saved, two distinct AI ports
@@ -607,7 +573,22 @@ class TestCleanScanImageMetadata:
         # simulate raw ScanImage metadata with LBM config
         raw_meta = {
             "si": {
-                "SI.hChannels.channelSave": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+                "SI.hChannels.channelSave": [
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    11,
+                    12,
+                    13,
+                    14,
+                ],
                 "SI.hRoiManager.scanFrameRate": 7.5,
                 "SI.hRoiManager.linesPerFrame": 512,
                 "SI.hRoiManager.pixelsPerLine": 512,
@@ -703,8 +684,9 @@ class TestExtractRoiSlices:
 
 
 def _rate_alias_source(fs: float = 19.66) -> dict:
-    """metadata dict with every registered rate alias stamped, as the
-    zarr writer's normalize_metadata pass does at ingest."""
+    """Metadata dict with every registered rate alias stamped, as the
+    zarr writer's normalize_metadata pass does at ingest.
+    """
     from mbo_utilities.metadata import METADATA_PARAMS
 
     src = {"fs": fs}
@@ -721,7 +703,8 @@ class TestOutputMetadataRateAliases:
 
     def test_strided_selection_updates_all_aliases(self):
         """stride-4 T selection divides every fs alias, multiplies every
-        finterval alias."""
+        finterval alias.
+        """
         from mbo_utilities.metadata import METADATA_PARAMS, OutputMetadata
 
         base = 19.66
@@ -764,7 +747,7 @@ class TestOutputMetadataRateAliases:
             assert result[key] is None, key
 
     def test_no_invented_alias_keys(self):
-        """a source without rate aliases gains only the canonical keys."""
+        """A source without rate aliases gains only the canonical keys."""
         from mbo_utilities.metadata import OutputMetadata
 
         out = OutputMetadata(
@@ -777,8 +760,15 @@ class TestOutputMetadataRateAliases:
         assert result["fs"] == 10.0
         assert result["frame_rate"] == 10.0
         assert result["finterval"] == pytest.approx(0.1)
-        for absent in ("framerate", "fps", "scanFrameRate", "dt",
-                       "frame_interval", "FrameInterval", "time_interval"):
+        for absent in (
+            "framerate",
+            "fps",
+            "scanFrameRate",
+            "dt",
+            "frame_interval",
+            "FrameInterval",
+            "time_interval",
+        ):
             assert absent not in result, absent
 
 
@@ -806,7 +796,7 @@ class TestTimeSelectionMetadata:
         }
 
     def test_short_selection_emits_explicit_list(self):
-        """selections up to max_explicit keep the explicit index list."""
+        """Selections up to max_explicit keep the explicit index list."""
         from mbo_utilities.arrays.features._slicing import (
             parse_timepoint_selection,
         )
@@ -819,7 +809,7 @@ class TestTimeSelectionMetadata:
         assert "include_indices_summary" not in meta
 
     def test_include_string_round_trips(self):
-        """reparsing the stored include string reproduces the indices."""
+        """Reparsing the stored include string reproduces the indices."""
         from mbo_utilities.arrays.features._slicing import (
             parse_timepoint_selection,
         )
@@ -832,7 +822,7 @@ class TestTimeSelectionMetadata:
         assert reparsed.count == meta["count"]
 
     def test_exclude_preserved(self):
-        """exclude string and its (small) index list survive."""
+        """Exclude string and its (small) index list survive."""
         from mbo_utilities.arrays.features._slicing import (
             parse_timepoint_selection,
         )
@@ -845,7 +835,7 @@ class TestTimeSelectionMetadata:
         assert "exclude_indices_summary" not in meta
 
     def test_long_exclude_emits_summary(self):
-        """a 40k-index exclude stores first/last/n, not the full list."""
+        """A 40k-index exclude stores first/last/n, not the full list."""
         from mbo_utilities.arrays.features._slicing import (
             parse_timepoint_selection,
         )
@@ -862,7 +852,7 @@ class TestTimeSelectionMetadata:
         }
 
     def test_exclude_at_cap_keeps_explicit_list(self):
-        """an exclude list exactly at max_explicit stays explicit."""
+        """An exclude list exactly at max_explicit stays explicit."""
         from mbo_utilities.arrays.features._slicing import (
             parse_timepoint_selection,
         )
@@ -887,15 +877,17 @@ class TestNormalizeOpsArrays:
     def test_lists_become_arrays_and_empties_are_dropped(self):
         from mbo_utilities.metadata import normalize_ops_arrays
 
-        ops = normalize_ops_arrays({
-            "meanImg": [[1.0, 2.0], [3.0, 4.0]],
-            "max_proj": [[1.0, 2.0], [3.0, 4.0]],
-            "Vcorr": [[0.5, 0.5], [0.5, 0.5]],
-            "meanImgE": [],
-            "xoff": [1.0, 2.0, 3.0],
-            "xrange": [0, 2],
-            "fs": 10.0,
-        })
+        ops = normalize_ops_arrays(
+            {
+                "meanImg": [[1.0, 2.0], [3.0, 4.0]],
+                "max_proj": [[1.0, 2.0], [3.0, 4.0]],
+                "Vcorr": [[0.5, 0.5], [0.5, 0.5]],
+                "meanImgE": [],
+                "xoff": [1.0, 2.0, 3.0],
+                "xrange": [0, 2],
+                "fs": 10.0,
+            }
+        )
         for key in ("meanImg", "max_proj", "Vcorr", "xoff"):
             assert isinstance(ops[key], np.ndarray), key
             assert ops[key].dtype == np.float32, key
@@ -941,7 +933,7 @@ class TestStripForExport:
     """strip_for_export size guard and allowlist."""
 
     def test_drops_oversized_list(self):
-        """a 100k-element list is dropped from export metadata."""
+        """A 100k-element list is dropped from export metadata."""
         from mbo_utilities.metadata import strip_for_export
 
         md = {"fs": 10.0, "huge": list(range(100_000))}
@@ -969,14 +961,19 @@ class TestStripForExport:
         """suite2p-only fields never reach export metadata."""
         from mbo_utilities.metadata import strip_for_export
 
-        md = {"fs": 10.0, "meanImg_crop": [[0.0]], "badframes0": [0, 1],
-              "ihop": [1], "plane_times": [0.1]}
+        md = {
+            "fs": 10.0,
+            "meanImg_crop": [[0.0]],
+            "badframes0": [0, 1],
+            "ihop": [1],
+            "plane_times": [0.1],
+        }
         out = strip_for_export(md)
 
         assert out == {"fs": 10.0}
 
     def test_deeply_nested_value_does_not_recurse_out(self):
-        """a 2000-deep nested list must not raise RecursionError."""
+        """A 2000-deep nested list must not raise RecursionError."""
         from mbo_utilities.metadata import strip_for_export
 
         deep = [1]
@@ -1003,22 +1000,34 @@ class TestDecimatedZarrOmeScale:
         import logging
 
         import numpy as np
-
         from mbo_utilities import imread, imwrite
         from mbo_utilities.metadata import params
 
         data = np.random.randint(0, 100, size=(20, 1, 16, 16), dtype=np.int16)
 
         a_dir = tmp_path / "A"
-        imwrite(data, a_dir, ext=".zarr", metadata={"fs": 10.0},
-                dim_order="TZYX", show_progress=False, overwrite=True)
+        imwrite(
+            data,
+            a_dir,
+            ext=".zarr",
+            metadata={"fs": 10.0},
+            dim_order="TZYX",
+            show_progress=False,
+            overwrite=True,
+        )
         arr_a = imread(next(a_dir.glob("*.zarr")))
         assert arr_a.metadata["fs"] == pytest.approx(10.0)
         assert arr_a.metadata["_ome_time_scale"] == pytest.approx(0.1)
 
         b_dir = tmp_path / "B"
-        imwrite(arr_a, b_dir, ext=".zarr", timepoints=list(range(1, 21, 2)),
-                show_progress=False, overwrite=True)
+        imwrite(
+            arr_a,
+            b_dir,
+            ext=".zarr",
+            timepoints=list(range(1, 21, 2)),
+            show_progress=False,
+            overwrite=True,
+        )
         b_store = next(b_dir.glob("*.zarr"))
 
         attrs = json.loads((b_store / "zarr.json").read_text())["attributes"]
@@ -1044,8 +1053,8 @@ class TestDecimatedZarrOmeScale:
         finally:
             log.removeHandler(handler)
         stale = [
-            r for r in records
-            if r.levelno >= logging.WARNING
-            and "stale frame-rate" in r.getMessage()
+            r
+            for r in records
+            if r.levelno >= logging.WARNING and "stale frame-rate" in r.getMessage()
         ]
         assert stale == []

@@ -1,4 +1,5 @@
-from typing import Callable, NamedTuple, Optional, Sequence
+from collections.abc import Callable, Sequence
+from typing import NamedTuple
 
 import numpy as np
 from imgui_bundle import imgui
@@ -29,7 +30,7 @@ class RowAction(NamedTuple):
     icon: str
     tooltip: str
     on_click: Callable[[int], None]
-    disabled: Optional[Callable[[int], Optional[str]]] = None
+    disabled: Callable[[int], str | None] | None = None
 
 
 class RoiOrder:
@@ -40,7 +41,7 @@ class RoiOrder:
         self.labels = labels
         self.n_items = n_items
         self.filter_label = FILTER_ALL
-        self.range_column: Optional[str] = None
+        self.range_column: str | None = None
         self.range_limits = (0, 0)
         self.sort_column = 0
         self.ascending = True
@@ -53,7 +54,7 @@ class RoiOrder:
         self.range_limits = (0, int(np.max(values, initial=0)))
 
     @property
-    def current(self) -> Optional[int]:
+    def current(self) -> int | None:
         if len(self.order) == 0:
             return None
         return int(self.order[self.pos])
@@ -75,7 +76,9 @@ class RoiOrder:
             idx = idx[::-1]
         self.order = idx
         hits = np.flatnonzero(self.order == current) if current is not None else ()
-        self.pos = int(hits[0]) if len(hits) else int(min(self.pos, max(len(idx) - 1, 0)))
+        self.pos = (
+            int(hits[0]) if len(hits) else int(min(self.pos, max(len(idx) - 1, 0)))
+        )
 
     def step(self, delta: int) -> bool:
         if not len(self.order):
@@ -93,7 +96,10 @@ class RoiOrder:
     def hidden_by(self, item: int) -> list:
         """Names of the filters that keep ``item`` out of the current view."""
         out = []
-        if self.filter_label >= UNLABELED and int(self.labels[item]) != self.filter_label:
+        if (
+            self.filter_label >= UNLABELED
+            and int(self.labels[item]) != self.filter_label
+        ):
             out.append("label")
         if self.range_column is not None:
             value = self.columns[self.range_column][item]
@@ -151,11 +157,11 @@ def draw_roi_table(
     formatters: dict,
     scroll_to_current: bool,
     table_id: str = "rois",
-    on_select: Optional[Callable[[int], None]] = None,
+    on_select: Callable[[int], None] | None = None,
     actions: Sequence[RowAction] = (),
-    is_grouped: Optional[Callable[[int], bool]] = None,
-    on_ctrl_select: Optional[Callable[[int], None]] = None,
-    on_shift_select: Optional[Callable[[int], None]] = None,
+    is_grouped: Callable[[int], bool] | None = None,
+    on_ctrl_select: Callable[[int], None] | None = None,
+    on_shift_select: Callable[[int], None] | None = None,
 ) -> bool:
     """
     Sortable, clipped ROI table. Returns the new scroll_to_current flag.
@@ -193,7 +199,9 @@ def draw_roi_table(
     if specs is not None and specs.specs_dirty:
         if specs.specs_count > 0:
             order.sort_column = int(specs.specs.column_index)
-            order.ascending = specs.specs.sort_direction == imgui.SortDirection.ascending
+            order.ascending = (
+                specs.specs.sort_direction == imgui.SortDirection.ascending
+            )
         specs.specs_dirty = False
         order.rebuild()
 
@@ -209,9 +217,13 @@ def draw_roi_table(
             sel_flags = imgui.SelectableFlags_.span_all_columns
             if actions:
                 sel_flags |= imgui.SelectableFlags_.allow_overlap
-            highlighted = row == order.pos or (is_grouped is not None and is_grouped(item))
+            highlighted = row == order.pos or (
+                is_grouped is not None and is_grouped(item)
+            )
             clicked, _ = imgui.selectable(
-                f"{item}##row{row}", highlighted, sel_flags,
+                f"{item}##row{row}",
+                highlighted,
+                sel_flags,
             )
             if clicked:
                 io = imgui.get_io()
@@ -231,7 +243,10 @@ def draw_roi_table(
                 if name == "label":
                     label = int(label_set.labels[item])
                     if label >= 0:
-                        imgui.text_colored(theme.label_color(label_set.color(label)), label_set.names[label])
+                        imgui.text_colored(
+                            theme.label_color(label_set.color(label)),
+                            label_set.names[label],
+                        )
                     else:
                         imgui.text("-")
                 else:
@@ -259,12 +274,17 @@ def _draw_row_actions(actions: Sequence[RowAction], item: int, row: int):
             imgui.set_tooltip(reason or action.tooltip)
 
 
-def draw_label_filter(order: RoiOrder, label_set, id_suffix: str = "", width: float = -1) -> bool:
+def draw_label_filter(
+    order: RoiOrder, label_set, id_suffix: str = "", width: float = -1
+) -> bool:
     """The label filter combo on its own, so a caller can put another filter
-    beside it. Does not rebuild; returns True if the selection changed."""
+    beside it. Does not rebuild; returns True if the selection changed.
+    """
     names = ("all", "unlabeled", *label_set.names)
     imgui.set_next_item_width(width)
-    changed, sel = imgui.combo(f"##filter{id_suffix}", order.filter_label + 2, list(names))
+    changed, sel = imgui.combo(
+        f"##filter{id_suffix}", order.filter_label + 2, list(names)
+    )
     if changed:
         order.filter_label = sel - 2
     return changed
@@ -272,16 +292,21 @@ def draw_label_filter(order: RoiOrder, label_set, id_suffix: str = "", width: fl
 
 def draw_range_filter(order: RoiOrder, id_suffix: str = "", width: float = -1) -> bool:
     """The range slider for ``order.range_column``, or nothing when no column
-    is set. Does not rebuild; returns True if the limits changed."""
+    is set. Does not rebuild; returns True if the limits changed.
+    """
     if order.range_column is None:
         return False
     values = order.columns[order.range_column]
     imgui.set_next_item_width(width)
     changed, lo, hi = imgui.drag_int_range2(
         f"##range{id_suffix}",
-        order.range_limits[0], order.range_limits[1], 1, 0,
+        order.range_limits[0],
+        order.range_limits[1],
+        1,
+        0,
         int(np.max(values, initial=0)),
-        f"{order.range_column} >= %d", f"{order.range_column} <= %d",
+        f"{order.range_column} >= %d",
+        f"{order.range_column} <= %d",
     )
     if changed:
         order.range_limits = (lo, hi)

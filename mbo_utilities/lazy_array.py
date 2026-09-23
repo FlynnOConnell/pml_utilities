@@ -42,42 +42,42 @@ class LazyArray:
     PRIORITY: ClassVar[int] = 50
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
-        """return the 5D TCZYX shape. subclasses must implement this."""
+        """Return the 5D TCZYX shape. subclasses must implement this."""
         raise NotImplementedError
 
     @property
     def shape(self) -> tuple[int, int, int, int, int]:
-        """shape as 5D TCZYX. subclasses may override (e.g. squeezed views)."""
+        """Shape as 5D TCZYX. subclasses may override (e.g. squeezed views)."""
         return self._shape5d()
 
     @property
     def ndim(self) -> int:
-        """always 5 for a canonical LazyArray."""
+        """Always 5 for a canonical LazyArray."""
         return 5
 
     @property
     def nt(self) -> int:
-        """number of timepoints."""
+        """Number of timepoints."""
         return self._shape5d()[0]
 
     @property
     def nc(self) -> int:
-        """number of channels."""
+        """Number of channels."""
         return self._shape5d()[1]
 
     @property
     def nz(self) -> int:
-        """number of z-planes."""
+        """Number of z-planes."""
         return self._shape5d()[2]
 
     @property
     def ny(self) -> int:
-        """spatial height."""
+        """Spatial height."""
         return self._shape5d()[3]
 
     @property
     def nx(self) -> int:
-        """spatial width."""
+        """Spatial width."""
         return self._shape5d()[4]
 
     _metadata: dict | None = None
@@ -289,12 +289,13 @@ class LazyArray:
         """The shifts a motion-correction stage applied over this recording
         (``features.MotionCorrection``), or None when the source records none.
         A reader whose format carries them overrides this: MESc's RTMC curves
-        today; a registration's per-frame offsets take the same shape."""
+        today; a registration's per-frame offsets take the same shape.
+        """
         return None
 
     @property
     def source_path(self) -> Path | None:
-        """canonical path `imread()` uses to reconstruct this array.
+        """Canonical path `imread()` uses to reconstruct this array.
 
         default implementation derives it from `self.filenames` (list or
         single path) or falls back to `self.path`. subclasses whose files
@@ -322,12 +323,13 @@ class LazyArray:
 
     @classmethod
     def can_open(cls, path: Path) -> bool:
-        """return True if this class can open `path`. default: no."""
+        """Return True if this class can open `path`. default: no."""
         return False
 
     def squeeze(self):
         """Return a view with size-1 T/C/Z axes dropped (opt-in ergonomics)."""
         from mbo_utilities.squeeze import SqueezedView
+
         return SqueezedView(self)
 
 
@@ -391,7 +393,8 @@ def _dispatch(path) -> type[LazyArray] | None:
 def base_array(arr):
     """The array ``imread`` returned under the viewer's display wrappers and
     read-time views (timing proxy, squeezed singletons, frame averaging,
-    scan-phase correction, axial shifts), for ``isinstance`` checks."""
+    scan-phase correction, axial shifts), for ``isinstance`` checks.
+    """
     from mbo_utilities.arrays._average_view import FrameAveragedView
     from mbo_utilities.arrays._phasecorr_view import PhaseCorrectedView
     from mbo_utilities.arrays._registration import AxialShiftView

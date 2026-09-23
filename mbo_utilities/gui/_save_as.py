@@ -11,31 +11,35 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import imgui, hello_imgui, portable_file_dialogs as pfd
+from imgui_bundle import hello_imgui, imgui
+from imgui_bundle import portable_file_dialogs as pfd
 
-from mbo_utilities.reader import MBO_AVAILABLE_FTYPES, imread, widget_reader_kwargs
-from mbo_utilities.writer import imwrite
-from mbo_utilities.metadata import get_param
 from mbo_utilities.arrays import _sanitize_suffix
-from mbo_utilities.arrays.features import DimensionTag, TAG_REGISTRY, parse_timepoint_selection, TimeSelection
-from mbo_utilities.preferences import get_last_dir, set_last_dir
+from mbo_utilities.arrays.features import (
+    TAG_REGISTRY,
+    DimensionTag,
+    parse_timepoint_selection,
+)
 from mbo_utilities.gui._files import NATIVE_DIALOGS, no_dialog_hint
 from mbo_utilities.gui._imgui_helpers import (
     PopupAutoSize,
-    set_tooltip,
     checkbox_with_tooltip,
-    draw_checkbox_grid,
+    set_tooltip,
 )
+from mbo_utilities.gui._metadata_editor import _check_missing_metadata
 from mbo_utilities.gui._selection_ui import (
     draw_frame_average_input,
     draw_selection_table,
     resolve_dim_labels,
     source_timepoints,
 )
-from mbo_utilities.gui._metadata_editor import _check_missing_metadata
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.gui.widgets.progress_bar import reset_progress_state
-import contextlib
+from mbo_utilities.metadata import get_param
+from mbo_utilities.preferences import get_last_dir, set_last_dir
+from mbo_utilities.reader import MBO_AVAILABLE_FTYPES, imread, widget_reader_kwargs
+from mbo_utilities.writer import imwrite
+
 
 def _get_array_features(widget: Any) -> dict[str, bool]:
     """
@@ -78,7 +82,8 @@ def _get_array_features(widget: Any) -> dict[str, bool]:
         # Multi-ROI: data has multiple ROIs
         "multi_roi": getattr(data, "num_rois", 1) > 1,
         # Frame averaging: piezo arrays with multiple frames per slice
-        "frame_averaging": hasattr(data, "can_average") and getattr(data, "can_average", False),
+        "frame_averaging": hasattr(data, "can_average")
+        and getattr(data, "can_average", False),
         # Temporal binning: anything with more than one timepoint (the viewer
         # may already be binned down to a single frame, so count the source)
         "frame_average": source_timepoints(widget) > 1,
@@ -167,7 +172,6 @@ def draw_saveas_popup(parent: Any):
         # The legacy `_saveas_select_metadata_tab` flag is unused.
 
         if imgui.begin_tab_bar("SaveAsTabBar"):
-
             # === Save tab ===
             if imgui.begin_tab_item("Save")[0]:
                 imgui.dummy(imgui.ImVec2(0, 5))
@@ -188,15 +192,22 @@ def draw_saveas_popup(parent: Any):
                 if not NATIVE_DIALOGS:
                     imgui.begin_disabled()
                 if imgui.button("Browse"):
-                    default_dir = parent._saveas_outdir or str(get_last_dir("save_as") or Path.home())
-                    parent._saveas_folder_dialog = pfd.select_folder("Select output folder", default_dir)
+                    default_dir = parent._saveas_outdir or str(
+                        get_last_dir("save_as") or Path.home()
+                    )
+                    parent._saveas_folder_dialog = pfd.select_folder(
+                        "Select output folder", default_dir
+                    )
                 if not NATIVE_DIALOGS:
                     imgui.end_disabled()
                     if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
                         imgui.set_tooltip(no_dialog_hint())
 
                 # Check if async folder dialog has a result
-                if parent._saveas_folder_dialog is not None and parent._saveas_folder_dialog.ready():
+                if (
+                    parent._saveas_folder_dialog is not None
+                    and parent._saveas_folder_dialog.ready()
+                ):
                     result = parent._saveas_folder_dialog.result()
                     if result:
                         parent._saveas_outdir = str(result)
@@ -210,7 +221,9 @@ def draw_saveas_popup(parent: Any):
                 # backing pkg is no longer installed), clamp to .tiff.
                 if parent._ext_idx >= len(MBO_AVAILABLE_FTYPES):
                     parent._ext_idx = MBO_AVAILABLE_FTYPES.index(".tiff")
-                _, parent._ext_idx = imgui.combo("Ext", parent._ext_idx, MBO_AVAILABLE_FTYPES)
+                _, parent._ext_idx = imgui.combo(
+                    "Ext", parent._ext_idx, MBO_AVAILABLE_FTYPES
+                )
                 parent._ext = MBO_AVAILABLE_FTYPES[parent._ext_idx]
 
                 # H5-specific: let the user pick the internal dataset name.
@@ -350,7 +363,8 @@ def _draw_options_popup(parent: Any):
         if not features.get("z_registration", False):
             imgui.begin_disabled()
         _changed, _reg_value = imgui.checkbox(
-            "Register Z-Planes Axially", parent._register_z if features.get("z_registration") else False
+            "Register Z-Planes Axially",
+            parent._register_z if features.get("z_registration") else False,
         )
         if features.get("z_registration") and _changed:
             parent._register_z = _reg_value
@@ -360,7 +374,9 @@ def _draw_options_popup(parent: Any):
             imgui.begin_tooltip()
             imgui.push_text_wrap_pos(imgui.get_font_size() * 35.0)
             if parent.nz <= 1:
-                imgui.text_unformatted("Requires multi-plane (4D) data with more than one z-plane.")
+                imgui.text_unformatted(
+                    "Requires multi-plane (4D) data with more than one z-plane."
+                )
             else:
                 imgui.text_unformatted(
                     "Compute per-plane rigid shifts via phase correlation and "
@@ -487,10 +503,14 @@ def _draw_options_popup(parent: Any):
 
             imgui.spacing()
             imgui.separator()
-            imgui.text_colored(imgui.ImVec4(0.6, 0.8, 1.0, 1.0), "Pyramid (Multi-resolution)")
+            imgui.text_colored(
+                imgui.ImVec4(0.6, 0.8, 1.0, 1.0), "Pyramid (Multi-resolution)"
+            )
             imgui.dummy(imgui.ImVec2(0, 3))
 
-            _, parent._zarr_pyramid = imgui.checkbox("Generate Pyramid", parent._zarr_pyramid)
+            _, parent._zarr_pyramid = imgui.checkbox(
+                "Generate Pyramid", parent._zarr_pyramid
+            )
             set_tooltip(
                 "Write multi-resolution OME-Zarr pyramid.",
             )
@@ -511,7 +531,11 @@ def _draw_options_popup(parent: Any):
                     "mean/nearest/gaussian also available.",
                 )
                 methods = ["median", "mode", "mean", "nearest", "gaussian"]
-                current_idx = methods.index(parent._zarr_pyramid_method) if parent._zarr_pyramid_method in methods else 0
+                current_idx = (
+                    methods.index(parent._zarr_pyramid_method)
+                    if parent._zarr_pyramid_method in methods
+                    else 0
+                )
                 imgui.set_next_item_width(hello_imgui.em_size(10))
                 if imgui.begin_combo("##pyramid_method", parent._zarr_pyramid_method):
                     for method in methods:
@@ -644,8 +668,9 @@ def _write_mean_subtract_stack(parent: Any) -> str | None:
     done = getattr(parent, "_zstats_done", None)
     if not means or not done:
         return None
-    import numpy as np
     import tempfile
+
+    import numpy as np
 
     from mbo_utilities.gui._stats import current_breakout_key
 
@@ -669,11 +694,10 @@ def _write_mean_subtract_stack(parent: Any) -> str | None:
     stack = np.stack(stacks, axis=0)  # (C, Z, Y, X)
     fd, path = tempfile.mkstemp(prefix="mbo_meansub_", suffix=".npy")
     import os
+
     os.close(fd)
     np.save(path, stack)
     return path
-
-
 
 
 def _draw_video_options(parent: Any):
@@ -700,8 +724,11 @@ def _draw_video_options(parent: Any):
 
     imgui.set_next_item_width(hello_imgui.em_size(10))
     _, parent._saveas_video_speed_factor = imgui.input_float(
-        "Speed", parent._saveas_video_speed_factor,
-        step=0.1, step_fast=1.0, format="%.2f",
+        "Speed",
+        parent._saveas_video_speed_factor,
+        step=0.1,
+        step_fast=1.0,
+        format="%.2f",
     )
     parent._saveas_video_speed_factor = max(
         0.1, min(float(parent._saveas_video_speed_factor), 100.0)
@@ -720,31 +747,47 @@ def _draw_video_options(parent: Any):
     if parent._saveas_video_auto:
         imgui.set_next_item_width(hello_imgui.em_size(10))
         _, parent._saveas_video_vmin_pct = imgui.input_float(
-            "vmin %", parent._saveas_video_vmin_pct,
-            step=0.1, step_fast=1.0, format="%.1f",
+            "vmin %",
+            parent._saveas_video_vmin_pct,
+            step=0.1,
+            step_fast=1.0,
+            format="%.1f",
         )
-        parent._saveas_video_vmin_pct = max(0.0, min(parent._saveas_video_vmin_pct, 10.0))
+        parent._saveas_video_vmin_pct = max(
+            0.0, min(parent._saveas_video_vmin_pct, 10.0)
+        )
         set_tooltip("Percentile for auto vmin. Lower = darker blacks.")
 
         imgui.set_next_item_width(hello_imgui.em_size(10))
         _, parent._saveas_video_vmax_pct = imgui.input_float(
-            "vmax %", parent._saveas_video_vmax_pct,
-            step=0.1, step_fast=1.0, format="%.1f",
+            "vmax %",
+            parent._saveas_video_vmax_pct,
+            step=0.1,
+            step_fast=1.0,
+            format="%.1f",
         )
-        parent._saveas_video_vmax_pct = max(90.0, min(parent._saveas_video_vmax_pct, 100.0))
+        parent._saveas_video_vmax_pct = max(
+            90.0, min(parent._saveas_video_vmax_pct, 100.0)
+        )
         set_tooltip("Percentile for auto vmax. Lower = brighter highlights.")
     else:
         imgui.set_next_item_width(hello_imgui.em_size(12))
         _, parent._saveas_video_vmin = imgui.input_float(
-            "vmin", parent._saveas_video_vmin,
-            step=10.0, step_fast=100.0, format="%.1f",
+            "vmin",
+            parent._saveas_video_vmin,
+            step=10.0,
+            step_fast=100.0,
+            format="%.1f",
         )
         set_tooltip("Min intensity value (clipped to black).")
 
         imgui.set_next_item_width(hello_imgui.em_size(12))
         _, parent._saveas_video_vmax = imgui.input_float(
-            "vmax", parent._saveas_video_vmax,
-            step=10.0, step_fast=100.0, format="%.1f",
+            "vmax",
+            parent._saveas_video_vmax,
+            step=10.0,
+            step_fast=100.0,
+            format="%.1f",
         )
         set_tooltip("Max intensity value (clipped to white).")
 
@@ -793,7 +836,6 @@ def _draw_video_options(parent: Any):
         "Frames already that big are left alone. Set 1 to disable."
     )
 
-
     imgui.set_next_item_width(hello_imgui.em_size(8))
     _, parent._saveas_video_temporal_mode_idx = imgui.combo(
         "Temporal mode",
@@ -812,14 +854,15 @@ def _draw_video_options(parent: Any):
     parent._saveas_video_temporal_smooth = max(
         0, min(int(parent._saveas_video_temporal_smooth), 500)
     )
-    set_tooltip(
-        "Rolling-window size in frames. 0 = off; combined with Temporal mode."
-    )
+    set_tooltip("Rolling-window size in frames. 0 = off; combined with Temporal mode.")
 
     imgui.set_next_item_width(hello_imgui.em_size(10))
     _, parent._saveas_video_spatial_smooth = imgui.input_float(
-        "Spatial smooth", parent._saveas_video_spatial_smooth,
-        step=0.1, step_fast=1.0, format="%.2f",
+        "Spatial smooth",
+        parent._saveas_video_spatial_smooth,
+        step=0.1,
+        step_fast=1.0,
+        format="%.2f",
     )
     parent._saveas_video_spatial_smooth = max(
         0.0, min(float(parent._saveas_video_spatial_smooth), 20.0)
@@ -828,8 +871,11 @@ def _draw_video_options(parent: Any):
 
     imgui.set_next_item_width(hello_imgui.em_size(10))
     _, parent._saveas_video_gamma = imgui.input_float(
-        "Gamma", parent._saveas_video_gamma,
-        step=0.05, step_fast=0.5, format="%.2f",
+        "Gamma",
+        parent._saveas_video_gamma,
+        step=0.05,
+        step_fast=0.5,
+        format="%.2f",
     )
     parent._saveas_video_gamma = max(0.1, min(float(parent._saveas_video_gamma), 5.0))
     set_tooltip("Gamma correction. <1 brightens midtones, >1 darkens them.")
@@ -918,7 +964,9 @@ def _draw_selection_section(parent: Any):
         else:
             num_channels = 1
     except Exception as e:
-        hello_imgui.log(hello_imgui.LogLevel.error, f"Could not read data dimensions: {e}")
+        hello_imgui.log(
+            hello_imgui.LogLevel.error, f"Could not read data dimensions: {e}"
+        )
 
     # track file path to reset state when file changes
     current_fpath = parent.fpath[0] if isinstance(parent.fpath, list) else parent.fpath
@@ -1027,7 +1075,9 @@ def _draw_selection_section(parent: Any):
     # parse selection if not already done (initial load)
     if parent._saveas_tp_parsed is None and not parent._saveas_tp_error:
         try:
-            parent._saveas_tp_parsed = parse_timepoint_selection(parent._saveas_tp_selection, max_frames)
+            parent._saveas_tp_parsed = parse_timepoint_selection(
+                parent._saveas_tp_selection, max_frames
+            )
         except ValueError as e:
             parent._saveas_tp_error = str(e)
 
@@ -1054,7 +1104,9 @@ def _draw_selection_section(parent: Any):
                 tp_step = 1
 
             if tp_start_1 == tp_stop_1:
-                t_tag = DimensionTag(TAG_REGISTRY["T"], start=tp_start_1, stop=None, step=1)
+                t_tag = DimensionTag(
+                    TAG_REGISTRY["T"], start=tp_start_1, stop=None, step=1
+                )
             else:
                 t_tag = DimensionTag(
                     TAG_REGISTRY["T"],
@@ -1085,7 +1137,9 @@ def _draw_selection_section(parent: Any):
             tags.append(t_tag)
         if num_channels > 1:
             if c_start == c_stop:
-                c_tag = DimensionTag(TAG_REGISTRY["C"], start=c_start, stop=None, step=1)
+                c_tag = DimensionTag(
+                    TAG_REGISTRY["C"], start=c_start, stop=None, step=1
+                )
             else:
                 c_tag = DimensionTag(
                     TAG_REGISTRY["C"],
@@ -1096,7 +1150,9 @@ def _draw_selection_section(parent: Any):
             tags.append(c_tag)
         if num_planes > 1:
             if z_start == z_stop:
-                z_tag = DimensionTag(TAG_REGISTRY["Z"], start=z_start, stop=None, step=1)
+                z_tag = DimensionTag(
+                    TAG_REGISTRY["Z"], start=z_start, stop=None, step=1
+                )
             else:
                 z_tag = DimensionTag(
                     TAG_REGISTRY["Z"],
@@ -1135,8 +1191,18 @@ def _draw_selection_section(parent: Any):
             # fallback to metadata if shape is lazy/not available
             elif hasattr(data, "metadata") and isinstance(data.metadata, dict):
                 meta = data.metadata
-                Ly = meta.get("Ly") or meta.get("height") or meta.get("frame_height") or 512
-                Lx = meta.get("Lx") or meta.get("width") or meta.get("frame_width") or 512
+                Ly = (
+                    meta.get("Ly")
+                    or meta.get("height")
+                    or meta.get("frame_height")
+                    or 512
+                )
+                Lx = (
+                    meta.get("Lx")
+                    or meta.get("width")
+                    or meta.get("frame_width")
+                    or 512
+                )
             if hasattr(data, "dtype"):
                 dtype_size = data.dtype.itemsize
         except Exception:
@@ -1181,9 +1247,13 @@ def _draw_selection_section(parent: Any):
     imgui.spacing()
 
     # output preview table
-    table_flags = imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
+    table_flags = (
+        imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
+    )
     if imgui.begin_table("output_preview", 2, table_flags):
-        imgui.table_setup_column("label", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(6))
+        imgui.table_setup_column(
+            "label", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(6)
+        )
         imgui.table_setup_column("value", imgui.TableColumnFlags_.width_stretch)
 
         # filename row
@@ -1220,7 +1290,9 @@ def _draw_save_button(parent: Any):
     """Draw the save/cancel buttons and handle save logic."""
     # check for missing metadata (for warning indicator, not blocking)
     missing_fields = _check_missing_metadata(parent)
-    no_planes = parent._selected_planes is not None and len(parent._selected_planes) == 0
+    no_planes = (
+        parent._selected_planes is not None and len(parent._selected_planes) == 0
+    )
     no_valid_tp = parent._saveas_tp_error or parent._saveas_tp_parsed is None
 
     # get num_channels from parent state (set in _draw_selection_section)
@@ -1243,8 +1315,7 @@ def _draw_save_button(parent: Any):
         imgui.end_disabled()
         imgui.same_line()
         imgui.text_colored(
-            imgui.ImVec4(1.0, 0.4, 0.4, 1.0),
-            "Select at least one z-plane"
+            imgui.ImVec4(1.0, 0.4, 0.4, 1.0), "Select at least one z-plane"
         )
     elif no_valid_tp:
         imgui.begin_disabled()
@@ -1252,8 +1323,7 @@ def _draw_save_button(parent: Any):
         imgui.end_disabled()
         imgui.same_line()
         imgui.text_colored(
-            imgui.ImVec4(1.0, 0.4, 0.4, 1.0),
-            "Invalid timepoint selection"
+            imgui.ImVec4(1.0, 0.4, 0.4, 1.0), "Invalid timepoint selection"
         )
     elif imgui.button("Save", imgui.ImVec2(100, 0)):
         if not parent._saveas_outdir:
@@ -1265,7 +1335,9 @@ def _draw_save_button(parent: Any):
 
             # Validate that at least one plane is selected
             if not save_planes:
-                parent.logger.error("No z-planes selected! Please select at least one plane.")
+                parent.logger.error(
+                    "No z-planes selected! Please select at least one plane."
+                )
             else:
                 parent._saveas_total = len(save_planes)
                 if parent._saveas_rois:
@@ -1299,10 +1371,16 @@ def _draw_save_button(parent: Any):
                     max_timepoints = 1000
 
                 # get final frame indices (0-based)
-                final_indices_0 = tp_parsed.final_indices if tp_parsed else list(range(max_timepoints))
+                final_indices_0 = (
+                    tp_parsed.final_indices
+                    if tp_parsed
+                    else list(range(max_timepoints))
+                )
 
                 # check if selecting all frames (None means all)
-                if len(final_indices_0) == max_timepoints and final_indices_0 == list(range(max_timepoints)):
+                if len(final_indices_0) == max_timepoints and final_indices_0 == list(
+                    range(max_timepoints)
+                ):
                     frames = None
                 else:
                     # convert to 1-based for imwrite
@@ -1329,13 +1407,16 @@ def _draw_save_button(parent: Any):
 
                 # determine roi_mode based on whether splitting ROIs
                 from mbo_utilities.metadata import RoiMode
+
                 roi_mode = RoiMode.separate if rois else RoiMode.concat_y
 
                 save_kwargs = {
                     "path": parent.fpath,
                     "outpath": parent._saveas_outdir,
                     "planes": save_planes,
-                    "channels": save_channels if len(save_channels) < num_channels else None,
+                    "channels": save_channels
+                    if len(save_channels) < num_channels
+                    else None,
                     "frames": frames,
                     "roi": rois,
                     "roi_mode": roi_mode,
@@ -1368,7 +1449,9 @@ def _draw_save_button(parent: Any):
                     save_kwargs["level"] = parent._zarr_compression_level
                     save_kwargs["pyramid"] = parent._zarr_pyramid
                     if parent._zarr_pyramid:
-                        save_kwargs["pyramid_max_layers"] = parent._zarr_pyramid_max_layers
+                        save_kwargs["pyramid_max_layers"] = (
+                            parent._zarr_pyramid_max_layers
+                        )
                         save_kwargs["pyramid_method"] = parent._zarr_pyramid_method
 
                 # H5-specific: dataset name (default "mov" for suite2p compat)
@@ -1377,7 +1460,9 @@ def _draw_save_button(parent: Any):
 
                 # Video options (.mp4)
                 if parent._ext == ".mp4":
-                    cmap_name = parent._saveas_video_cmaps[parent._saveas_video_cmap_idx]
+                    cmap_name = parent._saveas_video_cmaps[
+                        parent._saveas_video_cmap_idx
+                    ]
                     save_kwargs["fps"] = parent._saveas_video_fps
                     save_kwargs["speed_factor"] = parent._saveas_video_speed_factor
                     if parent._saveas_video_auto:
@@ -1388,13 +1473,19 @@ def _draw_save_button(parent: Any):
                         save_kwargs["vmax"] = parent._saveas_video_vmax
                     save_kwargs["vmin_percentile"] = parent._saveas_video_vmin_pct
                     save_kwargs["vmax_percentile"] = parent._saveas_video_vmax_pct
-                    save_kwargs["temporal_smooth"] = parent._saveas_video_temporal_smooth
+                    save_kwargs["temporal_smooth"] = (
+                        parent._saveas_video_temporal_smooth
+                    )
                     save_kwargs["spatial_smooth"] = parent._saveas_video_spatial_smooth
                     save_kwargs["gamma"] = parent._saveas_video_gamma
                     save_kwargs["cmap"] = cmap_name
-                    save_kwargs["quality"] = _VIDEO_QUALITY_PRESETS[parent._saveas_video_quality_idx]
+                    save_kwargs["quality"] = _VIDEO_QUALITY_PRESETS[
+                        parent._saveas_video_quality_idx
+                    ]
                     save_kwargs["codec"] = _VIDEO_CODECS[parent._saveas_video_codec_idx]
-                    save_kwargs["temporal_mode"] = _VIDEO_TEMPORAL_MODES[parent._saveas_video_temporal_mode_idx]
+                    save_kwargs["temporal_mode"] = _VIDEO_TEMPORAL_MODES[
+                        parent._saveas_video_temporal_mode_idx
+                    ]
                     save_kwargs["time_overlay"] = parent._saveas_video_time_overlay
                     save_kwargs["scalebar"] = parent._saveas_video_scalebar
                     save_kwargs["upscale"] = parent._saveas_video_upscale or None
@@ -1421,7 +1512,11 @@ def _draw_save_button(parent: Any):
                     roi_msg = f", {roi_mode.description}"
                 else:
                     roi_msg = ""
-                channels_msg = f", channels {save_channels}" if len(save_channels) < num_channels else ""
+                channels_msg = (
+                    f", channels {save_channels}"
+                    if len(save_channels) < num_channels
+                    else ""
+                )
                 avg_msg = (
                     f", {parent._saveas_frame_average} frames averaged"
                     if parent._saveas_frame_average > 1
@@ -1444,21 +1539,31 @@ def _draw_save_button(parent: Any):
                     is_video = parent._ext == ".mp4"
                     video_kwargs = {}
                     if is_video:
-                        cmap_name = parent._saveas_video_cmaps[parent._saveas_video_cmap_idx]
+                        cmap_name = parent._saveas_video_cmaps[
+                            parent._saveas_video_cmap_idx
+                        ]
                         video_kwargs = {
                             "fps": parent._saveas_video_fps,
                             "speed_factor": parent._saveas_video_speed_factor,
-                            "vmin": None if parent._saveas_video_auto else parent._saveas_video_vmin,
-                            "vmax": None if parent._saveas_video_auto else parent._saveas_video_vmax,
+                            "vmin": None
+                            if parent._saveas_video_auto
+                            else parent._saveas_video_vmin,
+                            "vmax": None
+                            if parent._saveas_video_auto
+                            else parent._saveas_video_vmax,
                             "vmin_percentile": parent._saveas_video_vmin_pct,
                             "vmax_percentile": parent._saveas_video_vmax_pct,
                             "temporal_smooth": parent._saveas_video_temporal_smooth,
                             "spatial_smooth": parent._saveas_video_spatial_smooth,
                             "gamma": parent._saveas_video_gamma,
                             "cmap": cmap_name,
-                            "quality": _VIDEO_QUALITY_PRESETS[parent._saveas_video_quality_idx],
+                            "quality": _VIDEO_QUALITY_PRESETS[
+                                parent._saveas_video_quality_idx
+                            ],
                             "codec": _VIDEO_CODECS[parent._saveas_video_codec_idx],
-                            "temporal_mode": _VIDEO_TEMPORAL_MODES[parent._saveas_video_temporal_mode_idx],
+                            "temporal_mode": _VIDEO_TEMPORAL_MODES[
+                                parent._saveas_video_temporal_mode_idx
+                            ],
                             "time_overlay": parent._saveas_video_time_overlay,
                             "scalebar": parent._saveas_video_scalebar,
                             "upscale": parent._saveas_video_upscale or None,
@@ -1481,7 +1586,9 @@ def _draw_save_button(parent: Any):
                         "output_path": str(parent._saveas_outdir),
                         "ext": parent._ext,
                         "planes": save_planes,
-                        "channels": save_channels if len(save_channels) < num_channels else None,
+                        "channels": save_channels
+                        if len(save_channels) < num_channels
+                        else None,
                         "frames": frames,
                         "rois": rois,
                         "fix_phase": parent._saveas_fix_phase,
@@ -1492,16 +1599,30 @@ def _draw_save_button(parent: Any):
                         "max_reg_xy": parent._axial_max_reg_xy,
                         "metadata": metadata_overrides if metadata_overrides else {},
                         "kwargs": {
-                            "sharded": parent._zarr_sharded if parent._ext == ".zarr" else False,
-                            "ome": parent._zarr_ome if parent._ext == ".zarr" else False,
+                            "sharded": parent._zarr_sharded
+                            if parent._ext == ".zarr"
+                            else False,
+                            "ome": parent._zarr_ome
+                            if parent._ext == ".zarr"
+                            else False,
                             "output_suffix": output_suffix,
-                            "pyramid": parent._zarr_pyramid if parent._ext == ".zarr" else False,
-                            "pyramid_max_layers": parent._zarr_pyramid_max_layers if parent._ext == ".zarr" and parent._zarr_pyramid else 4,
-                            "pyramid_method": parent._zarr_pyramid_method if parent._ext == ".zarr" and parent._zarr_pyramid else "median",
+                            "pyramid": parent._zarr_pyramid
+                            if parent._ext == ".zarr"
+                            else False,
+                            "pyramid_max_layers": parent._zarr_pyramid_max_layers
+                            if parent._ext == ".zarr" and parent._zarr_pyramid
+                            else 4,
+                            "pyramid_method": parent._zarr_pyramid_method
+                            if parent._ext == ".zarr" and parent._zarr_pyramid
+                            else "median",
                             # h5: dataset name inside the .h5 file (default "mov")
-                            **({"dataset_name": parent._h5_dataset_name} if parent._ext == ".h5" else {}),
+                            **(
+                                {"dataset_name": parent._h5_dataset_name}
+                                if parent._ext == ".h5"
+                                else {}
+                            ),
                             **video_kwargs,
-                        }
+                        },
                     }
                     pid = pm.spawn(
                         task_type="save_as",
@@ -1510,8 +1631,12 @@ def _draw_save_button(parent: Any):
                         output_path=str(parent._saveas_outdir),
                     )
                     if pid:
-                        parent.logger.info(f"Started background save process (PID {pid})")
-                        parent.logger.info("You can close the GUI - the save will continue.")
+                        parent.logger.info(
+                            f"Started background save process (PID {pid})"
+                        )
+                        parent.logger.info(
+                            "You can close the GUI - the save will continue."
+                        )
                     else:
                         parent.logger.error("Failed to start background process")
                 else:

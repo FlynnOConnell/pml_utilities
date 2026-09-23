@@ -8,11 +8,12 @@ from collections.abc import Mapping, Sequence
 
 from imgui_bundle import imgui, imgui_ctx
 
-from ._imgui_helpers import fmt_value, fmt_multivalue
+from ._imgui_helpers import fmt_multivalue, fmt_value
 
 # Font awesome icons (with fallback)
 try:
     from imgui_bundle import icons_fontawesome as fa
+
     ICON_SEARCH = fa.ICON_FA_SEARCH
 except (ImportError, AttributeError):
     ICON_SEARCH = "\uf002"
@@ -81,7 +82,9 @@ _match_cache: dict = {}
 _match_cache_filter: str | None = None
 
 
-def _matches_filter_recursive(key: str, value, filter_text: str, _depth: int = 0) -> bool:
+def _matches_filter_recursive(
+    key: str, value, filter_text: str, _depth: int = 0
+) -> bool:
     """Recursively check if key, value, or any nested children match the filter.
 
     Bounded to the first _MATCH_MAX_ITEMS children per container and
@@ -194,10 +197,13 @@ def _get_key_color(key: str, imaging_keys: set, acquisition_keys: set, alias_map
 def _is_disabled_si_module(value) -> bool:
     """Check if a scanimage module dict has enable=false."""
     from mbo_utilities._writers import _is_disabled_si_module as _check
+
     return _check(value)
 
 
-def _render_item(name, val, prefix="", depth=0, filter_text="", name_color=None, is_disabled=False):
+def _render_item(
+    name, val, prefix="", depth=0, filter_text="", name_color=None, is_disabled=False
+):
     full_name = f"{prefix}{name}"
 
     is_disabled_module = name.startswith("h") and _is_disabled_si_module(val)
@@ -218,7 +224,11 @@ def _render_item(name, val, prefix="", depth=0, filter_text="", name_color=None,
             and not callable(v)
         ]
         if filter_text:
-            children = [(k, v) for k, v in children if _matches_filter_recursive(k, v, filter_text)]
+            children = [
+                (k, v)
+                for k, v in children
+                if _matches_filter_recursive(k, v, filter_text)
+            ]
         if children:
             if is_disabled_module:
                 imgui.push_style_color(imgui.Col_.text, _DISABLED_COLOR)
@@ -228,23 +238,39 @@ def _render_item(name, val, prefix="", depth=0, filter_text="", name_color=None,
             imgui.pop_style_color()
             if imgui.is_item_hovered():
                 if is_disabled_module:
-                    imgui.set_tooltip("Disabled - when saving, these values will be discarded")
+                    imgui.set_tooltip(
+                        "Disabled - when saving, these values will be discarded"
+                    )
                 elif name in METADATA_TOOLTIPS:
                     imgui.set_tooltip(METADATA_TOOLTIPS[name])
             if node_open:
-                child_color = _OTHER_COLOR if (is_disabled_module or is_disabled) else None
+                child_color = (
+                    _OTHER_COLOR if (is_disabled_module or is_disabled) else None
+                )
                 for k, v in children:
-                    _render_item(str(k), v, prefix=full_name + ".", depth=depth + 1, filter_text=filter_text, name_color=child_color, is_disabled=(is_disabled_module or is_disabled))
+                    _render_item(
+                        str(k),
+                        v,
+                        prefix=full_name + ".",
+                        depth=depth + 1,
+                        filter_text=filter_text,
+                        name_color=child_color,
+                        is_disabled=(is_disabled_module or is_disabled),
+                    )
                 imgui.tree_pop()
         else:
             imgui.text_colored(color, full_name)
             if imgui.is_item_hovered():
                 if is_disabled_module:
-                    imgui.set_tooltip("Disabled - when saving, these values will be discarded")
+                    imgui.set_tooltip(
+                        "Disabled - when saving, these values will be discarded"
+                    )
                 elif name in METADATA_TOOLTIPS:
                     imgui.set_tooltip(METADATA_TOOLTIPS[name])
             imgui.same_line(spacing=16)
-            val_color = _OTHER_COLOR if (is_disabled or is_disabled_module) else _VALUE_COLOR
+            val_color = (
+                _OTHER_COLOR if (is_disabled or is_disabled_module) else _VALUE_COLOR
+            )
             imgui.text_colored(val_color, fmt_value(val))
     elif isinstance(val, Sequence) and not isinstance(val, (str, bytes, bytearray)):
         val_color = _OTHER_COLOR if is_disabled else _VALUE_COLOR
@@ -261,24 +287,36 @@ def _render_item(name, val, prefix="", depth=0, filter_text="", name_color=None,
         is_path_list = (
             len(val) > 0
             and all(isinstance(v, str) for v in val)
-            and any("\\" in v or "/" in v for v in val[:min(3, len(val))])
+            and any("\\" in v or "/" in v for v in val[: min(3, len(val))])
         )
         if is_path_list:
             filtered_paths = list(enumerate(val))
             if filter_text:
-                filtered_paths = [(i, p) for i, p in filtered_paths if filter_text.lower() in p.lower()]
+                filtered_paths = [
+                    (i, p)
+                    for i, p in filtered_paths
+                    if filter_text.lower() in p.lower()
+                ]
             if filtered_paths:
-                label = f"{full_name} ({len(filtered_paths)}/{len(val)} paths)" if filter_text else f"{full_name} ({len(val)} paths)"
+                label = (
+                    f"{full_name} ({len(filtered_paths)}/{len(val)} paths)"
+                    if filter_text
+                    else f"{full_name} ({len(val)} paths)"
+                )
                 if _colored_tree_node(label):
                     for i, path in filtered_paths[:_SEQ_PAGE]:
-                        imgui.text_colored(_OTHER_COLOR if is_disabled else _NAME_COLORS[1], f"[{i}]")
+                        imgui.text_colored(
+                            _OTHER_COLOR if is_disabled else _NAME_COLORS[1], f"[{i}]"
+                        )
                         imgui.same_line(spacing=8)
                         display_path = path if len(path) <= 60 else "..." + path[-57:]
                         imgui.text_colored(val_color, display_path)
                         if imgui.is_item_hovered() and len(path) > 60:
                             imgui.set_tooltip(path)
                     if len(filtered_paths) > _SEQ_PAGE:
-                        imgui.text_disabled(f"... +{len(filtered_paths) - _SEQ_PAGE} more")
+                        imgui.text_disabled(
+                            f"... +{len(filtered_paths) - _SEQ_PAGE} more"
+                        )
                     imgui.tree_pop()
         elif len(val) <= 8 and all(isinstance(v, (int, float, str, bool)) for v in val):
             imgui.text_colored(color, full_name)
@@ -287,11 +325,22 @@ def _render_item(name, val, prefix="", depth=0, filter_text="", name_color=None,
         else:
             children = [(i, v) for i, v in enumerate(val) if not callable(v)]
             if filter_text:
-                children = [(i, v) for i, v in children if _matches_filter_recursive(f"[{i}]", v, filter_text)]
+                children = [
+                    (i, v)
+                    for i, v in children
+                    if _matches_filter_recursive(f"[{i}]", v, filter_text)
+                ]
             if children:
                 if _colored_tree_node(f"{full_name} ({len(val)} items)"):
                     for i, v in children[:_SEQ_PAGE]:
-                        _render_item(f"[{i}]", v, prefix=full_name, depth=depth + 1, filter_text=filter_text, is_disabled=is_disabled)
+                        _render_item(
+                            f"[{i}]",
+                            v,
+                            prefix=full_name,
+                            depth=depth + 1,
+                            filter_text=filter_text,
+                            is_disabled=is_disabled,
+                        )
                     if len(children) > _SEQ_PAGE:
                         imgui.text_disabled(f"... +{len(children) - _SEQ_PAGE} more")
                     imgui.tree_pop()
@@ -320,15 +369,31 @@ def _render_item(name, val, prefix="", depth=0, filter_text="", name_color=None,
                 for k, v in fields.items():
                     if filter_text and not _matches_filter_recursive(k, v, filter_text):
                         continue
-                    _render_item(k, v, prefix=full_name + ".", depth=depth + 1, filter_text=filter_text, is_disabled=is_disabled)
+                    _render_item(
+                        k,
+                        v,
+                        prefix=full_name + ".",
+                        depth=depth + 1,
+                        filter_text=filter_text,
+                        is_disabled=is_disabled,
+                    )
                 for prop in prop_names:
                     try:
                         prop_val = getattr(val, prop)
                     except Exception:
                         continue
-                    if filter_text and not _matches_filter_recursive(prop, prop_val, filter_text):
+                    if filter_text and not _matches_filter_recursive(
+                        prop, prop_val, filter_text
+                    ):
                         continue
-                    _render_item(prop, prop_val, prefix=full_name + ".", depth=depth + 1, filter_text=filter_text, is_disabled=is_disabled)
+                    _render_item(
+                        prop,
+                        prop_val,
+                        prefix=full_name + ".",
+                        depth=depth + 1,
+                        filter_text=filter_text,
+                        is_disabled=is_disabled,
+                    )
                 imgui.tree_pop()
         else:
             imgui.text_colored(color, full_name)
@@ -350,8 +415,11 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
         get_param_description(). If provided, tooltips will show array-specific
         context for metadata parameters.
     """
-    global _metadata_search_filter, _metadata_search_active, _metadata_search_focus_requested
-    from mbo_utilities.metadata import METADATA_PARAMS, IMAGING_METADATA_KEYS, ALIAS_MAP
+    global \
+        _metadata_search_filter, \
+        _metadata_search_active, \
+        _metadata_search_focus_requested
+    from mbo_utilities.metadata import ALIAS_MAP, IMAGING_METADATA_KEYS, METADATA_PARAMS
     from mbo_utilities.metadata.params import get_param
 
     with imgui_ctx.begin_child("Metadata Viewer"):
@@ -395,7 +463,11 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
 
             # Search button
             imgui.same_line(avail_width - 24)
-            search_color = _TREE_NODE_COLOR if _metadata_search_active else imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
+            search_color = (
+                _TREE_NODE_COLOR
+                if _metadata_search_active
+                else imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
+            )
             imgui.push_style_color(imgui.Col_.text, search_color)
             if imgui.small_button(ICON_SEARCH + "##search"):
                 _metadata_search_active = not _metadata_search_active
@@ -422,15 +494,23 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
             imgui.spacing()
 
             # File info section
-            source_path = metadata.get("source_path") or metadata.get("path") or metadata.get("file_path")
+            source_path = (
+                metadata.get("source_path")
+                or metadata.get("path")
+                or metadata.get("file_path")
+            )
             if source_path:
                 shown_keys.update({"source_path", "path", "file_path"})
-                file_matches = not _metadata_search_filter or _matches_filter_recursive("source", source_path, _metadata_search_filter)
+                file_matches = not _metadata_search_filter or _matches_filter_recursive(
+                    "source", source_path, _metadata_search_filter
+                )
                 if file_matches:
                     imgui.text_colored(_TREE_NODE_COLOR, "File")
                     imgui.separator()
                     path_str = str(source_path)
-                    display_path = path_str if len(path_str) <= 50 else "..." + path_str[-47:]
+                    display_path = (
+                        path_str if len(path_str) <= 50 else "..." + path_str[-47:]
+                    )
                     imgui.text_colored(_NAME_COLORS[0], "path")
                     imgui.same_line(value_col)
                     imgui.text_colored(_VALUE_COLOR, display_path)
@@ -438,7 +518,9 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                         imgui.set_tooltip(path_str)
                     imgui.spacing()
 
-            is_lbm = metadata.get("lbm_stack", False) or metadata.get("stack_type") == "lbm"
+            is_lbm = (
+                metadata.get("lbm_stack", False) or metadata.get("stack_type") == "lbm"
+            )
             is_isoview = str(metadata.get("stack_type", "")).startswith("isoview")
             is_tiled = bool(getattr(data_array, "is_tiled", False))
 
@@ -471,7 +553,11 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                 shown_keys.add(param.canonical)
                 shown_keys.update(param.aliases)
 
-                if _metadata_search_filter and not _matches_filter_recursive(param.canonical, value if value is not None else "", _metadata_search_filter):
+                if _metadata_search_filter and not _matches_filter_recursive(
+                    param.canonical,
+                    value if value is not None else "",
+                    _metadata_search_filter,
+                ):
                     continue
 
                 imgui.text_colored(_IMAGING_COLOR, param.canonical)
@@ -493,7 +579,9 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                             imgui.text_colored(_IMAGING_COLOR, alias)
                     imgui.end_tooltip()
                 if value is not None:
-                    _clickable_value(param.canonical, value, value_col, unit=param.unit or "")
+                    _clickable_value(
+                        param.canonical, value, value_col, unit=param.unit or ""
+                    )
                 elif param.canonical == "dz" and is_lbm:
                     imgui.same_line(value_col)
                     imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), "Required")
@@ -507,7 +595,9 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                     imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), "Required")
                     if imgui.is_item_hovered():
                         imgui.begin_tooltip()
-                        imgui.text("IsoView timelapse stacks require a user-supplied frame rate.")
+                        imgui.text(
+                            "IsoView timelapse stacks require a user-supplied frame rate."
+                        )
                         imgui.text("Set via Shift+M (metadata editor).")
                         imgui.end_tooltip()
                 else:
@@ -520,7 +610,9 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                 roi_mode_val = metadata.get("roi_mode")
                 if roi_mode_val is not None:
                     shown_keys.add("roi_mode")
-                    if not _metadata_search_filter or _matches_filter_recursive("roi_mode", roi_mode_val, _metadata_search_filter):
+                    if not _metadata_search_filter or _matches_filter_recursive(
+                        "roi_mode", roi_mode_val, _metadata_search_filter
+                    ):
                         imgui.text_colored(_IMAGING_COLOR, "roi_mode")
                         if imgui.is_item_hovered():
                             imgui.set_tooltip(METADATA_TOOLTIPS.get("roi_mode", ""))
@@ -533,26 +625,41 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                 ("piezo_stack", "Piezo-driven z-stack acquisition mode"),
             ]
 
-            si_data = metadata.get("si", {}) if isinstance(metadata.get("si"), dict) else {}
+            si_data = (
+                metadata.get("si", {}) if isinstance(metadata.get("si"), dict) else {}
+            )
             si_version_major = (
-                si_data.get("SI.VERSION_MAJOR") or si_data.get("VERSION_MAJOR") or
-                metadata.get("SI.VERSION_MAJOR") or metadata.get("si.version_major")
+                si_data.get("SI.VERSION_MAJOR")
+                or si_data.get("VERSION_MAJOR")
+                or metadata.get("SI.VERSION_MAJOR")
+                or metadata.get("si.version_major")
             )
             si_version_minor = (
-                si_data.get("SI.VERSION_MINOR") or si_data.get("VERSION_MINOR") or
-                metadata.get("SI.VERSION_MINOR") or metadata.get("si.version_minor")
+                si_data.get("SI.VERSION_MINOR")
+                or si_data.get("VERSION_MINOR")
+                or metadata.get("SI.VERSION_MINOR")
+                or metadata.get("si.version_minor")
             )
             si_imaging_system = (
-                si_data.get("SI.imagingSystem") or si_data.get("imagingSystem") or
-                metadata.get("SI.imagingSystem") or metadata.get("si.imagingsystem") or
-                metadata.get("imaging_system")
+                si_data.get("SI.imagingSystem")
+                or si_data.get("imagingSystem")
+                or metadata.get("SI.imagingSystem")
+                or metadata.get("si.imagingsystem")
+                or metadata.get("imaging_system")
             )
 
             acq_aliases = {
                 "stack_type": ("stackType",),
                 "lbm_stack": ("is_lbm", "lbmStack"),
                 "piezo_stack": ("is_piezo", "piezoStack"),
-                "nchannels": ("num_channels", "n_channels", "channels", "C", "nc", "numChannels"),
+                "nchannels": (
+                    "num_channels",
+                    "n_channels",
+                    "channels",
+                    "C",
+                    "nc",
+                    "numChannels",
+                ),
             }
             for key, _ in acq_fields:
                 shown_keys.add(key)
@@ -561,23 +668,46 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
             shown_keys.add("nchannels")
             for alias in acq_aliases.get("nchannels", ()):
                 shown_keys.add(alias)
-            shown_keys.update({"SI.VERSION_MAJOR", "SI.VERSION_MINOR", "SI.imagingSystem",
-                               "si.version_major", "si.version_minor", "si.imagingsystem",
-                               "imaging_system"})
+            shown_keys.update(
+                {
+                    "SI.VERSION_MAJOR",
+                    "SI.VERSION_MINOR",
+                    "SI.imagingSystem",
+                    "si.version_major",
+                    "si.version_minor",
+                    "si.imagingsystem",
+                    "imaging_system",
+                }
+            )
 
             acq_values = {k: metadata.get(k) for k, _ in acq_fields}
-            has_si_version = si_version_major is not None and si_version_minor is not None
-            has_acq_data = any(v is not None for v in acq_values.values()) or has_si_version or si_imaging_system
+            has_si_version = (
+                si_version_major is not None and si_version_minor is not None
+            )
+            has_acq_data = (
+                any(v is not None for v in acq_values.values())
+                or has_si_version
+                or si_imaging_system
+            )
 
             acq_matches_filter = True
             if _metadata_search_filter:
                 acq_field_matches = any(
                     _matches_filter_recursive(k, v, _metadata_search_filter)
-                    for k, v in acq_values.items() if v is not None
+                    for k, v in acq_values.items()
+                    if v is not None
                 )
-                si_version_matches = has_si_version and _matches_filter_shallow("scanimage_version", f"{si_version_major}.{si_version_minor}", _metadata_search_filter)
-                si_system_matches = si_imaging_system and _matches_filter_shallow("imaging_system", si_imaging_system, _metadata_search_filter)
-                acq_matches_filter = acq_field_matches or si_version_matches or si_system_matches
+                si_version_matches = has_si_version and _matches_filter_shallow(
+                    "scanimage_version",
+                    f"{si_version_major}.{si_version_minor}",
+                    _metadata_search_filter,
+                )
+                si_system_matches = si_imaging_system and _matches_filter_shallow(
+                    "imaging_system", si_imaging_system, _metadata_search_filter
+                )
+                acq_matches_filter = (
+                    acq_field_matches or si_version_matches or si_system_matches
+                )
 
             if has_acq_data and acq_matches_filter:
                 imgui.spacing()
@@ -585,7 +715,9 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                 imgui.separator()
 
                 if si_imaging_system:
-                    if not _metadata_search_filter or _matches_filter_shallow("imaging_system", si_imaging_system, _metadata_search_filter):
+                    if not _metadata_search_filter or _matches_filter_shallow(
+                        "imaging_system", si_imaging_system, _metadata_search_filter
+                    ):
                         imgui.text_colored(_ACQUISITION_COLOR, "imaging_system")
                         if imgui.is_item_hovered():
                             imgui.set_tooltip("ScanImage imaging system identifier")
@@ -593,7 +725,9 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
 
                 if has_si_version:
                     si_version_str = f"{si_version_major}.{si_version_minor}"
-                    if not _metadata_search_filter or _matches_filter_shallow("scanimage_version", si_version_str, _metadata_search_filter):
+                    if not _metadata_search_filter or _matches_filter_shallow(
+                        "scanimage_version", si_version_str, _metadata_search_filter
+                    ):
                         imgui.text_colored(_ACQUISITION_COLOR, "scanimage_version")
                         if imgui.is_item_hovered():
                             imgui.set_tooltip("ScanImage software version")
@@ -603,12 +737,16 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                     value = metadata.get(key)
                     if value is None:
                         continue
-                    if _metadata_search_filter and not _matches_filter_recursive(key, value, _metadata_search_filter):
+                    if _metadata_search_filter and not _matches_filter_recursive(
+                        key, value, _metadata_search_filter
+                    ):
                         continue
                     imgui.text_colored(_ACQUISITION_COLOR, key)
                     if imgui.is_item_hovered():
                         imgui.set_tooltip(tooltip)
-                    display_value = "Yes" if value is True else ("No" if value is False else value)
+                    display_value = (
+                        "Yes" if value is True else ("No" if value is False else value)
+                    )
                     _clickable_value(key, display_value, value_col)
 
             # Views section
@@ -616,20 +754,29 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
             if views and isinstance(views, dict):
                 views_match = not _metadata_search_filter
                 if _metadata_search_filter:
-                    views_match = _matches_filter_recursive("views", views, _metadata_search_filter)
+                    views_match = _matches_filter_recursive(
+                        "views", views, _metadata_search_filter
+                    )
 
                 if views_match:
                     imgui.spacing()
                     imgui.text_colored(_TREE_NODE_COLOR, "Views")
                     imgui.separator()
                     for view_label, view_meta in views.items():
-                        if _metadata_search_filter and not _matches_filter_recursive(view_label, view_meta, _metadata_search_filter):
+                        if _metadata_search_filter and not _matches_filter_recursive(
+                            view_label, view_meta, _metadata_search_filter
+                        ):
                             continue
                         if _colored_tree_node(str(view_label)):
                             for k, v in sorted(view_meta.items()):
                                 if k == "multiscales":
                                     continue
-                                if _metadata_search_filter and not _matches_filter_recursive(k, v, _metadata_search_filter):
+                                if (
+                                    _metadata_search_filter
+                                    and not _matches_filter_recursive(
+                                        k, v, _metadata_search_filter
+                                    )
+                                ):
                                     continue
                                 imgui.text_colored(_NAME_COLORS[0], k)
                                 imgui.same_line(value_col)
@@ -642,7 +789,9 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
             if tiles and isinstance(tiles, dict):
                 tiles_match = not _metadata_search_filter
                 if _metadata_search_filter:
-                    tiles_match = _matches_filter_recursive("tiles", tiles, _metadata_search_filter)
+                    tiles_match = _matches_filter_recursive(
+                        "tiles", tiles, _metadata_search_filter
+                    )
 
                 if tiles_match:
                     imgui.spacing()
@@ -650,11 +799,18 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                     imgui.separator()
                     for tile_idx, tile_meta in sorted(tiles.items()):
                         label = tile_meta.get("specimen_name") or f"tile_{tile_idx}"
-                        if _metadata_search_filter and not _matches_filter_recursive(label, tile_meta, _metadata_search_filter):
+                        if _metadata_search_filter and not _matches_filter_recursive(
+                            label, tile_meta, _metadata_search_filter
+                        ):
                             continue
                         if _colored_tree_node(f"{label}##tile_{tile_idx}"):
                             for k, v in sorted(tile_meta.items()):
-                                if _metadata_search_filter and not _matches_filter_recursive(k, v, _metadata_search_filter):
+                                if (
+                                    _metadata_search_filter
+                                    and not _matches_filter_recursive(
+                                        k, v, _metadata_search_filter
+                                    )
+                                ):
                                     continue
                                 imgui.text_colored(_NAME_COLORS[0], k)
                                 imgui.same_line(value_col)
@@ -665,21 +821,41 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
             # processing-only isoview identifiers/maps: kept in arr.metadata for
             # the pipeline widgets + BigStitcher export, hidden from the viewer.
             if is_isoview:
-                shown_keys.update({"camera_view_map", "specimen", "timepoint",
-                                   "view_keys", "view_names"})
+                shown_keys.update(
+                    {
+                        "camera_view_map",
+                        "specimen",
+                        "timepoint",
+                        "view_keys",
+                        "view_names",
+                    }
+                )
 
             # Other metadata section
             remaining = {k: v for k, v in metadata.items() if k not in shown_keys}
             if _metadata_search_filter:
-                remaining = {k: v for k, v in remaining.items() if _matches_filter_recursive(k, v, _metadata_search_filter)}
+                remaining = {
+                    k: v
+                    for k, v in remaining.items()
+                    if _matches_filter_recursive(k, v, _metadata_search_filter)
+                }
             if remaining:
                 imgui.spacing()
                 imgui.text_colored(_TREE_NODE_COLOR, "Other")
                 imgui.separator()
                 imaging_keys = set(IMAGING_METADATA_KEYS)
-                acquisition_keys = {"stack_type", "lbm_stack", "piezo_stack", "nchannels"}
+                acquisition_keys = {
+                    "stack_type",
+                    "lbm_stack",
+                    "piezo_stack",
+                    "nchannels",
+                }
                 for k, v in sorted(remaining.items()):
-                    key_color = _get_key_color(k, imaging_keys, acquisition_keys, ALIAS_MAP)
-                    _render_item(k, v, filter_text=_metadata_search_filter, name_color=key_color)
+                    key_color = _get_key_color(
+                        k, imaging_keys, acquisition_keys, ALIAS_MAP
+                    )
+                    _render_item(
+                        k, v, filter_text=_metadata_search_filter, name_color=key_color
+                    )
         finally:
             imgui.pop_style_var()

@@ -7,33 +7,38 @@ from __future__ import annotations
 import copy
 import json
 import re
-import time
 import threading
+import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from tifffile import TiffFile
 
 from mbo_utilities import log
-from mbo_utilities.arrays._base import ReductionMixin, Shape5DMixin, TiffReaderMixin, _normalize_key
-from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.analysis.phasecorr import _apply_offset, bidir_phasecorr
+from mbo_utilities.arrays._base import (
+    ReductionMixin,
+    Shape5DMixin,
+    TiffReaderMixin,
+    _normalize_key,
+)
+from mbo_utilities.arrays.features import (
+    PhaseCorrectionFeature,
+    PhaseCorrectionMixin,
+    RoiFeatureMixin,
+)
+from mbo_utilities.arrays.features._slicing import index_length, listify_index
 from mbo_utilities.file_io import expand_paths
-from mbo_utilities.metadata import get_metadata, get_param, extract_roi_slices
+from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.metadata import extract_roi_slices, get_metadata, get_param
 from mbo_utilities.metadata.scanimage import (
     StackType,
     detect_stack_type,
     get_frames_per_slice,
     get_log_average_factor,
 )
-from mbo_utilities.analysis.phasecorr import bidir_phasecorr, _apply_offset
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
-from mbo_utilities.arrays.features._slicing import listify_index, index_length
-from mbo_utilities.arrays.features import (
-    PhaseCorrectionFeature,
-    PhaseCorrectionMixin,
-    RoiFeatureMixin,
-)
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -86,7 +91,8 @@ def _convert_range_to_slice(k):
 
 def _is_full_slice(k) -> bool:
     """True for ``slice(None)``; safe for array keys, where ``k != slice(None)``
-    would return an array."""
+    would return an array.
+    """
     return isinstance(k, slice) and k == slice(None)
 
 
@@ -100,18 +106,18 @@ def _extract_tiff_plane_number(name: str) -> int | None:
 
 def _read_tiff_metadata(path: Path) -> dict:
     """
-    checks tiff metadata in order:
+    Checks tiff metadata in order:
     1. custom tag 50839 (JSON metadata from mbo save)
     2. imagej_metadata Info field
     3. shaped_metadata (tifffile format)
     4. page description JSON
 
-    parameters
+    Parameters
     ----------
     path : Path
         path to tiff file
 
-    returns
+    Returns
     -------
     dict
         metadata dict, empty if none found
@@ -199,13 +205,7 @@ def _imagej_layout(meta: dict, path: Path) -> tuple[int, ...] | None:
             spacing = ij.get("spacing")
     if frames * slices * channels <= 1:
         return None
-    if (
-        frames == 1
-        and channels == 1
-        and slices > 1
-        and not hyperstack
-        and not spacing
-    ):
+    if frames == 1 and channels == 1 and slices > 1 and not hyperstack and not spacing:
         logger.info(
             f"ImageJ stack with slices={slices} and no hyperstack/spacing tags: "
             "reading the page axis as time. Pass dims='ZYX' to keep it as z."
@@ -236,7 +236,8 @@ def _apply_dims_override(
 
 def _ome_layout(meta: dict) -> tuple[int, int, int] | None:
     """(frames, slices, channels) from OME-XML SizeT/SizeZ/SizeC counts
-    deposited by ``get_metadata_single``, else None."""
+    deposited by ``get_metadata_single``, else None.
+    """
     counts = tuple(meta.get(k) for k in ("SizeT", "SizeZ", "SizeC"))
     if all(c is None for c in counts):
         return None
@@ -248,7 +249,8 @@ def _plane_color_layout(meta: dict, pages: int) -> tuple[int, int]:
     """``(z-planes, color channels)`` for ``pages`` interleaved pages per
     frame (``pages == planes * colors``). With neither count in ``meta``,
     the interleave is z only for LBM-shaped data - a 1-2 page interleave on
-    anything else is PMT color channels, not depth."""
+    anything else is PMT color channels, not depth.
+    """
     planes = meta.get("num_planes") or meta.get("num_zplanes")
     colors = meta.get("num_color_channels")
     if planes is None and colors is None:
@@ -264,7 +266,8 @@ def _plane_color_layout(meta: dict, pages: int) -> tuple[int, int]:
 
 def _shape_layout(meta: dict) -> tuple[int, ...] | None:
     """(frames, planes[, channels]) from a TZCYX ``shape`` for shaped/legacy
-    metadata that predates the ImageJ count keys, else None."""
+    metadata that predates the ImageJ count keys, else None.
+    """
     shape = meta.get("shape")
     if shape and len(shape) == 5 and shape[1] > 1 and shape[2] > 1:
         return shape[0], shape[1], shape[2]
@@ -337,6 +340,7 @@ class _InterleavedTiffReader:
     @property
     def dtype(self):
         from mbo_utilities.arrays._base import get_dtype
+
         return get_dtype(self._dtype)
 
     def _frame(self, flat_idx: int) -> np.ndarray:
@@ -366,7 +370,12 @@ class _InterleavedTiffReader:
         midx = tuple(int(i) for i in np.unravel_index(flat_idx, lead))
         return np.asarray(self._zstore[midx])
 
-    def read_tzyx(self, t_indices: list[int], z_indices: list[int], c_indices: list[int] | None = None) -> np.ndarray:
+    def read_tzyx(
+        self,
+        t_indices: list[int],
+        z_indices: list[int],
+        c_indices: list[int] | None = None,
+    ) -> np.ndarray:
         """Read frames for given T, Z, and optional C indices.
 
         Page index follows ``dim_order`` strides (XYCZT default:
@@ -379,7 +388,7 @@ class _InterleavedTiffReader:
             # 5D: return TCZYX
             buf = np.empty(
                 (len(t_indices), len(c_indices), len(z_indices), self.Ly, self.Lx),
-                dtype=self._dtype
+                dtype=self._dtype,
             )
             with self._lock:
                 for ti, t_idx in enumerate(t_indices):
@@ -391,8 +400,7 @@ class _InterleavedTiffReader:
         else:
             # 4D: return TZYX (backward compatible)
             buf = np.empty(
-                (len(t_indices), len(z_indices), self.Ly, self.Lx),
-                dtype=self._dtype
+                (len(t_indices), len(z_indices), self.Ly, self.Lx), dtype=self._dtype
             )
             with self._lock:
                 for ti, t_idx in enumerate(t_indices):
@@ -423,7 +431,9 @@ class _SingleTiffPlaneReader:
         self._frames_per_file = []
         self._num_frames = 0
 
-        for i, (tfile, fpath) in enumerate(zip(self.tiff_files, self.filenames, strict=False)):
+        for i, (tfile, fpath) in enumerate(
+            zip(self.tiff_files, self.filenames, strict=False)
+        ):
             nframes = None
 
             desc = page0.description if i == 0 else tfile.pages.first.description
@@ -474,7 +484,6 @@ class _SingleTiffPlaneReader:
         return get_dtype(self._dtype)
 
     def __getitem__(self, key):
-
         key = _normalize_key(key, 3)
 
         t_key = key[0] if len(key) > 0 else slice(None)
@@ -667,15 +676,15 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
     def reader_kwargs(self) -> dict:
         """``imread`` kwargs that re-create this array: the ``dims`` override
         when one was given, so a worker re-opening the path reads the page
-        axis the same way."""
+        axis the same way.
+        """
         if not self._dims_override:
             return {}
         dims = self._dims_override
         return {"dims": dims if isinstance(dims, str) else "".join(dims)}
 
-
     def _init_volume_from_groups(self, plane_groups: list[list[Path]]):
-        """initialize as volumetric array from groups of files (one group per plane)."""
+        """Initialize as volumetric array from groups of files (one group per plane)."""
         self._is_volumetric = True
         self._planes = []
 
@@ -714,7 +723,7 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
         self.num_rois = 1
 
     def _init_single_plane(self, files: list[Path]):
-        """initialize as single-plane (TYX) array."""
+        """Initialize as single-plane (TYX) array."""
         self._is_volumetric = False
 
         reader = _SingleTiffPlaneReader(files)
@@ -753,8 +762,10 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
         else:
             self._init_single_plane(files)
 
-    def _init_interleaved(self, path: Path, n_frames: int, n_planes: int, n_channels: int = 1):
-        """initialize as interleaved TZCYX from single file."""
+    def _init_interleaved(
+        self, path: Path, n_frames: int, n_planes: int, n_channels: int = 1
+    ):
+        """Initialize as interleaved TZCYX from single file."""
         self._is_volumetric = True
         self._interleaved_reader = _InterleavedTiffReader(
             path,
@@ -799,7 +810,7 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
             )
 
     def _init_volume(self, plane_files: list[Path]):
-        """initialize as volumetric array from separate plane files."""
+        """Initialize as volumetric array from separate plane files."""
         self._is_volumetric = True
 
         for pfile in plane_files:
@@ -900,7 +911,9 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
                 if c_key < 0:
                     c_key = self._nc + c_key
                 if c_key < 0 or c_key >= self._nc:
-                    raise IndexError(f"Channel index {c_key} out of bounds for {self._nc} channels")
+                    raise IndexError(
+                        f"Channel index {c_key} out of bounds for {self._nc} channels"
+                    )
                 c_indices = [c_key]
             elif isinstance(c_key, slice):
                 c_indices = list(range(self._nc)[c_key])
@@ -967,7 +980,9 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
             plane.close()
 
 
-class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMixin):
+class ScanImageArray(
+    TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMixin
+):
     """
     Base class for raw ScanImage TIFF readers with phase correction support.
 
@@ -1144,7 +1159,9 @@ class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorr
         # for LBM: beamlets (which are z-planes)
         # for single-plane with 2 PMTs: color channels
         # this is used for shape calculation and data indexing
-        self.num_channels = self._metadata.get("nchannels") or get_param(self._metadata, "nplanes", default=1)
+        self.num_channels = self._metadata.get("nchannels") or get_param(
+            self._metadata, "nplanes", default=1
+        )
         self._num_zplanes, self._num_color_channels = _plane_color_layout(
             self._metadata, self.num_channels
         )
@@ -1184,7 +1201,6 @@ class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorr
         )
 
         self.phase_correction.add_event_handler(self._on_feature_change)
-
 
     def _on_feature_change(self, event):
         # Optional: handle feature changes (log, etc)
@@ -1308,7 +1324,11 @@ class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorr
 
         start = 0
         tiff_iterator = (
-            zip(self.tiff_files, (f * self.num_channels for f in self._frames_per_file), strict=False)
+            zip(
+                self.tiff_files,
+                (f * self.num_channels for f in self._frames_per_file),
+                strict=False,
+            )
             if self._frames_per_file is not None
             else ((tf, len(tf.pages)) for tf in self.tiff_files)
         )
@@ -1386,9 +1406,7 @@ class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorr
                 # without this, any background read (histogram subsampler,
                 # zstats worker, etc.) clobbers _last_offset and the displayed
                 # number drifts even when the user isn't scrubbing.
-                self._record_offset_for_pages(
-                    [pages[i] for i in idxs], float(offset)
-                )
+                self._record_offset_for_pages([pages[i] for i in idxs], float(offset))
                 _t1 = _t.perf_counter()
                 logger.debug(
                     f"phase_corr: offset={offset:.2f}, method={self.phasecorr_method}, "
@@ -1397,9 +1415,7 @@ class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorr
             else:
                 buf[idxs] = chunk
                 self._last_offset = 0.0
-                self._record_offset_for_pages(
-                    [pages[i] for i in idxs], 0.0
-                )
+                self._record_offset_for_pages([pages[i] for i in idxs], 0.0)
             start = end
 
         logger.debug(
@@ -1408,10 +1424,11 @@ class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorr
         return buf.reshape(len(frames), len(chans), tiff_height_px, tiff_width_px)
 
     def __getitem__(self, key):
-
         t0 = time.perf_counter()
         key = _normalize_key(key, 5)
-        key = tuple(_convert_range_to_slice(k) for k in key) + (slice(None),) * (5 - len(key))
+        key = tuple(_convert_range_to_slice(k) for k in key) + (slice(None),) * (
+            5 - len(key)
+        )
 
         t_key, c_key, z_key, y_key, x_key = key
         frames = listify_index(t_key, self.num_frames)
@@ -1579,10 +1596,22 @@ class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorr
         if self.roi is not None and not isinstance(self.roi, (list, tuple)):
             if self.roi > 0:
                 roi = self._rois[self.roi - 1]
-                return (self.num_frames, self._num_color_channels, self._num_zplanes, roi["height"], roi["width"])
+                return (
+                    self.num_frames,
+                    self._num_color_channels,
+                    self._num_zplanes,
+                    roi["height"],
+                    roi["width"],
+                )
         total_width = sum(roi["width"] for roi in self._rois)
         max_height = max(roi["height"] for roi in self._rois)
-        return (self.num_frames, self._num_color_channels, self._num_zplanes, max_height, total_width)
+        return (
+            self.num_frames,
+            self._num_color_channels,
+            self._num_zplanes,
+            max_height,
+            total_width,
+        )
 
     @property
     def size(self):
@@ -1601,7 +1630,6 @@ class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorr
         return self._metadata.get("page_width")
 
     def imshow(self, **kwargs):
-        import fastplotlib as fpl
 
         arrays = []
         names = []
@@ -1625,6 +1653,7 @@ class ScanImageArray(TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorr
         vmin, vmax = float(sample_frame.min()), float(sample_frame.max())
 
         from mbo_utilities.gui._ndviewer import MboNDViewer
+
         return MboNDViewer(
             data=arrays,
             names=names,
@@ -1711,6 +1740,7 @@ class LBMArray(ScanImageArray):
     @property
     def dims(self) -> tuple[str, ...]:
         from mbo_utilities.arrays._base import DIMS
+
         return DIMS
 
 
@@ -1821,7 +1851,6 @@ class PiezoArray(ScanImageArray):
         from mbo_utilities.metadata.scanimage import (
             get_num_slices,
             get_num_volumes,
-            get_frames_per_volume,
         )
 
         self._frames_per_slice = get_frames_per_slice(self._metadata)
@@ -1850,7 +1879,6 @@ class PiezoArray(ScanImageArray):
                 self._num_volumes = 1
 
         self._average_frames = average_frames and self.can_average
-
 
     @property
     def num_slices(self) -> int:
@@ -1917,6 +1945,7 @@ class PiezoArray(ScanImageArray):
     @property
     def dims(self) -> tuple[str, ...]:
         from mbo_utilities.arrays._base import DIMS
+
         return DIMS
 
     def _volume_slice_to_raw_frame(self, vol_idx: int, slice_idx: int) -> int:
@@ -1951,7 +1980,6 @@ class PiezoArray(ScanImageArray):
         When averaging: frame_idx maps to z-slices (averaged)
         When not averaging: frame_idx maps to raw frames (flattened z * frames_per_slice)
         """
-
         key = _normalize_key(key, 5)
         while len(key) < 5:
             key = key + (slice(None),)
@@ -2084,6 +2112,7 @@ class SinglePlaneArray(ScanImageArray):
     @property
     def dims(self) -> tuple[str, ...]:
         from mbo_utilities.arrays._base import DIMS
+
         return DIMS
 
 
@@ -2169,6 +2198,7 @@ class LBMPiezoArray(ScanImageArray):
     @property
     def dims(self) -> tuple[str, ...]:
         from mbo_utilities.arrays._base import DIMS
+
         return DIMS
 
     # no _shape5d override: parent's native layout

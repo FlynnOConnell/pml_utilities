@@ -18,7 +18,8 @@ from typing import Any
 
 import numpy as np
 import tifffile
-from imgui_bundle import imgui, portable_file_dialogs as pfd
+from imgui_bundle import imgui
+from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities.gui._imgui_helpers import (
     button_width,
@@ -27,23 +28,22 @@ from mbo_utilities.gui._imgui_helpers import (
 )
 from mbo_utilities.gui.widgets._base import Widget
 from mbo_utilities.gui.widgets.summary_image import (
-    STATUS_ERROR_COLOR,
-    STATUS_OK_COLOR,
     _CONTRAST_AUTO,
     _CONTRAST_MANUAL,
     _CONTRAST_MODES,
     _DEFAULT_COLORMAP,
     _DEFAULT_COLORMAPS,
-    _GpuImage,
     _PIXEL_VALUES_MIN_ZOOM,
+    STATUS_ERROR_COLOR,
+    STATUS_OK_COLOR,
     _auto_range,
     _data_range,
     _format_value,
+    _GpuImage,
     _to_rgba,
     center_popup_on_open,
     draw_section_header,
 )
-
 
 _AXIS_DISPLAY = {"xy": "XY (max-Z)", "xz": "XZ (max-Y)", "yz": "YZ (max-X)"}
 _WHITE = (1.0, 1.0, 1.0, 1.0)
@@ -168,9 +168,7 @@ class ProjectionsViewer(Widget):
             return None
         if self._timepoint is None:
             return None
-        return self._projections["files"].get(
-            (self._axis, self._view, self._timepoint)
-        )
+        return self._projections["files"].get((self._axis, self._view, self._timepoint))
 
     def _selection_key(self) -> tuple:
         return (self._stack_type, self._axis, self._view, self._timepoint)
@@ -286,10 +284,7 @@ class ProjectionsViewer(Widget):
             imgui.text_colored(STATUS_ERROR_COLOR, "no projections")
             return
 
-        tps_per_view = {
-            v: len({t for (a, vv, t) in files if vv == v})
-            for v in views
-        }
+        tps_per_view = {v: len({t for (a, vv, t) in files if vv == v}) for v in views}
         max_t = max(tps_per_view.values()) if tps_per_view else 0
         axes_str = ", ".join(a.upper() for a in axes)
 
@@ -350,17 +345,23 @@ class ProjectionsViewer(Widget):
 
             def _tp():
                 ch, v = imgui.slider_int(
-                    "##projtp", cur_pos, 0, len(tps) - 1, value_fmt,
+                    "##projtp",
+                    cur_pos,
+                    0,
+                    len(tps) - 1,
+                    value_fmt,
                 )
                 if ch:
                     self._timepoint = tps[int(v)]
                     self._on_selection_changed()
+
             items.append((label, 220.0, _tp))
 
         draw_toolbar_row(items)
         if not tps:
             imgui.text_colored(
-                STATUS_ERROR_COLOR, f"no {self._axis} projections",
+                STATUS_ERROR_COLOR,
+                f"no {self._axis} projections",
             )
 
     def draw(self) -> None:
@@ -407,16 +408,16 @@ class ProjectionsViewer(Widget):
         def _save():
             if imgui.button("Save...##projections"):
                 self._open_save_dialog()
-            set_tooltip(
-                "Save the colormapped projection as a PNG (native resolution)."
-            )
+            set_tooltip("Save the colormapped projection as a PNG (native resolution).")
 
-        draw_toolbar_row([
-            ("Cmap", 110.0, _cmap),
-            ("Contrast", 110.0, _contrast),
-            (None, button_width("Reset"), _reset),
-            (None, button_width("Save..."), _save),
-        ])
+        draw_toolbar_row(
+            [
+                ("Cmap", 110.0, _cmap),
+                ("Contrast", 110.0, _contrast),
+                (None, button_width("Reset"), _reset),
+                (None, button_width("Save..."), _save),
+            ]
+        )
 
         _, self._show_pixel_values = imgui.checkbox(
             "Pixel values##projections", self._show_pixel_values
@@ -486,8 +487,12 @@ class ProjectionsViewer(Widget):
             return
         x0_img = max(0, int(np.floor(-self._pan_x / self._zoom)))
         y0_img = max(0, int(np.floor(-self._pan_y / self._zoom)))
-        x1_img = min(gpu.w, int(np.ceil((canvas_size.x - self._pan_x) / self._zoom)) + 1)
-        y1_img = min(gpu.h, int(np.ceil((canvas_size.y - self._pan_y) / self._zoom)) + 1)
+        x1_img = min(
+            gpu.w, int(np.ceil((canvas_size.x - self._pan_x) / self._zoom)) + 1
+        )
+        y1_img = min(
+            gpu.h, int(np.ceil((canvas_size.y - self._pan_y) / self._zoom)) + 1
+        )
         if x1_img <= x0_img or y1_img <= y0_img:
             return
         n = (x1_img - x0_img) * (y1_img - y0_img)
@@ -591,7 +596,9 @@ class ProjectionsViewer(Widget):
 
         path = self._current_path()
         if path is None:
-            imgui.text_colored(STATUS_ERROR_COLOR, "no projection for current selection")
+            imgui.text_colored(
+                STATUS_ERROR_COLOR, "no projection for current selection"
+            )
             imgui.end()
             return
 
@@ -642,7 +649,7 @@ class ProjectionsViewer(Widget):
             mx = io.mouse_pos.x - canvas_pos.x
             my = io.mouse_pos.y - canvas_pos.y
             old = self._zoom
-            self._zoom = float(np.clip(old * (1.1 ** io.mouse_wheel), 0.05, 64.0))
+            self._zoom = float(np.clip(old * (1.1**io.mouse_wheel), 0.05, 64.0))
             scale = self._zoom / old
             self._pan_x = mx - (mx - self._pan_x) * scale
             self._pan_y = my - (my - self._pan_y) * scale

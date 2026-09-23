@@ -21,4 +21,6 @@ def debug_apps(target: object) -> list[App]:
     tools = DebugTools.default(target, store=store)
     tools.add(DemoPanel())
     tools.load_state()
-    return [PanelApp(panel, order=200 + i, store=store) for i, panel in enumerate(tools)]
+    return [
+        PanelApp(panel, order=200 + i, store=store) for i, panel in enumerate(tools)
+    ]

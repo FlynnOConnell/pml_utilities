@@ -1,5 +1,6 @@
 """The figure's shared top strip: the menu row, the panels features register
-on it, and the Signal Quality split (plot on top, table in the right tab)."""
+on it, and the Signal Quality split (plot on top, table in the right tab).
+"""
 
 import time
 
@@ -97,7 +98,8 @@ class TestTopStrip:
 
     def test_a_taller_window_does_not_stretch_the_strip(self, figure):
         """Every extra pixel goes to the images; the panel keeps the height
-        it asked for."""
+        it asked for.
+        """
         from mbo_utilities.gui._top_strip import TopStrip, strip_height
 
         strip = TopStrip(figure)
@@ -148,7 +150,8 @@ class TestSignalQualitySplit:
             figure_kwargs_override={"size": FIGURE_SIZE},
         )
         gui = next(
-            w for w in iw.figure.imgui_windows.values()
+            w
+            for w in iw.figure.imgui_windows.values()
             if isinstance(w, PreviewDataWidget)
         )
         return iw, gui
@@ -236,7 +239,8 @@ class TestSignalQualitySplit:
 
 class TestTopStripResize:
     """The grab bar makes the strip adjustable and collapsible, the way
-    fastplotlib's right and bottom edge windows are."""
+    fastplotlib's right and bottom edge windows are.
+    """
 
     def test_collapse_shuts_to_the_menu_row_and_back(self, figure):
         from mbo_utilities.gui._top_strip import TopStrip
@@ -311,7 +315,6 @@ class TestTopStripResize:
     def test_shut_keeps_the_tab_row(self, figure):
         """The tabs stay visible so the user knows the panels are there."""
         from imgui_bundle import imgui
-
         from mbo_utilities.gui._top_strip import TopStrip, strip_height
 
         strip = TopStrip(figure)
@@ -332,7 +335,6 @@ class TestTopStripResize:
 
     def test_clicking_a_tab_opens_a_shut_strip(self, figure, monkeypatch):
         from imgui_bundle import imgui
-
         from mbo_utilities.gui._top_strip import TopStrip
 
         strip = TopStrip(figure)
@@ -361,7 +363,8 @@ class TestTopStripResize:
 
 class TestMenuRowCluster:
     """The status / metadata / help / keybinds buttons sit at the right end
-    of the menu row, and the status button says what is idle."""
+    of the menu row, and the status button says what is idle.
+    """
 
     @staticmethod
     def _gui(shape=(4, 1, 5, 32, 32)):
@@ -376,7 +379,8 @@ class TestMenuRowCluster:
             figure_kwargs_override={"size": FIGURE_SIZE},
         )
         gui = next(
-            w for w in iw.figure.imgui_windows.values()
+            w
+            for w in iw.figure.imgui_windows.values()
             if isinstance(w, PreviewDataWidget)
         )
         return iw, gui
@@ -384,7 +388,6 @@ class TestMenuRowCluster:
     def _buttons(self):
         """``[(label, cursor_x, window_width)]`` for one drawn frame."""
         from imgui_bundle import imgui
-
         from mbo_utilities.gui.widgets.process_manager import get_process_manager
 
         iw, gui = self._gui()
@@ -430,9 +433,10 @@ class TestMenuRowCluster:
         assert x > width * 0.5, f"status button at {x} of {width}"
 
     def test_the_panel_has_no_title_bar(self):
-        """fastplotlib draws a custom full-width title box for an edge window
+        """Fastplotlib draws a custom full-width title box for an edge window
         with a title; a static "Data Preview" label only cost the panel a row
-        of height."""
+        of height.
+        """
         iw, gui = self._gui()
         try:
             assert gui._title is None

@@ -33,4 +33,6 @@ class MotionCorrection:
     @property
     def duration_s(self) -> float:
         """The last sample's time over every trace, 0 without one."""
-        return max((float(t[-1]) for t, _ in self.traces.values() if len(t)), default=0.0)
+        return max(
+            (float(t[-1]) for t, _ in self.traces.values() if len(t)), default=0.0
+        )

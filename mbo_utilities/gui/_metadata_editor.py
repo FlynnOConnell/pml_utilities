@@ -10,10 +10,10 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
-from imgui_bundle import imgui, hello_imgui
+from imgui_bundle import hello_imgui, imgui
 
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
-from mbo_utilities.metadata import parse_filename_metadata, get_filename_suggestions
+from mbo_utilities.metadata import get_filename_suggestions, parse_filename_metadata
 
 _COL_SET = imgui.ImVec4(0.5, 0.8, 0.5, 1.0)
 _COL_UNSET = imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
@@ -47,7 +47,9 @@ def _push_wrap_at_edge() -> None:
     )
 
 
-def _apply_set(parent: Any, current_data: Any, canonical: str, dtype, input_key: str) -> None:
+def _apply_set(
+    parent: Any, current_data: Any, canonical: str, dtype, input_key: str
+) -> None:
     input_val = getattr(parent, input_key).strip()
     if not input_val:
         return
@@ -64,9 +66,12 @@ def _apply_set(parent: Any, current_data: Any, canonical: str, dtype, input_key:
 
 def _apply_clear(parent: Any, current_data: Any, canonical: str) -> None:
     del parent._custom_metadata[canonical]
-    if (current_data and hasattr(current_data, "metadata")
-            and isinstance(current_data.metadata, dict)
-            and canonical in current_data.metadata):
+    if (
+        current_data
+        and hasattr(current_data, "metadata")
+        and isinstance(current_data.metadata, dict)
+        and canonical in current_data.metadata
+    ):
         del current_data.metadata[canonical]
 
 
@@ -209,7 +214,9 @@ def draw_metadata_editor_content(parent: Any):
     # build suggested fields (includes filename detection)
     suggested_fields = _build_suggested_fields(parent)
 
-    table_flags = imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
+    table_flags = (
+        imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
+    )
     # column widths shared by suggested + custom tables so everything aligns
     col_label = hello_imgui.em_size(7)
     col_value = hello_imgui.em_size(10)
@@ -227,10 +234,18 @@ def draw_metadata_editor_content(parent: Any):
     # draw suggested fields in a table
     if suggested_fields:
         if imgui.begin_table("suggested_meta", 4, table_flags):
-            imgui.table_setup_column("label", imgui.TableColumnFlags_.width_fixed, col_label)
-            imgui.table_setup_column("value", imgui.TableColumnFlags_.width_fixed, col_value)
-            imgui.table_setup_column("input", imgui.TableColumnFlags_.width_fixed, col_input)
-            imgui.table_setup_column("btn", imgui.TableColumnFlags_.width_fixed, col_btn)
+            imgui.table_setup_column(
+                "label", imgui.TableColumnFlags_.width_fixed, col_label
+            )
+            imgui.table_setup_column(
+                "value", imgui.TableColumnFlags_.width_fixed, col_value
+            )
+            imgui.table_setup_column(
+                "input", imgui.TableColumnFlags_.width_fixed, col_input
+            )
+            imgui.table_setup_column(
+                "btn", imgui.TableColumnFlags_.width_fixed, col_btn
+            )
 
             for field in suggested_fields:
                 canonical = field["canonical"]
@@ -273,8 +288,12 @@ def draw_metadata_editor_content(parent: Any):
                     setattr(parent, input_key, "")
 
                 imgui.set_next_item_width(input_w)
-                flags = imgui.InputTextFlags_.chars_decimal if dtype in (float, int) else 0
-                _, new_val = imgui.input_text(f"##{canonical}", getattr(parent, input_key), flags=flags)
+                flags = (
+                    imgui.InputTextFlags_.chars_decimal if dtype in (float, int) else 0
+                )
+                _, new_val = imgui.input_text(
+                    f"##{canonical}", getattr(parent, input_key), flags=flags
+                )
                 setattr(parent, input_key, new_val)
                 if imgui.is_item_hovered():
                     imgui.set_tooltip(_input_tooltip(dtype))
@@ -296,7 +315,9 @@ def draw_metadata_editor_content(parent: Any):
 
     # === Custom section ===
     suggested_keys = {f["canonical"] for f in suggested_fields}
-    custom_entries = [(k, v) for k, v in parent._custom_metadata.items() if k not in suggested_keys]
+    custom_entries = [
+        (k, v) for k, v in parent._custom_metadata.items() if k not in suggested_keys
+    ]
 
     imgui.spacing()
     imgui.separator()
@@ -304,9 +325,15 @@ def draw_metadata_editor_content(parent: Any):
     imgui.dummy(imgui.ImVec2(0, 2))
 
     if imgui.begin_table("custom_meta", 4, table_flags):
-        imgui.table_setup_column("label", imgui.TableColumnFlags_.width_fixed, col_label)
-        imgui.table_setup_column("value", imgui.TableColumnFlags_.width_fixed, col_value)
-        imgui.table_setup_column("input", imgui.TableColumnFlags_.width_fixed, col_input)
+        imgui.table_setup_column(
+            "label", imgui.TableColumnFlags_.width_fixed, col_label
+        )
+        imgui.table_setup_column(
+            "value", imgui.TableColumnFlags_.width_fixed, col_value
+        )
+        imgui.table_setup_column(
+            "input", imgui.TableColumnFlags_.width_fixed, col_input
+        )
         imgui.table_setup_column("btn", imgui.TableColumnFlags_.width_fixed, col_btn)
 
         # existing custom entries \u2014 same row layout as suggested table
@@ -348,7 +375,9 @@ def draw_metadata_editor_content(parent: Any):
         imgui.end_table()
 
 
-def _draw_editor_narrow(parent: Any, current_data: Any, suggested_fields: list[dict]) -> None:
+def _draw_editor_narrow(
+    parent: Any, current_data: Any, suggested_fields: list[dict]
+) -> None:
     """Stacked per-field layout: label/value line, then input + buttons.
 
     Fits any panel width — text wraps and the input shrinks to leave room
@@ -472,9 +501,7 @@ def draw_metadata_popup(parent: Any) -> None:
     screen_w, screen_h = io.display_size.x, io.display_size.y
     win_w = min(560, screen_w * 0.7)
     win_h = min(620, screen_h * 0.85)
-    imgui.set_next_window_size(
-        imgui.ImVec2(win_w, win_h), imgui.Cond_.first_use_ever
-    )
+    imgui.set_next_window_size(imgui.ImVec2(win_w, win_h), imgui.Cond_.first_use_ever)
     imgui.set_next_window_size_constraints(
         imgui.ImVec2(420, 360), imgui.ImVec2(screen_w, screen_h)
     )

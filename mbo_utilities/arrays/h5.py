@@ -88,6 +88,7 @@ def list_h5_datasets(path: Path | str) -> list[dict]:
     with h5py.File(Path(path), "r") as f:
         return _iter_h5_datasets(f)
 
+
 # register hdf5 pipeline info
 _H5_INFO = PipelineInfo(
     name="hdf5",
@@ -300,7 +301,8 @@ class H5Array(ReductionMixin, Shape5DMixin):
         raw_key = tuple(key_by_dim.get(d, slice(None)) for d in self._raw_dims)
         out = np.asarray(self._d[raw_key])
         kept = tuple(
-            d for d in self._raw_dims
+            d
+            for d in self._raw_dims
             if not isinstance(key_by_dim[d], (int, np.integer))
         )
         out = _canonicalize_to_5d(out, kept)

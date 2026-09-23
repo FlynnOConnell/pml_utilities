@@ -92,7 +92,9 @@ class CurationSession:
         Window length to curate; None curates the whole trace.
     """
 
-    def __init__(self, data_path, mode="fast", slow_cutoff_hz=40.0, duration_s=None, **kwargs):
+    def __init__(
+        self, data_path, mode="fast", slow_cutoff_hz=40.0, duration_s=None, **kwargs
+    ):
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
         self.dash = EventCurationDashboard(
@@ -120,10 +122,15 @@ class CurationSession:
     def load_run(self, arr: ResultsArray, unit: str, roi: str) -> str:
         """Curate the pipeline's denoised trace of one ROI of one unit of a
         run: no denoiser, labels in ``<run>/.curation``. Returns the status
-        line; raises ``KeyError`` for a unit or ROI the run does not hold."""
+        line; raises ``KeyError`` for a unit or ROI the run does not hold.
+        """
         unit, roi = str(unit), str(roi)
         found = arr.results.units.get(unit)
-        if found is None or roi not in found.roi_names or "denoised" not in found.traces:
+        if (
+            found is None
+            or roi not in found.roi_names
+            or "denoised" not in found.traces
+        ):
             raise KeyError(f"{arr.path} has no denoised trace for {unit} / {roi}")
         return self.load_trace(
             arr.trace(roi, unit=unit),
@@ -151,7 +158,8 @@ class CurationSession:
         ``curation_dir/cache`` by ``recording_id`` and the source file's size
         and mtime; ``pre_denoised`` takes the trace as the pipeline's output
         instead. Labels go to ``curation_dir/<mode>_template_curation.json``
-        keyed by ``recording_id``. Returns the status line."""
+        keyed by ``recording_id``. Returns the status line.
+        """
         trace = np.asarray(trace, dtype=float).ravel()
         if trace.size < 2:
             raise ValueError(f"{label} has fewer than two samples")
@@ -159,7 +167,9 @@ class CurationSession:
             raise ValueError(f"{label} contains NaN or infinite values")
         source_path = Path(source_path)
         curation_dir = (
-            Path(curation_dir) if curation_dir is not None else source_path.parent / ".curation"
+            Path(curation_dir)
+            if curation_dir is not None
+            else source_path.parent / ".curation"
         )
         t = np.arange(trace.size, dtype=float) / float(fs_hz)
         full = RecordingSample(
@@ -207,7 +217,8 @@ class CurationSession:
 
     def _trace_cache_path(self, recording) -> Path | None:
         """Like the dashboard's cache path, with the recording id in the key
-        so several traces of one source file do not share a cache."""
+        so several traces of one source file do not share a cache.
+        """
         if not self.dash.enable_pipeline_cache:
             return None
         stat = Path(recording.path).stat()
@@ -225,7 +236,9 @@ class CurationSession:
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True).encode("utf-8")
         ).hexdigest()[:16]
-        stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(recording.metadata.get("recording_id")))
+        stem = re.sub(
+            r"[^A-Za-z0-9_.-]+", "_", str(recording.metadata.get("recording_id"))
+        )
         return self.dash.curation_dir / "cache" / f"{stem}-{digest}.npz"
 
     @property
@@ -270,7 +283,8 @@ class CurationSession:
     @property
     def analysis_trace(self) -> np.ndarray:
         """What candidates are thresholded on: the denoised trace, or its
-        low-pass view in slow mode."""
+        low-pass view in slow mode.
+        """
         return self.dash.analysis_trace
 
     @property
@@ -366,14 +380,16 @@ class CurationSession:
     @property
     def auto_pass_pc1_range(self) -> tuple[float, float, float]:
         """``(low, high, step)`` of the A3 line: the candidates' PC1 scores
-        padded so the line at either end passes none."""
+        padded so the line at either end passes none.
+        """
         lo, hi, step = self.dash.pc1_slider_range()
         return float(lo), float(hi), float(step)
 
     @property
     def auto_pass_pc1_shown(self) -> float:
         """Where the A3 line is drawn: its value, or parked at the end of
-        the passing side (nothing passes) while the rule is off."""
+        the passing side (nothing passes) while the rule is off.
+        """
         if self.auto_pass_pc1 is not None:
             return float(self.auto_pass_pc1)
         lo, hi, _ = self.auto_pass_pc1_range
@@ -482,7 +498,8 @@ class CurationSession:
 
     def label(self, index: int) -> str:
         """The shown label: a manual yes/no, else the auto call as
-        ``auto_yes`` / ``auto_no``, else ``unlabeled``."""
+        ``auto_yes`` / ``auto_no``, else ``unlabeled``.
+        """
         return self.dash._label_for_index(int(index))
 
     def labels(self) -> list[str]:
@@ -493,7 +510,8 @@ class CurationSession:
 
     def set_label(self, label: str) -> None:
         """Label the current candidate ``yes``, ``no`` or ``unlabeled`` and
-        save; the template and second pass follow."""
+        save; the template and second pass follow.
+        """
         if label not in ("yes", "no", "unlabeled") or not self.n:
             return
         self.dash._set_label(label)
@@ -501,11 +519,16 @@ class CurationSession:
     def set_labels(self, indices, label: str) -> int:
         """Label several candidates at once (a box selection) and save;
         the template and second pass follow, as after ``set_label``.
-        Returns how many were labelled."""
+        Returns how many were labelled.
+        """
         if label not in ("yes", "no", "unlabeled") or not self.n:
             return 0
         dash = self.dash
-        keys = [dash.event_keys[int(i)] for i in indices if 0 <= int(i) < len(dash.event_keys)]
+        keys = [
+            dash.event_keys[int(i)]
+            for i in indices
+            if 0 <= int(i) < len(dash.event_keys)
+        ]
         if not keys:
             return 0
         for key in keys:
@@ -525,7 +548,8 @@ class CurationSession:
 
     def clear_labels(self) -> int:
         """Drop every manual label of this recording and save; the auto
-        rules decide every candidate again. Returns how many were dropped."""
+        rules decide every candidate again. Returns how many were dropped.
+        """
         if not self.n:
             return 0
         labelled = [i for i in range(self.n) if self.manual_label(i) != "unlabeled"]
@@ -561,7 +585,9 @@ class CurationSession:
             "time_s": float(self.times_s[i]),
             "amplitude": float(self.amplitudes[i]),
             "peak": float(self.peak_values[i]),
-            "source": "threshold" if self.is_threshold_candidate(i) else "retained manual",
+            "source": "threshold"
+            if self.is_threshold_candidate(i)
+            else "retained manual",
             "template_cosine": score,
             "initial_cosine": float(self.dash._initial_template_score_for_index(i)),
             "auto_call": self.dash._initial_auto_call_for_index(i),
@@ -622,11 +648,13 @@ class CurationSession:
 # the processed PF folder that belongs to a raw line-scan .mesc
 # ----------------------------------------------------------------------
 
+
 def voltage_run_for_mesc(mesc_path) -> Path | None:
     """What the voltage pipeline last left for a line scan: the newest results
     file beside it, else a ``PF`` folder of pickles beside it or one folder up
     (the ``<expt>/<expt>/<expt>.mesc`` layout keeps ``<expt>/PF``); None when
-    there is none."""
+    there is none.
+    """
     mesc_path = Path(mesc_path)
     found = newest_results(mesc_path.parent, "voltage")
     if found is not None:
@@ -641,7 +669,8 @@ def voltage_run_for_mesc(mesc_path) -> Path | None:
 def voltage_unit_for_mesc(mesc_path, unit_key: str) -> ResultsArray | None:
     """The line scan's last voltage run opened on that recording unit (the
     image is left closed), or None when there is no run or the pipeline never
-    processed the unit."""
+    processed the unit.
+    """
     run = voltage_run_for_mesc(mesc_path)
     if run is None:
         return None

@@ -235,7 +235,8 @@ def roi_placements(
 
 def slices_with_rois(placements: list[dict]) -> dict[int, list[int]]:
     """``{slice: [roi indices]}`` for the slices that carry at least one line,
-    ascending by slice. Most slices of a stack carry none."""
+    ascending by slice. Most slices of a stack carry none.
+    """
     table: dict[int, list[int]] = {}
     for p in placements:
         table.setdefault(p["slice"], []).append(p["index"])
@@ -367,7 +368,9 @@ def image_overlays(
                 colors = [
                     None
                     if r["color"].upper().endswith("000000")
-                    else tuple(int(r["color"][i : i + 2], 16) / 255.0 for i in (3, 5, 7))
+                    else tuple(
+                        int(r["color"][i : i + 2], 16) / 255.0 for i in (3, 5, 7)
+                    )
                     for r in rois
                 ]
             for i, seg in enumerate(outlines):
@@ -409,17 +412,22 @@ def zstack_contents(mesc_path, units: list[dict] | None = None) -> dict[str, lis
     every multi-ROI unit with at least one outline inside the stack's field
     and depth range (:func:`image_overlays`), in unit order. A snapshot's
     scans are its ``scans`` entry from ``list_mesc_units``; a stack has no
-    such link, only geometry."""
+    such link, only geometry.
+    """
     if units is None:
         units = list_mesc_units(mesc_path)
     return {
-        u["key"]: list(dict.fromkeys(r["unit"] for r in image_overlays(mesc_path, u["key"], units)))
+        u["key"]: list(
+            dict.fromkeys(r["unit"] for r in image_overlays(mesc_path, u["key"], units))
+        )
         for u in units
         if u["kind"] == "zstack"
     }
 
 
-def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = None) -> list[dict] | None:
+def line_positions(
+    mesc_path, unit_key: str, sample_counts: list[int] | None = None
+) -> list[dict] | None:
     """Where each of a multi-ROI unit's scanned lines or patches sits, one
     dict per ROI in ROI order, or None when the unit has no geometry.
 
@@ -459,7 +467,11 @@ def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = N
         seg = np.asarray(seg, dtype=float)
         end = 1 if seg.shape[1] == 4 else -1
         length = float(np.hypot(*(seg[:2, end] - seg[:2, 0])))
-        n = None if sample_counts is None or i >= len(sample_counts) else int(sample_counts[i])
+        n = (
+            None
+            if sample_counts is None or i >= len(sample_counts)
+            else int(sample_counts[i])
+        )
         z_um = float(seg[2].mean())
         out.append(
             {
@@ -481,10 +493,17 @@ def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = N
     key = str(unit_key).strip("/")
     for stack in (u["key"] for u in units if u["kind"] == "zstack"):
         placed = {
-            r["roi"]: r for r in image_overlays(mesc_path, stack, units) if r["unit"].strip("/") == key
+            r["roi"]: r
+            for r in image_overlays(mesc_path, stack, units)
+            if r["unit"].strip("/") == key
         }
         for p in out:
             r = placed.get(p["index"])
             if r is not None and p["stack"] is None:
-                p.update(stack=stack, slice=r["slice"], slice_dz_um=r["dz_um"], in_stack=r["on_plane"])
+                p.update(
+                    stack=stack,
+                    slice=r["slice"],
+                    slice_dz_um=r["dz_um"],
+                    in_stack=r["on_plane"],
+                )
     return out

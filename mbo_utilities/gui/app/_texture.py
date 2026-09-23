@@ -33,7 +33,9 @@ class Texture:
         if key == self._key:
             return
         self._key = key
-        normed = np.clip((np.asarray(array, dtype=np.float32) - lo) / max(hi - lo, 1e-12), 0.0, 1.0)
+        normed = np.clip(
+            (np.asarray(array, dtype=np.float32) - lo) / max(hi - lo, 1e-12), 0.0, 1.0
+        )
         rgba = np.ascontiguousarray((Colormap(cmap)(normed) * 255).astype(np.uint8))
         height, width = rgba.shape[:2]
         if self._texture is None or (width, height) != (self.width, self.height):

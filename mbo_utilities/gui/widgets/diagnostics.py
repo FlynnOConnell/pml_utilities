@@ -8,11 +8,13 @@ Provides ROI filtering and visualization:
 - Bi-directional sync with Suite2p GUI via file watching
 """
 
-import numpy as np
 import shutil
 import time
 from pathlib import Path
-from imgui_bundle import imgui, implot, portable_file_dialogs as pfd
+
+import numpy as np
+from imgui_bundle import imgui, implot
+from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.preferences import get_last_dir, set_last_dir
@@ -84,7 +86,9 @@ class DiagnosticsWidget:
         self._last_check_time = 0  # Throttle file checks
         self._check_interval = 1.0  # Check for changes every N seconds
         self._last_save_time = 0  # Prevent reload immediately after our own save
-        self._save_cooldown = 0.5  # Seconds to wait after save before checking for changes
+        self._save_cooldown = (
+            0.5  # Seconds to wait after save before checking for changes
+        )
         self._save_status_msg = ""  # Status message to display
         self._save_status_time = 0  # When status was set
 
@@ -177,7 +181,9 @@ class DiagnosticsWidget:
         for i, s in enumerate(self.stat):
             self._skewness[i] = s.get("skew", 0)
             self._activity[i] = np.sum(self._dff[i] > 0.5) / len(self._dff[i])
-            self._shot_noise[i] = s.get("std", np.std(self.F[i])) if self.F is not None else 0
+            self._shot_noise[i] = (
+                s.get("std", np.std(self.F[i])) if self.F is not None else 0
+            )
 
     def _recompute_dff(self):
         """Recompute dF/F with current baseline settings."""
@@ -190,7 +196,9 @@ class DiagnosticsWidget:
             F_corrected = self.F
 
         if self._baseline_method == 0:  # percentile
-            baseline = np.percentile(F_corrected, self._baseline_percentile, axis=1, keepdims=True)
+            baseline = np.percentile(
+                F_corrected, self._baseline_percentile, axis=1, keepdims=True
+            )
         else:  # median
             baseline = np.median(F_corrected, axis=1, keepdims=True)
 
@@ -227,15 +235,28 @@ class DiagnosticsWidget:
             passes = True
             if self._snr is not None and self._snr[i] < self._filter_snr_min:
                 passes = False
-            if self._shot_noise is not None and self._shot_noise[i] > self._filter_shot_noise_max:
+            if (
+                self._shot_noise is not None
+                and self._shot_noise[i] > self._filter_shot_noise_max
+            ):
                 passes = False
-            if self._skewness is not None and self._skewness[i] < self._filter_skewness_min:
+            if (
+                self._skewness is not None
+                and self._skewness[i] < self._filter_skewness_min
+            ):
                 passes = False
-            if self._activity is not None and self._activity[i] < self._filter_activity_min:
+            if (
+                self._activity is not None
+                and self._activity[i] < self._filter_activity_min
+            ):
                 passes = False
 
             # Only modify if originally classified as cell
-            orig_prob = self.iscell_original[i, 0] if self.iscell_original.ndim > 1 else self.iscell_original[i]
+            orig_prob = (
+                self.iscell_original[i, 0]
+                if self.iscell_original.ndim > 1
+                else self.iscell_original[i]
+            )
             if orig_prob > 0.5:
                 if self.iscell.ndim > 1:
                     new_val = orig_prob if passes else 0.0
@@ -274,7 +295,10 @@ class DiagnosticsWidget:
 
         try:
             current_mtime = iscell_path.stat().st_mtime
-            if self._last_iscell_mtime is not None and current_mtime > self._last_iscell_mtime:
+            if (
+                self._last_iscell_mtime is not None
+                and current_mtime > self._last_iscell_mtime
+            ):
                 # File was modified externally - reload it
                 self._reload_iscell()
         except OSError:
@@ -334,7 +358,9 @@ class DiagnosticsWidget:
         left_width = min(280, avail.x * 0.28)
 
         # Left panel - controls
-        if imgui.begin_child("DiagLeft", imgui.ImVec2(left_width, 0), imgui.ChildFlags_.borders):
+        if imgui.begin_child(
+            "DiagLeft", imgui.ImVec2(left_width, 0), imgui.ChildFlags_.borders
+        ):
             self._draw_controls()
             imgui.separator()
             self._draw_baseline_settings()
@@ -345,7 +371,9 @@ class DiagnosticsWidget:
         imgui.same_line()
 
         # Right panel - trace and histograms
-        if imgui.begin_child("DiagRight", imgui.ImVec2(0, 0), imgui.ChildFlags_.borders):
+        if imgui.begin_child(
+            "DiagRight", imgui.ImVec2(0, 0), imgui.ChildFlags_.borders
+        ):
             self._draw_right_panel()
         imgui.end_child()
 
@@ -368,7 +396,11 @@ class DiagnosticsWidget:
         imgui.text(f"Path: {self.loaded_path.name if self.loaded_path else 'None'}")
 
         n_cells = len(self.cell_indices)
-        n_orig = len(np.where(self.iscell_original[:, 0] > 0.5)[0]) if self.iscell_original is not None and self.iscell_original.ndim > 1 else n_cells
+        n_orig = (
+            len(np.where(self.iscell_original[:, 0] > 0.5)[0])
+            if self.iscell_original is not None and self.iscell_original.ndim > 1
+            else n_cells
+        )
         imgui.text(f"ROIs: {self.n_rois} | Cells: {n_cells}/{n_orig}")
 
         imgui.spacing()
@@ -379,7 +411,9 @@ class DiagnosticsWidget:
                 self.selected_roi = 0
 
             imgui.set_next_item_width(120)
-            changed, new_val = imgui.slider_int("ROI", self.selected_roi, 0, len(visible) - 1)
+            changed, new_val = imgui.slider_int(
+                "ROI", self.selected_roi, 0, len(visible) - 1
+            )
             if changed:
                 self.selected_roi = new_val
 
@@ -394,13 +428,23 @@ class DiagnosticsWidget:
             roi_idx = visible[self.selected_roi]
             imgui.text(f"ROI {roi_idx}")
             if self.iscell is not None:
-                prob = self.iscell[roi_idx, 0] if self.iscell.ndim > 1 else self.iscell[roi_idx]
-                color = imgui.ImVec4(0.2, 1.0, 0.2, 1.0) if prob > 0.5 else imgui.ImVec4(1.0, 0.5, 0.2, 1.0)
+                prob = (
+                    self.iscell[roi_idx, 0]
+                    if self.iscell.ndim > 1
+                    else self.iscell[roi_idx]
+                )
+                color = (
+                    imgui.ImVec4(0.2, 1.0, 0.2, 1.0)
+                    if prob > 0.5
+                    else imgui.ImVec4(1.0, 0.5, 0.2, 1.0)
+                )
                 imgui.same_line()
                 imgui.text_colored(color, f"p={prob:.2f}")
 
         imgui.spacing()
-        _, self.show_only_cells = imgui.checkbox("Show only cells", self.show_only_cells)
+        _, self.show_only_cells = imgui.checkbox(
+            "Show only cells", self.show_only_cells
+        )
 
         if imgui.button("View Stats..."):
             self._show_stats_popup = True
@@ -456,16 +500,24 @@ class DiagnosticsWidget:
         if imgui.is_item_hovered():
             imgui.set_tooltip("Auto-save iscell.npy when filters change")
 
-        _, self._watch_for_changes = imgui.checkbox("Watch file", self._watch_for_changes)
+        _, self._watch_for_changes = imgui.checkbox(
+            "Watch file", self._watch_for_changes
+        )
         if imgui.is_item_hovered():
-            imgui.set_tooltip("Reload when iscell.npy is modified externally (e.g., by Suite2p GUI)")
+            imgui.set_tooltip(
+                "Reload when iscell.npy is modified externally (e.g., by Suite2p GUI)"
+            )
 
         # Show save status message (fades after 3 seconds)
         if self._save_status_msg and time.time() - self._save_status_time < 3.0:
             if "error" in self._save_status_msg.lower():
-                imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), self._save_status_msg)
+                imgui.text_colored(
+                    imgui.ImVec4(1.0, 0.3, 0.3, 1.0), self._save_status_msg
+                )
             else:
-                imgui.text_colored(imgui.ImVec4(0.3, 1.0, 0.3, 1.0), self._save_status_msg)
+                imgui.text_colored(
+                    imgui.ImVec4(0.3, 1.0, 0.3, 1.0), self._save_status_msg
+                )
         elif self._auto_save:
             imgui.text_colored(imgui.ImVec4(0.5, 0.7, 0.5, 1.0), "Auto-save ON")
 
@@ -487,7 +539,9 @@ class DiagnosticsWidget:
         if imgui.button("Export Training"):
             self._export_for_training()
         if imgui.is_item_hovered():
-            imgui.set_tooltip("export current iscell + stat features for classifier training")
+            imgui.set_tooltip(
+                "export current iscell + stat features for classifier training"
+            )
 
         imgui.same_line()
         if imgui.button("Mark Curated"):
@@ -498,8 +552,7 @@ class DiagnosticsWidget:
         # show training status
         if self._training_dir:
             imgui.text_colored(
-                imgui.ImVec4(0.5, 0.8, 0.5, 1.0),
-                f"Training: {self._training_dir.name}"
+                imgui.ImVec4(0.5, 0.8, 0.5, 1.0), f"Training: {self._training_dir.name}"
             )
 
         if len(self._exported_datasets) > 0:
@@ -520,14 +573,18 @@ class DiagnosticsWidget:
         trace_height = max(self._min_plot_height, avail.y * self._trace_height_frac)
 
         # dF/F trace section
-        if imgui.begin_child("TraceSection", imgui.ImVec2(-1, trace_height), imgui.ChildFlags_.none):
+        if imgui.begin_child(
+            "TraceSection", imgui.ImVec2(-1, trace_height), imgui.ChildFlags_.none
+        ):
             self._draw_dff_trace()
         imgui.end_child()
 
         imgui.separator()
 
         # Histograms section
-        if imgui.begin_child("HistSection", imgui.ImVec2(-1, 0), imgui.ChildFlags_.none):
+        if imgui.begin_child(
+            "HistSection", imgui.ImVec2(-1, 0), imgui.ChildFlags_.none
+        ):
             self._draw_filter_histograms()
         imgui.end_child()
 
@@ -579,38 +636,63 @@ class DiagnosticsWidget:
 
         # SNR histogram with min threshold
         filters_changed |= self._draw_histogram_with_slider(
-            "SNR", self._snr, hist_height,
-            "_filter_snr_min", self._snr_min, self._snr_max,
-            is_min_filter=True
+            "SNR",
+            self._snr,
+            hist_height,
+            "_filter_snr_min",
+            self._snr_min,
+            self._snr_max,
+            is_min_filter=True,
         )
 
         # Shot Noise histogram with max threshold
         filters_changed |= self._draw_histogram_with_slider(
-            "Shot Noise", self._shot_noise, hist_height,
-            "_filter_shot_noise_max", self._shot_noise_min, self._shot_noise_max,
-            is_min_filter=False
+            "Shot Noise",
+            self._shot_noise,
+            hist_height,
+            "_filter_shot_noise_max",
+            self._shot_noise_min,
+            self._shot_noise_max,
+            is_min_filter=False,
         )
 
         # Skewness histogram with min threshold
         filters_changed |= self._draw_histogram_with_slider(
-            "Skewness", self._skewness, hist_height,
-            "_filter_skewness_min", self._skewness_min, self._skewness_max,
-            is_min_filter=True
+            "Skewness",
+            self._skewness,
+            hist_height,
+            "_filter_skewness_min",
+            self._skewness_min,
+            self._skewness_max,
+            is_min_filter=True,
         )
 
         # Activity histogram with min threshold
         filters_changed |= self._draw_histogram_with_slider(
-            "Activity %", self._activity * 100, hist_height,
-            "_filter_activity_min", self._activity_min * 100, self._activity_max * 100,
-            is_min_filter=True, scale=100
+            "Activity %",
+            self._activity * 100,
+            hist_height,
+            "_filter_activity_min",
+            self._activity_min * 100,
+            self._activity_max * 100,
+            is_min_filter=True,
+            scale=100,
         )
 
         if filters_changed:
             self._apply_filters()
 
-    def _draw_histogram_with_slider(self, label: str, data: np.ndarray, height: float,
-                                     filter_attr: str, data_min: float, data_max: float,
-                                     is_min_filter: bool, scale: float = 1.0) -> bool:
+    def _draw_histogram_with_slider(
+        self,
+        label: str,
+        data: np.ndarray,
+        height: float,
+        filter_attr: str,
+        data_min: float,
+        data_max: float,
+        is_min_filter: bool,
+        scale: float = 1.0,
+    ) -> bool:
         """Draw a histogram with an integrated threshold slider.
 
         Returns True if filter value changed.
@@ -644,31 +726,56 @@ class DiagnosticsWidget:
         imgui.text(f"{label} ({filter_type}: {current_val:.2f})")
 
         # Draw plot with histogram and threshold line
-        if implot.begin_plot(f"##{label}", imgui.ImVec2(content_width, height - 25), implot.Flags_.no_legend):
-            implot.setup_axes("", "", implot.AxisFlags_.auto_fit | implot.AxisFlags_.no_tick_labels, implot.AxisFlags_.auto_fit)
+        if implot.begin_plot(
+            f"##{label}",
+            imgui.ImVec2(content_width, height - 25),
+            implot.Flags_.no_legend,
+        ):
+            implot.setup_axes(
+                "",
+                "",
+                implot.AxisFlags_.auto_fit | implot.AxisFlags_.no_tick_labels,
+                implot.AxisFlags_.auto_fit,
+            )
 
             # Draw histogram bars
             bar_width = (hist_max - hist_min) / n_bins * 0.9
-            implot.plot_bars(label, bin_centers.astype(np.float64), counts.astype(np.float64), bar_width)
+            implot.plot_bars(
+                label,
+                bin_centers.astype(np.float64),
+                counts.astype(np.float64),
+                bar_width,
+            )
 
             # Draw threshold line
             threshold_x = np.array([current_val, current_val], dtype=np.float64)
             threshold_y = np.array([0, np.max(counts) * 1.1], dtype=np.float64)
             implot.plot_line(
-                "threshold", threshold_x, threshold_y,
+                "threshold",
+                threshold_x,
+                threshold_y,
                 implot.Spec(line_color=imgui.ImVec4(1.0, 0.3, 0.3, 1.0)),
             )
 
             # Draw shaded region for excluded values
             if is_min_filter:
                 # Shade left of threshold (excluded)
-                shade_x = np.array([hist_min, current_val, current_val, hist_min], dtype=np.float64)
+                shade_x = np.array(
+                    [hist_min, current_val, current_val, hist_min], dtype=np.float64
+                )
             else:
                 # Shade right of threshold (excluded)
-                shade_x = np.array([current_val, hist_max, hist_max, current_val], dtype=np.float64)
-            shade_y = np.array([0, 0, np.max(counts) * 1.1, np.max(counts) * 1.1], dtype=np.float64)
+                shade_x = np.array(
+                    [current_val, hist_max, hist_max, current_val], dtype=np.float64
+                )
+            shade_y = np.array(
+                [0, 0, np.max(counts) * 1.1, np.max(counts) * 1.1], dtype=np.float64
+            )
             implot.plot_shaded(
-                "excluded", shade_x[:2], shade_y[:2], shade_y[2:4],
+                "excluded",
+                shade_x[:2],
+                shade_y[:2],
+                shade_y[2:4],
                 implot.Spec(fill_color=imgui.ImVec4(1.0, 0.3, 0.3, 0.2)),
             )
 
@@ -677,7 +784,9 @@ class DiagnosticsWidget:
         # Slider for threshold - use same width as plot, format includes value on right
         imgui.set_next_item_width(content_width)
         slider_label = f"##{label}_slider"
-        changed, new_val = imgui.slider_float(slider_label, current_val, hist_min, hist_max, "%.2f")
+        changed, new_val = imgui.slider_float(
+            slider_label, current_val, hist_min, hist_max, "%.2f"
+        )
 
         if changed:
             if scale != 1.0:
@@ -831,9 +940,7 @@ class DiagnosticsWidget:
     def _draw_stats_popup(self):
         """Draw ROI statistics popup."""
         if not hasattr(self, "_stats_sizer"):
-            self._stats_sizer = PopupAutoSize(
-                "ROI Statistics", auto_resize=False
-            )
+            self._stats_sizer = PopupAutoSize("ROI Statistics", auto_resize=False)
 
         if self._show_stats_popup:
             self._stats_popup_open = True
@@ -846,7 +953,7 @@ class DiagnosticsWidget:
         opened, visible = imgui.begin_popup_modal(
             "ROI Statistics",
             p_open=True if self._stats_popup_open else None,
-            flags=imgui.WindowFlags_.no_saved_settings
+            flags=imgui.WindowFlags_.no_saved_settings,
         )
 
         if opened:
@@ -864,45 +971,73 @@ class DiagnosticsWidget:
                     imgui.text(f"ROI {roi_idx}")
                     imgui.separator()
 
-                    if imgui.begin_child("StatsScroll", imgui.ImVec2(0, -35), imgui.ChildFlags_.borders):
+                    if imgui.begin_child(
+                        "StatsScroll", imgui.ImVec2(0, -35), imgui.ChildFlags_.borders
+                    ):
                         # Classification
-                        if imgui.collapsing_header("Classification", imgui.TreeNodeFlags_.default_open):
+                        if imgui.collapsing_header(
+                            "Classification", imgui.TreeNodeFlags_.default_open
+                        ):
                             if self.iscell is not None:
-                                prob = self.iscell[roi_idx, 0] if self.iscell.ndim > 1 else self.iscell[roi_idx]
-                                orig_prob = self.iscell_original[roi_idx, 0] if self.iscell_original.ndim > 1 else self.iscell_original[roi_idx]
-                                color = imgui.ImVec4(0.2, 1.0, 0.2, 1.0) if prob > 0.5 else imgui.ImVec4(1.0, 0.5, 0.2, 1.0)
+                                prob = (
+                                    self.iscell[roi_idx, 0]
+                                    if self.iscell.ndim > 1
+                                    else self.iscell[roi_idx]
+                                )
+                                orig_prob = (
+                                    self.iscell_original[roi_idx, 0]
+                                    if self.iscell_original.ndim > 1
+                                    else self.iscell_original[roi_idx]
+                                )
+                                color = (
+                                    imgui.ImVec4(0.2, 1.0, 0.2, 1.0)
+                                    if prob > 0.5
+                                    else imgui.ImVec4(1.0, 0.5, 0.2, 1.0)
+                                )
                                 imgui.text("Current probability:")
                                 imgui.same_line()
                                 imgui.text_colored(color, f"{prob:.4f}")
                                 imgui.text(f"Original probability: {orig_prob:.4f}")
 
                         # Morphology
-                        if imgui.collapsing_header("Morphology", imgui.TreeNodeFlags_.default_open):
+                        if imgui.collapsing_header(
+                            "Morphology", imgui.TreeNodeFlags_.default_open
+                        ):
                             ypix = s.get("ypix", [])
                             xpix = s.get("xpix", [])
                             imgui.text(f"Pixels: {len(ypix)}")
                             if len(ypix) > 0:
-                                imgui.text(f"Center: ({np.mean(xpix):.1f}, {np.mean(ypix):.1f})")
+                                imgui.text(
+                                    f"Center: ({np.mean(xpix):.1f}, {np.mean(ypix):.1f})"
+                                )
                             imgui.text(f"Radius: {s.get('radius', 0):.2f}")
                             imgui.text(f"Aspect ratio: {s.get('aspect_ratio', 0):.2f}")
 
                         # Signal metrics
-                        if imgui.collapsing_header("Signal Metrics", imgui.TreeNodeFlags_.default_open):
+                        if imgui.collapsing_header(
+                            "Signal Metrics", imgui.TreeNodeFlags_.default_open
+                        ):
                             if self._snr is not None:
                                 imgui.text(f"SNR: {self._snr[roi_idx]:.4f}")
                             if self._shot_noise is not None:
-                                imgui.text(f"Shot noise: {self._shot_noise[roi_idx]:.2f}")
+                                imgui.text(
+                                    f"Shot noise: {self._shot_noise[roi_idx]:.2f}"
+                                )
                             if self._skewness is not None:
                                 imgui.text(f"Skewness: {self._skewness[roi_idx]:.4f}")
                             if self._activity is not None:
                                 imgui.text(f"Activity: {self._activity[roi_idx]:.2%}")
                             if self._dff is not None:
                                 dff = self._dff[roi_idx]
-                                imgui.text(f"dF/F range: [{np.min(dff):.3f}, {np.max(dff):.3f}]")
+                                imgui.text(
+                                    f"dF/F range: [{np.min(dff):.3f}, {np.max(dff):.3f}]"
+                                )
                                 imgui.text(f"dF/F std: {np.std(dff):.4f}")
 
                         # classifier features (suite2p default: npix_norm, compact, skew)
-                        if imgui.collapsing_header("Classifier Features", imgui.TreeNodeFlags_.default_open):
+                        if imgui.collapsing_header(
+                            "Classifier Features", imgui.TreeNodeFlags_.default_open
+                        ):
                             npix_norm = s.get("npix_norm", None)
                             compact = s.get("compact", None)
                             skew_val = s.get("skew", None)
@@ -923,14 +1058,18 @@ class DiagnosticsWidget:
                                 imgui.text_disabled("skew: not computed")
 
                             imgui.spacing()
-                            imgui.text_wrapped("these 3 features are used by suite2p's default classifier")
+                            imgui.text_wrapped(
+                                "these 3 features are used by suite2p's default classifier"
+                            )
 
                         # Raw stat values
                         if imgui.collapsing_header("stat.npy values"):
                             for key, value in sorted(s.items()):
                                 if key in ("ypix", "xpix", "lam"):
                                     imgui.text_disabled(f"{key}: [{len(value)} values]")
-                                elif isinstance(value, (int, float, np.integer, np.floating)):
+                                elif isinstance(
+                                    value, (int, float, np.integer, np.floating)
+                                ):
                                     if isinstance(value, float):
                                         imgui.text(f"{key}: {value:.4f}")
                                     else:
@@ -938,7 +1077,9 @@ class DiagnosticsWidget:
                                 elif isinstance(value, np.ndarray) and value.size <= 10:
                                     imgui.text(f"{key}: {value}")
                                 else:
-                                    imgui.text_disabled(f"{key}: [shape {getattr(value, 'shape', 'N/A')}]")
+                                    imgui.text_disabled(
+                                        f"{key}: [shape {getattr(value, 'shape', 'N/A')}]"
+                                    )
 
                     imgui.end_child()
 

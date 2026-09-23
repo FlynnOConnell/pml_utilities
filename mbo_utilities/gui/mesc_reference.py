@@ -31,8 +31,8 @@ the MESc tab and redrawn every frame from the top strip's hook.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import numpy as np
 from imgui_bundle import imgui
@@ -63,7 +63,8 @@ MAX_ELEMENTS = 50_000_000
 def roi_slider(names) -> str | None:
     """The viewer slider that walks the array's Z axis: the one labelled so
     (``Z-plane``) when there is one, else the one in Z's position (``ROI``
-    on an AOD unit, ``slider_roles``); None without either."""
+    on an AOD unit, ``slider_roles``); None without either.
+    """
     name = find_slider_name(names, "z")
     if name is None:
         name = next((n for n, role in slider_roles(names).items() if role == "z"), None)
@@ -72,7 +73,8 @@ def roi_slider(names) -> str | None:
 
 def current_roi(iw) -> int:
     """The ROI an AOD unit's slider is on: the Z slider's index, 0 when
-    there is none."""
+    there is none.
+    """
     zdim = roi_slider(iw.dim_names)
     return int(iw.indices[zdim]) if zdim is not None else 0
 
@@ -81,7 +83,8 @@ def current_roi(iw) -> int:
 class ReferenceImage:
     """One image of the popup: what the combo calls it, its pixels, the shown
     unit's overlay records on it (``mesc_geometry.image_overlays``), the unit
-    it is of, and the slice to open that unit at (None for a picture)."""
+    it is of, and the slice to open that unit at (None for a picture).
+    """
 
     key: str
     image: np.ndarray
@@ -90,24 +93,34 @@ class ReferenceImage:
     slice: int | None = None
 
 
-def reference_images(mesc, open_unit: Callable[[str], object], c: int) -> list[ReferenceImage]:
+def reference_images(
+    mesc, open_unit: Callable[[str], object], c: int
+) -> list[ReferenceImage]:
     """Every image the popup shows for ``mesc``, in combo order: the picture
     its ROIs were drawn on, then every Z-stack holding them, each a max
     projection in channel ``c`` carrying the unit's ROIs. A picture projects
     over its frames, a Z-stack over the slices the ROIs were scanned on.
     Empty for a unit with no ROIs, or none placed on an image of the file.
-    ``open_unit`` opens a sibling unit by key; the caller keeps the cache."""
+    ``open_unit`` opens a sibling unit by key; the caller keeps the cache.
+    """
     path = mesc.filenames[0]
     key = mesc.unit_key
     info = next((u for u in mesc.units if u["key"] == key), None)
-    refs = [info["background_unit"]] if info is not None and info.get("background_unit") else []
+    refs = (
+        [info["background_unit"]]
+        if info is not None and info.get("background_unit")
+        else []
+    )
     refs += [
-        stack for stack, held in zstack_contents(path, mesc.units).items()
+        stack
+        for stack, held in zstack_contents(path, mesc.units).items()
         if key in held and stack not in refs
     ]
     out = []
     for ref_key in refs:
-        records = [r for r in image_overlays(path, ref_key, mesc.units) if r["unit"] == key]
+        records = [
+            r for r in image_overlays(path, ref_key, mesc.units) if r["unit"] == key
+        ]
         if not records:
             continue
         ref = open_unit(ref_key)
@@ -118,15 +131,23 @@ def reference_images(mesc, open_unit: Callable[[str], object], c: int) -> list[R
             # one entry per ROI, so the middle slice is where most of them are
             ks = sorted(r["slice"] for r in records)
             lo, hi, at = ks[0], ks[-1], ks[len(ks) // 2]
-            label = f"{name} slice {lo + 1}" if lo == hi else f"{name} slices {lo + 1}-{hi + 1}"
+            label = (
+                f"{name} slice {lo + 1}"
+                if lo == hi
+                else f"{name} slices {lo + 1}-{hi + 1}"
+            )
         else:
             lo, hi, label, at = 0, 0, f"{name} picture", None
         # evenly spaced frames, a few slices at a time, within MAX_ELEMENTS samples
         step = max(1, -(-nt * ny * nx // MAX_ELEMENTS))
-        chunk = max(1, min(hi - lo + 1, MAX_ELEMENTS // max(-(-nt // step) * ny * nx, 1)))
+        chunk = max(
+            1, min(hi - lo + 1, MAX_ELEMENTS // max(-(-nt // step) * ny * nx, 1))
+        )
         peak = np.full((ny, nx), -np.inf, np.float32)
         for k0 in range(lo, hi + 1, chunk):
-            block = np.asarray(ref[::step, cc, k0 : min(k0 + chunk, hi + 1)], np.float32)
+            block = np.asarray(
+                ref[::step, cc, k0 : min(k0 + chunk, hi + 1)], np.float32
+            )
             np.maximum(peak, block.reshape(-1, ny, nx).max(axis=0), out=peak)
         out.append(ReferenceImage(label, peak, records, ref_key, at))
     return out
@@ -143,7 +164,9 @@ class ReferenceView:
     unit, a Z-stack at that slice.
     """
 
-    def __init__(self, parent, on_show: Callable[[str, int | None], None] | None = None):
+    def __init__(
+        self, parent, on_show: Callable[[str, int | None], None] | None = None
+    ):
         self.parent = parent
         self.on_show = on_show
         self.images: dict[str, ReferenceImage] = {}
@@ -166,7 +189,8 @@ class ReferenceView:
 
     def open(self, mesc, open_unit: Callable[[str], object]) -> bool:
         """Show the popup for ``mesc``, on the picture its ROIs were drawn on;
-        False when no image of the file carries them."""
+        False when no image of the file carries them.
+        """
         iw = self.parent.image_widget
         cdim = find_slider_name(iw.dim_names, "c")
         c = int(iw.indices[cdim]) if cdim is not None else 0
@@ -201,7 +225,8 @@ class ReferenceView:
 
     def contours(self, key: str) -> list[tuple]:
         """The shown unit's ROIs on image ``key`` as ``(points, rgba,
-        thickness)`` for the popup: MESc's colours, the slider's ROI thicker."""
+        thickness)`` for the popup: MESc's colours, the slider's ROI thicker.
+        """
         im = self.images.get(key)
         if im is None:
             return []
@@ -210,13 +235,20 @@ class ReferenceView:
         for r in im.records:
             rgb = (r["color"] or CLASS_COLORS[r["roi"] % len(CLASS_COLORS)])[:3]
             # the records are [col, row]; the popup draws [row, col]
-            out.append((r["pixels"][:, ::-1], (*rgb, 1.0), SELECTED_THICKNESS if r["roi"] == roi else ON_THICKNESS))
+            out.append(
+                (
+                    r["pixels"][:, ::-1],
+                    (*rgb, 1.0),
+                    SELECTED_THICKNESS if r["roi"] == roi else ON_THICKNESS,
+                )
+            )
         return out
 
     def pick(self, key: str, py: float, px: float) -> int | None:
         """A click on image ``key`` at ``(py, px)``: the ROI whose line or
         patch runs within a few screen pixels of it becomes the viewer's ROI
-        slider's, and is returned; None when none is near."""
+        slider's, and is returned; None when none is near.
+        """
         im = self.images.get(key)
         if im is None:
             return None
@@ -227,7 +259,12 @@ class ReferenceView:
             pts = np.asarray(r["pixels"], dtype=float)
             a, b = pts[:-1], pts[1:]
             ab = b - a
-            t = np.clip(np.einsum("ij,ij->i", p - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12), 0.0, 1.0)
+            t = np.clip(
+                np.einsum("ij,ij->i", p - a, ab)
+                / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12),
+                0.0,
+                1.0,
+            )
             d = float(np.min(np.linalg.norm(p - (a + t[:, None] * ab), axis=1)))
             if d < best_d:
                 best, best_d = r, d
@@ -244,7 +281,8 @@ class ReferenceView:
         viewer (a Z-stack at the slice its ROIs sit on), and its caption: how
         many of the unit's ROIs are on this image and which one is thick. A
         Z-stack holds only the ROIs scanned inside it, so the count says of
-        how many when some are missing."""
+        how many when some are missing.
+        """
         im = self.images.get(viewer.current_key)
         if im is None:
             return
@@ -267,6 +305,10 @@ class ReferenceView:
         imgui.text_disabled(f"{self.unit}: {drawn} drawn here, ROI {roi + 1} thick")
         set_tooltip(
             "Click a line or patch to move the ROI slider to it."
-            + ("" if n == self.n_rois else "\nThe rest were scanned above or below this Z-stack."),
+            + (
+                ""
+                if n == self.n_rois
+                else "\nThe rest were scanned above or below this Z-stack."
+            ),
             show_mark=False,
         )

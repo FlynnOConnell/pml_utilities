@@ -16,7 +16,8 @@ __all__ = ["in_notebook", "display_widget"]
 
 def in_notebook() -> bool:
     """True inside a Jupyter kernel (lab, notebook, VS Code, hub); False in a
-    terminal, a plain ``ipython`` shell, a script or pytest."""
+    terminal, a plain ``ipython`` shell, a script or pytest.
+    """
     try:
         from IPython import get_ipython
     except ImportError:
@@ -26,9 +27,7 @@ def in_notebook() -> bool:
         return False
     # ZMQInteractiveShell is the kernel; TerminalInteractiveShell is `ipython`.
     # The kernel attribute is the duck-typed version for shells that subclass.
-    return shell.__class__.__name__ == "ZMQInteractiveShell" or hasattr(
-        shell, "kernel"
-    )
+    return shell.__class__.__name__ == "ZMQInteractiveShell" or hasattr(shell, "kernel")
 
 
 def display_widget(output) -> None:

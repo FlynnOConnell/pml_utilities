@@ -1,6 +1,9 @@
 from pathlib import Path
 from typing import Literal
-from imgui_bundle import imgui, immapp, hello_imgui, portable_file_dialogs as pfd
+
+from imgui_bundle import hello_imgui, imgui, immapp
+from imgui_bundle import portable_file_dialogs as pfd
+
 from mbo_utilities.gui._setup import get_default_ini_path
 
 
@@ -35,10 +38,7 @@ class SimpleSelector:
 
         elif self.mode == "files" and imgui.button("Select File(s)"):
             result = pfd.open_file(
-                self.title,
-                self.start_path,
-                self.filters,
-                pfd.opt.multiselect
+                self.title, self.start_path, self.filters, pfd.opt.multiselect
             )
             if result and result.result():
                 self.selected_paths = [Path(p) for p in result.result()]
@@ -116,9 +116,7 @@ def select_files(
 
 if __name__ == "__main__":
     selected = select_files(
-        title="Choose TIFF file(s)",
-        filters=None,
-        start_path=Path.home()
+        title="Choose TIFF file(s)", filters=None, start_path=Path.home()
     )
 
     if selected:

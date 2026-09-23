@@ -8,17 +8,22 @@ Presents data in TZYX format.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from mbo_utilities import log
-from mbo_utilities.arrays._base import _imwrite_base, _normalize_key, ReductionMixin, Shape5DMixin
-from mbo_utilities.lazy_array import register_array_class
-from mbo_utilities.file_io import HAS_ZARR, logger
+from mbo_utilities.arrays._base import (
+    ReductionMixin,
+    Shape5DMixin,
+    _imwrite_base,
+    _normalize_key,
+)
 from mbo_utilities.arrays.suite2p import _add_suite2p_labels
+from mbo_utilities.file_io import HAS_ZARR, logger
+from mbo_utilities.lazy_array import register_array_class
 from mbo_utilities.metadata import _build_ome_metadata, get_param, get_voxel_size
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -55,12 +60,11 @@ def _ome_time_scale_attr(md: dict) -> float | None:
     try:
         entry = multiscales[0]
         idx = next(
-            i for i, ax in enumerate(entry["axes"])
+            i
+            for i, ax in enumerate(entry["axes"])
             if isinstance(ax, dict) and ax.get("type") == "time"
         )
-        return float(
-            entry["datasets"][0]["coordinateTransformations"][0]["scale"][idx]
-        )
+        return float(entry["datasets"][0]["coordinateTransformations"][0]["scale"][idx])
     except (TypeError, KeyError, IndexError, ValueError, StopIteration):
         return None
 
@@ -154,7 +158,9 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
             if isinstance(z, zarr.Group):
                 if "0" not in z:
                     # get store path for error message (zarr v3 uses .root)
-                    store_path = getattr(z.store, "root", getattr(z.store, "path", self.filenames[i]))
+                    store_path = getattr(
+                        z.store, "root", getattr(z.store, "path", self.filenames[i])
+                    )
                     raise ValueError(
                         f"OME-Zarr group missing '0' array in {store_path}"
                     )
@@ -167,15 +173,14 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         shapes = [z.shape for z in self.zs]
         if len(set(shapes)) != 1:
             listing = "\n".join(
-                f"  - {p.name}: {tuple(s)}"
-                for p, s in zip(self.filenames, shapes)
+                f"  - {p.name}: {tuple(s)}" for p, s in zip(self.filenames, shapes)
             )
             parent = self.filenames[0].parent
             raise ValueError(
                 f"{parent} contains {len(self.zs)} zarr stores with different "
                 f"shapes, so they are separate datasets and cannot be opened "
                 f"together:\n{listing}\n"
-                f"Open one explicitly, e.g. imread(r\"{self.filenames[0]}\")."
+                f'Open one explicitly, e.g. imread(r"{self.filenames[0]}").'
             )
 
         # For OME-Zarr, metadata is on the group; for standard zarr, on the array
@@ -297,8 +302,9 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
 
     @property
     def _shape_tzyx(self) -> tuple[int, int, int, int]:
-        """internal 4D shape for zarr indexing (used by 2D/3D/4D source paths;
-        5D sources skip this and feed _shape5d directly)."""
+        """Internal 4D shape for zarr indexing (used by 2D/3D/4D source paths;
+        5D sources skip this and feed _shape5d directly).
+        """
         first_shape = self.zs[0].shape
         if len(first_shape) == 4:
             return first_shape
@@ -316,7 +322,12 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
     @property
     def dtype(self):
         from mbo_utilities.arrays._base import get_dtype
-        return self._target_dtype if self._target_dtype is not None else get_dtype(self.zs[0].dtype)
+
+        return (
+            self._target_dtype
+            if self._target_dtype is not None
+            else get_dtype(self.zs[0].dtype)
+        )
 
     def astype(self, dtype, copy=True):
         """Set target dtype for lazy conversion on data access."""
@@ -336,7 +347,6 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
             data = data.astype(dtype)
         return data
 
-
     def _shape5d(self) -> tuple[int, int, int, int, int]:
         # 5D source zarr: TCZYX is the natural layout, return as-is. This
         # supports the multi-channel OME-Zarrs produced by isoview_to_ome_zarr
@@ -351,7 +361,6 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         return self.nt
 
     def __getitem__(self, key):
-
         key = _normalize_key(key, 5)
         key = key + (slice(None),) * (5 - len(key))
         t_key, c_key, z_key, y_key, x_key = key
@@ -670,7 +679,8 @@ def merge_zarr_zplanes(
     # so a fixed-(c, z) T-scrub touches one file per z. File count = Z
     # instead of T*Z. Benchmark (D:/demo/zarr_chunking_benchmark): same
     # ~5.5 ms/frame as unsharded, ~50x fewer files at typical sizes.
-    from zarr.codecs import ShardingCodec, Crc32cCodec
+    from zarr.codecs import Crc32cCodec, ShardingCodec
+
     inner_codecs = [BytesCodec(), GzipCodec(level=compression_level)]
     image_codecs = [
         ShardingCodec(

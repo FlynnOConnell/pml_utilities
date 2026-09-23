@@ -8,9 +8,9 @@ Two diagnostics, each computed with FFT (subpixel) and without FFT (integer):
 - offset spatial distribution across the FOV
 """
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-import time
 
 import numpy as np
 from tqdm.auto import tqdm
@@ -71,7 +71,13 @@ class ScanPhaseResults:
         arr = np.asarray(arr, dtype=float)
         valid = arr[~np.isnan(arr)]
         if len(valid) == 0:
-            return {"mean": np.nan, "median": np.nan, "std": np.nan, "min": np.nan, "max": np.nan}
+            return {
+                "mean": np.nan,
+                "median": np.nan,
+                "std": np.nan,
+                "min": np.nan,
+                "max": np.nan,
+            }
         return {
             "mean": float(np.mean(valid)),
             "median": float(np.median(valid)),
@@ -115,6 +121,7 @@ def _apply_mbo_style(ax, fig=None):
 def _mbo_fig(*args, **kwargs):
     """Create figure with MBO dark theme."""
     import matplotlib.pyplot as plt
+
     colors = MBO_DARK_THEME
     fig, axes = plt.subplots(*args, **kwargs)
     fig.patch.set_facecolor(colors["background"])
@@ -129,6 +136,7 @@ def _mbo_fig(*args, **kwargs):
 def _mbo_colorbar(im, ax, label=None):
     """Create colorbar with MBO dark theme styling."""
     import matplotlib.pyplot as plt
+
     colors = MBO_DARK_THEME
     cbar = plt.colorbar(im, ax=ax)
     cbar.ax.yaxis.set_tick_params(color=colors["text_muted"])
@@ -243,7 +251,9 @@ class ScanPhaseAnalyzer:
                 if mean_img is None:
                     continue
                 s_fft.append(_phase_corr_2d(mean_img, border, max_offset, use_fft=True))
-                s_int.append(_phase_corr_2d(mean_img, border, max_offset, use_fft=False))
+                s_int.append(
+                    _phase_corr_2d(mean_img, border, max_offset, use_fft=False)
+                )
             off_fft.append(np.mean(s_fft) if s_fft else np.nan)
             std_fft.append(np.std(s_fft) if len(s_fft) > 1 else 0.0)
             off_int.append(np.mean(s_int) if s_int else np.nan)
@@ -282,8 +292,12 @@ class ScanPhaseAnalyzer:
                 if patch.mean() < thr:
                     continue
                 try:
-                    grid_fft[row, col] = _phase_corr_2d(patch, 0, max_offset, use_fft=True)
-                    grid_int[row, col] = _phase_corr_2d(patch, 0, max_offset, use_fft=False)
+                    grid_fft[row, col] = _phase_corr_2d(
+                        patch, 0, max_offset, use_fft=True
+                    )
+                    grid_int[row, col] = _phase_corr_2d(
+                        patch, 0, max_offset, use_fft=False
+                    )
                     valid[row, col] = True
                 except Exception:
                     pass
@@ -304,10 +318,16 @@ class ScanPhaseAnalyzer:
         """Run both diagnostics."""
         start = time.perf_counter()
         steps = [
-            ("window lengths", lambda: self.analyze_windows(
-                border=border, max_offset=max_offset)),
-            ("spatial distribution", lambda: self.analyze_spatial(
-                patch_size=patch_size, max_offset=max_offset)),
+            (
+                "window lengths",
+                lambda: self.analyze_windows(border=border, max_offset=max_offset),
+            ),
+            (
+                "spatial distribution",
+                lambda: self.analyze_spatial(
+                    patch_size=patch_size, max_offset=max_offset
+                ),
+            ),
         ]
         for _name, func in tqdm(steps, desc="scan-phase analysis"):
             func()
@@ -318,6 +338,7 @@ class ScanPhaseAnalyzer:
     def generate_figures(self, output_dir=None, fmt="png", dpi=150, show=False):
         """Generate the two analysis figures."""
         import matplotlib.pyplot as plt
+
         colors = MBO_DARK_THEME
 
         if output_dir:
@@ -329,8 +350,13 @@ class ScanPhaseAnalyzer:
         def _save_fig(fig, name):
             if output_dir:
                 path = output_dir / f"{name}.{fmt}"
-                fig.savefig(path, dpi=dpi, facecolor=colors["background"],
-                            edgecolor="none", bbox_inches="tight")
+                fig.savefig(
+                    path,
+                    dpi=dpi,
+                    facecolor=colors["background"],
+                    edgecolor="none",
+                    bbox_inches="tight",
+                )
                 saved.append(path)
             if show:
                 plt.show()
@@ -355,29 +381,65 @@ class ScanPhaseAnalyzer:
         std_int = self.results.window_stds_int
 
         ax = axes[0]
-        ax.fill_between(ws, off_fft - std_fft, off_fft + std_fft, alpha=0.25, color=colors["primary"])
-        ax.plot(ws, off_fft, "o-", color=colors["primary"], ms=6, lw=2, label="with FFT (subpixel)")
-        ax.fill_between(ws, off_int - std_int, off_int + std_int, alpha=0.2, color=colors["orange"])
-        ax.plot(ws, off_int, "s--", color=colors["orange"], ms=6, lw=2, label="without FFT (integer)")
+        ax.fill_between(
+            ws,
+            off_fft - std_fft,
+            off_fft + std_fft,
+            alpha=0.25,
+            color=colors["primary"],
+        )
+        ax.plot(
+            ws,
+            off_fft,
+            "o-",
+            color=colors["primary"],
+            ms=6,
+            lw=2,
+            label="with FFT (subpixel)",
+        )
+        ax.fill_between(
+            ws, off_int - std_int, off_int + std_int, alpha=0.2, color=colors["orange"]
+        )
+        ax.plot(
+            ws,
+            off_int,
+            "s--",
+            color=colors["orange"],
+            ms=6,
+            lw=2,
+            label="without FFT (integer)",
+        )
         ax.set_xscale("log")
         ax.xaxis.set_major_formatter(lambda x, p: f"{int(x)}" if x >= 1 else "")
         ax.set_xlabel("Window Length (frames)")
         ax.set_ylabel("Offset (px)")
         ax.set_title("Offset vs Window Length", fontweight="bold")
-        ax.legend(loc="best", facecolor=colors["surface"],
-                  edgecolor=colors["border"], labelcolor=colors["text"])
+        ax.legend(
+            loc="best",
+            facecolor=colors["surface"],
+            edgecolor=colors["border"],
+            labelcolor=colors["text"],
+        )
 
         ax = axes[1]
-        ax.plot(ws, std_fft, "o-", color=colors["primary"], ms=6, lw=2, label="with FFT")
-        ax.plot(ws, std_int, "s--", color=colors["orange"], ms=6, lw=2, label="without FFT")
+        ax.plot(
+            ws, std_fft, "o-", color=colors["primary"], ms=6, lw=2, label="with FFT"
+        )
+        ax.plot(
+            ws, std_int, "s--", color=colors["orange"], ms=6, lw=2, label="without FFT"
+        )
         ax.axhline(0.1, color=colors["warning"], ls="--", lw=1.5, alpha=0.8)
         ax.set_xscale("log")
         ax.xaxis.set_major_formatter(lambda x, p: f"{int(x)}" if x >= 1 else "")
         ax.set_xlabel("Window Length (frames)")
         ax.set_ylabel("Std of Estimate (px)")
         ax.set_title("Estimation Precision", fontweight="bold")
-        ax.legend(loc="best", facecolor=colors["surface"],
-                  edgecolor=colors["border"], labelcolor=colors["text"])
+        ax.legend(
+            loc="best",
+            facecolor=colors["surface"],
+            edgecolor=colors["border"],
+            labelcolor=colors["text"],
+        )
 
         fig.tight_layout()
         return fig
@@ -385,6 +447,7 @@ class ScanPhaseAnalyzer:
     def _fig_spatial(self):
         """Spatial offset heatmaps across the FOV, with/without FFT."""
         from matplotlib.colors import TwoSlopeNorm
+
         colors = MBO_DARK_THEME
 
         valid = self.results.grid_valid
@@ -392,7 +455,9 @@ class ScanPhaseAnalyzer:
         disp_fft = np.where(valid, self.results.grid_offsets_fft, np.nan)
         disp_int = np.where(valid, self.results.grid_offsets_int, np.nan)
 
-        vmax = max(0.5, np.nanmax(np.abs(np.concatenate([disp_fft.ravel(), disp_int.ravel()]))))
+        vmax = max(
+            0.5, np.nanmax(np.abs(np.concatenate([disp_fft.ravel(), disp_int.ravel()])))
+        )
         norm = TwoSlopeNorm(vmin=-vmax, vcenter=0, vmax=vmax)
 
         fig, axes = _mbo_fig(1, 2, figsize=(12, 5.5))
@@ -405,8 +470,10 @@ class ScanPhaseAnalyzer:
             _mbo_colorbar(im, ax, "Offset (px)")
             vals = disp[~np.isnan(disp)]
             if len(vals) > 0:
-                ax.set_title(f"{label}\nmean={np.mean(vals):.3f}, std={np.std(vals):.3f} px",
-                             fontweight="bold")
+                ax.set_title(
+                    f"{label}\nmean={np.mean(vals):.3f}, std={np.std(vals):.3f} px",
+                    fontweight="bold",
+                )
             else:
                 ax.set_title(label, fontweight="bold")
             ax.set_xlabel(f"X ({ps}px patches)")
@@ -457,6 +524,7 @@ def run_scanphase_analysis(
 
     if data_path is None:
         from mbo_utilities.gui import select_files
+
         paths = select_files(title="Select data for scan-phase analysis")
         if not paths:
             return None
@@ -467,7 +535,9 @@ def run_scanphase_analysis(
             raise ValueError("empty list of paths")
         first_path = Path(data_path[0])
         if output_dir is None:
-            output_dir = first_path.parent / f"{first_path.parent.name}_scanphase_analysis"
+            output_dir = (
+                first_path.parent / f"{first_path.parent.name}_scanphase_analysis"
+            )
         logger.info(f"loading {len(data_path)} tiff files")
         arr = imread(data_path)
     else:

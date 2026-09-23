@@ -5,28 +5,28 @@ combines processing configuration with a button to view trace quality statistics
 in a separate popup window.
 """
 
-from typing import Any
-from pathlib import Path
 import time
+from pathlib import Path
+from typing import Any
 
 import numpy as np
-from imgui_bundle import imgui, portable_file_dialogs as pfd
+from imgui_bundle import imgui
 
-from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 from mbo_utilities.gui._availability import HAS_SUITE2P
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
-from mbo_utilities.preferences import get_last_dir, set_last_dir
-
+from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
+from mbo_utilities.preferences import set_last_dir
 
 # lazy availability check cache
 _HAS_LSP: bool | None = None
 
 
 def _check_lsp_available() -> bool:
-    """check if lbm_suite2p_python and suite2p are both available."""
+    """Check if lbm_suite2p_python and suite2p are both available."""
     global _HAS_LSP
     if _HAS_LSP is None:
         import importlib.util
+
         _HAS_LSP = (
             importlib.util.find_spec("lbm_suite2p_python") is not None
             and importlib.util.find_spec("suite2p") is not None
@@ -38,6 +38,7 @@ def _patch_pyqt6_slider():
     """Apply PyQt6 compatibility fix for suite2p GUI (call before opening GUI)."""
     try:
         from PyQt6.QtWidgets import QSlider
+
         if not hasattr(QSlider, "NoTicks"):
             QSlider.NoTicks = QSlider.TickPosition.NoTicks
     except ImportError:
@@ -65,9 +66,9 @@ class Suite2pPipelineWidget(PipelineWidget):
         same weighted extraction — which also gives the surrounding
         neuropil trace that a plain mask average cannot.
         """
+        import torch
         from suite2p.extraction.extract import extract_traces
         from suite2p.extraction.masks import create_masks
-        import torch
 
         labels = np.asarray(labels)
         n_rois = int(labels.max())
@@ -106,10 +107,11 @@ class Suite2pPipelineWidget(PipelineWidget):
 
         # import settings from settings module
         from mbo_utilities.gui.widgets.pipelines.settings import (
-            Suite2pSettings,
-            Suite2pDB,
             MboSuite2pExtras,
+            Suite2pDB,
+            Suite2pSettings,
         )
+
         self.settings = Suite2pSettings()
         self.db = Suite2pDB()
         self.extras = MboSuite2pExtras()
@@ -155,6 +157,7 @@ class Suite2pPipelineWidget(PipelineWidget):
         """Get diagnostics widget (lazy init)."""
         if self._diagnostics_widget is None:
             from mbo_utilities.gui.widgets.diagnostics import DiagnosticsWidget
+
             self._diagnostics_widget = DiagnosticsWidget()
         return self._diagnostics_widget
 
@@ -162,6 +165,7 @@ class Suite2pPipelineWidget(PipelineWidget):
         """Get grid search widget (lazy init)."""
         if self._grid_search_widget is None:
             from mbo_utilities.gui.widgets.grid_search import GridSearchViewer
+
             self._grid_search_widget = GridSearchViewer()
         return self._grid_search_widget
 
@@ -169,6 +173,7 @@ class Suite2pPipelineWidget(PipelineWidget):
         """Check if suite2p GUI is available (requires rastermap)."""
         # always re-check using find_spec (fast, no actual import)
         import importlib.util
+
         # suite2p GUI requires rastermap
         return (
             importlib.util.find_spec("suite2p.gui") is not None
@@ -179,6 +184,7 @@ class Suite2pPipelineWidget(PipelineWidget):
         """Check if cellpose GUI is available."""
         # always re-check using find_spec (fast, no actual import)
         import importlib.util
+
         return importlib.util.find_spec("cellpose.gui") is not None
 
     def draw_config(self) -> None:
@@ -220,8 +226,12 @@ class Suite2pPipelineWidget(PipelineWidget):
         self._last_max_frames = getattr(self.parent, "_last_max_frames", 1000)
         self._selected_planes = getattr(self.parent, "_selected_planes", set())
         self._show_plane_popup = getattr(self.parent, "_show_plane_popup", False)
-        self._savepath_flash_start = getattr(self.parent, "_s2p_savepath_flash_start", None)
-        self._show_savepath_popup = getattr(self.parent, "_s2p_show_savepath_popup", False)
+        self._savepath_flash_start = getattr(
+            self.parent, "_s2p_savepath_flash_start", None
+        )
+        self._show_savepath_popup = getattr(
+            self.parent, "_s2p_show_savepath_popup", False
+        )
         self._s2p_fix_phase = getattr(self.parent, "_s2p_fix_phase", True)
         self._s2p_use_fft = getattr(self.parent, "_s2p_use_fft", True)
 
@@ -257,7 +267,10 @@ class Suite2pPipelineWidget(PipelineWidget):
             self._last_suite2p_ichosen = None
             return
 
-        if not hasattr(self._external_gui_window, "loaded") or not self._external_gui_window.loaded:
+        if (
+            not hasattr(self._external_gui_window, "loaded")
+            or not self._external_gui_window.loaded
+        ):
             return
 
         # get current selection from suite2p
@@ -328,12 +341,14 @@ class Suite2pPipelineWidget(PipelineWidget):
         viewport = imgui.get_main_viewport()
         popup_width = min(1200, viewport.size.x * 0.9)
         popup_height = min(800, viewport.size.y * 0.85)
-        imgui.set_next_window_size(imgui.ImVec2(popup_width, popup_height), imgui.Cond_.first_use_ever)
+        imgui.set_next_window_size(
+            imgui.ImVec2(popup_width, popup_height), imgui.Cond_.first_use_ever
+        )
 
         opened, visible = imgui.begin_popup_modal(
             "Trace Quality Statistics",
             p_open=True if self._diagnostics_popup_open else None,
-            flags=imgui.WindowFlags_.no_saved_settings
+            flags=imgui.WindowFlags_.no_saved_settings,
         )
 
         if opened:
@@ -381,9 +396,9 @@ class Suite2pPipelineWidget(PipelineWidget):
         try:
             # apply PyQt6 compatibility fix before importing suite2p GUI
             _patch_pyqt6_slider()
-            from suite2p.gui.gui2p import MainWindow as Suite2pMainWindow
-            from PyQt6.QtWidgets import QApplication
             from PyQt6.QtCore import QRect
+            from PyQt6.QtWidgets import QApplication
+            from suite2p.gui.gui2p import MainWindow as Suite2pMainWindow
 
             self._external_gui_window = Suite2pMainWindow(statfile=str(statfile))
             self._external_gui_type = "suite2p"
@@ -401,14 +416,18 @@ class Suite2pPipelineWidget(PipelineWidget):
                 margin_bottom = 10
                 win_height = screen_h - margin_top - margin_bottom
 
-                self._external_gui_window.setGeometry(QRect(
-                    screen_x + half_width,
-                    screen_y + margin_top,
-                    half_width,
-                    win_height
-                ))
+                self._external_gui_window.setGeometry(
+                    QRect(
+                        screen_x + half_width,
+                        screen_y + margin_top,
+                        half_width,
+                        win_height,
+                    )
+                )
                 self._external_gui_window.setMinimumSize(400, 300)
-                self._reposition_mbo_window(screen_x, screen_y + margin_top, half_width, win_height)
+                self._reposition_mbo_window(
+                    screen_x, screen_y + margin_top, half_width, win_height
+                )
 
             self._external_gui_window.show()
             self._external_gui_window.showNormal()
@@ -427,14 +446,15 @@ class Suite2pPipelineWidget(PipelineWidget):
         Edits made in the GUI can be saved and will persist.
         """
         try:
-            from lbm_suite2p_python.conversion import ensure_cellpose_format
-            from cellpose.gui.gui import MainW
             from cellpose.gui import io as cellpose_io
-            from PyQt6.QtWidgets import QApplication
+            from cellpose.gui.gui import MainW
+            from lbm_suite2p_python.conversion import ensure_cellpose_format
             from PyQt6.QtCore import QRect
+            from PyQt6.QtWidgets import QApplication
 
             # patch QCheckBox for Qt5/Qt6 compatibility
             from mbo_utilities.analysis import _patch_qt_checkbox
+
             _patch_qt_checkbox()
 
             plane_dir = statfile.parent
@@ -449,9 +469,7 @@ class Suite2pPipelineWidget(PipelineWidget):
             # Use cellpose's native _load_seg to properly load everything
             # This handles image loading, mask initialization, outlines, colors, etc.
             cellpose_io._load_seg(
-                self._external_gui_window,
-                filename=str(seg_file),
-                load_3D=False
+                self._external_gui_window, filename=str(seg_file), load_3D=False
             )
 
             # Position window side-by-side with MBO window
@@ -467,22 +485,29 @@ class Suite2pPipelineWidget(PipelineWidget):
                 margin_bottom = 10
                 win_height = screen_h - margin_top - margin_bottom
 
-                self._external_gui_window.setGeometry(QRect(
-                    screen_x + half_width,
-                    screen_y + margin_top,
-                    half_width,
-                    win_height
-                ))
-                self._reposition_mbo_window(screen_x, screen_y + margin_top, half_width, win_height)
+                self._external_gui_window.setGeometry(
+                    QRect(
+                        screen_x + half_width,
+                        screen_y + margin_top,
+                        half_width,
+                        win_height,
+                    )
+                )
+                self._reposition_mbo_window(
+                    screen_x, screen_y + margin_top, half_width, win_height
+                )
 
             self._external_gui_window.show()
 
-            self._external_gui_window.ncells.get() if hasattr(self._external_gui_window.ncells, "get") else 0
+            self._external_gui_window.ncells.get() if hasattr(
+                self._external_gui_window.ncells, "get"
+            ) else 0
 
         except ImportError:
             pass
         except Exception:
             import traceback
+
             traceback.print_exc()
 
     def _reposition_mbo_window(self, x: int, y: int, width: int, height: int):
@@ -552,12 +577,14 @@ class Suite2pPipelineWidget(PipelineWidget):
         viewport = imgui.get_main_viewport()
         popup_width = min(1200, viewport.size.x * 0.9)
         popup_height = min(800, viewport.size.y * 0.85)
-        imgui.set_next_window_size(imgui.ImVec2(popup_width, popup_height), imgui.Cond_.first_use_ever)
+        imgui.set_next_window_size(
+            imgui.ImVec2(popup_width, popup_height), imgui.Cond_.first_use_ever
+        )
 
         opened, visible = imgui.begin_popup_modal(
             "Grid Search Results",
             p_open=True if self._grid_search_popup_open else None,
-            flags=imgui.WindowFlags_.no_saved_settings
+            flags=imgui.WindowFlags_.no_saved_settings,
         )
 
         if opened:

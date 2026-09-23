@@ -28,8 +28,11 @@ class Summaries:
 def host():
     from mbo_utilities.gui.app import build_host
 
-    host = build_host(Summaries(np.linspace(0, 1, 32 * 32).reshape(32, 32)),
-                      apps=apps_module.ported_apps(), size=(900, 600))
+    host = build_host(
+        Summaries(np.linspace(0, 1, 32 * 32).reshape(32, 32)),
+        apps=apps_module.ported_apps(),
+        size=(900, 600),
+    )
     host.figure.show()
     host.figure.canvas.force_draw()
     yield host

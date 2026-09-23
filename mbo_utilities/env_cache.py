@@ -17,12 +17,12 @@ from typing import Any
 
 
 def get_env_hash() -> str:
-    """generate short hash from sys.executable path."""
+    """Generate short hash from sys.executable path."""
     return hashlib.md5(sys.executable.encode()).hexdigest()[:8]
 
 
 def get_cache_dir() -> Path:
-    """get cache directory for environment caches."""
+    """Get cache directory for environment caches."""
     # kept inline rather than via get_mbo_dirs() to keep the fast-startup path
     # free of package imports; must stay equal to get_mbo_dirs()["cache"]/"envs"
     cache_dir = Path.home() / ".mbo" / "cache" / "envs"
@@ -31,12 +31,12 @@ def get_cache_dir() -> Path:
 
 
 def get_cache_path() -> Path:
-    """get cache file path for current environment."""
+    """Get cache file path for current environment."""
     return get_cache_dir() / f"{get_env_hash()}.json"
 
 
 def load_cache() -> dict | None:
-    """load cache for current environment, return None if missing/corrupted."""
+    """Load cache for current environment, return None if missing/corrupted."""
     path = get_cache_path()
     if not path.exists():
         return None
@@ -48,7 +48,7 @@ def load_cache() -> dict | None:
 
 
 def save_cache(data: dict) -> None:
-    """save cache for current environment."""
+    """Save cache for current environment."""
     path = get_cache_path()
     data["env_path"] = sys.executable
     data["env_hash"] = get_env_hash()
@@ -61,7 +61,7 @@ def save_cache(data: dict) -> None:
 
 
 def clear_cache() -> bool:
-    """delete cache for current environment. returns True if deleted."""
+    """Delete cache for current environment. returns True if deleted."""
     path = get_cache_path()
     if path.exists():
         try:
@@ -79,7 +79,8 @@ _CACHE_SCHEMA = 2
 
 def _find_installed_dist(candidates: tuple[str, ...]) -> tuple[str, str] | None:
     """Return (dist_name, version) of the first candidate that resolves."""
-    from importlib.metadata import version, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError, version
+
     for name in candidates:
         try:
             return name, version(name)
@@ -89,17 +90,27 @@ def _find_installed_dist(candidates: tuple[str, ...]) -> tuple[str, str] | None:
 
 
 def get_env_fingerprint() -> str:
-    """generate fingerprint of installed packages to detect env changes.
+    """Generate fingerprint of installed packages to detect env changes.
 
     uses a hash of package names + versions for key dependencies.
     if this changes, the environment has been modified.
     """
     try:
-        from importlib.metadata import version, PackageNotFoundError
+        from importlib.metadata import PackageNotFoundError, version
+
         # check specific packages directly (faster than iterating all)
         key_packages = [
-            "mbo-utilities", "torch", "lbm-suite2p-python", "suite2p", "cellpose",
-            "masknmf", "rastermap", "imgui-bundle", "fastplotlib", "pyqt6", "napari",
+            "mbo-utilities",
+            "torch",
+            "lbm-suite2p-python",
+            "suite2p",
+            "cellpose",
+            "masknmf",
+            "rastermap",
+            "imgui-bundle",
+            "fastplotlib",
+            "pyqt6",
+            "napari",
         ]
         installed = []
         for pkg in key_packages:
@@ -119,7 +130,7 @@ def get_env_fingerprint() -> str:
 
 
 def is_cache_valid(cache: dict | None, max_age_hours: int = 168) -> bool:
-    """check if cache is still valid.
+    """Check if cache is still valid.
 
     cache is valid if:
     - env fingerprint matches (packages haven't changed)
@@ -130,6 +141,7 @@ def is_cache_valid(cache: dict | None, max_age_hours: int = 168) -> bool:
         return False
     try:
         from mbo_utilities import __version__
+
         # check mbo version
         if cache.get("mbo_version") != __version__:
             return False
@@ -147,7 +159,7 @@ def is_cache_valid(cache: dict | None, max_age_hours: int = 168) -> bool:
 
 
 def get_cached_packages() -> dict | None:
-    """get cached package info, or None if cache invalid."""
+    """Get cached package info, or None if cache invalid."""
     cache = load_cache()
     if is_cache_valid(cache):
         return cache.get("packages")
@@ -155,7 +167,7 @@ def get_cached_packages() -> dict | None:
 
 
 def get_cached_install_type() -> str | None:
-    """get cached install type, or None if cache invalid."""
+    """Get cached install type, or None if cache invalid."""
     cache = load_cache()
     if is_cache_valid(cache):
         return cache.get("install_type")
@@ -163,7 +175,7 @@ def get_cached_install_type() -> str | None:
 
 
 def get_cached_pypi_version(max_age_hours: int = 1) -> str | None:
-    """get cached pypi version if checked recently."""
+    """Get cached pypi version if checked recently."""
     cache = load_cache()
     if not cache:
         return None
@@ -178,7 +190,7 @@ def get_cached_pypi_version(max_age_hours: int = 1) -> str | None:
 
 
 def update_pypi_cache(latest_version: str) -> None:
-    """update pypi version check in cache."""
+    """Update pypi version check in cache."""
     cache = load_cache() or {}
     cache["pypi_check"] = {
         "latest_version": latest_version,
@@ -188,7 +200,7 @@ def update_pypi_cache(latest_version: str) -> None:
 
 
 def build_full_cache() -> dict:
-    """build complete cache data from scratch."""
+    """Build complete cache data from scratch."""
     from mbo_utilities import __version__
 
     cache = {
@@ -203,7 +215,7 @@ def build_full_cache() -> dict:
 
 
 def build_full_cache_with_install_status() -> dict:
-    """build complete cache including full install status (slower, includes GPU checks)."""
+    """Build complete cache including full install status (slower, includes GPU checks)."""
     from mbo_utilities import __version__
     from mbo_utilities.install import check_installation
 
@@ -236,7 +248,7 @@ def _serialize_install_status(status) -> dict:
 
 
 def get_cached_install_status():
-    """get cached InstallStatus object, or None if cache invalid."""
+    """Get cached InstallStatus object, or None if cache invalid."""
     cache = load_cache()
     if not is_cache_valid(cache):
         return None
@@ -268,7 +280,7 @@ def _deserialize_install_status(data: dict):
 
 
 def _detect_install_type() -> str:
-    """detect how mbo_utilities is installed."""
+    """Detect how mbo_utilities is installed."""
     exe_str = sys.executable.lower()
     if ".local" in exe_str or ("uv" in exe_str and "tools" in exe_str):
         return "uv tool"
@@ -281,22 +293,24 @@ def _detect_install_type() -> str:
 
 
 def _check_import(module_name: str) -> bool:
-    """check if a module can be imported without actually importing it."""
+    """Check if a module can be imported without actually importing it."""
     import importlib.util
+
     return importlib.util.find_spec(module_name) is not None
 
 
 def _get_package_version(module_name: str) -> str | None:
-    """get installed version of a package."""
+    """Get installed version of a package."""
     try:
         from importlib.metadata import version
+
         return version(module_name)
     except Exception:
         return None
 
 
 def _check_all_packages() -> dict:
-    """check availability and versions of all optional packages."""
+    """Check availability and versions of all optional packages."""
     packages = {}
 
     # package definitions: (cache_key, module_to_check, package_name_for_version)
@@ -335,7 +349,7 @@ def _check_all_packages() -> dict:
 
 
 def ensure_cache() -> dict:
-    """ensure cache exists and is valid, building if needed."""
+    """Ensure cache exists and is valid, building if needed."""
     cache = load_cache()
     if is_cache_valid(cache):
         return cache

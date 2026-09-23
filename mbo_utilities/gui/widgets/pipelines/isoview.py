@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import hello_imgui, icons_fontawesome_6 as fa, imgui
+from imgui_bundle import hello_imgui, imgui
 
 from mbo_utilities.gui._imgui_helpers import (
     PopupAutoSize,
@@ -40,17 +40,14 @@ from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 from mbo_utilities.gui.widgets.pipelines.settings import (
     _dataset_size_bytes,
     _draw_dataset_files_popup,
-    _draw_md_field,
     _format_size,
-    _truncate_to_width,
 )
-
 
 # Style palette matched to Suite2p's settings panel — colors picked
 # from mbo_utilities/gui/widgets/pipelines/settings.py so the two
 # pipelines look like they belong to the same family.
-_TITLE_COLOR = imgui.ImVec4(1.0, 0.85, 0.4, 1.0)         # section title (yellow)
-_SUBSECTION_COLOR = imgui.ImVec4(0.55, 0.75, 1.0, 1.0)   # subtitle (light blue)
+_TITLE_COLOR = imgui.ImVec4(1.0, 0.85, 0.4, 1.0)  # section title (yellow)
+_SUBSECTION_COLOR = imgui.ImVec4(0.55, 0.75, 1.0, 1.0)  # subtitle (light blue)
 
 # Button sizes — same scheme as Suite2p (_RUN_W primary, _BTN_W secondary).
 _RUN_W = 220
@@ -77,7 +74,7 @@ def _iso_volume_gb(arr: Any) -> float:
         if len(shp) < 3:
             return 0.0
         itemsize = int(getattr(arr.dtype, "itemsize", 2))
-        return (shp[-3] * shp[-2] * shp[-1] * itemsize) / (1024 ** 3)
+        return (shp[-3] * shp[-2] * shp[-1] * itemsize) / (1024**3)
     except Exception:
         return 0.0
 
@@ -137,9 +134,13 @@ def _hint(text: str) -> None:
 @contextmanager
 def _green_button():
     """Push the Suite2p green-Run-button color scheme (idle/hover/active)."""
-    imgui.push_style_color(imgui.Col_.button,         imgui.ImVec4(0.13, 0.55, 0.13, 1.0))
-    imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0))
-    imgui.push_style_color(imgui.Col_.button_active,  imgui.ImVec4(0.10, 0.45, 0.10, 1.0))
+    imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.13, 0.55, 0.13, 1.0))
+    imgui.push_style_color(
+        imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0)
+    )
+    imgui.push_style_color(
+        imgui.Col_.button_active, imgui.ImVec4(0.10, 0.45, 0.10, 1.0)
+    )
     try:
         yield
     finally:
@@ -195,6 +196,7 @@ def _norm_variant(text: str) -> str:
     s = (text or "").lstrip("_")
     return f"_{s}" if s else ""
 
+
 # "Look at these first" — labels rendered in a thin rounded box (bold
 # when self.parent._bold_font is available) inside the Parameters popup.
 # Mirrors Suite2p's _IMPORTANT_FIELDS treatment.
@@ -248,6 +250,7 @@ def maybe_spawn_raw_projections(parent: Any) -> None:
         return
     arr = _unwrap_array(iw.data[0])
     from mbo_utilities.arrays.isoview import IsoviewArray
+
     if not isinstance(arr, IsoviewArray) or arr.kind != "raw":
         return
     raw_dir = str(arr.scan_root)
@@ -259,6 +262,7 @@ def maybe_spawn_raw_projections(parent: Any) -> None:
         return
 
     from mbo_utilities.gui.widgets.process_manager import get_process_manager
+
     pm = get_process_manager()
     for p in pm.get_all():
         if (
@@ -300,6 +304,7 @@ def maybe_refresh_raw_projections(parent: Any) -> None:
         return
 
     from mbo_utilities.gui.widgets.process_manager import get_process_manager
+
     pm = get_process_manager()
     procs = pm.get_all()
     for raw_dir in list(pending):
@@ -356,9 +361,12 @@ class IsoviewPipelineWidget(PipelineWidget):
         if arr is None:
             return False
         from mbo_utilities.arrays.isoview import IsoviewArray
+
         underlying = _unwrap_array(arr)
         return isinstance(underlying, IsoviewArray) and underlying.kind in (
-            "raw", "corrected", "fused",
+            "raw",
+            "corrected",
+            "fused",
         )
 
     def __init__(self, parent: Any):
@@ -564,7 +572,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         if view is None:
             return
         params = self._fuse_view_params.setdefault(
-            view, self._default_fuse_view_params(),
+            view,
+            self._default_fuse_view_params(),
         )
         params[name] = value
 
@@ -595,10 +604,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             for _p in self._fuse_view_params.values():
                 _p["flip_horizontal"] = False
                 _p["flip_vertical"] = True
-        if (
-            self._fuse_active_view is None
-            or self._fuse_active_view not in view_ids
-        ):
+        if self._fuse_active_view is None or self._fuse_active_view not in view_ids:
             self._fuse_active_view = view_ids[0]
 
         # Default consolidate output: drop a .zarr sibling next to the
@@ -653,7 +659,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         return "_output_dir"
 
     @staticmethod
-    def _iso_input_tree(arr: Any) -> "Path | None":
+    def _iso_input_tree(arr: Any) -> Path | None:
         """The .corrected*/.fused* tree the array was loaded from.
 
         Matches custom suffixes (e.g. ``.fused_v2``) by accepting a
@@ -665,17 +671,19 @@ class IsoviewPipelineWidget(PipelineWidget):
             for suf in (".corrected", ".fused"):
                 idx = n.find(suf)
                 if idx >= 0:
-                    rest = n[idx + len(suf):]
+                    rest = n[idx + len(suf) :]
                     if rest == "" or rest.startswith("_"):
                         return ancestor
         return None
 
     @staticmethod
-    def _iso_raw_stem(tree: "Path") -> str:
+    def _iso_raw_stem(tree: Path) -> str:
         """Raw dataset stem of a tree dir, e.g. ``zebrafish.fused_v2`` -> ``zebrafish``."""
         from mbo_utilities.arrays.isoview.array import (
-            _CORRECTED_TAIL_RE, _FUSED_TAIL_RE,
+            _CORRECTED_TAIL_RE,
+            _FUSED_TAIL_RE,
         )
+
         stem = tree.name
         for rx in (_CORRECTED_TAIL_RE, _FUSED_TAIL_RE):
             m = rx.search(stem)
@@ -684,20 +692,21 @@ class IsoviewPipelineWidget(PipelineWidget):
         return stem
 
     @staticmethod
-    def _iso_tree_suffix(tree: "Path") -> str:
+    def _iso_tree_suffix(tree: Path) -> str:
         """Variant suffix carried by a tree dir, e.g. ``zebrafish.fused_v2`` -> ``v2``."""
         n = tree.name
         for pre in (".corrected", ".fused"):
             idx = n.find(pre)
             if idx >= 0:
-                return n[idx + len(pre):].lstrip("_")
+                return n[idx + len(pre) :].lstrip("_")
         return ""
 
-    def _iso_stitcher_dest(self, arr: Any) -> "Path | None":
+    def _iso_stitcher_dest(self, arr: Any) -> Path | None:
         """BigStitcher output dir = ``<rawstem>.stitcher[_<variant>]``, where
         the variant is the Output-options field (empty -> bare ``.stitcher``).
         Matches isoview's ``derive_output_name(raw, ".stitcher", variant)``.
-        Works without the raw root."""
+        Works without the raw root.
+        """
         # raw datasets export straight from the acquisition root, which has
         # no .corrected/.fused ancestor for _iso_input_tree to match.
         if getattr(arr, "kind", None) == "raw":
@@ -733,20 +742,22 @@ class IsoviewPipelineWidget(PipelineWidget):
                 return f"{Path(sr).resolve()}{tail}"
         return ""
 
-    def _spawn(self, task_type: str, args: dict, description: str,
-               output_path: str | None) -> None:
+    def _spawn(
+        self, task_type: str, args: dict, description: str, output_path: str | None
+    ) -> None:
         from mbo_utilities.gui.widgets.process_manager import get_process_manager
+
         pm = get_process_manager()
         pid = pm.spawn(
-            task_type=task_type, args=args, description=description,
+            task_type=task_type,
+            args=args,
+            description=description,
             output_path=output_path,
         )
         if pid:
             self._last_status = f"Started (PID {pid})"
             if hasattr(self.parent, "logger"):
-                self.parent.logger.info(
-                    f"{task_type} spawned PID {pid}"
-                )
+                self.parent.logger.info(f"{task_type} spawned PID {pid}")
         else:
             self._last_status = "Failed to spawn worker."
 
@@ -812,9 +823,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         opened, visible = imgui.begin_popup_modal(
             popup_title,
             p_open=True,
-            flags=self._iso_settings_sizer.flags(
-                imgui.WindowFlags_.no_saved_settings
-            ),
+            flags=self._iso_settings_sizer.flags(imgui.WindowFlags_.no_saved_settings),
         )
         if not opened:
             return
@@ -846,15 +855,15 @@ class IsoviewPipelineWidget(PipelineWidget):
             imgui.spacing()
             imgui.separator()
             imgui.spacing()
-            if imgui.button("Close##iso_settings_close",
-                            imgui.ImVec2(_BTN_W, 0)):
+            if imgui.button("Close##iso_settings_close", imgui.ImVec2(_BTN_W, 0)):
                 self._show_settings_popup = False
                 imgui.close_current_popup()
         finally:
             imgui.end_popup()
 
     def _draw_popup_columns(
-        self, columns: "list[tuple[str, Any] | tuple[str, Any, bool]]",
+        self,
+        columns: list[tuple[str, Any] | tuple[str, Any, bool]],
     ) -> None:
         """Render a row of equal-width bordered child boxes.
 
@@ -891,9 +900,7 @@ class IsoviewPipelineWidget(PipelineWidget):
                 if collapsing:
                     imgui.set_next_item_open(False, imgui.Cond_.appearing)
                     imgui.push_style_color(imgui.Col_.text, _TITLE_COLOR)
-                    expanded = imgui.collapsing_header(
-                        f"{title}##iso_col_hdr_{title}"
-                    )
+                    expanded = imgui.collapsing_header(f"{title}##iso_col_hdr_{title}")
                     imgui.pop_style_color()
                     if expanded:
                         imgui.spacing()
@@ -906,38 +913,57 @@ class IsoviewPipelineWidget(PipelineWidget):
                 imgui.end_child()
 
     def _draw_consolidate_popup_rows(self) -> None:
-        self._draw_popup_columns([
-            ("I/O options", self._draw_consolidate_io_box),
-            ("Codec", self._draw_consolidate_codec_box),
-            ("Acquisition (override XML)",
-             self._draw_microscope_overrides_box, True),
-        ])
+        self._draw_popup_columns(
+            [
+                ("I/O options", self._draw_consolidate_io_box),
+                ("Codec", self._draw_consolidate_codec_box),
+                (
+                    "Acquisition (override XML)",
+                    self._draw_microscope_overrides_box,
+                    True,
+                ),
+            ]
+        )
 
     def _draw_correct_popup_rows(self) -> None:
-        self._draw_popup_columns([
-            ("I/O options", self._draw_correct_io_box),
-            ("Segmentation", self._draw_correct_segmentation_box),
-            ("Dead pixel correction", self._draw_correct_advanced_box),
-        ])
+        self._draw_popup_columns(
+            [
+                ("I/O options", self._draw_correct_io_box),
+                ("Segmentation", self._draw_correct_segmentation_box),
+                ("Dead pixel correction", self._draw_correct_advanced_box),
+            ]
+        )
         imgui.spacing()
-        self._draw_popup_columns([
-            ("Acquisition (override XML)",
-             self._draw_microscope_overrides_box, True),
-        ])
+        self._draw_popup_columns(
+            [
+                (
+                    "Acquisition (override XML)",
+                    self._draw_microscope_overrides_box,
+                    True,
+                ),
+            ]
+        )
 
     def _draw_fuse_popup_rows(self) -> None:
         self._draw_fuse_view_selector()
-        self._draw_popup_columns([
-            ("I/O options", self._draw_fuse_io_box),
-            ("Fusion", self._draw_fuse_fusion_box),
-            ("Background", self._draw_fuse_background_box),
-        ])
+        self._draw_popup_columns(
+            [
+                ("I/O options", self._draw_fuse_io_box),
+                ("Fusion", self._draw_fuse_fusion_box),
+                ("Background", self._draw_fuse_background_box),
+            ]
+        )
         imgui.spacing()
-        self._draw_popup_columns([
-            ("Registration search", self._draw_fuse_search_box, True),
-            ("Acquisition (override XML)",
-             self._draw_microscope_overrides_box, True),
-        ])
+        self._draw_popup_columns(
+            [
+                ("Registration search", self._draw_fuse_search_box, True),
+                (
+                    "Acquisition (override XML)",
+                    self._draw_microscope_overrides_box,
+                    True,
+                ),
+            ]
+        )
 
     def _draw_fuse_view_selector(self) -> None:
         """Per-view editor switcher.
@@ -994,35 +1020,40 @@ class IsoviewPipelineWidget(PipelineWidget):
 
     def _draw_stitcher_popup_rows(self) -> None:
         """BigStitcher Parameters popup, laid out in Suite2p-style boxes."""
-        self._draw_popup_columns([
-            ("Orientation", self._draw_stitcher_orientation_box),
-            ("View transforms", self._draw_stitcher_transforms_box),
-            ("Acquisition (override XML)",
-             self._draw_microscope_overrides_box, True),
-        ])
+        self._draw_popup_columns(
+            [
+                ("Orientation", self._draw_stitcher_orientation_box),
+                ("View transforms", self._draw_stitcher_transforms_box),
+                (
+                    "Acquisition (override XML)",
+                    self._draw_microscope_overrides_box,
+                    True,
+                ),
+            ]
+        )
 
     def _orient_toggle(self, label: str, active: bool, width: float = 0.0) -> bool:
         """Highlighted selection button; returns True when clicked."""
         with selected_button_style(active):
             return imgui.button(label, imgui.ImVec2(width, 0))
 
-    def _orient_target_state(self, target: "str | None" = None) -> dict:
+    def _orient_target_state(self, target: str | None = None) -> dict:
         """Editable rotations/flips for one orientation target (lazy-init)."""
         target = target or self._stitcher_orient_target
-        return self._stitcher_orient.setdefault(
-            target, {"rotations": [], "flips": []}
-        )
+        return self._stitcher_orient.setdefault(target, {"rotations": [], "flips": []})
 
     def _parse_stitcher_cameras(self) -> list:
         """Camera indices from the Cameras field (e.g. '0,2' -> [0, 2])."""
         return [
-            int(c) for c in self._stitcher_cameras.replace(",", " ").split()
+            int(c)
+            for c in self._stitcher_cameras.replace(",", " ").split()
             if c.strip().isdigit()
         ]
 
     def _is_per_camera_export(self) -> bool:
         """True when the export is per-camera (raw, corrected with a Cameras
-        filter, or corrected linked in place) rather than fused VW00/VW90."""
+        filter, or corrected linked in place) rather than fused VW00/VW90.
+        """
         kind = getattr(self._get_array(), "kind", None)
         if kind == "raw":
             return True
@@ -1033,9 +1064,11 @@ class IsoviewPipelineWidget(PipelineWidget):
     def _orient_targets(self) -> list:
         """Orientation targets. Per-camera (raw/.corrected): the views
         themselves (VW00/VW90/VW180/VW270, or the Cameras filter). Fused: the
-        fused views."""
+        fused views.
+        """
         if self._is_per_camera_export():
             from mbo_utilities.arrays.isoview.array import camera_view_label
+
             cams = self._parse_stitcher_cameras()
             if not cams:
                 cams = [0, 1, 2, 3]  # raw exports all cameras by default
@@ -1046,7 +1079,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         """Default orientation profile from the XML camera_orientation:
         Normal -> 'default', Rotated -> 'rotated'. When the field is absent,
         per-camera falls back to the Normal CM->CM00 alignment (prior
-        behaviour) and fused to 'none'."""
+        behaviour) and fused to 'none'.
+        """
         meta = getattr(arr, "metadata", None) or {}
         co = str(meta.get("camera_orientation") or "").strip().lower()
         if not co:
@@ -1072,6 +1106,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         rotated upright Z-90 is applied at export time (views.py) for both.
         """
         from mbo_utilities.arrays.isoview.array import camera_view_label
+
         self._stitcher_orient_profile = name
         table = {
             "default": _CM_ALIGN_DEFAULT,
@@ -1114,7 +1149,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         else:
             st["flips"].append(axis)
 
-    def _compose_orientation_ops(self, target: "str | None" = None) -> list:
+    def _compose_orientation_ops(self, target: str | None = None) -> list:
         """Orientation op list for one target.
 
         An orientation committed via the Align views Apply button overrides
@@ -1160,8 +1195,10 @@ class IsoviewPipelineWidget(PipelineWidget):
             lambda name: self._apply_orient_profile_all(name),
         )
         if per_camera:
-            _hint("Normal/Rotated align VW90/180/270 onto VW00; None clears "
-                  "them. Applies to every view.")
+            _hint(
+                "Normal/Rotated align VW90/180/270 onto VW00; None clears "
+                "them. Applies to every view."
+            )
         else:
             _hint("Seeds VW00; set VW90's ~90 below. Applies to the views.")
         imgui.spacing()
@@ -1256,18 +1293,18 @@ class IsoviewPipelineWidget(PipelineWidget):
             )
 
             _, self._stitcher_reverse_z = imgui.checkbox(
-                "Reverse Z", self._stitcher_reverse_z,
+                "Reverse Z",
+                self._stitcher_reverse_z,
             )
-            set_tooltip(
-                "Join adjacent z-blocks contiguously (camera scans -Z)."
-            )
+            set_tooltip("Join adjacent z-blocks contiguously (camera scans -Z).")
 
             # Raw .stacks have no .corrected zarr to link against.
             if getattr(self._get_array(), "kind", None) == "raw":
                 self._stitcher_link_existing = False
             else:
                 ch_link, self._stitcher_link_existing = imgui.checkbox(
-                    "Link existing (.corrected)", self._stitcher_link_existing,
+                    "Link existing (.corrected)",
+                    self._stitcher_link_existing,
                 )
                 if ch_link:
                     # toggling link flips per-camera <-> fused, which switches
@@ -1294,15 +1331,15 @@ class IsoviewPipelineWidget(PipelineWidget):
             imgui.set_next_item_width(_input_w())
             prev_pc = self._is_per_camera_export()
             ch_cam, self._stitcher_cameras = imgui.input_text(
-                "Views", self._stitcher_cameras,
+                "Views",
+                self._stitcher_cameras,
             )
             if ch_cam and self._is_per_camera_export() != prev_pc:
                 # entering/leaving per-view switches the orientation targets;
                 # re-seed so the fused VW00 profile can't leak onto cam0.
                 self._apply_orient_profile_all(self._stitcher_orient_profile)
             set_tooltip(
-                "Per-view export from .corrected, e.g. 0,2. "
-                "Empty: fused VW00/VW90."
+                "Per-view export from .corrected, e.g. 0,2. Empty: fused VW00/VW90."
             )
 
             # Zarr version is always v3 (sharded + zstd, the BigStitcher ZarrV3
@@ -1321,7 +1358,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         """Consolidate I/O options for the Parameters popup."""
         with tooltip_marks_right():
             _, self._consolidate_pyramid = imgui.checkbox(
-                "Pyramid", self._consolidate_pyramid,
+                "Pyramid",
+                self._consolidate_pyramid,
             )
             set_tooltip(
                 "Build the OME-NGFF pyramid for fast zoomed-out viewing. "
@@ -1332,7 +1370,9 @@ class IsoviewPipelineWidget(PipelineWidget):
                 imgui.set_next_item_width(_input_w())
                 _, self._consolidate_pyramid_max_layers = imgui.input_int(
                     "Pyramid levels",
-                    self._consolidate_pyramid_max_layers, 1, 1,
+                    self._consolidate_pyramid_max_layers,
+                    1,
+                    1,
                 )
                 set_tooltip(
                     "Max additional pyramid levels beyond /0.\n"
@@ -1342,7 +1382,11 @@ class IsoviewPipelineWidget(PipelineWidget):
     def _draw_consolidate_codec_box(self) -> None:
         with tooltip_marks_right():
             compressors = [
-                "zstd", "gzip", "blosc-zstd", "blosc-lz4", "none",
+                "zstd",
+                "gzip",
+                "blosc-zstd",
+                "blosc-lz4",
+                "none",
             ]
             try:
                 idx = compressors.index(self._consolidate_compressor)
@@ -1353,17 +1397,18 @@ class IsoviewPipelineWidget(PipelineWidget):
             if changed:
                 self._consolidate_compressor = compressors[new_idx]
             set_tooltip(
-                "Inner-chunk codec. zstd = best size/speed; "
-                "none = fastest, biggest."
+                "Inner-chunk codec. zstd = best size/speed; none = fastest, biggest."
             )
 
             imgui.set_next_item_width(_input_w())
             _, self._consolidate_compression_level = imgui.input_int(
-                "Level", self._consolidate_compression_level, 1, 1,
+                "Level",
+                self._consolidate_compression_level,
+                1,
+                1,
             )
             set_tooltip(
-                "0–9. Higher = smaller files, slower writes; "
-                "gains taper past ~5."
+                "0–9. Higher = smaller files, slower writes; gains taper past ~5."
             )
 
     def _draw_codec_controls(self) -> None:
@@ -1383,9 +1428,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         if c_changed:
             self._compression = compressors[c_new]
         if self._output_format == "tif":
-            set_tooltip(
-                "TIFF codec. deflate default; Fiji can't read zstd TIFFs."
-            )
+            set_tooltip("TIFF codec. deflate default; Fiji can't read zstd TIFFs.")
         else:
             set_tooltip(
                 "Inner-chunk codec. zstd = best size/speed; "
@@ -1394,11 +1437,12 @@ class IsoviewPipelineWidget(PipelineWidget):
 
         imgui.set_next_item_width(_input_w())
         _, self._compression_level = imgui.input_int(
-            "Level", self._compression_level, 1, 1,
+            "Level",
+            self._compression_level,
+            1,
+            1,
         )
-        set_tooltip(
-            "0–9. Higher = smaller files, slower writes; gains taper past ~5."
-        )
+        set_tooltip("0–9. Higher = smaller files, slower writes; gains taper past ~5.")
 
     def _draw_zarr_chunk_controls(self) -> None:
         """Sharding toggle + inner-chunk / shard sizes (zarr only).
@@ -1425,15 +1469,21 @@ class IsoviewPipelineWidget(PipelineWidget):
             return [max(0, int(v)) for v in vals]
 
         self._zarr_chunk_z, self._zarr_chunk_y, self._zarr_chunk_x = _zyx(
-            "Chunk [Z, Y, X]", "##chunk_zyx",
-            self._zarr_chunk_z, self._zarr_chunk_y, self._zarr_chunk_x,
+            "Chunk [Z, Y, X]",
+            "##chunk_zyx",
+            self._zarr_chunk_z,
+            self._zarr_chunk_y,
+            self._zarr_chunk_x,
             "Inner chunk decompressed per read. Set all three; 0 = auto "
             "(one Y×X plane).",
         )
         if self._zarr_sharded:
             self._zarr_shard_z, self._zarr_shard_y, self._zarr_shard_x = _zyx(
-                "Shards [Z, Y, X]", "##shard_zyx",
-                self._zarr_shard_z, self._zarr_shard_y, self._zarr_shard_x,
+                "Shards [Z, Y, X]",
+                "##shard_zyx",
+                self._zarr_shard_z,
+                self._zarr_shard_y,
+                self._zarr_shard_x,
                 "Outer shard file size. Set all three; 0 = auto "
                 "(memory-bounded Z-slab).",
             )
@@ -1482,9 +1532,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             changed, new_idx = imgui.combo("Format", idx, formats)
             if changed:
                 self._output_format = formats[new_idx]
-                self._compression = _default_codec_for_format(
-                    self._output_format
-                )
+                self._compression = _default_codec_for_format(self._output_format)
             set_tooltip(
                 "Container per (timepoint, camera). zarr = chunked + "
                 "pyramids; tif/klb for legacy tools."
@@ -1495,7 +1543,10 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, new_workers = imgui.input_int(
-                "Workers", self._workers, 1, 2,
+                "Workers",
+                self._workers,
+                1,
+                2,
             )
             self._workers = max(1, min(_MAX_WORKERS, new_workers))
             set_tooltip(
@@ -1514,7 +1565,10 @@ class IsoviewPipelineWidget(PipelineWidget):
             if self._pyramid:
                 imgui.set_next_item_width(_input_w())
                 _, self._pyramid_max_layers = imgui.input_int(
-                    "Pyramid levels", self._pyramid_max_layers, 1, 1,
+                    "Pyramid levels",
+                    self._pyramid_max_layers,
+                    1,
+                    1,
                 )
                 set_tooltip(
                     "Extra downsample levels beyond full-res. More = "
@@ -1527,7 +1581,9 @@ class IsoviewPipelineWidget(PipelineWidget):
             seg_labels = ["none", "generate + save masks"]
             imgui.set_next_item_width(_input_w())
             s_changed, s_new = imgui.combo(
-                "Segment mode", self._correct_segment_mode, seg_labels,
+                "Segment mode",
+                self._correct_segment_mode,
+                seg_labels,
             )
             if s_changed:
                 self._correct_segment_mode = s_new
@@ -1538,7 +1594,8 @@ class IsoviewPipelineWidget(PipelineWidget):
             )
 
             _, self._correct_apply_seg_mask = imgui.checkbox(
-                "Apply mask to volume", self._correct_apply_seg_mask,
+                "Apply mask to volume",
+                self._correct_apply_seg_mask,
             )
             set_tooltip(
                 "Zero background pixels in the saved volume (irreversible).\n"
@@ -1546,7 +1603,8 @@ class IsoviewPipelineWidget(PipelineWidget):
             )
 
             _, self._correct_do_tenengrad = imgui.checkbox(
-                "Tenengrad diagnostic", self._correct_do_tenengrad,
+                "Tenengrad diagnostic",
+                self._correct_do_tenengrad,
             )
             set_tooltip(
                 "Extra per-Z sharpness plot per camera pair (small added "
@@ -1556,7 +1614,10 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, self._correct_gauss_kernel = imgui.input_int(
-                "Gaussian kernel", self._correct_gauss_kernel, 1, 1,
+                "Gaussian kernel",
+                self._correct_gauss_kernel,
+                1,
+                1,
             )
             set_tooltip(
                 "Pre-blur window (px) before thresholding.\n"
@@ -1565,7 +1626,11 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, self._correct_gauss_sigma = imgui.input_float(
-                "Gaussian sigma", self._correct_gauss_sigma, 0.1, 1.0, "%.2f",
+                "Gaussian sigma",
+                self._correct_gauss_sigma,
+                0.1,
+                1.0,
+                "%.2f",
             )
             set_tooltip(
                 "Pre-blur strength (px).\n"
@@ -1574,8 +1639,11 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, self._correct_segment_threshold = imgui.input_float(
-                "##segment_threshold", self._correct_segment_threshold,
-                0.01, 0.1, "%.3f",
+                "##segment_threshold",
+                self._correct_segment_threshold,
+                0.01,
+                0.1,
+                "%.3f",
             )
             imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
             self._emp_label("segment_threshold", "Threshold")
@@ -1586,8 +1654,11 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, self._correct_mask_percentile = imgui.input_float(
-                "Mask percentile", self._correct_mask_percentile,
-                0.1, 1.0, "%.2f",
+                "Mask percentile",
+                self._correct_mask_percentile,
+                0.1,
+                1.0,
+                "%.2f",
             )
             set_tooltip(
                 "Baseline percentile for the mask (0–100).\n"
@@ -1596,7 +1667,10 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, self._correct_splitting = imgui.input_int(
-                "Splitting", self._correct_splitting, 1, 5,
+                "Splitting",
+                self._correct_splitting,
+                1,
+                5,
             )
             set_tooltip(
                 "Y-axis slabs for the segmentation filter.\n"
@@ -1606,7 +1680,10 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, self._correct_subsample_factor = imgui.input_int(
-                "Subsample factor", self._correct_subsample_factor, 1, 10,
+                "Subsample factor",
+                self._correct_subsample_factor,
+                1,
+                10,
             )
             set_tooltip(
                 "Percentile sampling stride — uses every Nth voxel "
@@ -1617,7 +1694,8 @@ class IsoviewPipelineWidget(PipelineWidget):
     def _draw_correct_advanced_box(self) -> None:
         with tooltip_marks_right():
             _, self._correct_median_kernel_enabled = imgui.checkbox(
-                "Median filter", self._correct_median_kernel_enabled,
+                "Median filter",
+                self._correct_median_kernel_enabled,
             )
             set_tooltip(
                 "Replace hot/dead pixels with a per-plane median.\n"
@@ -1626,7 +1704,10 @@ class IsoviewPipelineWidget(PipelineWidget):
             if self._correct_median_kernel_enabled:
                 imgui.set_next_item_width(_input_w())
                 _, self._correct_median_kernel_size = imgui.input_int(
-                    "Kernel (N×N)", self._correct_median_kernel_size, 1, 1,
+                    "Kernel (N×N)",
+                    self._correct_median_kernel_size,
+                    1,
+                    1,
                 )
                 set_tooltip(
                     "Median window (px). Larger removes bigger clusters "
@@ -1637,7 +1718,9 @@ class IsoviewPipelineWidget(PipelineWidget):
             _, self._correct_background_percentile = imgui.input_float(
                 "Background pct",
                 self._correct_background_percentile,
-                0.5, 5.0, "%.2f",
+                0.5,
+                5.0,
+                "%.2f",
             )
             set_tooltip(
                 "Percentile for the camera background floor (0–100).\n"
@@ -1645,7 +1728,8 @@ class IsoviewPipelineWidget(PipelineWidget):
             )
 
             _, self._correct_subtract_background = imgui.checkbox(
-                "Subtract background", self._correct_subtract_background,
+                "Subtract background",
+                self._correct_subtract_background,
             )
             set_tooltip(
                 "Subtract the per-camera Background_##.tif frame pixel-by-pixel\n"
@@ -1669,9 +1753,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             changed, new_idx = imgui.combo("Format", idx, formats)
             if changed:
                 self._output_format = formats[new_idx]
-                self._compression = _default_codec_for_format(
-                    self._output_format
-                )
+                self._compression = _default_codec_for_format(self._output_format)
             set_tooltip(
                 "Container per (timepoint, camera). zarr = chunked + "
                 "pyramids; tif/klb for legacy tools."
@@ -1682,7 +1764,10 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, new_workers = imgui.input_int(
-                "Workers", self._workers, 1, 2,
+                "Workers",
+                self._workers,
+                1,
+                2,
             )
             self._workers = max(1, min(_MAX_WORKERS, new_workers))
             set_tooltip(
@@ -1701,7 +1786,10 @@ class IsoviewPipelineWidget(PipelineWidget):
             if self._pyramid:
                 imgui.set_next_item_width(_input_w())
                 _, self._pyramid_max_layers = imgui.input_int(
-                    "Pyramid levels", self._pyramid_max_layers, 1, 1,
+                    "Pyramid levels",
+                    self._pyramid_max_layers,
+                    1,
+                    1,
                 )
                 set_tooltip(
                     "Extra downsample levels beyond full-res. More = "
@@ -1711,7 +1799,8 @@ class IsoviewPipelineWidget(PipelineWidget):
 
     def _draw_fuse_fusion_box(self) -> None:
         """Per-view fusion box: blending + view transforms under one
-        shared Target-view badge."""
+        shared Target-view badge.
+        """
         self._draw_view_scope_badge("per_view")
         self._draw_fuse_blending_box()
         imgui.spacing()
@@ -1743,7 +1832,10 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, new_br = imgui.input_int(
-                "##blending_range", int(self._fv("blending_range")), 1, 5,
+                "##blending_range",
+                int(self._fv("blending_range")),
+                1,
+                5,
             )
             self._set_fv("blending_range", new_br)
             imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
@@ -1755,7 +1847,10 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, new_tp = imgui.input_int(
-                "##transition_plane", int(self._fv("transition_plane")), 1, 5,
+                "##transition_plane",
+                int(self._fv("transition_plane")),
+                1,
+                5,
             )
             self._set_fv("transition_plane", new_tp)
             imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
@@ -1767,7 +1862,10 @@ class IsoviewPipelineWidget(PipelineWidget):
 
             imgui.set_next_item_width(_input_w())
             _, new_ff = imgui.input_int(
-                "##front_flag", int(self._fv("front_flag")), 1, 1,
+                "##front_flag",
+                int(self._fv("front_flag")),
+                1,
+                1,
             )
             self._set_fv("front_flag", new_ff)
             imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
@@ -1782,7 +1880,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         self._draw_view_scope_badge("shared")
         with tooltip_marks_right():
             _, self._fuse_subtract_background = imgui.checkbox(
-                "Subtract background", self._fuse_subtract_background,
+                "Subtract background",
+                self._fuse_subtract_background,
             )
             set_tooltip(
                 "Subtract an estimated background floor from both cameras "
@@ -1808,8 +1907,11 @@ class IsoviewPipelineWidget(PipelineWidget):
 
                 imgui.set_next_item_width(_input_w())
                 _, self._fuse_background_percentile = imgui.input_float(
-                    "Background pct", self._fuse_background_percentile,
-                    0.5, 5.0, "%.2f",
+                    "Background pct",
+                    self._fuse_background_percentile,
+                    0.5,
+                    5.0,
+                    "%.2f",
                 )
                 set_tooltip(
                     "Percentile for the background floor (0–100).\n"
@@ -1826,13 +1928,15 @@ class IsoviewPipelineWidget(PipelineWidget):
             )
 
             _, new_fh = imgui.checkbox(
-                "Flip horizontal", bool(self._fv("flip_horizontal")),
+                "Flip horizontal",
+                bool(self._fv("flip_horizontal")),
             )
             self._set_fv("flip_horizontal", new_fh)
             set_tooltip("Flip the second camera horizontally before fusion.")
 
             _, new_fv = imgui.checkbox(
-                "Flip vertical", bool(self._fv("flip_vertical")),
+                "Flip vertical",
+                bool(self._fv("flip_vertical")),
             )
             self._set_fv("flip_vertical", new_fv)
             set_tooltip("Flip the second camera vertically before fusion.")
@@ -1848,7 +1952,10 @@ class IsoviewPipelineWidget(PipelineWidget):
             ):
                 imgui.set_next_item_width(_input_w())
                 _, new_val = imgui.input_int(
-                    label, int(self._fv(key)), 1, 10,
+                    label,
+                    int(self._fv(key)),
+                    1,
+                    10,
                 )
                 self._set_fv(key, new_val)
                 set_tooltip(
@@ -1866,7 +1973,10 @@ class IsoviewPipelineWidget(PipelineWidget):
             ):
                 imgui.set_next_item_width(_input_w())
                 _, new_val = imgui.input_int(
-                    label, int(self._fv(key)), 1, 10,
+                    label,
+                    int(self._fv(key)),
+                    1,
+                    10,
                 )
                 self._set_fv(key, new_val)
                 set_tooltip(
@@ -1878,7 +1988,8 @@ class IsoviewPipelineWidget(PipelineWidget):
     def _draw_microscope_overrides_box(self) -> None:
         with tooltip_marks_right():
             _, self._mic_overrides_enabled = imgui.checkbox(
-                "Override XML defaults", self._mic_overrides_enabled,
+                "Override XML defaults",
+                self._mic_overrides_enabled,
             )
             set_tooltip(
                 "When off, values are read from the dataset XML.\n"
@@ -1894,22 +2005,31 @@ class IsoviewPipelineWidget(PipelineWidget):
 
                 imgui.set_next_item_width(_input_w())
                 _, self._mic_pixel_spacing_z = imgui.input_float(
-                    "Z spacing (µm)", self._mic_pixel_spacing_z,
-                    0.01, 0.1, "%.3f",
+                    "Z spacing (µm)",
+                    self._mic_pixel_spacing_z,
+                    0.01,
+                    0.1,
+                    "%.3f",
                 )
                 set_tooltip("Physical Z-step in micrometers.")
 
                 imgui.set_next_item_width(_input_w())
                 _, self._mic_objective_mag = imgui.input_float(
-                    "Objective mag", self._mic_objective_mag,
-                    0.5, 5.0, "%.2f",
+                    "Objective mag",
+                    self._mic_objective_mag,
+                    0.5,
+                    5.0,
+                    "%.2f",
                 )
                 set_tooltip("Detection objective magnification (e.g. 16.0).")
 
                 imgui.set_next_item_width(_input_w())
                 _, self._mic_pixel_spacing_camera = imgui.input_float(
-                    "Camera pixel (µm)", self._mic_pixel_spacing_camera,
-                    0.1, 1.0, "%.2f",
+                    "Camera pixel (µm)",
+                    self._mic_pixel_spacing_camera,
+                    0.1,
+                    1.0,
+                    "%.2f",
                 )
                 set_tooltip(
                     "Physical camera pixel size in micrometers "
@@ -1967,13 +2087,13 @@ class IsoviewPipelineWidget(PipelineWidget):
             "compression_level": self._consolidate_compression_level,
         }
         self._spawn(
-            "isoview", args,
-            description=f"Isoview consolidate ({arr.kind}) → "
-                        f"{Path(out_path).name}",
+            "isoview",
+            args,
+            description=f"Isoview consolidate ({arr.kind}) → {Path(out_path).name}",
             output_path=out_path,
         )
 
-    def _tile_spm_key(self, arr: Any, ti: Any) -> "str | int":
+    def _tile_spm_key(self, arr: Any, ti: Any) -> str | int:
         """The fused ``spm_key`` for tile index ``ti``.
 
         Mirrors isoview's tiled naming: the ``specimen_name`` grid token
@@ -1981,6 +2101,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         integer specimen id (isoview formats that as ``SPM##``).
         """
         from mbo_utilities.arrays.isoview.array import _parse_tile_grid_position
+
         tm = (getattr(arr, "tile_metadata", None) or {}).get(ti) or {}
         name = tm.get("specimen_name")
         if name and _parse_tile_grid_position(str(name)) is not None:
@@ -1995,9 +2116,10 @@ class IsoviewPipelineWidget(PipelineWidget):
     def _ops_to_inplane(ops):
         """Reduce an Align-views op list to ``[rot, fx, fy]`` (Z-rotation 90deg
         steps + X/Y flips). Out-of-plane (X/Y rotation) and Z-flip components are
-        dropped — they aren't part of the in-plane tile recipe."""
+        dropped — they aren't part of the in-plane tile recipe.
+        """
         rot = fx = fy = 0
-        for op in (ops or []):
+        for op in ops or []:
             kind, axis = str(op[0]).lower(), str(op[1]).upper()
             if kind == "rot" and axis == "Z":
                 rot = (rot + int(op[2]) // 90) % 4
@@ -2011,7 +2133,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         """Compose the Align views per-view orientation onto every tile entry in
         ``tile_orientations`` (rotations add -> position, flips XOR -> pose,
         matching how the export splits them), so view-level corrections drive the
-        export too. Returns the original when Align views has nothing applied."""
+        export too. Returns the original when Align views has nothing applied.
+        """
         from mbo_utilities.gui import _isoview_orient_state as orient_state
 
         applied = orient_state.get_all_applied(arr)
@@ -2031,9 +2154,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         for views in out.values():
             for view, ip in view_ip.items():
                 base = views.get(view, [0, 0, 0])
-                views[view] = [
-                    (base[0] + ip[0]) % 4, base[1] ^ ip[1], base[2] ^ ip[2]
-                ]
+                views[view] = [(base[0] + ip[0]) % 4, base[1] ^ ip[1], base[2] ^ ip[2]]
         return out or None
 
     def _submit_stitcher(self, arr: Any) -> None:
@@ -2058,13 +2179,15 @@ class IsoviewPipelineWidget(PipelineWidget):
         # Walk up from scan_root looking for a .corrected* or .fused* dir.
         # arr.scan_root for kind="fused" points at the method dir (e.g.
         # geometric) under <root>.fused/; for "corrected" it's the SPM##.
-        for ancestor in () if input_dir is not None else (scan_root, *scan_root.parents):
+        for ancestor in (
+            () if input_dir is not None else (scan_root, *scan_root.parents)
+        ):
             n = ancestor.name
             for suf in (".corrected", ".fused"):
                 idx = n.find(suf)
                 if idx < 0:
                     continue
-                rest = n[idx + len(suf):]
+                rest = n[idx + len(suf) :]
                 if rest == "" or rest.startswith("_"):
                     input_dir = ancestor
                     break
@@ -2088,6 +2211,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         # layout: scan_root is the .fused root (no method dir) → None, and
         # isoview resolves the one method present. Corrected input also → None.
         from mbo_utilities.arrays.isoview.array import _is_method_dir
+
         method = None
         if getattr(arr, "kind", None) == "fused":
             sr = Path(arr.scan_root)
@@ -2117,6 +2241,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             # VW label; the export's camera_orientations dict stays keyed by the
             # camera index (the .stack file identity).
             from mbo_utilities.arrays.isoview.array import camera_view_label
+
             export_cams = cameras if cameras else [0, 1, 2, 3]
             cam_orient = {
                 str(c): self._compose_orientation_ops(camera_view_label(c))
@@ -2135,8 +2260,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             if sel is not None:
                 tps = list(getattr(arr, "_timepoints", []) or [])
                 included_tiles = [
-                    self._tile_spm_key(arr, tps[i])
-                    for i in sel if 0 <= i < len(tps)
+                    self._tile_spm_key(arr, tps[i]) for i in sel if 0 <= i < len(tps)
                 ] or None
         # per-tile in-plane orientation (rotation/flips) from the Tile Grid, so
         # the exported tiles line up exactly as arranged there. None when the
@@ -2178,7 +2302,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         }
         args.update(self._microscope_kwargs())
         self._spawn(
-            "isoview_bigstitcher", args,
+            "isoview_bigstitcher",
+            args,
             description=f"BigStitcher XML: {input_dir.name}",
             output_path=self._current_output_path() or str(input_dir),
         )
@@ -2194,9 +2319,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             "output_dir": resolved_out or None,
             "output_suffix": self._correct_output_suffix,
             "output_format": self._output_format,
-            "compression": (
-                None if self._compression == "none" else self._compression
-            ),
+            "compression": (None if self._compression == "none" else self._compression),
             "compression_level": self._compression_level,
             "overwrite": self._overwrite,
             "workers": self._workers,
@@ -2227,7 +2350,9 @@ class IsoviewPipelineWidget(PipelineWidget):
                 # isoview slices tiled data by `specimens`, not `timepoints`. map
                 # the selected positions to SPM indices so "process 1 tile" works.
                 tiles = list(getattr(arr, "_timepoints", []) or [])
-                args["specimens"] = [tiles[i] for i in sel if 0 <= i < len(tiles)] or sel
+                args["specimens"] = [
+                    tiles[i] for i in sel if 0 <= i < len(tiles)
+                ] or sel
             else:
                 args["timepoints"] = sel
         cams = self._selected_cameras(arr)
@@ -2236,9 +2361,11 @@ class IsoviewPipelineWidget(PipelineWidget):
         args.update(self._zarr_layout_args())
         args.update(self._microscope_kwargs())
         from mbo_utilities.gui import _isoview_crop_state as crop_state
+
         args.update(crop_state.to_config_args(arr))
         self._spawn(
-            "isoview_correct", args,
+            "isoview_correct",
+            args,
             description=f"correct_stack: {Path(arr.scan_root).name}",
             output_path=resolved_out or str(arr.scan_root),
         )
@@ -2248,7 +2375,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         ~``per_worker_x`` x one raw camera volume; total = that x worker count.
         Colored amber when it nears, red when it exceeds, *available* RAM —
         compared against free memory (not total) so baseline usage counts, same
-        basis as ``_ram_capped_fuse_workers``."""
+        basis as ``_ram_capped_fuse_workers``.
+        """
         vol_gb = getattr(self, "_iso_vol_gb", 0.0)
         if vol_gb <= 0:
             return
@@ -2256,7 +2384,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         total = per_worker * max(1, self._workers)
         try:
             import psutil
-            avail_gb = psutil.virtual_memory().available / (1024 ** 3)
+
+            avail_gb = psutil.virtual_memory().available / (1024**3)
         except Exception:
             avail_gb = None
         label = f"~{total:.0f} GB RAM  ({per_worker:.1f} GB/worker x {self._workers})"
@@ -2283,9 +2412,10 @@ class IsoviewPipelineWidget(PipelineWidget):
         requested = max(1, int(requested))
         try:
             import psutil
+
             vol_gb = _iso_volume_gb(arr)
             per_worker_gb = max(1.0, vol_gb * _FUSE_RAM_PER_WORKER_X)
-            avail_gb = psutil.virtual_memory().available / (1024 ** 3)
+            avail_gb = psutil.virtual_memory().available / (1024**3)
             ram_cap = max(1, int((avail_gb * 0.8) // per_worker_gb))
         except Exception:
             return requested
@@ -2314,7 +2444,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             idx = n.find(".corrected")
             if idx < 0:
                 continue
-            rest = n[idx + len(".corrected"):]
+            rest = n[idx + len(".corrected") :]
             if rest == "" or rest.startswith("_"):
                 input_dir = ancestor
                 break
@@ -2332,7 +2462,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         if active_view is None or active_view not in self._fuse_view_params:
             active_view = (self._fuse_view_ids or [0])[0]
         active = self._fuse_view_params.get(
-            active_view, self._default_fuse_view_params(),
+            active_view,
+            self._default_fuse_view_params(),
         )
 
         def _tp(val: int) -> int | None:
@@ -2383,9 +2514,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             "input_path": str(input_dir),
             "output_dir": self._output_dir or None,
             "output_format": self._output_format,
-            "compression": (
-                None if self._compression == "none" else self._compression
-            ),
+            "compression": (None if self._compression == "none" else self._compression),
             "compression_level": self._compression_level,
             "overwrite": self._overwrite,
             "workers": workers,
@@ -2444,8 +2573,11 @@ class IsoviewPipelineWidget(PipelineWidget):
             # the TMs that actually have corrected output and intersect that
             # with the user's slicing selection.
             from mbo_utilities.arrays.isoview.array import (
-                _find_tm_folders, _extract_timepoint, _SPM_PATTERN,
+                _SPM_PATTERN,
+                _extract_timepoint,
+                _find_tm_folders,
             )
+
             corrected_root = scan_root if _SPM_PATTERN.match(scan_root.name) else None
             if corrected_root is None:
                 for d in scan_root.iterdir() if scan_root.is_dir() else []:
@@ -2455,8 +2587,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             available_tms: list[int] = []
             if corrected_root is not None:
                 available_tms = [
-                    _extract_timepoint(d.name)
-                    for d in _find_tm_folders(corrected_root)
+                    _extract_timepoint(d.name) for d in _find_tm_folders(corrected_root)
                 ]
             if available_tms:
                 if tps is None:
@@ -2473,11 +2604,12 @@ class IsoviewPipelineWidget(PipelineWidget):
         args.update(self._zarr_layout_args())
         args.update(self._microscope_kwargs())
         from mbo_utilities.gui import _isoview_crop_state as crop_state
+
         args.update(crop_state.to_config_args(arr))
         self._spawn(
-            "isoview_fuse", args,
-            description=f"multi_fuse ({active['blending_method']}): "
-                        f"{input_dir.name}",
+            "isoview_fuse",
+            args,
+            description=f"multi_fuse ({active['blending_method']}): {input_dir.name}",
             output_path=self._output_dir or str(input_dir),
         )
 
@@ -2517,8 +2649,10 @@ class IsoviewPipelineWidget(PipelineWidget):
                 from mbo_utilities.arrays.features._slicing import (
                     parse_timepoint_selection,
                 )
+
                 self._iso_tp_parsed = parse_timepoint_selection(
-                    self._iso_tp_selection, max_frames,
+                    self._iso_tp_selection,
+                    max_frames,
                 )
             except ValueError as e:
                 self._iso_tp_error = str(e)
@@ -2617,13 +2751,15 @@ class IsoviewPipelineWidget(PipelineWidget):
             if fs_val is None:
                 fs_val = md.get("fs")
             if fs_val is None:
-                rows.append((
-                    "Frame rate",
-                    "not encoded (Shift+M to set)",
-                    "isoview metadata does not currently encode the frame "
-                    "rate.\nPress Shift+M to open the metadata editor and set it.",
-                    _warn_color,
-                ))
+                rows.append(
+                    (
+                        "Frame rate",
+                        "not encoded (Shift+M to set)",
+                        "isoview metadata does not currently encode the frame "
+                        "rate.\nPress Shift+M to open the metadata editor and set it.",
+                        _warn_color,
+                    )
+                )
             else:
                 rows.append(("Frame rate", f"{fs_val} Hz", None, None))
         for label, key, unit in (
@@ -2647,9 +2783,7 @@ class IsoviewPipelineWidget(PipelineWidget):
                 imgui.table_setup_column(
                     "field", imgui.TableColumnFlags_.width_fixed, 90.0
                 )
-                imgui.table_setup_column(
-                    "value", imgui.TableColumnFlags_.width_stretch
-                )
+                imgui.table_setup_column("value", imgui.TableColumnFlags_.width_stretch)
                 for label, value, hover, color in rows:
                     imgui.table_next_row()
                     imgui.table_set_column_index(0)
@@ -2667,9 +2801,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             if imgui.button(f"Files ({n_files})##iso_dataset_files"):
                 self._iso_files_sizer.before_open()
                 imgui.open_popup("Dataset files##current_dataset_files_popup")
-            _draw_dataset_files_popup(
-                filenames, None, sizer=self._iso_files_sizer
-            )
+            _draw_dataset_files_popup(filenames, None, sizer=self._iso_files_sizer)
         finally:
             imgui.unindent(8)
 
@@ -2705,6 +2837,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         if tree is not None:
             return self._iso_raw_stem(tree)
         from mbo_utilities.arrays.isoview.array import _sibling_raw_root
+
         raw = _sibling_raw_root(arr)
         return raw.name if raw is not None else sr.name
 
@@ -2717,7 +2850,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             _MODE_CONSOLIDATE: "_consolidate_overwrite",
         }.get(self._selected_mode)
 
-    def _resolved_output_dir(self, arr: Any) -> "Path | None":
+    def _resolved_output_dir(self, arr: Any) -> Path | None:
         """Absolute path the current mode will write to (for the exists check).
 
         Mirrors the per-mode output naming so the Output-options block can
@@ -2727,7 +2860,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         if mode == _MODE_CONSOLIDATE:
             return (
                 Path(self._consolidate_output_path)
-                if self._consolidate_output_path else None
+                if self._consolidate_output_path
+                else None
             )
         if mode == _MODE_STITCHER:
             return self._iso_stitcher_dest(arr)
@@ -2759,8 +2893,8 @@ class IsoviewPipelineWidget(PipelineWidget):
             f"Output folder = <dataset>{prefix or ''}[_<suffix>]. The "
             f"{prefix} prefix is automatic; type only a suffix (blank = "
             f"bare {prefix}). A leading underscore is added for you."
-            if prefix else
-            "Filename suffix appended to the source name.",
+            if prefix
+            else "Filename suffix appended to the source name.",
             align="right",
         )
         imgui.spacing()
@@ -2783,9 +2917,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             preview = f"{basename}{new_val}"
         # wrap the result line — basename can be long and would otherwise
         # blow past the right edge of the side panel.
-        imgui.push_style_color(
-            imgui.Col_.text, imgui.ImVec4(0.6, 0.6, 0.65, 1.0)
-        )
+        imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(0.6, 0.6, 0.65, 1.0))
         imgui.push_text_wrap_pos(0.0)
         try:
             imgui.text_unformatted(f"Result: {preview}")
@@ -2841,9 +2973,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         imgui.same_line()
         if imgui.button("Clear##iso_crop_clear", imgui.ImVec2(_BTN_W, 0)):
             crop_state.clear(arr)
-        imgui.push_style_color(
-            imgui.Col_.text, imgui.ImVec4(0.6, 0.6, 0.65, 1.0)
-        )
+        imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(0.6, 0.6, 0.65, 1.0))
         imgui.push_text_wrap_pos(0.0)
         try:
             imgui.text_unformatted(crop_state.summary(arr))
@@ -2884,9 +3014,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             self._correct_mask_percentile = 1.0
             self._correct_gauss_sigma = 2.0
             self._correct_gauss_kernel = 5
-        imgui.push_style_color(
-            imgui.Col_.text, imgui.ImVec4(0.6, 0.6, 0.65, 1.0)
-        )
+        imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(0.6, 0.6, 0.65, 1.0))
         imgui.push_text_wrap_pos(0.0)
         try:
             imgui.text_unformatted(
@@ -2928,9 +3056,7 @@ class IsoviewPipelineWidget(PipelineWidget):
             self._correct_median_kernel_size = 3
             self._correct_median_kernel_enabled = True
             self._correct_subtract_background = False
-        imgui.push_style_color(
-            imgui.Col_.text, imgui.ImVec4(0.6, 0.6, 0.65, 1.0)
-        )
+        imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(0.6, 0.6, 0.65, 1.0))
         imgui.push_text_wrap_pos(0.0)
         try:
             on = "on" if self._correct_median_kernel_enabled else "off"
@@ -2968,9 +3094,7 @@ class IsoviewPipelineWidget(PipelineWidget):
 
         # preview
         n_tp = (
-            self._iso_tp_parsed.count
-            if self._iso_tp_parsed is not None
-            else max_frames
+            self._iso_tp_parsed.count if self._iso_tp_parsed is not None else max_frames
         )
         imgui.text(f"{tp_label}: {n_tp}/{max_frames}")
 
@@ -2989,11 +3113,13 @@ class IsoviewPipelineWidget(PipelineWidget):
             self._iso_slicing_open = False
 
         imgui.set_next_window_size(
-            imgui.ImVec2(520, 0), imgui.Cond_.first_use_ever,
+            imgui.ImVec2(520, 0),
+            imgui.Cond_.first_use_ever,
         )
         if imgui.begin_popup(popup_id):
             imgui.text_colored(
-                imgui.ImVec4(0.8, 0.8, 0.2, 1.0), tp_label,
+                imgui.ImVec4(0.8, 0.8, 0.2, 1.0),
+                tp_label,
             )
             imgui.same_line()
             imgui.text_disabled("(?)")
@@ -3029,7 +3155,8 @@ class IsoviewPipelineWidget(PipelineWidget):
 
     def _available_cameras(self, arr: Any) -> list[int]:
         """Camera indices present in the loaded array. raw/corrected view_keys
-        are plain camera ints; fused view_keys are tuples (take the first)."""
+        are plain camera ints; fused view_keys are tuples (take the first).
+        """
         vk = getattr(arr, "_view_keys", None)
         if vk is None:
             vk = getattr(arr, "view_keys", None) or []
@@ -3046,7 +3173,8 @@ class IsoviewPipelineWidget(PipelineWidget):
 
     def _selected_cameras(self, arr: Any) -> list[int] | None:
         """Selected camera indices, or None when the full set is selected (in
-        which case the pipeline auto-detects every camera)."""
+        which case the pipeline auto-detects every camera).
+        """
         avail = self._available_cameras(arr)
         if len(avail) <= 1:
             return None
@@ -3065,7 +3193,9 @@ class IsoviewPipelineWidget(PipelineWidget):
         if len(cams) <= 1:
             return
         # (re)seed on first draw or when the dataset's cameras changed.
-        if self._iso_selected_cameras is None or not (self._iso_selected_cameras <= set(cams)):
+        if self._iso_selected_cameras is None or not (
+            self._iso_selected_cameras <= set(cams)
+        ):
             self._iso_selected_cameras = set(cams)
         imgui.spacing()
         _, _, view_label = resolve_dim_labels(self.parent)
@@ -3073,6 +3203,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         imgui.text_colored(_SUBSECTION_COLOR, view_label)
         set_tooltip("Process only the checked views.", align="right")
         from mbo_utilities.arrays.isoview.array import camera_view_label
+
         for i, c in enumerate(cams):
             checked = c in self._iso_selected_cameras
             changed, new = imgui.checkbox(
@@ -3274,22 +3405,17 @@ class IsoviewPipelineWidget(PipelineWidget):
         avail = imgui.get_content_region_avail().x
         btn_w = min(_RUN_W, max(80.0, avail))
         if avail > btn_w:
-            imgui.set_cursor_pos_x(
-                imgui.get_cursor_pos_x() + (avail - btn_w) * 0.5
-            )
+            imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + (avail - btn_w) * 0.5)
         with _green_button():
             if not has_path:
                 imgui.begin_disabled()
             clicked = imgui.button(run_label, imgui.ImVec2(btn_w, 0))
             if not has_path:
                 imgui.end_disabled()
-        if (
-            not has_path
-            and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled)
+        if not has_path and imgui.is_item_hovered(
+            imgui.HoveredFlags_.allow_when_disabled
         ):
-            imgui.set_tooltip(
-                "No output path resolved for this dataset."
-            )
+            imgui.set_tooltip("No output path resolved for this dataset.")
         if clicked and has_path:
             self._submit_active(arr)
 

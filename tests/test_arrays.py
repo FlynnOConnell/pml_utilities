@@ -8,12 +8,11 @@ Tests individual array class functionality:
 - Protocol compliance (LazyArrayProtocol)
 """
 
-import numpy as np
-import pytest
-import tempfile
 from pathlib import Path
 
 import mbo_utilities as mbo
+import numpy as np
+import pytest
 from mbo_utilities.arrays import (
     BinArray,
     H5Array,
@@ -88,7 +87,9 @@ class TestBinArray:
         bin_path = tmp_path / "test.bin"
 
         # Write binary file
-        mmap = np.memmap(bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape)
+        mmap = np.memmap(
+            bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape
+        )
         mmap[:] = synthetic_3d_data
         mmap.flush()
         del mmap
@@ -201,7 +202,8 @@ class TestH5Array:
 
     def test_nested_autodetect(self, tmp_path):
         """A file whose only dataset is nested ('imaging/data') opens without
-        an explicit dataset kwarg and maps (T,Z,Y,X,C) onto TCZYX."""
+        an explicit dataset kwarg and maps (T,Z,Y,X,C) onto TCZYX.
+        """
         import h5py
 
         p = tmp_path / "nested.h5"
@@ -229,7 +231,8 @@ class TestH5Array:
 
     def test_group_sorting_first_regression(self, tmp_path):
         """A group that sorts before the real dataset previously crashed the
-        old first-key fallback with an AttributeError."""
+        old first-key fallback with an AttributeError.
+        """
         import h5py
 
         p = tmp_path / "groupfirst.h5"
@@ -243,7 +246,8 @@ class TestH5Array:
 
     def test_channels_last_line_scan(self, tmp_path):
         """(T,Y,X,C) dataset with scan_mode + matching n_channel attrs maps
-        the last axis to C, not Z."""
+        the last axis to C, not Z.
+        """
         import h5py
 
         p = tmp_path / "line.h5"
@@ -266,9 +270,11 @@ class TestH5Array:
 
     def test_largest_3d_fallback_warns(self, tmp_path, caplog):
         """No preferred names -> largest >=3D dataset wins, with a warning
-        that names the choice and the dataset= override."""
-        import h5py
+        that names the choice and the dataset= override.
+        """
         import logging
+
+        import h5py
         from mbo_utilities import log as mbo_log
 
         p = tmp_path / "fallback.h5"
@@ -304,7 +310,7 @@ class TestH5Array:
             H5Array(p, dataset="nope")
 
     def test_reader_kwargs_roundtrip(self, tmp_path):
-        """dataset selection survives source_reader_kwargs -> imread."""
+        """Dataset selection survives source_reader_kwargs -> imread."""
         import h5py
         from mbo_utilities.reader import imread, source_reader_kwargs
 
@@ -321,7 +327,8 @@ class TestH5Array:
 
     def test_metadata_group_and_dataset_attrs(self, tmp_path):
         """Parent group attrs and dataset attrs feed metadata; canonical
-        params resolve through registered aliases."""
+        params resolve through registered aliases.
+        """
         import h5py
         from mbo_utilities.metadata import get_param
 
@@ -352,7 +359,8 @@ class TestH5Array:
 
     def test_empty_dataset_skipped(self, tmp_path):
         """An h5py.Empty (null dataspace) dataset must not break opening the
-        file or enumerating its datasets."""
+        file or enumerating its datasets.
+        """
         import h5py
         from mbo_utilities.arrays.h5 import list_h5_datasets
 
@@ -373,7 +381,8 @@ class TestH5Array:
 
     def test_permuted_too_many_indices_raises(self, tmp_path):
         """The permuted (T,Y,X,C) path rejects keys with more than 5 entries
-        instead of silently ignoring the extras."""
+        instead of silently ignoring the extras.
+        """
         import h5py
 
         p = tmp_path / "permuted.h5"
@@ -390,7 +399,8 @@ class TestH5Array:
 
     def test_more_than_5d_raises_at_open(self, tmp_path):
         """A >5D dataset fails fast at open with a clear error, and the file
-        handle is released on the raise."""
+        handle is released on the raise.
+        """
         import h5py
 
         p = tmp_path / "sixd.h5"
@@ -434,7 +444,13 @@ class TestZarrArray:
 
         # ZarrArray normalizes to 5D (T, C, Z, Y, X)
         if expected_data.ndim == 3:
-            expected_shape = (expected_data.shape[0], 1, 1, expected_data.shape[1], expected_data.shape[2])
+            expected_shape = (
+                expected_data.shape[0],
+                1,
+                1,
+                expected_data.shape[1],
+                expected_data.shape[2],
+            )
         else:
             expected_shape = expected_data.shape
 
@@ -499,8 +515,9 @@ class TestTiffArray:
         frame_np = np.asarray(frame)
         # verify spatial dims are present (order may vary due to 4D normalization)
         frame_squeezed = frame_np.squeeze()
-        assert frame_squeezed.shape == expected_data[0].shape, \
+        assert frame_squeezed.shape == expected_data[0].shape, (
             f"Squeezed frame shape mismatch: {frame_squeezed.shape} vs {expected_data[0].shape}"
+        )
 
 
 class TestSuite2pArray:
@@ -515,7 +532,9 @@ class TestSuite2pArray:
 
         # Write binary - Suite2pArray looks for data.bin or data_raw.bin
         bin_path = s2p_dir / "data.bin"
-        mmap = np.memmap(bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape)
+        mmap = np.memmap(
+            bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape
+        )
         mmap[:] = synthetic_3d_data
         mmap.flush()
         del mmap
@@ -560,13 +579,16 @@ class TestSuite2pArray:
 
 class TestSuite2pRegTif:
     """Test Suite2pArray reg_tif/ folder support (registered tiffs in
-    place of data.bin)."""
+    place of data.bin).
+    """
 
     @staticmethod
-    def _write_reg_tif_plane(plane_dir: Path, data: np.ndarray, *,
-                             channel: int = 0, frames_per_file: int = 7) -> list[Path]:
+    def _write_reg_tif_plane(
+        plane_dir: Path, data: np.ndarray, *, channel: int = 0, frames_per_file: int = 7
+    ) -> list[Path]:
         """Write `data` (T, Y, X) into plane_dir/reg_tif/ as suite2p-style
-        chunks, returning the list of files in write order."""
+        chunks, returning the list of files in write order.
+        """
         import tifffile
 
         reg_dir = plane_dir / "reg_tif"
@@ -586,8 +608,9 @@ class TestSuite2pRegTif:
         plane_dir = tmp_path / "suite2p_regtif" / "plane0"
         plane_dir.mkdir(parents=True)
 
-        files = self._write_reg_tif_plane(plane_dir, synthetic_3d_data,
-                                          frames_per_file=7)
+        files = self._write_reg_tif_plane(
+            plane_dir, synthetic_3d_data, frames_per_file=7
+        )
 
         ops = {
             "Ly": synthetic_3d_data.shape[1],
@@ -599,7 +622,8 @@ class TestSuite2pRegTif:
 
     def test_find_reg_tif_files_sorted(self, suite2p_reg_tif_dir):
         """Files are returned sorted by numeric frame_start, not lexicographic
-        (so file00010 sorts after file00007)."""
+        (so file00010 sorts after file00007).
+        """
         from mbo_utilities.arrays.suite2p import find_suite2p_reg_tif_files
 
         plane_dir, _, expected_files = suite2p_reg_tif_dir
@@ -608,8 +632,8 @@ class TestSuite2pRegTif:
 
     def test_find_reg_tif_files_filters_channel(self, suite2p_reg_tif_dir, tmp_path):
         """Only the requested channel's files come back."""
-        from mbo_utilities.arrays.suite2p import find_suite2p_reg_tif_files
         import tifffile
+        from mbo_utilities.arrays.suite2p import find_suite2p_reg_tif_files
 
         plane_dir, data, _ = suite2p_reg_tif_dir
         # add a chan1 file that should be excluded
@@ -625,12 +649,19 @@ class TestSuite2pRegTif:
         plane_dir, expected, _ = suite2p_reg_tif_dir
         arr = Suite2pArray(plane_dir / "ops.npy")
 
-        assert arr.shape == (expected.shape[0], 1, 1, expected.shape[1], expected.shape[2])
+        assert arr.shape == (
+            expected.shape[0],
+            1,
+            1,
+            expected.shape[1],
+            expected.shape[2],
+        )
         assert arr.dtype == np.int16
 
     def test_reg_tif_frame_values_across_boundaries(self, suite2p_reg_tif_dir):
         """Frames read back match what was written, including across file
-        boundaries (frames_per_file=7 with 20 total frames produces 3 files)."""
+        boundaries (frames_per_file=7 with 20 total frames produces 3 files).
+        """
         plane_dir, expected, _ = suite2p_reg_tif_dir
         arr = Suite2pArray(plane_dir / "ops.npy")
 
@@ -649,14 +680,16 @@ class TestSuite2pRegTif:
 
     def test_use_reg_tif_overrides_data_bin(self, synthetic_3d_data, tmp_path):
         """When both data.bin and reg_tif exist with different content,
-        use_reg_tif=True picks reg_tif; default picks data.bin."""
+        use_reg_tif=True picks reg_tif; default picks data.bin.
+        """
         plane_dir = tmp_path / "suite2p_both" / "plane0"
         plane_dir.mkdir(parents=True)
 
         # data.bin gets `synthetic_3d_data`
         bin_path = plane_dir / "data.bin"
-        mmap = np.memmap(bin_path, mode="w+", dtype=np.int16,
-                         shape=synthetic_3d_data.shape)
+        mmap = np.memmap(
+            bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape
+        )
         mmap[:] = synthetic_3d_data
         mmap.flush()
         del mmap
@@ -666,11 +699,14 @@ class TestSuite2pRegTif:
         reg_data = (-synthetic_3d_data).astype(np.int16)
         self._write_reg_tif_plane(plane_dir, reg_data, frames_per_file=7)
 
-        np.save(plane_dir / "ops.npy", {
-            "Ly": synthetic_3d_data.shape[1],
-            "Lx": synthetic_3d_data.shape[2],
-            "nframes": synthetic_3d_data.shape[0],
-        })
+        np.save(
+            plane_dir / "ops.npy",
+            {
+                "Ly": synthetic_3d_data.shape[1],
+                "Lx": synthetic_3d_data.shape[2],
+                "nframes": synthetic_3d_data.shape[0],
+            },
+        )
 
         # default: data.bin wins
         arr_bin = Suite2pArray(plane_dir / "ops.npy")
@@ -686,7 +722,8 @@ class TestSuite2pRegTif:
         """imread() pointed at a reg_tif/ folder must route through
         Suite2pArray (numeric sort) — NOT TiffArray (lexicographic glob),
         which would scramble variable-width suite2p filenames like
-        file00500_chan0.tif vs file001000_chan0.tif."""
+        file00500_chan0.tif vs file001000_chan0.tif.
+        """
         plane_dir, expected, _ = suite2p_reg_tif_dir
         reg_dir = plane_dir / "reg_tif"
 
@@ -694,8 +731,16 @@ class TestSuite2pRegTif:
 
         # Must be a Suite2pArray (5D, int16) — TiffArray would give a
         # different shape contract.
-        assert isinstance(arr, Suite2pArray), f"Got {type(arr).__name__}, expected Suite2pArray"
-        assert arr.shape == (expected.shape[0], 1, 1, expected.shape[1], expected.shape[2])
+        assert isinstance(arr, Suite2pArray), (
+            f"Got {type(arr).__name__}, expected Suite2pArray"
+        )
+        assert arr.shape == (
+            expected.shape[0],
+            1,
+            1,
+            expected.shape[1],
+            expected.shape[2],
+        )
         assert arr.dtype == np.int16
 
         # Frame order must match the original — verifies numeric sort.
@@ -708,16 +753,20 @@ class TestSuite2pRegTif:
         plane_dir = tmp_path / "suite2p_bin_only" / "plane0"
         plane_dir.mkdir(parents=True)
         bin_path = plane_dir / "data.bin"
-        mmap = np.memmap(bin_path, mode="w+", dtype=np.int16,
-                         shape=synthetic_3d_data.shape)
+        mmap = np.memmap(
+            bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape
+        )
         mmap[:] = synthetic_3d_data
         mmap.flush()
         del mmap
-        np.save(plane_dir / "ops.npy", {
-            "Ly": synthetic_3d_data.shape[1],
-            "Lx": synthetic_3d_data.shape[2],
-            "nframes": synthetic_3d_data.shape[0],
-        })
+        np.save(
+            plane_dir / "ops.npy",
+            {
+                "Ly": synthetic_3d_data.shape[1],
+                "Lx": synthetic_3d_data.shape[2],
+                "nframes": synthetic_3d_data.shape[0],
+            },
+        )
 
         with pytest.raises(FileNotFoundError, match="use_reg_tif"):
             Suite2pArray(plane_dir / "ops.npy", use_reg_tif=True)
@@ -800,7 +849,9 @@ class TestSuite2pVolumeAutoDetection:
 
             # write binary file
             bin_path = plane_dir / "data.bin"
-            mmap = np.memmap(bin_path, mode="w+", dtype=np.int16, shape=plane_data.shape)
+            mmap = np.memmap(
+                bin_path, mode="w+", dtype=np.int16, shape=plane_data.shape
+            )
             mmap[:] = plane_data
             mmap.flush()
             del mmap
@@ -869,16 +920,23 @@ class TestProtocolCompliance:
 
         elif array_type == "bin":
             bin_path = tmp_path / "test.bin"
-            mmap = np.memmap(bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape)
+            mmap = np.memmap(
+                bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape
+            )
             mmap[:] = synthetic_3d_data
             mmap.flush()
             del mmap
-            ops = {"Ly": synthetic_3d_data.shape[1], "Lx": synthetic_3d_data.shape[2], "nframes": synthetic_3d_data.shape[0]}
+            ops = {
+                "Ly": synthetic_3d_data.shape[1],
+                "Lx": synthetic_3d_data.shape[2],
+                "nframes": synthetic_3d_data.shape[0],
+            }
             np.save(tmp_path / "ops.npy", ops)
             return BinArray(bin_path)
 
         elif array_type == "h5":
             import h5py
+
             h5_path = tmp_path / "test.h5"
             with h5py.File(h5_path, "w") as f:
                 f.create_dataset("mov", data=synthetic_3d_data)
@@ -886,13 +944,20 @@ class TestProtocolCompliance:
 
         elif array_type == "zarr":
             import zarr
+
             zarr_path = tmp_path / "test.zarr"
-            z = zarr.open_array(str(zarr_path), mode="w", shape=synthetic_3d_data.shape, dtype=synthetic_3d_data.dtype)
+            z = zarr.open_array(
+                str(zarr_path),
+                mode="w",
+                shape=synthetic_3d_data.shape,
+                dtype=synthetic_3d_data.dtype,
+            )
             z[:] = synthetic_3d_data
             return ZarrArray(zarr_path)
 
         elif array_type == "tiff":
             import tifffile
+
             tiff_path = tmp_path / "test.tif"
             tifffile.imwrite(tiff_path, synthetic_3d_data)
             return TiffArray(tiff_path)
@@ -935,7 +1000,7 @@ class TestImreadDispatcher:
     """Test that imread returns correct array types."""
 
     def test_imread_tiff(self, tmp_path, synthetic_3d_data):
-        """imread should return appropriate array for TIFF."""
+        """Imread should return appropriate array for TIFF."""
         import tifffile
 
         tiff_path = tmp_path / "test.tif"
@@ -949,11 +1014,16 @@ class TestImreadDispatcher:
         assert arr.shape[0] == synthetic_3d_data.shape[0]
 
     def test_imread_zarr(self, tmp_path, synthetic_3d_data):
-        """imread should return ZarrArray for .zarr."""
+        """Imread should return ZarrArray for .zarr."""
         import zarr
 
         zarr_path = tmp_path / "test.zarr"
-        z = zarr.open_array(str(zarr_path), mode="w", shape=synthetic_3d_data.shape, dtype=synthetic_3d_data.dtype)
+        z = zarr.open_array(
+            str(zarr_path),
+            mode="w",
+            shape=synthetic_3d_data.shape,
+            dtype=synthetic_3d_data.dtype,
+        )
         z[:] = synthetic_3d_data
 
         arr = mbo.imread(zarr_path)
@@ -964,7 +1034,7 @@ class TestImreadDispatcher:
         assert arr.shape[0] == synthetic_3d_data.shape[0]
 
     def test_imread_h5(self, tmp_path, synthetic_3d_data):
-        """imread should return H5Array for .h5."""
+        """Imread should return H5Array for .h5."""
         import h5py
 
         h5_path = tmp_path / "test.h5"
@@ -978,17 +1048,23 @@ class TestImreadDispatcher:
         assert arr.shape == (nt, 1, 1, ny, nx)
 
     def test_imread_bin(self, tmp_path, synthetic_3d_data):
-        """imread should return array for binary directory."""
+        """Imread should return array for binary directory."""
         bin_dir = tmp_path / "suite2p"
         bin_dir.mkdir()
 
         bin_path = bin_dir / "data_raw.bin"
-        mmap = np.memmap(bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape)
+        mmap = np.memmap(
+            bin_path, mode="w+", dtype=np.int16, shape=synthetic_3d_data.shape
+        )
         mmap[:] = synthetic_3d_data
         mmap.flush()
         del mmap
 
-        ops = {"Ly": synthetic_3d_data.shape[1], "Lx": synthetic_3d_data.shape[2], "nframes": synthetic_3d_data.shape[0]}
+        ops = {
+            "Ly": synthetic_3d_data.shape[1],
+            "Lx": synthetic_3d_data.shape[2],
+            "nframes": synthetic_3d_data.shape[0],
+        }
         np.save(bin_dir / "ops.npy", ops)
 
         arr = mbo.imread(bin_dir)

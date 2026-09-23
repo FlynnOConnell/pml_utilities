@@ -19,7 +19,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import tifffile
-
 from mbo_utilities.arrays import TiffArray
 
 
@@ -49,7 +48,8 @@ def tiff_3d_tyx(tmp_path):
 @pytest.fixture
 def tiff_3d_zyx(tmp_path):
     """Z-stack (Z, Y, X) — written as planeXX volume so TiffArray
-    detects it as multi-plane with T=1."""
+    detects it as multi-plane with T=1.
+    """
     rng = np.random.RandomState(2)
     nz = 8
     vol_dir = tmp_path / "zstack"
@@ -112,9 +112,9 @@ class TestTiffArray5DShape:
 class TestTiffArray5DInvariants:
     """nt / nc / nz / ny / nx match shape and shape is always length 5."""
 
-    @pytest.mark.parametrize("fixture_name", [
-        "tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"
-    ])
+    @pytest.mark.parametrize(
+        "fixture_name", ["tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"]
+    )
     def test_shape_always_length_5(self, request, fixture_name):
         fixture = request.getfixturevalue(fixture_name)
         path = fixture[0]
@@ -122,9 +122,9 @@ class TestTiffArray5DInvariants:
         assert len(arr.shape) == 5
         assert arr.ndim == 5
 
-    @pytest.mark.parametrize("fixture_name", [
-        "tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"
-    ])
+    @pytest.mark.parametrize(
+        "fixture_name", ["tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"]
+    )
     def test_named_accessors_match_shape(self, request, fixture_name):
         fixture = request.getfixturevalue(fixture_name)
         path = fixture[0]
@@ -187,9 +187,9 @@ class TestTiffArray5DIndexing:
 class TestTiffArrayNumpyProtocol:
     """np.asarray returns a representative (Y, X) frame; vmin/vmax never crash."""
 
-    @pytest.mark.parametrize("fixture_name", [
-        "tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"
-    ])
+    @pytest.mark.parametrize(
+        "fixture_name", ["tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"]
+    )
     def test_vmin_vmax_no_crash(self, request, fixture_name):
         fixture = request.getfixturevalue(fixture_name)
         path = fixture[0]
@@ -200,9 +200,9 @@ class TestTiffArrayNumpyProtocol:
         assert np.isfinite(vmax)
         assert vmin <= vmax
 
-    @pytest.mark.parametrize("fixture_name", [
-        "tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"
-    ])
+    @pytest.mark.parametrize(
+        "fixture_name", ["tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"]
+    )
     def test_asarray_returns_yx_frame(self, request, fixture_name):
         fixture = request.getfixturevalue(fixture_name)
         path = fixture[0]
@@ -225,10 +225,12 @@ class TestVminVmaxAcrossArrayClasses:
     def test_zarr_array(self, tmp_path):
         import zarr
         from mbo_utilities.arrays import ZarrArray
+
         rng = np.random.RandomState(0)
         data = rng.randint(0, 4096, size=(8, 3, 32, 32), dtype=np.uint16)
-        z = zarr.open(str(tmp_path / "a.zarr"), mode="w",
-                      shape=data.shape, dtype=data.dtype)
+        z = zarr.open(
+            str(tmp_path / "a.zarr"), mode="w", shape=data.shape, dtype=data.dtype
+        )
         z[:] = data
         arr = ZarrArray(tmp_path / "a.zarr")
         assert np.isfinite(arr.vmin) and np.isfinite(arr.vmax)
@@ -237,6 +239,7 @@ class TestVminVmaxAcrossArrayClasses:
     def test_h5_array(self, tmp_path):
         import h5py
         from mbo_utilities.arrays import H5Array
+
         rng = np.random.RandomState(1)
         data = rng.randint(0, 4096, size=(2, 1, 3, 32, 32), dtype=np.uint16)
         with h5py.File(tmp_path / "a.h5", "w") as f:
@@ -247,6 +250,7 @@ class TestVminVmaxAcrossArrayClasses:
 
     def test_numpy_array(self):
         from mbo_utilities.arrays import NumpyArray
+
         rng = np.random.RandomState(2)
         data = rng.randint(0, 4096, size=(4, 1, 3, 32, 32), dtype=np.uint16)
         arr = NumpyArray(data)
@@ -255,6 +259,7 @@ class TestVminVmaxAcrossArrayClasses:
 
     def test_numpy_array_2d(self):
         from mbo_utilities.arrays import NumpyArray
+
         rng = np.random.RandomState(3)
         data = rng.randint(0, 4096, size=(64, 48), dtype=np.uint16)
         arr = NumpyArray(data)

@@ -13,7 +13,6 @@ import json
 import h5py
 import numpy as np
 import pytest
-
 from mbo_utilities.arrays.mesc_geometry import (
     image_overlays,
     linescan_endpoints_um,
@@ -42,8 +41,16 @@ LINES = [
 ]
 PATCHES = [
     # x0..x3        y0..y3                z0..z3   (a chessboard patch's corners, absolute microns)
-    [[110, 130, 130, 110], [210, 210, 230, 230], [-46, -46, -46, -46]],  # z +4 -> slice 7
-    [[100, 120, 120, 100], [200, 200, 220, 220], [-70, -70, -70, -70]],  # below the stack
+    [
+        [110, 130, 130, 110],
+        [210, 210, 230, 230],
+        [-46, -46, -46, -46],
+    ],  # z +4 -> slice 7
+    [
+        [100, 120, 120, 100],
+        [200, 200, 220, 220],
+        [-70, -70, -70, -70],
+    ],  # below the stack
 ]
 
 
@@ -54,19 +61,35 @@ def mesc_path(tmp_path_factory):
         s = f.create_group("MSession_0")
         z = s.create_group("MUnit_0")
         z.attrs.update(
-            {"MethodType": 2, "VecChannelsSize": 1, "TStepInMs": 1.0,
-             "MeasurementDatePosix": 0, "Comment": "zstack",
-             "MinZ": -10.0, "MaxZ": 10.0, "ZDim": 11}
+            {
+                "MethodType": 2,
+                "VecChannelsSize": 1,
+                "TStepInMs": 1.0,
+                "MeasurementDatePosix": 0,
+                "Comment": "zstack",
+                "MinZ": -10.0,
+                "MaxZ": 10.0,
+                "ZDim": 11,
+            }
         )
         z.attrs["ReferenceViewportJSON"] = json.dumps(
-            {"viewports": [{"geomTransTransl": list(TRANSL), "width": 40.0, "height": 32.0}]}
+            {
+                "viewports": [
+                    {"geomTransTransl": list(TRANSL), "width": 40.0, "height": 32.0}
+                ]
+            }
         )
         z.create_dataset("Channel_0", data=np.zeros((11, 64, 80), np.uint16))
 
         ls = s.create_group("MUnit_1")
         ls.attrs.update(
-            {"MethodType": 6, "VecChannelsSize": 1, "TStepInMs": 2.0,
-             "MeasurementDatePosix": 1, "Comment": "linescan"}
+            {
+                "MethodType": 6,
+                "VecChannelsSize": 1,
+                "TStepInMs": 2.0,
+                "MeasurementDatePosix": 1,
+                "Comment": "linescan",
+            }
         )
         # four one-line ROIs packed side by side on the 8 x 8 page, 1-based corners
         boxes = [
@@ -81,13 +104,26 @@ def mesc_path(tmp_path_factory):
         ls.create_dataset("Channel_0", data=np.zeros((1, 8, 8), np.uint16))
 
         bare = s.create_group("MUnit_2")
-        bare.attrs.update({"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 1.0,
-                           "MeasurementDatePosix": 2})
+        bare.attrs.update(
+            {
+                "MethodType": 1,
+                "VecChannelsSize": 1,
+                "TStepInMs": 1.0,
+                "MeasurementDatePosix": 2,
+            }
+        )
         bare.create_dataset("Channel_0", data=np.zeros((2, 4, 4), np.uint16))
 
         chess = s.create_group("MUnit_3")
-        chess.attrs.update({"MethodType": 8, "VecChannelsSize": 1, "TStepInMs": 5.0,
-                            "MeasurementDatePosix": 3, "Comment": "chessboard"})
+        chess.attrs.update(
+            {
+                "MethodType": 8,
+                "VecChannelsSize": 1,
+                "TStepInMs": 5.0,
+                "MeasurementDatePosix": 3,
+                "Comment": "chessboard",
+            }
+        )
         chess.attrs["CoordinateMapJSON"] = json.dumps(
             {"maps": [{"measurementROIs": [], "contours": PATCHES}]}
         )
@@ -97,9 +133,17 @@ def mesc_path(tmp_path_factory):
                 "protocol": {"mainPatternIndex": 1, "scanners": [{"name": "AO1"}]},
                 "scanPatterns": {
                     "patterns": [
-                        {"centerPoints": [[0.0], [0.0], [0.0]], "pixelSizeX": 1.0, "rotation": [0, 0, 0, 1]},
                         {
-                            "centerPoints": [[120.0, 110.0], [220.0, 210.0], [-46.0, -70.0]],
+                            "centerPoints": [[0.0], [0.0], [0.0]],
+                            "pixelSizeX": 1.0,
+                            "rotation": [0, 0, 0, 1],
+                        },
+                        {
+                            "centerPoints": [
+                                [120.0, 110.0],
+                                [220.0, 210.0],
+                                [-46.0, -70.0],
+                            ],
                             "pixelSizeX": 1.0,
                             "rotation": [0, 0, 0, 1],
                         },
@@ -110,10 +154,25 @@ def mesc_path(tmp_path_factory):
         chess.create_dataset("Channel_0", data=np.zeros((1, 20, 40), np.uint16))
 
         snap = s.create_group("MUnit_4")
-        snap.attrs.update({"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 1.0,
-                           "MeasurementDatePosix": 0, "ImageRoleDebugString": "background"})
+        snap.attrs.update(
+            {
+                "MethodType": 1,
+                "VecChannelsSize": 1,
+                "TStepInMs": 1.0,
+                "MeasurementDatePosix": 0,
+                "ImageRoleDebugString": "background",
+            }
+        )
         snap.attrs["ReferenceViewportJSON"] = json.dumps(
-            {"viewports": [{"geomTransTransl": list(SNAP_TRANSL), "width": 40.0, "height": 32.0}]}
+            {
+                "viewports": [
+                    {
+                        "geomTransTransl": list(SNAP_TRANSL),
+                        "width": 40.0,
+                        "height": 32.0,
+                    }
+                ]
+            }
         )
         snap.create_dataset("Channel_0", data=np.zeros((1, 64, 80), np.uint16))
     return path
@@ -158,7 +217,9 @@ def test_placements(depth, lines):
     # 'off' is the true distance from the slice the line is drawn on
     assert np.allclose([q["dz_um"] for q in p], [0.0, 0.0, 0.1, -10.0])
     assert np.allclose([q["length_um"] for q in p], [20.0, 24.0, np.hypot(30, 10), 6.0])
-    assert np.allclose([q["sample_um"] for q in p], [1.0, 1.0, np.hypot(30, 10) / 10, 1.0])
+    assert np.allclose(
+        [q["sample_um"] for q in p], [1.0, 1.0, np.hypot(30, 10) / 10, 1.0]
+    )
     assert not any(q["tilted"] for q in p)
     assert np.array_equal(roi_slice_indices(lines, depth), [3, 7, 3, 0])
 
@@ -186,7 +247,10 @@ def test_chessboard_patches_place_like_lines(mesc_path, depth):
     patches = roi_outlines_um(mesc_path, "MSession_0/MUnit_3")
     assert len(patches) == 2 and patches[0].shape == (3, 4)
     # the line-scan name reads the same attribute and gives the same outlines
-    assert all(np.array_equal(a, b) for a, b in zip(linescan_endpoints_um(mesc_path, "MSession_0/MUnit_3"), patches))
+    assert all(
+        np.array_equal(a, b)
+        for a, b in zip(linescan_endpoints_um(mesc_path, "MSession_0/MUnit_3"), patches)
+    )
     p = roi_placements(patches, depth, sample_counts=[20, 20])
     assert [q["slice"] for q in p] == [7, 0]
     assert [q["in_range"] for q in p] == [True, False]
@@ -235,26 +299,41 @@ def test_snapshot_overlay_is_every_line_drawn_on_it(mesc_path):
 def test_zstack_overlay_places_lines_and_patches_on_slices(mesc_path):
     """Each ROI on the slice nearest its depth. The line and the patch scanned
     20 um below the stack are left out: the stack holds no picture of them, and
-    drawing them on slice 0 would put an outline on tissue they never touched."""
+    drawing them on slice 0 would put an outline on tissue they never touched.
+    """
     recs = image_overlays(mesc_path, "MSession_0/MUnit_0")
     assert [(r["munit"], r["roi"]) for r in recs] == [
-        ("MUnit_1", 0), ("MUnit_1", 1), ("MUnit_1", 2), ("MUnit_3", 0),
+        ("MUnit_1", 0),
+        ("MUnit_1", 1),
+        ("MUnit_1", 2),
+        ("MUnit_3", 0),
     ]
     assert [r["slice"] for r in recs] == [3, 7, 3, 7]
     assert all(r["on_plane"] for r in recs)
     assert np.allclose([r["dz_um"] for r in recs], [0.0, 0.0, 0.1, 0.0])
     patch = recs[3]
     assert patch["kind"] == "patch" and patch["color"] is None
-    assert np.allclose(patch["pixels"], [[20, 20], [60, 20], [60, 60], [20, 60], [20, 20]])
+    assert np.allclose(
+        patch["pixels"], [[20, 20], [60, 20], [60, 60], [20, 60], [20, 20]]
+    )
 
 
 def test_list_mesc_units_reports_outlines_and_links(mesc_path):
     from mbo_utilities.arrays.mesc import list_mesc_units
 
     units = {u["munit"]: u for u in list_mesc_units(mesc_path)}
-    assert (units["MUnit_1"]["outline_kind"], units["MUnit_1"]["n_outlines"]) == ("line", 4)
-    assert (units["MUnit_3"]["outline_kind"], units["MUnit_3"]["n_outlines"]) == ("patch", 2)
-    assert (units["MUnit_0"]["outline_kind"], units["MUnit_0"]["n_outlines"]) == (None, 0)
+    assert (units["MUnit_1"]["outline_kind"], units["MUnit_1"]["n_outlines"]) == (
+        "line",
+        4,
+    )
+    assert (units["MUnit_3"]["outline_kind"], units["MUnit_3"]["n_outlines"]) == (
+        "patch",
+        2,
+    )
+    assert (units["MUnit_0"]["outline_kind"], units["MUnit_0"]["n_outlines"]) == (
+        None,
+        0,
+    )
     assert units["MUnit_1"]["background_unit"] == "MSession_0/MUnit_4"
     assert units["MUnit_4"]["scans"] == ["MSession_0/MUnit_1"]
     assert units["MUnit_0"]["scans"] == [] and units["MUnit_1"]["scans"] == []
@@ -271,7 +350,8 @@ def test_a_scan_recorded_outside_every_stack_is_in_none_of_them(mesc_path, tmp_p
     """A scan whose ROIs were all recorded above or below the stack is not
     listed as inside it, however well their x and y line up: the file's one
     chessboard box sits 720 um under the stack on the 2026-09-14 rig, and
-    drawing it on an edge slice put it on unrelated tissue."""
+    drawing it on an edge slice put it on unrelated tissue.
+    """
     import shutil
 
     path = tmp_path / "far.mesc"
@@ -283,9 +363,13 @@ def test_a_scan_recorded_outside_every_stack_is_in_none_of_them(mesc_path, tmp_p
             patch[2] = [-770.0] * len(patch[2])
         unit.attrs["CoordinateMapJSON"] = json.dumps(maps)
     assert zstack_contents(path) == {"MSession_0/MUnit_0": ["MSession_0/MUnit_1"]}
-    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_0")} == {"MUnit_1"}
+    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_0")} == {
+        "MUnit_1"
+    }
     # it is still drawn on the picture it was drawn on, whatever its depth
-    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_4")} == {"MUnit_1"}
+    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_4")} == {
+        "MUnit_1"
+    }
 
 
 def test_overlay_skips_a_unit_whose_outlines_do_not_pair_with_its_rois(mesc_path):
@@ -301,13 +385,19 @@ def test_overlay_skips_a_unit_whose_outlines_do_not_pair_with_its_rois(mesc_path
 
 def test_a_reference_units_placeholder_viewport_is_no_position(tmp_path):
     """MEScan stamps an RTMC reference unit with a 1 um square at the origin;
-    that is not where anything was scanned, so it has no viewport."""
+    that is not where anything was scanned, so it has no viewport.
+    """
     path = tmp_path / "ref.mesc"
     with h5py.File(path, "w") as f:
         u = f.create_group("MSession_1").create_group("MUnit_0")
         u.attrs.update(
-            {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 1.0,
-             "MeasurementDatePosix": 0, "ImageRoleDebugString": "motionCorrection"}
+            {
+                "MethodType": 1,
+                "VecChannelsSize": 1,
+                "TStepInMs": 1.0,
+                "MeasurementDatePosix": 0,
+                "ImageRoleDebugString": "motionCorrection",
+            }
         )
         u.attrs["ReferenceViewportJSON"] = json.dumps(
             {"viewports": [{"geomTransTransl": [0, 0, 0], "width": 1, "height": 1}]}

@@ -8,70 +8,69 @@ this package provides:
 - voxel size extraction and normalization
 - file I/O for extracting metadata from TIFF files
 """
+
+from mbo_utilities.arrays.features._roi import RoiMode
+
+# filename metadata parsing
+from ._filename_parser import (
+    FilenameMetadata,
+    get_filename_suggestions,
+    parse_filename_metadata,
+)
 from .base import (
+    ALIAS_MAP,
+    EXPORT_DENYLIST,
+    IMAGING_METADATA_KEYS,
+    METADATA_PARAMS,
     MetadataParameter,
     VoxelSize,
-    METADATA_PARAMS,
-    ALIAS_MAP,
     get_canonical_name,
-    IMAGING_METADATA_KEYS,
-    EXPORT_DENYLIST,
     normalize_ops_arrays,
     repair_ops_file,
     repair_ops_tree,
     strip_for_export,
 )
-from mbo_utilities.arrays.features._roi import RoiMode
-
-from .params import (
-    get_param,
-    get_voxel_size,
-    normalize_resolution,
-    normalize_metadata,
-    scale_frame_rate,
-)
-
-from .scanimage import (
-    StackType,
-    detect_stack_type,
-    is_lbm_stack,
-    is_piezo_stack,
-    get_saved_channel_ports,
-    get_color_channel_ports,
-    get_beamlets_per_port,
-    get_num_color_channels,
-    get_num_zplanes,
-    get_frames_per_slice,
-    get_log_average_factor,
-    get_z_step_size,
-    get_num_volumes,
-    get_num_slices,
-    get_frames_per_volume,
-    get_roi_info,
-    get_frame_rate,
-    extract_roi_slices,
-)
 
 # file I/O functions
 from .io import (
-    is_raw_scanimage,
-    get_metadata,
-    get_metadata_single,
-    get_metadata_batch,
-    query_tiff_pages,
+    _build_ome_metadata,
     clean_scanimage_metadata,
     default_ops,
-    _build_ome_metadata,
+    get_metadata,
+    get_metadata_batch,
+    get_metadata_single,
+    is_raw_scanimage,
+    query_tiff_pages,
 )
 
 # output metadata for subsetted data
 from .output import OutputMetadata
-
-# filename metadata parsing
-from ._filename_parser import (
-    FilenameMetadata,
-    parse_filename_metadata,
-    get_filename_suggestions,
+from .params import (
+    get_param,
+    get_voxel_size,
+    normalize_metadata,
+    normalize_resolution,
+    scale_frame_rate,
+)
+from .scanimage import (
+    StackType,
+    detect_stack_type,
+    extract_roi_slices,
+    get_beamlets_per_port,
+    get_color_channel_ports,
+    get_frame_rate,
+    get_frames_per_slice,
+    get_frames_per_volume,
+    get_log_average_factor,
+    get_num_color_channels,
+    get_num_slices,
+    get_num_volumes,
+    get_num_zplanes,
+    get_roi_info,
+    get_saved_channel_ports,
+    get_z_step_size,
+    is_lbm_stack,
+    is_piezo_stack,
 )
 
 __all__ = [

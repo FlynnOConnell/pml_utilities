@@ -6,11 +6,10 @@ and pixel values against the source. Documents the lossy formats (.npy, .bin
 dtype) explicitly. Synthetic data, CI-runnable.
 """
 
+import mbo_utilities as mbo
 import numpy as np
 import pytest
 import tifffile
-
-import mbo_utilities as mbo
 
 
 def _synthetic_5d():
@@ -28,7 +27,11 @@ class TestVolumeRoundtrip:
         arr = mbo.imread(data, dims="TCZYX")
         mbo.imwrite(arr, output_dir, ext=ext, overwrite=True)
 
-        path = next(output_dir.rglob("*.zarr")) if ext == ".zarr" else next(output_dir.rglob("*.tif"))
+        path = (
+            next(output_dir.rglob("*.zarr"))
+            if ext == ".zarr"
+            else next(output_dir.rglob("*.tif"))
+        )
         back = mbo.imread(path)
 
         assert back.shape == data.shape
@@ -44,7 +47,11 @@ class TestSingleChannelRoundtrip:
         mbo.imwrite(arr, output_dir, ext=".h5", overwrite=True)
 
         back = mbo.imread(next(output_dir.rglob("*.h5")))
-        assert back.shape == (synthetic_4d_data.shape[0], 1, *synthetic_4d_data.shape[1:])
+        assert back.shape == (
+            synthetic_4d_data.shape[0],
+            1,
+            *synthetic_4d_data.shape[1:],
+        )
         assert np.array_equal(np.asarray(back[:])[:, 0], synthetic_4d_data)
 
     def test_bin_exact_int16(self, synthetic_4d_data, output_dir):
@@ -85,10 +92,18 @@ class TestStridedSubset:
             for z in range(Z):
                 data[t, z] = t * 100 + z
         arr = mbo.imread(data, dims="TZYX")
-        mbo.imwrite(arr, output_dir, ext=".zarr",
-                    planes=[1, 3, 5], timepoints=[1, 3, 5, 7, 9], overwrite=True)
+        mbo.imwrite(
+            arr,
+            output_dir,
+            ext=".zarr",
+            planes=[1, 3, 5],
+            timepoints=[1, 3, 5, 7, 9],
+            overwrite=True,
+        )
 
-        back = np.asarray(mbo.imread(next(output_dir.rglob("*.zarr")))[:])  # (5,1,3,Y,X)
+        back = np.asarray(
+            mbo.imread(next(output_dir.rglob("*.zarr")))[:]
+        )  # (5,1,3,Y,X)
         assert back.shape == (5, 1, 3, Y, X)
 
         sel_t, sel_z = [0, 2, 4, 6, 8], [0, 2, 4]
@@ -119,7 +134,11 @@ class TestCrossFormat:
         mbo.imwrite(intermediate, dst_dir, ext=".tiff", overwrite=True)
 
         readback = tifffile.imread(next(dst_dir.rglob("*.tif")))
-        expected = synthetic_3d_data.astype(np.int16) if source_ext == ".bin" else synthetic_3d_data
+        expected = (
+            synthetic_3d_data.astype(np.int16)
+            if source_ext == ".bin"
+            else synthetic_3d_data
+        )
         assert np.array_equal(np.asarray(readback).squeeze(), expected)
 
 
@@ -131,8 +150,14 @@ class TestDtypePreservation:
         arr = mbo.imread(synthetic_4d_data, dims="TZYX")
         mbo.imwrite(arr, output_dir, ext=ext, overwrite=True)
 
-        path = next(output_dir.rglob("*.zarr")) if ext == ".zarr" else (
-            next(output_dir.rglob("*.h5")) if ext == ".h5" else next(output_dir.rglob("*.tif"))
+        path = (
+            next(output_dir.rglob("*.zarr"))
+            if ext == ".zarr"
+            else (
+                next(output_dir.rglob("*.h5"))
+                if ext == ".h5"
+                else next(output_dir.rglob("*.tif"))
+            )
         )
         assert mbo.imread(path).dtype == synthetic_4d_data.dtype
 
@@ -153,7 +178,9 @@ class TestSourceArrayTypes:
     """imwrite accepts both a raw ndarray and an already-wrapped LazyArray."""
 
     def test_from_raw_ndarray(self, synthetic_3d_data, output_dir):
-        mbo.imwrite(synthetic_3d_data, output_dir, ext=".tiff", dim_order="TYX", overwrite=True)
+        mbo.imwrite(
+            synthetic_3d_data, output_dir, ext=".tiff", dim_order="TYX", overwrite=True
+        )
         readback = tifffile.imread(next(output_dir.rglob("*.tif")))
         assert np.array_equal(np.asarray(readback).squeeze(), synthetic_3d_data)
 

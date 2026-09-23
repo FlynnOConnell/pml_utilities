@@ -15,7 +15,10 @@ def crop_slices(top: int, left: int, crop_shape, fov_shape):
     x0, x1 = max(left, 0), min(left + w, fov_shape[1])
     if y1 <= y0 or x1 <= x0:
         return None
-    return (slice(y0 - top, y1 - top), slice(x0 - left, x1 - left)), (slice(y0, y1), slice(x0, x1))
+    return (slice(y0 - top, y1 - top), slice(x0 - left, x1 - left)), (
+        slice(y0, y1),
+        slice(x0, x1),
+    )
 
 
 def context_crop(fov: np.ndarray, centroid, crop_shape) -> np.ndarray:

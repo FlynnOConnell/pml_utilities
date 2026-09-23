@@ -388,7 +388,12 @@ def plot_roi_signal_decomposition(
         ax.plot(t[seg], ac_avg[k][seg], color="#2ecc71", lw=0.9, label="demixed")
         ax.plot(t[seg], bkgd_avg[k][seg], color="#3498db", lw=0.6, label="background")
         ax.plot(
-            t[seg], resid_avg[k][seg], color="#e74c3c", lw=0.4, alpha=0.7, label="residual"
+            t[seg],
+            resid_avg[k][seg],
+            color="#e74c3c",
+            lw=0.4,
+            alpha=0.7,
+            label="residual",
         )
         ax.set_title(
             f"signal {k} — {lab}\nvar: sig {frac_sig[k]:.2f} | bkgd {frac_bkg[k]:.2f} | "
@@ -463,9 +468,7 @@ def _calibrated_dff(results, pmd):
     pix, roi, lam = _sparse_footprints(results)
     c = _np(results.c)  # (T, K)
     n_rois = c.shape[1]
-    footprints = _outputs.split_sparse_footprints(
-        np.stack([pix, roi]), lam, n_rois
-    )
+    footprints = _outputs.split_sparse_footprints(np.stack([pix, roi]), lam, n_rois)
     gain, f0 = _outputs.roi_calibration(
         footprints,
         var_img=_np(pmd.var_img),
@@ -589,9 +592,7 @@ def plot_calibrated_dff(
     )
     ax.set_xlabel(xlabel)
     ax.set_yticks([])
-    ax.set_title(
-        f"Top {len(order)} demixed signals by peak dF/F", fontsize=11
-    )
+    ax.set_title(f"Top {len(order)} demixed signals by peak dF/F", fontsize=11)
     _dark(ax)
 
     ax = axes[1]
@@ -664,7 +665,9 @@ def plot_registration_summary(
     _save(fig, Path(plane_dir) / save_name)
 
 
-def plot_pmd_diagnostics(plane_dir: Path, pmd, save_name="05_pmd_basis_diagnostics.png"):
+def plot_pmd_diagnostics(
+    plane_dir: Path, pmd, save_name="05_pmd_basis_diagnostics.png"
+):
     """Mean / noise-normalizer images and the per-pixel PMD rank heatmap."""
     plt = _agg_plt()
 
@@ -853,13 +856,23 @@ def plot_plane_figures(
                     pmd,
                     fs,
                 )
-            _try(logger, "calibrated dff", plot_calibrated_dff, plane_dir, results, pmd, fs)
+            _try(
+                logger,
+                "calibrated dff",
+                plot_calibrated_dff,
+                plane_dir,
+                results,
+                pmd,
+                fs,
+            )
 
     if pmd is not None:
         _try(logger, "pmd diagnostics", plot_pmd_diagnostics, plane_dir, pmd)
 
     if shifts is not None:
-        _try(logger, "registration summary", plot_registration_summary, plane_dir, shifts)
+        _try(
+            logger, "registration summary", plot_registration_summary, plane_dir, shifts
+        )
 
 
 def plot_volume_figures(save_path: Path, ops_files: list[Path], logger=None) -> None:

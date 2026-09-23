@@ -30,7 +30,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import icons_fontawesome_6 as fa, imgui, imgui_ctx
+from imgui_bundle import icons_fontawesome_6 as fa
+from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities import log
 from mbo_utilities.gui._imgui_helpers import set_tooltip
@@ -65,10 +66,18 @@ UNIT_COLUMNS = (
     ("start", False),
     ("comment", False),
 )
-UNIT_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "unit")
-MODALITY_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "modality")
-PICTURE_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "picture")
-RTMC_COLUMN = next(i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "RTMC")
+UNIT_COLUMN = next(
+    i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "unit"
+)
+MODALITY_COLUMN = next(
+    i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "modality"
+)
+PICTURE_COLUMN = next(
+    i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "picture"
+)
+RTMC_COLUMN = next(
+    i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "RTMC"
+)
 
 # what each column means, on its header
 COLUMN_HELP = {
@@ -183,7 +192,8 @@ def companions(units: list[dict]) -> dict[str, str]:
     """The units the table folds into a scan's row: every picture
     (``BackgroundImagePath``) and RTMC reference unit
     (``MotionCorrectionImagePath``) a scan names, as ``{companion key: scan
-    key}``. A scan named by another scan, or a Z-stack, is never folded."""
+    key}``. A scan named by another scan, or a Z-stack, is never folded.
+    """
     out = {}
     for u in units:
         owners = [*u["scans"], *u["rtmc_of"]]
@@ -194,14 +204,16 @@ def companions(units: list[dict]) -> dict[str, str]:
 
 def rtmc_on(info: dict) -> bool:
     """Whether RTMC was on for a recording: it carries correction curves,
-    with samples (it moved the scan) or without (it never had to)."""
+    with samples (it moved the scan) or without (it never had to).
+    """
     return bool(info.get("rtmc_armed") or info.get("rtmc"))
 
 
 def describe_unit(info: dict, by_key: dict[str, dict]) -> str:
     """One recording in plain words, for the unit cell's tooltip: what the
     laser did, how much was recorded, and the picture and RTMC reference
-    unit MEScan saved beside it."""
+    unit MEScan saved beside it.
+    """
     t, c, z, y, x = info["shape"]
     fs = info.get("fs")
     dur = info.get("duration_s")
@@ -240,8 +252,14 @@ def describe_unit(info: dict, by_key: dict[str, dict]) -> str:
         lines.append(f"Picture: {bg}" + ("" if bg in by_key else " (not in this file)"))
     ref = info.get("rtmc_unit")
     if rtmc_on(info) or ref:
-        lines.append(f"RTMC {'on' if rtmc_on(info) else 'off'}" + (f"; reference pixels {ref}" if ref else ""))
-    for role, field in (("Picture of", "scans"), ("RTMC reference pixels of", "rtmc_of")):
+        lines.append(
+            f"RTMC {'on' if rtmc_on(info) else 'off'}"
+            + (f"; reference pixels {ref}" if ref else "")
+        )
+    for role, field in (
+        ("Picture of", "scans"),
+        ("RTMC reference pixels of", "rtmc_of"),
+    ):
         if info.get(field):
             lines.append(f"{role} " + ", ".join(info[field]))
     if info.get("comment"):
@@ -251,7 +269,8 @@ def describe_unit(info: dict, by_key: dict[str, dict]) -> str:
 
 def unit_row(info: dict) -> tuple[tuple[str, ...], tuple]:
     """One table row per `list_mesc_units` entry: the cell texts and the sort
-    keys, both in UNIT_COLUMNS order (numbers sort as numbers)."""
+    keys, both in UNIT_COLUMNS order (numbers sort as numbers).
+    """
     t, c, z_size, y, x = info["shape"]
     fs = info.get("fs")
     dur = info.get("duration_s")
@@ -358,15 +377,16 @@ class MescTabWidget(Widget):
     def open_reference(self) -> None:
         """The popup with the shown unit's lines or patches drawn on the
         picture they were drawn on and the Z-stack around them
-        (``mesc_reference``); the tab says so when neither exists."""
+        (``mesc_reference``); the tab says so when neither exists.
+        """
         mesc = self._mesc
         if self._reference is None:
-            self._reference = ReferenceView(self.parent, on_show=self._show_reference_unit)
+            self._reference = ReferenceView(
+                self.parent, on_show=self._show_reference_unit
+            )
         self._note = None
         if not self._reference.open(mesc, partial(self._open_unit, mesc.filenames[0])):
-            self._note = (
-                f"no picture or Z-stack in this file carries {mesc.unit_key.rsplit('/', 1)[-1]}'s ROIs"
-            )
+            self._note = f"no picture or Z-stack in this file carries {mesc.unit_key.rsplit('/', 1)[-1]}'s ROIs"
 
     @property
     def _mesc(self):
@@ -418,7 +438,10 @@ class MescTabWidget(Widget):
         roi_on = getattr(parent, "manual_roi", None) is not None
         if roi_on:
             detach_roi_widget(parent)
-            self._parked[(path, shown)] = (parent._manual_roi_store, parent._manual_roi_runs)
+            self._parked[(path, shown)] = (
+                parent._manual_roi_store,
+                parent._manual_roi_runs,
+            )
             parent._manual_roi_store, parent._manual_roi_runs = self._parked.get(
                 (path, arr.unit_key), (None, None)
             )
@@ -444,14 +467,17 @@ class MescTabWidget(Widget):
 
     def _switch(self, info: dict, z: int | None = None) -> None:
         """Open the unit ``info`` describes and show it at slice ``z``; a
-        failure is shown in the tab."""
+        failure is shown in the tab.
+        """
         mesc = self._mesc
         self._error = None
         try:
             self._install(self._open_unit(mesc.filenames[0], info["key"]), z)
         except Exception as e:
             self._error = str(e)
-            self.parent.logger.exception(f"MESc unit switch to {info['key']} failed: {e}")
+            self.parent.logger.exception(
+                f"MESc unit switch to {info['key']} failed: {e}"
+            )
 
     def draw(self) -> None:
         with imgui_ctx.begin_child(
@@ -476,12 +502,18 @@ class MescTabWidget(Widget):
             highlight = owner or mesc.unit_key
             shown = mesc.unit_key.rsplit("/", 1)[-1]
             if owner is not None:
-                what = "picture" if by_key[owner].get("background_unit") == mesc.unit_key else "RTMC reference pixels"
+                what = (
+                    "picture"
+                    if by_key[owner].get("background_unit") == mesc.unit_key
+                    else "RTMC reference pixels"
+                )
                 shown = f"{shown}, the {what} of {owner.rsplit('/', 1)[-1]}"
 
             imgui.text_colored(_ACCENT, Path(mesc.filenames[0]).name)
             imgui.same_line(0, 12)
-            imgui.text_disabled(f"{len(units) - len(folded)} recordings · showing {shown}")
+            imgui.text_disabled(
+                f"{len(units) - len(folded)} recordings · showing {shown}"
+            )
             imgui.same_line(0, 12)
             if imgui.small_button("?##mesc_help"):
                 self.parent._show_help_popup = True
@@ -498,7 +530,9 @@ class MescTabWidget(Widget):
                 imgui.text_disabled("Click a row to display that unit.")
             if paired:
                 imgui.same_line(0, 12)
-                changed, on = imgui.checkbox("companion units as rows", self._show_companions)
+                changed, on = imgui.checkbox(
+                    "companion units as rows", self._show_companions
+                )
                 set_tooltip(
                     "Give each scan's picture and RTMC reference pixels a row of their "
                     "own instead of the picture and RTMC cells of the scan's row.",
@@ -513,10 +547,14 @@ class MescTabWidget(Widget):
                 set_tooltip(self._error)
 
             flags = (
-                imgui.TableFlags_.sortable | imgui.TableFlags_.row_bg
-                | imgui.TableFlags_.borders_inner_h | imgui.TableFlags_.scroll_y
-                | imgui.TableFlags_.scroll_x | imgui.TableFlags_.resizable
-                | imgui.TableFlags_.hideable | imgui.TableFlags_.sizing_fixed_fit
+                imgui.TableFlags_.sortable
+                | imgui.TableFlags_.row_bg
+                | imgui.TableFlags_.borders_inner_h
+                | imgui.TableFlags_.scroll_y
+                | imgui.TableFlags_.scroll_x
+                | imgui.TableFlags_.resizable
+                | imgui.TableFlags_.hideable
+                | imgui.TableFlags_.sizing_fixed_fit
             )
             avail = imgui.get_content_region_avail()
             # a new table id whenever the columns change: imgui restores a
@@ -542,7 +580,8 @@ class MescTabWidget(Widget):
                     continue
                 imgui.table_header(name)
                 set_tooltip(
-                    COLUMN_HELP[name] + "\n\nRight-click a header to show or hide columns.",
+                    COLUMN_HELP[name]
+                    + "\n\nRight-click a header to show or hide columns.",
                     show_mark=False,
                 )
             specs = imgui.table_get_sort_specs()
@@ -555,11 +594,7 @@ class MescTabWidget(Widget):
                 specs.specs_dirty = False
             column, ascending = self._sort
             rows = sorted(
-                (
-                    (*unit_row(u), u)
-                    for u in units
-                    if u["key"] not in folded
-                ),
+                ((*unit_row(u), u) for u in units if u["key"] not in folded),
                 key=lambda row: row[1][column],
                 reverse=not ascending,
             )
@@ -567,7 +602,9 @@ class MescTabWidget(Widget):
             reference = None
             last = len(UNIT_COLUMNS) - 1
             for cells, _keys, info in rows:
-                what = {"line": "lines", "patch": "patches"}.get(info.get("outline_kind"), "ROIs")
+                what = {"line": "lines", "patch": "patches"}.get(
+                    info.get("outline_kind"), "ROIs"
+                )
                 imgui.table_next_row()
                 imgui.table_next_column()
                 clicked, _ = imgui.selectable(
@@ -575,7 +612,8 @@ class MescTabWidget(Widget):
                     info["key"] == highlight,
                     # the row spans the buttons' columns too; without overlap
                     # it takes the hover and a button never sees a click
-                    imgui.SelectableFlags_.span_all_columns | imgui.SelectableFlags_.allow_overlap,
+                    imgui.SelectableFlags_.span_all_columns
+                    | imgui.SelectableFlags_.allow_overlap,
                 )
                 if clicked and not split and info["key"] != mesc.unit_key:
                     picked = (info, None)
@@ -598,7 +636,12 @@ class MescTabWidget(Widget):
                             imgui.text_disabled(cells[i])
                             set_tooltip(f"{bg} is not in this file.", show_mark=False)
                             continue
-                        if imgui.small_button(f"{IMAGE_ICON} {cells[i]}##pic_{info['key']}") and not split:
+                        if (
+                            imgui.small_button(
+                                f"{IMAGE_ICON} {cells[i]}##pic_{info['key']}"
+                            )
+                            and not split
+                        ):
                             reference = info
                         _t, c, _z, y, x = other["shape"]
                         set_tooltip(

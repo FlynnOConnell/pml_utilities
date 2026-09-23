@@ -12,13 +12,11 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import mbo_utilities as mbo
 import numpy as np
 import pytest
-import zarr
-
 import tifffile  # noqa: F401  (import-order wiring, see test_roundtrip)
-
-import mbo_utilities as mbo
+import zarr
 from mbo_utilities.arrays import NumpyArray
 from mbo_utilities.arrays.features import get_dims
 
@@ -54,7 +52,9 @@ class TestDefaultInference:
 
     def test_inferred_flag(self):
         assert NumpyArray(np.zeros((10, 3, 32, 32)))._dims_inferred is True
-        assert NumpyArray(np.zeros((10, 3, 32, 32)), dims="TCYX")._dims_inferred is False
+        assert (
+            NumpyArray(np.zeros((10, 3, 32, 32)), dims="TCYX")._dims_inferred is False
+        )
 
 
 class TestExplicitDims:
@@ -127,14 +127,17 @@ class TestReactivity:
         assert arr.shape == (10, 1, 1, 32, 32)
 
     def test_ctor_dims_from_metadata(self):
-        arr = NumpyArray(np.zeros((10, 2, 32, 32), dtype=np.uint16),
-                         metadata={"dims": "TCYX"})
+        arr = NumpyArray(
+            np.zeros((10, 2, 32, 32), dtype=np.uint16), metadata={"dims": "TCYX"}
+        )
         assert arr.shape == (10, 2, 1, 32, 32)
 
     def test_ctor_dimension_names_alias(self):
         # NGFF-style lowercase dimension_names is accepted as a dims alias
-        arr = NumpyArray(np.zeros((10, 2, 32, 32), dtype=np.uint16),
-                         metadata={"dimension_names": ["t", "c", "y", "x"]})
+        arr = NumpyArray(
+            np.zeros((10, 2, 32, 32), dtype=np.uint16),
+            metadata={"dimension_names": ["t", "c", "y", "x"]},
+        )
         assert arr.shape == (10, 2, 1, 32, 32)
 
     def test_metadata_dimension_names_setter(self):
@@ -160,14 +163,20 @@ class TestOmeWriterLabeling:
             assert _dimension_names(written) == ["t", "z", "y", "x"]
         finally:
             import shutil
+
             shutil.rmtree(out, ignore_errors=True)
 
     def test_tagged_4d_two_channel_labels_c(self):
         out = _make_tmp()
         try:
             data = np.random.randint(0, 100, (8, 2, 16, 16), dtype=np.uint16)
-            mbo.imwrite(NumpyArray(data, dims="TCYX"), out, ext=".zarr",
-                        ome=True, overwrite=True)
+            mbo.imwrite(
+                NumpyArray(data, dims="TCYX"),
+                out,
+                ext=".zarr",
+                ome=True,
+                overwrite=True,
+            )
             written = next(p for p in out.iterdir() if p.suffix == ".zarr")
             names = _dimension_names(written)
             assert "c" in names
@@ -176,14 +185,25 @@ class TestOmeWriterLabeling:
             assert level0.shape[names.index("c")] == 2
         finally:
             import shutil
+
             shutil.rmtree(out, ignore_errors=True)
 
 
 def test_slider_roles_are_positional():
-    from mbo_utilities.arrays.features._dim_labels import default_dim_letters, slider_roles
+    from mbo_utilities.arrays.features._dim_labels import (
+        default_dim_letters,
+        slider_roles,
+    )
 
-    assert default_dim_letters(3) == ("t", "c", "z") and default_dim_letters(2) == ("t", "z")
+    assert default_dim_letters(3) == ("t", "c", "z") and default_dim_letters(2) == (
+        "t",
+        "z",
+    )
     assert default_dim_letters(5) == ("t", "c", "z", "dim3", "dim4")
-    assert slider_roles(("Timepoint", "Channel", "ROI")) == {"Timepoint": "t", "Channel": "c", "ROI": "z"}
+    assert slider_roles(("Timepoint", "Channel", "ROI")) == {
+        "Timepoint": "t",
+        "Channel": "c",
+        "ROI": "z",
+    }
     assert slider_roles(("t", "z")) == {"t": "t", "z": "z"}
     assert slider_roles(()) == {}

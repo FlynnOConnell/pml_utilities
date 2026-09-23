@@ -50,10 +50,10 @@ import argparse
 import logging
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable
 
 import numpy as np
 from imgui_bundle import hello_imgui, imgui, imgui_ctx, immapp
@@ -137,7 +137,8 @@ class PanelHost:
 
 def draw_dashboard(widget, host: PanelHost) -> None:
     """One frame of the layout both hosts share: the widget's frame hook,
-    the dashboard panel on the left, the controls column on the right."""
+    the dashboard panel on the left, the controls column on the right.
+    """
     for hook in list(host.hooks):
         hook()
     panel = host.panel("curation")
@@ -145,7 +146,8 @@ def draw_dashboard(widget, host: PanelHost) -> None:
     controls_w = em(CONTROLS_EM)
     gap = em(0.6)
     with imgui_ctx.begin_child(
-        "##curation_dashboard", imgui.ImVec2(max(avail.x - controls_w - gap, em(20)), 0),
+        "##curation_dashboard",
+        imgui.ImVec2(max(avail.x - controls_w - gap, em(20)), 0),
     ):
         if panel is not None:
             panel.draw()
@@ -156,10 +158,17 @@ def draw_dashboard(widget, host: PanelHost) -> None:
 
 class _Dashboard:
     """What both hosts share: the widget on a :class:`PanelHost` and the
-    ways to point it at data."""
+    ways to point it at data.
+    """
 
-    def __init__(self, path=None, *, channel: int = 0, logger: logging.Logger | None = None,
-                 figure=None):
+    def __init__(
+        self,
+        path=None,
+        *,
+        channel: int = 0,
+        logger: logging.Logger | None = None,
+        figure=None,
+    ):
         if not HAS_VNOISER:
             raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
         from mbo_utilities.gui.event_curation import EventCurationWidget
@@ -173,7 +182,9 @@ class _Dashboard:
             fpath=None if path is None else str(path),
         )
         # data_path "" defers opening to `open`, which knows about raw .mesc
-        self.widget = EventCurationWidget(parent, strip=self.host, data_path="" if path is not None else None)
+        self.widget = EventCurationWidget(
+            parent, strip=self.host, data_path="" if path is not None else None
+        )
         self.source = None if path is None else Path(path)
         if path is not None:
             self.open(path)
@@ -193,7 +204,11 @@ class _Dashboard:
 
         path = Path(path).expanduser()
         self.source = path
-        if path.is_file() and path.suffix.lower() == ".mesc" and voltage_run_for_mesc(path) is None:
+        if (
+            path.is_file()
+            and path.suffix.lower() == ".mesc"
+            and voltage_run_for_mesc(path) is None
+        ):
             self.open_raw_mesc(path)
         else:
             # a PF folder (or the folder holding it), and a .mesc with one beside it
@@ -201,7 +216,8 @@ class _Dashboard:
 
     def open_raw_mesc(self, mesc_path) -> int:
         """Every ROI of every AOD ROI unit as a raw recording the
-        denoiser runs on when clicked. Returns how many."""
+        denoiser runs on when clicked. Returns how many.
+        """
         return self.widget.scan_raw_mesc(mesc_path, self.channel)
 
 
@@ -217,7 +233,9 @@ class CurationApp(_Dashboard):
         Channel averaged into a raw line scan's traces.
     """
 
-    def __init__(self, path=None, *, channel: int = 0, logger: logging.Logger | None = None):
+    def __init__(
+        self, path=None, *, channel: int = 0, logger: logging.Logger | None = None
+    ):
         _setup.setup_imgui()
         self.frames = 0
         self.max_frames: int | None = None
@@ -241,13 +259,16 @@ class CurationApp(_Dashboard):
         params.app_window_params.window_geometry.size_auto = False
         params.app_window_params.resizable = True
         params.ini_filename = _setup.get_default_ini_path("curation_viewer")
-        params.imgui_window_params.tweaked_theme.theme = hello_imgui.ImGuiTheme_.darcula_darker
+        params.imgui_window_params.tweaked_theme.theme = (
+            hello_imgui.ImGuiTheme_.darcula_darker
+        )
         params.callbacks.show_gui = self.draw
         return params
 
     def run(self, frames: int | None = None, screenshot=None) -> None:
         """Run the window until it is closed (or ``frames`` frames, for a
-        smoke test; ``screenshot`` then saves the last frame)."""
+        smoke test; ``screenshot`` then saves the last frame).
+        """
         self.max_frames = frames
         addons = immapp.AddOnsParams()
         addons.with_implot = True
@@ -267,7 +288,7 @@ class CurationApp(_Dashboard):
 class _DashboardWindow(EdgeWindow):
     """The figure's top edge window, grown to the whole canvas."""
 
-    def __init__(self, figure, vis: "CurationVis"):
+    def __init__(self, figure, vis: CurationVis):
         self.vis = vis
         super().__init__(figure, size=self._want(figure), location="top", title=None)
 
@@ -306,8 +327,15 @@ class CurationVis(_Dashboard):
         runs decides otherwise.
     """
 
-    def __init__(self, path=None, *, channel: int = 0, size=None, canvas=None,
-                 logger: logging.Logger | None = None):
+    def __init__(
+        self,
+        path=None,
+        *,
+        channel: int = 0,
+        size=None,
+        canvas=None,
+        logger: logging.Logger | None = None,
+    ):
         import fastplotlib as fpl
 
         from mbo_utilities.gui.run_gui import _figure_kwargs_for_here
@@ -349,7 +377,8 @@ class CurationVis(_Dashboard):
         inside the imgui pass) and a canvas under MIN_CANVAS draws nothing.
         The next frame is requested whatever happened: the imgui figure
         only asks for one after a successful render, so one bad frame would
-        otherwise end the stream."""
+        otherwise end the stream.
+        """
         canvas = self.figure.canvas
         try:
             w, h = canvas.get_logical_size()
@@ -374,8 +403,17 @@ class CurationVis(_Dashboard):
             self.figure.canvas.close()
 
 
-def open_curation_viewer(path=None, *, channel: int = 0, run: bool = True, frames=None,
-                         screenshot=None, figure: bool | None = None, canvas=None, size=None):
+def open_curation_viewer(
+    path=None,
+    *,
+    channel: int = 0,
+    run: bool = True,
+    frames=None,
+    screenshot=None,
+    figure: bool | None = None,
+    canvas=None,
+    size=None,
+):
     """Open the curation dashboard on ``path``.
 
     In a notebook (or with ``figure=True``) it is a :class:`CurationVis` on
@@ -401,7 +439,8 @@ def open_curation_viewer(path=None, *, channel: int = 0, run: bool = True, frame
 def curation_target(path) -> Path | None:
     """What of a viewer's open path the curation window can take: a ``.mesc``
     itself, or the ``PF`` folder a path names (the folder, its traces
-    pickle, or the experiment holding it); None for anything else."""
+    pickle, or the experiment holding it); None for anything else.
+    """
     from mbo_utilities.results import results_dir_of
 
     if isinstance(path, (list, tuple)):
@@ -417,7 +456,8 @@ def curation_target(path) -> Path | None:
 def launch_curation_window(path, channel: int = 0) -> int:
     """Open the curation window on ``path`` in its own process, what
     ``mbo curate PATH`` does, and return its pid. The window outlives the
-    viewer that opened it; its output goes to ``~/.mbo/logs``."""
+    viewer that opened it; its output goes to ``~/.mbo/logs``.
+    """
     python = sys.executable
     if sys.platform == "win32" and python.endswith("python.exe"):
         # no console window beside the curation window
@@ -426,28 +466,59 @@ def launch_curation_window(path, channel: int = 0) -> int:
             python = pythonw
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = get_mbo_dirs()["logs"] / f"{stamp}_curate_{Path(str(path)).stem}.log"
-    cmd = [python, "-m", "mbo_utilities.gui.curation_viewer", str(path), "--channel", str(int(channel))]
+    cmd = [
+        python,
+        "-m",
+        "mbo_utilities.gui.curation_viewer",
+        str(path),
+        "--channel",
+        str(int(channel)),
+    ]
     with log_file.open("a", encoding="utf-8") as out:
         if sys.platform == "win32":
             proc = subprocess.Popen(
-                cmd, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-                stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                cmd,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=out,
             )
         else:
-            proc = subprocess.Popen(cmd, start_new_session=True, stdin=subprocess.DEVNULL, stdout=out, stderr=out)
+            proc = subprocess.Popen(
+                cmd,
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=out,
+            )
     return proc.pid
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("path", nargs="?", type=Path,
-                    help="a PF folder (or the experiment folder holding it), or a line-scan .mesc "
-                         "(default: the last data path)")
-    ap.add_argument("--channel", type=int, default=0, help="channel averaged for raw line scans")
-    ap.add_argument("--frames", type=int, default=None, help="exit after this many frames")
-    ap.add_argument("--screenshot", type=Path, default=None, help="with --frames: save the last frame")
+    ap.add_argument(
+        "path",
+        nargs="?",
+        type=Path,
+        help="a PF folder (or the experiment folder holding it), or a line-scan .mesc "
+        "(default: the last data path)",
+    )
+    ap.add_argument(
+        "--channel", type=int, default=0, help="channel averaged for raw line scans"
+    )
+    ap.add_argument(
+        "--frames", type=int, default=None, help="exit after this many frames"
+    )
+    ap.add_argument(
+        "--screenshot",
+        type=Path,
+        default=None,
+        help="with --frames: save the last frame",
+    )
     args = ap.parse_args(argv)
-    open_curation_viewer(args.path, channel=args.channel, frames=args.frames, screenshot=args.screenshot)
+    open_curation_viewer(
+        args.path, channel=args.channel, frames=args.frames, screenshot=args.screenshot
+    )
 
 
 if __name__ == "__main__":

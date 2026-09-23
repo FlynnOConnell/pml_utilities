@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import threading
 import sys
+import threading
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,6 @@ from mbo_utilities import log
 from mbo_utilities.preferences import get_mbo_dirs
 
 logger = log.get("gui.process_manager")
-
 
 
 # how long to keep completed processes visible (seconds)
@@ -78,15 +77,19 @@ class ProcessInfo:
             if candidate.exists():
                 sidecar = candidate
             elif uuid:
-                 # If neither exists and we have UUID, candidate for error reporting is UUID file
-                 # (or we report missing for both)
-                 pass
+                # If neither exists and we have UUID, candidate for error reporting is UUID file
+                # (or we report missing for both)
+                pass
 
         if verbose:
             logger.debug(f"Checking sidecar for PID {self.pid} (UUID={uuid})")
             if uuid:
-                logger.debug(f"  UUID path: {log_dir / f'progress_{uuid}.json'} (Exists: {(log_dir / f'progress_{uuid}.json').exists()})")
-            logger.debug(f"  PID path:  {log_dir / f'progress_{self.pid}.json'} (Exists: {(log_dir / f'progress_{self.pid}.json').exists()})")
+                logger.debug(
+                    f"  UUID path: {log_dir / f'progress_{uuid}.json'} (Exists: {(log_dir / f'progress_{uuid}.json').exists()})"
+                )
+            logger.debug(
+                f"  PID path:  {log_dir / f'progress_{self.pid}.json'} (Exists: {(log_dir / f'progress_{self.pid}.json').exists()})"
+            )
 
         if sidecar and sidecar.exists():
             try:
@@ -95,7 +98,9 @@ class ProcessInfo:
 
                     # Validate: either UUID matches or PID matches
                     valid = False
-                    if (uuid and data.get("uuid") == uuid) or data.get("pid") == self.pid:
+                    if (uuid and data.get("uuid") == uuid) or data.get(
+                        "pid"
+                    ) == self.pid:
                         valid = True
 
                     if valid:
@@ -104,10 +109,15 @@ class ProcessInfo:
                         self.status_message = data.get("message", self.status_message)
                         self.error_details = data.get("details", self.error_details)
                         # freeze elapsed timer the moment we observe a terminal state
-                        if self.status in ("completed", "error") and self.completed_time is None:
+                        if (
+                            self.status in ("completed", "error")
+                            and self.completed_time is None
+                        ):
                             self.completed_time = data.get("timestamp", time.time())
                     else:
-                        logger.debug(f"Identity mismatch in sidecar {sidecar}. Found pid={data.get('pid')}, uuid={data.get('uuid')}")
+                        logger.debug(
+                            f"Identity mismatch in sidecar {sidecar}. Found pid={data.get('pid')}, uuid={data.get('uuid')}"
+                        )
             except Exception as e:
                 # Silently ignore read errors - atomic writes should prevent most issues
                 logger.debug(f"Failed to read sidecar for pid {self.pid}: {e}")
@@ -121,10 +131,13 @@ class ProcessInfo:
             # on windows, this uses ctypes internally
             if sys.platform == "win32":
                 import ctypes
+
                 # Use WinDLL with use_last_error=True to correctly capture error codes
                 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
                 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-                handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, self.pid)
+                handle = k32.OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION, False, self.pid
+                )
                 if handle:
                     k32.CloseHandle(handle)
                     return True
@@ -135,7 +148,9 @@ class ProcessInfo:
                 # ERROR_INVALID_PARAMETER (87) usually means PID found no process (Dead).
                 if err != 87:
                     # Log unusual errors
-                    logger.debug(f"PID {self.pid} is_alive check failed. OpenProcess err={err}")
+                    logger.debug(
+                        f"PID {self.pid} is_alive check failed. OpenProcess err={err}"
+                    )
                 return False
             os.kill(self.pid, 0)
             return True
@@ -180,7 +195,11 @@ class ProcessInfo:
 
         try:
             if sys.platform == "win32":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.pid)], check=True, capture_output=True)
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self.pid)],
+                    check=True,
+                    capture_output=True,
+                )
             else:
                 os.kill(self.pid, 9)  # SIGKILL
             return True
@@ -336,7 +355,9 @@ class ProcessManager:
                 # skip processes older than 24 hours
                 age = now - info.start_time
                 if age > max_age_seconds:
-                    logger.debug(f"Discarding old process {info.pid} (age: {age/3600:.1f}h)")
+                    logger.debug(
+                        f"Discarding old process {info.pid} (age: {age / 3600:.1f}h)"
+                    )
                     continue
                 self._processes[info.pid] = info
 
@@ -351,9 +372,7 @@ class ProcessManager:
         """Save process info to disk."""
         self.PROCESS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-        data = {
-            "processes": [asdict(p) for p in self._processes.values()]
-        }
+        data = {"processes": [asdict(p) for p in self._processes.values()]}
 
         try:
             with open(self.PROCESS_FILE, "w") as f:
@@ -397,8 +416,8 @@ class ProcessManager:
                     python_exe = pythonw
 
             # Generate UUID for the task
-            from uuid import uuid4
             from datetime import datetime
+            from uuid import uuid4
 
             task_uuid = str(uuid4())
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -411,7 +430,7 @@ class ProcessManager:
 
             # Pass UUID and log file to arguments
             args["_uuid"] = task_uuid
-            args["_log_file"] = str(log_file) # worker will pick this up
+            args["_log_file"] = str(log_file)  # worker will pick this up
 
             # write args to a temp file instead of passing on the command
             # line. large frame selections (e.g. 11453 frames) produce
@@ -427,7 +446,8 @@ class ProcessManager:
             # construct command — pass the file path, not the JSON blob
             cmd = [
                 python_exe,
-                "-m", "mbo_utilities.gui._worker",
+                "-m",
+                "mbo_utilities.gui._worker",
                 task_type,
                 str(args_file),
             ]
@@ -455,8 +475,7 @@ class ProcessManager:
                 # CREATE_NO_WINDOW — they are conflicting console-disposition
                 # flags and together Windows pops a blank console window.
                 creationflags = (
-                    subprocess.CREATE_NO_WINDOW
-                    | subprocess.CREATE_NEW_PROCESS_GROUP
+                    subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
                 )
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -490,7 +509,7 @@ class ProcessManager:
                 description=description,
                 start_time=time.time(),
                 task_type=task_type,
-                output_path=str(log_file), # Store log path here
+                output_path=str(log_file),  # Store log path here
                 args=args,
             )
             self._processes[proc.pid] = info
@@ -545,7 +564,9 @@ class ProcessManager:
                     # process died without reporting completion or error
                     p.status = "error"
                     p.status_message = "Process crashed unexpectedly"
-                    p.error_details = {"traceback": "Process exited without reporting results. Check worker logs."}
+                    p.error_details = {
+                        "traceback": "Process exited without reporting results. Check worker logs."
+                    }
                     changed = True
                     continue
 

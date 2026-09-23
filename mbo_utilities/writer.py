@@ -8,24 +8,23 @@ chunked streaming, and format conversion.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import numpy as np
 
 from mbo_utilities import log
 from mbo_utilities._writers import _try_generic_writers, add_processing_step
-from mbo_utilities.arrays.features._frame_average import apply_read_features
 from mbo_utilities.arrays._registration import (
     compute_axial_shifts,
     validate_axial_shifts,
 )
+from mbo_utilities.arrays.features._frame_average import apply_read_features
 from mbo_utilities.metadata import RoiMode, get_param
-from typing import TYPE_CHECKING
-import contextlib
-
-import numpy as np
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -283,6 +282,7 @@ def imwrite(
     # auto-wrap raw numpy arrays so the full ext-aware writer pipeline runs
     if isinstance(lazy_array, np.ndarray):
         from mbo_utilities.arrays.numpy import NumpyArray
+
         lazy_array = NumpyArray(lazy_array, dim_order=dim_order)
     elif dim_order is not None:
         logger.debug("dim_order ignored: lazy_array is not a raw numpy array")
@@ -384,9 +384,7 @@ def imwrite(
 
         out_planes = len(sel0) if planes is not None and shifts else total_planes
         if not validate_axial_shifts(file_metadata, out_planes):
-            logger.error(
-                "axial registration did not produce valid plane_shifts."
-            )
+            logger.error("axial registration did not produce valid plane_shifts.")
 
     if hasattr(lazy_array, "metadata"):
         with contextlib.suppress(AttributeError):
@@ -471,7 +469,8 @@ def imwrite(
         processing_extra["z_registration"] = {
             "enabled": True,
             "n_planes": len(file_metadata.get("plane_shifts", []))
-            if "plane_shifts" in file_metadata else 0,
+            if "plane_shifts" in file_metadata
+            else 0,
             "params": file_metadata.get("plane_shifts_params"),
         }
 

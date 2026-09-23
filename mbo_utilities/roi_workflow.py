@@ -50,7 +50,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -106,7 +106,8 @@ def labels_path(fpath, tag: str = "") -> Path:
     """Where ``fpath``'s annotations live: ``manual_labels.zarr`` beside a
     file, or inside a directory; with a ``tag`` (one recording of a file
     holding several: a MESc unit's ``MSession_0_MUnit_3``)
-    ``manual_labels_<tag>.zarr``, so each recording keeps its own ROIs."""
+    ``manual_labels_<tag>.zarr``, so each recording keeps its own ROIs.
+    """
     base = Path.cwd() if fpath is None else Path(fpath)
     name = f"{SAVE_NAME[:-5]}_{tag}.zarr" if tag else SAVE_NAME
     return (base.parent if base.suffix else base) / name
@@ -145,7 +146,8 @@ _RANK_DIMS = {2: "YX", 3: "TYX", 4: "TZYX", 5: "TCZYX"}
 
 def movie_dims(arr) -> tuple[str, ...]:
     """Axis names of ``arr``: its own ``dims`` when they match its rank and
-    name Y and X, else the rank's default letters."""
+    name Y and X, else the rank's default letters.
+    """
     nd = getattr(arr, "ndim", None)
     nd = int(np.ndim(arr) if nd is None else nd)
     dims = tuple(str(d).upper() for d in (getattr(arr, "dims", None) or ()))
@@ -201,7 +203,8 @@ class PlaneMovie:
     @property
     def box(self) -> tuple[int, int, int, int] | None:
         """``(y0, y1, x0, x1)`` of this view in the source frame; None when
-        the view covers the whole frame."""
+        the view covers the whole frame.
+        """
         _, ny, nx = self.shape
         size = dict(zip(self.dims, (int(s) for s in self.arr.shape)))
         if (self.y0, self.x0) == (0, 0) and (ny, nx) == (size["Y"], size["X"]):
@@ -216,7 +219,8 @@ class PlaneMovie:
 
     def crop(self, y0: int, y1: int, x0: int, x1: int) -> PlaneMovie:
         """View of rows ``y0:y1`` and columns ``x0:x1`` sharing this movie's
-        array; crops of crops compose."""
+        array; crops of crops compose.
+        """
         _, ny, nx = self.shape
         if not (0 <= y0 < y1 <= ny and 0 <= x0 < x1 <= nx):
             raise IndexError(f"crop ({y0}:{y1}, {x0}:{x1}) outside {ny}x{nx}")
@@ -229,13 +233,15 @@ class PlaneMovie:
     def t_indices(self) -> list[int] | None:
         """The 0-based source frames this view reads, in order; None when
         it reads every frame. The same list a worker task's ``tp_indices``
-        carries."""
+        carries.
+        """
         return None if self.t_map is None else [int(t) for t in self.t_map]
 
     @property
     def t_range(self) -> tuple[int, int] | None:
         """``(t0, t1)`` when the view is one contiguous window of the
-        source's T; None for every frame or a strided / gapped selection."""
+        source's T; None for every frame or a strided / gapped selection.
+        """
         window = index_window(self.t_indices)
         if window is None or window[2] != 1:
             return None
@@ -245,7 +251,8 @@ class PlaneMovie:
         """View over the source frames ``indices`` (0-based, in the order
         given: a ``parse_timepoint_selection`` result, a range, a list),
         sharing this movie's array and crop; selections of selections
-        compose. Every frame (None) is this movie."""
+        compose. Every frame (None) is this movie.
+        """
         if indices is None:
             return self
         idx = np.asarray(list(indices), dtype=np.int64).reshape(-1)
@@ -290,8 +297,14 @@ class PlaneMovie:
         if isinstance(t, (list, np.ndarray)):
             t = np.asarray(t).reshape(-1)
         nt, ny, nx = self.shape
-        want = tuple(n for n in (_index_len(t, nt), _index_len(y, ny), _index_len(x, nx)) if n is not None)
-        if "T" not in self.dims and not (isinstance(t, (int, np.integer)) or _index_len(t, 1) == 1):
+        want = tuple(
+            n
+            for n in (_index_len(t, nt), _index_len(y, ny), _index_len(x, nx))
+            if n is not None
+        )
+        if "T" not in self.dims and not (
+            isinstance(t, (int, np.integer)) or _index_len(t, 1) == 1
+        ):
             raise IndexError("a source without a time axis has a single frame")
         out = np.asarray(self.arr[self._full_key(t, y, x)])
         return out.reshape(want)
@@ -299,7 +312,11 @@ class PlaneMovie:
     def frames(self, t0: int, t1: int, y=slice(None), x=slice(None)) -> np.ndarray:
         """``(t1 - t0, ...)`` block, always with a leading time axis."""
         out = self[t0:t1, y, x]
-        return out.reshape((-1,) + out.shape[-2:]) if out.ndim >= 2 else out.reshape(-1, 1, 1)
+        return (
+            out.reshape((-1,) + out.shape[-2:])
+            if out.ndim >= 2
+            else out.reshape(-1, 1, 1)
+        )
 
 
 def as_movie(source, z: int = 0, c: int = 0) -> PlaneMovie:
@@ -346,7 +363,9 @@ def load_rois(rois, *, source=None) -> RoiLabelStore:
         return rois
     target = rois if rois is not None else source
     if target is None:
-        raise ValueError("no ROI source: pass a RoiLabelStore, a labels zarr, or a data path")
+        raise ValueError(
+            "no ROI source: pass a RoiLabelStore, a labels zarr, or a data path"
+        )
     target = Path(target)
     if target.suffix != ".zarr" or not (target / "zarr.json").exists():
         target = labels_path(target)
@@ -369,7 +388,9 @@ def select_rois(
         wanted = set(int(i) for i in indices)
         bad = sorted(i for i in wanted if not 0 <= i < len(store.rois))
         if bad:
-            raise IndexError(f"ROI indices out of range for {len(store.rois)} ROIs: {bad}")
+            raise IndexError(
+                f"ROI indices out of range for {len(store.rois)} ROIs: {bad}"
+            )
         keep = [i for i in keep if i in wanted]
     if planes:
         zs = set(int(z) for z in planes)
@@ -400,6 +421,7 @@ def plane_masks(
         out[plane == (i + 1)] = k
     return out, kept
 
+
 def _bbox(mask: np.ndarray) -> tuple[int, int, int, int]:
     rows, cols = np.nonzero(mask)
     if rows.size == 0:
@@ -410,7 +432,8 @@ def _bbox(mask: np.ndarray) -> tuple[int, int, int, int]:
 def feather_mask(mask: np.ndarray, edge_width: int = 3) -> np.ndarray:
     """Soft-edged weights for a binary mask, 1 in the interior falling off
     over ``edge_width`` px toward the boundary (lbm_suite2p_python's
-    feathering, kept inside the mask so trace weights never leave it)."""
+    feathering, kept inside the mask so trace weights never leave it).
+    """
     from scipy.ndimage import distance_transform_edt
 
     inside = distance_transform_edt(np.asarray(mask, bool))
@@ -419,11 +442,21 @@ def feather_mask(mask: np.ndarray, edge_width: int = 3) -> np.ndarray:
 
 def _factorized(arr) -> bool:
     """True for masknmf factorized arrays, whose ``__getitem__`` reconstructs
-    only the requested crop; frame batching then just adds overhead."""
+    only the requested crop; frame batching then just adds overhead.
+    """
     return callable(getattr(arr, "getitem_tensor", None))
 
 
-def roi_trace(source, mask: np.ndarray, t=slice(None), *, z: int = 0, c: int = 0, batch: int = 500, weights: np.ndarray | None = None) -> np.ndarray:
+def roi_trace(
+    source,
+    mask: np.ndarray,
+    t=slice(None),
+    *,
+    z: int = 0,
+    c: int = 0,
+    batch: int = 500,
+    weights: np.ndarray | None = None,
+) -> np.ndarray:
     """Mean over ``mask`` per frame, reading only the mask's bounding box.
 
     Parameters
@@ -460,20 +493,35 @@ def roi_trace(source, mask: np.ndarray, t=slice(None), *, z: int = 0, c: int = 0
     if weights is not None:
         w = np.asarray(weights, np.float32)[y0:y1, x0:x1][m]
         w = w / (float(w.sum()) or 1.0)
-    lo, hi, step = t.indices(movie.shape[0]) if isinstance(t, slice) else (int(t), int(t) + 1, 1)
+    lo, hi, step = (
+        t.indices(movie.shape[0]) if isinstance(t, slice) else (int(t), int(t) + 1, 1)
+    )
     frames = range(lo, hi, step)
     out = np.empty(len(frames), np.float32)
     pos = 0
     for b0 in range(0, len(frames), batch):
         sel = frames[b0 : b0 + batch]
-        blk = movie[slice(sel.start, sel.stop, sel.step), y0:y1, x0:x1].reshape(-1, y1 - y0, x1 - x0)
+        blk = movie[slice(sel.start, sel.stop, sel.step), y0:y1, x0:x1].reshape(
+            -1, y1 - y0, x1 - x0
+        )
         picked = blk[:, m]
-        out[pos : pos + blk.shape[0]] = picked @ w if w is not None else picked.mean(axis=1)
+        out[pos : pos + blk.shape[0]] = (
+            picked @ w if w is not None else picked.mean(axis=1)
+        )
         pos += blk.shape[0]
     return out
 
 
-def pixel_trace(source, row: int, col: int, t=slice(None), *, z: int = 0, c: int = 0, batch: int = 2000) -> np.ndarray:
+def pixel_trace(
+    source,
+    row: int,
+    col: int,
+    t=slice(None),
+    *,
+    z: int = 0,
+    c: int = 0,
+    batch: int = 2000,
+) -> np.ndarray:
     """One pixel's value per frame - ``movie[t, row, col]``.
 
     Parameters
@@ -507,7 +555,9 @@ def pixel_trace(source, row: int, col: int, t=slice(None), *, z: int = 0, c: int
     pos = 0
     for b0 in range(0, len(frames), batch):
         sel = frames[b0 : b0 + batch]
-        blk = movie[slice(sel.start, sel.stop, sel.step), int(row), int(col)].reshape(-1)
+        blk = movie[slice(sel.start, sel.stop, sel.step), int(row), int(col)].reshape(
+            -1
+        )
         out[pos : pos + blk.size] = blk
         pos += blk.size
     return out
@@ -544,14 +594,17 @@ def open_registered(plane_dir: str | Path) -> tuple[np.memmap, dict]:
 
 def plane_index(plane_dir: str | Path, ops: dict | None = None) -> int:
     """0-based z index of a plane dir: ``ops['plane']`` (1-based) or the
-    ``zplaneNN`` in the directory name; 0 when neither is present."""
+    ``zplaneNN`` in the directory name; 0 when neither is present.
+    """
     plane_dir = Path(plane_dir)
     if ops is None and (plane_dir / "ops.npy").exists():
         ops = np.load(plane_dir / "ops.npy", allow_pickle=True).item()
     p = (ops or {}).get("plane")
     if p is not None:
         return int(p) - 1
-    z_tags = [t for t in filename_tags(plane_dir.name) if t.definition.label == "zplane"]
+    z_tags = [
+        t for t in filename_tags(plane_dir.name) if t.definition.label == "zplane"
+    ]
     return z_tags[0].start - 1 if z_tags else 0
 
 
@@ -649,7 +702,9 @@ def detection_algo(ops: dict) -> str:
     return "s2p-sparsery" if ops.get("sparse_mode", True) else "s2p-sourcery"
 
 
-def load_run_dir(path: str | Path, *, iscell_only: bool = True, logger=None) -> RunResult:
+def load_run_dir(
+    path: str | Path, *, iscell_only: bool = True, logger=None
+) -> RunResult:
     """Load one output dir (any writer's here, or a plain suite2p plane).
 
     Parameters
@@ -671,14 +726,18 @@ def load_run_dir(path: str | Path, *, iscell_only: bool = True, logger=None) -> 
     path = Path(path)
     ops = np.load(path / "ops.npy", allow_pickle=True).item()
     wf = ops.get("roi_workflow") or {}
-    kind = wf.get("process") or ("masknmf" if ops.get("pipeline") == "masknmf" else "suite2p")
+    kind = wf.get("process") or (
+        "masknmf" if ops.get("pipeline") == "masknmf" else "suite2p"
+    )
     if wf.get("plane") is not None:
         z = int(wf["plane"])
     else:
         # vanilla suite2p's plane0, plane1... are 0-based, unlike the tag vocabulary
         vanilla = re.fullmatch(r"plane(\d+)", path.name)
         z_tags = [t for t in filename_tags(path.name) if t.definition.label == "zplane"]
-        legacy = _Z_RE.search(path.name)  # z03 children of runs written before the tag vocabulary
+        legacy = _Z_RE.search(
+            path.name
+        )  # z03 children of runs written before the tag vocabulary
         if vanilla:
             z = int(vanilla.group(1))
         elif z_tags:
@@ -694,7 +753,16 @@ def load_run_dir(path: str | Path, *, iscell_only: bool = True, logger=None) -> 
 
     F, Fneu, norm = _opt("F.npy"), _opt("Fneu.npy"), _opt("norm_traces.npy")
     iscell = _opt("iscell.npy")
-    stale = [n for n, a in (("F.npy", F), ("Fneu.npy", Fneu), ("norm_traces.npy", norm), ("iscell.npy", iscell)) if a is not None and len(a) != len(stat)]
+    stale = [
+        n
+        for n, a in (
+            ("F.npy", F),
+            ("Fneu.npy", Fneu),
+            ("norm_traces.npy", norm),
+            ("iscell.npy", iscell),
+        )
+        if a is not None and len(a) != len(stat)
+    ]
     if stale:
         logger.info(
             f"roi_workflow: {path.name}: {', '.join(stale)} row count disagrees "
@@ -734,14 +802,27 @@ def load_run_dir(path: str | Path, *, iscell_only: bool = True, logger=None) -> 
         store_indices = store_indices[keep] if store_indices is not None else None
         iscell = iscell[keep]
     return RunResult(
-        path=path, kind=str(kind), z=z, shape=(int(ops["Ly"]), int(ops["Lx"])),
-        stat=stat, F=F, Fneu=Fneu, norm=norm, iscell=iscell,
-        uids=uids, store_indices=store_indices, algo=detection_algo(ops),
+        path=path,
+        kind=str(kind),
+        z=z,
+        shape=(int(ops["Ly"]), int(ops["Lx"])),
+        stat=stat,
+        F=F,
+        Fneu=Fneu,
+        norm=norm,
+        iscell=iscell,
+        uids=uids,
+        store_indices=store_indices,
+        algo=detection_algo(ops),
         engine=str(wf.get("engine") or ""),
         read_z=None if wf.get("z") is None else int(wf["z"]),
-        read_c=None if wf.get("c", wf.get("channel")) is None else int(wf.get("c", wf.get("channel"))),
+        read_c=None
+        if wf.get("c", wf.get("channel")) is None
+        else int(wf.get("c", wf.get("channel"))),
         frames=_frames_tuple(wf.get("frames")),
-        tp_indices=None if not wf.get("tp_indices") else [int(t) for t in wf["tp_indices"]],
+        tp_indices=None
+        if not wf.get("tp_indices")
+        else [int(t) for t in wf["tp_indices"]],
     )
 
 
@@ -763,7 +844,9 @@ def run_result_from_unit(unit, path, pipeline: str = "") -> RunResult:
     ``<file>.zarr/<unit name>``.
     """
     if unit.member_kind != "pixel" or unit.image_shape is None:
-        raise ValueError(f"{unit.name}: only pixel units with an image shape load as ROIs")
+        raise ValueError(
+            f"{unit.name}: only pixel units with an image shape load as ROIs"
+        )
     ly, lx = (int(v) for v in unit.image_shape)
     weights = unit.weights if unit.weights is not None else [None] * unit.n_rois
     stat = np.empty(unit.n_rois, dtype=object)
@@ -772,19 +855,34 @@ def run_result_from_unit(unit, path, pipeline: str = "") -> RunResult:
         stat[k] = {
             "ypix": ypix.astype(np.int32),
             "xpix": xpix.astype(np.int32),
-            "lam": np.ones(ypix.size, np.float32) if lam is None else np.asarray(lam, np.float32),
-            "med": (float(np.median(ypix)), float(np.median(xpix))) if ypix.size else (0.0, 0.0),
+            "lam": np.ones(ypix.size, np.float32)
+            if lam is None
+            else np.asarray(lam, np.float32),
+            "med": (float(np.median(ypix)), float(np.median(xpix)))
+            if ypix.size
+            else (0.0, 0.0),
             "npix": int(ypix.size),
         }
     kind = str(pipeline or unit.attrs.get("pipeline") or "suite2p")
     return RunResult(
-        path=Path(path), kind=kind, z=int(unit.index) - 1 if unit.kind == "plane" else 0,
-        shape=(ly, lx), stat=stat,
-        F=None if "raw" not in unit.traces else np.asarray(unit.traces["raw"], np.float32),
-        Fneu=None if "neuropil" not in unit.traces else np.asarray(unit.traces["neuropil"], np.float32),
-        norm=None if "dff" not in unit.traces else np.asarray(unit.traces["dff"], np.float32),
+        path=Path(path),
+        kind=kind,
+        z=int(unit.index) - 1 if unit.kind == "plane" else 0,
+        shape=(ly, lx),
+        stat=stat,
+        F=None
+        if "raw" not in unit.traces
+        else np.asarray(unit.traces["raw"], np.float32),
+        Fneu=None
+        if "neuropil" not in unit.traces
+        else np.asarray(unit.traces["neuropil"], np.float32),
+        norm=None
+        if "dff" not in unit.traces
+        else np.asarray(unit.traces["dff"], np.float32),
         iscell=None if unit.iscell is None else np.asarray(unit.iscell, np.float32),
-        uids=None, store_indices=None, algo=kind,
+        uids=None,
+        store_indices=None,
+        algo=kind,
     )
 
 
@@ -836,7 +934,9 @@ def register(
             fs = get_param(metadata, "fs")
             if fs and ops.get("fs") in (None, 10.0):
                 ops["fs"] = float(fs)
-        logger.info(f"roi_workflow: suite2p registration of planes {planes} -> {save_path}")
+        logger.info(
+            f"roi_workflow: suite2p registration of planes {planes} -> {save_path}"
+        )
         lsp_run_volume(
             arr,
             save_path,
@@ -855,7 +955,8 @@ def register(
             workers=1,
         )
     elif method == "masknmf":
-        from mbo_utilities.masknmf import MasknmfSettings, run_plane as mnmf_run_plane
+        from mbo_utilities.masknmf import MasknmfSettings
+        from mbo_utilities.masknmf import run_plane as mnmf_run_plane
         from mbo_utilities.masknmf.params import STAGE_FORCE, STAGE_RUN, STAGE_SKIP
 
         s = MasknmfSettings.from_dict(settings or {})
@@ -863,7 +964,9 @@ def register(
         s.compression.do_compression = STAGE_SKIP
         s.demixing.do_demixing = STAGE_SKIP
         s.runtime.keep_bin = True
-        logger.info(f"roi_workflow: masknmf registration of planes {planes} -> {save_path}")
+        logger.info(
+            f"roi_workflow: masknmf registration of planes {planes} -> {save_path}"
+        )
         for p in planes:
             mnmf_run_plane(
                 arr,
@@ -886,11 +989,11 @@ def register(
         d = save_path / generate_plane_dirname(p, frame_indices)
         if not (d / "ops.npy").exists():
             # lsp may name planes differently when timepoints are given
-            cands = [
-                c for c in _find_plane_dirs(save_path) if plane_index(c) == p - 1
-            ]
+            cands = [c for c in _find_plane_dirs(save_path) if plane_index(c) == p - 1]
             if not cands:
-                raise FileNotFoundError(f"registration produced no plane dir for plane {p}")
+                raise FileNotFoundError(
+                    f"registration produced no plane dir for plane {p}"
+                )
             d = cands[0]
         dirs.append(d)
         _drop_run_gates(d / "ops.npy", logger)
@@ -924,7 +1027,8 @@ def _drop_run_gates(ops_path: Path, logger) -> None:
 def _frames_info(movie: PlaneMovie) -> dict:
     """What a run records about the frames it read: ``frames`` as
     ``[start, stop, step]`` when the selection is a window, ``tp_indices``
-    (the worker-task spelling) whenever it is a subset."""
+    (the worker-task spelling) whenever it is a subset.
+    """
     indices = movie.t_indices
     window = index_window(indices)
     return {
@@ -955,15 +1059,24 @@ def _default_out_dir(source, tag: str) -> Path:
 
 def _movie_fingerprint(movie: PlaneMovie, src: Path | None) -> str:
     """PMD cache key for a movie view; a crop's box keeps its cache separate
-    from the full plane's."""
-    fp = f"{src}:{movie.shape}:{movie.z}:{movie.c}" if src is not None else f"array:{movie.shape}"
+    from the full plane's.
+    """
+    fp = (
+        f"{src}:{movie.shape}:{movie.z}:{movie.c}"
+        if src is not None
+        else f"array:{movie.shape}"
+    )
     box = movie.box
     if box is not None:
         fp += ":{}:{}:{}:{}".format(*box)
     indices = movie.t_indices
     if indices is not None:
         window = index_window(indices)
-        fp += ":t{}:{}:{}".format(*window) if window else f":tn{len(indices)}:{hash(tuple(indices))}"
+        fp += (
+            ":t{}:{}:{}".format(*window)
+            if window
+            else f":tn{len(indices)}:{hash(tuple(indices))}"
+        )
     return fp
 
 
@@ -1004,7 +1117,9 @@ def _ops_for(source, movie: PlaneMovie) -> dict:
         if movie.t_indices is not None and shape5d is not None:
             # a strided selection changes the rate; the writers' layer says by how much
             scaled = OutputMetadata(
-                source=dict(meta), source_shape=tuple(shape5d()), source_dims=("T", "C", "Z", "Y", "X"),
+                source=dict(meta),
+                source_shape=tuple(shape5d()),
+                source_dims=("T", "C", "Z", "Y", "X"),
                 selections={"T": movie.t_indices},
             ).to_dict(include_aliases=False)
             fs = scaled.get("fs", fs)
@@ -1015,7 +1130,9 @@ def _ops_for(source, movie: PlaneMovie) -> dict:
     return ops
 
 
-def _resolve_planes(source, movie_src, store: RoiLabelStore, z: int | None, c: int) -> tuple[int, PlaneMovie]:
+def _resolve_planes(
+    source, movie_src, store: RoiLabelStore, z: int | None, c: int
+) -> tuple[int, PlaneMovie]:
     """``(store z, movie)``: the store plane and the matching movie view.
 
     A single-plane store is plane 0. A single-plane movie (a plane dir, a
@@ -1121,7 +1238,9 @@ def _write_discovery_outputs(
     np.save(out_dir / "spks.npy", np.zeros_like(F))
     np.save(out_dir / "iscell.npy", np.ones((n, 2), np.float32))
     (out_dir / "rois.json").write_text(
-        json.dumps([{"z": int(info["plane"]), "npix": int(r["npix"])} for r in stat], indent=1)
+        json.dumps(
+            [{"z": int(info["plane"]), "npix": int(r["npix"])} for r in stat], indent=1
+        )
     )
     src = _source_path(source)
     reg_file = _reg_file_for(src, ops)
@@ -1169,7 +1288,7 @@ def _neuropil_annulus(
         outer *= 2
 
 
-def _sparse_weights(masks: list[np.ndarray], box) -> "scipy.sparse.csr_matrix":  # noqa: F821
+def _sparse_weights(masks: list[np.ndarray], box) -> scipy.sparse.csr_matrix:  # noqa: F821
     """(K, h*w) CSR averaging each ``(Y, X)`` bool mask inside ``box``."""
     from scipy.sparse import csr_matrix
 
@@ -1191,7 +1310,9 @@ def _sparse_weights(masks: list[np.ndarray], box) -> "scipy.sparse.csr_matrix": 
     )
 
 
-def _extract_mean(movie: PlaneMovie, label_image, K, *, neuropil, inner, outer, min_npix, batch):
+def _extract_mean(
+    movie: PlaneMovie, label_image, K, *, neuropil, inner, outer, min_npix, batch
+):
     """Streaming weighted-mean extraction: (F, Fneu) as (K, T) float32.
 
     Reads only the union bounding box of the selected ROIs (and their
@@ -1201,7 +1322,10 @@ def _extract_mean(movie: PlaneMovie, label_image, K, *, neuropil, inner, outer, 
     T, ly, lx = movie.shape
     cells = [label_image == k for k in range(1, K + 1)]
     rings = (
-        [_neuropil_annulus(label_image, k, inner, outer, min_npix) for k in range(1, K + 1)]
+        [
+            _neuropil_annulus(label_image, k, inner, outer, min_npix)
+            for k in range(1, K + 1)
+        ]
         if neuropil
         else []
     )
@@ -1223,7 +1347,9 @@ def _extract_mean(movie: PlaneMovie, label_image, K, *, neuropil, inner, outer, 
     return F, Fneu
 
 
-def _extract_suite2p(movie: PlaneMovie, label_image, K, ops, *, neuropil, inner, min_npix, batch, device):
+def _extract_suite2p(
+    movie: PlaneMovie, label_image, K, ops, *, neuropil, inner, min_npix, batch, device
+):
     import torch
     from lbm_suite2p_python import masks_to_stat
     from suite2p.extraction.extract import extract_traces
@@ -1239,8 +1365,12 @@ def _extract_suite2p(movie: PlaneMovie, label_image, K, ops, *, neuropil, inner,
         inner_neuropil_radius=inner,
         min_neuropil_pixels=min_npix,
     )
-    dev = torch.device(device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
-    F, Fneu = extract_traces(movie, cell_masks, neuropil_masks, batch_size=batch, device=dev)
+    dev = torch.device(
+        device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
+    )
+    F, Fneu = extract_traces(
+        movie, cell_masks, neuropil_masks, batch_size=batch, device=dev
+    )
     F = np.asarray(F, np.float32)
     Fneu = np.asarray(Fneu, np.float32) if Fneu is not None else np.zeros_like(F)
     return F, Fneu
@@ -1295,18 +1425,31 @@ def extract_rois(
     ops = _ops_for(source, movie)
     K = len(kept)
     t0 = time.time()
-    logger.info(f"roi_workflow: extracting {K} ROIs on plane z={z} with engine={engine}")
+    logger.info(
+        f"roi_workflow: extracting {K} ROIs on plane z={z} with engine={engine}"
+    )
     if engine == "suite2p":
         F, Fneu = _extract_suite2p(
-            movie, label_image, K, ops,
-            neuropil=neuropil, inner=inner_neuropil_radius,
-            min_npix=min_neuropil_pixels, batch=batch_size, device=device,
+            movie,
+            label_image,
+            K,
+            ops,
+            neuropil=neuropil,
+            inner=inner_neuropil_radius,
+            min_npix=min_neuropil_pixels,
+            batch=batch_size,
+            device=device,
         )
     elif engine == "mean":
         F, Fneu = _extract_mean(
-            movie, label_image, K,
-            neuropil=neuropil, inner=inner_neuropil_radius, outer=outer_neuropil_radius,
-            min_npix=min_neuropil_pixels, batch=batch_size,
+            movie,
+            label_image,
+            K,
+            neuropil=neuropil,
+            inner=inner_neuropil_radius,
+            outer=outer_neuropil_radius,
+            min_npix=min_neuropil_pixels,
+            batch=batch_size,
         )
     else:
         raise ValueError(f"unknown extraction engine {engine!r}")
@@ -1339,8 +1482,15 @@ def extract_rois(
         "seconds": round(time.time() - t0, 3),
     }
     out = _write_subset_outputs(
-        out_dir, source=source, ops=ops, stat=stat, F=F, Fneu=Fneu,
-        kept=kept, store=store, info=info,
+        out_dir,
+        source=source,
+        ops=ops,
+        stat=stat,
+        F=F,
+        Fneu=Fneu,
+        kept=kept,
+        store=store,
+        info=info,
     )
     logger.info(f"roi_workflow: wrote {K} traces -> {out} ({info['seconds']}s)")
     return out
@@ -1368,6 +1518,7 @@ def pmd_crop(pmd, y0: int, y1: int, x0: int, x1: int):
         parent's temporal basis, device, and rescale / trend settings.
     """
     import torch
+
     from masknmf import PMDArray
 
     nt, h, w = pmd.shape
@@ -1383,7 +1534,9 @@ def pmd_crop(pmd, y0: int, y1: int, x0: int, x1: int):
         pmd.v,
         pmd.mean_img[y0:y1, x0:x1],
         pmd.var_img[y0:y1, x0:x1],
-        u_local_projector=torch.index_select(proj, 0, idx) if proj is not None else None,
+        u_local_projector=torch.index_select(proj, 0, idx)
+        if proj is not None
+        else None,
         spatial_trend_basis=trend[idx] if trend is not None else None,
         temporal_trend_basis=pmd.temporal_trend_basis if trend is not None else None,
         device=pmd.device,
@@ -1392,7 +1545,9 @@ def pmd_crop(pmd, y0: int, y1: int, x0: int, x1: int):
     )
 
 
-def _cached_pmd_crop(source, movie: PlaneMovie, cfg, logger) -> tuple[object, str] | None:
+def _cached_pmd_crop(
+    source, movie: PlaneMovie, cfg, logger
+) -> tuple[object, str] | None:
     """Cropped ``PMDArray`` built from the source plane's cached compression.
 
     Parameters
@@ -1428,7 +1583,9 @@ def _cached_pmd_crop(source, movie: PlaneMovie, cfg, logger) -> tuple[object, st
     if not pmd_path.exists():
         return None
     stored = _runner._read_provenance(pmd_path)
-    if stored is None or stored.get("settings") != _runner._stage_hash(cfg, "do_compression"):
+    if stored is None or stored.get("settings") != _runner._stage_hash(
+        cfg, "do_compression"
+    ):
         return None
 
     import masknmf
@@ -1436,13 +1593,17 @@ def _cached_pmd_crop(source, movie: PlaneMovie, cfg, logger) -> tuple[object, st
     try:
         pmd = masknmf.PMDArray.from_hdf5(str(pmd_path))
     except Exception as e:
-        logger.warning(f"roi_workflow: cached {pmd_path.name} unusable ({e}); recompressing crop")
+        logger.warning(
+            f"roi_workflow: cached {pmd_path.name} unusable ({e}); recompressing crop"
+        )
         return None
     size = dict(zip(movie.dims, (int(s) for s in movie.arr.shape)))
     if tuple(pmd.shape) != (movie.shape[0], size["Y"], size["X"]):
         return None
     y0, y1, x0, x1 = box
-    logger.info(f"roi_workflow: cropping cached {pmd_path.name} to ({y0}:{y1}, {x0}:{x1})")
+    logger.info(
+        f"roi_workflow: cropping cached {pmd_path.name} to ({y0}:{y1}, {x0}:{x1})"
+    )
     return pmd_crop(pmd, y0, y1, x0, x1), f"pmd_crop:{pmd_path}:{box}"
 
 
@@ -1459,7 +1620,7 @@ def demix_rois(
     tag: str = "manual",
     logger=None,
 ) -> Path | None:
-    """masknmf demixing of ``source`` initialised from the drawn ROI masks.
+    """Masknmf demixing of ``source`` initialised from the drawn ROI masks.
 
     ``source`` / ``z`` / ``c`` / ``out_dir`` as in :func:`extract_rois`.
     PMD compression runs through the same ``PlaneMovie`` view, so any
@@ -1477,13 +1638,16 @@ def demix_rois(
     logger = logger or log.get("roi_workflow")
 
     import masknmf
-
     from mbo_utilities.masknmf import MasknmfSettings
     from mbo_utilities.masknmf import outputs as _outputs
     from mbo_utilities.masknmf import runner as _runner
     from mbo_utilities.metadata import get_param
 
-    s = settings if isinstance(settings, MasknmfSettings) else MasknmfSettings.from_dict(settings or {})
+    s = (
+        settings
+        if isinstance(settings, MasknmfSettings)
+        else MasknmfSettings.from_dict(settings or {})
+    )
     if indices is None:
         indices = list(range(len(store.rois)))
     z, movie = _resolve_planes(source, source, store, z, c)
@@ -1493,14 +1657,18 @@ def demix_rois(
         return None
     nframes, ly, lx = movie.shape
     if (ly, lx) != label_image.shape:
-        raise ValueError(f"ROI store is {label_image.shape} but the movie is {(ly, lx)}")
+        raise ValueError(
+            f"ROI store is {label_image.shape} but the movie is {(ly, lx)}"
+        )
     out_dir = Path(out_dir) if out_dir is not None else _default_out_dir(source, tag)
     out_dir.mkdir(parents=True, exist_ok=True)
     # a full plane shares the plane's PMD cache; a crop keeps its own
     cache_dir = out_dir if movie.box is not None else out_dir.parent
     ops = _ops_for(source, movie)
     K = len(kept)
-    dev = _runner._resolve_device(s.runtime.device if device == "auto" else device, logger)
+    dev = _runner._resolve_device(
+        s.runtime.device if device == "auto" else device, logger
+    )
     fs = get_param(ops, "fs")
     fs = float(fs) if fs else None
     t0 = time.time()
@@ -1522,16 +1690,26 @@ def demix_rois(
         pmd, comp_seconds, pmd_key = cached[0], 0.0, cached[1]
     else:
         pmd, comp_seconds, pmd_key = _runner._stage_compression(
-            movie, s.compression, s.runtime, cache_dir, dev, np.ones((ly, lx), float), fs, logger,
-            f"registered:{fingerprint}", False,
+            movie,
+            s.compression,
+            s.runtime,
+            cache_dir,
+            dev,
+            np.ones((ly, lx), float),
+            fs,
+            logger,
+            f"registered:{fingerprint}",
+            False,
         )
         if pmd is None:
-            raise ValueError("compression skipped and no cached compression.hdf5 to demix from")
+            raise ValueError(
+                "compression skipped and no cached compression.hdf5 to demix from"
+            )
 
     # seed footprints: one binary column per selected ROI
     a0 = np.zeros((ly, lx, K), np.float32)
     for k in range(1, K + 1):
-        a0[..., k - 1] = (label_image == k)
+        a0[..., k - 1] = label_image == k
 
     detrender = None
     if detrend_ok:
@@ -1545,10 +1723,16 @@ def demix_rois(
             device=dev,
         )
     cfg = _runner.clamp_background_downsampling(s.demixing, ly, lx, logger)
-    logger.info(f"roi_workflow: masknmf demixing seeded with {K} ROIs on plane z={z} ({dev})")
-    demixer = masknmf.SignalDemixer(pmd, device=dev, frame_batch_size=s.runtime.frame_batch_size)
+    logger.info(
+        f"roi_workflow: masknmf demixing seeded with {K} ROIs on plane z={z} ({dev})"
+    )
+    demixer = masknmf.SignalDemixer(
+        pmd, device=dev, frame_batch_size=s.runtime.frame_batch_size
+    )
     demixer.initialize_signals(is_custom=True, spatial_footprints=a0, c_nonneg=True)
-    demixer.demix(**cfg.nmf_kwargs(cfg.unfiltered_support_lo, ring=True, detrender=detrender))
+    demixer.demix(
+        **cfg.nmf_kwargs(cfg.unfiltered_support_lo, ring=True, detrender=detrender)
+    )
     results = demixer.results
 
     info = {
@@ -1569,7 +1753,11 @@ def demix_rois(
     cc = np.asarray(results.ac_array.export_c(), dtype=np.float32)
     counts = _outputs.write_plane_outputs(
         out_dir,
-        indices=coo_idx, values=values, c=cc, shape=(ly, lx), baseline=baseline,
+        indices=coo_idx,
+        values=values,
+        c=cc,
+        shape=(ly, lx),
+        baseline=baseline,
         var_img=_runner._to_np(getattr(pmd, "var_img", None)),
         mean_img=_runner._to_np(getattr(pmd, "mean_img", None)),
     )
@@ -1578,19 +1766,26 @@ def demix_rois(
     info["n_components"] = int(counts["n_rois"])
     np.save(out_dir / "roi_indices.npy", np.asarray(kept, np.int64))
     names = list(store.label_names)
-    (out_dir / "rois.json").write_text(json.dumps(
-        [
-            {
-                "index": int(i), "uid": int(store.rois[i].uid),
-                "plane": int(store.rois[i].plane), "z": int(store.roi_z(i)), "c": int(store.roi_c(i)),
-                "area": int(store.rois[i].area),
-                "label": names[store.rois[i].class_index] if 0 <= store.rois[i].class_index < len(names) else None,
-                "note": store.rois[i].note,
-            }
-            for i in kept
-        ],
-        indent=1,
-    ))
+    (out_dir / "rois.json").write_text(
+        json.dumps(
+            [
+                {
+                    "index": int(i),
+                    "uid": int(store.rois[i].uid),
+                    "plane": int(store.rois[i].plane),
+                    "z": int(store.roi_z(i)),
+                    "c": int(store.roi_c(i)),
+                    "area": int(store.rois[i].area),
+                    "label": names[store.rois[i].class_index]
+                    if 0 <= store.rois[i].class_index < len(names)
+                    else None,
+                    "note": store.rois[i].note,
+                }
+                for i in kept
+            ],
+            indent=1,
+        )
+    )
     reg_file = _reg_file_for(src, ops)
     updates = dict(ops)
     updates.update(
@@ -1600,7 +1795,8 @@ def demix_rois(
             "n_rois": counts["n_rois"],
             "pipeline": "masknmf",
             "roi_workflow": info,
-            "processing_history": list(ops.get("processing_history") or []) + [{"step": "roi_demix", **info}],
+            "processing_history": list(ops.get("processing_history") or [])
+            + [{"step": "roi_demix", **info}],
         }
     )
     if reg_file is not None:
@@ -1691,16 +1887,22 @@ def discover_rois(
     }
 
     if engine == "masknmf":
-        import masknmf
         from masknmf.demixing import NoSignalsDetectedError
 
+        import masknmf
         from mbo_utilities.masknmf import MasknmfSettings
         from mbo_utilities.masknmf import outputs as _outputs
         from mbo_utilities.masknmf import runner as _runner
         from mbo_utilities.metadata import get_param
 
-        s = settings if isinstance(settings, MasknmfSettings) else MasknmfSettings.from_dict(settings or {})
-        dev = _runner._resolve_device(s.runtime.device if device == "auto" else device, logger)
+        s = (
+            settings
+            if isinstance(settings, MasknmfSettings)
+            else MasknmfSettings.from_dict(settings or {})
+        )
+        dev = _runner._resolve_device(
+            s.runtime.device if device == "auto" else device, logger
+        )
         fs = get_param(ops, "fs")
         fs = float(fs) if fs else None
         # masknmf's spline detrenders need a movie longer than their window
@@ -1712,11 +1914,21 @@ def discover_rois(
             pmd, comp_seconds, pmd_key = cached[0], 0.0, cached[1]
         else:
             pmd, comp_seconds, pmd_key = _runner._stage_compression(
-                crop, s.compression, s.runtime, out_dir, dev, np.ones((h, w), float), fs, logger,
-                f"registered:{_movie_fingerprint(crop, _source_path(source))}", False,
+                crop,
+                s.compression,
+                s.runtime,
+                out_dir,
+                dev,
+                np.ones((h, w), float),
+                fs,
+                logger,
+                f"registered:{_movie_fingerprint(crop, _source_path(source))}",
+                False,
             )
             if pmd is None:
-                raise ValueError("compression skipped and no cached compression.hdf5 to demix from")
+                raise ValueError(
+                    "compression skipped and no cached compression.hdf5 to demix from"
+                )
         detrender = None
         if detrend_ok:
             from masknmf.compression.preprocessing import MaximinSplineDetrend
@@ -1732,21 +1944,31 @@ def discover_rois(
         logger.info(
             f"roi_workflow: masknmf discovery in ({y0}:{y1}, {x0}:{x1}) on plane z={z} ({dev})"
         )
-        demixer = masknmf.SignalDemixer(pmd, device=dev, frame_batch_size=s.runtime.frame_batch_size)
+        demixer = masknmf.SignalDemixer(
+            pmd, device=dev, frame_batch_size=s.runtime.frame_batch_size
+        )
         try:
             demixer.initialize_signals(**cfg.init_kwargs(detrender))
         except NoSignalsDetectedError:
             logger.info("roi_workflow: masknmf found no signals in the region")
             return None
-        demixer.demix(**cfg.nmf_kwargs(cfg.unfiltered_support_lo, ring=True, detrender=detrender))
+        demixer.demix(
+            **cfg.nmf_kwargs(cfg.unfiltered_support_lo, ring=True, detrender=detrender)
+        )
         results = demixer.results
-        info.update(settings=_runner._stage_hash(cfg, "do_demixing"), input=pmd_key, fs=fs)
+        info.update(
+            settings=_runner._stage_hash(cfg, "do_demixing"), input=pmd_key, fs=fs
+        )
         _runner._export_atomic(results, out_dir / _runner.DEMIX_FILE, info)
         coo_idx, values, baseline = _runner._extract_footprints(results)
         cc = np.asarray(results.ac_array.export_c(), dtype=np.float32)
         counts = _outputs.write_plane_outputs(
             out_dir,
-            indices=coo_idx, values=values, c=cc, shape=(h, w), baseline=baseline,
+            indices=coo_idx,
+            values=values,
+            c=cc,
+            shape=(h, w),
+            baseline=baseline,
             var_img=_runner._to_np(getattr(pmd, "var_img", None)),
             mean_img=_runner._to_np(getattr(pmd, "mean_img", None)),
         )
@@ -1763,7 +1985,11 @@ def discover_rois(
 
         from mbo_utilities.metadata import get_param
 
-        dev = torch.device(device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
+        dev = torch.device(
+            device
+            if device != "auto"
+            else ("cuda" if torch.cuda.is_available() else "cpu")
+        )
         det = dict(default_settings()["detection"])
         det.update(settings or {})
         fs = get_param(ops, "fs")
@@ -1772,8 +1998,12 @@ def discover_rois(
         )
         try:
             _, stat, _ = detection_wrapper(
-                crop, fs=float(fs) if fs else 30, yrange=None, xrange=None,
-                settings=det, device=dev,
+                crop,
+                fs=float(fs) if fs else 30,
+                yrange=None,
+                xrange=None,
+                settings=det,
+                device=dev,
             )
         except ValueError:
             logger.info("roi_workflow: suite2p found no ROIs in the region")
@@ -1789,15 +2019,24 @@ def discover_rois(
 
     info["seconds"] = round(time.time() - t0, 3)
     out = _write_discovery_outputs(
-        out_dir, source=source, ops=ops, stat=stat, F=F, Fneu=Fneu, info=info,
+        out_dir,
+        source=source,
+        ops=ops,
+        stat=stat,
+        F=F,
+        Fneu=Fneu,
+        info=info,
     )
-    logger.info(f"roi_workflow: discovered {len(stat)} ROIs -> {out} ({info['seconds']}s)")
+    logger.info(
+        f"roi_workflow: discovered {len(stat)} ROIs -> {out} ({info['seconds']}s)"
+    )
     return out
 
 
 def _bridge_frames(F: np.ndarray, frames: np.ndarray) -> np.ndarray:
     """Copy of ``F`` with the listed frames replaced by linear interpolation
-    between their nearest untouched neighbours (edges hold the neighbour)."""
+    between their nearest untouched neighbours (edges hold the neighbour).
+    """
     frames = np.asarray(frames, dtype=int)
     if frames.size == 0:
         return F
@@ -1874,7 +2113,9 @@ def linescan_roi_read(
         h, w = int(ext["height"]), int(ext["width"])
         for tt0 in range(0, T, batch_size):
             tt1 = min(T, tt0 + batch_size)
-            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(dtype, copy=False)
+            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(
+                dtype, copy=False
+            )
             if scale != 1.0 or offset != 0.0:
                 blk = blk * scale + offset
             F[i, tt0:tt1] = blk.reshape(blk.shape[0], -1).mean(axis=1)
@@ -1884,7 +2125,9 @@ def linescan_roi_read(
                 nfull = prof.shape[0] // bin_frames
                 if nfull:
                     kymo[i, b0 : b0 + nfull, :w] = (
-                        prof[: nfull * bin_frames].reshape(nfull, bin_frames, w).mean(axis=1)
+                        prof[: nfull * bin_frames]
+                        .reshape(nfull, bin_frames, w)
+                        .mean(axis=1)
                     )
                 if prof.shape[0] > nfull * bin_frames:
                     kymo[i, b0 + nfull, :w] = prof[nfull * bin_frames :].mean(axis=0)
@@ -1897,8 +2140,11 @@ def linescan_roi_means(
     arr, *, channel: int = 0, batch_size: int = 5000, progress=None
 ) -> np.ndarray:
     """``(K, T)`` mean fluorescence per ROI per timepoint of a linescan unit
-    (:func:`linescan_roi_read` without the kymograph)."""
-    F, _ = linescan_roi_read(arr, channel=channel, batch_size=batch_size, progress=progress)
+    (:func:`linescan_roi_read` without the kymograph).
+    """
+    F, _ = linescan_roi_read(
+        arr, channel=channel, batch_size=batch_size, progress=progress
+    )
     return F
 
 
@@ -1961,7 +2207,10 @@ def extract_linescan_traces(
 
         arr = imread(arr)
     md = arr.metadata
-    if md.get("mesc_z_axis_meaning") != "roi_index" or md.get("mesc_layout") != "packed":
+    if (
+        md.get("mesc_z_axis_meaning") != "roi_index"
+        or md.get("mesc_layout") != "packed"
+    ):
         raise ValueError(
             "extract_linescan_traces only handles linescan units "
             f"(mesc_layout='packed'); got mesc_layout={md.get('mesc_layout')!r}, "
@@ -1990,7 +2239,9 @@ def extract_linescan_traces(
     F_by: dict[int, np.ndarray] = {}
     kymo_by: dict[int, np.ndarray] = {}
     for c in channels:
-        F_c, kymo_c = linescan_roi_read(arr, channel=c, batch_size=batch_size, bin_frames=bin_frames)
+        F_c, kymo_c = linescan_roi_read(
+            arr, channel=c, batch_size=batch_size, bin_frames=bin_frames
+        )
         F_by[c] = F_c
         if kymo_c is not None:
             kymo_by[c] = kymo_c
@@ -2060,13 +2311,23 @@ def extract_linescan_traces(
         # linescan unit of the file overwrite the last: nest by unit
         out_dir = _default_out_dir(source, tag) / md["mesc_unit"].rsplit("/", 1)[-1]
     out = _write_discovery_outputs(
-        out_dir, source=source, ops=ops, stat=stat, F=F, Fneu=Fneu, info=info,
+        out_dir,
+        source=source,
+        ops=ops,
+        stat=stat,
+        F=F,
+        Fneu=Fneu,
+        info=info,
     )
     for c, F_c in F_by.items():
         if c != int(channel):
             np.save(out / f"F_chan{c}.npy", F_c)
     for c, kymo_c in kymo_by.items():
-        np.save(out / ("kymographs.npy" if c == int(channel) else f"kymographs_chan{c}.npy"), kymo_c)
+        np.save(
+            out
+            / ("kymographs.npy" if c == int(channel) else f"kymographs_chan{c}.npy"),
+            kymo_c,
+        )
     if stim:
         np.save(out / "stim_frames.npy", stim["frames"])
     dfof = None
@@ -2161,7 +2422,9 @@ def extract_linescan_units(
     for u in all_units:
         named = u["key"] in wanted or u["munit"] in wanted
         if u["kind"] != "packed":
-            if u["key"] in wanted or (u["munit"] in wanted and u["munit"] not in packed_munits):
+            if u["key"] in wanted or (
+                u["munit"] in wanted and u["munit"] not in packed_munits
+            ):
                 raise ValueError(
                     f"{u['key']} is a {u['modality_name']} unit, not a linescan"
                 )
@@ -2229,14 +2492,27 @@ def run(
     if process not in ("extract", "demix", "discover", "none"):
         raise ValueError(f"unknown process {process!r}")
     if process == "discover" and not (process_settings or {}).get("box"):
-        raise ValueError('process="discover" needs process_settings["box"] = [y0, y1, x0, x1]')
+        raise ValueError(
+            'process="discover" needs process_settings["box"] = [y0, y1, x0, x1]'
+        )
     source_path = None if hasattr(input_data, "shape") else input_data
-    sel = selection if isinstance(selection, RoiSelection) else RoiSelection(**(selection or {}))
+    sel = (
+        selection
+        if isinstance(selection, RoiSelection)
+        else RoiSelection(**(selection or {}))
+    )
 
     plane_dirs = register(
-        input_data, save_path or "", register_method,
-        planes=planes, settings=register_settings, metadata=metadata,
-        frame_indices=frame_indices, channel=channel, force=force, logger=logger,
+        input_data,
+        save_path or "",
+        register_method,
+        planes=planes,
+        settings=register_settings,
+        metadata=metadata,
+        frame_indices=frame_indices,
+        channel=channel,
+        force=force,
+        logger=logger,
     )
     if planes and register_method == "none":
         plane_dirs = [d for d in plane_dirs if plane_index(d) + 1 in set(planes)]
@@ -2260,8 +2536,14 @@ def run(
             if sel.planes and z_global not in set(sel.planes):
                 continue
             out = discover_rois(
-                d, box, engine=engine, z=z_global, c=channel or 0,
-                tag=tag, logger=logger, **ps,
+                d,
+                box,
+                engine=engine,
+                z=z_global,
+                c=channel or 0,
+                tag=tag,
+                logger=logger,
+                **ps,
             )
             if out is not None:
                 found[z_global] = out
@@ -2285,7 +2567,9 @@ def run(
         store, z = plane_store(d, shared)
         z_global = plane_index(d)
         if store is None:
-            logger.warning(f"roi_workflow: no ROI store for {d.name}; draw ROIs with `mbo {d}`")
+            logger.warning(
+                f"roi_workflow: no ROI store for {d.name}; draw ROIs with `mbo {d}`"
+            )
             continue
         n_stores += 1
         if sel.planes and z_global not in set(sel.planes):

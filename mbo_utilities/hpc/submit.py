@@ -14,8 +14,8 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-from .config import HpcConfig
 from . import pipeline as _pipe
+from .config import HpcConfig
 from .slurm import slurm_available
 
 
@@ -92,22 +92,33 @@ def _print_plan(cfg: HpcConfig, mode: str, output_dir: Path) -> None:
     print(f"input:   {cfg.io.input}")
     print(f"output:  {output_dir}")
     if cfg.pipeline.stream:
-        src = "node-local /tmp (staged copy)" if cfg.pipeline.stage_input else "input in place"
+        src = (
+            "node-local /tmp (staged copy)"
+            if cfg.pipeline.stage_input
+            else "input in place"
+        )
         print(f"stream:  on  (no data_raw.bin/data.bin; reads raw from {src})")
     ok, detail = _pipe.probe_writable(output_dir)
-    print(f"writable: {detail}" if ok else
-          f"WARNING: output not writable ({detail}); set [io] output to a writable "
-          f"location with room (prefer scratch)")
+    print(
+        f"writable: {detail}"
+        if ok
+        else f"WARNING: output not writable ({detail}); set [io] output to a writable "
+        f"location with room (prefer scratch)"
+    )
     print("slurm parameters:")
     for k, v in _executor_params(cfg, array=(mode == "array")).items():
         print(f"  {k} = {v}")
     if mode == "array":
         if not cfg.pipeline_kwargs().get("keep_reg", True):
-            print("WARNING: keep_reg=false + array makes the aggregate re-process "
-                  "every plane; use single/local mode for small outputs.")
+            print(
+                "WARNING: keep_reg=false + array makes the aggregate re-process "
+                "every plane; use single/local mode for small outputs."
+            )
         try:
             n, ntasks, shards = plan(cfg)
-            print(f"planes:  {n}  ->  {ntasks} array task(s), F={cfg.pipeline.planes_per_gpu}")
+            print(
+                f"planes:  {n}  ->  {ntasks} array task(s), F={cfg.pipeline.planes_per_gpu}"
+            )
             for t, s in enumerate(shards):
                 print(f"  task {t}: planes {s}")
             print("  + 1 dependent aggregate job (afterok)")
@@ -158,16 +169,20 @@ def submit(cfg: HpcConfig, mode: str = "single", dry_run: bool = False):
 
     if mode == "array":
         if not cfg.pipeline_kwargs().get("keep_reg", True):
-            print("WARNING: keep_reg=false with --mode array makes the aggregate "
-                  "re-process every plane (its binaries are gone). Use single/local "
-                  "mode for small outputs, or keep keep_reg=true for array.")
+            print(
+                "WARNING: keep_reg=false with --mode array makes the aggregate "
+                "re-process every plane (its binaries are gone). Use single/local "
+                "mode for small outputs, or keep keep_reg=true for array."
+            )
         n, ntasks, shards = plan(cfg)
         ex = _make_executor(log_folder, _executor_params(cfg, array=True))
         jobs = []
         with ex.batch():
             for t in range(ntasks):
                 jobs.append(
-                    ex.submit(_pipe.run_job, cfg_dict, str(output_dir), "array", t, shards[t])
+                    ex.submit(
+                        _pipe.run_job, cfg_dict, str(output_dir), "array", t, shards[t]
+                    )
                 )
         array_id = jobs[0].job_id.split("_")[0]
         print(f"submitted array job {array_id} ({ntasks} task(s)) -> {output_dir}")

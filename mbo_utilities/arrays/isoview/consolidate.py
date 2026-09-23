@@ -57,7 +57,6 @@ Public entry: :func:`consolidate_isoview` (kind dispatch).
 from __future__ import annotations
 
 import json
-import logging
 import math
 import re
 import shutil
@@ -92,6 +91,7 @@ ProgressCallback = Callable[[str, int, int], None]
 
 
 # === Pyramid factors ===
+
 
 def _compute_anisotropic_mags(
     voxel_size: tuple[float, float, float],
@@ -152,15 +152,9 @@ _MASK_RE = re.compile(
     r"^SPM(\d+)_TM(\d+)_CM(\d+)\.segmentationMask\."
     r"(?:ome\.tif|tif|tiff|zarr|klb)$"
 )
-_XY_MASK_RE = re.compile(
-    r"^SPM(\d+)_TM(\d+)_CM(\d+)\.xyMask\.(?:ome\.tif|tif|tiff)$"
-)
-_XZ_MASK_RE = re.compile(
-    r"^SPM(\d+)_TM(\d+)_CM(\d+)\.xzMask\.(?:ome\.tif|tif|tiff)$"
-)
-_MIN_INT_RE = re.compile(
-    r"^SPM(\d+)_TM(\d+)_CM(\d+)\.minIntensity\.npz$"
-)
+_XY_MASK_RE = re.compile(r"^SPM(\d+)_TM(\d+)_CM(\d+)\.xyMask\.(?:ome\.tif|tif|tiff)$")
+_XZ_MASK_RE = re.compile(r"^SPM(\d+)_TM(\d+)_CM(\d+)\.xzMask\.(?:ome\.tif|tif|tiff)$")
+_MIN_INT_RE = re.compile(r"^SPM(\d+)_TM(\d+)_CM(\d+)\.minIntensity\.npz$")
 
 # Fused tree (under <raw>.fused/<method>/{SPM##|TM######}/) — pair-level
 # files use the CM##_CM##_VW## naming; single-camera-in-pair files
@@ -235,7 +229,7 @@ def _scan_fused_companions(method_dir: Path) -> dict[str, dict[int, dict[tuple, 
       timelapse: ``<method>/TM######/...`` — one TM per leaf dir
       tiled:     ``<method>/SPM##/...``    — TM number lives in filenames
     """
-    from .array import _iter_fused_leaf_dirs, _FUSED_RE
+    from .array import _FUSED_RE, _iter_fused_leaf_dirs
 
     if not method_dir.is_dir():
         return {}
@@ -260,9 +254,7 @@ def _scan_fused_companions(method_dir: Path) -> dict[str, dict[int, dict[tuple, 
             m = _FUSED_RE.match(f.name)
             if m is None:
                 continue
-            volume_tms.add(
-                tm_from_dir if tm_from_dir is not None else int(m.group(2))
-            )
+            volume_tms.add(tm_from_dir if tm_from_dir is not None else int(m.group(2)))
     if not volume_tms:
         return out
     tm_to_ti = {tm: ti for ti, tm in enumerate(sorted(volume_tms))}
@@ -283,11 +275,21 @@ def _scan_fused_companions(method_dir: Path) -> dict[str, dict[int, dict[tuple, 
                 continue
             if m_mask:
                 chn = int(m_mask.group(6)) if m_mask.group(6) is not None else -1
-                key = (int(m_mask.group(3)), int(m_mask.group(4)), int(m_mask.group(5)), chn)
+                key = (
+                    int(m_mask.group(3)),
+                    int(m_mask.group(4)),
+                    int(m_mask.group(5)),
+                    chn,
+                )
                 out["mask"].setdefault(ti, {})[key] = f
             elif m_fus:
                 chn = int(m_fus.group(6)) if m_fus.group(6) is not None else -1
-                key = (int(m_fus.group(3)), int(m_fus.group(4)), int(m_fus.group(5)), chn)
+                key = (
+                    int(m_fus.group(3)),
+                    int(m_fus.group(4)),
+                    int(m_fus.group(5)),
+                    chn,
+                )
                 out["fusion_mask"].setdefault(ti, {})[key] = f
             elif m_m2:
                 chn = int(m_m2.group(5)) if m_m2.group(5) is not None else -1
@@ -331,6 +333,7 @@ def _remap_single_cam_to_pair(
 
 # === Codec construction ===
 
+
 def _make_compressors(name: str, level: int, itemsize: int) -> list | None:
     """Build the compressor list passed to ``zarr.create_array``.
 
@@ -367,6 +370,7 @@ def _v2_compressor(name: str, level: int):
     if name in (None, "none"):
         return None
     import numcodecs
+
     if name == "gzip":
         return numcodecs.GZip(level=level)
     if name == "zstd":
@@ -406,6 +410,7 @@ def _v2_attrs(attrs: dict) -> dict:
 
 
 # === Output group + array creation ===
+
 
 def _open_output_group(out_path: Path, overwrite: bool):
     if out_path.exists():
@@ -545,6 +550,7 @@ def _json_safe(v):
 
 # === Image pyramid writer ===
 
+
 def _write_image_pyramid(
     group,
     iso_arr: IsoviewArray,
@@ -580,8 +586,14 @@ def _write_image_pyramid(
         shard = (1, 1, out_nz, out_ny, out_nx)
 
         arr = _create_sharded_array(
-            group, str(level_idx), shape, dtype, chunk, shard,
-            compressor, compression_level,
+            group,
+            str(level_idx),
+            shape,
+            dtype,
+            chunk,
+            shard,
+            compressor,
+            compression_level,
         )
         paths.append(str(level_idx))
         scales.append(_scale_5d(dt_s, dz, dy, dx, mag))
@@ -595,8 +607,16 @@ def _write_image_pyramid(
                         progress_callback("image_l0", ti * nc + ci + 1, nt * nc)
         else:
             prev_mag = mags[level_idx - 1]
-            factor = (mag[0] // prev_mag[0], mag[1] // prev_mag[1], mag[2] // prev_mag[2])
-            prev_path = f"{group.path.rstrip('/')}/{level_idx - 1}" if group.path else str(level_idx - 1)
+            factor = (
+                mag[0] // prev_mag[0],
+                mag[1] // prev_mag[1],
+                mag[2] // prev_mag[2],
+            )
+            prev_path = (
+                f"{group.path.rstrip('/')}/{level_idx - 1}"
+                if group.path
+                else str(level_idx - 1)
+            )
             prev_arr = zarr.open_array(store=group.store, path=prev_path, mode="r")
             for ti in range(nt):
                 for ci in range(nc):
@@ -616,6 +636,7 @@ def _write_image_pyramid(
 
 # === Label writers ===
 
+
 def _read_companion(path: Path) -> np.ndarray:
     """Read one companion file (zarr / tif / klb) as a numpy array."""
     suffix = path.suffix.lower()
@@ -630,6 +651,7 @@ def _read_companion(path: Path) -> np.ndarray:
         return np.asarray(tifffile.imread(str(path)))
     if suffix == ".klb":
         import pyklb
+
         return pyklb.readfull(str(path))
     raise ValueError(f"unsupported companion format: {path}")
 
@@ -673,8 +695,14 @@ def _write_segmentation_pyramid(
         shard = (1, 1, out_nz, out_ny, out_nx)
 
         arr = _create_sharded_array(
-            seg_group, str(level_idx), shape, np.dtype("uint8"),
-            chunk, shard, compressor, compression_level,
+            seg_group,
+            str(level_idx),
+            shape,
+            np.dtype("uint8"),
+            chunk,
+            shard,
+            compressor,
+            compression_level,
         )
         paths.append(str(level_idx))
         scales.append(_scale_5d(dt_s, dz, dy, dx, mag))
@@ -691,7 +719,11 @@ def _write_segmentation_pyramid(
                         progress_callback("seg_l0", ti * nc + ci + 1, nt * nc)
         else:
             prev_mag = mags[level_idx - 1]
-            factor = (mag[0] // prev_mag[0], mag[1] // prev_mag[1], mag[2] // prev_mag[2])
+            factor = (
+                mag[0] // prev_mag[0],
+                mag[1] // prev_mag[1],
+                mag[2] // prev_mag[2],
+            )
             prev_path = f"{seg_group.path.rstrip('/')}/{level_idx - 1}"
             prev_arr = zarr.open_array(store=seg_group.store, path=prev_path, mode="r")
             for ti in range(nt):
@@ -758,7 +790,9 @@ def _write_aux_2d_per_tc(
     if sample.ndim != 2:
         logger.warning(
             "skipping aux %s: unexpected source ndim %d (path=%s)",
-            name, sample.ndim, sample_path,
+            name,
+            sample.ndim,
+            sample_path,
         )
         return
     dim0, dim1 = sample.shape
@@ -771,8 +805,14 @@ def _write_aux_2d_per_tc(
 
     sub = root.create_group(name, overwrite=True)
     arr = _create_sharded_array(
-        sub, "0", shape, src_dtype, chunk, chunk,
-        compressor, compression_level,
+        sub,
+        "0",
+        shape,
+        src_dtype,
+        chunk,
+        chunk,
+        compressor,
+        compression_level,
     )
 
     for ti in range(nt):
@@ -787,7 +827,11 @@ def _write_aux_2d_per_tc(
                 logger.warning(
                     "aux %s: shape mismatch at t=%d c=%d "
                     "(expected %s, got %s) — skipping",
-                    name, ti, ci, (dim0, dim1), data.shape,
+                    name,
+                    ti,
+                    ci,
+                    (dim0, dim1),
+                    data.shape,
                 )
                 continue
             arr[ti, ci, 0, :, :] = data
@@ -798,7 +842,10 @@ def _write_aux_2d_per_tc(
         "version": "0.5",
         "multiscales": [
             _multiscales_block(
-                name, _AXES_5D, ["0"], [[1.0, 1.0, 1.0, 1.0, 1.0]],
+                name,
+                _AXES_5D,
+                ["0"],
+                [[1.0, 1.0, 1.0, 1.0, 1.0]],
             )
         ],
     }
@@ -810,6 +857,7 @@ def _write_aux_2d_per_tc(
 
 
 # === max projections ===
+
 
 def _write_disk_xy_projections(
     root,
@@ -868,8 +916,14 @@ def _write_disk_xy_projections(
         chunk = (1, 1, 1, out_ny, out_nx)
         shard = chunk
         arr = _create_sharded_array(
-            xy_group, str(level_idx), shape, dtype, chunk, shard,
-            compressor, compression_level,
+            xy_group,
+            str(level_idx),
+            shape,
+            dtype,
+            chunk,
+            shard,
+            compressor,
+            compression_level,
         )
         paths.append(str(level_idx))
         # 5D scale with Z mag fixed at 1 (singleton).
@@ -894,7 +948,8 @@ def _write_disk_xy_projections(
                     if progress_callback:
                         progress_callback(
                             "raw_max_xy_l0",
-                            ti * nc + ci + 1, nt * nc,
+                            ti * nc + ci + 1,
+                            nt * nc,
                         )
         else:
             prev_path = f"{xy_group.path.rstrip('/')}/{level_idx - 1}"
@@ -910,14 +965,13 @@ def _write_disk_xy_projections(
                     if progress_callback:
                         progress_callback(
                             f"raw_max_xy_l{level_idx}",
-                            ti * nc + ci + 1, nt * nc,
+                            ti * nc + ci + 1,
+                            nt * nc,
                         )
 
     xy_group.attrs["ome"] = {
         "version": "0.5",
-        "multiscales": [
-            _multiscales_block("max_xy", _AXES_5D, paths, scales)
-        ],
+        "multiscales": [_multiscales_block("max_xy", _AXES_5D, paths, scales)],
     }
 
 
@@ -991,24 +1045,28 @@ def _write_computed_projections(
             shape5 = _shape_for(spec, mag)
             chunk5 = (1, 1, 1, shape5[3], shape5[4])
             arr = _create_sharded_array(
-                sub, str(level_idx), shape5, dtype,
-                chunk5, chunk5, compressor, compression_level,
+                sub,
+                str(level_idx),
+                shape5,
+                dtype,
+                chunk5,
+                chunk5,
+                compressor,
+                compression_level,
             )
             arrays.append(arr)
             paths.append(str(level_idx))
             scales.append(_scale_for(spec, mag))
         sub.attrs["ome"] = {
             "version": "0.5",
-            "multiscales": [
-                _multiscales_block(axis, _AXES_5D, paths, scales)
-            ],
+            "multiscales": [_multiscales_block(axis, _AXES_5D, paths, scales)],
         }
         axis_state[axis] = {"arrays": arrays, "reduce": spec["reduce"]}
 
     # Level 0: one volume read per (t, c), three projection writes.
     for ti in range(nt):
         for ci in range(nc):
-            vol = np.asarray(iso_arr[ti, ci])         # (Z, Y, X)
+            vol = np.asarray(iso_arr[ti, ci])  # (Z, Y, X)
             for state in axis_state.values():
                 proj = vol.max(axis=state["reduce"])  # 2D
                 state["arrays"][0][ti, ci, 0, :, :] = proj.astype(dtype, copy=False)
@@ -1040,11 +1098,13 @@ def _write_computed_projections(
                     if progress_callback:
                         progress_callback(
                             f"{axis}_l{level_idx}",
-                            ti * nc + ci + 1, nt * nc,
+                            ti * nc + ci + 1,
+                            nt * nc,
                         )
 
 
 # === /min_intensity ===
+
 
 def _write_min_intensity(
     root,
@@ -1085,8 +1145,14 @@ def _write_min_intensity(
 
     g = root.create_group("min_intensity", overwrite=True)
     arr = _create_sharded_array(
-        g, "0", data.shape, data.dtype, data.shape, data.shape,
-        compressor, compression_level,
+        g,
+        "0",
+        data.shape,
+        data.dtype,
+        data.shape,
+        data.shape,
+        compressor,
+        compression_level,
     )
     arr[:] = data
     g.attrs["description"] = (
@@ -1097,6 +1163,7 @@ def _write_min_intensity(
 
 
 # === /metadata ===
+
 
 def _write_metadata(root, iso_arr: IsoviewArray) -> None:
     """Inline parsed XML + isoview_config into ``/metadata`` attrs."""
@@ -1143,7 +1210,8 @@ def _write_backgrounds(root, raw_root: Path | None) -> None:
     if sample.ndim != 2:
         logger.warning(
             "skipping backgrounds: first source has ndim %d (path=%s)",
-            sample.ndim, bg_files[0],
+            sample.ndim,
+            bg_files[0],
         )
         return
     ny, nx = sample.shape
@@ -1155,7 +1223,8 @@ def _write_backgrounds(root, raw_root: Path | None) -> None:
     raw_group = root.require_group("raw")
     bg_group = raw_group.create_group("background", overwrite=True)
     arr = _create_sharded_array(
-        bg_group, "0",
+        bg_group,
+        "0",
         shape=(1, nc, 1, ny, nx),
         dtype=dtype,
         chunk_shape=(1, 1, 1, ny, nx),
@@ -1172,7 +1241,9 @@ def _write_backgrounds(root, raw_root: Path | None) -> None:
         if img.shape != (ny, nx):
             logger.warning(
                 "background %s: shape %s != %s, skipping",
-                bg.name, img.shape, (ny, nx),
+                bg.name,
+                img.shape,
+                (ny, nx),
             )
             continue
         arr[0, i, 0, :, :] = img
@@ -1182,7 +1253,9 @@ def _write_backgrounds(root, raw_root: Path | None) -> None:
         "version": "0.5",
         "multiscales": [
             _multiscales_block(
-                "background", _AXES_5D, ["0"],
+                "background",
+                _AXES_5D,
+                ["0"],
                 [[1.0, 1.0, 1.0, 1.0, 1.0]],
             )
         ],
@@ -1244,6 +1317,7 @@ def _write_raw_xml(root, raw_root: Path | None) -> None:
 
 # === Public entry point ===
 
+
 def _setup_consolidation(
     iso: IsoviewArray,
     out: str | Path,
@@ -1254,7 +1328,8 @@ def _setup_consolidation(
 ):
     """Shared boot for any kind: open the output group, compute mags,
     pull physical scales from metadata. Returns ``(root, mags, dx, dy,
-    dz, dt_s, out_path)`` used by both per-kind consolidators."""
+    dz, dt_s, out_path)`` used by both per-kind consolidators.
+    """
     _nt, _nc, nz, ny, nx = iso.shape
     dx = float(iso.dx or 1.0)
     dy = float(iso.dy or 1.0)
@@ -1264,7 +1339,9 @@ def _setup_consolidation(
 
     if pyramid:
         mags = _compute_anisotropic_mags(
-            (dz, dy, dx), (nz, ny, nx), pyramid_max_layers,
+            (dz, dy, dx),
+            (nz, ny, nx),
+            pyramid_max_layers,
         )
     else:
         mags = [(1, 1, 1)]
@@ -1306,19 +1383,34 @@ def _consolidate_corrected(
     iso = IsoviewArray(spm_dir, kind="corrected")
     nt, nc, nz, ny, nx = iso.shape
     root, mags, dx, dy, dz, dt_s, out_path = _setup_consolidation(
-        iso, out, overwrite=overwrite,
-        pyramid=pyramid, pyramid_max_layers=pyramid_max_layers,
+        iso,
+        out,
+        overwrite=overwrite,
+        pyramid=pyramid,
+        pyramid_max_layers=pyramid_max_layers,
     )
 
     logger.info(
         "consolidate corrected: src=%s out=%s shape=%s pyramid=%d levels=%d",
-        spm_dir, out_path, iso.shape, int(pyramid), len(mags),
+        spm_dir,
+        out_path,
+        iso.shape,
+        int(pyramid),
+        len(mags),
     )
 
     # main image pyramid
     img_paths, img_scales = _write_image_pyramid(
-        root, iso, mags, dx, dy, dz, dt_s,
-        compressor, compression_level, progress_callback,
+        root,
+        iso,
+        mags,
+        dx,
+        dy,
+        dz,
+        dt_s,
+        compressor,
+        compression_level,
+        progress_callback,
     )
 
     # labels — only the OME-spec-compliant 3D segmentation lives here.
@@ -1328,26 +1420,56 @@ def _consolidate_corrected(
     companions = _scan_corrected_companions(spm_dir)
     labels = root.create_group("labels", overwrite=True)
     label_names: list[str] = []
-    if _write_segmentation_pyramid(
-        labels, companions.get("segmentation", {}), iso, mags,
-        dx, dy, dz, dt_s, compressor, compression_level, progress_callback,
-    ) is not None:
+    if (
+        _write_segmentation_pyramid(
+            labels,
+            companions.get("segmentation", {}),
+            iso,
+            mags,
+            dx,
+            dy,
+            dz,
+            dt_s,
+            compressor,
+            compression_level,
+            progress_callback,
+        )
+        is not None
+    ):
         label_names.append("background_mask")
     labels.attrs["ome"] = {"version": "0.5", "labels": label_names}
 
     _write_aux_2d_per_tc(
-        root, "xy_mask", companions.get("xy_mask", {}), iso,
-        compressor, compression_level, progress_callback,
+        root,
+        "xy_mask",
+        companions.get("xy_mask", {}),
+        iso,
+        compressor,
+        compression_level,
+        progress_callback,
     )
     _write_aux_2d_per_tc(
-        root, "xz_mask", companions.get("xz_mask", {}), iso,
-        compressor, compression_level, progress_callback,
+        root,
+        "xz_mask",
+        companions.get("xz_mask", {}),
+        iso,
+        compressor,
+        compression_level,
+        progress_callback,
     )
 
     # corrected projections/max_xy / max_xz / max_yz: one volume read per (t,c).
     _write_computed_projections(
-        root, iso, mags,
-        dx, dy, dz, dt_s, compressor, compression_level, progress_callback,
+        root,
+        iso,
+        mags,
+        dx,
+        dy,
+        dz,
+        dt_s,
+        compressor,
+        compression_level,
+        progress_callback,
     )
 
     # raw projections: come from a flat sibling dir (not from the
@@ -1355,7 +1477,8 @@ def _consolidate_corrected(
     raw_root = _sibling_raw_root(iso)
     raw_proj_dir = (
         raw_root.parent / f"{raw_root.name}.raw.projections"
-        if raw_root is not None else None
+        if raw_root is not None
+        else None
     )
     raw_proj = (
         _scan_flat_projections(raw_proj_dir)
@@ -1375,14 +1498,25 @@ def _consolidate_corrected(
                 seen_yx.add((my, mx))
                 mags_yx.append((my, mx))
         _write_disk_xy_projections(
-            root, raw_proj, iso, tm_int_by_index,
-            mags_yx, dx, dy, dt_s, compressor, compression_level,
+            root,
+            raw_proj,
+            iso,
+            tm_int_by_index,
+            mags_yx,
+            dx,
+            dy,
+            dt_s,
+            compressor,
+            compression_level,
             progress_callback,
         )
 
     _write_min_intensity(
-        root, companions.get("min_intensity", {}), iso,
-        compressor, compression_level,
+        root,
+        companions.get("min_intensity", {}),
+        iso,
+        compressor,
+        compression_level,
     )
     _write_metadata(root, iso)
     _write_backgrounds(root, raw_root)
@@ -1393,9 +1527,7 @@ def _consolidate_corrected(
         "multiscales": [
             _multiscales_block(spm_dir.name, _AXES_5D, img_paths, img_scales)
         ],
-        "omero": _omero_block(
-            iso.view_names, iso._camera_metadata, default_z=nz // 2
-        ),
+        "omero": _omero_block(iso.view_names, iso._camera_metadata, default_z=nz // 2),
     }
     root.attrs["isoview"] = {
         "schema_version": "0.1",
@@ -1437,18 +1569,33 @@ def _consolidate_fused(
     method_dir = iso.scan_root  # <raw>.fused/<method>/
     nt, nc, nz, ny, nx = iso.shape
     root, mags, dx, dy, dz, dt_s, out_path = _setup_consolidation(
-        iso, out, overwrite=overwrite,
-        pyramid=pyramid, pyramid_max_layers=pyramid_max_layers,
+        iso,
+        out,
+        overwrite=overwrite,
+        pyramid=pyramid,
+        pyramid_max_layers=pyramid_max_layers,
     )
 
     logger.info(
         "consolidate fused: src=%s out=%s shape=%s pyramid=%d levels=%d",
-        method_dir, out_path, iso.shape, int(pyramid), len(mags),
+        method_dir,
+        out_path,
+        iso.shape,
+        int(pyramid),
+        len(mags),
     )
 
     img_paths, img_scales = _write_image_pyramid(
-        root, iso, mags, dx, dy, dz, dt_s,
-        compressor, compression_level, progress_callback,
+        root,
+        iso,
+        mags,
+        dx,
+        dy,
+        dz,
+        dt_s,
+        compressor,
+        compression_level,
+        progress_callback,
     )
 
     # Combined 3D fusion mask → /labels/segmentation/.
@@ -1458,10 +1605,22 @@ def _consolidate_fused(
     companions = _scan_fused_companions(method_dir)
     labels = root.create_group("labels", overwrite=True)
     label_names: list[str] = []
-    if _write_segmentation_pyramid(
-        labels, companions.get("mask", {}), iso, mags,
-        dx, dy, dz, dt_s, compressor, compression_level, progress_callback,
-    ) is not None:
+    if (
+        _write_segmentation_pyramid(
+            labels,
+            companions.get("mask", {}),
+            iso,
+            mags,
+            dx,
+            dy,
+            dz,
+            dt_s,
+            compressor,
+            compression_level,
+            progress_callback,
+        )
+        is not None
+    ):
         label_names.append("background_mask")
     labels.attrs["ome"] = {"version": "0.5", "labels": label_names}
 
@@ -1471,36 +1630,66 @@ def _consolidate_fused(
     # use them.
     pair_view_keys = list(iso.views)
     _write_aux_2d_per_tc(
-        root, "fusion_mask", companions.get("fusion_mask", {}), iso,
-        compressor, compression_level, progress_callback,
+        root,
+        "fusion_mask",
+        companions.get("fusion_mask", {}),
+        iso,
+        compressor,
+        compression_level,
+        progress_callback,
     )
     _write_aux_2d_per_tc(
-        root, "mask2D_cam0",
+        root,
+        "mask2D_cam0",
         _remap_single_cam_to_pair(
-            companions.get("mask2D", {}), pair_view_keys, cam_position=0,
+            companions.get("mask2D", {}),
+            pair_view_keys,
+            cam_position=0,
         ),
-        iso, compressor, compression_level, progress_callback,
+        iso,
+        compressor,
+        compression_level,
+        progress_callback,
     )
     _write_aux_2d_per_tc(
-        root, "mask2D_cam1",
+        root,
+        "mask2D_cam1",
         _remap_single_cam_to_pair(
-            companions.get("mask2D", {}), pair_view_keys, cam_position=1,
+            companions.get("mask2D", {}),
+            pair_view_keys,
+            cam_position=1,
         ),
-        iso, compressor, compression_level, progress_callback,
+        iso,
+        compressor,
+        compression_level,
+        progress_callback,
     )
     _write_aux_2d_per_tc(
-        root, "transformedMask2D_cam1",
+        root,
+        "transformedMask2D_cam1",
         _remap_single_cam_to_pair(
             companions.get("transformedMask2D", {}),
-            pair_view_keys, cam_position=1,
+            pair_view_keys,
+            cam_position=1,
         ),
-        iso, compressor, compression_level, progress_callback,
+        iso,
+        compressor,
+        compression_level,
+        progress_callback,
     )
 
     # projections/max_xy / max_xz / max_yz from the consolidated volume
     _write_computed_projections(
-        root, iso, mags,
-        dx, dy, dz, dt_s, compressor, compression_level, progress_callback,
+        root,
+        iso,
+        mags,
+        dx,
+        dy,
+        dz,
+        dt_s,
+        compressor,
+        compression_level,
+        progress_callback,
     )
 
     # metadata + backgrounds + raw XML (same as corrected)
@@ -1514,9 +1703,7 @@ def _consolidate_fused(
         "multiscales": [
             _multiscales_block(method_dir.name, _AXES_5D, img_paths, img_scales)
         ],
-        "omero": _omero_block(
-            iso.view_names, iso._camera_metadata, default_z=nz // 2
-        ),
+        "omero": _omero_block(iso.view_names, iso._camera_metadata, default_z=nz // 2),
     }
     root.attrs["isoview"] = {
         "schema_version": "0.1",
@@ -1580,21 +1767,27 @@ def consolidate_isoview(
 
     if kind == "corrected":
         return _consolidate_corrected(
-            src_path, out, overwrite=overwrite,
-            pyramid=pyramid, pyramid_max_layers=pyramid_max_layers,
-            compressor=compressor, compression_level=compression_level,
+            src_path,
+            out,
+            overwrite=overwrite,
+            pyramid=pyramid,
+            pyramid_max_layers=pyramid_max_layers,
+            compressor=compressor,
+            compression_level=compression_level,
             progress_callback=progress_callback,
         )
     if kind == "fused":
         return _consolidate_fused(
-            src_path, out, overwrite=overwrite,
-            pyramid=pyramid, pyramid_max_layers=pyramid_max_layers,
-            compressor=compressor, compression_level=compression_level,
+            src_path,
+            out,
+            overwrite=overwrite,
+            pyramid=pyramid,
+            pyramid_max_layers=pyramid_max_layers,
+            compressor=compressor,
+            compression_level=compression_level,
             progress_callback=progress_callback,
         )
-    raise ValueError(
-        f"kind must be 'corrected' or 'fused'; got {kind!r}"
-    )
+    raise ValueError(f"kind must be 'corrected' or 'fused'; got {kind!r}")
 
 
 def to_bigstitcher(

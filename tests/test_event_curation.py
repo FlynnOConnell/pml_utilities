@@ -52,7 +52,8 @@ def _write_spatial_recording(root, trace=None):
 @pytest.fixture(autouse=True)
 def _keep_preferences(monkeypatch):
     """The widget remembers the last data path in ~/.mbo; tests must not
-    leave a pytest tmp dir there for the next real session to open."""
+    leave a pytest tmp dir there for the next real session to open.
+    """
     from mbo_utilities.gui import event_curation
 
     monkeypatch.setattr(event_curation, "set_last_dir", lambda *a, **k: None)
@@ -81,7 +82,8 @@ def _loaded(data_root, mode="fast"):
 
 def _add_scan(pf_dir, scan="20"):
     """A second scan in the folder, a copy of scan 10's trace, as an
-    experiment with two units has."""
+    experiment with two units has.
+    """
     for name in ("denoised_trace_scans.pkl", "fs_scans.pkl"):
         payload = pickle.loads((pf_dir / name).read_bytes())
         payload[scan] = payload["10"]
@@ -104,7 +106,10 @@ class TestSession:
         assert session.t.shape == session.denoised.shape == (4000,)
         assert session.n == 3
         assert np.allclose(session.times_s * FS_HZ, EVENT_SAMPLES, atol=2)
-        assert session.label_path == data_root / "expt1" / "PF" / ".curation" / "fast_template_curation.json"
+        assert (
+            session.label_path
+            == data_root / "expt1" / "PF" / ".curation" / "fast_template_curation.json"
+        )
         assert "denoised" in session.cache_status
 
     def test_a_scan_or_domain_the_folder_lacks_raises(self, data_root):
@@ -177,16 +182,17 @@ class TestSession:
     def test_a1_a2_controls_do_what_the_notebook_sliders_do(self, data_root):
         """The imgui A1 / A2 controls call the session; the notebook moves
         ipywidgets sliders. Driving both on the same recording must leave
-        identical candidates, auto calls, labels and saved JSON."""
+        identical candidates, auto calls, labels and saved JSON.
+        """
         from vnoiser.curation import EventCurationDashboard
-
-        from mbo_utilities.vnoiser import CurationSession
 
         def notebook(mode):
             # vnoiser's own route into the same PF folder; its recording id
             # carries the folder's parents and ours does not, so the reference
             # is renamed before the load and both key the JSON alike
-            dash = EventCurationDashboard(data_path=data_root / PF, mode=mode, duration_s=None, auto_load=False)
+            dash = EventCurationDashboard(
+                data_path=data_root / PF, mode=mode, duration_s=None, auto_load=False
+            )
             ref = dash.dataset._by_id[dash.dataset.recording_options()[0][1]]
             object.__setattr__(ref, "recording_id", RID)
             dash.dataset._by_id[RID] = ref
@@ -202,7 +208,9 @@ class TestSession:
                 float(dash.candidate_threshold),
                 dash.auto_pass_amplitude,
                 bool(dash.waveform_rejection),
-                json.loads(dash.label_path.read_text(encoding="utf-8"))["candidate_detection"]
+                json.loads(dash.label_path.read_text(encoding="utf-8"))[
+                    "candidate_detection"
+                ]
                 if dash.label_path.exists()
                 else None,
             )
@@ -213,7 +221,10 @@ class TestSession:
 
         # A1: the notebook slider snaps to its own range; so does set_threshold
         lo, hi, _step = session.threshold_range
-        assert (float(dash.threshold_slider.min), float(dash.threshold_slider.max)) == (lo, hi)
+        assert (float(dash.threshold_slider.min), float(dash.threshold_slider.max)) == (
+            lo,
+            hi,
+        )
         target = lo + 0.5 * (hi - lo)
         dash.threshold_slider.value = target
         session.set_threshold(target)
@@ -256,7 +267,8 @@ class TestSession:
     def test_a2_passes_what_sits_above_the_line_on_the_trace(self, data_root):
         """A2 is a line on the trace, so it is compared with the value each
         candidate peaks at (what panel A draws its marker at), not with the
-        baseline-subtracted amplitude panel C draws."""
+        baseline-subtracted amplitude panel C draws.
+        """
         session = _loaded(data_root, mode="fast")
         lo, hi, _step = session.threshold_range
         session.set_threshold(lo)
@@ -283,14 +295,17 @@ class TestSession:
     def test_a3_a4_controls_do_what_the_notebook_sliders_do(self, data_root):
         """The PC1 line (A3) and the cosine threshold (A4) drive vnoiser's
         own sliders; the session's setters must leave the same calls and
-        the same saved JSON as moving them in the notebook."""
+        the same saved JSON as moving them in the notebook.
+        """
         from vnoiser.curation import EventCurationDashboard
 
         def notebook(mode):
             # vnoiser's own route into the same PF folder; its recording id
             # carries the folder's parents and ours does not, so the reference
             # is renamed before the load and both key the JSON alike
-            dash = EventCurationDashboard(data_path=data_root / PF, mode=mode, duration_s=None, auto_load=False)
+            dash = EventCurationDashboard(
+                data_path=data_root / PF, mode=mode, duration_s=None, auto_load=False
+            )
             ref = dash.dataset._by_id[dash.dataset.recording_options()[0][1]]
             object.__setattr__(ref, "recording_id", RID)
             dash.dataset._by_id[RID] = ref
@@ -305,7 +320,9 @@ class TestSession:
                 dash.auto_pass_pc1,
                 dash.auto_pass_pc1_side,
                 float(dash.auto_template_threshold),
-                json.loads(dash.label_path.read_text(encoding="utf-8"))["candidate_detection"]
+                json.loads(dash.label_path.read_text(encoding="utf-8"))[
+                    "candidate_detection"
+                ]
                 if dash.label_path.exists()
                 else None,
             )
@@ -359,7 +376,8 @@ class TestSession:
         assert state(dash) == state(session.dash)
         rejected = sum(label == "auto_no" for label in session.labels())
         expected = sum(
-            not session.event_info(i)["pc1_pass"] and scores[i] < 1.0 for i in range(session.n)
+            not session.event_info(i)["pc1_pass"] and scores[i] < 1.0
+            for i in range(session.n)
         )
         assert rejected == expected > 0
 
@@ -367,7 +385,9 @@ class TestSession:
         detection = state(session.dash)[-1]
         assert detection["auto_pass_pc1"][session.recording_id] == pytest.approx(line)
         assert detection["auto_pass_pc1_sides"][session.recording_id] == "right"
-        assert detection["auto_template_thresholds"][session.recording_id] == pytest.approx(1.0)
+        assert detection["auto_template_thresholds"][
+            session.recording_id
+        ] == pytest.approx(1.0)
         again = _loaded(data_root, mode="fast")
         assert again.auto_pass_pc1 == pytest.approx(line)
         assert again.auto_template_threshold == pytest.approx(1.0)
@@ -522,7 +542,9 @@ class TestWidget:
         assert curation.strip.panels[0] is curation.panel
         _frames(curation)
 
-    def test_scope_narrows_what_is_shown_and_flipped(self, curation, data_root, tmp_path):
+    def test_scope_narrows_what_is_shown_and_flipped(
+        self, curation, data_root, tmp_path
+    ):
         _add_scan(data_root / PF)
         curation.scope = lambda rec: rec.unit == "scan20"
         _load(curation, data_root)
@@ -564,19 +586,32 @@ class TestWidget:
     def test_scan_catalogs_and_loads_every_scan_and_domain(self, curation, data_root):
         _add_scan(data_root / PF)
         # the folder, its traces file and the experiment folder all name it
-        for path in (data_root / PF, data_root / PF / "denoised_trace_scans.pkl", data_root / "expt1"):
+        for path in (
+            data_root / PF,
+            data_root / PF / "denoised_trace_scans.pkl",
+            data_root / "expt1",
+        ):
             curation.scan(path)
             assert curation.data_path == str(data_root / PF), path
-        assert [r.rid for r in curation.catalog] == ["scan=10/domain=soma", "scan=20/domain=soma"]
+        assert [r.rid for r in curation.catalog] == [
+            "scan=10/domain=soma",
+            "scan=20/domain=soma",
+        ]
         assert [(r.unit, r.roi, r.label) for r in curation.catalog] == [
-            ("scan10", "soma", "scan 10 / soma"), ("scan20", "soma", "scan 20 / soma"),
+            ("scan10", "soma", "scan 10 / soma"),
+            ("scan20", "soma", "scan 20 / soma"),
         ]
         assert curation.current == curation.catalog[0].rid
         assert "2 recordings (2 units)" in curation.status
         curation.wait(60)
-        assert [r.rid for r, _ in curation.loaded()] == [r.rid for r in curation.catalog]
+        assert [r.rid for r, _ in curation.loaded()] == [
+            r.rid for r in curation.catalog
+        ]
         assert curation.session.recording_id == "scan=10/domain=soma"
-        assert curation.session.label_path == data_root / PF / ".curation" / "fast_template_curation.json"
+        assert (
+            curation.session.label_path
+            == data_root / PF / ".curation" / "fast_template_curation.json"
+        )
         _each_panel(curation)
 
     def test_bad_path_reports_instead_of_raising(self, curation, tmp_path):
@@ -617,7 +652,8 @@ class TestWidget:
 
     def test_a3_a4_card_and_pc1_line_draw(self, curation, data_root):
         """The A3 / A4 card and the PC1 line on the PCA draw in a seeded
-        mode; a release of the dragged line applies through the session."""
+        mode; a release of the dragged line applies through the session.
+        """
         _load(curation, data_root)
         session = curation.session
         _each_panel(curation)
@@ -652,8 +688,12 @@ class TestWidget:
         # that covers the whole trace: the frame measures what it holds
         t = session.times_s
         curation._box_rect = {
-            "plot": "timeline", "x0": float(t.min()) - 1.0, "y0": -100.0,
-            "x1": float(t.max()) + 1.0, "y1": 100.0, "drawing": False,
+            "plot": "timeline",
+            "x0": float(t.min()) - 1.0,
+            "y0": -100.0,
+            "x1": float(t.max()) + 1.0,
+            "y1": 100.0,
+            "drawing": False,
         }
         _each_panel(curation)
         assert sorted(curation.boxed().tolist()) == [0, 1, 2]
@@ -662,11 +702,26 @@ class TestWidget:
         _each_panel(curation)
         assert curation.boxed().tolist() == [0]
         assert curation.apply_box() == 1
-        assert [session.manual_label(i) for i in range(3)] == ["no", "unlabeled", "unlabeled"]
+        assert [session.manual_label(i) for i in range(3)] == [
+            "no",
+            "unlabeled",
+            "unlabeled",
+        ]
         # the box is gone, the mode stays for the next one
-        assert curation._box_rect is None and curation.boxed().size == 0 and curation.box_mode == "no"
+        assert (
+            curation._box_rect is None
+            and curation.boxed().size == 0
+            and curation.box_mode == "no"
+        )
         # switching to accept drops any box; a box on the PCA applies the same way
-        curation._box_rect = {"plot": "timeline", "x0": 0, "y0": 0, "x1": 1, "y1": 1, "drawing": False}
+        curation._box_rect = {
+            "plot": "timeline",
+            "x0": 0,
+            "y0": 0,
+            "x1": 1,
+            "y1": 1,
+            "drawing": False,
+        }
         curation.set_box_mode("yes")
         assert curation.box_mode == "yes" and curation._box_rect is None
         curation._box = ("pca", np.array([1, 2]))
@@ -686,7 +741,8 @@ class TestWidget:
 class TestViewerIntegration:
     """The viewer has no curation panel of its own: the Curate button (the
     Voltage pipeline's, or File > Curate) opens the curation window in a
-    second process, what `mbo curate` runs."""
+    second process, what `mbo curate` runs.
+    """
 
     def test_widgets_menu_has_no_curation_toggle(self):
         from mbo_utilities.gui.widgets import _WIDGET_CLASSES, _discover_widgets
@@ -726,27 +782,43 @@ class TestViewerIntegration:
         spawned = []
         monkeypatch.setattr(curation_viewer, "get_mbo_dirs", lambda: {"logs": tmp_path})
         monkeypatch.setattr(
-            curation_viewer.subprocess, "Popen",
-            lambda cmd, **kwargs: spawned.append((cmd, kwargs)) or SimpleNamespace(pid=4242),
+            curation_viewer.subprocess,
+            "Popen",
+            lambda cmd, **kwargs: spawned.append((cmd, kwargs))
+            or SimpleNamespace(pid=4242),
         )
         pf_dir = _write_spatial_recording(tmp_path)
         assert curation_viewer.launch_curation_window(pf_dir, channel=1) == 4242
         cmd, kwargs = spawned[0]
         assert Path(cmd[0]).stem.startswith("python")
-        assert cmd[1:] == ["-m", "mbo_utilities.gui.curation_viewer", str(pf_dir), "--channel", "1"]
+        assert cmd[1:] == [
+            "-m",
+            "mbo_utilities.gui.curation_viewer",
+            str(pf_dir),
+            "--channel",
+            "1",
+        ]
         assert kwargs["stdin"] is curation_viewer.subprocess.DEVNULL
         logs = list(tmp_path.glob("*_curate_PF.log"))
         assert len(logs) == 1 and Path(kwargs["stdout"].name) == logs[0]
 
-    def test_the_voltage_widgets_curate_button_launches_the_window(self, tmp_path, monkeypatch):
+    def test_the_voltage_widgets_curate_button_launches_the_window(
+        self, tmp_path, monkeypatch
+    ):
         from types import SimpleNamespace
 
         from mbo_utilities.gui import curation_viewer
         from mbo_utilities.gui.widgets.pipelines import voltage
 
         calls = []
-        monkeypatch.setattr(curation_viewer, "launch_curation_window", lambda path, channel=0: calls.append((path, channel)) or 7)
-        widget = voltage.VoltagePipelineWidget(SimpleNamespace(image_widget=None, fpath=None))
+        monkeypatch.setattr(
+            curation_viewer,
+            "launch_curation_window",
+            lambda path, channel=0: calls.append((path, channel)) or 7,
+        )
+        widget = voltage.VoltagePipelineWidget(
+            SimpleNamespace(image_widget=None, fpath=None)
+        )
         widget._voltage_c_selection = "2"
         widget._curate(str(tmp_path / "PF"))
         assert calls == [(str(tmp_path / "PF"), 1)]
@@ -755,8 +827,8 @@ class TestViewerIntegration:
     def test_a_pf_folder_opens_in_the_viewer_without_a_curation_panel(self, data_root):
         if not _offscreen_selected():
             pytest.skip("needs the offscreen rendercanvas")
-        from mbo_utilities.results import ResultsArray
         from mbo_utilities.gui.data_vis import DataVis
+        from mbo_utilities.results import ResultsArray
 
         pf_dir = data_root / "expt1" / "PF"
         vis = DataVis(ResultsArray(pf_dir), size=FIGURE_SIZE)
@@ -782,7 +854,10 @@ def _raw_unit(munit: int, n_rois: int = 2, samples: int = 4000) -> dict:
 
     traces = np.random.default_rng(munit).random((n_rois, samples))
     return {
-        "key": f"MSession_0/MUnit_{munit}", "munit": f"MUnit_{munit}", "fs": FS_HZ, "n_rois": n_rois,
+        "key": f"MSession_0/MUnit_{munit}",
+        "munit": f"MUnit_{munit}",
+        "fs": FS_HZ,
+        "n_rois": n_rois,
         "traces": SimpleNamespace(roi=lambda i: traces[int(i)]),
     }
 
@@ -818,18 +893,28 @@ def _source(tmp_path):
 
 
 class TestLoadTrace:
-    def test_runs_the_pipeline_and_files_labels_beside_the_source(self, tmp_path, monkeypatch):
+    def test_runs_the_pipeline_and_files_labels_beside_the_source(
+        self, tmp_path, monkeypatch
+    ):
         from mbo_utilities.vnoiser import CurationSession
 
         calls = _fake_pipeline(monkeypatch)
         source = _source(tmp_path)
         trace = np.random.default_rng(0).normal(size=3000) + 100.0
         session = CurationSession(source, mode="fast")
-        session.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=3", label="ROI 3", source_path=source)
+        session.load_trace(
+            trace,
+            FS_HZ,
+            recording_id="expt/MUnit_1/roi=3",
+            label="ROI 3",
+            source_path=source,
+        )
         assert session.loaded and session.n == 3
         assert calls == ["expt/MUnit_1/roi=3"]
         assert session.cache_status == "computed pipeline"
-        assert session.label_path == tmp_path / ".curation" / "fast_template_curation.json"
+        assert (
+            session.label_path == tmp_path / ".curation" / "fast_template_curation.json"
+        )
         session.select(0)
         session.set_label("yes")
         payload = json.loads(session.label_path.read_text(encoding="utf-8"))
@@ -844,10 +929,28 @@ class TestLoadTrace:
         source = _source(tmp_path)
         trace = np.random.default_rng(1).normal(size=3000)
         session = CurationSession(source, mode="fast")
-        session.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=0", label="ROI 0", source_path=source)
-        session.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=1", label="ROI 1", source_path=source)
+        session.load_trace(
+            trace,
+            FS_HZ,
+            recording_id="expt/MUnit_1/roi=0",
+            label="ROI 0",
+            source_path=source,
+        )
+        session.load_trace(
+            trace,
+            FS_HZ,
+            recording_id="expt/MUnit_1/roi=1",
+            label="ROI 1",
+            source_path=source,
+        )
         assert calls == ["expt/MUnit_1/roi=0", "expt/MUnit_1/roi=1"]
-        session.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=0", label="ROI 0", source_path=source)
+        session.load_trace(
+            trace,
+            FS_HZ,
+            recording_id="expt/MUnit_1/roi=0",
+            label="ROI 0",
+            source_path=source,
+        )
         assert calls == ["expt/MUnit_1/roi=0", "expt/MUnit_1/roi=1"]
         assert session.cache_status.startswith("loaded cache")
         assert len(list((tmp_path / ".curation" / "cache").glob("*.npz"))) == 2
@@ -858,17 +961,33 @@ class TestLoadTrace:
         source = _source(tmp_path)
         session = CurationSession(source, mode="fast")
         with pytest.raises(ValueError):
-            session.load_trace([1.0], FS_HZ, recording_id="r", label="r", source_path=source)
+            session.load_trace(
+                [1.0], FS_HZ, recording_id="r", label="r", source_path=source
+            )
         with pytest.raises(ValueError):
-            session.load_trace([1.0, np.nan, 2.0], FS_HZ, recording_id="r", label="r", source_path=source)
+            session.load_trace(
+                [1.0, np.nan, 2.0],
+                FS_HZ,
+                recording_id="r",
+                label="r",
+                source_path=source,
+            )
 
-    def test_widget_loads_a_trace_off_the_frame_and_reports_focus(self, curation, tmp_path, monkeypatch):
+    def test_widget_loads_a_trace_off_the_frame_and_reports_focus(
+        self, curation, tmp_path, monkeypatch
+    ):
         _fake_pipeline(monkeypatch)
         source = _source(tmp_path)
         focused = []
         curation.on_focus = focused.append
         trace = np.random.default_rng(2).normal(size=3000)
-        curation.load_trace(trace, FS_HZ, recording_id="expt/MUnit_1/roi=2", label="ROI 2", source_path=source)
+        curation.load_trace(
+            trace,
+            FS_HZ,
+            recording_id="expt/MUnit_1/roi=2",
+            label="ROI 2",
+            source_path=source,
+        )
         curation.wait(60)
         assert curation.session.loaded and curation.session.n == 3
         assert curation.current == "expt/MUnit_1/roi=2"
@@ -901,24 +1020,35 @@ ASAKO_MESC = next(
 
 
 class TestSeparateZstackFile:
-    @pytest.mark.skipif(not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only")
+    @pytest.mark.skipif(
+        not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only"
+    )
     def test_stack_in_a_sibling_file_pairs_with_the_lines(self):
         from pathlib import Path
 
-        from mbo_utilities.analysis.linescan import pair_reference_zstack, zstack_candidates
+        from mbo_utilities.analysis.linescan import (
+            pair_reference_zstack,
+            zstack_candidates,
+        )
         from mbo_utilities.arrays.mesc import list_mesc_units
 
         mesc = Path(ASAKO_MESC)
         zstack = mesc.parent.parent / f"{mesc.stem}_zstack.mesc"
         units = list_mesc_units(zstack)
-        cands = zstack_candidates(mesc, "MSession_0/MUnit_35", units, zstack_path=zstack)
+        cands = zstack_candidates(
+            mesc, "MSession_0/MUnit_35", units, zstack_path=zstack
+        )
         assert [c["munit"] for c in cands] == ["MUnit_3"]
         assert cands[0]["xy_fraction"] == 1.0 and cands[0]["z_fraction"] == 1.0
-        paired = pair_reference_zstack(mesc, "MSession_0/MUnit_35", units, zstack_path=zstack)
+        paired = pair_reference_zstack(
+            mesc, "MSession_0/MUnit_35", units, zstack_path=zstack
+        )
         assert paired["munit"] == "MUnit_3"
         assert zstack_candidates(mesc, "MSession_0/MUnit_35") == []
 
-    @pytest.mark.skipif(not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only")
+    @pytest.mark.skipif(
+        not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only"
+    )
     def test_mbo_recognises_the_line_scan_unit(self):
         from mbo_utilities.gui.run_gui import _is_linescan_unit, _mesc_unit
 
@@ -928,11 +1058,15 @@ class TestSeparateZstackFile:
         assert not _is_linescan_unit(ASAKO_MESC, None)
         assert _mesc_unit(ASAKO_MESC, "MUnit_35")["key"] == "MSession_0/MUnit_35"
 
-    @pytest.mark.skipif(not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only")
+    @pytest.mark.skipif(
+        not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only"
+    )
     def test_dry_run_of_the_viewer_entry_point(self, capsys):
         from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
 
-        assert open_linescan_viewer(ASAKO_MESC, ref_key="MUnit_35", dry_run=True) is None
+        assert (
+            open_linescan_viewer(ASAKO_MESC, ref_key="MUnit_35", dry_run=True) is None
+        )
         out = capsys.readouterr().out
         assert "1 zstack in stan112_expt12_zstack.mesc" in out
         assert "Z-stack: MSession_0/MUnit_3" in out
@@ -951,7 +1085,11 @@ def _mesc_beside_pf(tmp_path):
 
 class TestPfForMesc:
     def test_pf_folder_and_scan_are_found_beside_the_mesc(self, tmp_path):
-        from mbo_utilities.vnoiser import recording_id, voltage_run_for_mesc, voltage_unit_for_mesc
+        from mbo_utilities.vnoiser import (
+            recording_id,
+            voltage_run_for_mesc,
+            voltage_unit_for_mesc,
+        )
 
         mesc, pf_dir = _mesc_beside_pf(tmp_path)
         assert voltage_run_for_mesc(mesc) == pf_dir
@@ -984,7 +1122,9 @@ class TestPfForMesc:
         assert session.loaded and session.n == 3
         assert session.recording_id == "scan=10/domain=soma"
 
-    def test_picker_pointed_at_a_mesc_redirects_to_its_pf(self, curation, data_root, tmp_path):
+    def test_picker_pointed_at_a_mesc_redirects_to_its_pf(
+        self, curation, data_root, tmp_path
+    ):
         # the curation fixture already wrote the PF folder under data_root
         pf_dir = data_root / "expt1" / "PF"
         scan_dir = pf_dir.parent / "expt1"
@@ -1009,7 +1149,8 @@ class TestMboOpensTheLineScanViewer:
     """``mbo scan.mesc`` opens the image viewer on the file's first line-scan
     unit with no prompt (or on the line-scan unit picked); the curation and
     the Voltage pipeline follow the unit on screen. Other units and files
-    still prompt once and go to the image viewer."""
+    still prompt once and go to the image viewer.
+    """
 
     @staticmethod
     def _units(monkeypatch, kinds):
@@ -1019,33 +1160,49 @@ class TestMboOpensTheLineScanViewer:
             {"key": f"MSession_0/MUnit_{i}", "munit": f"MUnit_{i}", "kind": kind}
             for i, kind in enumerate(kinds)
         ]
-        monkeypatch.setattr("mbo_utilities.arrays.mesc.list_mesc_units", lambda p: units)
+        monkeypatch.setattr(
+            "mbo_utilities.arrays.mesc.list_mesc_units", lambda p: units
+        )
         return rg
 
-    def test_a_file_with_line_scans_opens_the_viewer_with_no_prompt(self, tmp_path, monkeypatch):
+    def test_a_file_with_line_scans_opens_the_viewer_with_no_prompt(
+        self, tmp_path, monkeypatch
+    ):
         rg = self._units(monkeypatch, ["multicube", "frames", "packed", "packed"])
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
         standard = []
         monkeypatch.setattr(
-            rg, "_resolve_mesc_unit",
-            lambda p, u: ({"unit": u}, True) if u is not None else pytest.fail("prompted"),
+            rg,
+            "_resolve_mesc_unit",
+            lambda p, u: ({"unit": u}, True)
+            if u is not None
+            else pytest.fail("prompted"),
         )
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        monkeypatch.setattr(
+            rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
+        )
         rg._run_gui_impl(data_in=mesc)
         assert len(standard) == 1
         assert standard[0][0] == mesc and standard[0][-1] == "MSession_0/MUnit_2"
 
-    def test_a_file_with_chessboard_patches_opens_the_same_way(self, tmp_path, monkeypatch):
+    def test_a_file_with_chessboard_patches_opens_the_same_way(
+        self, tmp_path, monkeypatch
+    ):
         rg = self._units(monkeypatch, ["frames", "tiled", "packed"])
         mesc = tmp_path / "chess.mesc"
         mesc.write_bytes(b"x")
         standard = []
         monkeypatch.setattr(
-            rg, "_resolve_mesc_unit",
-            lambda p, u: ({"unit": u}, True) if u is not None else pytest.fail("prompted"),
+            rg,
+            "_resolve_mesc_unit",
+            lambda p, u: ({"unit": u}, True)
+            if u is not None
+            else pytest.fail("prompted"),
         )
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        monkeypatch.setattr(
+            rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
+        )
         rg._run_gui_impl(data_in=mesc)
         assert len(standard) == 1 and standard[0][-1] == "MSession_0/MUnit_1"
 
@@ -1054,17 +1211,23 @@ class TestMboOpensTheLineScanViewer:
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
         standard = []
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        monkeypatch.setattr(
+            rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
+        )
         rg._run_gui_impl(data_in=mesc, unit="MUnit_1")
         assert len(standard) == 1 and standard[0][-1] == "MUnit_1"
         # a non line-scan unit of the same file still goes to the image viewer
         standard = []
         monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: ({"unit": u}, True))
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        monkeypatch.setattr(
+            rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
+        )
         rg._run_gui_impl(data_in=mesc, unit="MUnit_0")
         assert standard and standard[0][-1] == "MUnit_0"
 
-    def test_a_file_without_line_scans_prompts_once_and_opens_the_image_viewer(self, tmp_path, monkeypatch):
+    def test_a_file_without_line_scans_prompts_once_and_opens_the_image_viewer(
+        self, tmp_path, monkeypatch
+    ):
         rg = self._units(monkeypatch, ["multicube", "frames"])
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
@@ -1075,7 +1238,9 @@ class TestMboOpensTheLineScanViewer:
             return {"unit": "MSession_0/MUnit_0"}, True
 
         monkeypatch.setattr(rg, "_resolve_mesc_unit", resolve)
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        monkeypatch.setattr(
+            rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
+        )
         rg._run_gui_impl(data_in=mesc)
         assert prompts == [None]
         assert standard and standard[0][-1] == "MSession_0/MUnit_0"
@@ -1085,20 +1250,25 @@ class TestMboOpensTheLineScanViewer:
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
         monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: ({}, False))
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: pytest.fail("opened"))
+        monkeypatch.setattr(
+            rg, "_launch_standard_viewer", lambda *a, **k: pytest.fail("opened")
+        )
         assert rg._run_gui_impl(data_in=mesc) is None
 
     def test_linescan_command_view_flag(self, tmp_path, monkeypatch):
         from click.testing import CliRunner
-
         from mbo_utilities import cli
         from mbo_utilities.gui import linescan_viewer
 
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
         calls = []
-        monkeypatch.setattr(linescan_viewer, "open_linescan_viewer", lambda p, **k: calls.append((p, k)))
-        result = CliRunner().invoke(cli.main, ["linescan", str(mesc), "--view", "--unit", "MUnit_35"])
+        monkeypatch.setattr(
+            linescan_viewer, "open_linescan_viewer", lambda p, **k: calls.append((p, k))
+        )
+        result = CliRunner().invoke(
+            cli.main, ["linescan", str(mesc), "--view", "--unit", "MUnit_35"]
+        )
         assert result.exit_code == 0, result.output
         assert calls[0][1]["ref_key"] == "MUnit_35"
         assert calls[0][1]["zstack_key"] is None
@@ -1138,17 +1308,23 @@ class TestExperimentFolder:
         from mbo_utilities.analysis.linescan import experiment_linescan_mesc
 
         _experiment_layout(tmp_path)
-        assert experiment_linescan_mesc(tmp_path) is None  # the folder holding experiments
+        assert (
+            experiment_linescan_mesc(tmp_path) is None
+        )  # the folder holding experiments
         tif = tmp_path / "movie.tif"
         tif.write_bytes(b"x")
         assert experiment_linescan_mesc(tif) is None
         assert experiment_linescan_mesc(tmp_path / "missing") is None
 
-    def test_mbo_opens_the_experiment_folder_in_the_image_viewer(self, tmp_path, monkeypatch):
+    def test_mbo_opens_the_experiment_folder_in_the_image_viewer(
+        self, tmp_path, monkeypatch
+    ):
         rg = TestMboOpensTheLineScanViewer._units(monkeypatch, ["frames", "packed"])
         experiment, _mesc = _experiment_layout(tmp_path)
         standard = []
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        monkeypatch.setattr(
+            rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
+        )
         rg._run_gui_impl(data_in=experiment)
         rg._run_gui_impl(data_in=str(experiment / "PF"))
         # the folder itself is handed over: imread opens it as a ResultsArray
@@ -1158,19 +1334,22 @@ class TestExperimentFolder:
         rg = TestMboOpensTheLineScanViewer._units(monkeypatch, ["frames"])
         experiment, _mesc = _experiment_layout(tmp_path)
         standard = []
-        monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
+        monkeypatch.setattr(
+            rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
+        )
         rg._run_gui_impl(data_in=experiment)
         assert standard and standard[0][0] == experiment
 
     def test_linescan_command_takes_the_folder(self, tmp_path, monkeypatch):
         from click.testing import CliRunner
-
         from mbo_utilities import cli
         from mbo_utilities.gui import linescan_viewer
 
         experiment, mesc = _experiment_layout(tmp_path)
         calls = []
-        monkeypatch.setattr(linescan_viewer, "open_linescan_viewer", lambda p, **k: calls.append((p, k)))
+        monkeypatch.setattr(
+            linescan_viewer, "open_linescan_viewer", lambda p, **k: calls.append((p, k))
+        )
         result = CliRunner().invoke(cli.main, ["linescan", str(experiment), "--view"])
         assert result.exit_code == 0, result.output
         assert calls[0][0] == str(mesc)
@@ -1185,7 +1364,8 @@ class TestExperimentFolder:
 
 class TestCurationWindow:
     """``gui/curation_viewer.py``: the dashboard in a hello_imgui window,
-    no figure. Building the app and its catalog needs no window."""
+    no figure. Building the app and its catalog needs no window.
+    """
 
     def test_panel_host_stands_in_for_the_strip(self):
         from mbo_utilities.gui._top_strip import TopPanel
@@ -1230,14 +1410,17 @@ class TestCurationWindow:
         from mbo_utilities.gui import event_curation
 
         monkeypatch.setattr(
-            event_curation, "raw_linescan_traces",
+            event_curation,
+            "raw_linescan_traces",
             lambda p, channel=0, traces_dir=None: [_raw_unit(35, n_rois=3)],
         )
         calls = _fake_pipeline(monkeypatch)
         app = curation_viewer.open_curation_viewer(mesc, run=False)
         try:
             widget = app.widget
-            assert [r.rid for r in widget.catalog] == [f"scan/MUnit_35/roi={i}" for i in range(3)]
+            assert [r.rid for r in widget.catalog] == [
+                f"scan/MUnit_35/roi={i}" for i in range(3)
+            ]
             assert not any(r.pre_denoised for r in widget.catalog)
             assert widget.session is None and "3 raw ROI traces" in widget.status
             # nothing runs until a recording is picked; then the denoiser does
@@ -1252,7 +1435,8 @@ class TestCurationWindow:
 
     def test_figure_host_draws_the_dashboard_offscreen(self, data_root):
         """The notebook route: the dashboard as a fastplotlib figure's top
-        window (jupyter_rfb in a real notebook, offscreen here)."""
+        window (jupyter_rfb in a real notebook, offscreen here).
+        """
         if not _offscreen_selected():
             pytest.skip("needs the offscreen rendercanvas")
         from mbo_utilities.gui.curation_viewer import CurationVis, open_curation_viewer
@@ -1286,7 +1470,11 @@ class TestCurationWindow:
 
     def test_add_trace_lists_without_loading(self, curation, tmp_path):
         rec = curation.add_trace(
-            np.zeros(100), FS_HZ, recording_id="x/roi=0", label="ROI 0", source_path=tmp_path / "a.mesc",
+            np.zeros(100),
+            FS_HZ,
+            recording_id="x/roi=0",
+            label="ROI 0",
+            source_path=tmp_path / "a.mesc",
         )
         assert rec in curation.catalog and not rec.pre_denoised
         assert not curation.loading and curation.session is None
@@ -1325,26 +1513,33 @@ class TestLoadingLine:
 
 
 class TestRawLines:
-    def test_a_raw_line_scan_lists_its_lines_scoped_to_a_unit(self, curation, tmp_path, monkeypatch):
+    def test_a_raw_line_scan_lists_its_lines_scoped_to_a_unit(
+        self, curation, tmp_path, monkeypatch
+    ):
         """The line-scan viewer scopes the list to the unit on screen."""
         from mbo_utilities.gui import event_curation
 
         mesc = tmp_path / "scan.mesc"
         mesc.write_bytes(b"x")
         monkeypatch.setattr(
-            event_curation, "raw_linescan_traces",
+            event_curation,
+            "raw_linescan_traces",
             lambda p, channel=0, traces_dir=None: [_raw_unit(35), _raw_unit(38)],
         )
         assert curation.scan_raw_mesc(mesc) == 4
         assert len(curation.catalog) == 4 and "4 raw ROI traces" in curation.status
         curation.scope = lambda rec: rec.rid.split("/")[1:2] == ["MUnit_38"]
-        assert [r.rid for r in curation.shown] == ["scan/MUnit_38/roi=0", "scan/MUnit_38/roi=1"]
+        assert [r.rid for r in curation.shown] == [
+            "scan/MUnit_38/roi=0",
+            "scan/MUnit_38/roi=1",
+        ]
         _frames(curation)
 
 
 def _mesc_with_rtmc(path, munit=10):
     """A line-scan ``.mesc`` whose unit ran with RTMC: X and Y totals (X in
-    MEScan's counts), an X intercycle trace, 50 samples 30 ms apart."""
+    MEScan's counts), an X intercycle trace, 50 samples 30 ms apart.
+    """
     from tests.test_mesc import _RTMC_UM, _curve
     from tests.test_results_array import write_mesc
 
@@ -1352,7 +1547,14 @@ def _mesc_with_rtmc(path, munit=10):
     write_mesc(path, munits=(munit,))
     with h5py.File(path, "a") as f:
         unit = f[f"MSession_0/MUnit_{munit}"]
-        _curve(unit, 0, "RTMC X correction (total)", 8388608.0 + 1024.0 * np.arange(50), 30.0, **_RTMC_UM)
+        _curve(
+            unit,
+            0,
+            "RTMC X correction (total)",
+            8388608.0 + 1024.0 * np.arange(50),
+            30.0,
+            **_RTMC_UM,
+        )
         _curve(unit, 1, "RTMC Y correction (total)", -0.1 * np.arange(50), 30.0)
         _curve(unit, 2, "RTMC X correction (intercycle)", [0.0, 1.0, 0.0], 30.0)
     return path
@@ -1361,22 +1563,32 @@ def _mesc_with_rtmc(path, munit=10):
 def _name_source(pf_dir, mesc, scan="10"):
     """The provenance the voltage pipeline writes beside its traces."""
     units = {scan: f"MSession_0/MUnit_{scan}"}
-    (pf_dir / "pipeline.json").write_text(json.dumps({"source": {"mesc": str(mesc), "units": units}}))
+    (pf_dir / "pipeline.json").write_text(
+        json.dumps({"source": {"mesc": str(mesc), "units": units}})
+    )
     return units[scan]
 
 
 class TestMotion:
     """A scan that went through motion correction (RTMC) shows it over the
-    candidate trace, on the same time axis, behind the MC checkbox."""
+    candidate trace, on the same time axis, behind the MC checkbox.
+    """
 
     def test_rtmc_totals_become_the_scans_motion_correction(self):
         from mbo_utilities.arrays.mesc import rtmc_motion
         from mbo_utilities.gui.imgui.motion import MotionPlot
 
         t = np.arange(20000) / 1000.0
-        rtmc = {"X total": {"t": t, "um": np.sin(t)}, "X intercycle": {"t": t, "um": np.cos(t)}}
+        rtmc = {
+            "X total": {"t": t, "um": np.sin(t)},
+            "X intercycle": {"t": t, "um": np.cos(t)},
+        }
         motion = rtmc_motion(rtmc)
-        assert motion.source == "RTMC" and motion.unit == "um" and list(motion.traces) == ["X"]
+        assert (
+            motion.source == "RTMC"
+            and motion.unit == "um"
+            and list(motion.traces) == ["X"]
+        )
         plot = MotionPlot(motion, points=1000)
         assert plot and list(plot.traces) == ["X"]
         # a min and a max per bin
@@ -1391,18 +1603,30 @@ class TestMotion:
         try:
             # a raw trace: the file it was read from and the unit in its id
             rec = widget.add_trace(
-                np.zeros(100), FS_HZ, recording_id="scan/MUnit_35/roi=0", label="ROI 0",
+                np.zeros(100),
+                FS_HZ,
+                recording_id="scan/MUnit_35/roi=0",
+                label="ROI 0",
                 source_path=tmp_path / "scan.mesc",
             )
             assert widget.scan_source(rec) == (str(tmp_path / "scan.mesc"), "MUnit_35")
-            mat = widget.add_trace(np.zeros(100), FS_HZ, recording_id="cell1", label="cell1", source_path=tmp_path / "cell1.mat")
+            mat = widget.add_trace(
+                np.zeros(100),
+                FS_HZ,
+                recording_id="cell1",
+                label="cell1",
+                source_path=tmp_path / "cell1.mat",
+            )
             assert widget.scan_source(mat) is None
             # a PF recording: the provenance names the file and the scan's unit
             pf_dir = _write_spatial_recording(tmp_path / "named")
             mesc = _mesc_with_rtmc(tmp_path / "named" / "src" / "expt.mesc")
             _name_source(pf_dir, mesc)
             widget.scan(pf_dir)
-            assert widget.scan_source(widget.catalog[0]) == (str(mesc), "MSession_0/MUnit_10")
+            assert widget.scan_source(widget.catalog[0]) == (
+                str(mesc),
+                "MSession_0/MUnit_10",
+            )
             # without one, the archive layout beside the folder and MUnit_<scan>
             beside, pf_beside = _mesc_beside_pf(tmp_path / "beside")
             widget.scan(pf_beside)
@@ -1413,14 +1637,19 @@ class TestMotion:
         finally:
             widget.close()
 
-    def test_a_pf_recording_reads_its_scans_motion_correction(self, curation, data_root):
+    def test_a_pf_recording_reads_its_scans_motion_correction(
+        self, curation, data_root
+    ):
         from mbo_utilities.gui.event_curation import MOTION_HEIGHT, PANEL_HEIGHT
 
         pf_dir = data_root / "expt1" / "PF"
         mesc = _mesc_with_rtmc(data_root / "src" / "expt.mesc")
         unit = _name_source(pf_dir, mesc)
         _load(curation, data_root)
-        assert curation.scan_source(curation.recording(curation.current)) == (str(mesc), unit)
+        assert curation.scan_source(curation.recording(curation.current)) == (
+            str(mesc),
+            unit,
+        )
         plot = curation.motion_plot
         assert plot is not None and curation.motion[(str(mesc), unit)] is plot
         assert sorted(plot.traces) == ["X", "Y"] and plot.y_label == "RTMC shift (um)"
@@ -1434,9 +1663,9 @@ class TestMotion:
         assert curation.panel.height == PANEL_HEIGHT
 
     def test_a_scan_without_rtmc_shows_no_motion_plot(self, curation, data_root):
-        from tests.test_results_array import write_mesc
-
         from mbo_utilities.gui.event_curation import PANEL_HEIGHT
+
+        from tests.test_results_array import write_mesc
 
         pf_dir = data_root / "expt1" / "PF"
         (data_root / "src").mkdir()

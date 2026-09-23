@@ -8,6 +8,7 @@ the BigStitcher export to override its table default for that view.
 Keyed by view label (``"VW00"``/``"VW90"``/...). The widget's seed defaults are
 held in the widget, not here; only explicit Apply commits land in this store.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -51,7 +52,8 @@ def applied_ops(arr: Any, view_key: str) -> list | None:
 
 def get_all_applied(arr: Any) -> dict:
     """``{view_key: {rotations, flips}}`` for every view the Align views widget
-    has committed an orientation for (empty when none)."""
+    has committed an orientation for (empty when none).
+    """
     k = _key(arr)
     if k is None:
         return {}

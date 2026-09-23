@@ -5,11 +5,9 @@ Arrays are always 5D; squeezing drops size-1 T/C/Z axes for ergonomics
 while indexing delegates back to the canonical 5D array.
 """
 
-import numpy as np
-import pytest
-import tifffile
-
 import mbo_utilities
+import numpy as np
+import tifffile
 from mbo_utilities.arrays import NumpyArray
 from mbo_utilities.squeeze import SqueezedView
 

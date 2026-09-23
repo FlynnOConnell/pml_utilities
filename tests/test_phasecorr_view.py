@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from mbo_utilities.arrays._phasecorr_view import PhaseCorrectedView, with_phasecorr
 from mbo_utilities.arrays.features import PhaseCorrectionFeature
 from mbo_utilities.arrays.numpy import NumpyArray
@@ -17,7 +16,8 @@ from mbo_utilities.arrays.numpy import NumpyArray
 
 def _offset_movie(nt=400, ny=64, nx=256, shift=3, seed=0):
     """(T, Y, X) movie with sharp shared row structure and an injected
-    bidirectional offset of `shift` px on the odd rows."""
+    bidirectional offset of `shift` px on the odd rows.
+    """
     rng = np.random.default_rng(seed)
     xprof = rng.standard_normal(nx).astype(np.float32)
     base = np.broadcast_to(xprof, (ny, nx))

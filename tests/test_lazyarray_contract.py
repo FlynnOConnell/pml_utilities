@@ -8,8 +8,6 @@ classes opt out via `ndim`/`shape`. BinArray (suite2p input) stays 3D.
 from __future__ import annotations
 
 import numpy as np
-import pytest
-
 from mbo_utilities.lazy_array import LazyArray
 
 

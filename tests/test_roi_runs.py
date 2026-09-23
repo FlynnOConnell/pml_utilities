@@ -16,11 +16,9 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from mbo_utilities import roi_workflow as rw
 from mbo_utilities.gui import roi_runs as rr
 from mbo_utilities.gui.widgets.process_manager import LocalJob
-
 
 # ---- fixtures ---------------------------------------------------------------
 
@@ -48,8 +46,12 @@ class _StubPM:
 
     def spawn(self, task_type, args, description, output_path=None):
         self.spawns.append(
-            {"task_type": task_type, "args": args, "description": description,
-             "output_path": output_path}
+            {
+                "task_type": task_type,
+                "args": args,
+                "description": description,
+                "output_path": output_path,
+            }
         )
         if self.spawn_fails:
             return None
@@ -94,15 +96,28 @@ def _until(cond, timeout=5.0):
 def _row(ypix, xpix, lam):
     ypix, xpix = np.asarray(ypix, np.int32), np.asarray(xpix, np.int32)
     lam = np.asarray(lam, np.float32)
-    return {"ypix": ypix, "xpix": xpix, "lam": lam,
-            "med": (float(ypix.mean()), float(xpix.mean())), "npix": int(ypix.size)}
+    return {
+        "ypix": ypix,
+        "xpix": xpix,
+        "lam": lam,
+        "med": (float(ypix.mean()), float(xpix.mean())),
+        "npix": int(ypix.size),
+    }
 
 
 def _result(rows, shape=(6, 6), z=0, kind="discover"):
     return rw.RunResult(
-        path=Path("run"), kind=kind, z=z, shape=shape,
-        stat=np.array(rows, dtype=object), F=None, Fneu=None, norm=None,
-        iscell=None, uids=None, store_indices=None,
+        path=Path("run"),
+        kind=kind,
+        z=z,
+        shape=shape,
+        stat=np.array(rows, dtype=object),
+        F=None,
+        Fneu=None,
+        norm=None,
+        iscell=None,
+        uids=None,
+        store_indices=None,
     )
 
 
@@ -131,7 +146,7 @@ def test_submit_failure_lands_on_run_and_job(pm):
         raise ValueError("boom")
 
     mgr.submit(run, boom)
-    (got, payload), = _drain(mgr, pm)
+    ((got, payload),) = _drain(mgr, pm)
     assert got is run and payload is None
     # the message names the frame that raised, so a failure deep in a
     # pipeline is diagnosable without opening the log
@@ -149,10 +164,15 @@ def test_heavy_runs_serialize_on_the_gpu_lock(pm):
         assert gate.wait(5)
         order.append("a-done")
 
-    ra = mgr.submit(rr.RoiRun(kind="demix", tag="a", description="demix a"), slow, heavy=True)
+    ra = mgr.submit(
+        rr.RoiRun(kind="demix", tag="a", description="demix a"), slow, heavy=True
+    )
     assert _until(lambda: order == ["a"])
-    rb = mgr.submit(rr.RoiRun(kind="discover", tag="b", description="find b"),
-                    lambda job: order.append("b"), heavy=True)
+    rb = mgr.submit(
+        rr.RoiRun(kind="discover", tag="b", description="find b"),
+        lambda job: order.append("b"),
+        heavy=True,
+    )
     assert _until(lambda: rb.job.status_message == "waiting for gpu")
     time.sleep(0.05)
     assert order == ["a"]  # b is queued behind a, not running
@@ -267,10 +287,12 @@ def test_stop_kills_spawned_only(pm, tmp_path):
 
 
 def test_pick_map_strongest_lam_wins():
-    res = _result([
-        _row([0, 1], [0, 1], [5.0, 5.0]),
-        _row([1, 2], [1, 2], [2.0, 2.0]),
-    ])
+    res = _result(
+        [
+            _row([0, 1], [0, 1], [5.0, 5.0]),
+            _row([1, 2], [1, 2], [2.0, 2.0]),
+        ]
+    )
     pick = rr.build_pick_map(res.stat, res.shape)
     assert pick[0, 0] == 0 and pick[2, 2] == 1
     assert pick[1, 1] == 0  # contested pixel goes to the stronger component
@@ -313,10 +335,17 @@ def test_derived_rgba_selection_fill_and_rim():
 
 
 def test_derived_rgba_skips_discarded_and_invisible():
-    s = rr.DerivedSet(_result([
-        _row([1], [1], [1.0]),
-        _row([3], [3], [1.0]),
-    ]), "a", (1.0, 0.0, 0.0), discarded={0})
+    s = rr.DerivedSet(
+        _result(
+            [
+                _row([1], [1], [1.0]),
+                _row([3], [3], [1.0]),
+            ]
+        ),
+        "a",
+        (1.0, 0.0, 0.0),
+        discarded={0},
+    )
     img = rr.derived_rgba((6, 6), [s], 0.5)
     assert img[1, 1, 3] == 0 and img[3, 3, 3] == 128
     s.visible = False
@@ -393,7 +422,9 @@ def test_outline_data_gives_one_closed_path_per_component():
 
 def test_outline_data_rings_the_halo_footprints_in_white():
     comps = [(np.array([4]), np.array([4]), np.ones(1), (1.0, 0.0, 0.0), 1.0)]
-    pos, colors = rr.outline_data(comps, "circle", halo=[(np.array([4]), np.array([4]))])
+    pos, colors = rr.outline_data(
+        comps, "circle", halo=[(np.array([4]), np.array([4]))]
+    )
     rings = _pieces(pos)
     assert len(rings) == 2
     spans = [np.ptp(r[:, 0]) for r in rings]
@@ -407,10 +438,17 @@ def test_outline_data_of_nothing_is_empty():
 
 
 def test_derived_outline_follows_the_same_rows_as_derived_rgba():
-    s = rr.DerivedSet(_result([
-        _row([1], [1], [1.0]),
-        _row([3], [3], [1.0]),
-    ]), "a", (1.0, 0.0, 0.0), discarded={0})
+    s = rr.DerivedSet(
+        _result(
+            [
+                _row([1], [1], [1.0]),
+                _row([3], [3], [1.0]),
+            ]
+        ),
+        "a",
+        (1.0, 0.0, 0.0),
+        discarded={0},
+    )
     pos, colors = rr.derived_outline([s], "circle")
     assert len(_pieces(pos)) == 1  # the discarded row is skipped
     # rejected rows draw dimmed, and only they do
@@ -441,10 +479,20 @@ def test_component_color_is_class_color_when_labeled():
 def test_result_traces_carry_the_read_coordinates(tmp_path):
     stat = np.array([_row([0], [0], [1.0])] * 2, object)
     res = rw.RunResult(
-        path=tmp_path / "rois_manual", kind="extract", z=3, shape=(8, 9), stat=stat,
-        F=np.arange(8, dtype=np.float32).reshape(2, 4), Fneu=np.zeros((2, 4), np.float32),
-        norm=None, iscell=None, uids=np.array([5, 0]), store_indices=None,
-        engine="suite2p", read_z=1, read_c=2,
+        path=tmp_path / "rois_manual",
+        kind="extract",
+        z=3,
+        shape=(8, 9),
+        stat=stat,
+        F=np.arange(8, dtype=np.float32).reshape(2, 4),
+        Fneu=np.zeros((2, 4), np.float32),
+        norm=None,
+        iscell=None,
+        uids=np.array([5, 0]),
+        store_indices=None,
+        engine="suite2p",
+        read_z=1,
+        read_c=2,
     )
     (trace,) = rr.result_traces(res)
     assert trace.key == ("roi", 5, 1, 2, "suite2p")
@@ -452,8 +500,17 @@ def test_result_traces_carry_the_read_coordinates(tmp_path):
     np.testing.assert_array_equal(trace.F, [0, 1, 2, 3])
     # no read coordinates recorded: the store plane stands in for z
     plain = rw.RunResult(
-        path=tmp_path / "find01", kind="demix", z=3, shape=(8, 9), stat=stat,
-        F=res.F, Fneu=None, norm=None, iscell=None, uids=None, store_indices=None,
+        path=tmp_path / "find01",
+        kind="demix",
+        z=3,
+        shape=(8, 9),
+        stat=stat,
+        F=res.F,
+        Fneu=None,
+        norm=None,
+        iscell=None,
+        uids=None,
+        store_indices=None,
     )
     assert rr.result_traces(plain) == []
     (t0, t1) = rr.result_traces(plain, uids=[7, 8])
@@ -490,8 +547,11 @@ def test_scan_run_dirs(tmp_path):
     rows = rr.scan_run_dirs(tmp_path)
     by_path = {r["path"]: r for r in rows}
     assert set(by_path) == {
-        tmp_path / "rois_a", tmp_path / "rois_m" / "z01", tmp_path / "rois_m" / "z02",
-        tmp_path / "zplane01", tmp_path / "zplane01" / "rois_d",
+        tmp_path / "rois_a",
+        tmp_path / "rois_m" / "z01",
+        tmp_path / "rois_m" / "z02",
+        tmp_path / "zplane01",
+        tmp_path / "zplane01" / "rois_d",
     }
     assert by_path[tmp_path / "rois_a"]["kind"] == "extract"
     assert by_path[tmp_path / "rois_a"]["n_rois"] == 2
@@ -500,7 +560,9 @@ def test_scan_run_dirs(tmp_path):
     assert by_path[tmp_path / "zplane01"]["kind"] == "suite2p"
     assert by_path[tmp_path / "zplane01"]["n_rois"] == 3
     assert all(r["mtime"] > 0 for r in rows)
-    assert [r["mtime"] for r in rows] == sorted((r["mtime"] for r in rows), reverse=True)
+    assert [r["mtime"] for r in rows] == sorted(
+        (r["mtime"] for r in rows), reverse=True
+    )
     # a data file scans the dir beside it; nothing on disk is fine
     assert {r["path"] for r in rr.scan_run_dirs(tmp_path / "raw.tif")} == set(by_path)
     assert rr.scan_run_dirs(tmp_path / "missing" / "raw.tif") == []
@@ -512,7 +574,12 @@ def test_full_plane_args_minimal_payloads(tmp_path):
     fpath = tmp_path / "raw.tif"
     s2p = rr.full_plane_args("suite2p", fpath, 3, None)
     assert set(s2p) == {
-        "input_path", "output_dir", "planes", "reader_kwargs", "ops", "s2p_settings",
+        "input_path",
+        "output_dir",
+        "planes",
+        "reader_kwargs",
+        "ops",
+        "s2p_settings",
     }
     assert s2p["input_path"] == str(fpath) and s2p["output_dir"] == str(tmp_path)
     assert s2p["planes"] == [3] and s2p["reader_kwargs"] == {}
@@ -524,7 +591,13 @@ def test_full_plane_args_minimal_payloads(tmp_path):
     assert s2p["s2p_settings"] == {"force_reg": False, "force_detect": True}
 
     mnmf = rr.full_plane_args("masknmf", fpath, 1, None)
-    assert set(mnmf) == {"input_path", "output_dir", "planes", "reader_kwargs", "settings"}
+    assert set(mnmf) == {
+        "input_path",
+        "output_dir",
+        "planes",
+        "reader_kwargs",
+        "settings",
+    }
     assert mnmf["settings"] == MasknmfSettings().to_dict()
 
     with pytest.raises(ValueError, match="pipeline"):
@@ -539,17 +612,32 @@ def test_run_registry_round_trip(tmp_path):
     assert rr.load_run_registry(target) == []
 
     entries = [
-        {"path": tmp_path / "rois_a", "kind": "extract", "discarded": {3, 1},
-         "classes": {2: 0}, "colors": {4: (1.0, 0.5, 0.0)}},
+        {
+            "path": tmp_path / "rois_a",
+            "kind": "extract",
+            "discarded": {3, 1},
+            "classes": {2: 0},
+            "colors": {4: (1.0, 0.5, 0.0)},
+        },
         {"path": tmp_path / "gone" / "rois_b", "kind": "demix"},  # dir never existed
     ]
     rr.save_run_registry(target, entries)
     got = rr.load_run_registry(target)
     assert got == [
-        {"path": str(tmp_path / "rois_a"), "kind": "extract",
-         "discarded": [1, 3], "classes": {2: 0}, "colors": {4: (1.0, 0.5, 0.0)}},
-        {"path": str(tmp_path / "gone" / "rois_b"), "kind": "demix",
-         "discarded": [], "classes": {}, "colors": {}},
+        {
+            "path": str(tmp_path / "rois_a"),
+            "kind": "extract",
+            "discarded": [1, 3],
+            "classes": {2: 0},
+            "colors": {4: (1.0, 0.5, 0.0)},
+        },
+        {
+            "path": str(tmp_path / "gone" / "rois_b"),
+            "kind": "demix",
+            "discarded": [],
+            "classes": {},
+            "colors": {},
+        },
     ]
     assert json.loads(target.read_text())["runs"][0]["discarded"] == [1, 3]
 
@@ -601,7 +689,12 @@ def test_full_plane_args_without_a_host_keeps_the_old_payload(tmp_path):
     fpath = tmp_path / "raw.tif"
     s2p = rr.full_plane_args("suite2p", fpath, 3, None)
     assert set(s2p) == {
-        "input_path", "output_dir", "planes", "reader_kwargs", "ops", "s2p_settings",
+        "input_path",
+        "output_dir",
+        "planes",
+        "reader_kwargs",
+        "ops",
+        "s2p_settings",
     }
     assert s2p["ops"] == {"roidetect": 1}
     mnmf = rr.full_plane_args("masknmf", fpath, 1, None)
@@ -610,7 +703,8 @@ def test_full_plane_args_without_a_host_keeps_the_old_payload(tmp_path):
 
 def test_full_plane_args_honors_an_explicit_detection_skip(tmp_path):
     """The Process tab's Skip still wins - the fix is about the toggle the
-    user never set, not about overriding one they did."""
+    user never set, not about overriding one they did.
+    """
     host = _Host(s2p=_Settings({}, do_detection=0, do_registration=1))
     args = rr.full_plane_args("suite2p", tmp_path / "raw.tif", 1, None, host=host)
     assert args["ops"] == {"roidetect": 0}
@@ -667,12 +761,16 @@ class TestSuite2pHydrate:
 
         plane = tmp_path / "zplane01"
         plane.mkdir()
-        np.save(plane / "ops.npy", {
-            "roidetect": False,     # registration-only pass wrote this
-            "do_registration": 1,
-            "tau": 0.7,             # a real parameter, which must survive
-            "Ly": 4, "Lx": 4,
-        })
+        np.save(
+            plane / "ops.npy",
+            {
+                "roidetect": False,  # registration-only pass wrote this
+                "do_registration": 1,
+                "tau": 0.7,  # a real parameter, which must survive
+                "Ly": 4,
+                "Lx": 4,
+            },
+        )
 
         parent = self._parent()
         before = parent.s2p.do_detection
@@ -683,9 +781,11 @@ class TestSuite2pHydrate:
 
 def test_registration_does_not_leave_roidetect_behind(tmp_path):
     """roidetect=0 is how register() asks for registration only; left in
-    ops.npy it is inherited by every later stage and by the GUI."""
-    from mbo_utilities.roi_workflow import _drop_run_gates
+    ops.npy it is inherited by every later stage and by the GUI.
+    """
     import logging
+
+    from mbo_utilities.roi_workflow import _drop_run_gates
 
     ops_path = tmp_path / "ops.npy"
     np.save(ops_path, {"roidetect": 0, "do_registration": 1, "Ly": 4, "Lx": 4})
@@ -701,8 +801,12 @@ def test_registration_does_not_leave_roidetect_behind(tmp_path):
 
 def test_full_plane_args_carry_a_channel_and_a_frame_window(tmp_path):
     fpath = tmp_path / "raw.tif"
-    args = rr.full_plane_args("suite2p", fpath, 2, None, channel=2, tp_indices=range(0, 5))
+    args = rr.full_plane_args(
+        "suite2p", fpath, 2, None, channel=2, tp_indices=range(0, 5)
+    )
     assert args["channel"] == 2
-    assert args["tp_indices"] == [0, 1, 2, 3, 4] and args["selected_planes_0based"] == [1]
+    assert args["tp_indices"] == [0, 1, 2, 3, 4] and args["selected_planes_0based"] == [
+        1
+    ]
     args = rr.full_plane_args("masknmf", fpath, 1, None, channel=1)
     assert args["channel"] == 1 and "tp_indices" not in args

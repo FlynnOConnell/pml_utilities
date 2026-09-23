@@ -6,12 +6,12 @@ This module contains keyboard shortcut handling for the PreviewDataWidget.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from imgui_bundle import imgui
 
 from mbo_utilities.gui._dialogs import start_open_prompt
-import contextlib
 
 
 def handle_keyboard_shortcuts(parent: Any):
@@ -24,7 +24,11 @@ def handle_keyboard_shortcuts(parent: Any):
         return
 
     # o: open file (no modifiers); typed path with the native dialog as browse
-    if not io.key_ctrl and not io.key_shift and imgui.is_key_pressed(imgui.Key.o, False):
+    if (
+        not io.key_ctrl
+        and not io.key_shift
+        and imgui.is_key_pressed(imgui.Key.o, False)
+    ):
         if parent._file_dialog is None and parent._folder_dialog is None:
             parent.logger.info("Shortcut: 'o' (Open File)")
             start_open_prompt(parent, "file")
@@ -36,12 +40,20 @@ def handle_keyboard_shortcuts(parent: Any):
             start_open_prompt(parent, "folder")
 
     # s: open save as popup (no modifiers)
-    if not io.key_ctrl and not io.key_shift and imgui.is_key_pressed(imgui.Key.s, False):
+    if (
+        not io.key_ctrl
+        and not io.key_shift
+        and imgui.is_key_pressed(imgui.Key.s, False)
+    ):
         parent.logger.info("Shortcut: 's' (Save As)")
         parent._saveas_popup_open = True
 
     # m: toggle metadata viewer (no modifiers)
-    if not io.key_ctrl and not io.key_shift and imgui.is_key_pressed(imgui.Key.m, False):
+    if (
+        not io.key_ctrl
+        and not io.key_shift
+        and imgui.is_key_pressed(imgui.Key.m, False)
+    ):
         parent.logger.info("Shortcut: 'm' (Metadata Viewer)")
         parent.show_metadata_viewer = not parent.show_metadata_viewer
 
@@ -51,9 +63,13 @@ def handle_keyboard_shortcuts(parent: Any):
         parent._show_metadata_popup = True
 
     # enter or p: toggle side panel collapse (no modifiers)
-    if not io.key_ctrl and not io.key_shift and (
-        imgui.is_key_pressed(imgui.Key.enter, False)
-        or imgui.is_key_pressed(imgui.Key.p, False)
+    if (
+        not io.key_ctrl
+        and not io.key_shift
+        and (
+            imgui.is_key_pressed(imgui.Key.enter, False)
+            or imgui.is_key_pressed(imgui.Key.p, False)
+        )
     ):
         toggle_side_panel(parent)
 
@@ -62,14 +78,22 @@ def handle_keyboard_shortcuts(parent: Any):
     # space=collapse handler which our imgui-layer shortcut can't intercept.
 
     # v: reset vmin/vmax (no modifiers)
-    if not io.key_ctrl and not io.key_shift and imgui.is_key_pressed(imgui.Key.v, False):
+    if (
+        not io.key_ctrl
+        and not io.key_shift
+        and imgui.is_key_pressed(imgui.Key.v, False)
+    ):
         if parent.image_widget:
             parent.logger.info("Shortcut: 'v' (Reset vmin/vmax)")
             with contextlib.suppress(Exception):
                 parent.image_widget.reset_vmin_vmax_frame()
 
     # c: toggle fix-phase (scan-phase correction) when data supports it
-    if not io.key_ctrl and not io.key_shift and imgui.is_key_pressed(imgui.Key.c, False):
+    if (
+        not io.key_ctrl
+        and not io.key_shift
+        and imgui.is_key_pressed(imgui.Key.c, False)
+    ):
         if hasattr(parent, "fix_phase"):
             parent.fix_phase = not parent.fix_phase
             state = "ON" if parent.fix_phase else "OFF"
@@ -89,14 +113,22 @@ def handle_keyboard_shortcuts(parent: Any):
         parent.logger.info(f"Shortcut: 'Shift+V' (Auto-contrast on Z: {state})")
 
     # k: toggle keybinds popup open/close (no modifiers)
-    if not io.key_ctrl and not io.key_shift and imgui.is_key_pressed(imgui.Key.k, False):
+    if (
+        not io.key_ctrl
+        and not io.key_shift
+        and imgui.is_key_pressed(imgui.Key.k, False)
+    ):
         parent._show_keybinds_popup = not getattr(parent, "_show_keybinds_popup", False)
         parent.logger.info(
             f"Shortcut: 'k' (Keybinds {'OPEN' if parent._show_keybinds_popup else 'CLOSE'})"
         )
 
     # h: show help popup (no modifiers)
-    if not io.key_ctrl and not io.key_shift and imgui.is_key_pressed(imgui.Key.h, False):
+    if (
+        not io.key_ctrl
+        and not io.key_shift
+        and imgui.is_key_pressed(imgui.Key.h, False)
+    ):
         parent.logger.info("Shortcut: 'h' (Help)")
         parent._show_help_popup = True
 
@@ -108,7 +140,7 @@ def handle_keyboard_shortcuts(parent: Any):
 
 
 def _get_sliders_ui(parent: Any):
-    """the viewer's playback-bar adapter, or None"""
+    """The viewer's playback-bar adapter, or None"""
     return getattr(getattr(parent, "image_widget", None), "_sliders_ui", None)
 
 
@@ -154,7 +186,8 @@ def toggle_side_panel(parent: Any) -> None:
 
 def rebind_space_to_playback(parent: Any) -> None:
     """Remove fpl's built-in space=collapse-right-gui handler and install our
-    own space=play/pause handler on the renderer. Idempotent."""
+    own space=play/pause handler on the renderer. Idempotent.
+    """
     if getattr(parent, "_space_rebound", False):
         return
     try:
@@ -174,6 +207,7 @@ def rebind_space_to_playback(parent: Any) -> None:
         if getattr(event, "key", None) != " ":
             return
         import time
+
         now = time.monotonic()
         if now - parent._last_space_time < 0.15:
             return
@@ -239,7 +273,9 @@ def handle_arrow_keys(parent: Any):
             parent.image_widget.indices = current_indices
             return
 
-    if not _arrow_claimed("right_arrow") and imgui.is_key_pressed(imgui.Key.right_arrow):
+    if not _arrow_claimed("right_arrow") and imgui.is_key_pressed(
+        imgui.Key.right_arrow
+    ):
         new_t = min(t_max, current_t + step)
         if new_t != current_t:
             current_indices[0] = new_t
@@ -250,6 +286,7 @@ def handle_arrow_keys(parent: Any):
     # indices[1] is C, not Z) scrolls the correct axis. Hardcoding
     # indices[1] used to make Up/Down scroll C on 5D data.
     from mbo_utilities.arrays.features import find_slider_name
+
     names = tuple(getattr(parent.image_widget, "_slider_dim_names", None) or ())
     z_name = find_slider_name(names, "z")
     if z_name is not None:
@@ -257,7 +294,9 @@ def handle_arrow_keys(parent: Any):
         z_max = shape[z_pos] - 1
         current_z = current_indices[z_pos]
 
-        if not _arrow_claimed("down_arrow") and imgui.is_key_pressed(imgui.Key.down_arrow):
+        if not _arrow_claimed("down_arrow") and imgui.is_key_pressed(
+            imgui.Key.down_arrow
+        ):
             new_z = max(0, current_z - step)
             if new_z != current_z:
                 current_indices[z_pos] = new_z

@@ -1,14 +1,14 @@
 """Shared imgui styling for the ROI panels: a small palette plus card,
 section and popup helpers so the top strip and its popups read as one
-design (the same look as masknmf's viewers)."""
+design (the same look as masknmf's viewers).
+"""
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Tuple
 
 from imgui_bundle import imgui
 
-Color = Tuple[float, float, float, float]
+Color = tuple[float, float, float, float]
 
 
 def to_vec4(color) -> imgui.ImVec4:
@@ -39,12 +39,14 @@ THEME = Theme()
 
 
 def em(x: float = 1.0) -> float:
-    """x font heights in pixels; only valid inside a frame."""
+    """X font heights in pixels; only valid inside a frame."""
     return imgui.get_font_size() * x
 
 
 @contextmanager
-def card(name: str, title: str, height: float, width: float = 0.0, theme: Theme = THEME):
+def card(
+    name: str, title: str, height: float, width: float = 0.0, theme: Theme = THEME
+):
     """
     Bordered child window with an accent title.
 
@@ -99,14 +101,17 @@ def popup(title: str, is_open: bool, theme: Theme = THEME) -> tuple[bool, bool]:
     (draw_contents, still_open); call ``imgui.end()`` either way.
     """
     imgui.set_next_window_pos(
-        imgui.get_main_viewport().get_center(), imgui.Cond_.appearing, pivot=imgui.ImVec2(0.5, 0.5)
+        imgui.get_main_viewport().get_center(),
+        imgui.Cond_.appearing,
+        pivot=imgui.ImVec2(0.5, 0.5),
     )
     imgui.push_style_var(imgui.StyleVar_.window_rounding, theme.rounding)
     imgui.push_style_var(imgui.StyleVar_.window_padding, imgui.ImVec2(em(1.0), em(0.8)))
     opened, is_open = imgui.begin(
         f"{title}###{title}",
         is_open,
-        flags=imgui.WindowFlags_.no_saved_settings | imgui.WindowFlags_.always_auto_resize,
+        flags=imgui.WindowFlags_.no_saved_settings
+        | imgui.WindowFlags_.always_auto_resize,
     )
     imgui.pop_style_var(2)
     return opened, is_open

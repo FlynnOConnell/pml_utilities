@@ -73,6 +73,7 @@ def _instantiate(parent: Any, placement: str) -> list[Widget]:
         except Exception:
             # Log the error for debugging
             import traceback
+
             traceback.print_exc()
 
     # sort by priority (lower = first)
@@ -113,13 +114,11 @@ def draw_all_widgets(parent: Any, widgets: list[Widget]) -> None:
         except Exception as e:
             # log error but don't crash the ui
             import traceback
+
             error_msg = f"Error in {widget.name}: {e}"
             parent.logger.exception(error_msg)
             parent.logger.exception(traceback.format_exc())
-            imgui.text_colored(
-                imgui.ImVec4(1.0, 0.3, 0.3, 1.0),
-                error_msg
-            )
+            imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), error_msg)
 
 
 def cleanup_all_widgets(widgets: list[Widget]) -> None:

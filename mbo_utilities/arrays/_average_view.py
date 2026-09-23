@@ -97,13 +97,15 @@ class FrameAveragedView(LazyArray):
     @property
     def frame_average(self) -> int:
         """The binning factor, under the name the option kwargs use, so
-        ``getattr(arr, "frame_average", 1)`` reads the same on any array."""
+        ``getattr(arr, "frame_average", 1)`` reads the same on any array.
+        """
         return self._factor
 
     @property
     def reader_kwargs(self) -> dict:
         """``imread`` kwargs that re-create this view from the source's path:
-        the source's own selectors plus the binning factor."""
+        the source's own selectors plus the binning factor.
+        """
         kwargs = dict(getattr(self._source, "reader_kwargs", None) or {})
         kwargs[FRAME_AVERAGE_KEY] = self._factor
         return kwargs
@@ -133,7 +135,8 @@ class FrameAveragedView(LazyArray):
     def metadata(self) -> dict:
         """The source's metadata with every frame-rate / frame-interval alias
         retimed and the frame count scaled, plus a history entry, so
-        downstream code reads real seconds."""
+        downstream code reads real seconds.
+        """
         from mbo_utilities.metadata import scale_frame_rate
 
         meta = scale_frame_rate(

@@ -10,6 +10,7 @@ orientation for the export to bake (see
 
 Replaces the former View Align + Camera Align widgets.
 """
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -35,8 +36,8 @@ from mbo_utilities.gui.widgets._orient import (
     orientation_ops,
 )
 from mbo_utilities.gui.widgets.summary_image import (
-    _GpuImage,
     _auto_range,
+    _GpuImage,
     center_popup_on_open,
     draw_section_header,
 )
@@ -87,7 +88,8 @@ def _resize_to(a: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
 
 def _seed_for_view(cam: int, rotated: bool = False) -> dict:
     """Editable rotations/flips that map a view's camera onto VW00, from the
-    export's CM->CM00 default, picking the Normal or Rotated mounting table."""
+    export's CM->CM00 default, picking the Normal or Rotated mounting table.
+    """
     try:
         from mbo_utilities.gui.widgets.pipelines.isoview import (
             _CM_ALIGN_DEFAULT,
@@ -242,7 +244,8 @@ class IsoviewAlignViews(Widget):
     def _summary_text(self, arr) -> str:
         """Effective per-view orientation the export will bake: the Apply
         override when present, else the seed default. ``"(none)"`` only when
-        every view resolves to identity."""
+        every view resolves to identity.
+        """
         parts = []
         for v in self._views_list:
             ops = orient_state.applied_ops(arr, v["view_label"])
@@ -268,7 +271,8 @@ class IsoviewAlignViews(Widget):
 
     def _mip_params(self, arr) -> tuple[int, int]:
         """``(xy_stride, z_stride)`` so a decimated Z pixel spans about the same
-        physical distance as a decimated Y/X pixel (isotropic thumbs)."""
+        physical distance as a decimated Y/X pixel (isotropic thumbs).
+        """
         ny, nx = int(arr.shape[3]), int(arr.shape[4])
         s = max(1, -(-max(ny, nx) // _THUMB_MAX))  # ceil
         dxy = float(getattr(arr, "dx", 0.0) or 0.0)

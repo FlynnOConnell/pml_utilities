@@ -10,7 +10,7 @@ This module contains:
 
 from contextlib import contextmanager
 
-from imgui_bundle import imgui, hello_imgui, implot, ImVec4, ImVec2
+from imgui_bundle import ImVec2, ImVec4, hello_imgui, imgui, implot
 
 __all__ = [
     "PopupAutoSize",
@@ -91,7 +91,8 @@ def draw_toolbar_row(items: list) -> None:
     right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
     for i, (label, width, draw) in enumerate(items):
         total = (
-            width if label is None
+            width
+            if label is None
             else imgui.calc_text_size(f"{label}:").x + inner + width
         )
         if i > 0:
@@ -172,12 +173,11 @@ def draw_boxed_label(
             rounding,
             thickness,
         )
-        draw_list.add_text(
-            ImVec2(origin.x + pad_x, origin.y + pad_y), col, text
-        )
+        draw_list.add_text(ImVec2(origin.x + pad_x, origin.y + pad_y), col, text)
     finally:
         if pushed:
             imgui.pop_font()
+
 
 _IMGUI_OPAQUE_APPLIED = False
 
@@ -349,7 +349,9 @@ def style_imgui_opaque():
     # title bars
     style.set_color_(imgui.Col_.title_bg.value, ImVec4(0.05, 0.06, 0.08, 1.00))
     style.set_color_(imgui.Col_.title_bg_active.value, ImVec4(0.10, 0.12, 0.16, 1.00))
-    style.set_color_(imgui.Col_.title_bg_collapsed.value, ImVec4(0.05, 0.06, 0.08, 1.00))
+    style.set_color_(
+        imgui.Col_.title_bg_collapsed.value, ImVec4(0.05, 0.06, 0.08, 1.00)
+    )
 
     # borders — solid
     style.set_color_(imgui.Col_.border.value, ImVec4(0.30, 0.32, 0.36, 1.00))
@@ -469,16 +471,12 @@ def set_tooltip(
     """
     if show_mark:
         imgui.same_line()
-        effective_align = (
-            _TOOLTIP_ALIGN_STACK[-1] if _TOOLTIP_ALIGN_STACK else align
-        )
+        effective_align = _TOOLTIP_ALIGN_STACK[-1] if _TOOLTIP_ALIGN_STACK else align
         if effective_align == "right":
             avail = imgui.get_content_region_avail().x
             qm = imgui.calc_text_size("(?)").x
             if avail > qm + 4:
-                imgui.set_cursor_pos_x(
-                    imgui.get_cursor_pos_x() + avail - qm - 4
-                )
+                imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + avail - qm - 4)
         if mark_dimmed:
             imgui.text_disabled("(?)")
         else:
@@ -498,13 +496,17 @@ def settings_table(table_id: str, captions):
     Yields False when the table is clipped. Start each row with
     :func:`settings_row`.
     """
-    caption_w = max(imgui.calc_text_size(c).x for c in captions) + imgui.get_font_size() * 0.8
+    caption_w = (
+        max(imgui.calc_text_size(c).x for c in captions) + imgui.get_font_size() * 0.8
+    )
     flags = imgui.TableFlags_.sizing_stretch_prop | imgui.TableFlags_.no_pad_outer_x
     if not imgui.begin_table(table_id, 2, flags):
         yield False
         return
     try:
-        imgui.table_setup_column("caption", imgui.TableColumnFlags_.width_fixed, caption_w)
+        imgui.table_setup_column(
+            "caption", imgui.TableColumnFlags_.width_fixed, caption_w
+        )
         imgui.table_setup_column("control", imgui.TableColumnFlags_.width_stretch)
         yield True
     finally:
@@ -513,7 +515,8 @@ def settings_table(table_id: str, captions):
 
 def settings_row(caption: str) -> None:
     """Start a row of a :func:`settings_table`: the dim caption on the frame
-    baseline of its row's widgets, the cursor in the control cell."""
+    baseline of its row's widgets, the cursor in the control cell.
+    """
     imgui.table_next_row()
     imgui.table_next_column()
     imgui.align_text_to_frame_padding()
@@ -523,7 +526,8 @@ def settings_row(caption: str) -> None:
 
 def right_aligned_text(text: str, color: ImVec4 | None = None) -> None:
     """``text`` flush with the right edge of the current cell or window,
-    dim unless ``color`` is given."""
+    dim unless ``color`` is given.
+    """
     room = imgui.get_content_region_avail().x - imgui.calc_text_size(text).x
     if room > 0:
         imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + room)
@@ -750,7 +754,8 @@ def settings_row_with_popup(
     opened, visible = imgui.begin_popup_modal(
         f"{label} Settings##{popup_id}",
         p_open=True if _popup_states[popup_id] else None,
-        flags=imgui.WindowFlags_.no_saved_settings | imgui.WindowFlags_.always_auto_resize,
+        flags=imgui.WindowFlags_.no_saved_settings
+        | imgui.WindowFlags_.always_auto_resize,
     )
 
     if opened:
@@ -821,5 +826,5 @@ def fmt_multivalue(value, max_items: int = 8) -> str:
                 formatted.append(f"{v:.4g}")
             else:
                 formatted.append(str(v))
-        return "[" + ", ".join(formatted) + f", +{len(value)-max_items}...]"
+        return "[" + ", ".join(formatted) + f", +{len(value) - max_items}...]"
     return fmt_value(value)

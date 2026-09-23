@@ -1,10 +1,9 @@
 """Tests for to_video export functionality."""
 
-import numpy as np
-import pytest
 from pathlib import Path
 
-import mbo_utilities as mbo
+import numpy as np
+import pytest
 from mbo_utilities import imread, to_video
 
 
@@ -21,7 +20,9 @@ class TestToVideoSynthetic:
     def test_speed_factor(self, tmp_path, synthetic_3d_data):
         """Speed factor increases playback rate."""
         out = tmp_path / "fast.mp4"
-        result = to_video(synthetic_3d_data, out, fps=30, speed_factor=10, max_frames=10)
+        result = to_video(
+            synthetic_3d_data, out, fps=30, speed_factor=10, max_frames=10
+        )
         assert result.exists()
 
     def test_quality_options(self, tmp_path, synthetic_3d_data):
@@ -52,13 +53,21 @@ class TestToVideoSynthetic:
         for mode in ("mean", "max", "std"):
             out = tmp_path / f"tm_{mode}.mp4"
             assert to_video(
-                synthetic_3d_data, out, fps=30, max_frames=10,
-                temporal_smooth=3, temporal_mode=mode,
+                synthetic_3d_data,
+                out,
+                fps=30,
+                max_frames=10,
+                temporal_smooth=3,
+                temporal_mode=mode,
             ).exists()
         with pytest.raises(ValueError):
             to_video(
-                synthetic_3d_data, tmp_path / "bad.mp4", fps=30, max_frames=5,
-                temporal_smooth=3, temporal_mode="median",
+                synthetic_3d_data,
+                tmp_path / "bad.mp4",
+                fps=30,
+                max_frames=5,
+                temporal_smooth=3,
+                temporal_mode="median",
             )
 
     def test_mean_subtract(self, tmp_path, synthetic_3d_data):
@@ -67,20 +76,31 @@ class TestToVideoSynthetic:
         mean_img = arr.mean(axis=0)
         out = tmp_path / "ms.mp4"
         assert to_video(
-            arr, out, fps=30, max_frames=10, mean_subtract=mean_img,
+            arr,
+            out,
+            fps=30,
+            max_frames=10,
+            mean_subtract=mean_img,
         ).exists()
         with pytest.raises(ValueError):
             to_video(
-                arr, tmp_path / "ms_bad.mp4", fps=30, max_frames=5,
+                arr,
+                tmp_path / "ms_bad.mp4",
+                fps=30,
+                max_frames=5,
                 mean_subtract=np.zeros((4, 4)),
             )
 
     def test_scalebar(self, tmp_path, synthetic_3d_data):
-        """scalebar with explicit pixel_size_um produces a non-empty mp4."""
+        """Scalebar with explicit pixel_size_um produces a non-empty mp4."""
         out = tmp_path / "scalebar.mp4"
         result = to_video(
-            synthetic_3d_data, out, fps=30, max_frames=10,
-            scalebar=True, pixel_size_um=0.65,
+            synthetic_3d_data,
+            out,
+            fps=30,
+            max_frames=10,
+            scalebar=True,
+            pixel_size_um=0.65,
         )
         assert result.exists()
         assert result.stat().st_size > 0
@@ -89,10 +109,14 @@ class TestToVideoSynthetic:
     def _expected_bar_rect(h: int, w: int):
         """Mirror _draw_scalebar's layout to know where the bar lives in pixel space."""
         import cv2
+
         bar_px = max(2, int(round(w * 0.10)))
         font_scale = max(0.3, min(0.6, h / 900.0))
         (_text_w, text_h), _ = cv2.getTextSize(
-            "0.0 um", cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1,
+            "0.0 um",
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            1,
         )
         bar_h = max(2, int(round(h * 0.010)))
         gap = max(2, int(round(h * 0.012)))
@@ -108,14 +132,24 @@ class TestToVideoSynthetic:
     def test_scalebar_writes_white_pixels(self, tmp_path):
         """Scalebar must leave white pixels in the exact bar rectangle."""
         import imageio.v3 as iio
+
         rng = np.random.default_rng(0)
         h_in, w_in = 200, 400
-        arr = (np.full((10, h_in, w_in), 100.0, dtype=np.float32)
-               + rng.standard_normal((10, h_in, w_in)).astype(np.float32) * 5)
+        arr = (
+            np.full((10, h_in, w_in), 100.0, dtype=np.float32)
+            + rng.standard_normal((10, h_in, w_in)).astype(np.float32) * 5
+        )
         out = tmp_path / "scalebar_pixels.mp4"
         to_video(
-            arr, out, fps=30, max_frames=10, quality="visually lossless",
-            scalebar=True, pixel_size_um=0.65, vmin=80, vmax=120,
+            arr,
+            out,
+            fps=30,
+            max_frames=10,
+            quality="visually lossless",
+            scalebar=True,
+            pixel_size_um=0.65,
+            vmin=80,
+            vmax=120,
         )
         first = iio.imread(out)[0]
         h, w = first.shape[:2]
@@ -131,44 +165,65 @@ class TestToVideoSynthetic:
         assert x0 >= 0 and y0 >= 0, f"bar starts at ({x0}, {y0}), out of bounds"
 
     def test_scalebar_skips_without_pixel_size(self, tmp_path, synthetic_3d_data):
-        """scalebar without pixel size silently skips the overlay and still writes."""
+        """Scalebar without pixel size silently skips the overlay and still writes."""
         out = tmp_path / "scalebar_skip.mp4"
         result = to_video(
-            synthetic_3d_data, out, fps=30, max_frames=5, scalebar=True,
+            synthetic_3d_data,
+            out,
+            fps=30,
+            max_frames=5,
+            scalebar=True,
         )
         assert result.exists()
 
     def test_scalebar_reads_metadata_pixel_resolution(self, tmp_path):
         """Regression: ScanImage-style arrays expose pixel size via
-        metadata['pixel_resolution'] = (dx, dy), not an arr.dx attribute."""
+        metadata['pixel_resolution'] = (dx, dy), not an arr.dx attribute.
+        """
         import imageio.v3 as iio
 
         class _ArrayWithMetadata:
             """Minimal lazy-array stand-in: shape + dtype + metadata + indexing."""
+
             def __init__(self, data, metadata):
                 self._data = data
                 self.metadata = metadata
                 self.shape = data.shape
                 self.dtype = data.dtype
                 self.ndim = data.ndim
+
             def __getitem__(self, key):
                 return self._data[key]
+
             def __array__(self, dtype=None, copy=None):
-                return np.asarray(self._data, dtype=dtype) if dtype else np.asarray(self._data)
+                return (
+                    np.asarray(self._data, dtype=dtype)
+                    if dtype
+                    else np.asarray(self._data)
+                )
+
             def __len__(self):
                 return len(self._data)
 
         rng = np.random.default_rng(0)
         h_in, w_in = 200, 400
-        raw = (np.full((10, h_in, w_in), 100.0, dtype=np.float32)
-               + rng.standard_normal((10, h_in, w_in)).astype(np.float32) * 5)
+        raw = (
+            np.full((10, h_in, w_in), 100.0, dtype=np.float32)
+            + rng.standard_normal((10, h_in, w_in)).astype(np.float32) * 5
+        )
         # ScanImage style: tuple under 'pixel_resolution', no .dx attribute
         wrapped = _ArrayWithMetadata(raw, {"pixel_resolution": (0.65, 0.65)})
 
         out = tmp_path / "scalebar_md.mp4"
         to_video(
-            wrapped, out, fps=30, max_frames=10, quality="visually lossless",
-            scalebar=True, vmin=80, vmax=120,
+            wrapped,
+            out,
+            fps=30,
+            max_frames=10,
+            quality="visually lossless",
+            scalebar=True,
+            vmin=80,
+            vmax=120,
         )
         first = iio.imread(out)[0]
         h, w = first.shape[:2]
@@ -183,17 +238,25 @@ class TestToVideoSynthetic:
         """time_overlay produces a non-empty mp4 (cv2 putText does not crash)."""
         out = tmp_path / "overlay.mp4"
         result = to_video(
-            synthetic_3d_data, out, fps=30, max_frames=15, time_overlay=True,
+            synthetic_3d_data,
+            out,
+            fps=30,
+            max_frames=15,
+            time_overlay=True,
         )
         assert result.exists()
         assert result.stat().st_size > 0
 
-    @pytest.mark.parametrize("quality", ["preview", "high", "visually lossless", "lossless"])
+    @pytest.mark.parametrize(
+        "quality", ["preview", "high", "visually lossless", "lossless"]
+    )
     @pytest.mark.parametrize("ext", ["mp4", "mov"])
     def test_quality_x_ext(self, tmp_path, synthetic_3d_data, quality, ext):
         """Each quality preset must produce a non-empty file in mp4 and mov."""
         out = tmp_path / f"q_{quality.replace(' ', '_')}.{ext}"
-        result = to_video(synthetic_3d_data, out, fps=30, max_frames=15, quality=quality)
+        result = to_video(
+            synthetic_3d_data, out, fps=30, max_frames=15, quality=quality
+        )
         assert result.exists()
         assert result.stat().st_size > 0, f"empty output for {quality} {ext}"
 
@@ -202,28 +265,32 @@ class TestToVideoSynthetic:
     def test_realistic_size_lossless(self, tmp_path, quality, ext):
         """Reproduce the user's setup: 448x550, 60 frames, libx264 lossless."""
         rng = np.random.default_rng(0)
-        arr = (rng.random((60, 448, 550), dtype=np.float32) * 1000 + 200).astype(np.float32)
+        arr = (rng.random((60, 448, 550), dtype=np.float32) * 1000 + 200).astype(
+            np.float32
+        )
         arr += rng.standard_normal(arr.shape, dtype=np.float32) * 80
         out = tmp_path / f"realistic_{quality.replace(' ', '_')}.{ext}"
         result = to_video(arr, out, fps=30, max_frames=60, quality=quality)
         size = result.stat().st_size
         print(f"\n  {quality!r:20s} .{ext}: {size} bytes")
         assert result.exists()
-        assert size > 1000, f"suspiciously tiny output for {quality} {ext}: {size} bytes"
+        assert size > 1000, (
+            f"suspiciously tiny output for {quality} {ext}: {size} bytes"
+        )
 
     def test_rawvideo_in_mp4_rejected(self, tmp_path, synthetic_3d_data):
-        """rawvideo cannot be muxed into .mp4 — should fail fast with a clear error."""
+        """Rawvideo cannot be muxed into .mp4 — should fail fast with a clear error."""
         with pytest.raises(ValueError, match="rawvideo"):
             to_video(
-                synthetic_3d_data, tmp_path / "raw.mp4", fps=30, max_frames=5,
+                synthetic_3d_data,
+                tmp_path / "raw.mp4",
+                fps=30,
+                max_frames=5,
                 codec="rawvideo",
             )
 
 
-@pytest.mark.skipif(
-    not Path(r"D:\demo\raw").exists(),
-    reason="Demo data not available"
-)
+@pytest.mark.skipif(not Path(r"D:\demo\raw").exists(), reason="Demo data not available")
 class TestToVideoDemo:
     """Quick validation with demo data."""
 
@@ -249,8 +316,7 @@ class TestToVideoDemo:
 
 
 @pytest.mark.skipif(
-    not Path(r"D:\example_extraction\zarr").exists(),
-    reason="Zarr data not available"
+    not Path(r"D:\example_extraction\zarr").exists(), reason="Zarr data not available"
 )
 class TestToVideoZarr:
     """Full quality test with zarr data."""

@@ -11,10 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import imgui, ImVec2
+from imgui_bundle import ImVec2, imgui
 
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
-
 
 # cached doc content
 _doc_cache: dict[str, str] = {}
@@ -35,7 +34,8 @@ MESC_DOC = "mesc.md"
 def docs_for(parent: Any) -> list[tuple[str, str]]:
     """The doc tabs to show: the shipped ones, the MESc page while a
     ``.mesc`` unit is on screen, plus the ROI tool's guide as a section when
-    that widget is on. One Help button for the whole app."""
+    that widget is on. One Help button for the whole app.
+    """
     docs = list(DOCS)
     data = getattr(getattr(parent, "image_widget", None), "data", None) or []
     md = getattr(data[0], "metadata", None) if len(data) else None
@@ -47,12 +47,12 @@ def docs_for(parent: Any) -> list[tuple[str, str]]:
 
 
 def get_docs_dir() -> Path:
-    """get path to embedded docs directory."""
+    """Get path to embedded docs directory."""
     return Path(__file__).parent.parent / "assets" / "docs"
 
 
 def load_doc(filename: str) -> str:
-    """load markdown doc from assets, with caching."""
+    """Load markdown doc from assets, with caching."""
     if filename == ROI_DOC:
         from mbo_utilities.gui.manual_roi import help_markdown
 
@@ -67,16 +67,14 @@ def load_doc(filename: str) -> str:
 
 
 def draw_help_popup(parent: Any) -> None:
-    """draw help viewer popup with markdown rendering."""
+    """Draw help viewer popup with markdown rendering."""
     if not hasattr(parent, "_show_help_popup"):
         parent._show_help_popup = False
     if not hasattr(parent, "_help_selected_doc"):
         parent._help_selected_doc = 0
 
     if not hasattr(parent, "_help_sizer"):
-        parent._help_sizer = PopupAutoSize(
-            "Help##HelpViewer", auto_resize=False
-        )
+        parent._help_sizer = PopupAutoSize("Help##HelpViewer", auto_resize=False)
 
     if parent._show_help_popup:
         parent._help_sizer.before_open()
@@ -106,7 +104,11 @@ def draw_help_popup(parent: Any) -> None:
             wanted = getattr(parent, "_help_select_doc", None)
             if imgui.begin_tab_bar("##HelpTabs"):
                 for i, (name, filename) in enumerate(docs):
-                    flags = imgui.TabItemFlags_.set_selected if filename == wanted else imgui.TabItemFlags_.none
+                    flags = (
+                        imgui.TabItemFlags_.set_selected
+                        if filename == wanted
+                        else imgui.TabItemFlags_.none
+                    )
                     if imgui.begin_tab_item(name, None, flags)[0]:
                         parent._help_selected_doc = i
                         imgui.end_tab_item()
@@ -120,7 +122,9 @@ def draw_help_popup(parent: Any) -> None:
             avail = imgui.get_content_region_avail()
             content_height = avail.y - 35  # space for close button
 
-            if imgui.begin_child("##HelpContent", ImVec2(0, content_height), imgui.ChildFlags_.borders):
+            if imgui.begin_child(
+                "##HelpContent", ImVec2(0, content_height), imgui.ChildFlags_.borders
+            ):
                 # the ROI tab comes and goes with its widget, so the
                 # remembered index can outlive the tab it pointed at
                 _, filename = docs[min(parent._help_selected_doc, len(docs) - 1)]
@@ -143,7 +147,7 @@ import re
 
 # colors for the renderer
 _C_NORMAL = imgui.ImVec4(0.85, 0.85, 0.85, 1.0)
-_C_BOLD = imgui.ImVec4(1.0, 1.0, 1.0, 1.0)         # brighter = "bold" surrogate
+_C_BOLD = imgui.ImVec4(1.0, 1.0, 1.0, 1.0)  # brighter = "bold" surrogate
 _C_CODE_INLINE = imgui.ImVec4(0.95, 0.75, 0.55, 1.0)
 _C_CODE_BLOCK = imgui.ImVec4(0.7, 0.9, 0.7, 1.0)
 _C_H1 = imgui.ImVec4(1.0, 0.9, 0.4, 1.0)
@@ -227,7 +231,7 @@ def _render_inline(text: str, base_color: imgui.ImVec4 = _C_NORMAL) -> None:
 
 
 def _render_markdown(content: str) -> None:
-    """render markdown content with basic formatting."""
+    """Render markdown content with basic formatting."""
     in_code_block = False
 
     lines = content.split("\n")

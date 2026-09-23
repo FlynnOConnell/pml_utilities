@@ -1,5 +1,6 @@
 """The fastplotlib config every mbo figure gets, and the window fit that
-goes with it."""
+goes with it.
+"""
 
 import numpy as np
 import pytest
@@ -26,7 +27,8 @@ class TestConfig:
 
     def test_the_image_fills_its_viewport(self):
         """auto_scale sets the camera to the image's bounding box; zoom 1 shows
-        exactly that, so the camera's world window matches the image."""
+        exactly that, so the camera's world window matches the image.
+        """
         from mbo_utilities.gui._ndviewer import MboNDViewer
 
         data = np.random.default_rng(0).random((4, 30, 60)).astype(np.float32)
@@ -44,7 +46,11 @@ class TestConfig:
 
 class TestFitFigureSize:
     def test_the_image_fills_the_height_and_the_width_follows(self):
-        from mbo_utilities.gui._fpl_config import HISTOGRAM_WIDTH, SUBPLOT_PAD_H, SUBPLOT_PAD_W
+        from mbo_utilities.gui._fpl_config import (
+            HISTOGRAM_WIDTH,
+            SUBPLOT_PAD_H,
+            SUBPLOT_PAD_W,
+        )
         from mbo_utilities.gui.run_gui import fit_figure_size
 
         w, h = fit_figure_size((1800, 1000), (512, 512), top=36, bottom=107, right=300)
@@ -67,7 +73,11 @@ class TestFitFigureSize:
         assert h < 1000
 
     def test_the_grid_multiplies_columns(self):
-        from mbo_utilities.gui._fpl_config import HISTOGRAM_WIDTH, SUBPLOT_PAD_H, SUBPLOT_PAD_W
+        from mbo_utilities.gui._fpl_config import (
+            HISTOGRAM_WIDTH,
+            SUBPLOT_PAD_H,
+            SUBPLOT_PAD_W,
+        )
         from mbo_utilities.gui.run_gui import fit_figure_size
 
         w, h = fit_figure_size((4000, 1000), (256, 256), grid=(1, 2), right=300)
@@ -79,10 +89,17 @@ class TestFitFigureSize:
     def test_create_image_widget_sizes_the_canvas_to_the_data(self, monkeypatch, roi):
         from mbo_utilities.arrays.numpy import NumpyArray
         from mbo_utilities.gui._ndviewer import sliders_height
-        from mbo_utilities.gui._top_strip import MENU_HEIGHT, MENU_MIN_WIDTH, strip_height
+        from mbo_utilities.gui._top_strip import (
+            MENU_HEIGHT,
+            MENU_MIN_WIDTH,
+            strip_height,
+        )
         from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
         from mbo_utilities.gui.run_gui import _create_image_widget, fit_figure_size
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled, widget_enabled
+        from mbo_utilities.gui.widgets.widget_toggles import (
+            set_widget_enabled,
+            widget_enabled,
+        )
 
         monkeypatch.setenv("RENDERCANVAS_FORCE_OFFSCREEN", "1")
         was = {k: widget_enabled(k) for k in ("manual_roi", "signal_quality")}
@@ -93,9 +110,11 @@ class TestFitFigureSize:
             # the Traces panel on the strip is planned for: its height; the ROI
             # controls are a right-bar tab, so no extra width
             want = fit_figure_size(
-                (1000, 1000), (40, 80),
+                (1000, 1000),
+                (40, 80),
                 top=strip_height(PANEL_HEIGHT) if roi else MENU_HEIGHT,
-                bottom=sliders_height(2), right=300,
+                bottom=sliders_height(2),
+                right=300,
                 min_width=MENU_MIN_WIDTH,
             )
             iw = _create_image_widget(NumpyArray(data, dims="TCZYX"), widget="preview")
@@ -107,7 +126,9 @@ class TestFitFigureSize:
                     iw.figure.canvas.draw()
                 panels = [(p.key, p.height) for p in strip.panels]
                 assert panels == ([("traces", PANEL_HEIGHT)] if roi else [])
-                assert strip.size == (strip_height(PANEL_HEIGHT) if roi else MENU_HEIGHT)
+                assert strip.size == (
+                    strip_height(PANEL_HEIGHT) if roi else MENU_HEIGHT
+                )
             finally:
                 iw.close()
         finally:

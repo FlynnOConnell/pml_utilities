@@ -73,6 +73,7 @@ def _config():
 def _num_planes(arr) -> int:
     try:
         from lbm_suite2p_python.utils import _get_num_planes
+
         return int(_get_num_planes(arr))
     except Exception:
         pass
@@ -85,8 +86,9 @@ def _num_planes(arr) -> int:
     return 1
 
 
-def _run(arr, output_dir, ops, planes, workers, threads, skip_volumetric, force,
-         replot=True):
+def _run(
+    arr, output_dir, ops, planes, workers, threads, skip_volumetric, force, replot=True
+):
     from lbm_suite2p_python import pipeline
 
     t0 = time.perf_counter()
@@ -134,14 +136,16 @@ def _read_plane_timings(output_dir):
         pt = ops.get("plane_times") or {}
         io = plots = 0.0
         seen = set()
-        for step in (ops.get("processing_history") or []):
+        for step in ops.get("processing_history") or []:
             name, dur = step.get("step"), step.get("duration_seconds")
             if dur is None:
                 continue
             if name == "binary_write" and "io" not in seen:
-                io = float(dur); seen.add("io")
+                io = float(dur)
+                seen.add("io")
             elif name == "plots" and "plots" not in seen:
-                plots = float(dur); seen.add("plots")
+                plots = float(dur)
+                seen.add("plots")
         if not pt and not seen:
             continue
         row = {
@@ -150,11 +154,19 @@ def _read_plane_timings(output_dir):
             "reg": _g(pt, "registration"),
             "regmetrics": _g(pt, "registration_metrics"),
             "detect": _g(pt, "detection"),
-            "extract": _g(pt, "extraction") + _g(pt, "classification") + _g(pt, "deconvolution"),
+            "extract": _g(pt, "extraction")
+            + _g(pt, "classification")
+            + _g(pt, "deconvolution"),
             "plots": plots,
         }
-        row["total"] = (row["io"] + row["reg"] + row["regmetrics"]
-                        + row["detect"] + row["extract"] + row["plots"])
+        row["total"] = (
+            row["io"]
+            + row["reg"]
+            + row["regmetrics"]
+            + row["detect"]
+            + row["extract"]
+            + row["plots"]
+        )
         rows.append(row)
     return rows
 
@@ -170,9 +182,11 @@ def _write_timing_report(output_dir, wall=None, n_workers=None):
     report = {"wall": wall or {}, "n_workers": n_workers, "planes": rows}
     if rows:
         report["totals"] = {
-            c: {"sum": sum(r[c] for r in rows),
+            c: {
+                "sum": sum(r[c] for r in rows),
                 "mean": sum(r[c] for r in rows) / len(rows),
-                "max": max(r[c] for r in rows)}
+                "max": max(r[c] for r in rows),
+            }
             for c in _COLS
         }
     try:
@@ -181,16 +195,31 @@ def _write_timing_report(output_dir, wall=None, n_workers=None):
         pass
 
     if not rows:
-        print(f"timing: no ops.npy timing (plane_times / processing_history) under {output_dir}", flush=True)
+        print(
+            f"timing: no ops.npy timing (plane_times / processing_history) under {output_dir}",
+            flush=True,
+        )
     else:
-        print("\n--- per-plane timing (s): io=tiff->bin  reg=motion  regmetrics=reg-quality  "
-              "detect=cellpose  extract=+class+decon  plots=figures ---", flush=True)
+        print(
+            "\n--- per-plane timing (s): io=tiff->bin  reg=motion  regmetrics=reg-quality  "
+            "detect=cellpose  extract=+class+decon  plots=figures ---",
+            flush=True,
+        )
         print(f"{'plane':<24}" + "".join(f"{c:>11}" for c in _COLS), flush=True)
         for r in rows:
-            print(f"{r['plane'][:24]:<24}" + "".join(f"{r[c]:>11.1f}" for c in _COLS), flush=True)
+            print(
+                f"{r['plane'][:24]:<24}" + "".join(f"{r[c]:>11.1f}" for c in _COLS),
+                flush=True,
+            )
         tot = report["totals"]
-        print(f"{'sum':<24}" + "".join(f"{tot[c]['sum']:>11.1f}" for c in _COLS), flush=True)
-        print(f"{'mean':<24}" + "".join(f"{tot[c]['mean']:>11.1f}" for c in _COLS), flush=True)
+        print(
+            f"{'sum':<24}" + "".join(f"{tot[c]['sum']:>11.1f}" for c in _COLS),
+            flush=True,
+        )
+        print(
+            f"{'mean':<24}" + "".join(f"{tot[c]['mean']:>11.1f}" for c in _COLS),
+            flush=True,
+        )
     for k, v in (wall or {}).items():
         print(f"wall.{k}: {v:.1f}s", flush=True)
     return report
@@ -205,7 +234,7 @@ def _resolve_workers(n_shard: int, pack: int) -> tuple[int, int]:
 
 def _shard_for_task(plane_indices, pack, task_id):
     start = task_id * pack
-    return plane_indices[start:start + pack]
+    return plane_indices[start : start + pack]
 
 
 def _local_multi_gpu(gpus, plane_indices, input_dir, output_dir):
@@ -214,7 +243,7 @@ def _local_multi_gpu(gpus, plane_indices, input_dir, output_dir):
     per = math.ceil(len(plane_indices) / n)
     procs = []
     for i, gpu in enumerate(gpus):
-        shard = plane_indices[i * per:(i + 1) * per]
+        shard = plane_indices[i * per : (i + 1) * per]
         if not shard:
             continue
         env = dict(os.environ)
@@ -239,8 +268,17 @@ def _aggregate(input_dir, output_dir):
     # replot=False: per-plane figures already exist from the shard runs; the
     # aggregate only needs the volumetric merge + volume plots, not a redundant
     # per-plane re-plot (the dominant cost of the aggregate).
-    _run(arr, output_dir, ops, planes=None, workers=1, threads=_cpu_quota(),
-         skip_volumetric=False, force=False, replot=False)
+    _run(
+        arr,
+        output_dir,
+        ops,
+        planes=None,
+        workers=1,
+        threads=_cpu_quota(),
+        skip_volumetric=False,
+        force=False,
+        replot=False,
+    )
 
 
 def main(argv=None):
@@ -249,13 +287,18 @@ def main(argv=None):
 
     if "--print-num-tasks" in argv:
         from mbo_utilities import imread
+
         p = _num_planes(imread(input_dir))
         print(math.ceil(p / pack))
         return
 
     if "--report-timings" in argv:
         i = argv.index("--report-timings")
-        d = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith("--") else str(output_dir)
+        d = (
+            argv[i + 1]
+            if i + 1 < len(argv) and not argv[i + 1].startswith("--")
+            else str(output_dir)
+        )
         _write_timing_report(d)
         return
 
@@ -316,14 +359,40 @@ def main(argv=None):
             print(f"array task {array_id}: no planes, exiting", flush=True)
             return
         workers, threads = _resolve_workers(len(shard), pack)
-        print(f"array task {array_id}: planes {shard} workers={workers} threads={threads}", flush=True)
-        _run(arr, output_dir, ops, shard, workers, threads, skip_volumetric=True, force=False)
+        print(
+            f"array task {array_id}: planes {shard} workers={workers} threads={threads}",
+            flush=True,
+        )
+        _run(
+            arr,
+            output_dir,
+            ops,
+            shard,
+            workers,
+            threads,
+            skip_volumetric=True,
+            force=False,
+        )
         return
 
     workers, threads = _resolve_workers(len(plane_indices), pack)
-    print(f"single job: {len(plane_indices)} planes workers={workers} threads={threads}", flush=True)
-    wall = _run(arr, output_dir, ops, plane_indices, workers, threads, skip_volumetric=False, force=False)
-    _write_timing_report(output_dir, {"imread": t_imread, "pipeline": wall}, n_workers=workers)
+    print(
+        f"single job: {len(plane_indices)} planes workers={workers} threads={threads}",
+        flush=True,
+    )
+    wall = _run(
+        arr,
+        output_dir,
+        ops,
+        plane_indices,
+        workers,
+        threads,
+        skip_volumetric=False,
+        force=False,
+    )
+    _write_timing_report(
+        output_dir, {"imread": t_imread, "pipeline": wall}, n_workers=workers
+    )
 
 
 if __name__ == "__main__":

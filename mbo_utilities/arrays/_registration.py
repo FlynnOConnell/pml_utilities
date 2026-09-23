@@ -19,18 +19,21 @@ pass use_gpu=True or use_gpu=False to override.
 from __future__ import annotations
 
 import math
-from typing import Any
 
 import numpy as np
 
 try:
-    from mkl_fft import fft2 as _np_fft2, ifft2 as _np_ifft2
+    from mkl_fft import fft2 as _np_fft2
+    from mkl_fft import ifft2 as _np_ifft2
 except ImportError:
-    from scipy.fft import fft2 as _np_fft2, ifft2 as _np_ifft2
+    from scipy.fft import fft2 as _np_fft2
+    from scipy.fft import ifft2 as _np_ifft2
 
 try:
     import cupy as _cp
-    from cupyx.scipy.fft import fft2 as _cp_fft2, ifft2 as _cp_ifft2
+    from cupyx.scipy.fft import fft2 as _cp_fft2
+    from cupyx.scipy.fft import ifft2 as _cp_ifft2
+
     HAS_CUPY = True
 except ImportError:
     HAS_CUPY = False
@@ -40,7 +43,7 @@ except ImportError:
 
 
 def _auto_resolve_gpu() -> bool:
-    """detect whether a cuda gpu is actually usable via cupy.
+    """Detect whether a cuda gpu is actually usable via cupy.
 
     returns true only if cupy imported AND a cuda device is reachable.
     falls back to false on any failure (no cupy, no driver, no device).
@@ -49,6 +52,7 @@ def _auto_resolve_gpu() -> bool:
         return False
     try:
         from mbo_utilities.gpu import gpu_compute_disabled
+
         if gpu_compute_disabled():
             return False
     except Exception:
@@ -60,7 +64,7 @@ def _auto_resolve_gpu() -> bool:
 
 
 def _resolve_backend(use_gpu: bool | None):
-    """pick numpy or cupy backend. None = auto-detect."""
+    """Pick numpy or cupy backend. None = auto-detect."""
     if use_gpu is None:
         use_gpu = _auto_resolve_gpu()
     if use_gpu:
@@ -75,6 +79,7 @@ def _resolve_backend(use_gpu: bool | None):
 
 # mask + reference builders
 
+
 def _meshgrid_mean_centered_2d(nx, ny, xp):
     x = xp.arange(0, nx)
     y = xp.arange(0, ny)
@@ -84,9 +89,12 @@ def _meshgrid_mean_centered_2d(nx, ny, xp):
 
 
 def _meshgrid_mean_centered_3d(nz, ny, nx, xp):
-    x = xp.arange(0, nx); x = xp.abs(x - x.mean())
-    y = xp.arange(0, ny); y = xp.abs(y - y.mean())
-    z = xp.arange(0, nz); z = xp.abs(z - z.mean())
+    x = xp.arange(0, nx)
+    x = xp.abs(x - x.mean())
+    y = xp.arange(0, ny)
+    y = xp.abs(y - y.mean())
+    z = xp.arange(0, nz)
+    z = xp.abs(z - z.mean())
     return xp.meshgrid(z, y, x, indexing="ij")
 
 
@@ -130,6 +138,7 @@ def _phasecorr_ref(ref_img, smooth_sigma, xp, fft2):
 
 # phase-corr primitives
 
+
 def _clip_and_mask(mov, mult_mask, add_mask):
     mov *= mult_mask
     mov += add_mask
@@ -147,16 +156,16 @@ def _convolve_2d(mov, ref_f, xp, fft2, ifft2):
 def _unwrap_fft_2d(mov_float, nr, out):
     # reshuffle fft output so zero-shift peak lands in the center of `out`
     ncc = nr * 2 + 1
-    out[:, :nr,   :nr]   = mov_float[:, -nr:,   -nr:]
-    out[:,  nr:,  :nr]   = mov_float[:, :nr + 1, -nr:]
-    out[:, :nr,   nr:]   = mov_float[:, -nr:,   :nr + 1]
-    out[:,  nr:,  nr:]   = mov_float[:, :nr + 1, :nr + 1]
+    out[:, :nr, :nr] = mov_float[:, -nr:, -nr:]
+    out[:, nr:, :nr] = mov_float[:, : nr + 1, -nr:]
+    out[:, :nr, nr:] = mov_float[:, -nr:, : nr + 1]
+    out[:, nr:, nr:] = mov_float[:, : nr + 1, : nr + 1]
     return out
 
 
 def _get_max_cc_coord(phase_corr, max_reg_xy, xp):
     nt, ncc, _ = phase_corr.shape
-    flat = phase_corr.reshape(nt, ncc ** 2)
+    flat = phase_corr.reshape(nt, ncc**2)
     argmaxs = xp.argmax(flat, axis=1)
     cmax = xp.max(flat, axis=1)
     ymax = (argmaxs // ncc) - max_reg_xy
@@ -166,6 +175,7 @@ def _get_max_cc_coord(phase_corr, max_reg_xy, xp):
 
 # public api
 
+
 def align_planes(
     mov3D,
     sigma=(1.45, 0),
@@ -174,9 +184,9 @@ def align_planes(
     use_gpu=None,
     progress_callback=None,
 ):
-    """compute per-plane (y, x) shift vectors via adjacent-plane phase correlation.
+    """Compute per-plane (y, x) shift vectors via adjacent-plane phase correlation.
 
-    parameters
+    Parameters
     ----------
     mov3D : ndarray (nz, ny, nx)
         time-averaged mean image per z-plane.
@@ -193,7 +203,7 @@ def align_planes(
     progress_callback : callable or None
         called as cb(fraction, message) after each plane.
 
-    returns
+    Returns
     -------
     tvecs : ndarray (nz, 2) numpy
         cumulative (y_shift, x_shift) per plane, relative to plane 0.
@@ -241,7 +251,7 @@ def compute_plane_shifts(
     use_gpu=None,
     progress_callback=None,
 ):
-    """accepts a 4d (nz, nt, ny, nx) movie or a 3d (nz, ny, nx) mean image.
+    """Accepts a 4d (nz, nt, ny, nx) movie or a 3d (nz, ny, nx) mean image.
 
     4d input is time-averaged internally. returns tvecs (nz, 2).
     """
@@ -278,7 +288,8 @@ def _auto_downsample(
 
 def _block_mean_yx(a: np.ndarray, f: int) -> np.ndarray:
     """Block-mean the trailing (Y, X) axes by factor ``f``, accumulating at the
-    reduced size so no full-resolution float copy is ever materialized."""
+    reduced size so no full-resolution float copy is ever materialized.
+    """
     *lead, ny, nx = a.shape
     yc, xc = (ny // f) * f, (nx // f) * f
     a = a[..., :yc, :xc]
@@ -293,7 +304,7 @@ def _block_mean_yx(a: np.ndarray, f: int) -> np.ndarray:
 def _stream_plane_mean(
     arr, max_frames: int, chunk_frames: int, downsample: int = 1
 ) -> np.ndarray:
-    """stream a (nz, ny, nx) time-mean image from a lazy array without
+    """Stream a (nz, ny, nx) time-mean image from a lazy array without
     materializing the full 4d movie in memory.
 
     supports both 5d arrays (T, C, Z, Y, X) and 4d (T, Z, Y, X). ``downsample``
@@ -357,7 +368,7 @@ def compute_axial_shifts(
         metadata["plane_shifts"]        = tvecs.tolist()     (nz, 2)
         metadata["plane_shifts_params"] = {...}              (reproducibility)
 
-    parameters
+    Parameters
     ----------
     arr : lazy array
         any 5D (T, C, Z, Y, X) or 4d (T, Z, Y, X) lazy array.
@@ -383,7 +394,7 @@ def compute_axial_shifts(
     progress_callback : callable or None
         forwarded to `align_planes` (called per plane).
 
-    returns
+    Returns
     -------
     tvecs : ndarray (nz, 2) int-valued float
         per-plane cumulative (y, x) shift relative to plane 0.
@@ -428,7 +439,7 @@ def compute_axial_shifts(
 
 
 def validate_axial_shifts(metadata: dict | None, num_planes: int | None = None) -> bool:
-    """true iff metadata contains a well-formed plane_shifts entry."""
+    """True iff metadata contains a well-formed plane_shifts entry."""
     if not metadata:
         return False
     shifts = metadata.get("plane_shifts")
@@ -462,9 +473,7 @@ def _validated_tczyx_shape(source) -> tuple[int, int, int, int, int]:
     else:
         shape5d = tuple(getattr(source, "shape", ()))
     if len(shape5d) != 5:
-        raise ValueError(
-            f"axial shifts need a 5D TCZYX source; got shape {shape5d!r}"
-        )
+        raise ValueError(f"axial shifts need a 5D TCZYX source; got shape {shape5d!r}")
     dims = getattr(source, "dims", None)
     if dims is not None and len(dims) == 5 and tuple(dims) != _TCZYX:
         raise ValueError(
@@ -479,7 +488,7 @@ def _is_int_index(k) -> bool:
 
 
 def _idx_list(k, n: int) -> list[int]:
-    """index (int / slice / list) -> list of non-negative ints over size n."""
+    """Index (int / slice / list) -> list of non-negative ints over size n."""
     if _is_int_index(k):
         k = int(k)
         return [k if k >= 0 else n + k]
@@ -568,18 +577,19 @@ class AxialShiftView:
 
     @property
     def source(self):
-        """the wrapped source array (never modified)."""
+        """The wrapped source array (never modified)."""
         return self._source
 
     @property
     def _arr(self):
-        """the wrapped source, for one-level `_arr` unwrapping by callers
-        (e.g. the GUI's isinstance peel). Mirrors `.source`."""
+        """The wrapped source, for one-level `_arr` unwrapping by callers
+        (e.g. the GUI's isinstance peel). Mirrors `.source`.
+        """
         return self._source
 
     @property
     def plane_shifts(self) -> np.ndarray:
-        """the (nz, 2) integer shifts applied when enabled."""
+        """The (nz, 2) integer shifts applied when enabled."""
         return self._shifts
 
     @property
@@ -637,7 +647,7 @@ class AxialShiftView:
         if Ellipsis in key:
             i = key.index(Ellipsis)
             n_missing = 5 - (len(key) - 1)
-            key = key[:i] + (slice(None),) * max(n_missing, 0) + key[i + 1:]
+            key = key[:i] + (slice(None),) * max(n_missing, 0) + key[i + 1 :]
         if len(key) > 5:
             raise IndexError(f"too many indices for 5D array: {len(key)}")
         if len(key) < 5:
@@ -666,7 +676,7 @@ class AxialShiftView:
         if _is_int_index(z_key):
             z = _idx_list(z_key, self._Z)[0]
             dy, dx = int(self._shifts[z, 0]), int(self._shifts[z, 1])
-            out[..., pt + dy: pt + dy + Y, pl + dx: pl + dx + X] = raw
+            out[..., pt + dy : pt + dy + Y, pl + dx : pl + dx + X] = raw
             return out
 
         # z is a kept axis; its position = number of non-int axes before it.
@@ -676,7 +686,7 @@ class AxialShiftView:
         out_zf = np.moveaxis(out, z_axis, 0)  # view into out
         for i, z in enumerate(z_indices):
             dy, dx = int(self._shifts[z, 0]), int(self._shifts[z, 1])
-            out_zf[i, ..., pt + dy: pt + dy + Y, pl + dx: pl + dx + X] = raw_zf[i]
+            out_zf[i, ..., pt + dy : pt + dy + Y, pl + dx : pl + dx + X] = raw_zf[i]
         return out
 
     def __array__(self, dtype=None, copy=None):
@@ -709,6 +719,7 @@ class AxialShiftView:
         plane_shifts when enabled (they are baked into the saved pixels).
         """
         from mbo_utilities.arrays._base import _imwrite_base
+
         prev = self._hide_shifts
         self._hide_shifts = self.enabled
         try:
@@ -727,7 +738,9 @@ class AxialShiftView:
         )
 
 
-def with_axial_shifts(arr, *, enabled: bool = True, plane_shifts=None) -> AxialShiftView:
+def with_axial_shifts(
+    arr, *, enabled: bool = True, plane_shifts=None
+) -> AxialShiftView:
     """Wrap a 5D TCZYX array so per-plane axial shifts are applied on read.
 
     Non-destructive: `arr` is never modified. Reversible: set

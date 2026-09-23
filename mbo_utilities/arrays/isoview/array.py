@@ -36,7 +36,6 @@ from mbo_utilities.lazy_array import register_array_class
 from mbo_utilities.log import get as _get_logger
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
-
 logger = _get_logger("arrays.isoview")
 
 
@@ -100,9 +99,20 @@ _FUSED_SUFFIX = ".fused"
 _FUSED_TAIL_RE = re.compile(r"\.fused(?:[-._].*)?$")
 _CORRECTED_TAIL_RE = re.compile(r"\.corrected(?:[-._].*)?$")
 _AUX_PATTERNS = (
-    "Mask", "mask", "minIntensity", "coords", "Projection", "configuration",
-    "transformation", "intensityCorrection", "referenceMinIntensity",
-    "scores", "jobCompleted", "Background_", "transformedMask", "mask2D",
+    "Mask",
+    "mask",
+    "minIntensity",
+    "coords",
+    "Projection",
+    "configuration",
+    "transformation",
+    "intensityCorrection",
+    "referenceMinIntensity",
+    "scores",
+    "jobCompleted",
+    "Background_",
+    "transformedMask",
+    "mask2D",
 )
 
 
@@ -158,7 +168,9 @@ class LazyVolume:
     because the raw binary carries no shape header.
     """
 
-    def __init__(self, path: str | Path, dimensions: tuple[int, int, int] | None = None):
+    def __init__(
+        self, path: str | Path, dimensions: tuple[int, int, int] | None = None
+    ):
         self._path = Path(path)
         self._dimensions = dimensions
         self._arr = None
@@ -176,6 +188,7 @@ class LazyVolume:
         p = self._path
         if p.suffix.lower() == ".zarr":
             import zarr
+
             store = zarr.storage.LocalStore(str(p))
             root = zarr.open_group(store=store, mode="r")
             arr = root["0"] if "0" in root else zarr.open_array(store=store, mode="r")
@@ -191,6 +204,7 @@ class LazyVolume:
                 self._attrs = {}
         elif self._is_tiff(p.name):
             import tifffile
+
             tf = tifffile.TiffFile(str(p))
             series = tf.series[0]
             shape = tuple(int(s) for s in series.shape)
@@ -203,6 +217,7 @@ class LazyVolume:
             self._arr = tf
         elif p.suffix.lower() == ".klb":
             import pyklb
+
             header = pyklb.readheader(str(p))
             dims = [int(d) for d in header["imagesize_tczyx"] if int(d) > 1]
             if len(dims) >= 3:
@@ -268,6 +283,7 @@ class LazyVolume:
                 if roi is not None:
                     return roi
                 import pyklb
+
                 self._arr = pyklb.readfull(str(self._path))
             return np.asarray(self._arr[key])
 
@@ -309,6 +325,7 @@ class LazyVolume:
             return None
 
         import pyklb
+
         arr = pyklb.readroi(
             str(self._path),
             [b[0] for b in bounds],
@@ -342,9 +359,7 @@ class LazyVolume:
             zs = list(z_key)
         else:
             zs = range(nz)
-        stacked = np.stack(
-            [self._arr.pages[int(zi)].asarray() for zi in zs], axis=0
-        )
+        stacked = np.stack([self._arr.pages[int(zi)].asarray() for zi in zs], axis=0)
         return stacked[:, y_key, x_key]
 
     def __array__(self, dtype=None, copy=None) -> np.ndarray:
@@ -375,7 +390,9 @@ class LazyVolume:
             pass
 
     def __repr__(self):
-        return f"LazyVolume({self._path.name}, shape={self._shape}, dtype={self._dtype})"
+        return (
+            f"LazyVolume({self._path.name}, shape={self._shape}, dtype={self._dtype})"
+        )
 
 
 def _parse_tile_grid_position(specimen_name: str):
@@ -434,19 +451,33 @@ def _parse_isoview_xml(xml_path: Path) -> dict:
 
         # plain attribute lifts (key, type cast)
         for key, cast in (
-            ("z_step", float), ("y_step", float),
-            ("exposure_time", float), ("angle", float),
-            ("time_point", int), ("time_step", float),
+            ("z_step", float),
+            ("y_step", float),
+            ("exposure_time", float),
+            ("angle", float),
+            ("time_point", int),
+            ("time_step", float),
             ("camera_pixel_pitch_um", float),
-            ("specimen_name", str), ("data_header", str), ("timestamp", str),
-            ("camera_index", str), ("camera", str),
-            ("camera_type", str), ("camera_roi", str), ("wavelength", str),
-            ("camera_orientation", str), ("magnification", str),
-            ("illumination_arms", str), ("illumination_filter", str),
-            ("detection_filter", str), ("detection_objective", str),
-            ("stack_direction", str), ("planes", str),
-            ("laser_power", str), ("experiment_notes", str),
-            ("software_version", str), ("z_offset_planes", str),
+            ("specimen_name", str),
+            ("data_header", str),
+            ("timestamp", str),
+            ("camera_index", str),
+            ("camera", str),
+            ("camera_type", str),
+            ("camera_roi", str),
+            ("wavelength", str),
+            ("camera_orientation", str),
+            ("magnification", str),
+            ("illumination_arms", str),
+            ("illumination_filter", str),
+            ("detection_filter", str),
+            ("detection_objective", str),
+            ("stack_direction", str),
+            ("planes", str),
+            ("laser_power", str),
+            ("experiment_notes", str),
+            ("software_version", str),
+            ("z_offset_planes", str),
         ):
             if key in a:
                 try:
@@ -473,7 +504,9 @@ def _parse_isoview_xml(xml_path: Path) -> dict:
             try:
                 sx, sy, sz = (float(v) for v in re.split(r"[_,]", _stride))
                 meta["tile_stride_x"], meta["tile_stride_y"], meta["tile_stride_z"] = (
-                    sx, sy, sz,
+                    sx,
+                    sy,
+                    sz,
                 )
             except (ValueError, TypeError):
                 pass
@@ -528,8 +561,13 @@ def _parse_isoview_xml(xml_path: Path) -> dict:
 
 def _find_isoview_xml(base_path: Path) -> Path | None:
     for pattern in (
-        "ch00_spec00.xml", "ch0.xml", "ch*.xml",
-        "TL*_ch*.xml", "SPM*_TL*_VW*.xml", "SPM*_TM*_VW*.xml", "*.xml",
+        "ch00_spec00.xml",
+        "ch0.xml",
+        "ch*.xml",
+        "TL*_ch*.xml",
+        "SPM*_TL*_VW*.xml",
+        "SPM*_TM*_VW*.xml",
+        "*.xml",
     ):
         matches = list(base_path.glob(pattern))
         if matches:
@@ -632,9 +670,13 @@ def _split_common_vs_tile(
     shared: dict = {}
     per_tile: dict[int, dict] = {}
     for key in all_keys:
-        present = [(ti, per_tile_common[ti][key]) for ti in tiles if key in per_tile_common[ti]]
+        present = [
+            (ti, per_tile_common[ti][key]) for ti in tiles if key in per_tile_common[ti]
+        ]
         values = [v for _, v in present]
-        if len(present) == len(tiles) and all(_meta_eq(values[0], v) for v in values[1:]):
+        if len(present) == len(tiles) and all(
+            _meta_eq(values[0], v) for v in values[1:]
+        ):
             shared[key] = values[0]
         else:
             for ti, v in present:
@@ -645,14 +687,24 @@ def _split_common_vs_tile(
 # fields NOT split on their comma: either the comma is internal to one value,
 # or the comma pair describes the camera pair as a whole (stack_direction
 # "-Z,+Z" is kept intact and copied to both cameras of the view).
-_NOT_PER_CAMERA_FIELDS = frozenset({
-    "laser_power", "specimen_XYZT", "z_offset_planes", "y_offset_planes",
-    "experiment_notes", "timestamp", "stack_direction",
-})
+_NOT_PER_CAMERA_FIELDS = frozenset(
+    {
+        "laser_power",
+        "specimen_XYZT",
+        "z_offset_planes",
+        "y_offset_planes",
+        "experiment_notes",
+        "timestamp",
+        "stack_direction",
+    }
+)
 
 # per-tile stride fields surfaced in each tile's metadata section
 _TILE_STRIDE_KEYS = (
-    "tile_stride_xyz_um", "tile_stride_x", "tile_stride_y", "tile_stride_z",
+    "tile_stride_xyz_um",
+    "tile_stride_x",
+    "tile_stride_y",
+    "tile_stride_z",
 )
 
 # Per-view fields shown in the GUI "Views" panel: per-camera intrinsics plus
@@ -660,10 +712,20 @@ _TILE_STRIDE_KEYS = (
 # reported metadata (they live under metadata["views"] instead). `angle` is the
 # specimen rotation (constant across views) and stays in acquisition.
 _VIEW_METADATA_FIELDS = (
-    "stack_direction", "wavelength", "magnification", "laser_power",
-    "illumination_filter", "illumination_arms", "exposure_time",
-    "detection_filter", "detection_objective", "camera_type", "camera_roi",
-    "camera_pixel_pitch_um", "pixel_resolution_um", "camera",
+    "stack_direction",
+    "wavelength",
+    "magnification",
+    "laser_power",
+    "illumination_filter",
+    "illumination_arms",
+    "exposure_time",
+    "detection_filter",
+    "detection_objective",
+    "camera_type",
+    "camera_roi",
+    "camera_pixel_pitch_um",
+    "pixel_resolution_um",
+    "camera",
 )
 # Fields dropped from the reported metadata entirely. Either duplicates of a
 # canonical field (z_step/y_step/axial_step -> dz; objective_mag -> magnification;
@@ -675,22 +737,39 @@ _VIEW_METADATA_FIELDS = (
 # that ARE consumed (specimen, timepoint, camera_view_map) are kept and only
 # hidden from the GUI viewer.
 _DROPPED_METADATA_FIELDS = (
-    "view", "channel", "camera_pair", "min_intensity", "camera_pixel_size_um",
-    "z_step", "y_step", "axial_step", "objective_mag",
-    "dimensions", "planes", "z_offset_planes", "y_offset_planes",
-    "specimen_XYZT", "tile_name",
-    "camera_channel_map", "channel_idx_by_xml_ch",
+    "view",
+    "channel",
+    "camera_pair",
+    "min_intensity",
+    "camera_pixel_size_um",
+    "z_step",
+    "y_step",
+    "axial_step",
+    "objective_mag",
+    "dimensions",
+    "planes",
+    "z_offset_planes",
+    "y_offset_planes",
+    "specimen_XYZT",
+    "tile_name",
+    "camera_channel_map",
+    "channel_idx_by_xml_ch",
 )
 # Per-tile fields surfaced in the GUI "Tiles" panel.
 _TILE_METADATA_FIELDS = (
-    "specimen_name", "tile_stride_xyz_um", "stage_x", "stage_y", "stage_z",
+    "specimen_name",
+    "tile_stride_xyz_um",
+    "stage_x",
+    "stage_y",
+    "stage_z",
 )
 
 
 def _cameras_for_xml(meta: dict) -> list[int]:
     """Cameras covered by one per-view XML: from the ``camera`` attribute
     (``"01"`` -> [0, 1], ``"23"`` -> [2, 3]), else by hardware convention
-    (Z-scan -> 0,1; Y-scan -> 2,3)."""
+    (Z-scan -> 0,1; Y-scan -> 2,3).
+    """
     cam_attr = str(meta.get("camera", "")).strip()
     if cam_attr.isdigit():
         return [int(c) for c in cam_attr]
@@ -733,8 +812,11 @@ def _build_cameras_views(parsed: list[dict], common_keys: set) -> dict:
             if per_cam:
                 for cam, part in zip(cams, val.split(",")):
                     cameras.setdefault(cam, {})[key] = part.strip()
-            elif key == "dimensions" and getattr(val, "ndim", 0) == 2 \
-                    and val.shape[0] == len(cams):
+            elif (
+                key == "dimensions"
+                and getattr(val, "ndim", 0) == 2
+                and val.shape[0] == len(cams)
+            ):
                 for i, cam in enumerate(cams):
                     cameras.setdefault(cam, {})["dimensions"] = val[i].tolist()
             elif key not in common_keys:
@@ -817,7 +899,11 @@ def _read_all_isoview_xml(
             camera_view_map[2] = 90
             camera_view_map[3] = 90
     if not camera_view_map and len(parsed) >= 2:
-        arms_seen = {str(m.get("illumination_arms")) for m in parsed if m.get("illumination_arms") is not None}
+        arms_seen = {
+            str(m.get("illumination_arms"))
+            for m in parsed
+            if m.get("illumination_arms") is not None
+        }
         if len(arms_seen) >= 2:
             camera_view_map = {0: 0, 1: 0, 2: 90, 3: 90}
 
@@ -952,14 +1038,14 @@ def _resolve_corrected_spm_dir(p: Path) -> Path | None:
         return p.parent
     if _CORRECTED_TAIL_RE.search(p.name):
         spms = sorted(
-            d for d in p.iterdir()
-            if d.is_dir() and _SPM_PATTERN.match(d.name)
+            d for d in p.iterdir() if d.is_dir() and _SPM_PATTERN.match(d.name)
         )
         return spms[0] if spms else None
     for ancestor in p.parents:
         if _CORRECTED_TAIL_RE.search(ancestor.name):
             spms = sorted(
-                d for d in ancestor.iterdir()
+                d
+                for d in ancestor.iterdir()
                 if d.is_dir() and _SPM_PATTERN.match(d.name)
             )
             if spms:
@@ -998,8 +1084,10 @@ def _resolve_fused_method_dir(p: Path) -> Path | None:
     if _is_method_dir(p):
         return p
     parents = list(p.parents)
-    if parents and _is_method_dir(parents[0]) and (
-        _SPM_PATTERN.match(p.name) or _has_tm_pattern(p.name)
+    if (
+        parents
+        and _is_method_dir(parents[0])
+        and (_SPM_PATTERN.match(p.name) or _has_tm_pattern(p.name))
     ):
         return parents[0]
     if _is_fused_root(p) and p.is_dir():
@@ -1033,16 +1121,12 @@ def _first_method_dir(fused_root: Path) -> Path | None:
     if not fused_root.is_dir():
         return None
     candidates = sorted(
-        d for d in fused_root.iterdir()
-        if d.is_dir() and d.name != "projections"
+        d for d in fused_root.iterdir() if d.is_dir() and d.name != "projections"
     )
     if not candidates:
         return None
     # New layout: tiles sit directly under .fused — scan the root itself.
-    if any(
-        _SPM_PATTERN.match(d.name) or _has_tm_pattern(d.name)
-        for d in candidates
-    ):
+    if any(_SPM_PATTERN.match(d.name) or _has_tm_pattern(d.name) for d in candidates):
         return fused_root
     for c in candidates:
         if c.name == "geometric":
@@ -1071,7 +1155,8 @@ _FUSED_LEGACY_RE = re.compile(
 def _match_fused(name: str):
     """``(tile, a0, a1, chn)`` for a fused filename (a1=-1 when single), with
     a0/a1 as view angles. Matches new VW##_VW##_CH## and legacy CM##_CM##_VW##.
-    Returns ``None`` if neither matches."""
+    Returns ``None`` if neither matches.
+    """
     m = _FUSED_RE.match(name)
     if m:
         a1 = int(m.group(4)) if m.group(4) is not None else -1
@@ -1085,9 +1170,9 @@ def _match_fused(name: str):
         a1 = CAMERA_VIEW_ANGLE.get(c1, c1) if c1 >= 0 else -1
         return m.group(1), a0, a1, chn
     return None
-_RAW_STACK_RE = re.compile(
-    r"SPC(\d+)_TM(\d+)_ANG\d+_CM(\d+)_CHN(\d+)_PH\d+\.stack$"
-)
+
+
+_RAW_STACK_RE = re.compile(r"SPC(\d+)_TM(\d+)_ANG\d+_CM(\d+)_CHN(\d+)_PH\d+\.stack$")
 _KLB_TM_RE = re.compile(r"SPM(\d+)_TM(\d+)_CM(\d+)_CHN(\d+)\.klb$")
 
 # Camera index -> view angle (deg): the four cameras sit at 0/90/180/270 around
@@ -1102,7 +1187,7 @@ def camera_view_label(cam: int) -> str:
     return f"VW{CAMERA_VIEW_ANGLE.get(int(cam), int(cam)):02d}"
 
 
-def camera_from_view_label(label: str) -> "int | None":
+def camera_from_view_label(label: str) -> int | None:
     """Camera index for a ``VW{angle}`` label, or ``None`` if it isn't one."""
     m = re.search(r"VW(\d+)", str(label))
     return VIEW_ANGLE_CAMERA.get(int(m.group(1))) if m else None
@@ -1110,8 +1195,14 @@ def camera_from_view_label(label: str) -> "int | None":
 
 def _token_to_camera(token: str, num: int) -> int:
     """Camera index from a filename view token: ``CM##`` is the literal camera
-    (raw/legacy); ``VW{angle}`` maps the view angle back to the camera."""
-    return int(num) if str(token).upper() == "CM" else VIEW_ANGLE_CAMERA.get(int(num), int(num))
+    (raw/legacy); ``VW{angle}`` maps the view angle back to the camera.
+    """
+    return (
+        int(num)
+        if str(token).upper() == "CM"
+        else VIEW_ANGLE_CAMERA.get(int(num), int(num))
+    )
+
 
 # Per-kind filename regex whose group(1) is the specimen (tile) number.
 # Used to recover the SPC/SPM id of each tile slot for per-tile XML reads.
@@ -1158,9 +1249,7 @@ _MIC_GLOBAL_RE = re.compile(
 )
 
 
-def _finalize_projections(
-    axes: set, views: set, files: dict
-) -> dict | None:
+def _finalize_projections(axes: set, views: set, files: dict) -> dict | None:
     if not files:
         return None
     return {
@@ -1271,7 +1360,11 @@ def _collect_fused_proj_files(
             view = f"VW{int(vw):02d}"
         else:
             spm_str, tm_str, pfx, n0, _n1, _mid, _chn, axis = m.groups()
-            a0 = int(n0) if pfx.upper() == "VW" else CAMERA_VIEW_ANGLE.get(int(n0), int(n0))
+            a0 = (
+                int(n0)
+                if pfx.upper() == "VW"
+                else CAMERA_VIEW_ANGLE.get(int(n0), int(n0))
+            )
             view = f"VW{a0:02d}"
         axis = axis.lower()
         # tiled projections (flat dir, no TM in name) key by the leading tile
@@ -1331,13 +1424,13 @@ def _scan_corrected(spm_dir: Path):
     single SPM## and fold its ``TM######`` folders into T.
     """
     parent = spm_dir.parent
-    sibling_spms = sorted(
-        d for d in parent.iterdir()
-        if d.is_dir() and _SPM_PATTERN.match(d.name)
-    ) if parent.is_dir() else []
+    sibling_spms = (
+        sorted(d for d in parent.iterdir() if d.is_dir() and _SPM_PATTERN.match(d.name))
+        if parent.is_dir()
+        else []
+    )
     is_tiled = (
-        _CORRECTED_TAIL_RE.search(parent.name) is not None
-        and len(sibling_spms) > 1
+        _CORRECTED_TAIL_RE.search(parent.name) is not None and len(sibling_spms) > 1
     )
 
     def _read_cams(folder: Path, ti: int) -> None:
@@ -1423,8 +1516,11 @@ def _scan_fused(method_dir: Path):
     tp_paths = {ti: by_tm[tm] for ti, tm in enumerate(sorted(by_tm))}
     view_keys = sorted(views)
     view_names = [
-        (f"VW{a0:02d}_VW{a1:02d}_CH{chn:02d}_fused" if a1 >= 0
-         else f"VW{a0:02d}_CH{chn:02d}_fused")
+        (
+            f"VW{a0:02d}_VW{a1:02d}_CH{chn:02d}_fused"
+            if a1 >= 0
+            else f"VW{a0:02d}_CH{chn:02d}_fused"
+        )
         for a0, a1, chn in view_keys
     ]
     return tp_paths, view_keys, view_names, is_tiled
@@ -1518,8 +1614,11 @@ _PIPELINE_INFOS = (
             "**/*.corrected*/SPM??/TM??????/SPM??_TM??????_CM??.zarr",
             "**/*.corrected*/SPM??/TM??????/SPM??_TM??????_CM??.tif",
         ],
-        output_patterns=[], input_extensions=["zarr", "tif"],
-        output_extensions=[], marker_files=[], category="reader",
+        output_patterns=[],
+        input_extensions=["zarr", "tif"],
+        output_extensions=[],
+        marker_files=[],
+        category="reader",
     ),
     PipelineInfo(
         name="isoview-fused",
@@ -1534,30 +1633,38 @@ _PIPELINE_INFOS = (
             "**/*.fused*/*/SPM??/*.fusedStack.*",
             "**/*.fused*/*/SPM??/SPM??_TM??????_CM??_CM??_VW??.*",
         ],
-        output_patterns=[], input_extensions=["klb", "tif", "zarr"],
-        output_extensions=[], marker_files=[], category="reader",
+        output_patterns=[],
+        input_extensions=["klb", "tif", "zarr"],
+        output_extensions=[],
+        marker_files=[],
+        category="reader",
     ),
     PipelineInfo(
         name="isoview-raw",
         description="IsoView raw acquisition stacks",
         input_patterns=["**/SPC??_TM?????_ANG???_CM?_CHN??_PH?.stack"],
-        output_patterns=[], input_extensions=["stack"],
-        output_extensions=[], marker_files=["ch00_spec00.xml", "ch0.xml"],
+        output_patterns=[],
+        input_extensions=["stack"],
+        output_extensions=[],
+        marker_files=["ch00_spec00.xml", "ch0.xml"],
         category="reader",
     ),
     PipelineInfo(
         name="isoview-clusterpt",
         description="IsoView clusterPT KLB output",
         input_patterns=["**/TM??????/SPM??_TM??????_CM??_CHN??.klb"],
-        output_patterns=[], input_extensions=["klb"],
-        output_extensions=[], marker_files=[], category="reader",
+        output_patterns=[],
+        input_extensions=["klb"],
+        output_extensions=[],
+        marker_files=[],
+        category="reader",
     ),
 )
 for _info in _PIPELINE_INFOS:
     register_pipeline(_info)
 
 
-def _sibling_raw_root(arr: "IsoviewArray") -> Path | None:
+def _sibling_raw_root(arr: IsoviewArray) -> Path | None:
     """Locate the raw acquisition root next to a ``.corrected/`` or ``.fused/`` tree.
 
     For arr.scan_root = ``<dataset>.corrected/SPM##`` (corrected) or
@@ -1568,6 +1675,7 @@ def _sibling_raw_root(arr: "IsoviewArray") -> Path | None:
     Returns ``None`` when the path is not under a ``.corrected/`` or
     ``.fused/`` tree.
     """
+
     def _strip(name: str) -> str | None:
         m = _CORRECTED_TAIL_RE.search(name)
         if m:
@@ -1587,7 +1695,7 @@ def _sibling_raw_root(arr: "IsoviewArray") -> Path | None:
     return None
 
 
-def _corrected_xml_dirs(arr: "IsoviewArray") -> list[Path]:
+def _corrected_xml_dirs(arr: IsoviewArray) -> list[Path]:
     """Candidate XML dirs for the corrected kind."""
     raw = _sibling_raw_root(arr)
     dirs: list[Path] = []
@@ -1597,7 +1705,7 @@ def _corrected_xml_dirs(arr: "IsoviewArray") -> list[Path]:
     return dirs
 
 
-def _fused_xml_dirs(arr: "IsoviewArray") -> list[Path]:
+def _fused_xml_dirs(arr: IsoviewArray) -> list[Path]:
     """Candidate XML dirs for the fused kind."""
     raw = _sibling_raw_root(arr)
     dirs: list[Path] = []
@@ -1611,12 +1719,12 @@ def _fused_xml_dirs(arr: "IsoviewArray") -> list[Path]:
     return dirs
 
 
-def _raw_xml_dirs(arr: "IsoviewArray") -> list[Path]:
+def _raw_xml_dirs(arr: IsoviewArray) -> list[Path]:
     return [arr.scan_root]
 
 
-def _klb_xml_dirs(arr: "IsoviewArray") -> list[Path]:
-    """clusterPT XMLs may live at TM/SPM level; raw root if reachable."""
+def _klb_xml_dirs(arr: IsoviewArray) -> list[Path]:
+    """ClusterPT XMLs may live at TM/SPM level; raw root if reachable."""
     dirs: list[Path] = [arr.scan_root]
     raw = _sibling_raw_root(arr)
     if raw is not None:
@@ -1624,7 +1732,7 @@ def _klb_xml_dirs(arr: "IsoviewArray") -> list[Path]:
     return dirs
 
 
-def _corrected_projections(arr: "IsoviewArray") -> dict | None:
+def _corrected_projections(arr: IsoviewArray) -> dict | None:
     corrected_root = arr.scan_root.parent
     if not _CORRECTED_TAIL_RE.search(corrected_root.name):
         return None
@@ -1640,11 +1748,11 @@ def _corrected_projections(arr: "IsoviewArray") -> dict | None:
     )
 
 
-def _fused_projections(arr: "IsoviewArray") -> dict | None:
+def _fused_projections(arr: IsoviewArray) -> dict | None:
     return _scan_fused_projections(arr.scan_root)
 
 
-def _raw_projections(arr: "IsoviewArray") -> dict | None:
+def _raw_projections(arr: IsoviewArray) -> dict | None:
     return _scan_flat_projections(
         arr.scan_root.parent / f"{arr.scan_root.name}.raw.projections"
     )
@@ -1803,9 +1911,7 @@ def make_raw_projections(
             for axis, out_path in targets.values():
                 if out_path.exists() and not overwrite:
                     continue
-                tifffile.imwrite(
-                    out_path, np.max(vol, axis=axis), compression="zstd"
-                )
+                tifffile.imwrite(out_path, np.max(vol, axis=axis), compression="zstd")
         written += 1
         if progress_callback is not None:
             progress_callback(i + 1, total, base)
@@ -1926,9 +2032,7 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
                     f"Not an isoview tree (or kind not recognized): {self.base_path}"
                 )
         if kind not in _KINDS:
-            raise ValueError(
-                f"kind must be one of {sorted(_KINDS)}; got {kind!r}"
-            )
+            raise ValueError(f"kind must be one of {sorted(_KINDS)}; got {kind!r}")
         self.kind: str = kind
         self._kind_cfg = _KINDS[kind]
         self.stack_type: str = self._kind_cfg["stack_type"]
@@ -2193,8 +2297,12 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
                     # so callers (GUI metadata panel, BigStitcher submit)
                     # see specimen/timepoint/etc. without digging.
                     for key in (
-                        "specimen", "specimen_name", "timepoint",
-                        "camera_pair", "view", "channel",
+                        "specimen",
+                        "specimen_name",
+                        "timepoint",
+                        "camera_pair",
+                        "view",
+                        "channel",
                     ):
                         if key in iv:
                             self._metadata.setdefault(key, iv[key])
@@ -2208,7 +2316,13 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
 
     @property
     def shape(self) -> tuple[int, int, int, int, int]:
-        return (len(self._timepoints), len(self._view_keys), self._nz, self._ny, self._nx)
+        return (
+            len(self._timepoints),
+            len(self._view_keys),
+            self._nz,
+            self._ny,
+            self._nx,
+        )
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
         return self.shape
@@ -2219,7 +2333,8 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
 
     def summary_stats_dim_role(self, name: str):
         """Tiled datasets fold spatial tiles into T, so T is a group (one stats
-        series per tile), never collapsed. Otherwise use the default mapping."""
+        series per tile), never collapsed. Otherwise use the default mapping.
+        """
         from mbo_utilities.arrays.features._summary_stats import (
             StatsDimRole,
             default_dim_role,
@@ -2552,8 +2667,10 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
                     target[:sz, :sy, :sx] = slab[:sz, :sy, :sx]
 
         int_indexed = [
-            isinstance(t_key, int), isinstance(c_key, int),
-            isinstance(z_key, int), isinstance(y_key, int),
+            isinstance(t_key, int),
+            isinstance(c_key, int),
+            isinstance(z_key, int),
+            isinstance(y_key, int),
             isinstance(x_key, int),
         ]
         for ax in range(4, -1, -1):
@@ -2572,7 +2689,9 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
             return n
 
         nz, ny, nx = vol_shape
-        out_dims = [d for d in (dim(z_key, nz), dim(y_key, ny), dim(x_key, nx)) if d is not None]
+        out_dims = [
+            d for d in (dim(z_key, nz), dim(y_key, ny), dim(x_key, nx)) if d is not None
+        ]
         if not out_dims:
             out_dims = [1]
         return np.zeros(tuple(out_dims), dtype=self._dtype)
@@ -2589,7 +2708,7 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
         self._cache[cache_key] = data
         return data
 
-    def _open_volume(self, path: Path) -> "LazyVolume":
+    def _open_volume(self, path: Path) -> LazyVolume:
         """Return a cached open zarr `LazyVolume` for `path` (bounded LRU).
 
         Avoids reopening the store on every strided plane read. Only used for
@@ -2622,21 +2741,26 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
             return v
 
     def _slab_from_volume(
-        self, v: "LazyVolume", t_idx: int, c_idx: int, z_key, y_key, x_key
+        self, v: LazyVolume, t_idx: int, c_idx: int, z_key, y_key, x_key
     ) -> np.ndarray:
         if _int_out_of_bounds((z_key, y_key, x_key), v.shape):
             return self._empty_slab(z_key, y_key, x_key, v.shape)
         slab = np.asarray(v[z_key, y_key, x_key])
         if logger.isEnabledFor(logging.DEBUG) and v.chunks is not None:
             touched = _chunks_touched(
-                v._arr.shape, v.chunks,
+                v._arr.shape,
+                v.chunks,
                 (0,) * (len(v._arr.shape) - 3) + (z_key, y_key, x_key),
             )
             chunk_bytes = int(np.prod(v.chunks)) * v.dtype.itemsize
             decompressed = touched * chunk_bytes
             logger.debug(
                 "%s narrow zarr read: t=%d c=%d returned=%d decompressed=%d ratio=%.1fx",
-                type(self).__name__, t_idx, c_idx, slab.nbytes, decompressed,
+                type(self).__name__,
+                t_idx,
+                c_idx,
+                slab.nbytes,
+                decompressed,
                 decompressed / max(1, slab.nbytes),
             )
         return slab
@@ -2690,10 +2814,17 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
         **kwargs,
     ):
         from mbo_utilities.arrays._base import _imwrite_base
+
         return _imwrite_base(
-            self, outpath, planes=planes, ext=ext, overwrite=overwrite,
-            target_chunk_mb=target_chunk_mb, progress_callback=progress_callback,
-            debug=debug, **kwargs,
+            self,
+            outpath,
+            planes=planes,
+            ext=ext,
+            overwrite=overwrite,
+            target_chunk_mb=target_chunk_mb,
+            progress_callback=progress_callback,
+            debug=debug,
+            **kwargs,
         )
 
     def projections(self) -> dict | None:
@@ -2780,14 +2911,22 @@ def isoview_to_ome_zarr(
     """
     arr = IsoviewArray(src, kind=kind)
     return arr._imwrite(
-        out, ext=".zarr", overwrite=overwrite,
+        out,
+        ext=".zarr",
+        overwrite=overwrite,
         target_chunk_mb=target_chunk_mb,
         progress_callback=progress_callback,
-        show_progress=show_progress, debug=debug,
-        planes=planes, frames=timepoints, channels=channels,
-        sharded=sharded, compressor=compressor,
-        compression_level=compression_level, shuffle=shuffle,
-        pyramid=pyramid, pyramid_max_layers=pyramid_max_layers,
+        show_progress=show_progress,
+        debug=debug,
+        planes=planes,
+        frames=timepoints,
+        channels=channels,
+        sharded=sharded,
+        compressor=compressor,
+        compression_level=compression_level,
+        shuffle=shuffle,
+        pyramid=pyramid,
+        pyramid_max_layers=pyramid_max_layers,
         pyramid_method=pyramid_method,
         output_suffix=output_suffix or arr.stack_type,
     )

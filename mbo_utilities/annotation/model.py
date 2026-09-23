@@ -31,7 +31,8 @@ COLUMNS: tuple[str, ...] = ("plane", "z", "c", "area", "class")
 @dataclass(frozen=True)
 class RunTarget:
     """Where one run reads one ROI: the mask from store ``plane``, the
-    pixels from z-plane ``z`` and channel ``c`` of the movie."""
+    pixels from z-plane ``z`` and channel ``c`` of the movie.
+    """
 
     index: int
     uid: int
@@ -57,7 +58,8 @@ class RoiModel(Observable):
 
     def close(self) -> None:
         """Stop forwarding: the store and the table may outlive this model
-        (parked for the next widget) and must not call into it."""
+        (parked for the next widget) and must not call into it.
+        """
         if self._store is not None:
             self._store.remove_event_handler(self._forward, "rois")
         if self._traces is not None:
@@ -71,7 +73,8 @@ class RoiModel(Observable):
     @traces.setter
     def traces(self, traces: RoiTraceTable) -> None:
         """Swap the trace table (a parked one from the previous widget),
-        keeping the subscribers."""
+        keeping the subscribers.
+        """
         if self._traces is not None:
             self._traces.remove_event_handler(self._forward, "traces")
         self._traces = traces
@@ -84,7 +87,8 @@ class RoiModel(Observable):
     @store.setter
     def store(self, store: RoiLabelStore) -> None:
         """Swap the label store (a restore, a unit switch), keeping the
-        subscribers; the plane is re-derived from the current view."""
+        subscribers; the plane is re-derived from the current view.
+        """
         if self._store is not None:
             self._store.remove_event_handler(self._forward, "rois")
         self._store = store
@@ -105,7 +109,8 @@ class RoiModel(Observable):
 
     def set_view(self, pos: Mapping[str, int]) -> bool:
         """Record the slider position; emits ``"view"`` and returns True
-        when it lands on another plane."""
+        when it lands on another plane.
+        """
         self.view = {str(k): int(v) for k, v in pos.items()}
         plane = self._store.plane_of(self.view)
         if plane == self.plane:
@@ -123,10 +128,13 @@ class RoiModel(Observable):
     def rois_on_screen(self) -> list[int]:
         return self._store.rois_on_plane(self.plane)
 
-    def targets(self, indices, z: int | None = None, c: int | None = None) -> list[RunTarget]:
+    def targets(
+        self, indices, z: int | None = None, c: int | None = None
+    ) -> list[RunTarget]:
         """One :class:`RunTarget` per drawn ROI of ``indices``: the mask
         stays on the plane it was drawn on; the pixels come from ``z`` /
-        ``c`` when given, else from where the ROI was drawn."""
+        ``c`` when given, else from where the ROI was drawn.
+        """
         out = []
         for i in indices:
             i = int(i)
@@ -144,9 +152,16 @@ class RoiModel(Observable):
             )
         return out
 
-    def traced(self, index: int, z: int | None = None, c: int | None = None, engine: str | None = None) -> list[RoiTrace]:
+    def traced(
+        self,
+        index: int,
+        z: int | None = None,
+        c: int | None = None,
+        engine: str | None = None,
+    ) -> list[RoiTrace]:
         """The traces drawn ROI ``index`` already has at the coordinates
-        given (any, when none are)."""
+        given (any, when none are).
+        """
         if not 0 <= index < len(self._store.rois):
             return []
         return self.traces.at(self._store.rois[index].uid, z=z, c=c, engine=engine)
@@ -156,7 +171,8 @@ class RoiModel(Observable):
 
     def column(self, name: str) -> dict[int, float]:
         """One number per drawn ROI, keyed by uid: its ``plane``, ``z``, ``c``,
-        ``area`` or ``class`` (unlabeled ROIs are left out of that one)."""
+        ``area`` or ``class`` (unlabeled ROIs are left out of that one).
+        """
         if name not in COLUMNS:
             raise KeyError(f"unknown column {name!r}; one of {COLUMNS}")
         store = self._store
@@ -175,13 +191,21 @@ class RoiModel(Observable):
             out[record.uid] = float(value)
         return out
 
-    def colorize(self, values: Mapping[int, float] | None, cmap: str = "viridis", categorical: bool = False, vmin: float | None = None, vmax: float | None = None) -> dict[int, tuple[int, int, int]]:
+    def colorize(
+        self,
+        values: Mapping[int, float] | None,
+        cmap: str = "viridis",
+        categorical: bool = False,
+        vmin: float | None = None,
+        vmax: float | None = None,
+    ) -> dict[int, tuple[int, int, int]]:
         """Color every ROI in ``values`` (uid -> number) through a colormap,
         like fastplotlib's ``cmap_transform``: continuous values are scaled
         between ``vmin`` / ``vmax`` (their extremes when None), categorical
         ones get one color per distinct value in sorted order. ROIs not in
         ``values`` keep their own color. None (or nothing) clears the tint.
-        Returns the uint8 rgb per uid that was applied."""
+        Returns the uint8 rgb per uid that was applied.
+        """
         if not values:
             self._store.set_tint(None)
             return {}
@@ -196,10 +220,15 @@ class RoiModel(Observable):
         else:
             lo = float(np.nanmin(v)) if vmin is None else float(vmin)
             hi = float(np.nanmax(v)) if vmax is None else float(vmax)
-            norm = np.zeros_like(v) if hi <= lo else np.clip((v - lo) / (hi - lo), 0.0, 1.0)
+            norm = (
+                np.zeros_like(v)
+                if hi <= lo
+                else np.clip((v - lo) / (hi - lo), 0.0, 1.0)
+            )
             rgb = np.atleast_2d(np.asarray(colormap(norm)))[:, :3]
         tint = {
-            u: tuple(int(round(float(c) * 255)) for c in row) for u, row in zip(uids, rgb)
+            u: tuple(int(round(float(c) * 255)) for c in row)
+            for u, row in zip(uids, rgb)
         }
         self._store.set_tint(tint)
         return tint

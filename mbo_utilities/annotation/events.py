@@ -10,14 +10,15 @@ returns.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 __all__ = ["ModelEvent", "Observable"]
 
 
 class ModelEvent:
     """One change: ``type`` names the feature, ``info`` says what changed,
-    ``source`` is the model that emitted it."""
+    ``source`` is the model that emitted it.
+    """
 
     __slots__ = ("type", "info", "source")
 
@@ -39,21 +40,29 @@ class Observable:
         self._handlers: dict[str, list[Callable[[ModelEvent], None]]] = {}
         self._events_blocked = False
 
-    def add_event_handler(self, handler: Callable[[ModelEvent], None], *types: str) -> None:
+    def add_event_handler(
+        self, handler: Callable[[ModelEvent], None], *types: str
+    ) -> None:
         """Call ``handler(event)`` on every event of ``types`` (all of them
-        when none are named). Registering the same handler twice is a no-op."""
+        when none are named). Registering the same handler twice is a no-op.
+        """
         if not callable(handler):
             raise TypeError("event handler must be callable")
         for kind in types or self.events:
             if kind not in self.events:
-                raise ValueError(f"{type(self).__name__} emits {self.events}, not {kind!r}")
+                raise ValueError(
+                    f"{type(self).__name__} emits {self.events}, not {kind!r}"
+                )
             handlers = self._handlers.setdefault(kind, [])
             if handler not in handlers:
                 handlers.append(handler)
 
-    def remove_event_handler(self, handler: Callable[[ModelEvent], None], *types: str) -> None:
+    def remove_event_handler(
+        self, handler: Callable[[ModelEvent], None], *types: str
+    ) -> None:
         """Forget ``handler`` for ``types`` (every type when none are named);
-        a handler that was never registered is ignored."""
+        a handler that was never registered is ignored.
+        """
         for kind in types or tuple(self._handlers):
             handlers = self._handlers.get(kind)
             if handlers and handler in handlers:
@@ -64,7 +73,8 @@ class Observable:
 
     def block_events(self, on: bool) -> None:
         """Silence every event while ``on``; a bulk edit unblocks and emits
-        one event of its own."""
+        one event of its own.
+        """
         self._events_blocked = bool(on)
 
     @property

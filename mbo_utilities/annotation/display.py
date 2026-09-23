@@ -51,7 +51,8 @@ DFF_METHODS = ("maxmin", "percentile")
 class DffSettings:
     """How a dF/F is computed from a raw trace: a rolling max-min baseline
     sized in seconds (``maxmin``, needs the row's ``fs``; falls back to the
-    percentile without one) or a static per-row percentile."""
+    percentile without one) or a static per-row percentile.
+    """
 
     method: str = "maxmin"
     window_s: float = 5.0
@@ -81,24 +82,35 @@ TRACE_PROFILES: dict[str, TraceProfile] = {
     # suite2p: F, Fneu and (from lbm_suite2p_python) norm_traces in percent;
     # its plot is F - 0.7 Fneu over a static 20th percentile
     "suite2p": TraceProfile(
-        pipeline="suite2p", kinds=("dff", "raw", "neuropil"), default="dff",
-        neuropil=True, dff=DffSettings(method="percentile"),
+        pipeline="suite2p",
+        kinds=("dff", "raw", "neuropil"),
+        default="dff",
+        neuropil=True,
+        dff=DffSettings(method="percentile"),
     ),
     # masknmf: norm_traces in percent; its Fneu is zeros, so no correction
     "masknmf": TraceProfile(
-        pipeline="masknmf", kinds=("dff", "raw"), default="dff",
+        pipeline="masknmf",
+        kinds=("dff", "raw"),
+        default="dff",
         dff=DffSettings(method="percentile"),
     ),
     # voltage: the curated (denoised) trace first, then the pipeline's own
     # dfof_raw (a fraction), the z-score and the lines' raw means in counts
     "voltage": TraceProfile(
-        pipeline="voltage", kinds=("denoised", "dff", "zscore", "raw"), default="denoised",
-        dff_percent=False, raw_label="F (counts)",
+        pipeline="voltage",
+        kinds=("denoised", "dff", "zscore", "raw"),
+        default="denoised",
+        dff_percent=False,
+        raw_label="F (counts)",
     ),
     # the ROI tool's mean engine: a mask mean plus a neuropil ring, no
     # pipeline; dF/F over the rolling baseline sized in seconds
     "mean": TraceProfile(
-        pipeline="mean", kinds=("dff", "raw", "neuropil"), default="dff", neuropil=True,
+        pipeline="mean",
+        kinds=("dff", "raw", "neuropil"),
+        default="dff",
+        neuropil=True,
     ),
 }
 
@@ -115,7 +127,8 @@ def trace_profile(engine: str) -> TraceProfile:
 
 def available_kinds(trace) -> tuple[str, ...]:
     """The kinds ``trace`` can show, in its profile's order: the arrays it
-    carries, plus ``dff`` whenever it has a raw trace to compute one from."""
+    carries, plus ``dff`` whenever it has a raw trace to compute one from.
+    """
     profile = trace_profile(trace.engine)
     out = []
     for kind in profile.kinds:
@@ -126,7 +139,8 @@ def available_kinds(trace) -> tuple[str, ...]:
 
 def displayed_kind(trace, kind: str | None = None) -> str | None:
     """The kind :func:`display_trace` shows for ``kind``: ``kind`` when the
-    row has it, else the profile's default, else the first it has."""
+    row has it, else the profile's default, else the first it has.
+    """
     kinds = available_kinds(trace)
     if not kinds:
         return None
@@ -145,7 +159,10 @@ def _corrected_raw(trace, neuropil: bool) -> np.ndarray:
 
 
 def display_trace(
-    trace, kind: str | None = None, settings: DffSettings | None = None, neuropil: bool = True
+    trace,
+    kind: str | None = None,
+    settings: DffSettings | None = None,
+    neuropil: bool = True,
 ) -> np.ndarray | None:
     """The row's trace as the panel plots it, in the kind
     :func:`displayed_kind` picks, or None when the row carries nothing.
@@ -176,10 +193,13 @@ def display_trace(
     return (dff[0] * 100.0).astype(np.float32)
 
 
-def neuropil_overlay(trace, kind: str | None = None, settings: DffSettings | None = None) -> np.ndarray | None:
+def neuropil_overlay(
+    trace, kind: str | None = None, settings: DffSettings | None = None
+) -> np.ndarray | None:
     """The neuropil trace drawn under a ``raw`` or ``dff`` row on the same
     scale (raw counts, or percent over its own baseline), for a profile that
-    offers the correction; None otherwise."""
+    offers the correction; None otherwise.
+    """
     profile = trace_profile(trace.engine)
     if not profile.neuropil or trace.Fneu is None:
         return None

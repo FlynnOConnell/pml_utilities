@@ -4,13 +4,14 @@ parameter access and normalization utilities.
 provides functions to get/set metadata parameters using canonical names
 and their aliases, with type conversion and defaults.
 """
+
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
-from .base import METADATA_PARAMS, ALIAS_MAP, VoxelSize
-import contextlib
+from .base import ALIAS_MAP, METADATA_PARAMS, VoxelSize
 
 
 def _rate_precedence() -> tuple[dict[str, tuple[int, str]], int]:
@@ -130,7 +131,8 @@ def _ome_time_scale(metadata: dict) -> tuple[float, str] | None:
             entry = multiscales[0]
             axes = entry["axes"]
             idx = next(
-                i for i, ax in enumerate(axes)
+                i
+                for i, ax in enumerate(axes)
                 if isinstance(ax, dict) and ax.get("type") == "time"
             )
             scale = float(
@@ -221,9 +223,7 @@ def resolve_effective_rate(
 
     # at equal rank the exactly-registered spelling outranks a case variant
     # ({"FS": 10, "fs": 20} must resolve from "fs", not dict order)
-    candidates.sort(
-        key=lambda c: (c[0], 0 if c[1] in _EXACT_RATE_SPELLINGS else 1)
-    )
+    candidates.sort(key=lambda c: (c[0], 0 if c[1] in _EXACT_RATE_SPELLINGS else 1))
     best_rank, best_key, best_fs, best_finterval, _ = candidates[0]
     if canonical_nulled and best_rank > _CANONICAL_RATE_MAX_RANK:
         return None, None, ""
@@ -614,9 +614,7 @@ def normalize_metadata(
         if name in ("dx", "dy", "dz"):
             continue  # already handled by VoxelSize
 
-        value = get_param(
-            metadata, name, override=overrides.get(name), shape=shape
-        )
+        value = get_param(metadata, name, override=overrides.get(name), shape=shape)
         if value is not None:
             # set canonical key
             metadata[name] = value

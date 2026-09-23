@@ -105,4 +105,6 @@ def draw_guarded(app: App, host: AppHost) -> None:
         if app.id not in _reported:
             _reported.add(app.id)
             logger.exception(f"{app.id} raised while drawing")
-        imgui.text_colored(imgui.ImVec4(1.0, 0.4, 0.4, 1.0), f"{type(error).__name__}: {error}")
+        imgui.text_colored(
+            imgui.ImVec4(1.0, 0.4, 0.4, 1.0), f"{type(error).__name__}: {error}"
+        )

@@ -7,34 +7,35 @@ Keybinds / Pipeline Settings popups (PopupAutoSize + begin_popup_modal).
 Live GPU usage lives in the Process Console's System panel; the compute
 (suite2p / cellpose) device lives in the suite2p settings.
 """
+
 from __future__ import annotations
 
 import os
 from typing import Any
 
-from imgui_bundle import imgui, hello_imgui, icons_fontawesome_6 as fa
+from imgui_bundle import hello_imgui, imgui
+from imgui_bundle import icons_fontawesome_6 as fa
 
 from mbo_utilities import log as _mbo_log
+from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.preferences import (
-    get_gpu_index,
-    set_gpu_index,
     get_compute_gpu,
-    get_linescan_auto_traces,
-    set_compute_gpu,
-    set_linescan_auto_traces,
     get_debug_logging,
-    set_debug_logging,
-    get_mem_monitor,
-    set_mem_monitor,
-    get_mem_monitor_interval,
-    set_mem_monitor_interval,
+    get_gpu_index,
+    get_linescan_auto_traces,
     get_mem_log_interval,
-    set_mem_log_interval,
+    get_mem_monitor,
+    get_mem_monitor_interval,
     get_mem_warn_pct,
+    set_compute_gpu,
+    set_debug_logging,
+    set_gpu_index,
+    set_linescan_auto_traces,
+    set_mem_log_interval,
+    set_mem_monitor,
+    set_mem_monitor_interval,
     set_mem_warn_pct,
 )
-from mbo_utilities.gui._imgui_helpers import PopupAutoSize
-
 
 _COL_ACCENT = imgui.ImVec4(0.20, 0.50, 0.85, 1.0)
 _COL_DIM = imgui.ImVec4(0.75, 0.75, 0.77, 1.0)
@@ -44,6 +45,7 @@ def compute_gpu_devices() -> list:
     """nvidia-smi compute devices (cached per call site). Empty on no GPU."""
     try:
         from mbo_utilities.gpu import gpu_devices
+
         return gpu_devices()
     except Exception:
         return []
@@ -134,11 +136,14 @@ def _refresh_gpu_panel(parent: Any) -> None:
     if 0 <= idx < len(adapters):
         parent._options_render_gpu = {
             "summary": _gpu._adapter_summary(adapters[idx]),
-            "source": source, "index": idx,
+            "source": source,
+            "index": idx,
         }
     else:
         parent._options_render_gpu = {
-            "summary": "wgpu default", "source": "auto", "index": -1,
+            "summary": "wgpu default",
+            "source": "auto",
+            "index": -1,
         }
 
 
@@ -152,6 +157,7 @@ def _ensure_gpu_list(parent: Any) -> None:
     if getattr(parent, "_options_gpu_adapters", None) is not None:
         return
     from mbo_utilities.gui._gpu_cache import get_adapters, get_default_index
+
     parent._options_gpu_adapters = list(get_adapters())
     parent._options_gpu_default_idx = get_default_index()
 
@@ -255,7 +261,8 @@ def draw_memory_options(obj: Any, tooltip: Any = None) -> None:
 
 def draw_linescan_options(parent: Any, tooltip=None) -> None:
     """The line-scan viewer's background trace toggle; shared by both
-    options popups. ``tooltip`` wraps long tooltips when given."""
+    options popups. ``tooltip`` wraps long tooltips when given.
+    """
     if not hasattr(parent, "_options_linescan_auto"):
         parent._options_linescan_auto = get_linescan_auto_traces()
     changed, value = imgui.checkbox(
@@ -285,9 +292,7 @@ def draw_options_popup(parent: Any) -> None:
     if not hasattr(parent, "_show_options_popup"):
         parent._show_options_popup = False
     if not hasattr(parent, "_options_sizer"):
-        parent._options_sizer = PopupAutoSize(
-            "Options##options_popup", anchor="center"
-        )
+        parent._options_sizer = PopupAutoSize("Options##options_popup", anchor="center")
     if not hasattr(parent, "_options_gpu_idx"):
         parent._options_gpu_idx = get_gpu_index()
     if not hasattr(parent, "_options_debug"):
@@ -311,7 +316,9 @@ def draw_options_popup(parent: Any) -> None:
 
     flags = parent._options_sizer.flags(imgui.WindowFlags_.no_saved_settings)
     opened, visible = imgui.begin_popup_modal(
-        "Options##options_popup", p_open=True, flags=flags,
+        "Options##options_popup",
+        p_open=True,
+        flags=flags,
     )
     if not opened:
         return
@@ -346,8 +353,9 @@ def draw_options_popup(parent: Any) -> None:
         # what fastplotlib actually renders with right now
         rg = getattr(parent, "_options_render_gpu", None)
         if rg:
-            note = {"live": "", "preference": "  (selected)",
-                    "auto": "  (auto)"}.get(rg.get("source"), "")
+            note = {"live": "", "preference": "  (selected)", "auto": "  (auto)"}.get(
+                rg.get("source"), ""
+            )
             imgui.text_colored(_COL_DIM, f"  using: {rg['summary']}{note}")
 
         imgui.dummy(imgui.ImVec2(0, 8))

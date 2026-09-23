@@ -80,9 +80,17 @@ class CurationServer:
         The page title; the dashboard's own by default.
     """
 
-    def __init__(self, path=None, *, channel: int = 0, host: str = DEFAULT_HOST,
-                 port: int = DEFAULT_PORT, size=DEFAULT_SIZE, title: str | None = None,
-                 logger: logging.Logger | None = None):
+    def __init__(
+        self,
+        path=None,
+        *,
+        channel: int = 0,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        size=DEFAULT_SIZE,
+        title: str | None = None,
+        logger: logging.Logger | None = None,
+    ):
         # the auto backend is never used here, but fastplotlib resolves it at
         # import and the desktop branch of the figure helper would ask Qt for
         # a screen: a server has none
@@ -94,7 +102,9 @@ class CurationServer:
         self.logger = logger or logging.getLogger("curation_server")
         self.host = str(host)
         self.port = int(port)
-        self.vis = CurationVis(path, channel=channel, canvas="http", size=tuple(size), logger=self.logger)
+        self.vis = CurationVis(
+            path, channel=channel, canvas="http", size=tuple(size), logger=self.logger
+        )
         self.title = title or self.vis.title
         resources["index.html"] = "text/html", PAGE_HTML.replace("$title", self.title)
         self.asgi = asgi
@@ -123,7 +133,11 @@ class CurationServer:
         import uvicorn
 
         return uvicorn.Config(
-            self.asgi, host=self.host, port=self.port, log_level="warning", **kwargs,
+            self.asgi,
+            host=self.host,
+            port=self.port,
+            log_level="warning",
+            **kwargs,
         )
 
     def serve(self) -> None:
@@ -154,8 +168,14 @@ class CurationServer:
         self.vis.close()
 
 
-def serve_curation(path=None, *, channel: int = 0, host: str = DEFAULT_HOST,
-                   port: int = DEFAULT_PORT, size=DEFAULT_SIZE) -> None:
+def serve_curation(
+    path=None,
+    *,
+    channel: int = 0,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    size=DEFAULT_SIZE,
+) -> None:
     """Serve the dashboard on ``path`` until interrupted."""
     CurationServer(path, channel=channel, host=host, port=port, size=size).serve()
 
@@ -167,17 +187,33 @@ def _size(text: str) -> tuple[int, int]:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("path", nargs="?", type=Path,
-                    help="a PF folder (or the experiment folder holding it), or a line-scan .mesc "
-                         "(default: the last data path)")
-    ap.add_argument("--host", default=DEFAULT_HOST,
-                    help=f"interface to listen on (default {DEFAULT_HOST}; 0.0.0.0 for the network)")
+    ap.add_argument(
+        "path",
+        nargs="?",
+        type=Path,
+        help="a PF folder (or the experiment folder holding it), or a line-scan .mesc "
+        "(default: the last data path)",
+    )
+    ap.add_argument(
+        "--host",
+        default=DEFAULT_HOST,
+        help=f"interface to listen on (default {DEFAULT_HOST}; 0.0.0.0 for the network)",
+    )
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
-    ap.add_argument("--channel", type=int, default=0, help="channel averaged for raw line scans")
-    ap.add_argument("--size", type=_size, default=DEFAULT_SIZE, metavar="WxH",
-                    help="canvas size until a browser reports its window (default 1500x900)")
+    ap.add_argument(
+        "--channel", type=int, default=0, help="channel averaged for raw line scans"
+    )
+    ap.add_argument(
+        "--size",
+        type=_size,
+        default=DEFAULT_SIZE,
+        metavar="WxH",
+        help="canvas size until a browser reports its window (default 1500x900)",
+    )
     args = ap.parse_args(argv)
-    serve_curation(args.path, channel=args.channel, host=args.host, port=args.port, size=args.size)
+    serve_curation(
+        args.path, channel=args.channel, host=args.host, port=args.port, size=args.size
+    )
 
 
 if __name__ == "__main__":

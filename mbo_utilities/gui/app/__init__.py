@@ -30,10 +30,22 @@ from mbo_utilities.gui.app._menu import MenuBar
 from mbo_utilities.gui.app._texture import Texture
 from mbo_utilities.gui.app._window import AppWindow
 
-__all__ = ["DOCKS", "App", "AppHost", "AppWindow", "Dock", "MenuBar", "Texture", "build_host", "run_app"]
+__all__ = [
+    "DOCKS",
+    "App",
+    "AppHost",
+    "AppWindow",
+    "Dock",
+    "MenuBar",
+    "Texture",
+    "build_host",
+    "run_app",
+]
 
 
-def build_host(data: Any = None, *, apps=None, size: tuple[int, int] = (1400, 900)) -> AppHost:
+def build_host(
+    data: Any = None, *, apps=None, size: tuple[int, int] = (1400, 900)
+) -> AppHost:
     """The host: two subplots, every app registered, the movie and traces mounted."""
     import fastplotlib as fpl
 
@@ -56,7 +68,9 @@ def build_host(data: Any = None, *, apps=None, size: tuple[int, int] = (1400, 90
     return host
 
 
-def run_app(path=None, *, nt: int = 500, frames: int = 0, size: tuple[int, int] = (1400, 900)) -> AppHost:
+def run_app(
+    path=None, *, nt: int = 500, frames: int = 0, size: tuple[int, int] = (1400, 900)
+) -> AppHost:
     """Open the app host, on ``path`` when given, else on a synthetic movie.
 
     ``path`` is read as ``(T, Y, X)`` from the first z-plane and colour

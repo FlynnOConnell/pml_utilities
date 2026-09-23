@@ -5,17 +5,17 @@ validates that `.shape` returns 5D (T, C, Z, Y, X) for each array type,
 and that nt/nc/nz/ny/nx match expected dimension sizes.
 """
 
-import numpy as np
-import pytest
 import tempfile
 from pathlib import Path
 
+import numpy as np
+import pytest
 from mbo_utilities.arrays import (
+    DIMS,
     BinArray,
     NumpyArray,
     TiffArray,
     ZarrArray,
-    DIMS,
 )
 from mbo_utilities.arrays._base import Shape5DMixin
 
@@ -95,7 +95,7 @@ class TestTiffArrayShape5D:
     """TiffArray shape5d for single-file and volume data."""
 
     def test_single_file_3d(self, synthetic_3d_data):
-        """single tiff file: shape is (T, 1, Y, X), shape5d adds C=1."""
+        """Single tiff file: shape is (T, 1, Y, X), shape5d adds C=1."""
         import tifffile
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -113,7 +113,7 @@ class TestTiffArrayShape5D:
             assert s5[4] == 128
 
     def test_volume_dir(self, synthetic_4d_data):
-        """volume dir with plane files: shape5d includes Z."""
+        """Volume dir with plane files: shape5d includes Z."""
         import tifffile
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -128,8 +128,8 @@ class TestTiffArrayShape5D:
             s5 = arr.shape
             assert len(s5) == 5
             assert s5[0] == 10  # T
-            assert s5[1] == 1   # C
-            assert s5[2] == 3   # Z
+            assert s5[1] == 1  # C
+            assert s5[2] == 3  # Z
             assert s5[3] == 64  # Y
             assert s5[4] == 64  # X
             assert arr.nz == 3
@@ -143,7 +143,12 @@ class TestZarrArrayShape5D:
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "test.zarr"
-            store = zarr.open(str(path), mode="w", shape=synthetic_4d_data.shape, dtype=synthetic_4d_data.dtype)
+            store = zarr.open(
+                str(path),
+                mode="w",
+                shape=synthetic_4d_data.shape,
+                dtype=synthetic_4d_data.dtype,
+            )
             store[:] = synthetic_4d_data
 
             arr = ZarrArray(path)
@@ -157,7 +162,7 @@ class TestShape5DConsistency:
     """cross-array consistency checks."""
 
     def test_shape5d_length_always_5(self, synthetic_3d_data, synthetic_4d_data):
-        """all array types return exactly 5 elements."""
+        """All array types return exactly 5 elements."""
         arr3 = NumpyArray(synthetic_3d_data)
         arr4 = NumpyArray(synthetic_4d_data)
 

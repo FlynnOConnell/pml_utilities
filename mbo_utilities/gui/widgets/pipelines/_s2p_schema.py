@@ -52,6 +52,7 @@ def _cache_dir() -> Path:
     if override:
         return Path(override)
     from mbo_utilities.preferences import get_mbo_dirs
+
     return get_mbo_dirs()["cache"]
 
 
@@ -166,7 +167,9 @@ def _start_loader() -> None:
         if _LOAD_THREAD is not None:
             return
         t = threading.Thread(
-            target=_load_or_build, daemon=True, name="s2p-schema-loader",
+            target=_load_or_build,
+            daemon=True,
+            name="s2p-schema-loader",
         )
         _LOAD_THREAD = t
     t.start()
@@ -304,10 +307,16 @@ _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
     "chan2_threshold": (("detection", "chan2_threshold"), None),
     "cellpose_chan2": (("detection", "cellpose_chan2"), None),
     # detection.sparsery_settings
-    "highpass_neuropil": (("detection", "sparsery_settings", "highpass_neuropil"), None),
+    "highpass_neuropil": (
+        ("detection", "sparsery_settings", "highpass_neuropil"),
+        None,
+    ),
     "max_ROIs": (("detection", "sparsery_settings", "max_ROIs"), None),
     "spatial_scale": (("detection", "sparsery_settings", "spatial_scale"), None),
-    "active_percentile": (("detection", "sparsery_settings", "active_percentile"), None),
+    "active_percentile": (
+        ("detection", "sparsery_settings", "active_percentile"),
+        None,
+    ),
     # detection.sourcery_settings
     "connected": (("detection", "sourcery_settings", "connected"), None),
     "max_iterations": (("detection", "sourcery_settings", "max_iterations"), None),
@@ -317,7 +326,10 @@ _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
     "cellpose_img": (("detection", "cellpose_settings", "img"), None),
     "highpass_spatial": (("detection", "cellpose_settings", "highpass_spatial"), None),
     "flow_threshold": (("detection", "cellpose_settings", "flow_threshold"), None),
-    "cellprob_threshold": (("detection", "cellpose_settings", "cellprob_threshold"), None),
+    "cellprob_threshold": (
+        ("detection", "cellpose_settings", "cellprob_threshold"),
+        None,
+    ),
     # classification
     "classifier_path": (("classification", "classifier_path"), None),
     "use_builtin_classifier": (("classification", "use_builtin_classifier"), None),
@@ -393,10 +405,12 @@ def _mbo_defaults() -> dict[str, Any]:
     global _MBO_DEFAULTS
     if _MBO_DEFAULTS is None:
         import dataclasses as _dc
+
         from mbo_utilities.gui.widgets.pipelines.settings import (
             Suite2pDB,
             Suite2pSettings,
         )
+
         out: dict[str, Any] = {}
         for cls in (Suite2pSettings, Suite2pDB):
             for f in _dc.fields(cls):
@@ -453,8 +467,6 @@ def get_default(mbo_field: str) -> Any:
     return default
 
 
-
-
 def is_default(mbo_field: str, value: Any) -> bool:
     """Whether the given value matches the default. False for mbo-only fields.
 
@@ -508,6 +520,7 @@ def is_default(mbo_field: str, value: Any) -> bool:
         and not isinstance(default, bool)
     ):
         import math
+
         try:
             return math.isclose(
                 float(value), float(default), rel_tol=1e-6, abs_tol=1e-9
@@ -679,8 +692,13 @@ _FLAT_TO_MBO: dict[str, Any] = {
 
 
 _STRUCTURED_TOP_KEYS = {
-    "run", "io", "registration", "detection",
-    "classification", "extraction", "dcnv_preprocess",
+    "run",
+    "io",
+    "registration",
+    "detection",
+    "classification",
+    "extraction",
+    "dcnv_preprocess",
 }
 
 
@@ -725,7 +743,11 @@ def from_structured(settings: dict) -> dict[str, Any]:
 
     # cellpose_settings.params is a dict with optional `niter`; mbo stores
     # it as a top-level int (0 = "let cellpose decide").
-    cp = settings.get("detection", {}).get("cellpose_settings", {}) if isinstance(settings.get("detection"), dict) else {}
+    cp = (
+        settings.get("detection", {}).get("cellpose_settings", {})
+        if isinstance(settings.get("detection"), dict)
+        else {}
+    )
     params = cp.get("params") if isinstance(cp, dict) else None
     if isinstance(params, dict) and "niter" in params:
         out["cellpose_niter"] = int(_to_py(params["niter"]))
@@ -848,7 +870,9 @@ def from_flat(ops: dict) -> dict[str, Any]:
             out["rastermap_volumetric"] = True
             any_mode = True
             if "n_clusters" in volumetric and volumetric["n_clusters"] is not None:
-                out["rastermap_volumetric_n_clusters"] = int(_to_py(volumetric["n_clusters"]))
+                out["rastermap_volumetric_n_clusters"] = int(
+                    _to_py(volumetric["n_clusters"])
+                )
             if "n_PCs" in volumetric and volumetric["n_PCs"] is not None:
                 out["rastermap_volumetric_n_pcs"] = int(_to_py(volumetric["n_PCs"]))
         if any_mode:
@@ -870,6 +894,7 @@ def from_npy_file(path) -> dict[str, Any]:
     Accepts a pickled-dict .npy (the standard suite2p output shape).
     """
     import numpy as np
+
     arr = np.load(str(path), allow_pickle=True)
     d = arr.item() if hasattr(arr, "item") and arr.ndim == 0 else arr
     if not isinstance(d, dict):

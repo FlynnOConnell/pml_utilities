@@ -7,17 +7,23 @@ as lazy arrays conforming to LazyArrayProtocol.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
 from mbo_utilities import log
-from mbo_utilities.arrays._base import _imwrite_base, _index_5d_into_raw, DIMS, ReductionMixin, Shape5DMixin
+from mbo_utilities.arrays._base import (
+    DIMS,
+    ReductionMixin,
+    Shape5DMixin,
+    _imwrite_base,
+    _index_5d_into_raw,
+)
 from mbo_utilities.arrays.features._dim_labels import DEFAULT_DIMS
 from mbo_utilities.lazy_array import register_array_class
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
-import contextlib
 
 logger = log.get("arrays.numpy")
 
@@ -246,7 +252,9 @@ class NumpyArray(ReductionMixin, Shape5DMixin):
                 fallback = DEFAULT_DIMS.get(source.ndim)
                 log.get().warning(
                     "dims %r unusable for shape %r (%s); inferring %s",
-                    tuple(declared), source.shape, e,
+                    tuple(declared),
+                    source.shape,
+                    e,
                     "".join(fallback) if fallback else "?",
                 )
                 declared = fallback
@@ -262,7 +270,9 @@ class NumpyArray(ReductionMixin, Shape5DMixin):
         log.get().info(
             "dims %s -> %s  shape %s%s",
             "".join(self._declared_dims) if self._declared_dims else "?",
-            "".join(DIMS), self._shape5d(), suffix,
+            "".join(DIMS),
+            self._shape5d(),
+            suffix,
         )
 
     def __getitem__(self, item):
@@ -358,7 +368,6 @@ class NumpyArray(ReductionMixin, Shape5DMixin):
         if declared is not None:
             self.dims = declared
 
-
     def close(self):
         """Release resources and clean up temporary files."""
         if self._npz_file is not None:
@@ -395,14 +404,13 @@ class NumpyArray(ReductionMixin, Shape5DMixin):
 
     def imshow(self, **kwargs):
         """Display array using fastplotlib ImageWidget."""
-        import fastplotlib as fpl
-
         histogram_widget = kwargs.pop("histogram_widget", True)
         figure_kwargs = kwargs.pop("figure_kwargs", {"size": (800, 800)})
         # get min/max from first frame for contrast scaling
         first_frame = self.data[0]
         graphic_kwargs = kwargs.pop(
-            "graphic_kwargs", {"vmin": float(first_frame.min()), "vmax": float(first_frame.max())}
+            "graphic_kwargs",
+            {"vmin": float(first_frame.min()), "vmax": float(first_frame.max())},
         )
 
         # always 5D TCZYX: sliders for t, c, z
@@ -411,6 +419,7 @@ class NumpyArray(ReductionMixin, Shape5DMixin):
         window_sizes = kwargs.pop("window_sizes", (1, None, None))
 
         from mbo_utilities.gui._ndviewer import MboNDViewer
+
         return MboNDViewer(
             data=self.data,
             slider_dim_names=slider_dim_names,

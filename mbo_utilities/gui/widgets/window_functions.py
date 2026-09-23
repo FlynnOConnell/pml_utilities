@@ -7,10 +7,10 @@ always shows for any data with temporal dimension.
 
 from typing import Any
 
-from imgui_bundle import imgui, hello_imgui
+from imgui_bundle import hello_imgui, imgui
 
-from mbo_utilities.gui.widgets._base import Widget
 from mbo_utilities.gui._imgui_helpers import set_tooltip
+from mbo_utilities.gui.widgets._base import Widget
 
 
 class WindowFunctionsWidget(Widget):
@@ -23,7 +23,11 @@ class WindowFunctionsWidget(Widget):
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
         """Supported when data has a time dimension with more than 1 frame."""
-        arr = parent.image_widget.data[0] if getattr(parent, "image_widget", None) else None
+        arr = (
+            parent.image_widget.data[0]
+            if getattr(parent, "image_widget", None)
+            else None
+        )
         if arr is None:
             return False
         dims = getattr(arr, "dims", None)
@@ -48,7 +52,9 @@ class WindowFunctionsWidget(Widget):
         # projection type combo (temporal operations only)
         options = ["mean", "max", "std"]
 
-        current_display_idx = options.index(parent.proj) if parent.proj in options else 0
+        current_display_idx = (
+            options.index(parent.proj) if parent.proj in options else 0
+        )
 
         imgui.set_next_item_width(hello_imgui.em_size(6))
         proj_changed, selected_display_idx = imgui.combo(
@@ -125,7 +131,11 @@ class SpatialFunctionsWidget(Widget):
         ill-defined and gaussian blur is trivially available on the
         already-displayed frame without this control.
         """
-        arr = parent.image_widget.data[0] if getattr(parent, "image_widget", None) else None
+        arr = (
+            parent.image_widget.data[0]
+            if getattr(parent, "image_widget", None)
+            else None
+        )
         if arr is None:
             return False
         shape = getattr(arr, "shape", None)
@@ -145,7 +155,11 @@ class SpatialFunctionsWidget(Widget):
         # gaussian sigma
         imgui.set_next_item_width(hello_imgui.em_size(6))
         gaussian_changed, new_sigma = imgui.input_float(
-            "Gaussian Sigma", parent.gaussian_sigma, step=0.1, step_fast=1.0, format="%.1f"
+            "Gaussian Sigma",
+            parent.gaussian_sigma,
+            step=0.1,
+            step_fast=1.0,
+            format="%.1f",
         )
         set_tooltip(
             "Apply a Gaussian blur to the preview image. Sigma is in pixels; larger values yield stronger smoothing."
@@ -162,7 +176,9 @@ class SpatialFunctionsWidget(Widget):
             "Mean Subtraction", parent.mean_subtraction
         )
         if not zstats_ready:
-            set_tooltip("Mean subtraction requires z-stats to be computed first (in progress...)")
+            set_tooltip(
+                "Mean subtraction requires z-stats to be computed first (in progress...)"
+            )
             imgui.end_disabled()
         else:
             set_tooltip(

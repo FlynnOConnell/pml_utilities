@@ -11,15 +11,16 @@ import importlib.util
 import inspect
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from mbo_utilities import log
 from mbo_utilities.arrays import (
     BinArray,
-    LBMPiezoArray,
     H5Array,
     LBMArray,
+    LBMPiezoArray,
     MP4Array,
     NumpyArray,
     PiezoArray,
@@ -35,7 +36,6 @@ from mbo_utilities.arrays.isoview import (
     detect_isoview_kind,
 )
 from mbo_utilities.lazy_array import _dispatch
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -46,7 +46,15 @@ logger = log.get("reader")
 MBO_SUPPORTED_FTYPES = [".tiff", ".zarr", ".bin", ".h5", ".klb", ".mp4"]
 # reading accepts .tif as alias for .tiff
 MBO_READABLE_FTYPES = [
-    ".tiff", ".tif", ".zarr", ".bin", ".h5", ".mesc", ".npy", ".klb", ".mp4",
+    ".tiff",
+    ".tif",
+    ".zarr",
+    ".bin",
+    ".h5",
+    ".mesc",
+    ".npy",
+    ".klb",
+    ".mp4",
 ]
 
 # extensions that require an optional third-party package. when the package
@@ -55,7 +63,8 @@ MBO_READABLE_FTYPES = [
 _OPTIONAL_PKG_BY_EXT = {".klb": "pyklb"}
 
 MBO_AVAILABLE_FTYPES = [
-    ext for ext in MBO_SUPPORTED_FTYPES
+    ext
+    for ext in MBO_SUPPORTED_FTYPES
     if _OPTIONAL_PKG_BY_EXT.get(ext) is None
     or importlib.util.find_spec(_OPTIONAL_PKG_BY_EXT[ext]) is not None
 ]
@@ -109,7 +118,8 @@ def _get_init_params(cls: type) -> set[str]:
         return {
             name
             for name, param in sig.parameters.items()
-            if name != "self" and param.kind
+            if name != "self"
+            and param.kind
             not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
         }
     except (ValueError, TypeError):
@@ -206,13 +216,16 @@ def imread(
     arr = _imread_impl(inputs, **kwargs)
     if frame_average is not None and int(frame_average) > 1:
         from mbo_utilities.arrays._average_view import average_frames
+
         arr = average_frames(arr, int(frame_average))
     if channel is not None:
         from mbo_utilities.arrays._channel_view import _ChannelView
+
         if not hasattr(arr, "shape") or len(arr.shape) < 5:
             logger.debug(
                 "imread(channel=%r): underlying array is %dD, returning unwrapped",
-                channel, getattr(arr, "ndim", "?"),
+                channel,
+                getattr(arr, "ndim", "?"),
             )
         else:
             arr = _ChannelView(arr, int(channel))
@@ -236,6 +249,7 @@ def _imread_impl(
     # back to that base so imread()/pipeline() operate on the real 5D array
     # (the view drops axes the writer/pipeline rely on).
     from mbo_utilities.squeeze import SqueezedView
+
     if isinstance(inputs, SqueezedView):
         return inputs.base
     # Pass through already-loaded lazy arrays (has _imwrite method)
@@ -253,7 +267,9 @@ def _imread_impl(
         if not p.is_dir():
             for ancestor in p.parents:
                 if ancestor.suffix.lower() == ".zarr" and ancestor.is_dir():
-                    logger.debug(f"Redirecting {p.name} -> parent zarr store {ancestor}")
+                    logger.debug(
+                        f"Redirecting {p.name} -> parent zarr store {ancestor}"
+                    )
                     p = ancestor
                     break
 
@@ -280,9 +296,13 @@ def _imread_impl(
             if p.name == "reg_tif" and (p.parent / "ops.npy").exists():
                 logger.info(f"Detected Suite2p reg_tif folder at {p}")
                 return Suite2pArray(p.parent / "ops.npy", use_reg_tif=True)
-            plane_subdirs = [d for d in p.iterdir() if d.is_dir() and (d / "ops.npy").exists()]
+            plane_subdirs = [
+                d for d in p.iterdir() if d.is_dir() and (d / "ops.npy").exists()
+            ]
             if plane_subdirs:
-                logger.info(f"Detected Suite2p volume with {len(plane_subdirs)} planes in {p}")
+                logger.info(
+                    f"Detected Suite2p volume with {len(plane_subdirs)} planes in {p}"
+                )
                 return Suite2pArray(p)
 
         # Isoview detection runs before file-vs-dir dispatch so "Open File"
@@ -335,16 +355,22 @@ def _imread_impl(
                     return Suite2pArray(p.parent / "ops.npy", use_reg_tif=True)
 
                 # Check for plane subdirectories (volumetric suite2p)
-                plane_subdirs = [d for d in p.iterdir() if d.is_dir() and (d / "ops.npy").exists()]
+                plane_subdirs = [
+                    d for d in p.iterdir() if d.is_dir() and (d / "ops.npy").exists()
+                ]
                 if plane_subdirs:
-                    logger.info(f"Detected Suite2p volume with {len(plane_subdirs)} planes in {p}")
+                    logger.info(
+                        f"Detected Suite2p volume with {len(plane_subdirs)} planes in {p}"
+                    )
                     return Suite2pArray(p)
 
                 # Check for TIFF volume structure (planeXX.tiff files)
                 # unified TiffArray handles both single files and plane volumes
                 plane_tiffs = sorted(p.glob("plane*.tif*"))
                 if plane_tiffs:
-                    logger.info(f"Detected TIFF volume with {len(plane_tiffs)} planes in {p}")
+                    logger.info(
+                        f"Detected TIFF volume with {len(plane_tiffs)} planes in {p}"
+                    )
                     return TiffArray(p)
 
                 paths = [Path(f) for f in p.glob("*") if f.is_file()]
@@ -418,7 +444,9 @@ def _imread_impl(
             plane_nums = {_extract_tiff_plane_number(p.name) for p in paths}
             plane_nums.discard(None)
             if len(plane_nums) > 1:
-                logger.debug("Detected multiple planes in file list, loading as volumetric TiffArray.")
+                logger.debug(
+                    "Detected multiple planes in file list, loading as volumetric TiffArray."
+                )
                 return TiffArray(paths, **_filter_kwargs(TiffArray, kwargs))
 
         # Try array classes in priority order (most specific first)
@@ -449,7 +477,9 @@ def _imread_impl(
                             f"file(s) from directory load"
                         )
                     paths = valid
-                logger.debug(f"Detected {description}, loading as {array_cls.__name__}.")
+                logger.debug(
+                    f"Detected {description}, loading as {array_cls.__name__}."
+                )
                 return array_cls(paths, **_filter_kwargs(array_cls, kwargs))
 
     if first.suffix == ".bin":
@@ -532,9 +562,13 @@ def _imread_impl(
             logger.info("Detected KLB file in TM folder, loading as isoview-clusterpt.")
             return IsoviewArray(parent.parent, kind="clusterpt")
 
-        tm_folders = [d for d in parent.iterdir() if d.is_dir() and d.name.startswith("TM")]
+        tm_folders = [
+            d for d in parent.iterdir() if d.is_dir() and d.name.startswith("TM")
+        ]
         if tm_folders:
-            logger.info("Detected KLB file in clusterPT root, loading as isoview-clusterpt.")
+            logger.info(
+                "Detected KLB file in clusterPT root, loading as isoview-clusterpt."
+            )
             return IsoviewArray(parent, kind="clusterpt")
 
         logger.info(f"Loading standalone KLB file: {first}")
@@ -542,5 +576,3 @@ def _imread_impl(
         return NumpyArray(data)
 
     raise TypeError(f"Unsupported file type: {first.suffix}")
-
-

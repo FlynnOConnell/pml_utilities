@@ -20,15 +20,13 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import mbo_utilities as mbo
 import numpy as np
-import pytest
-import zarr
 
 # import order matters: tifffile must be imported before mbo for the
 # package's pre-existing import wiring (matches tests/test_roundtrip.py)
 import tifffile  # noqa: F401
-
-import mbo_utilities as mbo
+import zarr
 from mbo_utilities.arrays import NumpyArray
 
 
@@ -286,7 +284,8 @@ class TestUnshardedFallback:
 
 class TestGenericWriterFallback:
     """The `_try_generic_writers` zarr branch (raw numpy, no `_imwrite`)
-    should produce the same optimal layout as the volumetric writer."""
+    should produce the same optimal layout as the volumetric writer.
+    """
 
     def test_5d_numpy_through_generic_writer(self):
         """Raw numpy 5D array through `imwrite` (no `_imwrite` attr) should
@@ -308,7 +307,8 @@ class TestGenericWriterFallback:
 
     def test_3d_numpy_through_generic_writer(self):
         """Raw numpy 3D TYX array through generic writer should produce
-        chunks=(1,Y,X) and shards=(T,Y,X)."""
+        chunks=(1,Y,X) and shards=(T,Y,X).
+        """
         from mbo_utilities._writers import _try_generic_writers
 
         data = (np.random.rand(20, 64, 48) * 1000).astype(np.uint16)
@@ -325,7 +325,8 @@ class TestGenericWriterFallback:
 
     def test_2d_numpy_through_generic_writer_no_shards(self):
         """Raw numpy 2D YX has no T axis to scrub — sharding adds no
-        value and shouldn't be applied. Single chunk is correct."""
+        value and shouldn't be applied. Single chunk is correct.
+        """
         from mbo_utilities._writers import _try_generic_writers
 
         data = (np.random.rand(64, 48) * 1000).astype(np.uint16)
@@ -344,7 +345,8 @@ class TestGenericWriterFallback:
 class TestPyramidLevels:
     """When `pyramid=True`, every level — not just level 0 — should
     use the same chunk/shard recipe so a viewer falling back to a
-    lower-resolution level still gets per-frame zarr reads."""
+    lower-resolution level still gets per-frame zarr reads.
+    """
 
     def test_pyramid_levels_share_layout_recipe(self):
         # 5D with enough Y, X to make multiple pyramid levels meaningful.
@@ -354,16 +356,19 @@ class TestPyramidLevels:
         try:
             wrapped = NumpyArray(data, dim_order="TCZYX")
             mbo.imwrite(
-                wrapped, out, ext=".zarr", ome=True, overwrite=True,
-                pyramid=True, pyramid_max_layers=2,
+                wrapped,
+                out,
+                ext=".zarr",
+                ome=True,
+                overwrite=True,
+                pyramid=True,
+                pyramid_max_layers=2,
             )
             written = [p for p in out.iterdir() if p.suffix == ".zarr"]
             assert len(written) == 1
             z = zarr.open(str(written[0]), mode="r")
 
-            level_paths = sorted(
-                k for k in z if k.isdigit()
-            )
+            level_paths = sorted(k for k in z if k.isdigit())
             # we should have at least level 0 and one downsampled level
             assert len(level_paths) >= 2, (
                 f"expected pyramid >= 2 levels, got {level_paths}"
@@ -378,8 +383,7 @@ class TestPyramidLevels:
                 )
                 # every level uses (T, 1, 1, Y, X) shard
                 assert a.shards == (data.shape[0], 1, 1, Y, X), (
-                    f"level {lvl}: shards {a.shards} != "
-                    f"({data.shape[0]},1,1,{Y},{X})"
+                    f"level {lvl}: shards {a.shards} != ({data.shape[0]},1,1,{Y},{X})"
                 )
         finally:
             shutil.rmtree(out, ignore_errors=True)

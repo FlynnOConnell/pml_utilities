@@ -4,16 +4,14 @@ Common helpers and base utilities for array types.
 
 from __future__ import annotations
 
-from os.path import commonpath
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+from numpy.exceptions import AxisError
 
 from mbo_utilities import log
 from mbo_utilities.lazy_array import LazyArray
-from mbo_utilities.arrays.features._dim_labels import get_dims
-from numpy.exceptions import AxisError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -32,6 +30,7 @@ def get_dtype(dtype):
         return np.dtype(dtype)
     except TypeError:
         return np.dtype(str(dtype))
+
 
 # canonical 5D dimension order (OME-NGFF 0.5)
 DIMS = ("T", "C", "Z", "Y", "X")
@@ -55,7 +54,7 @@ def _normalize_key(key, ndim):
     if Ellipsis in key:
         idx = key.index(Ellipsis)
         n_missing = ndim - (len(key) - 1)
-        key = key[:idx] + (slice(None),) * max(n_missing, 0) + key[idx + 1:]
+        key = key[:idx] + (slice(None),) * max(n_missing, 0) + key[idx + 1 :]
     return key
 
 
@@ -64,9 +63,9 @@ def _normalize_key(key, ndim):
 # 5D index onto the underlying lower-rank array.
 _SKIP_BY_RAW_NDIM = {
     5: (),
-    4: (1,),          # C
-    3: (1, 2),        # C, Z
-    2: (0, 1, 2),     # T, C, Z
+    4: (1,),  # C
+    3: (1, 2),  # C, Z
+    2: (0, 1, 2),  # T, C, Z
     1: (0, 1, 2, 3),  # T, C, Z, Y
 }
 
@@ -303,11 +302,11 @@ def _imwrite_base(
     # imported here, not at module top, to avoid a circular import:
     # _writers -> metadata -> arrays -> _base -> _writers
     from mbo_utilities._writers import (
+        _scanphase_record,
         _write_plane,
+        _write_scanphase_sidecar,
         _write_volumetric_tiff,
         _write_volumetric_zarr,
-        _scanphase_record,
-        _write_scanphase_sidecar,
     )
 
     outpath = Path(outpath)
@@ -353,6 +352,7 @@ def _imwrite_base(
 
     if debug:
         from mbo_utilities import log
+
         _logger = log.get("writers")
         _n_shifts = len(md.get("plane_shifts", [])) if "plane_shifts" in md else 0
         _logger.info(f"_imwrite_base: plane_shifts={_n_shifts} planes")
@@ -377,7 +377,7 @@ def _imwrite_base(
         num_channels = getattr(arr, "nc", 1)
 
     def _norm_sel(val):
-        """normalize a selection kwarg to list[int] or None (=all)."""
+        """Normalize a selection kwarg to list[int] or None (=all)."""
         if val is None:
             return None
         if isinstance(val, (int, np.integer)):
@@ -547,7 +547,6 @@ def _imwrite_base(
 
     # use OutputMetadata for reactive dz/fs values
     from mbo_utilities.metadata import OutputMetadata
-    from mbo_utilities.arrays.features import parse_selection
 
     # convert 1-based selections to 0-based indices for OutputMetadata
     frame_indices_0 = None
@@ -621,12 +620,18 @@ def _imwrite_base(
 
     for c_idx in channels_0idx:
         for plane_idx in planes_0idx:
-            from mbo_utilities.arrays.features import OutputFilename, TAG_REGISTRY, DimensionTag
+            from mbo_utilities.arrays.features import (
+                TAG_REGISTRY,
+                DimensionTag,
+                OutputFilename,
+            )
 
             # build per-plane Z + T tags once — used for both the
             # Suite2p-layout plane dir name (.bin) and the generic
             # `tp...zplaneNN.ext` filename (.npy etc.).
-            z_tag = DimensionTag.from_dim_size(TAG_REGISTRY["Z"], num_planes, [plane_idx + 1])
+            z_tag = DimensionTag.from_dim_size(
+                TAG_REGISTRY["Z"], num_planes, [plane_idx + 1]
+            )
             t_tag = DimensionTag.from_dim_size(TAG_REGISTRY["T"], nframes, frames_list)
 
             if output_name:
@@ -767,12 +772,11 @@ class TiffReaderMixin:
 
     def imshow(self, **kwargs):
         """Display array using fastplotlib ImageWidget."""
-        import fastplotlib as fpl
-
         histogram_widget = kwargs.get("histogram_widget", True)
         figure_kwargs = kwargs.get("figure_kwargs", {"size": (800, 1000)})
         window_funcs = kwargs.get("window_funcs")
         from mbo_utilities.gui._ndviewer import MboNDViewer
+
         return MboNDViewer(
             data=self,
             cmap="gnuplot2",
@@ -924,7 +928,9 @@ class ReductionMixin:
             # Not all numpy functions accept dtype (max/min don't)
             if func in ("max", "min"):
                 return np_func(self, axis=axis, keepdims=keepdims, out=out, **kwargs)
-            return np_func(self, axis=axis, dtype=dtype, keepdims=keepdims, out=out, **kwargs)
+            return np_func(
+                self, axis=axis, dtype=dtype, keepdims=keepdims, out=out, **kwargs
+            )
 
         # Normalize axis
         if axis is not None:
@@ -953,7 +959,9 @@ class ReductionMixin:
             if func in ("max", "min"):
                 result = np_func(data, axis=axis, keepdims=keepdims, out=out, **kwargs)
             else:
-                result = np_func(data, axis=axis, dtype=dtype, keepdims=keepdims, out=out, **kwargs)
+                result = np_func(
+                    data, axis=axis, dtype=dtype, keepdims=keepdims, out=out, **kwargs
+                )
             return result
 
         # Large array - use chunked reduction
@@ -1011,7 +1019,9 @@ class ReductionMixin:
                     result = chunk_min if result is None else min(result, chunk_min)
             elif func in ("std", "var"):
                 # Two-pass for numerical stability
-                mean_val = self._chunked_reduce("mean", axis=None, chunk_size=chunk_size)
+                mean_val = self._chunked_reduce(
+                    "mean", axis=None, chunk_size=chunk_size
+                )
                 variance_sum = 0.0
                 total_count = 0
                 for start in tqdm(range(0, n, chunk_size), desc=f"Computing {func}"):
@@ -1078,7 +1088,9 @@ class ReductionMixin:
             elif func == "max":
                 chunk = np.asarray(self[make_slice(0, min(chunk_size, n))])
                 accumulator = np.max(chunk, axis=ax)
-                for start in tqdm(range(chunk_size, n, chunk_size), desc=f"Computing {func}"):
+                for start in tqdm(
+                    range(chunk_size, n, chunk_size), desc=f"Computing {func}"
+                ):
                     end = min(start + chunk_size, n)
                     chunk = np.asarray(self[make_slice(start, end)])
                     accumulator = np.maximum(accumulator, np.max(chunk, axis=ax))
@@ -1087,7 +1099,9 @@ class ReductionMixin:
             elif func == "min":
                 chunk = np.asarray(self[make_slice(0, min(chunk_size, n))])
                 accumulator = np.min(chunk, axis=ax)
-                for start in tqdm(range(chunk_size, n, chunk_size), desc=f"Computing {func}"):
+                for start in tqdm(
+                    range(chunk_size, n, chunk_size), desc=f"Computing {func}"
+                ):
                     end = min(start + chunk_size, n)
                     chunk = np.asarray(self[make_slice(start, end)])
                     accumulator = np.minimum(accumulator, np.min(chunk, axis=ax))
@@ -1103,7 +1117,9 @@ class ReductionMixin:
                     variance += np.sum((chunk - mean_expanded) ** 2, axis=ax)
                 ddof = kwargs.get("ddof", 0)
                 variance = variance / (n - ddof)
-                result = (np.sqrt(variance) if func == "std" else variance).astype(reduce_dtype)
+                result = (np.sqrt(variance) if func == "std" else variance).astype(
+                    reduce_dtype
+                )
 
             else:
                 raise ValueError(f"Unknown reduction function: {func}")
@@ -1120,7 +1136,11 @@ class ReductionMixin:
         axes = sorted(axis, reverse=True)
         result = self
         for ax in axes:
-            result = result._chunked_reduce(func, axis=ax, dtype=dtype, **kwargs) if hasattr(result, "_chunked_reduce") else getattr(np, func)(result, axis=ax, dtype=dtype, **kwargs)
+            result = (
+                result._chunked_reduce(func, axis=ax, dtype=dtype, **kwargs)
+                if hasattr(result, "_chunked_reduce")
+                else getattr(np, func)(result, axis=ax, dtype=dtype, **kwargs)
+            )
         if keepdims:
             for ax in sorted(axis):
                 result = np.expand_dims(result, axis=ax)
@@ -1158,7 +1178,9 @@ class ReductionMixin:
         np.ndarray or scalar
             Mean value(s).
         """
-        return self._reduce("mean", axis=axis, dtype=dtype, out=out, keepdims=keepdims, **kwargs)
+        return self._reduce(
+            "mean", axis=axis, dtype=dtype, out=out, keepdims=keepdims, **kwargs
+        )
 
     def max(
         self,
@@ -1248,7 +1270,15 @@ class ReductionMixin:
         np.ndarray or scalar
             Standard deviation.
         """
-        return self._reduce("std", axis=axis, dtype=dtype, out=out, ddof=ddof, keepdims=keepdims, **kwargs)
+        return self._reduce(
+            "std",
+            axis=axis,
+            dtype=dtype,
+            out=out,
+            ddof=ddof,
+            keepdims=keepdims,
+            **kwargs,
+        )
 
     def var(
         self,
@@ -1282,7 +1312,15 @@ class ReductionMixin:
         np.ndarray or scalar
             Variance.
         """
-        return self._reduce("var", axis=axis, dtype=dtype, out=out, ddof=ddof, keepdims=keepdims, **kwargs)
+        return self._reduce(
+            "var",
+            axis=axis,
+            dtype=dtype,
+            out=out,
+            ddof=ddof,
+            keepdims=keepdims,
+            **kwargs,
+        )
 
     def sum(
         self,
@@ -1313,4 +1351,6 @@ class ReductionMixin:
         np.ndarray or scalar
             Sum.
         """
-        return self._reduce("sum", axis=axis, dtype=dtype, out=out, keepdims=keepdims, **kwargs)
+        return self._reduce(
+            "sum", axis=axis, dtype=dtype, out=out, keepdims=keepdims, **kwargs
+        )

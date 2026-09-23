@@ -31,7 +31,13 @@ from mbo_utilities.annotation.store import (
     RoiRecord,
     class_color,
 )
-from mbo_utilities.annotation.traces import ENGINES, FULL_IMAGE, RoiTrace, RoiTraceTable, trace_key
+from mbo_utilities.annotation.traces import (
+    ENGINES,
+    FULL_IMAGE,
+    RoiTrace,
+    RoiTraceTable,
+    trace_key,
+)
 
 __all__ = [
     "CLASS_COLORS",

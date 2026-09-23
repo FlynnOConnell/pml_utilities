@@ -9,7 +9,6 @@ pipelines need it) and honours ``dims=`` as an explicit override.
 import numpy as np
 import pytest
 import tifffile
-
 from mbo_utilities.arrays import FrameAveragedView
 from mbo_utilities.reader import imread, source_reader_kwargs
 
@@ -32,7 +31,9 @@ def plain_stack(tmp_path, frames):
 def z_hyperstack(tmp_path, frames):
     path = tmp_path / "zstack.tif"
     tifffile.imwrite(
-        path, frames, imagej=True,
+        path,
+        frames,
+        imagej=True,
         metadata={"axes": "ZYX", "spacing": 2.0, "unit": "um"},
     )
     return path

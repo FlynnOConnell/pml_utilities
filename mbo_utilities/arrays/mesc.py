@@ -152,7 +152,9 @@ CURVE_NAMES = frozenset(
 # correction applied per axis, "total" (cumulative) or "intercycle" (per
 # cycle), and one per layer for a z-stack. A unit that armed RTMC without
 # it ever moving carries the curve with a single sample.
-_RTMC_NAME = re.compile(r"^RTMC ([XYZ]) correction \((total|intercycle)\)(?: layer (\d+))?$")
+_RTMC_NAME = re.compile(
+    r"^RTMC ([XYZ]) correction \((total|intercycle)\)(?: layer (\d+))?$"
+)
 
 SYNC_KEY_DEFAULT = "DiI2"
 SYNC_EDGE_DEFAULT = "falling"
@@ -391,18 +393,18 @@ def _spatial_info(unit, modality: int) -> dict:
                 "rotations": [
                     _quaternion_from_guideline(g) for g in pattern["guideLine"]
                 ],
-                "pixel_size_um": _extend_to_rois(
-                    pattern["pixelSizeL"], len(centroids)
-                )[0],
+                "pixel_size_um": _extend_to_rois(pattern["pixelSizeL"], len(centroids))[
+                    0
+                ],
             }
         if modality == 7:  # multiline
             centroids = _as_points(np.asarray(pattern["centerPoints"]).T.tolist())
             return {
                 "centroids": centroids,
                 "rotations": [],
-                "pixel_size_um": _extend_to_rois(
-                    pattern["pixelSize"], len(centroids)
-                )[0],
+                "pixel_size_um": _extend_to_rois(pattern["pixelSize"], len(centroids))[
+                    0
+                ],
             }
         if modality in (8, 11):  # chessboard, multicube
             centroids = _as_points(np.asarray(pattern["centerPoints"]).T.tolist())
@@ -446,8 +448,12 @@ def _parse_curves(unit) -> dict[str, dict]:
             ts[0] = 0
             values = curve["CurveDataYRawData"][:]
             if int(_attr(curve, "CurveDataYConversionType", 0) or 0) == 1:
-                scale = float(_attr(curve, "CurveDataYConversionConversionLinearScale", 1.0))
-                offset = float(_attr(curve, "CurveDataYConversionConversionLinearOffset", 0.0))
+                scale = float(
+                    _attr(curve, "CurveDataYConversionConversionLinearScale", 1.0)
+                )
+                offset = float(
+                    _attr(curve, "CurveDataYConversionConversionLinearOffset", 0.0)
+                )
                 values = values * scale + offset
             curves[name] = {
                 "timestamps": ts * delta,  # ms
@@ -460,7 +466,8 @@ def _parse_curves(unit) -> dict[str, dict]:
 
 def _rtmc_traces(curves: dict[str, dict]) -> dict[str, dict]:
     """One trace per RTMC curve that has samples, ``{"X total": {"t": s,
-    "um": µm}, "Z intercycle layer 3": ...}``."""
+    "um": µm}, "Z intercycle layer 3": ...}``.
+    """
     traces: dict[str, dict] = {}
     for name, curve in curves.items():
         m = _RTMC_NAME.match(name)
@@ -475,9 +482,13 @@ def rtmc_motion(rtmc: dict[str, dict]) -> MotionCorrection | None:
     """The RTMC traces as the motion correction the scan went through: the
     ``total`` curves (the shift applied, per axis and per layer of a
     z-stack) labelled by axis, in µm; None when RTMC never moved. The
-    ``intercycle`` increments stay in :attr:`MescArray.rtmc`."""
+    ``intercycle`` increments stay in :attr:`MescArray.rtmc`.
+    """
     traces = {
-        label.replace(" total", ""): (np.asarray(tr["t"], dtype=np.float64), np.asarray(tr["um"], dtype=np.float64))
+        label.replace(" total", ""): (
+            np.asarray(tr["t"], dtype=np.float64),
+            np.asarray(tr["um"], dtype=np.float64),
+        )
         for label, tr in rtmc.items()
         if " total" in label
     }
@@ -487,7 +498,8 @@ def rtmc_motion(rtmc: dict[str, dict]) -> MotionCorrection | None:
 def unit_rtmc(path, unit: str) -> dict[str, dict]:
     """:attr:`MescArray.rtmc` of one unit (``MUnit_35`` or
     ``MSession_0/MUnit_35``) read from its curves alone, no array: ``{}`` for
-    a unit the file lacks, or a file that is not a ``.mesc`` at all."""
+    a unit the file lacks, or a file that is not a ``.mesc`` at all.
+    """
     path = Path(path)
     key = str(unit) if "/" in str(unit) else f"MSession_0/{unit}"
     if not path.is_file() or not h5py.is_hdf5(path):
@@ -1264,8 +1276,22 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             # returned raw; readers needing photon-level zero apply this.
             "mesc_channel_conversion": [
                 {
-                    "scale": float(_attr(self._unit, f"Channel_{c}_Conversion_ConversionLinearScale", 1.0) or 1.0),
-                    "offset": float(_attr(self._unit, f"Channel_{c}_Conversion_ConversionLinearOffset", 0.0) or 0.0),
+                    "scale": float(
+                        _attr(
+                            self._unit,
+                            f"Channel_{c}_Conversion_ConversionLinearScale",
+                            1.0,
+                        )
+                        or 1.0
+                    ),
+                    "offset": float(
+                        _attr(
+                            self._unit,
+                            f"Channel_{c}_Conversion_ConversionLinearOffset",
+                            0.0,
+                        )
+                        or 0.0
+                    ),
                 }
                 for c in range(layout.nc)
             ],
@@ -1378,14 +1404,16 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
     def curves(self) -> dict[str, dict]:
         """Timing curves of this unit, ``{name: {"timestamps": ms, "values"}}``
         (see ``CURVE_NAMES``): the pattern sequence, dichroic switching,
-        sync lines, plus every RTMC curve under its MEScan name."""
+        sync lines, plus every RTMC curve under its MEScan name.
+        """
         return self._curves
 
     @property
     def rtmc(self) -> dict[str, dict]:
         """Real-time motion correction traces, ``{"X total": {"t": s, "um": µm}, ...}``,
         one per axis and kind (``total`` / ``intercycle``, ``layer N`` for a
-        z-stack). Empty when RTMC never ran or never moved."""
+        z-stack). Empty when RTMC never ran or never moved.
+        """
         return self._rtmc
 
     @property
@@ -1399,13 +1427,16 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         file's geometry (``mesc_geometry.line_positions``): one dict per ROI
         with ``z_um``, ``dz_um`` against the snapshot it was drawn on,
         ``start_um`` / ``end_um``, ``length_um``, ``sample_um``; None for a
-        unit without ROIs or geometry. Read once."""
+        unit without ROIs or geometry. Read once.
+        """
         if not self._line_positions_read:
             from mbo_utilities.arrays.mesc_geometry import line_positions
 
             extents = self._metadata.get("mesc_roi_extents") or []
             self._line_positions = line_positions(
-                self.filenames[0], self.unit_key, [int(e["width"]) for e in extents] or None
+                self.filenames[0],
+                self.unit_key,
+                [int(e["width"]) for e in extents] or None,
             )
             self._line_positions_read = True
         return self._line_positions

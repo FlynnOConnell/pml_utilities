@@ -112,8 +112,7 @@ def experiment_linescan_mesc(path) -> Path | None:
         if not folder.is_dir():
             continue
         found = sorted(
-            p for p in folder.glob("*.mesc")
-            if not p.stem.lower().endswith("_zstack")
+            p for p in folder.glob("*.mesc") if not p.stem.lower().endswith("_zstack")
         )
         if found:
             return found[0]
@@ -259,7 +258,11 @@ def _background_planes(mesc_path, bg: dict) -> dict[int, np.ndarray]:
 
 
 def zstack_candidates(
-    mesc_path, unit_key: str, units: list[dict] | None = None, *, min_px_per_line: int = 10,
+    mesc_path,
+    unit_key: str,
+    units: list[dict] | None = None,
+    *,
+    min_px_per_line: int = 10,
     zstack_path=None,
 ) -> list[dict]:
     """Every Z-stack of the file scored against a line-scan unit's lines:
@@ -268,7 +271,8 @@ def zstack_candidates(
     pixels along the median line. All stacks, including those holding no
     line at all, so a picker can show why one is unsuitable. ``zstack_path``
     is the file holding the stacks when they were saved separately from the
-    line scan (``units`` then lists that file's units)."""
+    line scan (``units`` then lists that file's units).
+    """
     from mbo_utilities.arrays.mesc import list_mesc_units
 
     lines = linescan_endpoints_um(mesc_path, unit_key)
@@ -303,7 +307,11 @@ def zstack_candidates(
 
 
 def pair_reference_zstack(
-    mesc_path, unit_key: str, units: list[dict] | None = None, *, min_px_per_line: int = 10,
+    mesc_path,
+    unit_key: str,
+    units: list[dict] | None = None,
+    *,
+    min_px_per_line: int = 10,
     zstack_path=None,
 ) -> dict | None:
     """Pick the Z-stack unit of the same file that the lines were drawn on.
@@ -331,7 +339,11 @@ def pair_reference_zstack(
     cands = [
         c
         for c in zstack_candidates(
-            mesc_path, unit_key, units, min_px_per_line=min_px_per_line, zstack_path=zstack_path
+            mesc_path,
+            unit_key,
+            units,
+            min_px_per_line=min_px_per_line,
+            zstack_path=zstack_path,
         )
         if c["xy_fraction"] > 0
     ]
@@ -358,12 +370,17 @@ def _smooth(x: np.ndarray, fs: float, window_s: float = _SMOOTH_S) -> np.ndarray
 
 
 def stim_aligned_dfof(
-    F: np.ndarray, fs: float, onsets_s: list[float], pre_s: float = 1.0, post_s: float = 5.0
+    F: np.ndarray,
+    fs: float,
+    onsets_s: list[float],
+    pre_s: float = 1.0,
+    post_s: float = 5.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """``(n_events, K, n)`` dF/F around each train onset, with ``F0`` the mean
     of the ``pre_s`` window before the onset (the last 50 ms before the
     onset excluded, so a pulse that lands early does not leak into F0).
-    Returns ``(dfof, t_s)``; windows that run off either end are NaN-padded."""
+    Returns ``(dfof, t_s)``; windows that run off either end are NaN-padded.
+    """
     K, T = F.shape
     n_pre, n_post = int(round(pre_s * fs)), int(round(post_s * fs))
     guard = int(round(0.05 * fs))
@@ -403,7 +420,9 @@ def response_metrics(
     """
     K, T = F.shape
     if stim and stim.get("onsets_s"):
-        aligned, t_s = stim_aligned_dfof(F, fs, stim["onsets_s"][:1], pre_s=pre_s, post_s=post_s)
+        aligned, t_s = stim_aligned_dfof(
+            F, fs, stim["onsets_s"][:1], pre_s=pre_s, post_s=post_s
+        )
         d = _smooth(np.nan_to_num(aligned[0]), fs)
         pre = t_s < -0.05
         post = (t_s >= 0) & (t_s <= post_s)
@@ -423,7 +442,9 @@ def response_metrics(
         peak = d[np.arange(K), peak_idx]
         ttp = peak_idx / fs
         auc = np.full(K, np.nan)
-        noise = 1.4826 * np.median(np.abs(d - np.median(d, axis=1, keepdims=True)), axis=1)
+        noise = 1.4826 * np.median(
+            np.abs(d - np.median(d, axis=1, keepdims=True)), axis=1
+        )
         mode = "spontaneous"
     with np.errstate(divide="ignore", invalid="ignore"):
         snr = np.where(noise > 0, peak / noise, np.nan)
@@ -475,7 +496,9 @@ def _save(fig, path):
 def _roi_colors(K: int) -> np.ndarray:
     from mbo_utilities.annotation.store import CLASS_COLORS
 
-    return np.array([CLASS_COLORS[i % len(CLASS_COLORS)][:3] for i in range(K)], dtype=float)
+    return np.array(
+        [CLASS_COLORS[i % len(CLASS_COLORS)][:3] for i in range(K)], dtype=float
+    )
 
 
 def _mark_stim(ax, stim, fs=None, text=True):
@@ -485,7 +508,13 @@ def _mark_stim(ax, stim, fs=None, text=True):
         ax.axvline(onset, color="yellow", lw=0.8, alpha=0.8, ls="--")
         if text and k == 0:
             ax.text(
-                onset, 1.0, " stim", color="yellow", fontsize=7, va="top", ha="left",
+                onset,
+                1.0,
+                " stim",
+                color="yellow",
+                fontsize=7,
+                va="top",
+                ha="left",
                 transform=ax.get_xaxis_transform(),
             )
 
@@ -507,7 +536,9 @@ def _composite(slices_by_channel: dict[int, np.ndarray], channel_names) -> np.nd
     """RGB from a green and a red channel when both exist, else greyscale."""
     if len(slices_by_channel) >= 2:
         names = {c: _channel_label(channel_names, c) for c in slices_by_channel}
-        green = next((c for c, n in names.items() if "green" in n), min(slices_by_channel))
+        green = next(
+            (c for c, n in names.items() if "green" in n), min(slices_by_channel)
+        )
         red = next((c for c, n in names.items() if "red" in n and c != green), None)
         if red is None:
             red = next(c for c in slices_by_channel if c != green)
@@ -523,24 +554,49 @@ def _composite(slices_by_channel: dict[int, np.ndarray], channel_names) -> np.nd
 def _draw_lines(ax, pixel_lines, colors, on, labels=True):
     for i, seg in enumerate(pixel_lines):
         is_on = on[i]
-        ax.plot(seg[:, 0], seg[:, 1], color=colors[i], lw=2.0 if is_on else 0.8,
-                alpha=1.0 if is_on else 0.35, ls="-" if is_on else "--")
-        ax.plot(seg[0, 0], seg[0, 1], "o", color=colors[i], ms=4 if is_on else 2,
-                alpha=1.0 if is_on else 0.35)
+        ax.plot(
+            seg[:, 0],
+            seg[:, 1],
+            color=colors[i],
+            lw=2.0 if is_on else 0.8,
+            alpha=1.0 if is_on else 0.35,
+            ls="-" if is_on else "--",
+        )
+        ax.plot(
+            seg[0, 0],
+            seg[0, 1],
+            "o",
+            color=colors[i],
+            ms=4 if is_on else 2,
+            alpha=1.0 if is_on else 0.35,
+        )
         if labels and is_on:
-            ax.annotate(str(i), seg[0], color=colors[i], fontsize=7,
-                        xytext=(3, 3), textcoords="offset points")
+            ax.annotate(
+                str(i),
+                seg[0],
+                color=colors[i],
+                fontsize=7,
+                xytext=(3, 3),
+                textcoords="offset points",
+            )
 
 
 def plot_background_snapshot(
-    out_dir: Path, mesc_path, unit_key: str, bg: dict, extents, *, flip_y: bool = False,
+    out_dir: Path,
+    mesc_path,
+    unit_key: str,
+    bg: dict,
+    extents,
+    *,
+    flip_y: bool = False,
     save_name: str = "01a_background_snapshot_lines.png",
 ) -> Path | None:
     """Every line on the raster snapshot it was drawn on (the unit's
     ``BackgroundImagePath``), composite of the channels, with the depth of
     each line relative to the snapshot's focal plane. Lines more than 1 um
     off that plane are dashed: they were placed on a different slice of the
-    3D view and need the Z-stack figure."""
+    3D view and need the Z-stack figure.
+    """
     plt = _agg_plt()
     lines = linescan_endpoints_um(mesc_path, unit_key)
     if not lines:
@@ -558,11 +614,15 @@ def plot_background_snapshot(
     try:
         from mbo_utilities.arrays.mesc import MescArray
 
-        names = MescArray(mesc_path, unit=unit_key).metadata.get("channel_names") or names
+        names = (
+            MescArray(mesc_path, unit=unit_key).metadata.get("channel_names") or names
+        )
     except Exception:
         pass
     ncols = 1 + len(planes)
-    fig, axes = plt.subplots(1, ncols, figsize=(6.2 * ncols, 6.4), facecolor=_FIG_BG, squeeze=False)
+    fig, axes = plt.subplots(
+        1, ncols, figsize=(6.2 * ncols, 6.4), facecolor=_FIG_BG, squeeze=False
+    )
     axes = axes[0]
     axes[0].imshow(_composite(planes, names), interpolation="nearest")
     axes[0].set_title("composite", color=_FIG_FG, fontsize=9)
@@ -576,7 +636,11 @@ def plot_background_snapshot(
         _draw_lines(ax, pixel_lines, colors, on)
         ax.set_xlim(0, nx)
         ax.set_ylim(ny, 0)
-    fig.suptitle(f"{unit_key.rsplit('/', 1)[-1]} on snapshot {bg['munit']}", color=_FIG_FG, fontsize=11)
+    fig.suptitle(
+        f"{unit_key.rsplit('/', 1)[-1]} on snapshot {bg['munit']}",
+        color=_FIG_FG,
+        fontsize=11,
+    )
     fig.tight_layout()
     path = out_dir / save_name
     _save(fig, path)
@@ -584,13 +648,22 @@ def plot_background_snapshot(
 
 
 def plot_line_zooms(
-    out_dir: Path, mesc_path, unit_key: str, extents, *, bg: dict | None, ref: dict | None,
-    flip_y: bool = False, half_um: float = 4.0, save_name: str = "01c_line_zooms.png",
+    out_dir: Path,
+    mesc_path,
+    unit_key: str,
+    extents,
+    *,
+    bg: dict | None,
+    ref: dict | None,
+    flip_y: bool = False,
+    half_um: float = 4.0,
+    save_name: str = "01c_line_zooms.png",
 ) -> Path | None:
     """An 8 um crop around every line, each channel, locally contrast-
     stretched: the line should cross a bright spine or shaft. The crop comes
     from the snapshot when the line is within 1 um of its plane, else from
-    the paired Z-stack's slice at the line's depth (title says which)."""
+    the paired Z-stack's slice at the line's depth (title says which).
+    """
     from mbo_utilities.arrays.mesc import MescArray
 
     plt = _agg_plt()
@@ -619,25 +692,59 @@ def plot_line_zooms(
         dz_bg = abs(float(seg[2].mean()) - bg["z"]) if bg is not None else np.inf
         dz_zs = abs(placements[i]["dz_um"]) if zs is not None else np.inf
         if bg_planes is not None and dz_bg <= min(dz_zs, 1.0):
-            sources.append(("snap", bg_planes, {"transl": bg["transl"], "width": bg["width"], "height": bg["height"]},
-                            f"{bg['munit']} {float(seg[2].mean()) - bg['z']:+.1f} um"))
+            sources.append(
+                (
+                    "snap",
+                    bg_planes,
+                    {
+                        "transl": bg["transl"],
+                        "width": bg["width"],
+                        "height": bg["height"],
+                    },
+                    f"{bg['munit']} {float(seg[2].mean()) - bg['z']:+.1f} um",
+                )
+            )
         elif zs is not None and dz_zs <= dz_bg:
             k = placements[i]["slice"]
             if k not in ref_planes:
-                ref_planes[k] = {c: np.asarray(zs[0, c, k], dtype=np.float32) for c in range(int(zs.shape[1]))}
+                ref_planes[k] = {
+                    c: np.asarray(zs[0, c, k], dtype=np.float32)
+                    for c in range(int(zs.shape[1]))
+                }
             flag = "" if placements[i]["in_range"] else " (outside stack)"
-            sources.append(("stack", ref_planes[k], vp_ref,
-                            f"{ref['munit']} slice {k + 1} {placements[i]['dz_um']:+.1f} um{flag}"))
+            sources.append(
+                (
+                    "stack",
+                    ref_planes[k],
+                    vp_ref,
+                    f"{ref['munit']} slice {k + 1} {placements[i]['dz_um']:+.1f} um{flag}",
+                )
+            )
         elif bg_planes is not None:
-            sources.append(("snap", bg_planes, {"transl": bg["transl"], "width": bg["width"], "height": bg["height"]},
-                            f"{bg['munit']} {float(seg[2].mean()) - bg['z']:+.1f} um (off plane)"))
+            sources.append(
+                (
+                    "snap",
+                    bg_planes,
+                    {
+                        "transl": bg["transl"],
+                        "width": bg["width"],
+                        "height": bg["height"],
+                    },
+                    f"{bg['munit']} {float(seg[2].mean()) - bg['z']:+.1f} um (off plane)",
+                )
+            )
         else:
             sources.append(None)
     nchan = max(len(src[1]) for src in sources if src is not None)
     per_row = 4 if nchan == 1 else 3
     nrows = int(np.ceil(n / per_row))
-    fig, axes = plt.subplots(nrows, per_row * nchan, figsize=(2.3 * per_row * nchan, 2.5 * nrows),
-                             facecolor=_FIG_BG, squeeze=False)
+    fig, axes = plt.subplots(
+        nrows,
+        per_row * nchan,
+        figsize=(2.3 * per_row * nchan, 2.5 * nrows),
+        facecolor=_FIG_BG,
+        squeeze=False,
+    )
     for ax in axes.ravel():
         ax.set_visible(False)
     for i, src in enumerate(sources):
@@ -656,18 +763,37 @@ def plot_line_zooms(
             crop = img[r0:r1, c0:c1]
             if crop.size:
                 lo, hi = np.percentile(crop, (2, 99.8))
-                ax.imshow(np.clip((crop - lo) / max(hi - lo, 1e-6), 0, 1), cmap="gray", vmin=0, vmax=1,
-                          extent=(c0, c1, r1, r0), interpolation="nearest")
-            _draw_lines(ax, px_all, [colors[j] if j == i else (1.0, 0.6, 0.0) for j in range(n)],
-                        [j == i for j in range(n)], labels=False)
+                ax.imshow(
+                    np.clip((crop - lo) / max(hi - lo, 1e-6), 0, 1),
+                    cmap="gray",
+                    vmin=0,
+                    vmax=1,
+                    extent=(c0, c1, r1, r0),
+                    interpolation="nearest",
+                )
+            _draw_lines(
+                ax,
+                px_all,
+                [colors[j] if j == i else (1.0, 0.6, 0.0) for j in range(n)],
+                [j == i for j in range(n)],
+                labels=False,
+            )
             ax.set_xlim(c0, c1)
             ax.set_ylim(r1, r0)
             ax.set_xticks([])
             ax.set_yticks([])
             for spine in ax.spines.values():
                 spine.set_color(colors[i])
-            ax.set_title(f"ROI {i} {_channel_label(names, c)}\n{where}", color=colors[i], fontsize=7)
-    fig.suptitle(f"{unit_key.rsplit('/', 1)[-1]} line zooms ({2 * half_um:.0f} um)", color=_FIG_FG, fontsize=11)
+            ax.set_title(
+                f"ROI {i} {_channel_label(names, c)}\n{where}",
+                color=colors[i],
+                fontsize=7,
+            )
+    fig.suptitle(
+        f"{unit_key.rsplit('/', 1)[-1]} line zooms ({2 * half_um:.0f} um)",
+        color=_FIG_FG,
+        fontsize=11,
+    )
     fig.tight_layout()
     path = out_dir / save_name
     _save(fig, path)
@@ -675,11 +801,18 @@ def plot_line_zooms(
 
 
 def plot_reference_zstack(
-    out_dir: Path, mesc_path, unit_key: str, ref: dict, extents, *, flip_y: bool = False,
+    out_dir: Path,
+    mesc_path,
+    unit_key: str,
+    ref: dict,
+    extents,
+    *,
+    flip_y: bool = False,
     save_name: str = "01b_reference_zstack_lines.png",
 ) -> Path | None:
     """Lines drawn on the slices of the paired Z-stack that carry them, plus
-    a max projection with every line. ROI index at each line's start."""
+    a max projection with every line. ROI index at each line's start.
+    """
     from mbo_utilities.arrays.mesc import MescArray
 
     plt = _agg_plt()
@@ -707,7 +840,9 @@ def plot_reference_zstack(
     panels = ["max"] + slice_ids
     ncols = min(4, len(panels))
     nrows = int(np.ceil(len(panels) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.6 * ncols, 4.6 * nrows), facecolor=_FIG_BG)
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(4.6 * ncols, 4.6 * nrows), facecolor=_FIG_BG
+    )
     axes = np.atleast_1d(axes).ravel()
 
     proj = {c: np.max(np.asarray(zs[0, c, :]), axis=0) for c in channels}
@@ -724,7 +859,9 @@ def plot_reference_zstack(
             k = int(panel)
             img = {c: np.asarray(zs[0, c, k]) for c in channels}
             ax.imshow(_composite(img, names), interpolation="nearest")
-            z_um = depth["min_z"] + k * (depth["max_z"] - depth["min_z"]) / max(nz - 1, 1)
+            z_um = depth["min_z"] + k * (depth["max_z"] - depth["min_z"]) / max(
+                nz - 1, 1
+            )
             ax.set_title(f"slice {k + 1}  z {z_um:+.1f} um", color=_FIG_FG, fontsize=9)
             here = occupied[k]
         for i in range(n):
@@ -733,19 +870,45 @@ def plot_reference_zstack(
             # a line scanned outside the stack's depth range is drawn dashed
             # on the nearest edge slice: its XY is right, its depth is not here
             ls = "-" if in_range[i] else "--"
-            ax.plot(seg[:, 0], seg[:, 1], color=colors[i], lw=2.0 if on else 0.8,
-                    alpha=1.0 if on else 0.35, ls=ls)
-            ax.plot(seg[0, 0], seg[0, 1], "o", color=colors[i], ms=4 if on else 2,
-                    alpha=1.0 if on else 0.35)
+            ax.plot(
+                seg[:, 0],
+                seg[:, 1],
+                color=colors[i],
+                lw=2.0 if on else 0.8,
+                alpha=1.0 if on else 0.35,
+                ls=ls,
+            )
+            ax.plot(
+                seg[0, 0],
+                seg[0, 1],
+                "o",
+                color=colors[i],
+                ms=4 if on else 2,
+                alpha=1.0 if on else 0.35,
+            )
             if on:
-                ax.annotate(f"{i}{'' if in_range[i] else '!'}", seg[0], color=colors[i], fontsize=7,
-                            xytext=(3, 3), textcoords="offset points")
+                ax.annotate(
+                    f"{i}{'' if in_range[i] else '!'}",
+                    seg[0],
+                    color=colors[i],
+                    fontsize=7,
+                    xytext=(3, 3),
+                    textcoords="offset points",
+                )
         ax.set_xlim(0, nx)
         ax.set_ylim(ny, 0)
-    for ax in axes[len(panels):]:
+    for ax in axes[len(panels) :]:
         ax.set_visible(False)
-    coarse = " (COARSE: no stack in this file resolves the lines)" if ref.get("coarse") else ""
-    fig.suptitle(f"{unit_key.rsplit('/', 1)[-1]} on z-stack {ref['munit']}{coarse}", color=_FIG_FG, fontsize=11)
+    coarse = (
+        " (COARSE: no stack in this file resolves the lines)"
+        if ref.get("coarse")
+        else ""
+    )
+    fig.suptitle(
+        f"{unit_key.rsplit('/', 1)[-1]} on z-stack {ref['munit']}{coarse}",
+        color=_FIG_FG,
+        fontsize=11,
+    )
     fig.tight_layout()
     path = out_dir / save_name
     _save(fig, path)
@@ -753,26 +916,42 @@ def plot_reference_zstack(
 
 
 def plot_line_profiles(
-    out_dir: Path, kymos: dict[int, np.ndarray], extents, channel_names, um_per_px: float | None,
+    out_dir: Path,
+    kymos: dict[int, np.ndarray],
+    extents,
+    channel_names,
+    um_per_px: float | None,
     save_name: str = "02_line_profiles.png",
 ) -> Path:
     """Time-averaged intensity along every line, one panel per ROI, one
     curve per channel, in the file's converted counts (zero = no photons)
     on a y-axis shared by all ROIs. A spine crossed by the line shows as a
-    bump; a flat profile at the background level means the line missed."""
+    bump; a flat profile at the background level means the line missed.
+    """
     plt = _agg_plt()
     K = len(extents)
     ncols = min(6, K)
     nrows = int(np.ceil(K / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(2.6 * ncols, 2.1 * nrows), facecolor=_FIG_BG,
-                             squeeze=False, sharey=True)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(2.6 * ncols, 2.1 * nrows),
+        facecolor=_FIG_BG,
+        squeeze=False,
+        sharey=True,
+    )
     colors = _roi_colors(K)
     chan_style = {}
     for c in kymos:
         label = _channel_label(channel_names, c)
-        chan_style[c] = ("lime" if "green" in label else "red" if "red" in label else "white", label)
-    profiles = {c: [np.nanmean(k[i, :, : int(extents[i]["width"])], axis=0) for i in range(K)]
-                for c, k in kymos.items()}
+        chan_style[c] = (
+            "lime" if "green" in label else "red" if "red" in label else "white",
+            label,
+        )
+    profiles = {
+        c: [np.nanmean(k[i, :, : int(extents[i]["width"])], axis=0) for i in range(K)]
+        for c, k in kymos.items()
+    }
     top = max(float(np.nanmax(p)) for ps in profiles.values() for p in ps)
     bottom = min(0.0, min(float(np.nanmin(p)) for ps in profiles.values() for p in ps))
     for i in range(K):
@@ -781,7 +960,13 @@ def plot_line_profiles(
         w = int(extents[i]["width"])
         x = np.arange(w) * (um_per_px if um_per_px else 1.0)
         for c in kymos:
-            ax.plot(x, profiles[c][i], color=chan_style[c][0], lw=1.2, label=chan_style[c][1])
+            ax.plot(
+                x,
+                profiles[c][i],
+                color=chan_style[c][0],
+                lw=1.2,
+                label=chan_style[c][1],
+            )
         ax.set_title(f"ROI {i}", color=colors[i], fontsize=9)
         ax.set_xlim(x[0], x[-1] if w > 1 else 1)
         if i % ncols == 0:
@@ -793,8 +978,15 @@ def plot_line_profiles(
         ax.set_visible(False)
     handles, labels = axes.ravel()[0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper right", fontsize=8, facecolor=_FIG_BG,
-                   labelcolor=_FIG_FG, edgecolor=_FIG_FG)
+        fig.legend(
+            handles,
+            labels,
+            loc="upper right",
+            fontsize=8,
+            facecolor=_FIG_BG,
+            labelcolor=_FIG_FG,
+            edgecolor=_FIG_FG,
+        )
     fig.suptitle("Line profiles", color=_FIG_FG, fontsize=11)
     fig.tight_layout()
     path = out_dir / save_name
@@ -803,15 +995,28 @@ def plot_line_profiles(
 
 
 def plot_kymographs(
-    out_dir: Path, kymo: np.ndarray, bin_s: float, extents, stim, label: str, save_name: str,
+    out_dir: Path,
+    kymo: np.ndarray,
+    bin_s: float,
+    extents,
+    stim,
+    label: str,
+    save_name: str,
     um_per_px: float | None = None,
 ) -> Path:
     """Position x time image per ROI (rows), shared time axis, per-ROI
-    contrast, stimulus onsets marked."""
+    contrast, stimulus onsets marked.
+    """
     plt = _agg_plt()
     K, nb, W = kymo.shape
-    fig, axes = plt.subplots(K, 1, figsize=(14, max(2.0, 0.55 * K + 1.2)), facecolor=_FIG_BG,
-                             sharex=True, squeeze=False)
+    fig, axes = plt.subplots(
+        K,
+        1,
+        figsize=(14, max(2.0, 0.55 * K + 1.2)),
+        facecolor=_FIG_BG,
+        sharex=True,
+        squeeze=False,
+    )
     colors = _roi_colors(K)
     t_end = nb * bin_s
     for i in range(K):
@@ -820,13 +1025,22 @@ def plot_kymographs(
         img = kymo[i, :, :w].T  # (position, time)
         lo, hi = np.nanpercentile(img, (1, 99.5))
         extent_y = w * um_per_px if um_per_px else w
-        ax.imshow(img, aspect="auto", cmap="magma", vmin=lo, vmax=hi,
-                  extent=(0, t_end, extent_y, 0), interpolation="nearest")
+        ax.imshow(
+            img,
+            aspect="auto",
+            cmap="magma",
+            vmin=lo,
+            vmax=hi,
+            extent=(0, t_end, extent_y, 0),
+            interpolation="nearest",
+        )
         ax.set_facecolor(_FIG_BG)
         ax.tick_params(colors=_FIG_FG, labelsize=7)
         for spine in ax.spines.values():
             spine.set_color(colors[i])
-        ax.set_ylabel(f"ROI {i}", color=colors[i], fontsize=8, rotation=0, ha="right", va="center")
+        ax.set_ylabel(
+            f"ROI {i}", color=colors[i], fontsize=8, rotation=0, ha="right", va="center"
+        )
         ax.set_yticks([])
         _mark_stim(ax, stim, text=(i == 0))
     axes[-1, 0].set_xlabel("time (s)", color=_FIG_FG, fontsize=9)
@@ -858,10 +1072,18 @@ def _stacked_traces(ax, traces: np.ndarray, t_s: np.ndarray, colors, lw=0.5, gap
 
 
 def plot_traces(
-    out_dir: Path, F: np.ndarray, fs: float, stim, *, kind: str, save_name: str, label: str = "",
+    out_dir: Path,
+    F: np.ndarray,
+    fs: float,
+    stim,
+    *,
+    kind: str,
+    save_name: str,
+    label: str = "",
 ) -> Path:
     """Stacked per-ROI traces over the whole run. ``kind`` is ``"raw"`` (F as
-    recorded) or ``"dfof"`` (already dF/F, drawn 20 ms-smoothed)."""
+    recorded) or ``"dfof"`` (already dF/F, drawn 20 ms-smoothed).
+    """
     plt = _agg_plt()
     K, T = F.shape
     t_s = np.arange(T) / fs
@@ -873,10 +1095,20 @@ def plot_traces(
     _mark_stim(ax, stim)
     # scale bar on the right edge
     x_bar = t_s[-1] * 0.995
-    ax.plot([x_bar, x_bar], [offsets[-1], offsets[-1] + step / (1.15)], color=_FIG_FG, lw=2)
+    ax.plot(
+        [x_bar, x_bar], [offsets[-1], offsets[-1] + step / (1.15)], color=_FIG_FG, lw=2
+    )
     unit = "dF/F" if kind == "dfof" else "counts"
-    ax.text(x_bar, offsets[-1] + step / 2.3, f" {step / 1.15:.2g} {unit}", color=_FIG_FG, fontsize=7,
-            ha="right", va="center", rotation=90)
+    ax.text(
+        x_bar,
+        offsets[-1] + step / 2.3,
+        f" {step / 1.15:.2g} {unit}",
+        color=_FIG_FG,
+        fontsize=7,
+        ha="right",
+        va="center",
+        rotation=90,
+    )
     ax.set_xlabel("time (s)", fontsize=9)
     title = f"F ({label})" if kind == "raw" else f"dF/F ({label})"
     ax.set_title(title, fontsize=10)
@@ -887,25 +1119,47 @@ def plot_traces(
 
 
 def plot_stim_response(
-    out_dir: Path, F: np.ndarray, fs: float, stim: dict, *, pre_s: float = 1.0, post_s: float = 5.0,
+    out_dir: Path,
+    F: np.ndarray,
+    fs: float,
+    stim: dict,
+    *,
+    pre_s: float = 1.0,
+    post_s: float = 5.0,
     save_name: str = "05_stim_response.png",
 ) -> Path:
     """Stimulus-aligned dF/F (pre-onset F0): a ROI x time heatmap, every ROI
     overlaid, and the mean across ROIs with its s.e.m. First train only when
-    there are several; the others are listed in the title."""
+    there are several; the others are listed in the title.
+    """
     plt = _agg_plt()
-    aligned, t_s = stim_aligned_dfof(F, fs, stim["onsets_s"][:1], pre_s=pre_s, post_s=post_s)
+    aligned, t_s = stim_aligned_dfof(
+        F, fs, stim["onsets_s"][:1], pre_s=pre_s, post_s=post_s
+    )
     d = _smooth(np.nan_to_num(aligned[0]), fs)
     K = d.shape[0]
     colors = _roi_colors(K)
-    fig, axes = plt.subplots(3, 1, figsize=(10, 9), facecolor=_FIG_BG, sharex=True,
-                             gridspec_kw={"height_ratios": [max(2.0, K * 0.22), 2, 2]})
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(10, 9),
+        facecolor=_FIG_BG,
+        sharex=True,
+        gridspec_kw={"height_ratios": [max(2.0, K * 0.22), 2, 2]},
+    )
     for ax in axes:
         _dark(ax)
     lim = np.nanpercentile(np.abs(d), 99.5)
     lim = lim if np.isfinite(lim) and lim > 0 else 0.1
-    im = axes[0].imshow(d, aspect="auto", cmap="RdBu_r", vmin=-lim, vmax=lim,
-                        extent=(t_s[0], t_s[-1], K - 0.5, -0.5), interpolation="nearest")
+    im = axes[0].imshow(
+        d,
+        aspect="auto",
+        cmap="RdBu_r",
+        vmin=-lim,
+        vmax=lim,
+        extent=(t_s[0], t_s[-1], K - 0.5, -0.5),
+        interpolation="nearest",
+    )
     axes[0].set_yticks(range(K))
     axes[0].set_yticklabels([f"ROI {i}" for i in range(K)], fontsize=7)
     for tick, c in zip(axes[0].get_yticklabels(), colors):
@@ -922,7 +1176,9 @@ def plot_stim_response(
 
     mean = np.nanmean(d, axis=0)
     sem = np.nanstd(d, axis=0) / np.sqrt(max(K, 1))
-    axes[2].fill_between(t_s, mean - sem, mean + sem, color="deepskyblue", alpha=0.3, lw=0)
+    axes[2].fill_between(
+        t_s, mean - sem, mean + sem, color="deepskyblue", alpha=0.3, lw=0
+    )
     axes[2].plot(t_s, mean, color="deepskyblue", lw=1.2)
     axes[2].axhline(0, color=_FIG_FG, lw=0.5, alpha=0.5)
     axes[2].set_ylabel("dF/F", fontsize=9)
@@ -934,8 +1190,18 @@ def plot_stim_response(
         if dur > 0:
             ax.axvspan(0, dur, color="yellow", alpha=0.15, lw=0)
     axes[2].set_xlim(t_s[0], t_s[-1])
-    n_pulses = sum(1 for p in stim["pulses_s"] if stim["onsets_s"][0] <= p <= stim["onsets_s"][0] + stim["durations_s"][0] + 1e-6)
-    fig.suptitle(f"Stimulus response (t = {stim['onsets_s'][0]:.2f} s, {n_pulses} pulses)", color=_FIG_FG, fontsize=11)
+    n_pulses = sum(
+        1
+        for p in stim["pulses_s"]
+        if stim["onsets_s"][0]
+        <= p
+        <= stim["onsets_s"][0] + stim["durations_s"][0] + 1e-6
+    )
+    fig.suptitle(
+        f"Stimulus response (t = {stim['onsets_s'][0]:.2f} s, {n_pulses} pulses)",
+        color=_FIG_FG,
+        fontsize=11,
+    )
     fig.tight_layout()
     path = out_dir / save_name
     _save(fig, path)
@@ -943,12 +1209,17 @@ def plot_stim_response(
 
 
 def plot_response_metrics(
-    out_dir: Path, metrics: list[dict], F_other: dict[int, np.ndarray], channel_names, main_channel: int,
+    out_dir: Path,
+    metrics: list[dict],
+    F_other: dict[int, np.ndarray],
+    channel_names,
+    main_channel: int,
     save_name: str = "06_roi_response_metrics.png",
 ) -> Path:
     """Per-ROI bars: baseline F on every channel, peak dF/F, latency, noise
     and SNR. Reads the response mode (stimulus or spontaneous) from the
-    metrics themselves."""
+    metrics themselves.
+    """
     plt = _agg_plt()
     K = len(metrics)
     colors = _roi_colors(K)
@@ -960,10 +1231,21 @@ def plot_response_metrics(
         _dark(ax)
 
     ax = axes[0]
-    ax.bar(x, [m["f0"] for m in metrics], color=colors, label=_channel_label(channel_names, main_channel))
+    ax.bar(
+        x,
+        [m["f0"] for m in metrics],
+        color=colors,
+        label=_channel_label(channel_names, main_channel),
+    )
     for c, Fo in F_other.items():
-        ax.plot(x, np.percentile(Fo, 10, axis=1), "o", color="red" if "red" in _channel_label(channel_names, c) else "white",
-                ms=4, label=f"{_channel_label(channel_names, c)} (10th pct)")
+        ax.plot(
+            x,
+            np.percentile(Fo, 10, axis=1),
+            "o",
+            color="red" if "red" in _channel_label(channel_names, c) else "white",
+            ms=4,
+            label=f"{_channel_label(channel_names, c)} (10th pct)",
+        )
     ax.set_title("F0", fontsize=9)
     ax.legend(fontsize=7, facecolor=_FIG_BG, labelcolor=_FIG_FG, edgecolor=_FIG_FG)
 
@@ -974,10 +1256,19 @@ def plot_response_metrics(
         top = np.nanmax(np.abs(vals)) if np.isfinite(vals).any() else 1.0
         for i, v in enumerate(vals):
             if np.isfinite(v):
-                ax.text(i, v, fmt.format(v), color=_FIG_FG, fontsize=6, ha="center",
-                        va="bottom" if v >= 0 else "top")
-        ax.set_ylim(min(0, np.nanmin(vals)) - 0.1 * top if np.isfinite(vals).any() else 0,
-                    (np.nanmax(vals) if np.isfinite(vals).any() else 1) + 0.25 * top)
+                ax.text(
+                    i,
+                    v,
+                    fmt.format(v),
+                    color=_FIG_FG,
+                    fontsize=6,
+                    ha="center",
+                    va="bottom" if v >= 0 else "top",
+                )
+        ax.set_ylim(
+            min(0, np.nanmin(vals)) - 0.1 * top if np.isfinite(vals).any() else 0,
+            (np.nanmax(vals) if np.isfinite(vals).any() else 1) + 0.25 * top,
+        )
 
     _bars(axes[1], "peak_dfof", "peak dF/F")
     _bars(axes[2], "time_to_peak_s", "time to peak (s)", "{:.2f}")
@@ -986,8 +1277,16 @@ def plot_response_metrics(
     if mode == "stim":
         _bars(axes[5], "response_auc", "AUC 0-2 s", "{:.2f}")
     else:
-        axes[5].text(0.5, 0.5, "no stimulus in this run:\npeak and noise are over the whole trace",
-                     color=_FIG_FG, ha="center", va="center", fontsize=9, transform=axes[5].transAxes)
+        axes[5].text(
+            0.5,
+            0.5,
+            "no stimulus in this run:\npeak and noise are over the whole trace",
+            color=_FIG_FG,
+            ha="center",
+            va="center",
+            fontsize=9,
+            transform=axes[5].transAxes,
+        )
     for ax in axes:
         ax.set_xticks(x)
         ax.set_xticklabels([str(i) for i in range(K)], fontsize=7)
@@ -1000,18 +1299,33 @@ def plot_response_metrics(
 
 
 def plot_motion_correction(
-    out_dir: Path, curves: dict, duration_s: float, stim, save_name: str = "07_motion_correction.png",
+    out_dir: Path,
+    curves: dict,
+    duration_s: float,
+    stim,
+    save_name: str = "07_motion_correction.png",
 ) -> Path | None:
     """The AOD's real-time motion correction (RTMC) totals in X, Y and Z over
     the run. A drifting trace means the lines were being moved to follow the
-    tissue; a jump means a correction the traces may show as a step."""
+    tissue; a jump means a correction the traces may show as a step.
+    """
     plt = _agg_plt()
-    axes_data = [(a, curves.get(f"RTMC {a} correction (total)")) for a in ("X", "Y", "Z")]
-    axes_data = [(a, c) for a, c in axes_data if c is not None and len(c["timestamps"]) > 1]
+    axes_data = [
+        (a, curves.get(f"RTMC {a} correction (total)")) for a in ("X", "Y", "Z")
+    ]
+    axes_data = [
+        (a, c) for a, c in axes_data if c is not None and len(c["timestamps"]) > 1
+    ]
     if not axes_data:
         return None
-    fig, axes = plt.subplots(len(axes_data), 1, figsize=(12, 2.2 * len(axes_data) + 0.8),
-                             facecolor=_FIG_BG, sharex=True, squeeze=False)
+    fig, axes = plt.subplots(
+        len(axes_data),
+        1,
+        figsize=(12, 2.2 * len(axes_data) + 0.8),
+        facecolor=_FIG_BG,
+        sharex=True,
+        squeeze=False,
+    )
     for ax, (name, c) in zip(axes[:, 0], axes_data):
         _dark(ax)
         t = np.asarray(c["timestamps"], dtype=float) / 1000.0
@@ -1051,7 +1365,8 @@ def plot_linescan_figures(
 ) -> list[Path]:
     """Write the whole numbered figure set into ``out_dir``; returns the
     paths written. Each figure is independent: one failing is logged and
-    the rest still run."""
+    the rest still run.
+    """
     logger = logger or log.get("linescan")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1064,7 +1379,9 @@ def plot_linescan_figures(
             proto = json.loads(f[unit_key].attrs["MultiROIProtocolJSON"])
             main = int(proto["protocol"]["scanners"]["mainPatternIndex"]) - 1
             ps = proto["scanPatterns"]["patterns"][main].get("pixelSize")
-            um_per_px = float(ps[0] if isinstance(ps, (list, tuple)) else ps) if ps else None
+            um_per_px = (
+                float(ps[0] if isinstance(ps, (list, tuple)) else ps) if ps else None
+            )
     except Exception:
         um_per_px = None
 
@@ -1084,30 +1401,105 @@ def plot_linescan_figures(
     except Exception as e:
         logger.warning(f"linescan figures: background image lookup failed: {e}")
     if bg is not None:
-        _try("background snapshot", plot_background_snapshot, out_dir, mesc_path, unit_key, bg,
-             extents, flip_y=flip_y)
+        _try(
+            "background snapshot",
+            plot_background_snapshot,
+            out_dir,
+            mesc_path,
+            unit_key,
+            bg,
+            extents,
+            flip_y=flip_y,
+        )
     if reference is not None:
-        _try("reference zstack", plot_reference_zstack, out_dir, mesc_path, unit_key, reference,
-             extents, flip_y=flip_y)
+        _try(
+            "reference zstack",
+            plot_reference_zstack,
+            out_dir,
+            mesc_path,
+            unit_key,
+            reference,
+            extents,
+            flip_y=flip_y,
+        )
     if bg is not None or reference is not None:
-        _try("line zooms", plot_line_zooms, out_dir, mesc_path, unit_key, extents, bg=bg,
-             ref=reference, flip_y=flip_y)
+        _try(
+            "line zooms",
+            plot_line_zooms,
+            out_dir,
+            mesc_path,
+            unit_key,
+            extents,
+            bg=bg,
+            ref=reference,
+            flip_y=flip_y,
+        )
     if kymo_by_channel:
-        _try("line profiles", plot_line_profiles, out_dir, kymo_by_channel, extents, channel_names,
-             um_per_px)
+        _try(
+            "line profiles",
+            plot_line_profiles,
+            out_dir,
+            kymo_by_channel,
+            extents,
+            channel_names,
+            um_per_px,
+        )
         for j, c in enumerate(sorted(kymo_by_channel)):
             name = _channel_label(channel_names, c)
-            _try(f"kymographs {name}", plot_kymographs, out_dir, kymo_by_channel[c], kymo_bin_s,
-                 extents, stim, name, f"03{'abcdefgh'[j]}_kymographs_{name}.png", um_per_px)
-    _try("raw traces", plot_traces, out_dir, F, fs, stim, kind="raw", save_name="04a_traces_raw.png",
-         label=label)
+            _try(
+                f"kymographs {name}",
+                plot_kymographs,
+                out_dir,
+                kymo_by_channel[c],
+                kymo_bin_s,
+                extents,
+                stim,
+                name,
+                f"03{'abcdefgh'[j]}_kymographs_{name}.png",
+                um_per_px,
+            )
+    _try(
+        "raw traces",
+        plot_traces,
+        out_dir,
+        F,
+        fs,
+        stim,
+        kind="raw",
+        save_name="04a_traces_raw.png",
+        label=label,
+    )
     if dfof is not None:
-        _try("dfof traces", plot_traces, out_dir, dfof, fs, stim, kind="dfof",
-             save_name="04b_traces_dfof.png", label=label)
+        _try(
+            "dfof traces",
+            plot_traces,
+            out_dir,
+            dfof,
+            fs,
+            stim,
+            kind="dfof",
+            save_name="04b_traces_dfof.png",
+            label=label,
+        )
     if stim and stim.get("onsets_s"):
         _try("stim response", plot_stim_response, out_dir, F, fs, stim)
     others = {c: v for c, v in F_by_channel.items() if c != main_channel}
-    _try("response metrics", plot_response_metrics, out_dir, metrics, others, channel_names, main_channel)
+    _try(
+        "response metrics",
+        plot_response_metrics,
+        out_dir,
+        metrics,
+        others,
+        channel_names,
+        main_channel,
+    )
     if curves:
-        _try("motion correction", plot_motion_correction, out_dir, curves, F.shape[1] / fs, stim)
+        _try(
+            "motion correction",
+            plot_motion_correction,
+            out_dir,
+            curves,
+            F.shape[1] / fs,
+            stim,
+        )
     return written

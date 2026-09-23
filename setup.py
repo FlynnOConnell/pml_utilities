@@ -1,6 +1,7 @@
 """Build hook: copy the starter notebooks from demos/ into the package so
 `mbo init` works for wheel / `uv tool install` installs. demos/ stays the
-single source of truth; the package copy is a build artifact (see .gitignore)."""
+single source of truth; the package copy is a build artifact (see .gitignore).
+"""
 
 import shutil
 from pathlib import Path

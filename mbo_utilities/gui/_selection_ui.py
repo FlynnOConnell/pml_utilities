@@ -6,10 +6,10 @@ used by both save-as dialog and suite2p run tab.
 
 import contextlib
 
-from imgui_bundle import imgui, hello_imgui
+from imgui_bundle import hello_imgui, imgui
 
-from mbo_utilities.arrays.features._slicing import parse_timepoint_selection
 from mbo_utilities.arrays.features._dim_labels import find_slider_name, slider_roles
+from mbo_utilities.arrays.features._slicing import parse_timepoint_selection
 
 
 def source_timepoints(widget) -> int:
@@ -287,12 +287,20 @@ def draw_selection_table(
 
     INPUT_WIDTH = hello_imgui.em_size(13)
 
-    table_flags = imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
+    table_flags = (
+        imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
+    )
     if imgui.begin_table(f"selection_table{id_suffix}", 4, table_flags):
         # column widths for alignment
-        imgui.table_setup_column("dim", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(7))
-        imgui.table_setup_column("input", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(14))
-        imgui.table_setup_column("all", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(3))
+        imgui.table_setup_column(
+            "dim", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(7)
+        )
+        imgui.table_setup_column(
+            "input", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(14)
+        )
+        imgui.table_setup_column(
+            "all", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(3)
+        )
         imgui.table_setup_column("info", imgui.TableColumnFlags_.width_stretch)
 
         if tp_mode != "none":
@@ -310,7 +318,9 @@ def draw_selection_table(
             # red border if error
             had_error = bool(tp_error)
             if had_error:
-                imgui.push_style_color(imgui.Col_.frame_bg, imgui.ImVec4(0.3, 0.1, 0.1, 1.0))
+                imgui.push_style_color(
+                    imgui.Col_.frame_bg, imgui.ImVec4(0.3, 0.1, 0.1, 1.0)
+                )
 
             changed, new_val = imgui.input_text(f"##tp{id_suffix}", tp_selection)
             if changed:
@@ -347,11 +357,17 @@ def draw_selection_table(
                 n_frames = tp_parsed.count
                 if tp_parsed.exclude_str:
                     n_excluded = len(tp_parsed.exclude_indices)
-                    imgui.text_colored(imgui.ImVec4(0.6, 0.8, 1.0, 1.0), f"{n_frames}/{max_frames}")
+                    imgui.text_colored(
+                        imgui.ImVec4(0.6, 0.8, 1.0, 1.0), f"{n_frames}/{max_frames}"
+                    )
                     imgui.same_line()
-                    imgui.text_colored(imgui.ImVec4(1.0, 0.6, 0.4, 1.0), f"(-{n_excluded})")
+                    imgui.text_colored(
+                        imgui.ImVec4(1.0, 0.6, 0.4, 1.0), f"(-{n_excluded})"
+                    )
                 else:
-                    imgui.text_colored(imgui.ImVec4(0.6, 0.8, 1.0, 1.0), f"{n_frames}/{max_frames}")
+                    imgui.text_colored(
+                        imgui.ImVec4(0.6, 0.8, 1.0, 1.0), f"{n_frames}/{max_frames}"
+                    )
             elif tp_error:
                 imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), "invalid")
             else:
@@ -375,7 +391,9 @@ def draw_selection_table(
             # red border if error
             had_z_error = bool(z_error)
             if had_z_error:
-                imgui.push_style_color(imgui.Col_.frame_bg, imgui.ImVec4(0.3, 0.1, 0.1, 1.0))
+                imgui.push_style_color(
+                    imgui.Col_.frame_bg, imgui.ImVec4(0.3, 0.1, 0.1, 1.0)
+                )
 
             changed, new_val = imgui.input_text(f"##z{id_suffix}", z_selection)
             if changed:
@@ -410,7 +428,10 @@ def draw_selection_table(
             if z_error:
                 imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), "invalid")
             else:
-                imgui.text_colored(imgui.ImVec4(0.6, 0.8, 1.0, 1.0), f"{n_planes_selected}/{num_planes}")
+                imgui.text_colored(
+                    imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
+                    f"{n_planes_selected}/{num_planes}",
+                )
 
             if _z_disabled:
                 imgui.end_disabled()
@@ -430,7 +451,9 @@ def draw_selection_table(
             # red border if error
             had_c_error = bool(c_error)
             if had_c_error:
-                imgui.push_style_color(imgui.Col_.frame_bg, imgui.ImVec4(0.3, 0.1, 0.1, 1.0))
+                imgui.push_style_color(
+                    imgui.Col_.frame_bg, imgui.ImVec4(0.3, 0.1, 0.1, 1.0)
+                )
 
             if c_mode == "select-one":
                 # A pipeline that reads one channel gets a picker, not a
@@ -457,7 +480,9 @@ def draw_selection_table(
                 changed, new_val = imgui.input_text(f"##c{id_suffix}", c_selection)
             if changed:
                 setattr(parent, c_selection_attr, new_val)
-                c_start, c_stop, c_step, err = _parse_channel_selection(new_val, num_channels)
+                c_start, c_stop, c_step, err = _parse_channel_selection(
+                    new_val, num_channels
+                )
                 setattr(parent, c_error_attr, err)
                 c_error = err
                 # update old-style attrs for compatibility
@@ -487,7 +512,10 @@ def draw_selection_table(
             if c_error:
                 imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), "invalid")
             else:
-                imgui.text_colored(imgui.ImVec4(0.6, 0.8, 1.0, 1.0), f"{n_channels_selected}/{num_channels}")
+                imgui.text_colored(
+                    imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
+                    f"{n_channels_selected}/{num_channels}",
+                )
 
             if _c_disabled:
                 imgui.end_disabled()

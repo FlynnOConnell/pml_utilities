@@ -1,5 +1,5 @@
-import os
 import logging
+import os
 
 _level_override: int | None = None
 
@@ -15,7 +15,12 @@ def set_global_level(level: int):
 
 def debug_enabled() -> bool:
     """Whether debug logging is on for this process (the MBO_DEBUG flag)."""
-    return os.environ.get("MBO_DEBUG", "0").strip().lower() not in ("", "0", "false", "no")
+    return os.environ.get("MBO_DEBUG", "0").strip().lower() not in (
+        "",
+        "0",
+        "false",
+        "no",
+    )
 
 
 def set_debug(enabled: bool) -> None:

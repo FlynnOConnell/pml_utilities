@@ -42,7 +42,9 @@ class MenuBar(ImguiWindow):
     def draw(self) -> None:
         imgui.set_next_window_size((self.width, self.height))
         imgui.set_next_window_pos((self.x, self.y))
-        imgui.begin(f"##menu_bar{self._id_counter}", p_open=None, flags=self._window_flags)
+        imgui.begin(
+            f"##menu_bar{self._id_counter}", p_open=None, flags=self._window_flags
+        )
         if imgui.begin_menu_bar():
             self._apps_menu()
             self._slot_menus()
@@ -55,9 +57,17 @@ class MenuBar(ImguiWindow):
             return
         for app in self.host.ordered():
             where = " ".join(
-                w for w in (app.dock, "window" if app.window else "", "scene" if app.scene else "") if w
+                w
+                for w in (
+                    app.dock,
+                    "window" if app.window else "",
+                    "scene" if app.scene else "",
+                )
+                if w
             )
-            if imgui.menu_item(app.title, where, p_selected=app.open, enabled=app.available(self.host))[0]:
+            if imgui.menu_item(
+                app.title, where, p_selected=app.open, enabled=app.available(self.host)
+            )[0]:
                 app.open = not app.open
         imgui.end_menu()
 
@@ -71,6 +81,11 @@ class MenuBar(ImguiWindow):
             for app in self.host.ordered():
                 if not app.scene:
                     continue
-                if imgui.menu_item(app.title, "", p_selected=current == app.id, enabled=app.available(self.host))[0]:
+                if imgui.menu_item(
+                    app.title,
+                    "",
+                    p_selected=current == app.id,
+                    enabled=app.available(self.host),
+                )[0]:
                     self.host.mount(app.id, slot)
             imgui.end_menu()

@@ -12,21 +12,20 @@ from __future__ import annotations
 
 import json
 import logging
-import re
+import os
 import threading
 import time
-import os
 import traceback
 from pathlib import Path
 
 from mbo_utilities import imread, log
-from mbo_utilities.writer import imwrite
-from mbo_utilities.arrays.features import apply_read_features
 from mbo_utilities.arrays._registration import (
     compute_axial_shifts,
     validate_axial_shifts,
 )
+from mbo_utilities.arrays.features import apply_read_features
 from mbo_utilities.metadata import get_param
+from mbo_utilities.writer import imwrite
 
 logger = log.get("worker.tasks")
 
@@ -45,7 +44,8 @@ def _auto_workers(num_planes: int, *, use_gpu: bool = False) -> int:
     cpu_workers = max(1, cpu - 2)
     try:
         import psutil
-        avail_gb = psutil.virtual_memory().available / (1024 ** 3)
+
+        avail_gb = psutil.virtual_memory().available / (1024**3)
         mem_workers = max(1, int(avail_gb // 8))
     except Exception:
         mem_workers = cpu_workers
@@ -70,13 +70,20 @@ class TaskMonitor:
         # Let's write to a standard location that ProcessManager knows about.
         # Standard: ~/.mbo/logs/progress_{pid}.json
         from mbo_utilities.preferences import get_mbo_dirs
+
         self.log_dir = get_mbo_dirs()["logs"]
         if self.uuid:
             self.progress_file = self.log_dir / f"progress_{self.uuid}.json"
         else:
             self.progress_file = self.log_dir / f"progress_{self.pid}.json"
 
-    def update(self, progress: float, message: str, state: str = "running", details: dict | None = None):
+    def update(
+        self,
+        progress: float,
+        message: str,
+        state: str = "running",
+        details: dict | None = None,
+    ):
         """
         Update progress file.
         progress: 0.0 to 1.0
@@ -90,7 +97,7 @@ class TaskMonitor:
             "status": state,
             "progress": progress,
             "message": message,
-            "details": details or {}
+            "details": details or {},
         }
         try:
             # Write atomically to avoid race conditions with readers.
@@ -126,7 +133,7 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
     monitor.update(0.0, "Initializing save task...")
 
     input_path = args["input_path"]
-    output_path = Path(args["output_path"]) # Full path including extension
+    output_path = Path(args["output_path"])  # Full path including extension
     output_dir = args.get("output_dir")
     if output_dir:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -170,7 +177,9 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
         def _reg_cb(progress, msg=""):
             monitor.update(0.05 + 0.05 * progress, f"Registration: {msg}")
 
-        num_planes = get_param(combined_meta, "nplanes") or getattr(arr, "num_planes", 1)
+        num_planes = get_param(combined_meta, "nplanes") or getattr(
+            arr, "num_planes", 1
+        )
         reg_error: Exception | None = None
 
         if validate_axial_shifts(combined_meta, num_planes):
@@ -193,17 +202,15 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
 
             if reg_error is None and validate_axial_shifts(combined_meta, num_planes):
                 metadata["plane_shifts"] = list(combined_meta["plane_shifts"])
-                metadata["plane_shifts_params"] = combined_meta.get("plane_shifts_params")
+                metadata["plane_shifts_params"] = combined_meta.get(
+                    "plane_shifts_params"
+                )
                 monitor.update(0.1, "Z-registration ready.")
             else:
                 if reg_error is not None:
-                    logger.warning(
-                        f"Z-registration failed: {reg_error}."
-                    )
+                    logger.warning(f"Z-registration failed: {reg_error}.")
                 else:
-                    logger.warning(
-                        "axial registration produced no valid plane_shifts."
-                    )
+                    logger.warning("axial registration produced no valid plane_shifts.")
 
     monitor.update(0.1, f"Saving to {output_path.name}...")
 
@@ -256,9 +263,9 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
 
         # Ensure output directory exists
         if not output_path.suffix:
-             output_path.mkdir(parents=True, exist_ok=True)
+            output_path.mkdir(parents=True, exist_ok=True)
         else:
-             output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Writing to {output_path} with ext={ext}")
 
@@ -279,7 +286,7 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
                 overwrite=True,
                 metadata_overrides=metadata,
                 progress_callback=_progress_cb,
-                **args.get("kwargs", {})
+                **args.get("kwargs", {}),
             )
         else:
             # Fallback for generic arrays
@@ -294,7 +301,7 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
                 overwrite=True,
                 metadata=metadata,
                 progress_callback=_progress_cb,
-                **args.get("kwargs", {})
+                **args.get("kwargs", {}),
             )
 
         monitor.finish(f"Saved to {output_path.name}")
@@ -340,6 +347,7 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
     if incoming_settings is not None or incoming_db is not None:
         try:
             from lbm_suite2p_python.db_settings import db_settings_to_ops
+
             flattened = db_settings_to_ops(incoming_db, incoming_settings)
         except ImportError:
             flattened = {**(incoming_db or {}), **(incoming_settings or {})}
@@ -409,7 +417,9 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
         # stride-scaled value when tp_indices is non-None.
         if ops.get("fs") in (None, 10.0):
             ops["fs"] = float(raw_src_fs)
-            logger.info(f"task_suite2p: replaced lbm default fs=10 with source fs={raw_src_fs}")
+            logger.info(
+                f"task_suite2p: replaced lbm default fs=10 with source fs={raw_src_fs}"
+            )
 
     # Same for dz — only override the lbm default, not a user-set value.
     if raw_src_dz is not None:
@@ -447,8 +457,16 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             #   default and pretend it's the answer. The user will see
             #   None in ops.npy and immediately know something's wrong,
             #   instead of silently getting fs=10.
-            for key in ("fs", "dz", "dx", "dy", "z_step",
-                        "umPerPixZ", "umPerPixX", "umPerPixY"):
+            for key in (
+                "fs",
+                "dz",
+                "dx",
+                "dy",
+                "z_step",
+                "umPerPixZ",
+                "umPerPixX",
+                "umPerPixY",
+            ):
                 if key in scaled and scaled[key] is not None:
                     ops[key] = scaled[key]
                 elif key in ("fs", "dz") and key in ops:
@@ -537,9 +555,7 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
                     f"({num_planes_reg} planes)"
                 )
             else:
-                logger.warning(
-                    "task_suite2p: no valid plane_shifts produced."
-                )
+                logger.warning("task_suite2p: no valid plane_shifts produced.")
 
     # seed nframes into ops so lsp's generate_plane_dirname always has a
     # frame count for the directory name. explicit num_timepoints wins;
@@ -560,7 +576,9 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
         ops["functional_chan"] = 1
         ops["align_by_chan"] = 1
         reader_kwargs["channel"] = int(channel) - 1
-        logger.info(f"Single-channel extraction: channel {channel} (zero-based: {channel - 1})")
+        logger.info(
+            f"Single-channel extraction: channel {channel} (zero-based: {channel - 1})"
+        )
 
     # Resolve workers: pass-through user choice, but honour 0/None as
     # "auto" using hardware capacity. lsp also has its own auto path,
@@ -574,6 +592,7 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
         # the env policy forces CPU; GPU workers contend for one device so
         # _auto_workers caps them. Key off the real device, not rastermap.
         from mbo_utilities.gpu import gpu_compute_disabled
+
         device = str(
             ops.get("torch_device") or s2p_settings.get("torch_device") or "cuda"
         ).lower()
@@ -609,13 +628,18 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
                     "(summary images were stored as lists)"
                 )
         except Exception as _e:  # noqa: BLE001 - never block the run on this
-            logger.warning(f"task_suite2p: ops.npy repair pass failed for {target}: {_e}")
+            logger.warning(
+                f"task_suite2p: ops.npy repair pass failed for {target}: {_e}"
+            )
 
     # Rastermap Force → drop cached model.npy in every plane subdir under
     # output_dir before pipeline runs. lsp's plot_zplane_figures already
     # deletes the rastermap PNG every run, but reuses model.npy when its
     # isort length matches n_accepted. Force == "recompute from scratch".
-    if s2p_settings.get("force_rastermap") and s2p_settings.get("rastermap_kwargs") is not None:
+    if (
+        s2p_settings.get("force_rastermap")
+        and s2p_settings.get("rastermap_kwargs") is not None
+    ):
         try:
             removed = 0
             for cached in Path(output_dir).glob("plane*/model.npy"):
@@ -625,7 +649,9 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
                 except OSError as _e:
                     logger.warning(f"force_rastermap: could not remove {cached}: {_e}")
             if removed:
-                logger.info(f"force_rastermap: removed {removed} cached model.npy file(s)")
+                logger.info(
+                    f"force_rastermap: removed {removed} cached model.npy file(s)"
+                )
         except Exception as _e:
             logger.warning(f"force_rastermap pre-clean failed: {_e}")
 
@@ -643,6 +669,7 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
     if (algo == "cellpose" or anatomical_on) and uses_default_model:
         try:
             from mbo_utilities._cellpose_model import ensure_cellpose_model
+
             ensure_cellpose_model(logger=logger)
         except Exception as _e:
             logger.warning(f"cellpose model prefetch failed: {_e}")
@@ -671,7 +698,9 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
                 f"(expected dirname tp{tp_indices[0] + 1:05d}-{tp_indices[-1] + 1:05d})"
             )
         else:
-            logger.info("task_suite2p: frame_indices=None (no slice — full range will be used)")
+            logger.info(
+                "task_suite2p: frame_indices=None (no slice — full range will be used)"
+            )
 
         pipeline(
             pipeline_input,
@@ -716,7 +745,7 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
 
 def task_masknmf(args: dict, logger: logging.Logger) -> None:
     """
-    masknmf pipeline task.
+    Masknmf pipeline task.
 
     Runs mbo_utilities.masknmf.runner per selected plane: stage-gated
     registration -> PMD compression -> demixing, suite2p-shaped outputs,
@@ -770,9 +799,7 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
             for key in ("dz", "dx", "dy"):
                 if scaled.get(key) is not None:
                     metadata[key] = scaled[key]
-            logger.info(
-                f"task_masknmf: reactive metadata -> dz={metadata.get('dz')}"
-            )
+            logger.info(f"task_masknmf: reactive metadata -> dz={metadata.get('dz')}")
         except Exception as e:
             logger.warning(f"task_masknmf: reactive dz/dx/dy scaling failed: {e}")
 
@@ -801,7 +828,9 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
                     "(summary images were stored as lists)"
                 )
         except Exception as _e:  # noqa: BLE001 - never block the run on this
-            logger.warning(f"task_masknmf: ops.npy repair pass failed for {target}: {_e}")
+            logger.warning(
+                f"task_masknmf: ops.npy repair pass failed for {target}: {_e}"
+            )
 
     # periodic log line keeps the worker's stall watchdog fed through long
     # silent GPU stages (PMD / HALS)
@@ -890,9 +919,7 @@ def task_isoview(args: dict, logger: logging.Logger) -> None:
 
     _bridge_consolidate_logging(logger)
 
-    monitor = TaskMonitor(
-        args.get("output_path", "."), uuid=args.get("_uuid")
-    )
+    monitor = TaskMonitor(args.get("output_path", "."), uuid=args.get("_uuid"))
     monitor.update(0.01, "Initializing isoview consolidator...")
 
     input_path = args["input_path"]
@@ -963,9 +990,8 @@ def task_isoview(args: dict, logger: logging.Logger) -> None:
         # consumed for this bucket: every prior sub-stage in this bucket
         # is treated as fully done (1.0); current sub-stage at substage_frac.
         bucket_consumed = (
-            (len(bucket_done[bucket]) - 1) * substage_weight
-            + substage_frac * substage_weight
-        )
+            len(bucket_done[bucket]) - 1
+        ) * substage_weight + substage_frac * substage_weight
         consumed[bucket] = max(consumed[bucket], bucket_consumed)
         total_frac = sum(consumed.values())
         # cap at 0.99 — actual finalize() pushes to 1.0 on success.
@@ -985,8 +1011,10 @@ def task_isoview(args: dict, logger: logging.Logger) -> None:
             progress_callback=cb,
         )
         _record_isoview_runtime(
-            "consolidate", time.monotonic() - t_start,
-            _isoview_config_root(input_path), logger,
+            "consolidate",
+            time.monotonic() - t_start,
+            _isoview_config_root(input_path),
+            logger,
         )
         monitor.finish(f"Wrote {out}")
         logger.info(f"isoview consolidator wrote {out}")
@@ -1095,8 +1123,14 @@ def _build_isoview_processing_config(args: dict):
 
     # crop_* dicts are keyed by camera index; JSON round-trips int keys to
     # strings, so coerce back to int or get_crop(camera) misses every entry.
-    for key in ("crop_left", "crop_top", "crop_front",
-                "crop_width", "crop_height", "crop_depth"):
+    for key in (
+        "crop_left",
+        "crop_top",
+        "crop_front",
+        "crop_width",
+        "crop_height",
+        "crop_depth",
+    ):
         d = config_kwargs.get(key)
         if isinstance(d, dict):
             config_kwargs[key] = {int(k): int(v) for k, v in d.items()}
@@ -1128,9 +1162,10 @@ def _format_runtime(seconds: float) -> str:
     return f"{s}s"
 
 
-def _isoview_config_root(path) -> "Path | None":
+def _isoview_config_root(path) -> Path | None:
     """Dataset root holding ``isoview_config.json`` for a corrected/fused
-    tree path (its parent). Returns ``None`` when no tree is found."""
+    tree path (its parent). Returns ``None`` when no tree is found.
+    """
     if not path:
         return None
     p = Path(path)
@@ -1139,14 +1174,17 @@ def _isoview_config_root(path) -> "Path | None":
         for suf in (".corrected", ".fused"):
             idx = name.find(suf)
             if idx >= 0:
-                rest = name[idx + len(suf):]
+                rest = name[idx + len(suf) :]
                 if rest == "" or rest.startswith("_"):
                     return anc.parent
     return None
 
 
 def _record_isoview_runtime(
-    step: str, elapsed: float, config_root, logger: logging.Logger,
+    step: str,
+    elapsed: float,
+    config_root,
+    logger: logging.Logger,
 ) -> None:
     """Log the step's total wall-clock runtime and append it to the
     dataset's ``isoview_config.json`` under a ``runtimes`` section.
@@ -1155,9 +1193,7 @@ def _record_isoview_runtime(
     (``config.input_dir.parent`` for the pipeline steps); ``None`` logs
     the runtime without persisting it.
     """
-    logger.info(
-        f"Total runtime ({step}): {_format_runtime(elapsed)} ({elapsed:.1f}s)"
-    )
+    logger.info(f"Total runtime ({step}): {_format_runtime(elapsed)} ({elapsed:.1f}s)")
     if config_root is None:
         return
     try:
@@ -1229,6 +1265,7 @@ def _bridge_isoview_logging(worker_logger: logging.Logger) -> None:
     if not debug:
         try:
             from mbo_utilities.preferences import get_debug_logging
+
             debug = get_debug_logging()
         except Exception:
             debug = False
@@ -1293,8 +1330,10 @@ def task_correct_stack(args: dict, logger: logging.Logger) -> None:
         monitor.update(0.05, "Running correct_stack (see log file for details)...")
         correct_stack(config)
         _record_isoview_runtime(
-            "correct_stack", time.monotonic() - t_start,
-            config.input_dir.parent, logger,
+            "correct_stack",
+            time.monotonic() - t_start,
+            config.input_dir.parent,
+            logger,
         )
         monitor.finish("correct_stack pipeline complete.")
         logger.info("correct_stack completed successfully")
@@ -1332,10 +1371,15 @@ def task_isoview_raw_projections(args: dict, logger: logging.Logger) -> None:
     t_start = time.monotonic()
     try:
         result = make_raw_projections(
-            raw_dir, overwrite=overwrite, progress_callback=cb,
+            raw_dir,
+            overwrite=overwrite,
+            progress_callback=cb,
         )
         _record_isoview_runtime(
-            "raw_projections", time.monotonic() - t_start, None, logger,
+            "raw_projections",
+            time.monotonic() - t_start,
+            None,
+            logger,
         )
         monitor.finish(
             f"raw projections: {result['written']} written, "
@@ -1402,9 +1446,9 @@ def task_multi_fuse(args: dict, logger: logging.Logger) -> None:
             try:
                 # new fused layout: <fused>/SPM##/TM######/ (timelapse) or
                 # <fused>/SPM##/ (tiled) — count whichever advances.
-                done = sum(
-                    1 for p in fused_dir.glob("SPM*/TM*") if p.is_dir()
-                ) or sum(1 for p in fused_dir.glob("SPM*") if p.is_dir())
+                done = sum(1 for p in fused_dir.glob("SPM*/TM*") if p.is_dir()) or sum(
+                    1 for p in fused_dir.glob("SPM*") if p.is_dir()
+                )
             except OSError:
                 done = 0
             frac = 0.05 + 0.9 * min(done / total, 1.0)
@@ -1419,8 +1463,10 @@ def task_multi_fuse(args: dict, logger: logging.Logger) -> None:
         # in <method>_<suffix>/).
 
         _record_isoview_runtime(
-            "fuse", time.monotonic() - t_start,
-            config.input_dir.parent, logger,
+            "fuse",
+            time.monotonic() - t_start,
+            config.input_dir.parent,
+            logger,
         )
         monitor.finish("multi_fuse pipeline complete.")
         logger.info("multi_fuse completed successfully")
@@ -1477,8 +1523,10 @@ def task_generate_bigstitcher(args: dict, logger: logging.Logger) -> None:
         )
         logger.info(f"  wrote: {xml_path}")
         _record_isoview_runtime(
-            "bigstitcher", time.monotonic() - t_start,
-            config.input_dir.parent, logger,
+            "bigstitcher",
+            time.monotonic() - t_start,
+            config.input_dir.parent,
+            logger,
         )
         monitor.finish(f"generate_bigstitcher_xml complete: {xml_path}")
         logger.info("generate_bigstitcher_xml completed successfully")
@@ -1552,7 +1600,10 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
     monitor.update(0.01, "Opening the source...")
     settings = VoltageSettings.from_dict(args.get("settings"))
     units = list(args.get("units") or [])
-    domains = {str(k): [int(v) for v in rois] for k, rois in (args.get("domains") or {}).items()}
+    domains = {
+        str(k): [int(v) for v in rois]
+        for k, rois in (args.get("domains") or {}).items()
+    }
     frames = args.get("frames")
     try:
         src_arr = imread(args["input_path"], **(args.get("reader_kwargs") or {}))
@@ -1580,11 +1631,16 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
             settings=settings,
             detect=settings.events.detect,
             overwrite=settings.runtime.overwrite,
-            provenance={"settings": settings.to_dict(), "source_metadata": strip_for_export(metadata)},
+            provenance={
+                "settings": settings.to_dict(),
+                "source_metadata": strip_for_export(metadata),
+            },
             progress_callback=monitor.update,
             logger=logger,
         )
-        monitor.finish(f"Voltage pipeline wrote {len(paths)} files to {args['output_dir']}")
+        monitor.finish(
+            f"Voltage pipeline wrote {len(paths)} files to {args['output_dir']}"
+        )
         logger.info(f"voltage completed: {sorted(paths)}")
     except Exception as e:
         monitor.fail(str(e), details={"traceback": traceback.format_exc()})

@@ -181,12 +181,21 @@ class RoiTraceTable(Observable):
 
     def for_roi(self, uid: int) -> list[RoiTrace]:
         """Every trace of one drawn ROI, in insertion order."""
-        return [t for t in self._rows.values() if t.member is None and t.uid == int(uid)]
+        return [
+            t for t in self._rows.values() if t.member is None and t.uid == int(uid)
+        ]
 
-    def at(self, uid: int, z: int | None = None, c: int | None = None, engine: str | None = None) -> list[RoiTrace]:
+    def at(
+        self,
+        uid: int,
+        z: int | None = None,
+        c: int | None = None,
+        engine: str | None = None,
+    ) -> list[RoiTrace]:
         """The traces of ``uid`` matching every given coordinate."""
         return [
-            t for t in self.for_roi(uid)
+            t
+            for t in self.for_roi(uid)
             if (z is None or t.z == int(z))
             and (c is None or t.c == int(c))
             and (engine is None or t.engine == engine)
@@ -205,9 +214,12 @@ class RoiTraceTable(Observable):
 
     def prune(self, uids) -> list[tuple]:
         """Drop the uid-keyed rows whose ROI is not in ``uids``; rows that
-        stand for no drawn ROI stay. Returns the keys removed."""
+        stand for no drawn ROI stay. Returns the keys removed.
+        """
         keep = {int(u) for u in uids}
-        gone = [k for k, t in self._rows.items() if t.member is None and t.uid not in keep]
+        gone = [
+            k for k, t in self._rows.items() if t.member is None and t.uid not in keep
+        ]
         for key in gone:
             del self._rows[key]
         if gone:

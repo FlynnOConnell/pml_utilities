@@ -1,9 +1,9 @@
 """Temporal frame averaging: the read-time view, and the viewer lock that
-installs it as a pipeline step."""
+installs it as a pipeline step.
+"""
 
 import numpy as np
 import pytest
-
 from mbo_utilities.arrays import FrameAveragedView, average_frames
 from mbo_utilities.arrays.numpy import NumpyArray
 
@@ -115,7 +115,8 @@ class TestDtype:
 
 class TestMetadata:
     """Averaging N frames divides the frame rate by N. Every downstream
-    window, detrend and trace axis is in seconds, so this must be right."""
+    window, detrend and trace axis is in seconds, so this must be right.
+    """
 
     def test_rate_and_frame_count_are_scaled(self, source):
         meta = average_frames(source, 4).metadata
@@ -124,7 +125,9 @@ class TestMetadata:
         assert meta["frame_average"] == 4
 
     def test_every_rate_alias_is_scaled(self, raw):
-        arr = NumpyArray(raw, dims="TCZYX", metadata={"frame_rate": 30.0, "framerate": 30.0})
+        arr = NumpyArray(
+            raw, dims="TCZYX", metadata={"frame_rate": 30.0, "framerate": 30.0}
+        )
         meta = average_frames(arr, 2).metadata
         assert meta["frame_rate"] == pytest.approx(15.0)
         assert meta["framerate"] == pytest.approx(15.0)
@@ -136,17 +139,32 @@ class TestMetadata:
     def test_every_registered_alias_is_retimed(self, raw):
         """A single alias left claiming the original rate makes the resolver
         warn about a stale alias, and anything reading `fps` or `dt` straight
-        from the dict gets the pre-binning number."""
+        from the dict gets the pre-binning number.
+        """
         from mbo_utilities.metadata import get_param
 
         meta = {
-            "fs": 30.0, "fps": 30.0, "fr": 30.0, "scanFrameRate": 30.0,
-            "frameRate": 30.0, "sampling_frequency": 30.0, "frame_rate_hz": 30.0,
-            "finterval": 1 / 30, "dt": 1 / 30, "frame_period": 1 / 30,
+            "fs": 30.0,
+            "fps": 30.0,
+            "fr": 30.0,
+            "scanFrameRate": 30.0,
+            "frameRate": 30.0,
+            "sampling_frequency": 30.0,
+            "frame_rate_hz": 30.0,
+            "finterval": 1 / 30,
+            "dt": 1 / 30,
+            "frame_period": 1 / 30,
         }
         out = average_frames(NumpyArray(raw, dims="TCZYX", metadata=meta), 3).metadata
-        for key in ("fs", "fps", "fr", "scanFrameRate", "frameRate",
-                    "sampling_frequency", "frame_rate_hz"):
+        for key in (
+            "fs",
+            "fps",
+            "fr",
+            "scanFrameRate",
+            "frameRate",
+            "sampling_frequency",
+            "frame_rate_hz",
+        ):
             assert out[key] == pytest.approx(10.0), key
         for key in ("finterval", "dt", "frame_period"):
             assert out[key] == pytest.approx(0.1), key
@@ -188,7 +206,8 @@ class TestPassthrough:
 
 class TestViewerLock:
     """The GUI side: ticking "Apply to dataset" swaps the viewer onto the
-    view, and everything downstream reads the averaged frames."""
+    view, and everything downstream reads the averaged frames.
+    """
 
     @staticmethod
     def _gui(nt=120, fs=30.0):
@@ -203,7 +222,8 @@ class TestViewerLock:
             figure_kwargs_override={"size": FIGURE_SIZE},
         )
         gui = next(
-            w for w in iw.figure.imgui_windows.values()
+            w
+            for w in iw.figure.imgui_windows.values()
             if isinstance(w, PreviewDataWidget)
         )
         return iw, gui
@@ -233,7 +253,8 @@ class TestViewerLock:
 
     def test_run_menus_follow_the_lock(self):
         """Save As, suite2p and masknmf pick up the factor as their default,
-        the way scan-phase is on by default for a run."""
+        the way scan-phase is on by default for a run.
+        """
         iw, gui = self._gui()
         try:
             gui.frame_average = 10
@@ -257,7 +278,8 @@ class TestViewerLock:
     def test_a_factor_past_the_end_clamps(self):
         """Averaging everything into one frame is allowed; it degrades to the
         mean image (T is gone, so the viewer squeezes it away) and unlocking
-        brings the movie back."""
+        brings the movie back.
+        """
         iw, gui = self._gui(nt=8)
         try:
             gui.frame_average = 999
@@ -325,7 +347,8 @@ class TestViewerLock:
 class TestReadFeatures:
     """The features API: ``frame_average`` as an imread / imwrite kwarg, the
     reader_kwargs round-trip a worker uses to re-open the same binned array,
-    and the shared applier every save / run path goes through."""
+    and the shared applier every save / run path goes through.
+    """
 
     def test_imread_kwarg_and_reader_kwargs_roundtrip(self, source, tmp_path):
         from mbo_utilities.reader import imread, source_reader_kwargs
@@ -394,7 +417,8 @@ class TestReadFeatures:
 class TestWriterContract:
     """The writers mutate the array they are handed (roi per split, fix_phase
     from the save options) and reassign its metadata; the view has to let all
-    of that through to the source without corrupting its own scaling."""
+    of that through to the source without corrupting its own scaling.
+    """
 
     def test_setting_reader_attributes_reaches_the_source(self, source):
         view = average_frames(source, 4)
@@ -428,7 +452,8 @@ class TestWriterContract:
 
 class TestWorkerPaths:
     """The subprocess paths re-open the dataset from its path; the option has
-    to survive that round trip the way fix_phase does."""
+    to survive that round trip the way fix_phase does.
+    """
 
     def test_task_save_as_bins_the_output(self, source, raw, tmp_path):
         import logging
@@ -479,7 +504,8 @@ class TestWorkerPaths:
 
     def test_imwrite_phase_kwargs_reach_the_array(self, raw, tmp_path):
         """fix_phase= used to fall through imwrite's **kwargs unread; the
-        pipeline menus rely on it landing on the reader."""
+        pipeline menus rely on it landing on the reader.
+        """
         from mbo_utilities.arrays._phasecorr_view import with_phasecorr
         from mbo_utilities.writer import imwrite
 
@@ -487,5 +513,7 @@ class TestWorkerPaths:
         movie = (rng.random((6, 1, 1, 64, 128)) * 500).astype(np.int16)
         view = with_phasecorr(NumpyArray(movie, dims="TCZYX"))
         assert view.fix_phase is False
-        imwrite(view, tmp_path, ext=".tiff", overwrite=True, fix_phase=True, use_fft=True)
+        imwrite(
+            view, tmp_path, ext=".tiff", overwrite=True, fix_phase=True, use_fft=True
+        )
         assert view.fix_phase is True and view.use_fft is True

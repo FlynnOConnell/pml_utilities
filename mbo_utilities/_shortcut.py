@@ -9,6 +9,7 @@ installs (plain pip/uv pip install) can get the same icon without the web
 installer. The bundled icon is read from the installed package, so no
 download is needed.
 """
+
 from __future__ import annotations
 
 import os
@@ -46,7 +47,8 @@ def _bundled_icon(suffix: str) -> Path | None:
 def _copy_icon(suffix: str, base: Path) -> str:
     """Copy the bundled icon next to the launcher so the shortcut keeps its
     icon even if the package is upgraded or moved. Returns the path to use,
-    or "" if no icon is available."""
+    or "" if no icon is available.
+    """
     src = _bundled_icon(suffix)
     if src is None:
         return ""
@@ -72,7 +74,9 @@ def _create_windows_shortcut(name: str) -> Path:
 
     exe = _find_mbo_exe()
     if exe is None:
-        raise RuntimeError("Could not find mbo.exe. Is mbo_utilities installed on PATH?")
+        raise RuntimeError(
+            "Could not find mbo.exe. Is mbo_utilities installed on PATH?"
+        )
 
     base = get_mbo_dirs()["base"]
     icon = _copy_icon(".ico", base)
@@ -109,7 +113,9 @@ def _create_windows_shortcut(name: str) -> Path:
     )
     result = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-        env=env, capture_output=True, text=True,
+        env=env,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -124,7 +130,10 @@ def _linux_desktop_dir() -> Path:
     """Resolve the user's real desktop directory, honoring xdg-user-dirs."""
     try:
         result = subprocess.run(
-            ["xdg-user-dir", "DESKTOP"], capture_output=True, text=True, check=True,
+            ["xdg-user-dir", "DESKTOP"],
+            capture_output=True,
+            text=True,
+            check=True,
         )
         out = result.stdout.strip()
         if out:
@@ -154,9 +163,7 @@ def _create_linux_shortcut(name: str) -> Path:
         "Type=Application\n"
         f"Name={name}\n"
         f"Comment={DESCRIPTION}\n"
-        f"Exec={exe}\n"
-        + (f"Icon={icon}\n" if icon else "")
-        + "Terminal=false\n"
+        f"Exec={exe}\n" + (f"Icon={icon}\n" if icon else "") + "Terminal=false\n"
         "Categories=Science;Graphics;\n",
         encoding="utf-8",
     )
@@ -165,7 +172,8 @@ def _create_linux_shortcut(name: str) -> Path:
     try:
         subprocess.run(
             ["gio", "set", str(entry), "metadata::trusted", "true"],
-            check=False, capture_output=True,
+            check=False,
+            capture_output=True,
         )
     except FileNotFoundError:
         pass

@@ -9,6 +9,7 @@ entries (axis in ``"X"/"Y"/"Z"``, deg a 90-degree multiple). The live UI
 state is two lists: ``rotations`` (dicts ``{"sign","axis","deg"}``) and
 ``flips`` (axis strings); :func:`orientation_ops` turns them into op lists.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -51,11 +52,7 @@ def compose_R(ops: list) -> np.ndarray:
     except Exception:
         R = np.eye(3)
         for op in ops:
-            M = (
-                axis_rotation(op[1], op[2])
-                if op[0] == "rot"
-                else axis_flip(op[1])
-            )
+            M = axis_rotation(op[1], op[2]) if op[0] == "rot" else axis_flip(op[1])
             R = M @ R
         return R
 

@@ -11,6 +11,7 @@ This module enumerates adapters once, at startup (before ``immapp.run``
 takes over the GL context), and hands the list to anyone who needs it
 later. Subsequent calls return the cached list without touching wgpu.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -31,11 +32,13 @@ def prime() -> None:
         return
     try:
         import fastplotlib as fpl
+
         _ADAPTERS = list(fpl.enumerate_adapters())
     except Exception:
         _ADAPTERS = []
     try:
         import wgpu
+
         default_info = wgpu.gpu.request_adapter_sync().info
         infos = [a.info for a in _ADAPTERS]
         _DEFAULT_INDEX = infos.index(default_info)

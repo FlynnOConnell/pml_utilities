@@ -43,8 +43,12 @@ HAS_TORCH: bool = _get_cached_flag("torch", lambda: _check_import("torch"))
 HAS_RASTERMAP: bool = _get_cached_flag("rastermap", lambda: _check_import("rastermap"))
 HAS_MASKNMF: bool = _get_cached_flag("masknmf", lambda: _check_import("masknmf"))
 HAS_VNOISER: bool = _get_cached_flag("vnoiser", lambda: _check_import("vnoiser"))
-HAS_IMGUI: bool = _get_cached_flag("imgui_bundle", lambda: _check_import("imgui_bundle"))
-HAS_FASTPLOTLIB: bool = _get_cached_flag("fastplotlib", lambda: _check_import("fastplotlib"))
+HAS_IMGUI: bool = _get_cached_flag(
+    "imgui_bundle", lambda: _check_import("imgui_bundle")
+)
+HAS_FASTPLOTLIB: bool = _get_cached_flag(
+    "fastplotlib", lambda: _check_import("fastplotlib")
+)
 HAS_PYQT6: bool = _get_cached_flag("pyqt6", lambda: _check_import("PyQt6"))
 HAS_NAPARI: bool = _get_cached_flag("napari", lambda: _check_import("napari"))
 HAS_NAPARI_OME_ZARR: bool = _get_cached_flag(
@@ -133,9 +137,7 @@ LINUX_QT_APT_PACKAGES = (
     "libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 libxkbcommon0 "
     "libx11-xcb1 libegl1 libgl1 libfontconfig1 libdbus-1-3"
 )
-LINUX_QT_HINT = (
-    f"sudo apt install {LINUX_QT_APT_PACKAGES}  |  or run without qt: RENDERCANVAS_BACKEND=glfw mbo"
-)
+LINUX_QT_HINT = f"sudo apt install {LINUX_QT_APT_PACKAGES}  |  or run without qt: RENDERCANVAS_BACKEND=glfw mbo"
 
 
 def _major(ver: str | None) -> int | None:
@@ -173,7 +175,9 @@ def cupy_install_hint(driver_cuda: str | None = None) -> str:
     return f"uv pip install {pkg} nvidia-cuda-nvrtc-cu{major} nvidia-cuda-runtime-cu{major}"
 
 
-def recommended_torch_tag(driver_cuda: str | None, capability: str | None = None) -> str:
+def recommended_torch_tag(
+    driver_cuda: str | None, capability: str | None = None
+) -> str:
     """PyTorch wheel tag the driver and card can run: cu118, cu126, cu128 or cu130.
 
     CUDA 13 wheels drop Pascal and Volta (compute capability < 7.5); Blackwell
@@ -189,7 +193,9 @@ def recommended_torch_tag(driver_cuda: str | None, capability: str | None = None
     return "cu126"
 
 
-def torch_install_hint(driver_cuda: str | None = None, capability: str | None = None) -> str:
+def torch_install_hint(
+    driver_cuda: str | None = None, capability: str | None = None
+) -> str:
     """Install command for the PyTorch wheel this machine can run."""
     return f"uv pip install torch --index-url {_TORCH_INDEX}{recommended_torch_tag(driver_cuda, capability)}"
 
@@ -201,7 +207,9 @@ def _arch_supported(arches: list[str], capability: tuple[int, int]) -> bool:
         kind, _, num = arch.partition("_")
         if not num.isdigit():
             continue
-        if (kind == "sm" and int(num) == want) or (kind == "compute" and int(num) <= want):
+        if (kind == "sm" and int(num) == want) or (
+            kind == "compute" and int(num) <= want
+        ):
             return True
     return not arches
 
@@ -211,7 +219,9 @@ def _arch_supported(arches: list[str], capability: tuple[int, int]) -> bool:
 # ---------------------------------------------------------------------------
 
 _TORCH_PURPOSE = "suite2p registration, cellpose and masknmf run on its device"
-_CUPY_PURPOSE = "z-registration of ScanImage tiffs only (imwrite register_z); numpy otherwise"
+_CUPY_PURPOSE = (
+    "z-registration of ScanImage tiffs only (imwrite register_z); numpy otherwise"
+)
 
 
 def _check_pytorch(
@@ -250,13 +260,21 @@ def _check_pytorch(
         name = torch.cuda.get_device_name(0)
         arches = list(torch.cuda.get_arch_list())
     except Exception as e:
-        return _feat(Status.ERROR, ver, f"CUDA init failed: {str(e)[:60]}", gpu_ok=False), build, None
+        return (
+            _feat(Status.ERROR, ver, f"CUDA init failed: {str(e)[:60]}", gpu_ok=False),
+            build,
+            None,
+        )
     capability = f"{cap[0]}.{cap[1]}"
     hint = torch_install_hint(driver_cuda, capability)
     if not _arch_supported(arches, cap):
         msg = f"{name} (sm_{cap[0]}{cap[1]}) has no kernels in the CUDA {build} wheel"
         return _feat(Status.ERROR, ver, msg, gpu_ok=False, hint=hint), build, capability
-    return _feat(Status.OK, ver, f"CUDA {build}, {name}", gpu_ok=True, hint=hint), build, capability
+    return (
+        _feat(Status.OK, ver, f"CUDA {build}, {name}", gpu_ok=True, hint=hint),
+        build,
+        capability,
+    )
 
 
 def _check_cupy(driver_cuda: str | None) -> tuple[FeatureStatus, str | None]:
@@ -278,16 +296,22 @@ def _check_cupy(driver_cuda: str | None) -> tuple[FeatureStatus, str | None]:
         rt = cp.cuda.runtime.runtimeGetVersion()
         runtime = f"{rt // 1000}.{(rt % 1000) // 10}"
     except Exception as e:
-        return _feat(Status.ERROR, ver, f"CUDA init failed: {str(e)[:60]}", gpu_ok=False), None
+        return _feat(
+            Status.ERROR, ver, f"CUDA init failed: {str(e)[:60]}", gpu_ok=False
+        ), None
     drv, cur = _major(driver_cuda), _major(runtime)
     if drv is not None and cur is not None and drv < cur:
         msg = f"built for CUDA {runtime}, driver supports {driver_cuda}"
         return _feat(Status.ERROR, ver, msg, gpu_ok=False), runtime
     try:
-        kernel = cp.ElementwiseKernel("float32 x", "float32 y", "y = x * 2", "mbo_probe")
+        kernel = cp.ElementwiseKernel(
+            "float32 x", "float32 y", "y = x * 2", "mbo_probe"
+        )
         kernel(cp.array([1.0], dtype="float32"), cp.empty(1, dtype="float32"))
     except Exception:
-        return _feat(Status.ERROR, ver, "NVRTC missing, kernels cannot compile", gpu_ok=False), runtime
+        return _feat(
+            Status.ERROR, ver, "NVRTC missing, kernels cannot compile", gpu_ok=False
+        ), runtime
     return _feat(Status.OK, ver, f"CUDA {runtime}", gpu_ok=True), runtime
 
 
@@ -296,7 +320,9 @@ def _check_pkg(
 ) -> FeatureStatus:
     """Version by metadata, so noisy packages (suite2p's pynwb warning) never import."""
     if not _check_import(import_name):
-        return FeatureStatus(display, Status.MISSING, "", "not installed", None, purpose, hint)
+        return FeatureStatus(
+            display, Status.MISSING, "", "not installed", None, purpose, hint
+        )
     try:
         ver = _dist_version(dist_name)
     except Exception:
@@ -310,9 +336,17 @@ def _on_torch(feat: FeatureStatus, torch: FeatureStatus) -> FeatureStatus:
         return feat
     feat.gpu_ok = torch.gpu_ok
     if torch.status is Status.MISSING:
-        feat.status, feat.message, feat.hint = Status.WARN, "PyTorch not installed", torch.hint
+        feat.status, feat.message, feat.hint = (
+            Status.WARN,
+            "PyTorch not installed",
+            torch.hint,
+        )
     elif not torch.gpu_ok:
-        feat.status, feat.message, feat.hint = Status.WARN, f"CPU: {torch.message}", torch.hint
+        feat.status, feat.message, feat.hint = (
+            Status.WARN,
+            f"CPU: {torch.message}",
+            torch.hint,
+        )
     return feat
 
 
@@ -344,7 +378,9 @@ def check_installation(callback=None) -> InstallStatus:
         cuda.capability = devices[0].get("compute_cap")
 
     _update(0.3, "Checking PyTorch...")
-    torch, cuda.pytorch_cuda, seen = _check_pytorch(cuda.driver_version, cuda.capability)
+    torch, cuda.pytorch_cuda, seen = _check_pytorch(
+        cuda.driver_version, cuda.capability
+    )
     cuda.capability = seen or cuda.capability
     status.features.append(torch)
 
@@ -356,64 +392,115 @@ def check_installation(callback=None) -> InstallStatus:
     status.features += [
         _on_torch(
             _check_pkg(
-                "lbm_suite2p_python", "lbm-suite2p-python", "LBM-Suite2p-Python",
-                "suite2p pipeline; registration on the PyTorch device", _SUITE2P_HINT,
+                "lbm_suite2p_python",
+                "lbm-suite2p-python",
+                "LBM-Suite2p-Python",
+                "suite2p pipeline; registration on the PyTorch device",
+                _SUITE2P_HINT,
             ),
             torch,
         ),
-        _check_pkg("suite2p", "suite2p", "Suite2p", "core of LBM-Suite2p-Python", _SUITE2P_HINT),
-        _on_torch(
-            _check_pkg(
-                "cellpose", "cellpose", "Cellpose",
-                "anatomical detection in suite2p, on the PyTorch device", "uv pip install cellpose",
-            ),
-            torch,
-        ),
-        _on_torch(
-            _check_pkg(
-                "masknmf", "masknmf", "MaskNMF",
-                "masknmf pipeline and curation GUI, on the PyTorch device", _MASKNMF_HINT,
-            ),
-            torch,
-        ),
-        _check_pkg("rastermap", "rastermap", "Rastermap", "sorts suite2p traces", _SUITE2P_HINT),
         _check_pkg(
-            "vnoiser", "vnoiser", "vnoiser",
-            "wavelet denoising and event curation of voltage traces", VNOISER_HINT,
+            "suite2p", "suite2p", "Suite2p", "core of LBM-Suite2p-Python", _SUITE2P_HINT
+        ),
+        _on_torch(
+            _check_pkg(
+                "cellpose",
+                "cellpose",
+                "Cellpose",
+                "anatomical detection in suite2p, on the PyTorch device",
+                "uv pip install cellpose",
+            ),
+            torch,
+        ),
+        _on_torch(
+            _check_pkg(
+                "masknmf",
+                "masknmf",
+                "MaskNMF",
+                "masknmf pipeline and curation GUI, on the PyTorch device",
+                _MASKNMF_HINT,
+            ),
+            torch,
+        ),
+        _check_pkg(
+            "rastermap", "rastermap", "Rastermap", "sorts suite2p traces", _SUITE2P_HINT
+        ),
+        _check_pkg(
+            "vnoiser",
+            "vnoiser",
+            "vnoiser",
+            "wavelet denoising and event curation of voltage traces",
+            VNOISER_HINT,
         ),
     ]
 
     _update(0.9, "Checking napari...")
     napari_hint = "uv pip install 'mbo_utilities[napari]'"
-    napari = _check_pkg("napari", "napari", "Napari", "the napari viewer mode", napari_hint)
+    napari = _check_pkg(
+        "napari", "napari", "Napari", "the napari viewer mode", napari_hint
+    )
     status.features.append(napari)
     if napari.status is Status.OK:
         status.features += [
-            _check_pkg("napari_ome_zarr", "napari-ome-zarr", "napari-ome-zarr", "zarr in napari", napari_hint),
-            _check_pkg("napari_animation", "napari-animation", "napari-animation", "movies from napari", napari_hint),
+            _check_pkg(
+                "napari_ome_zarr",
+                "napari-ome-zarr",
+                "napari-ome-zarr",
+                "zarr in napari",
+                napari_hint,
+            ),
+            _check_pkg(
+                "napari_animation",
+                "napari-animation",
+                "napari-animation",
+                "movies from napari",
+                napari_hint,
+            ),
         ]
     if sys.platform.startswith("linux") and HAS_PYQT6:
         _update(0.95, "Checking the Qt window backend...")
         purpose = "window backend for the viewer on Linux (PyQt6); glfw is the fallback"
         if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-            status.features.append(FeatureStatus(
-                "Qt display", Status.WARN, message="no DISPLAY or WAYLAND_DISPLAY in this shell",
-                purpose=purpose, hint="run from a desktop session, ssh -X, or a VNC/virtual desktop",
-            ))
+            status.features.append(
+                FeatureStatus(
+                    "Qt display",
+                    Status.WARN,
+                    message="no DISPLAY or WAYLAND_DISPLAY in this shell",
+                    purpose=purpose,
+                    hint="run from a desktop session, ssh -X, or a VNC/virtual desktop",
+                )
+            )
         else:
             # qt aborts the process when the xcb plugin cannot load, so probe in a subprocess
             probe = subprocess.run(
-                [sys.executable, "-c", "from PyQt6.QtGui import QGuiApplication; QGuiApplication([])"],
-                capture_output=True, text=True, timeout=120,
+                [
+                    sys.executable,
+                    "-c",
+                    "from PyQt6.QtGui import QGuiApplication; QGuiApplication([])",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
             if probe.returncode == 0:
-                status.features.append(FeatureStatus("Qt display", Status.OK, purpose=purpose))
+                status.features.append(
+                    FeatureStatus("Qt display", Status.OK, purpose=purpose)
+                )
             else:
                 lines = [ln for ln in probe.stderr.splitlines() if ln.strip()]
-                message = lines[0] if lines else f"qt exited with code {probe.returncode}"
-                status.features.append(FeatureStatus(
-                    "Qt display", Status.ERROR, message=message, purpose=purpose, hint=LINUX_QT_HINT,
-                ))
+                message = (
+                    lines[0] if lines else f"qt exited with code {probe.returncode}"
+                )
+                status.features.append(
+                    FeatureStatus(
+                        "Qt display",
+                        Status.ERROR,
+                        message=message,
+                        purpose=purpose,
+                        hint=LINUX_QT_HINT,
+                    )
+                )
     _update(1.0, "Done")
     return status
 
@@ -433,7 +520,9 @@ def print_status_cli(status: InstallStatus):
     """Print the status the way the launcher table shows it."""
     import click
 
-    click.echo(f"\nmbo_utilities v{status.mbo_version} | Python {status.python_version}")
+    click.echo(
+        f"\nmbo_utilities v{status.mbo_version} | Python {status.python_version}"
+    )
     click.echo(f"GPU: {gpu_summary(status.cuda_info)}")
     click.echo("=" * 60)
     marks = {
@@ -447,7 +536,9 @@ def print_status_cli(status: InstallStatus):
         ver = f" {f.version}" if f.version else ""
         dev = {True: "  GPU", False: "  CPU"}.get(f.gpu_ok, "")
         detail = "" if f.message in ("", "ready") else f"  {f.message}"
-        click.echo(f"  {click.style(mark, fg=color)} {click.style(f.name + ver, fg=color)}{dev}{detail}")
+        click.echo(
+            f"  {click.style(mark, fg=color)} {click.style(f.name + ver, fg=color)}{dev}{detail}"
+        )
         click.echo(click.style(f"       {f.purpose}", fg="bright_black"))
         if f.status is not Status.OK and f.hint:
             click.echo(click.style(f"       fix: {f.hint}", fg="cyan"))

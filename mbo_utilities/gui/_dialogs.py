@@ -9,12 +9,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import imgui, portable_file_dialogs as pfd
+from imgui_bundle import imgui
+from imgui_bundle import portable_file_dialogs as pfd
 
-from mbo_utilities.reader import imread
 from mbo_utilities.arrays import ScanImageArray
 from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.preferences import add_recent_file, get_last_dir, set_last_dir
+from mbo_utilities.reader import imread
 
 _IMAGE_FILTERS = ["All Files", "*"]
 
@@ -112,7 +113,10 @@ def _resolve_plane_dir(p: Path) -> Path | None:
     if p.is_file() and p.name in ("data.bin", "data_raw.bin"):
         return p.parent
     if p.is_dir():
-        if any((p / n).is_file() for n in ("ops.npy", "settings.npy", "data.bin", "data_raw.bin")):
+        if any(
+            (p / n).is_file()
+            for n in ("ops.npy", "settings.npy", "data.bin", "data_raw.bin")
+        ):
             return p
         try:
             for child in sorted(p.iterdir()):
@@ -154,17 +158,19 @@ def _try_hydrate_s2p_from_binary(parent: Any, path: str | Path) -> bool:
             d = arr.item() if hasattr(arr, "item") and arr.ndim == 0 else arr
             return d if isinstance(d, dict) else None
         except Exception as e:
-            parent.logger.warning(
-                f"suite2p hydrate: failed to read {fp}: {e}"
-            )
+            parent.logger.warning(f"suite2p hydrate: failed to read {fp}: {e}")
             return None
 
     loaded: dict = {}
     sources: list[str] = []
     try:
         from mbo_utilities.gui.widgets.pipelines._s2p_schema import (
-            from_structured as _from_structured,
             from_flat as _from_flat,
+        )
+        from mbo_utilities.gui.widgets.pipelines._s2p_schema import (
+            from_structured as _from_structured,
+        )
+        from mbo_utilities.gui.widgets.pipelines._s2p_schema import (
             warm_up_suite2p_schema as _warm_up_schema,
         )
     except Exception as e:
@@ -530,8 +536,8 @@ def load_new_data(parent: Any, path: str):
     """
     from mbo_utilities.arrays import TiffArray
     from mbo_utilities.gui.run_gui import (
-        _SqueezeSingletonDims,
         _ScrubTimingProxy,
+        _SqueezeSingletonDims,
     )
 
     path_obj = Path(path)
@@ -548,7 +554,9 @@ def load_new_data(parent: Any, path: str):
 
         parent.logger.debug(f"Calling imread on: {path}")
         raw_data = imread(path)
-        parent.logger.debug(f"imread returned: type={type(raw_data).__name__}, shape={getattr(raw_data, 'shape', 'N/A')}")
+        parent.logger.debug(
+            f"imread returned: type={type(raw_data).__name__}, shape={getattr(raw_data, 'shape', 'N/A')}"
+        )
 
         # Apply per-plane axial shifts on read when present, matching the
         # initial-launch path (_launch_standard_viewer). Without this, opening
@@ -559,12 +567,9 @@ def load_new_data(parent: Any, path: str):
                 validate_axial_shifts,
                 with_axial_shifts,
             )
+
             _md = getattr(raw_data, "metadata", None)
-            _nz = (
-                int(raw_data._shape5d()[2])
-                if hasattr(raw_data, "_shape5d")
-                else None
-            )
+            _nz = int(raw_data._shape5d()[2]) if hasattr(raw_data, "_shape5d") else None
             if validate_axial_shifts(_md, _nz):
                 raw_data = with_axial_shifts(raw_data)
                 parent.logger.info(f"axial alignment applied ({_nz} planes)")
@@ -577,8 +582,10 @@ def load_new_data(parent: Any, path: str):
         # reload would expose Z at index 2 here, but at index 1 on initial
         # launch — different code paths giving different shapes for the
         # same file. Squeeze keeps them in lockstep.
-        if hasattr(raw_data, "shape") and len(raw_data.shape) == 5 and any(
-            raw_data.shape[i] == 1 for i in range(3)
+        if (
+            hasattr(raw_data, "shape")
+            and len(raw_data.shape) == 5
+            and any(raw_data.shape[i] == 1 for i in range(3))
         ):
             new_data = _SqueezeSingletonDims(raw_data)
         else:
@@ -630,9 +637,8 @@ def load_new_data(parent: Any, path: str):
         # Peel _SqueezeSingletonDims so the wrapper doesn't hide the
         # underlying class from isinstance.
         underlying = getattr(new_data, "_arr", new_data)
-        parent.is_mbo_scan = (
-            isinstance(underlying, ScanImageArray) or
-            isinstance(underlying, TiffArray)
+        parent.is_mbo_scan = isinstance(underlying, ScanImageArray) or isinstance(
+            underlying, TiffArray
         )
 
         # If the loaded file is a suite2p binary, hydrate Suite2pSettings
@@ -681,7 +687,8 @@ def load_new_data(parent: Any, path: str):
         parent._custom_metadata = {}
 
         # Reinitialize viewer based on new data type (new architecture)
-        from mbo_utilities.gui.viewers import get_viewer_class, TimeSeriesViewer
+        from mbo_utilities.gui.viewers import TimeSeriesViewer, get_viewer_class
+
         if hasattr(parent, "_viewer") and parent._viewer:
             parent._viewer.cleanup()
         viewer_cls = get_viewer_class(new_data)
@@ -707,6 +714,7 @@ def load_new_data(parent: Any, path: str):
             from mbo_utilities.gui.widgets.pipelines.isoview import (
                 maybe_spawn_raw_projections,
             )
+
             maybe_spawn_raw_projections(parent)
         except Exception:
             parent.logger.debug("raw projection prefetch skipped", exc_info=True)

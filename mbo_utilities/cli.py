@@ -13,6 +13,7 @@ Usage patterns:
   mbo info INPUT                # Show array info (CLI only)
   mbo linescan FILE.mesc        # Per-ROI traces from AOD line-scan units
 """
+
 import logging
 import os
 import sys
@@ -24,7 +25,10 @@ from pathlib import Path
 if sys.platform == "win32":
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("mbo.utilities.gui.1.0")
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "mbo.utilities.gui.1.0"
+        )
     except Exception:
         pass
 
@@ -66,6 +70,7 @@ class PathAwareGroup(click.Group):
 def _get_marker_path() -> Path:
     """Get path to first-run marker file."""
     from mbo_utilities import get_mbo_dirs
+
     return get_mbo_dirs()["base"] / ".initialized"
 
 
@@ -119,13 +124,14 @@ class LoadingSpinner:
 
 
 def _get_version_info() -> str:
-    """get version string with install location info (cached)."""
+    """Get version string with install location info (cached)."""
     from mbo_utilities import __version__
 
     # try cache first for install type
     install_type = None
     try:
         from mbo_utilities.env_cache import get_cached_install_type
+
         install_type = get_cached_install_type()
     except Exception:
         pass
@@ -155,7 +161,8 @@ def _version_callback(ctx: click.Context, param: click.Parameter, value: bool) -
 
 @click.group(cls=PathAwareGroup, invoke_without_command=True)
 @click.option(
-    "-V", "--version",
+    "-V",
+    "--version",
     is_flag=True,
     callback=_version_callback,
     expose_value=False,
@@ -183,14 +190,14 @@ def _version_callback(ctx: click.Context, param: click.Parameter, value: bool) -
     type=int,
     default=None,
     help="Set and persist GPU adapter index. `mbo --gpu N` saves + exits; "
-         "`mbo --gpu N <path>` saves then opens. See `mbo view --list-gpus`.",
+    "`mbo --gpu N <path>` saves then opens. See `mbo view --list-gpus`.",
 )
 @click.option(
     "--debug/--no-debug",
     default=None,
     help="Debug logging for this run (sets MBO_DEBUG): verbose logs, the "
-         "Widgets > ImGui Debug tools, and every worker spawned after. "
-         "Omitted: the persisted Options setting.",
+    "Widgets > ImGui Debug tools, and every worker spawned after. "
+    "Omitted: the persisted Options setting.",
 )
 @click.pass_context
 def main(
@@ -224,11 +231,14 @@ def main(
     """
     if debug is not None:
         from mbo_utilities import log as _log
+
         _log.set_debug(debug)
 
     # handle --clear-cache early
     if clear_cache:
-        from mbo_utilities.env_cache import clear_cache as do_clear, get_cache_path
+        from mbo_utilities.env_cache import clear_cache as do_clear
+        from mbo_utilities.env_cache import get_cache_path
+
         path = get_cache_path()
         if do_clear():
             click.secho(f"Cache cleared: {path}", fg="green")
@@ -238,15 +248,21 @@ def main(
 
     if check_install:
         # force full cache rebuild including install status
-        from mbo_utilities.env_cache import build_full_cache_with_install_status, save_cache
+        from mbo_utilities.env_cache import (
+            build_full_cache_with_install_status,
+            save_cache,
+        )
+
         cache = build_full_cache_with_install_status()
         save_cache(cache)
         from mbo_utilities.gui.run_gui import _check_installation
+
         _check_installation()
         return
 
     if gpu_index_arg is not None:
         import fastplotlib as fpl
+
         adapters = fpl.enumerate_adapters()
         if not 0 <= gpu_index_arg < len(adapters):
             raise click.BadParameter(
@@ -255,6 +271,7 @@ def main(
                 param_hint="--gpu",
             )
         from mbo_utilities.preferences import set_gpu_index
+
         set_gpu_index(gpu_index_arg)
         info = getattr(adapters[gpu_index_arg], "info", {}) or {}
         click.echo(
@@ -274,12 +291,16 @@ def main(
     # show first-run warning
     first_run = _is_first_run()
     if first_run:
-        click.secho("First run detected - initial startup may take longer while caches are built.", fg="yellow")
+        click.secho(
+            "First run detected - initial startup may take longer while caches are built.",
+            fg="yellow",
+        )
 
     # ensure environment cache exists (build if missing/invalid)
     if not no_cache:
         try:
             from mbo_utilities.env_cache import ensure_cache
+
             ensure_cache()
         except Exception:
             pass  # don't crash if cache fails
@@ -289,6 +310,7 @@ def main(
     spinner.start()
     try:
         from mbo_utilities.gui.run_gui import run_gui
+
         spinner.stop()
     except Exception:
         spinner.stop()
@@ -351,7 +373,7 @@ def main(
     type=click.Choice(["demixing", "compression", "classification"]),
     default=None,
     help="For a masknmf demixing result: which of masknmf's viewers to open. "
-         "Omitted: a prompt in the terminal, or the demixing viewer when there is none.",
+    "Omitted: a prompt in the terminal, or the demixing viewer when there is none.",
 )
 @click.option(
     "--raw",
@@ -359,7 +381,7 @@ def main(
     type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="For a masknmf demixing result: the raw movie, shown as a panel in the demixing viewer and as the "
-         "reference in the compression viewer. Omitted: data_raw.bin or a lone .tif beside the result, if any.",
+    "reference in the compression viewer. Omitted: data_raw.bin or a lone .tif beside the result, if any.",
 )
 @click.option(
     "--motion-correction",
@@ -367,18 +389,29 @@ def main(
     type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="For a masknmf demixing result: a motion correction hdf5 whose shifts plot above the traces. "
-         "Omitted: motion_correction.hdf5 beside the result, if any.",
+    "Omitted: motion_correction.hdf5 beside the result, if any.",
 )
 @click.option(
     "--debug/--no-debug",
     default=None,
     help="Debug logging for this run (sets MBO_DEBUG): verbose logs, the "
-         "Widgets > ImGui Debug tools, and every worker spawned after. "
-         "Omitted: the persisted Options setting.",
+    "Widgets > ImGui Debug tools, and every worker spawned after. "
+    "Omitted: the persisted Options setting.",
 )
-def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=False,
-         unit=None, gpu_index=None, list_gpus=False, vis=None, raw_path=None,
-         motion_correction_path=None, debug=None):
+def view(
+    data_in=None,
+    roi=None,
+    widget="preview",
+    no_widget=False,
+    metadata=False,
+    unit=None,
+    gpu_index=None,
+    list_gpus=False,
+    vis=None,
+    raw_path=None,
+    motion_correction_path=None,
+    debug=None,
+):
     r"""
     Open imaging data in the GUI viewer.
 
@@ -397,10 +430,12 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
     """
     if debug is not None:
         from mbo_utilities import log as _log
+
         _log.set_debug(debug)
 
     if list_gpus:
         import fastplotlib as fpl
+
         adapters = fpl.enumerate_adapters()
         click.echo(f"{'idx':<4} {'type':<14} {'vendor':<10} {'name'}")
         for i, a in enumerate(adapters):
@@ -413,6 +448,7 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
 
     if gpu_index is not None:
         import fastplotlib as fpl
+
         adapters = fpl.enumerate_adapters()
         if not 0 <= gpu_index < len(adapters):
             raise click.BadParameter(
@@ -422,9 +458,12 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
             )
         fpl.select_adapter(adapters[gpu_index])
         from mbo_utilities.preferences import set_gpu_index
+
         set_gpu_index(gpu_index)
         info = getattr(adapters[gpu_index], "info", {}) or {}
-        click.echo(f"Using GPU {gpu_index}: {info.get('device', info.get('description', '?'))}")
+        click.echo(
+            f"Using GPU {gpu_index}: {info.get('device', info.get('description', '?'))}"
+        )
 
     # a masknmf demixing result opens in one of masknmf's viewers: ask which
     # before anything heavy loads
@@ -445,13 +484,17 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
     # show first-run warning
     first_run = _is_first_run()
     if first_run:
-        click.secho("First run detected - initial startup may take longer while caches are built.", fg="yellow")
+        click.secho(
+            "First run detected - initial startup may take longer while caches are built.",
+            fg="yellow",
+        )
 
     # show loading spinner while importing
     spinner = LoadingSpinner("Loading GUI")
     spinner.start()
     try:
         from mbo_utilities.gui.run_gui import run_gui
+
         spinner.stop()
     except Exception:
         spinner.stop()
@@ -476,19 +519,24 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
 @click.argument("input_path", required=False, type=click.Path())
 @click.argument("output_path", required=False, type=click.Path())
 @click.option(
-    "-e", "--ext",
-    type=click.Choice([".tiff", ".tif", ".zarr", ".bin", ".h5", ".npy"], case_sensitive=False),
+    "-e",
+    "--ext",
+    type=click.Choice(
+        [".tiff", ".tif", ".zarr", ".bin", ".h5", ".npy"], case_sensitive=False
+    ),
     default=None,
     help="Output format extension.",
 )
 @click.option(
-    "-p", "--planes",
+    "-p",
+    "--planes",
     multiple=True,
     type=int,
     help="Z-planes to export (1-based): -p 1 -p 7 -p 14",
 )
 @click.option(
-    "-t", "--timepoints",
+    "-t",
+    "--timepoints",
     multiple=True,
     type=int,
     help="Timepoints to export (1-based): -t 1 -t 50 -t 100",
@@ -506,7 +554,8 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
     help="Number of z-planes to export (first N).",
 )
 @click.option(
-    "-n", "--num-frames",
+    "-n",
+    "--num-frames",
     type=int,
     default=None,
     help="Deprecated, use --num-timepoints.",
@@ -556,7 +605,8 @@ def view(data_in=None, roi=None, widget="preview", no_widget=False, metadata=Fal
     help="Output filename for binary format.",
 )
 @click.option(
-    "-c", "--channels",
+    "-c",
+    "--channels",
     multiple=True,
     type=int,
     help="Color channels to export (1-based): -c 1 -c 2",
@@ -717,13 +767,17 @@ def convert(
     """
     # If no input provided, could open a conversion GUI in the future
     if input_path is None:
-        click.echo("Conversion GUI not yet implemented. Please provide INPUT_PATH and OUTPUT_PATH.")
+        click.echo(
+            "Conversion GUI not yet implemented. Please provide INPUT_PATH and OUTPUT_PATH."
+        )
         click.echo("\nUsage: mbo convert INPUT_PATH OUTPUT_PATH [OPTIONS]")
         click.echo("\nRun 'mbo convert --help' for all options.")
         return
 
     if output_path is None:
-        click.secho("Error: OUTPUT_PATH is required when INPUT_PATH is provided.", fg="red")
+        click.secho(
+            "Error: OUTPUT_PATH is required when INPUT_PATH is provided.", fg="red"
+        )
         return
 
     from mbo_utilities import imread, imwrite
@@ -850,6 +904,7 @@ def convert(
     result = imwrite(data, output_path, **imwrite_kwargs)
     click.secho(f"\nDone! Output saved to: {result}", fg="green")
 
+
 def _info_num(v):
     """Compact number formatting: 30.0 -> '30', 0.5 -> '0.5'. None -> None."""
     if v is None:
@@ -923,6 +978,7 @@ def _info_find_ops_dirs(root, max_depth=2):
 def _info_segmentation_counts(ops_dir):
     """(n_rois, n_cells) from stat.npy / iscell.npy, or (None, None)."""
     import numpy as np
+
     from mbo_utilities.file_io import load_npy
 
     stat_path = ops_dir / "stat.npy"
@@ -968,7 +1024,9 @@ def _echo_mesc_units(input_path, unit):
     units = list_mesc_units(path)
     click.echo("")
     click.secho(f"Measurement units ({len(units)})", fg="cyan")
-    click.echo(f"  {'idx':<5}{'unit':<12}{'type':<20}{'role':<18}{'shape (T,C,Z,Y,X)':<26}comment")
+    click.echo(
+        f"  {'idx':<5}{'unit':<12}{'type':<20}{'role':<18}{'shape (T,C,Z,Y,X)':<26}comment"
+    )
     for u in units:
         shape = ",".join(str(v) for v in u["shape"])
         click.echo(
@@ -976,9 +1034,7 @@ def _echo_mesc_units(input_path, unit):
             f"({shape}){'':<{max(0, 24 - len(shape))}}{u['comment']}"
         )
     if unit is None and len(units) > 1:
-        click.secho(
-            f"  -> no --unit given; describing {units[0]['key']}", fg="yellow"
-        )
+        click.secho(f"  -> no --unit given; describing {units[0]['key']}", fg="yellow")
     return {"unit": _parse_unit(unit)} if unit is not None else {}
 
 
@@ -1023,6 +1079,7 @@ def info(input_path, metadata, show_all, unit):
       mbo info /data/scan.mesc --unit 2
     """
     from pathlib import Path
+
     from mbo_utilities import imread
 
     reader_kwargs = _echo_mesc_units(input_path, unit)
@@ -1079,7 +1136,9 @@ def info(input_path, metadata, show_all, unit):
         if is_isoview:
             # view_names are the VW labels (VW00, VW90, ...); `views` holds
             # raw camera keys, so prefer the labels for display.
-            view_labels = getattr(data, "view_names", None) or getattr(data, "views", None) or []
+            view_labels = (
+                getattr(data, "view_names", None) or getattr(data, "views", None) or []
+            )
             view_str = ", ".join(str(v) for v in view_labels) or _info_num(
                 getattr(data, "num_views", None) or sizes.get("C")
             )
@@ -1090,7 +1149,9 @@ def info(input_path, metadata, show_all, unit):
                 _info_kv("Timepoints", _info_num(sizes.get("T")))
             _info_kv("Z-planes", _info_num(zplanes))
             _info_kv("Views", view_str)
-            _info_kv("Color channels", _info_num(getattr(data, "num_color_channels", None)))
+            _info_kv(
+                "Color channels", _info_num(getattr(data, "num_color_channels", None))
+            )
         else:
             timepoints = n_timepoints
             channels = sizes.get("C") or _info_md(md, "num_color_channels")
@@ -1100,6 +1161,7 @@ def info(input_path, metadata, show_all, unit):
             if isinstance(md.get("si"), dict):
                 try:
                     from mbo_utilities.metadata.scanimage import get_log_average_factor
+
                     avg = get_log_average_factor(md)
                 except Exception:
                     avg = None
@@ -1117,7 +1179,9 @@ def info(input_path, metadata, show_all, unit):
         vmin = data.vmin
         vmax = data.vmax
         if vmin is not None and vmax is not None:
-            _info_kv("Value range", f"[{_info_num(float(vmin))}, {_info_num(float(vmax))}]")
+            _info_kv(
+                "Value range", f"[{_info_num(float(vmin))}, {_info_num(float(vmax))}]"
+            )
     except Exception:
         pass
 
@@ -1167,7 +1231,10 @@ def info(input_path, metadata, show_all, unit):
             elif have_raw:
                 _info_kv("Registration", "data_raw.bin only (not registered)")
             if have_seg:
-                _info_kv("Segmentation", f"{total_rois} ROIs ({total_cells} cells), {seg_planes} plane(s)")
+                _info_kv(
+                    "Segmentation",
+                    f"{total_rois} ROIs ({total_cells} cells), {seg_planes} plane(s)",
+                )
             else:
                 _info_kv("Segmentation", "not run (no stat.npy)")
         else:
@@ -1211,14 +1278,16 @@ def list_formats():
 @main.command("scanphase")
 @click.argument("input_path", required=False, type=click.Path())
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     "output_dir",
     type=click.Path(),
     default=None,
     help="Output directory for results. Default: <input>_scanphase_analysis/",
 )
 @click.option(
-    "-n", "--num-tifs",
+    "-n",
+    "--num-tifs",
     "num_tifs",
     type=int,
     default=None,
@@ -1271,6 +1340,7 @@ def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_
       mbo scanphase data.tiff --show         # show plots interactively
     """
     from pathlib import Path
+
     from mbo_utilities import get_files
     from mbo_utilities.analysis.scanphase import run_scanphase_analysis
 
@@ -1300,7 +1370,9 @@ def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_
             actual_output_dir = Path(output_dir)
         elif input_path is not None:
             input_path_obj = Path(input_path)
-            actual_output_dir = input_path_obj.parent / f"{input_path_obj.stem}_scanphase_analysis"
+            actual_output_dir = (
+                input_path_obj.parent / f"{input_path_obj.stem}_scanphase_analysis"
+            )
         else:
             actual_output_dir = None
 
@@ -1322,9 +1394,11 @@ def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_
         click.echo("")
         click.secho("scan-phase analysis complete", fg="cyan", bold=True)
         click.echo("")
-        click.echo(f"data: {meta.get('num_timepoints', meta.get('num_frames', 0))} timepoints, "
-                   f"{meta.get('num_rois', 1)} ROIs, "
-                   f"{meta.get('frame_shape', (0, 0))[1]}x{meta.get('frame_shape', (0, 0))[0]} px")
+        click.echo(
+            f"data: {meta.get('num_timepoints', meta.get('num_frames', 0))} timepoints, "
+            f"{meta.get('num_rois', 1)} ROIs, "
+            f"{meta.get('frame_shape', (0, 0))[1]}x{meta.get('frame_shape', (0, 0))[0]} px"
+        )
         click.echo(f"analysis time: {meta.get('analysis_time', 0):.1f}s")
         click.echo(f"output: {actual_output_dir}")
 
@@ -1336,7 +1410,9 @@ def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_
             click.echo(f"  mean:   {stats.get('mean', 0):+.3f} px")
             click.echo(f"  median: {stats.get('median', 0):+.3f} px")
             click.echo(f"  std:    {stats.get('std', 0):.3f} px")
-            click.echo(f"  range:  [{stats.get('min', 0):.2f}, {stats.get('max', 0):.2f}] px")
+            click.echo(
+                f"  range:  [{stats.get('min', 0):.2f}, {stats.get('max', 0):.2f}] px"
+            )
 
         # int stats
         if "int" in summary:
@@ -1417,7 +1493,11 @@ def processes(kill_all, kill, cleanup):
 
     for p in all_procs:
         alive = p.is_alive()
-        status = click.style("RUNNING", fg="green") if alive else click.style("FINISHED", fg="bright_black")
+        status = (
+            click.style("RUNNING", fg="green")
+            if alive
+            else click.style("FINISHED", fg="bright_black")
+        )
         click.echo(f"  PID {p.pid:>6}  {status}  {p.description}")
         click.echo(f"           Started: {p.elapsed_str()}")
         if p.output_path:
@@ -1469,13 +1549,19 @@ def gpu(watch, show_processes, as_json):
 
     if as_json:
         import json as _json
-        click.echo(_json.dumps({
-            "render_gpu": gpu_mod.render_gpu(),
-            "compute_gpu": gpu_mod.compute_gpu(),
-            "devices": gpu_mod.gpu_devices(),
-            "processes": gpu_mod.gpu_processes() if show_processes else [],
-            "compute_disabled": gpu_mod.gpu_compute_disabled(),
-        }, indent=2))
+
+        click.echo(
+            _json.dumps(
+                {
+                    "render_gpu": gpu_mod.render_gpu(),
+                    "compute_gpu": gpu_mod.compute_gpu(),
+                    "devices": gpu_mod.gpu_devices(),
+                    "processes": gpu_mod.gpu_processes() if show_processes else [],
+                    "compute_disabled": gpu_mod.gpu_compute_disabled(),
+                },
+                indent=2,
+            )
+        )
         return
 
     if watch:
@@ -1494,7 +1580,8 @@ def gpu(watch, show_processes, as_json):
 @main.command("init")
 @click.argument("data_path", required=False, type=click.Path())
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     "output_dir",
     type=click.Path(),
     default=None,
@@ -1544,6 +1631,7 @@ def init(data_path, output_dir, overwrite):
     fill = Path(data_path).expanduser().resolve().as_posix() if data_path else None
 
     from datetime import date
+
     today = date.today().isoformat()
 
     written = []
@@ -1632,8 +1720,7 @@ def shortcut(name):
     "--path",
     "remote_path",
     default=None,
-    help="Remote file to measure storage read/metadata against. "
-         "Skipped if omitted.",
+    help="Remote file to measure storage read/metadata against. Skipped if omitted.",
 )
 @click.option(
     "--size",
@@ -1714,6 +1801,7 @@ def netcheck(host, remote_path, size_mb, streams, quick, as_json):
 
     if as_json:
         import json as _json
+
         click.echo(_json.dumps(results, indent=2))
         return
 
@@ -1729,38 +1817,104 @@ def _csv_ints(_ctx, _param, value):
     try:
         return [int(v) for v in value.split(",") if v.strip()]
     except ValueError as e:
-        raise click.BadParameter(f"expected comma-separated integers, got {value!r}") from e
+        raise click.BadParameter(
+            f"expected comma-separated integers, got {value!r}"
+        ) from e
 
 
 @main.command("roi-run")
 @click.argument("input_path", type=click.Path(exists=True))
-@click.option("-o", "--output", "output_dir", type=click.Path(), default=None,
-              help="Where registration writes plane dirs. Required unless --register none.")
-@click.option("--register", "register_method", type=click.Choice(["suite2p", "masknmf", "none"]),
-              default="suite2p", show_default=True,
-              help="Registration engine; 'none' treats INPUT_PATH as registered plane dir(s).")
-@click.option("--process", type=click.Choice(["extract", "demix", "none"]), default="extract",
-              show_default=True,
-              help="extract: suite2p-style traces from the masks; demix: masknmf seeded NMF; "
-                   "none: register only, then draw ROIs on the registered movie.")
-@click.option("--rois", type=click.Path(exists=True), default=None,
-              help="Labels zarr. Default: manual_labels.zarr in each plane dir (drawn on the "
-                   "registered movie), else beside INPUT_PATH.")
-@click.option("--planes", callback=_csv_ints, default=None,
-              help="1-based z-planes to register/process, e.g. 1,3. Default: all.")
-@click.option("--roi-planes", callback=_csv_ints, default=None,
-              help="Only ROIs drawn on these 0-based planes, e.g. 0,2.")
-@click.option("--indices", callback=_csv_ints, default=None,
-              help="Only these ROI indices (as shown in the ROI tool), e.g. 0,4,7.")
-@click.option("--labels", default=None,
-              help="Only ROIs with these class labels, comma-separated, e.g. soma,dendrite.")
-@click.option("--engine", type=click.Choice(["mean", "suite2p"]), default="mean", show_default=True,
-              help="Extraction engine (--process extract only).")
-@click.option("--no-neuropil", is_flag=True, default=False, help="Skip neuropil traces (extract only).")
-@click.option("--force", is_flag=True, default=False, help="Re-register even when cached.")
-@click.option("--tag", default="manual", show_default=True, help="Output subdir name: rois_<tag>/.")
-def roi_run(input_path, output_dir, register_method, process, rois, planes, roi_planes,
-            indices, labels, engine, no_neuropil, force, tag):
+@click.option(
+    "-o",
+    "--output",
+    "output_dir",
+    type=click.Path(),
+    default=None,
+    help="Where registration writes plane dirs. Required unless --register none.",
+)
+@click.option(
+    "--register",
+    "register_method",
+    type=click.Choice(["suite2p", "masknmf", "none"]),
+    default="suite2p",
+    show_default=True,
+    help="Registration engine; 'none' treats INPUT_PATH as registered plane dir(s).",
+)
+@click.option(
+    "--process",
+    type=click.Choice(["extract", "demix", "none"]),
+    default="extract",
+    show_default=True,
+    help="extract: suite2p-style traces from the masks; demix: masknmf seeded NMF; "
+    "none: register only, then draw ROIs on the registered movie.",
+)
+@click.option(
+    "--rois",
+    type=click.Path(exists=True),
+    default=None,
+    help="Labels zarr. Default: manual_labels.zarr in each plane dir (drawn on the "
+    "registered movie), else beside INPUT_PATH.",
+)
+@click.option(
+    "--planes",
+    callback=_csv_ints,
+    default=None,
+    help="1-based z-planes to register/process, e.g. 1,3. Default: all.",
+)
+@click.option(
+    "--roi-planes",
+    callback=_csv_ints,
+    default=None,
+    help="Only ROIs drawn on these 0-based planes, e.g. 0,2.",
+)
+@click.option(
+    "--indices",
+    callback=_csv_ints,
+    default=None,
+    help="Only these ROI indices (as shown in the ROI tool), e.g. 0,4,7.",
+)
+@click.option(
+    "--labels",
+    default=None,
+    help="Only ROIs with these class labels, comma-separated, e.g. soma,dendrite.",
+)
+@click.option(
+    "--engine",
+    type=click.Choice(["mean", "suite2p"]),
+    default="mean",
+    show_default=True,
+    help="Extraction engine (--process extract only).",
+)
+@click.option(
+    "--no-neuropil",
+    is_flag=True,
+    default=False,
+    help="Skip neuropil traces (extract only).",
+)
+@click.option(
+    "--force", is_flag=True, default=False, help="Re-register even when cached."
+)
+@click.option(
+    "--tag",
+    default="manual",
+    show_default=True,
+    help="Output subdir name: rois_<tag>/.",
+)
+def roi_run(
+    input_path,
+    output_dir,
+    register_method,
+    process,
+    rois,
+    planes,
+    roi_planes,
+    indices,
+    labels,
+    engine,
+    no_neuropil,
+    force,
+    tag,
+):
     """Register, then run some or all drawn ROIs through extraction or demixing.
 
     \b
@@ -1810,28 +1964,78 @@ def roi_run(input_path, output_dir, register_method, process, rois, planes, roi_
 
 @main.command("linescan")
 @click.argument("mesc_path", type=click.Path(exists=True))
-@click.option("-o", "--output", "out_root", type=click.Path(), default=None,
-              help="Root for the per-unit output dirs (<root>/<MUnit_n>/). "
-                   "Default: rois_<tag>/<MUnit_n>/ beside the .mesc file.")
-@click.option("--unit", "units", multiple=True,
-              help="Only this unit, e.g. MUnit_3 (repeatable). Default: every linescan unit.")
-@click.option("--channel", type=int, default=0, show_default=True, help="Channel to average.")
-@click.option("--dfof-window", type=float, default=5.0, show_default=True,
-              help="Rolling max-min baseline window for dF/F, in seconds.")
+@click.option(
+    "-o",
+    "--output",
+    "out_root",
+    type=click.Path(),
+    default=None,
+    help="Root for the per-unit output dirs (<root>/<MUnit_n>/). "
+    "Default: rois_<tag>/<MUnit_n>/ beside the .mesc file.",
+)
+@click.option(
+    "--unit",
+    "units",
+    multiple=True,
+    help="Only this unit, e.g. MUnit_3 (repeatable). Default: every linescan unit.",
+)
+@click.option(
+    "--channel", type=int, default=0, show_default=True, help="Channel to average."
+)
+@click.option(
+    "--dfof-window",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Rolling max-min baseline window for dF/F, in seconds.",
+)
 @click.option("--no-dfof", is_flag=True, default=False, help="Skip dfof.npy.")
-@click.option("--no-figures", is_flag=True, default=False, help="Skip the numbered PNG figure set.")
-@click.option("--flip-y", is_flag=True, default=False,
-              help="Mirror the lines vertically on the reference Z-stack figure.")
-@click.option("--tag", default="linescan", show_default=True, help="Output dir name: rois_<tag>/.")
-@click.option("--view", is_flag=True, default=False,
-              help="Open the line-scan + Z-stack viewer (with vnoiser curation when installed) "
-                   "instead of writing outputs. Same as `mbo scan.mesc` and picking the unit.")
-@click.option("--zstack", default=None, help="With --view: the Z-stack unit, e.g. MUnit_3.")
-@click.option("--zstack-file", type=click.Path(exists=True, dir_okay=False), default=None,
-              help="With --view: the .mesc holding the Z-stack when saved separately "
-                   "(default: <name>_zstack.mesc beside the file, else the file itself).")
-def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figures, flip_y, tag,
-             view, zstack, zstack_file):
+@click.option(
+    "--no-figures",
+    is_flag=True,
+    default=False,
+    help="Skip the numbered PNG figure set.",
+)
+@click.option(
+    "--flip-y",
+    is_flag=True,
+    default=False,
+    help="Mirror the lines vertically on the reference Z-stack figure.",
+)
+@click.option(
+    "--tag", default="linescan", show_default=True, help="Output dir name: rois_<tag>/."
+)
+@click.option(
+    "--view",
+    is_flag=True,
+    default=False,
+    help="Open the line-scan + Z-stack viewer (with vnoiser curation when installed) "
+    "instead of writing outputs. Same as `mbo scan.mesc` and picking the unit.",
+)
+@click.option(
+    "--zstack", default=None, help="With --view: the Z-stack unit, e.g. MUnit_3."
+)
+@click.option(
+    "--zstack-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="With --view: the .mesc holding the Z-stack when saved separately "
+    "(default: <name>_zstack.mesc beside the file, else the file itself).",
+)
+def linescan(
+    mesc_path,
+    out_root,
+    units,
+    channel,
+    dfof_window,
+    no_dfof,
+    no_figures,
+    flip_y,
+    tag,
+    view,
+    zstack,
+    zstack_file,
+):
     """Per-ROI traces from every AOD line-scan unit of a Femtonics .mesc file.
 
     Each line the scientist drew is its own ROI; its kymograph is averaged
@@ -1868,10 +2072,16 @@ def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figur
         from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
 
         if len(units) > 1:
-            raise click.BadParameter("--view opens one unit; pass a single --unit", param_hint="--unit")
+            raise click.BadParameter(
+                "--view opens one unit; pass a single --unit", param_hint="--unit"
+            )
         open_linescan_viewer(
-            mesc_path, ref_key=units[0] if units else None, zstack_key=zstack,
-            zstack_path=zstack_file, channel=channel, flip_y=flip_y,
+            mesc_path,
+            ref_key=units[0] if units else None,
+            zstack_key=zstack,
+            zstack_path=zstack_file,
+            channel=channel,
+            flip_y=flip_y,
         )
         return
 
@@ -1879,9 +2089,15 @@ def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figur
 
     try:
         outputs = extract_linescan_units(
-            mesc_path, channel=channel, out_root=out_root, units=list(units) or None,
-            compute_dfof=not no_dfof, dfof_window_s=dfof_window, tag=tag,
-            figures=not no_figures, flip_y=flip_y,
+            mesc_path,
+            channel=channel,
+            out_root=out_root,
+            units=list(units) or None,
+            compute_dfof=not no_dfof,
+            dfof_window_s=dfof_window,
+            tag=tag,
+            figures=not no_figures,
+            flip_y=flip_y,
         )
     except (ValueError, KeyError, IndexError, FileNotFoundError) as e:
         click.echo(f"error: {e}", err=True)
@@ -1897,30 +2113,40 @@ def linescan(mesc_path, out_root, units, channel, dfof_window, no_dfof, no_figur
         ops = np.load(out / "ops.npy", allow_pickle=True).item()
         fs = ops.get("fs")
         widths = ", ".join(str(int(r["width"])) for r in stat)
-        click.echo(f"{unit_key}: {len(stat)} ROI(s) x {F.shape[1]} timepoints"
-                   f"{f' at {fs:.1f} Hz' if fs else ''} -> {out}")
+        click.echo(
+            f"{unit_key}: {len(stat)} ROI(s) x {F.shape[1]} timepoints"
+            f"{f' at {fs:.1f} Hz' if fs else ''} -> {out}"
+        )
         click.echo(f"  widths px: {widths}")
         click.echo(f"  F mean {F.mean():.1f}  min {F.min():.1f}  max {F.max():.1f}")
         if not no_dfof:
             dfof = np.load(out / "dfof.npy")
-            click.echo("  dF/F per ROI max: "
-                       + ", ".join(f"{v:.2f}" for v in np.nanmax(dfof, axis=1)))
+            click.echo(
+                "  dF/F per ROI max: "
+                + ", ".join(f"{v:.2f}" for v in np.nanmax(dfof, axis=1))
+            )
         info = ops.get("roi_workflow") or {}
         if info.get("stim_onsets_s"):
             onsets = ", ".join(f"{t:.3f}" for t in info["stim_onsets_s"])
-            click.echo(f"  stimulus: {info['stim_n_pulses']} pulse(s), train onset(s) at {onsets} s;"
-                       "  peak dF/F after stim: "
-                       + ", ".join(f"{r.get('peak_dfof', float('nan')):.2f}" for r in stat))
+            click.echo(
+                f"  stimulus: {info['stim_n_pulses']} pulse(s), train onset(s) at {onsets} s;"
+                "  peak dF/F after stim: "
+                + ", ".join(f"{r.get('peak_dfof', float('nan')):.2f}" for r in stat)
+            )
         else:
             click.echo("  no photostimulation found in this unit")
         bg = info.get("background_image")
         if bg:
-            click.echo(f"  drawn on snapshot: {bg['munit']} ({bg['width']:.0f} um FOV at z {bg['z']:.2f})")
+            click.echo(
+                f"  drawn on snapshot: {bg['munit']} ({bg['width']:.0f} um FOV at z {bg['z']:.2f})"
+            )
         ref = info.get("reference_zstack")
         if ref:
-            click.echo(f"  reference z-stack: {ref['munit']} at {ref['um_per_px']:.2f} um/px "
-                       f"({ref['xy_fraction']:.0%} of lines in its field, {ref['z_fraction']:.0%} within its depth range"
-                       f"{'; COARSE, no stack resolves the lines' if ref.get('coarse') else ''})")
+            click.echo(
+                f"  reference z-stack: {ref['munit']} at {ref['um_per_px']:.2f} um/px "
+                f"({ref['xy_fraction']:.0%} of lines in its field, {ref['z_fraction']:.0%} within its depth range"
+                f"{'; COARSE, no stack resolves the lines' if ref.get('coarse') else ''})"
+            )
         figs = sorted(out.glob("[0-9][0-9]*_*.png"))
         if figs:
             click.echo(f"  figures: {len(figs)} ({figs[0].name} .. {figs[-1].name})")
@@ -1931,17 +2157,33 @@ from mbo_utilities.hpc.cli import hpc as _hpc_group  # noqa: E402
 
 main.add_command(_hpc_group)
 
+
 @main.command("curate")
 @click.argument("path", type=click.Path(exists=True), required=False)
-@click.option("--serve", is_flag=True, default=False,
-              help="Serve the dashboard to browsers over HTTP instead of opening a window.")
-@click.option("--host", default="127.0.0.1", show_default=True,
-              help="With --serve: interface to listen on (0.0.0.0 for the network).")
-@click.option("--port", type=int, default=60649, show_default=True, help="With --serve: port.")
-@click.option("--channel", type=int, default=0, show_default=True,
-              help="Channel averaged for a raw line scan's traces.")
+@click.option(
+    "--serve",
+    is_flag=True,
+    default=False,
+    help="Serve the dashboard to browsers over HTTP instead of opening a window.",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    show_default=True,
+    help="With --serve: interface to listen on (0.0.0.0 for the network).",
+)
+@click.option(
+    "--port", type=int, default=60649, show_default=True, help="With --serve: port."
+)
+@click.option(
+    "--channel",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Channel averaged for a raw line scan's traces.",
+)
 def curate(path, serve, host, port, channel):
-    """vnoiser event curation of PATH: a PF folder the voltage pipeline
+    """Vnoiser event curation of PATH: a PF folder the voltage pipeline
     wrote (or the experiment folder holding it), or a line-scan .mesc, with
     a PF folder beside it or raw (default: the last data path).
 
@@ -1969,34 +2211,98 @@ def curate(path, serve, host, port, channel):
 
 @main.command("voltage")
 @click.argument("mesc_path", type=click.Path(exists=True))
-@click.option("--domains", "domains_path", type=click.Path(exists=True, dir_okay=False), default=None,
-              help="domains.json (or an archive scanIDs_ROIs.pkl) naming which ROIs make each domain. "
-                   "Default: domains.json beside the file.")
-@click.option("--unit", "units", multiple=True,
-              help="Unit(s) to process, in scan order (MUnit_35 or MSession_0/MUnit_35): line scans, "
-                   "chessboard or ribbon patches. Default: the domains file's scans, else every such unit.")
-@click.option("-o", "--out", type=click.Path(file_okay=False), default=None,
-              help="The PF folder to write. Default: <animal>/<expt>/PF for the archive layout "
-                   "(<expt>/<expt>/<expt>.mesc), else PF beside the file.")
-@click.option("--channel", type=int, default=0, show_default=True, help="Channel averaged per line.")
-@click.option("--convert", is_flag=True, default=False,
-              help="Apply the file's linear conversion so zero means no photons. Off reproduces "
-                   "the archive, which worked on raw counts.")
-@click.option("--events", default=None, metavar="LO,HI,BP_SD,AMP_SD,DUR_MS",
-              help="Peak detector thresholds: band-pass Hz, SD on the band-passed trace, SD on the "
-                   "trace, minimum duration ms. Default 2,400,3.5,4,5 (the archive's).")
-@click.option("--save-cwt", is_flag=True, default=False,
-              help="Also write cwts.h5, the wavelet coefficients (about 20 bytes per sample per domain).")
-@click.option("--overwrite", is_flag=True, default=False, help="Replace an existing output of the same name.")
-@click.option("--pkl", "as_pkl", is_flag=True, default=False,
-              help="Write the archive's PF folder of pickles instead of the results zarr; the curation "
-                   "window opens either.")
-@click.option("-p", "--planes", type=int, multiple=True,
-              help="ROI to process (1-based; the unit's Z axis), repeat for several: -p 1 -p 3. Only these "
-                   "are read and every domain is cut down to them. Default: every ROI.")
-@click.option("--init", is_flag=True, default=False,
-              help="Write a domains.json template beside the file (one domain per ROI) and exit.")
-def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_cwt, overwrite, as_pkl, planes, init):
+@click.option(
+    "--domains",
+    "domains_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="domains.json (or an archive scanIDs_ROIs.pkl) naming which ROIs make each domain. "
+    "Default: domains.json beside the file.",
+)
+@click.option(
+    "--unit",
+    "units",
+    multiple=True,
+    help="Unit(s) to process, in scan order (MUnit_35 or MSession_0/MUnit_35): line scans, "
+    "chessboard or ribbon patches. Default: the domains file's scans, else every such unit.",
+)
+@click.option(
+    "-o",
+    "--out",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="The PF folder to write. Default: <animal>/<expt>/PF for the archive layout "
+    "(<expt>/<expt>/<expt>.mesc), else PF beside the file.",
+)
+@click.option(
+    "--channel",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Channel averaged per line.",
+)
+@click.option(
+    "--convert",
+    is_flag=True,
+    default=False,
+    help="Apply the file's linear conversion so zero means no photons. Off reproduces "
+    "the archive, which worked on raw counts.",
+)
+@click.option(
+    "--events",
+    default=None,
+    metavar="LO,HI,BP_SD,AMP_SD,DUR_MS",
+    help="Peak detector thresholds: band-pass Hz, SD on the band-passed trace, SD on the "
+    "trace, minimum duration ms. Default 2,400,3.5,4,5 (the archive's).",
+)
+@click.option(
+    "--save-cwt",
+    is_flag=True,
+    default=False,
+    help="Also write cwts.h5, the wavelet coefficients (about 20 bytes per sample per domain).",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Replace an existing output of the same name.",
+)
+@click.option(
+    "--pkl",
+    "as_pkl",
+    is_flag=True,
+    default=False,
+    help="Write the archive's PF folder of pickles instead of the results zarr; the curation "
+    "window opens either.",
+)
+@click.option(
+    "-p",
+    "--planes",
+    type=int,
+    multiple=True,
+    help="ROI to process (1-based; the unit's Z axis), repeat for several: -p 1 -p 3. Only these "
+    "are read and every domain is cut down to them. Default: every ROI.",
+)
+@click.option(
+    "--init",
+    is_flag=True,
+    default=False,
+    help="Write a domains.json template beside the file (one domain per ROI) and exit.",
+)
+def voltage(
+    mesc_path,
+    domains_path,
+    units,
+    out,
+    channel,
+    convert,
+    events,
+    save_cwt,
+    overwrite,
+    as_pkl,
+    planes,
+    init,
+):
     """The spatial JEDI voltage pipeline on a .mesc with AOD ROI units (line
     scans, chessboard or ribbon patches): per-ROI traces, domain dF/F and
     z-score, wavelet denoising, peaks, written as one
@@ -2042,9 +2348,13 @@ def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_
         mesc_path = Path(found)
     if init:
         path = write_domains_template(mesc_path, units=list(units) or None)
-        click.echo(f"wrote {path}; name the domains and group the ROIs, then run `mbo voltage` again")
+        click.echo(
+            f"wrote {path}; name the domains and group the ROIs, then run `mbo voltage` again"
+        )
         return
-    domains_path = Path(domains_path) if domains_path else mesc_path.parent / DOMAINS_FILE
+    domains_path = (
+        Path(domains_path) if domains_path else mesc_path.parent / DOMAINS_FILE
+    )
     if not domains_path.exists():
         raise click.BadParameter(
             f"{domains_path} not found; write one with `mbo voltage {mesc_path.name} --init`",
@@ -2056,7 +2366,9 @@ def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_
         try:
             lo, hi, bp_sd, amp_sd, dur = (float(v) for v in events.split(","))
         except ValueError:
-            raise click.BadParameter("expected LO,HI,BP_SD,AMP_SD,DUR_MS", param_hint="--events")
+            raise click.BadParameter(
+                "expected LO,HI,BP_SD,AMP_SD,DUR_MS", param_hint="--events"
+            )
         settings.events.bp_low, settings.events.bp_high = lo, hi
         settings.events.thres_bp_sd, settings.events.thres_amp_sd = bp_sd, amp_sd
         settings.events.duration_thres_ms = dur
@@ -2066,12 +2378,24 @@ def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_
     # the runner narrates every step through the mbo logger; give its console lines a clock
     logger = log.get()
     for handler in logger.handlers:
-        handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%H:%M:%S"))
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s | %(message)s", datefmt="%H:%M:%S")
+        )
     try:
         paths = run_voltage_pipeline(
-            mesc_path, domains=spec["domains"], units=chosen, first_env=spec["first_env"], out=out,
-            channel=channel, convert=convert, planes=list(planes) or None, save_cwt=save_cwt,
-            settings=settings, overwrite=overwrite, logger=logger, provenance={"settings": settings.to_dict()},
+            mesc_path,
+            domains=spec["domains"],
+            units=chosen,
+            first_env=spec["first_env"],
+            out=out,
+            channel=channel,
+            convert=convert,
+            planes=list(planes) or None,
+            save_cwt=save_cwt,
+            settings=settings,
+            overwrite=overwrite,
+            logger=logger,
+            provenance={"settings": settings.to_dict()},
         )
     except (ValueError, KeyError, FileExistsError) as e:
         click.echo(f"error: {e}", err=True)
@@ -2086,9 +2410,16 @@ def voltage(mesc_path, domains_path, units, out, channel, convert, events, save_
 
 @main.command("results")
 @click.argument("path", type=click.Path(exists=True, file_okay=False))
-@click.option("-o", "--out", type=click.Path(dir_okay=False), default=None,
-              help="The .zarr to write. Default: <date>_<tags>.zarr inside PATH, tags from PATH's name.")
-@click.option("--overwrite", is_flag=True, default=False, help="Replace an existing results file.")
+@click.option(
+    "-o",
+    "--out",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="The .zarr to write. Default: <date>_<tags>.zarr inside PATH, tags from PATH's name.",
+)
+@click.option(
+    "--overwrite", is_flag=True, default=False, help="Replace an existing results file."
+)
 def results(path, out, overwrite):
     """Mold a pipeline's output folder into one results zarr.
 
@@ -2132,10 +2463,19 @@ def results(path, out, overwrite):
 
 @main.command("app")
 @click.argument("path", type=click.Path(exists=True), required=False)
-@click.option("--nt", type=int, default=500, show_default=True,
-              help="Timepoints read from PATH into memory.")
-@click.option("--frames", type=int, default=0,
-              help="Draw N frames on an offscreen canvas and exit, for a smoke test.")
+@click.option(
+    "--nt",
+    type=int,
+    default=500,
+    show_default=True,
+    help="Timepoints read from PATH into memory.",
+)
+@click.option(
+    "--frames",
+    type=int,
+    default=0,
+    help="Draw N frames on an offscreen canvas and exit, for a smoke test.",
+)
 def app(path, nt, frames):
     r"""The app host: apps drawn on one canvas, swappable between its areas.
 

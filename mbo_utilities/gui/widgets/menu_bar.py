@@ -23,7 +23,8 @@ from mbo_utilities.install import VNOISER_HINT
 def draw_menu_bar(parent: Any):
     """Draw the menu row: the File / Widgets / Docs menus, then the process
     status and Metadata Viewer buttons. Drawn in the figure's top strip
-    (``gui/_top_strip.py``), which spans the canvas's full width."""
+    (``gui/_top_strip.py``), which spans the canvas's full width.
+    """
     with imgui_ctx.begin_child(
         "menu",
         window_flags=imgui.WindowFlags_.menu_bar,
@@ -36,10 +37,14 @@ def draw_menu_bar(parent: Any):
                 # dialog as a browse shortcut, so a remote kernel still works
                 if imgui.menu_item("Open File", "o", p_selected=False, enabled=True)[0]:
                     start_open_prompt(parent, "file")
-                if imgui.menu_item("Open Folder", "Shift+O", p_selected=False, enabled=True)[0]:
+                if imgui.menu_item(
+                    "Open Folder", "Shift+O", p_selected=False, enabled=True
+                )[0]:
                     start_open_prompt(parent, "folder")
                 imgui.separator()
-                if imgui.menu_item("Set Metadata", "Shift+M", p_selected=False, enabled=True)[0]:
+                if imgui.menu_item(
+                    "Set Metadata", "Shift+M", p_selected=False, enabled=True
+                )[0]:
                     parent._show_metadata_popup = True
                 imgui.separator()
                 # Check if current data supports imwrite
@@ -47,21 +52,31 @@ def draw_menu_bar(parent: Any):
                 if parent.image_widget and parent.image_widget.data:
                     arr = parent.image_widget.data[0]
                     can_save = hasattr(arr, "_imwrite")
-                if imgui.menu_item(
-                    "Save as", "s", p_selected=False, enabled=can_save
-                )[0]:
+                if imgui.menu_item("Save as", "s", p_selected=False, enabled=can_save)[
+                    0
+                ]:
                     parent._saveas_popup_open = True
                 # the curation window (`mbo curate`) on the open PF folder or
                 # .mesc, in its own process; its module brings hello_imgui
-                from mbo_utilities.gui.curation_viewer import curation_target, launch_curation_window
+                from mbo_utilities.gui.curation_viewer import (
+                    curation_target,
+                    launch_curation_window,
+                )
 
                 target = curation_target(getattr(parent, "fpath", None))
-                if imgui.menu_item("Curate", "", p_selected=False, enabled=HAS_VNOISER and target is not None)[0]:
+                if imgui.menu_item(
+                    "Curate",
+                    "",
+                    p_selected=False,
+                    enabled=HAS_VNOISER and target is not None,
+                )[0]:
                     launch_curation_window(target)
                 if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
                     imgui.set_tooltip(
-                        f"vnoiser is not installed: {VNOISER_HINT}" if not HAS_VNOISER
-                        else "Open a PF folder or a .mesc line scan first." if target is None
+                        f"vnoiser is not installed: {VNOISER_HINT}"
+                        if not HAS_VNOISER
+                        else "Open a PF folder or a .mesc line scan first."
+                        if target is None
                         else f"Open {target.name} in the curation window (its own window, what `mbo curate` opens)."
                     )
                 imgui.separator()
@@ -76,18 +91,14 @@ def draw_menu_bar(parent: Any):
                 imgui.end_menu()
             draw_widgets_menu(parent)
             if imgui.begin_menu("Docs", True):
-                if imgui.menu_item(
-                    "Help", "h", p_selected=False, enabled=True
-                )[0]:
+                if imgui.menu_item("Help", "h", p_selected=False, enabled=True)[0]:
                     parent._show_help_popup = True
-                if imgui.menu_item(
-                    "Keybinds", "k", p_selected=False, enabled=True
-                )[0]:
+                if imgui.menu_item("Keybinds", "k", p_selected=False, enabled=True)[0]:
                     parent._show_keybinds_popup = True
                 imgui.separator()
-                if imgui.menu_item(
-                    "Online Docs", "", p_selected=False, enabled=True
-                )[0]:
+                if imgui.menu_item("Online Docs", "", p_selected=False, enabled=True)[
+                    0
+                ]:
                     webbrowser.open(
                         "https://millerbrainobservatory.github.io/mbo_utilities/"
                     )
@@ -97,6 +108,7 @@ def draw_menu_bar(parent: Any):
             parent._clear_stale_progress()
             draw_process_status_indicator(parent, in_menu_bar=True)
             imgui.end_menu_bar()
+
 
 # label, hotkey hint pairs of the buttons that follow the status button; the
 # widths are measured together so the cluster can be right-aligned in one go
@@ -145,6 +157,7 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
     # Import icons
     try:
         from imgui_bundle import icons_fontawesome as fa
+
         ICON_IDLE = fa.ICON_FA_CIRCLE
         ICON_RUNNING = fa.ICON_FA_SPINNER
         ICON_ERROR = fa.ICON_FA_EXCLAMATION_TRIANGLE
@@ -162,6 +175,7 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
 
     # Get in-app progress items
     from mbo_utilities.gui.widgets.progress_bar import _get_active_progress_items
+
     progress_items = _get_active_progress_items(parent)
 
     # in-process jobs (ROI traces, etc.) count the same as spawned ones —
@@ -170,10 +184,14 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
 
     # categorize processes
     running_procs = [p for p in all_procs if p.is_alive()]
-    completed_procs = [p for p in all_procs if not p.is_alive() and p.status == "completed"]
+    completed_procs = [
+        p for p in all_procs if not p.is_alive() and p.status == "completed"
+    ]
     error_procs = [p for p in all_procs if not p.is_alive() and p.status == "error"]
 
-    n_running = len(running_procs) + sum(1 for item in progress_items if not item.get("done"))
+    n_running = len(running_procs) + sum(
+        1 for item in progress_items if not item.get("done")
+    )
     n_completed = len(completed_procs)
     n_errors = len(error_procs)
 
@@ -191,8 +209,12 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
 
         # Add percentage if we have progress items
         if progress_items:
-            avg_progress = sum(item["progress"] for item in progress_items) / len(progress_items)
-            status_text = f"{ICON_RUNNING} Running ({n_running}) {int(avg_progress * 100)}%"
+            avg_progress = sum(item["progress"] for item in progress_items) / len(
+                progress_items
+            )
+            status_text = (
+                f"{ICON_RUNNING} Running ({n_running}) {int(avg_progress * 100)}%"
+            )
             # widest the % can get -> fixes the button width as it animates
             status_width_text = f"{ICON_RUNNING} Running ({n_running}) 100%"
         else:
@@ -218,14 +240,16 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
     # 1. Status Button
     # Use distinct background color based on status
     imgui.push_style_color(imgui.Col_.button, status_color)
-    imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(1, 1, 1, 1))  # Always white text
+    imgui.push_style_color(
+        imgui.Col_.text, imgui.ImVec4(1, 1, 1, 1)
+    )  # Always white text
 
     # Slightly lighter hover color
     hover_col = imgui.ImVec4(
         min(status_color.x + 0.1, 1.0),
         min(status_color.y + 0.1, 1.0),
         min(status_color.z + 0.1, 1.0),
-        status_color.w
+        status_color.w,
     )
     imgui.push_style_color(imgui.Col_.button_hovered, hover_col)
     imgui.push_style_color(imgui.Col_.button_active, status_color)
@@ -234,7 +258,9 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
     if status_width_text is not None:
         pad = imgui.get_style().frame_padding.x
         btn_w = imgui.calc_text_size(status_width_text).x + pad * 2.0
-        clicked = imgui.button(status_text + "##process_status", imgui.ImVec2(btn_w, 0.0))
+        clicked = imgui.button(
+            status_text + "##process_status", imgui.ImVec2(btn_w, 0.0)
+        )
     else:
         clicked = imgui.button(status_text + "##process_status")
     if clicked:
@@ -257,7 +283,9 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
         imgui.same_line()
     imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.2, 0.2, 0.2, 1.0))
     imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.3, 0.3, 0.3, 1.0))
-    imgui.push_style_color(imgui.Col_.button_active, imgui.ImVec4(0.15, 0.15, 0.15, 1.0))
+    imgui.push_style_color(
+        imgui.Col_.button_active, imgui.ImVec4(0.15, 0.15, 0.15, 1.0)
+    )
     imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(0.9, 0.9, 0.9, 1.0))
 
     actions = (_toggle_metadata_viewer, _open_help, _open_keybinds)
@@ -310,7 +338,9 @@ def draw_keybinds_popup(parent: Any):
         parent._keybinds_popup_actually_open = True
 
     imgui.set_next_window_size(imgui.ImVec2(320, 380), imgui.Cond_.first_use_ever)
-    popup_open = imgui.begin_popup_modal("Keybinds", flags=imgui.WindowFlags_.no_saved_settings)[0]
+    popup_open = imgui.begin_popup_modal(
+        "Keybinds", flags=imgui.WindowFlags_.no_saved_settings
+    )[0]
     if popup_open:
         # if user flipped the flag off (e.g. pressed k again), close the popup
         if not parent._show_keybinds_popup:
@@ -350,7 +380,9 @@ def draw_keybinds_popup(parent: Any):
         ]
         keybinds += _roi_keybinds(parent)
 
-        table_flags = imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
+        table_flags = (
+            imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
+        )
         if imgui.begin_table("keybinds_table", 2, table_flags):
             # wide enough for the ROI section's chords ("ctrl+click")
             imgui.table_setup_column("key", imgui.TableColumnFlags_.width_fixed, 110)

@@ -8,20 +8,26 @@ and that ScanImage source metadata is read when local data is present.
 Synthetic data, CI-runnable. The single local-data test skips cleanly.
 """
 
+import mbo_utilities as mbo
 import numpy as np
 import pytest
 
-import mbo_utilities as mbo
-
 # scientific metadata stamped on every synthetic write
-SAMPLE = {"dx": 1.5, "dy": 1.5, "dz": 4.0, "fs": 9.6, "objective": "16x", "comment": "unit-test"}
+SAMPLE = {
+    "dx": 1.5,
+    "dy": 1.5,
+    "dz": 4.0,
+    "fs": 9.6,
+    "objective": "16x",
+    "comment": "unit-test",
+}
 
 # formats that round-trip a single-channel volume losslessly with metadata
 VOLUME_FORMATS = [".tiff", ".zarr", ".h5"]
 
 
 def _wrap(data, dims=None, metadata=None):
-    """imread an ndarray, declaring its source axes and metadata."""
+    """Imread an ndarray, declaring its source axes and metadata."""
     return mbo.imread(data, dims=dims, metadata=metadata)
 
 
@@ -80,7 +86,9 @@ class TestBinOpsMetadata:
 
         nt, _, nz, ny, nx = arr.shape
         ops_files = sorted(output_dir.rglob("ops.npy"))
-        assert len(ops_files) == nz, f"expected one ops.npy per plane, got {len(ops_files)}"
+        assert len(ops_files) == nz, (
+            f"expected one ops.npy per plane, got {len(ops_files)}"
+        )
 
         ops = np.load(ops_files[0], allow_pickle=True).item()
         assert ops["Ly"] == ny
@@ -136,7 +144,9 @@ class TestSubsetScaling:
     def test_plane_stride_scales_dz(self, synthetic_4d_data, output_dir):
         # source Z=3, dz=4.0; planes=[1,3] is stride 2 -> dz doubles
         arr = _wrap(synthetic_4d_data, dims="TZYX", metadata=SAMPLE)
-        mbo.imwrite(arr, output_dir, ext=".zarr", planes=[1, 3], metadata=SAMPLE, overwrite=True)
+        mbo.imwrite(
+            arr, output_dir, ext=".zarr", planes=[1, 3], metadata=SAMPLE, overwrite=True
+        )
 
         back = next(output_dir.rglob("*.zarr"))
         a = mbo.imread(back)
@@ -146,8 +156,14 @@ class TestSubsetScaling:
     def test_timepoint_stride_scales_fs(self, synthetic_4d_data, output_dir):
         # source T=10, fs=9.6; timepoints=[1,3,5,7,9] is stride 2 -> fs halves
         arr = _wrap(synthetic_4d_data, dims="TZYX", metadata=SAMPLE)
-        mbo.imwrite(arr, output_dir, ext=".zarr", timepoints=[1, 3, 5, 7, 9],
-                    metadata=SAMPLE, overwrite=True)
+        mbo.imwrite(
+            arr,
+            output_dir,
+            ext=".zarr",
+            timepoints=[1, 3, 5, 7, 9],
+            metadata=SAMPLE,
+            overwrite=True,
+        )
 
         a = mbo.imread(next(output_dir.rglob("*.zarr")))
         assert a.nt == 5

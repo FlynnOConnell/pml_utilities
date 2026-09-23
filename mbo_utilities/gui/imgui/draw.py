@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import numpy as np
 
@@ -20,7 +20,7 @@ class StrokeDrawer:
         self,
         subplot,
         on_stroke: Callable[[list], None],
-        on_click: Optional[Callable[[int, int, frozenset], None]] = None,
+        on_click: Callable[[int, int, frozenset], None] | None = None,
         color: str = "magenta",
     ):
         self.subplot = subplot
@@ -32,8 +32,12 @@ class StrokeDrawer:
         self._press = None
 
         self.line = subplot.add_line(
-            np.zeros((2, 3), np.float32), colors=color, thickness=2.0,
-            name="stroke", offset=(0, 0, 2), visible=False,
+            np.zeros((2, 3), np.float32),
+            colors=color,
+            thickness=2.0,
+            name="stroke",
+            offset=(0, 0, 2),
+            visible=False,
         )
         self.line.world_object.material.pick_write = False
 

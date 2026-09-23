@@ -1,7 +1,8 @@
 """A line-scan unit on the standard viewer (``mbo file.mesc``): its per-ROI
 traces land on the ROI widget's Traces tab as one external trace set, the
 plotted row follows the ROI slider and the slider follows a picked row, and
-the set goes when the traces are closed."""
+the set goes when the traces are closed.
+"""
 
 from __future__ import annotations
 
@@ -50,9 +51,15 @@ def viewer(tmp_path):
     from mbo_utilities.gui.manual_roi import ManualRoiWidget
     from mbo_utilities.gui.widgets.mesc_units import display_wrap
 
-    arr = MescArray(write_mesc(tmp_path / "scan.mesc", munits=(35,), frames=40), unit="MUnit_35")
+    arr = MescArray(
+        write_mesc(tmp_path / "scan.mesc", munits=(35,), frames=40), unit="MUnit_35"
+    )
     # the launch path names the sliders after the array (run_gui)
-    iw = MboNDViewer(data=display_wrap(arr), slider_dim_names=arr.slider_dim_labels, figure_kwargs={"size": FIGURE_SIZE})
+    iw = MboNDViewer(
+        data=display_wrap(arr),
+        slider_dim_names=arr.slider_dim_labels,
+        figure_kwargs={"size": FIGURE_SIZE},
+    )
     iw.show()
     roi = ManualRoiWidget(iw, fpath=None)
     yield _Parent(iw, roi), arr
@@ -115,34 +122,78 @@ def test_line_traces_are_one_external_set_following_the_roi_slider(viewer):
 
 def write_chessboard_mesc(path, frames=8):
     """A ``.mesc`` with one chessboard unit, ``MUnit_9``: 3 patches of 6 x 8 px
-    tiled along X at three depths, drawn on a snapshot 2 um above the first."""
+    tiled along X at three depths, drawn on a snapshot 2 um above the first.
+    """
     import json
 
     import h5py
 
     with h5py.File(path, "w") as f:
         u = f.create_group("MSession_0").create_group("MUnit_9")
-        u.attrs.update({
-            "MethodType": 8, "VecChannelsSize": 1, "TStepInMs": 5.0, "MeasurementDatePosix": 1,
-            "Comment": "soma", "BackgroundImagePath": "/MSession_1/MUnit_9",
-        })
-        u.attrs["MultiROIProtocolJSON"] = json.dumps({
-            "protocol": {"scanners": {"mainPatternIndex": 1}},
-            "scanPatterns": {"patterns": [{
-                "centerPoints": [[4.0, 14.0, 24.0], [3.0, 3.0, 3.0], [-50.0, -52.0, -54.0]],
-                "pixelSizeX": 1.0,
-                "rotation": [0, 0, 0, 1],
-            }]},
-        })
-        u.attrs["CoordinateMapJSON"] = json.dumps({"maps": [{"measurementROIs": [], "contours": [
-            [[x, x + 8, x + 8, x], [0.0, 0.0, 6.0, 6.0], [z] * 4]
-            for x, z in ((0.0, -50.0), (10.0, -52.0), (20.0, -54.0))
-        ]}]})
-        u.create_dataset("Channel_0", data=np.arange(frames * 6 * 24, dtype=np.uint16).reshape(frames, 6, 24))
+        u.attrs.update(
+            {
+                "MethodType": 8,
+                "VecChannelsSize": 1,
+                "TStepInMs": 5.0,
+                "MeasurementDatePosix": 1,
+                "Comment": "soma",
+                "BackgroundImagePath": "/MSession_1/MUnit_9",
+            }
+        )
+        u.attrs["MultiROIProtocolJSON"] = json.dumps(
+            {
+                "protocol": {"scanners": {"mainPatternIndex": 1}},
+                "scanPatterns": {
+                    "patterns": [
+                        {
+                            "centerPoints": [
+                                [4.0, 14.0, 24.0],
+                                [3.0, 3.0, 3.0],
+                                [-50.0, -52.0, -54.0],
+                            ],
+                            "pixelSizeX": 1.0,
+                            "rotation": [0, 0, 0, 1],
+                        }
+                    ]
+                },
+            }
+        )
+        u.attrs["CoordinateMapJSON"] = json.dumps(
+            {
+                "maps": [
+                    {
+                        "measurementROIs": [],
+                        "contours": [
+                            [[x, x + 8, x + 8, x], [0.0, 0.0, 6.0, 6.0], [z] * 4]
+                            for x, z in ((0.0, -50.0), (10.0, -52.0), (20.0, -54.0))
+                        ],
+                    }
+                ]
+            }
+        )
+        u.create_dataset(
+            "Channel_0",
+            data=np.arange(frames * 6 * 24, dtype=np.uint16).reshape(frames, 6, 24),
+        )
         snap = f.create_group("MSession_1").create_group("MUnit_9")
-        snap.attrs.update({"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 10.0, "MeasurementDatePosix": 1})
+        snap.attrs.update(
+            {
+                "MethodType": 1,
+                "VecChannelsSize": 1,
+                "TStepInMs": 10.0,
+                "MeasurementDatePosix": 1,
+            }
+        )
         snap.attrs["ReferenceViewportJSON"] = json.dumps(
-            {"viewports": [{"geomTransTransl": [0.0, 0.0, -48.0], "width": 64.0, "height": 64.0}]}
+            {
+                "viewports": [
+                    {
+                        "geomTransTransl": [0.0, 0.0, -48.0],
+                        "width": 64.0,
+                        "height": 64.0,
+                    }
+                ]
+            }
         )
         snap.create_dataset("Channel_0", data=np.zeros((1, 8, 8), np.uint16))
     return path
@@ -156,7 +207,11 @@ def patch_viewer(tmp_path):
     from mbo_utilities.gui.widgets.mesc_units import display_wrap
 
     arr = MescArray(write_chessboard_mesc(tmp_path / "chess.mesc"), unit="MUnit_9")
-    iw = MboNDViewer(data=display_wrap(arr), slider_dim_names=arr.slider_dim_labels, figure_kwargs={"size": FIGURE_SIZE})
+    iw = MboNDViewer(
+        data=display_wrap(arr),
+        slider_dim_names=arr.slider_dim_labels,
+        figure_kwargs={"size": FIGURE_SIZE},
+    )
     iw.show()
     roi = ManualRoiWidget(iw, fpath=None)
     yield _Parent(iw, roi), arr
@@ -168,7 +223,8 @@ def test_patch_traces_attach_for_a_chessboard_unit(patch_viewer):
     """A chessboard (or ribbon) unit gets its per-patch mean traces the way a
     line scan gets its lines: computed in the background as soon as the unit
     is shown, one row per patch carrying its depth, and a dF/F the panel
-    computes from the raw mean over a configurable baseline."""
+    computes from the raw mean over a configurable baseline.
+    """
     from mbo_utilities.annotation import DffSettings, available_kinds, display_trace
     from mbo_utilities.gui.linescan_viewer import attach_standard_traces
 
@@ -209,11 +265,11 @@ def test_nothing_attaches_without_the_roi_widget_or_for_another_unit(viewer, tmp
 
 def test_lines_with_geometry_carry_their_position(tmp_path):
     """A file whose lines have scanned segments and a snapshot: each row
-    says where its line sits and how far off the snapshot plane it is."""
+    says where its line sits and how far off the snapshot plane it is.
+    """
     import json
 
     import h5py
-
     from mbo_utilities.arrays.mesc_geometry import line_positions
 
     path = write_mesc(tmp_path / "scan.mesc", munits=(35,), frames=8)
@@ -222,22 +278,39 @@ def test_lines_with_geometry_carry_their_position(tmp_path):
         maps = json.loads(unit.attrs["CoordinateMapJSON"])
         # 7 lines, 2 um long along x, at depths -100 .. -94 um
         maps["maps"][0]["driftEndPoints"] = [
-            [[10.0 + i, 12.0 + i], [20.0, 20.0], [-100.0 + i, -100.0 + i]] for i in range(7)
+            [[10.0 + i, 12.0 + i], [20.0, 20.0], [-100.0 + i, -100.0 + i]]
+            for i in range(7)
         ]
         unit.attrs["CoordinateMapJSON"] = json.dumps(maps)
         unit.attrs["BackgroundImagePath"] = "/MSession_1/MUnit_35"
         snap = f.create_group("MSession_1/MUnit_35")
         snap.attrs.update({"MethodType": 1, "VecChannelsSize": 1})
         snap.attrs["ReferenceViewportJSON"] = json.dumps(
-            {"viewports": [{"geomTransTransl": [0.0, 0.0, -97.0], "width": 64.0, "height": 64.0}]}
+            {
+                "viewports": [
+                    {
+                        "geomTransTransl": [0.0, 0.0, -97.0],
+                        "width": 64.0,
+                        "height": 64.0,
+                    }
+                ]
+            }
         )
         snap.create_dataset("Channel_0", data=np.zeros((1, 8, 8), np.uint16))
     rows = line_positions(path, "MSession_0/MUnit_35", [4] * 7)
     assert [r["index"] for r in rows] == list(range(7))
-    assert rows[0]["start_um"] == [10.0, 20.0, -100.0] and rows[0]["end_um"] == [12.0, 20.0, -100.0]
-    assert rows[0]["length_um"] == pytest.approx(2.0) and rows[0]["sample_um"] == pytest.approx(0.5)
+    assert rows[0]["start_um"] == [10.0, 20.0, -100.0] and rows[0]["end_um"] == [
+        12.0,
+        20.0,
+        -100.0,
+    ]
+    assert rows[0]["length_um"] == pytest.approx(2.0) and rows[0][
+        "sample_um"
+    ] == pytest.approx(0.5)
     assert rows[0]["z_um"] == -100.0 and rows[0]["dz_um"] == pytest.approx(-3.0)
-    assert rows[3]["dz_um"] == pytest.approx(0.0) and rows[6]["dz_um"] == pytest.approx(3.0)
+    assert rows[3]["dz_um"] == pytest.approx(0.0) and rows[6]["dz_um"] == pytest.approx(
+        3.0
+    )
     # no Z-stack in this file holds the lines
     assert rows[0]["stack"] is None and rows[0]["slice"] is None
     # no geometry at all: None, so a caller draws nothing rather than guessing

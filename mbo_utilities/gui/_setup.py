@@ -4,6 +4,7 @@ this module handles all initialization for imgui_bundle, hello_imgui,
 wgpu backend configuration, and qt setup. importing this module
 automatically runs setup once.
 """
+
 import importlib.util
 import os
 import shutil
@@ -18,6 +19,7 @@ def get_package_assets_path() -> Path:
     """Return path to the bundled assets folder in the installed package."""
     try:
         from importlib import resources
+
         return Path(str(resources.files("mbo_utilities").joinpath("assets")))
     except (ImportError, TypeError):
         return Path(__file__).resolve().parent.parent / "assets"
@@ -26,6 +28,7 @@ def get_package_assets_path() -> Path:
 def _copy_assets():
     """Copy package assets to user config directory."""
     import imgui_bundle
+
     from mbo_utilities.preferences import get_mbo_dirs
 
     package_assets = get_package_assets_path()
@@ -122,6 +125,7 @@ def _configure_qt_backend():
 
     # fix suite2p pyqt6 compatibility
     from PyQt6.QtWidgets import QSlider
+
     if not hasattr(QSlider, "NoTicks"):
         QSlider.NoTicks = QSlider.TickPosition.NoTicks
 
@@ -133,6 +137,7 @@ def _configure_wgpu_backend():
 
     try:
         from wgpu.backends.wgpu_native.extras import set_instance_extras
+
         if sys.platform == "win32":
             set_instance_extras(backends=["Vulkan", "DX12"])
         elif sys.platform == "darwin":

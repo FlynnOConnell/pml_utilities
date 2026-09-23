@@ -10,6 +10,7 @@ number only means something next to the link it had to fit through.
 Nothing here writes to the remote host: throughput is measured against
 /dev/zero and /dev/null, and reads come from a file the caller names.
 """
+
 from __future__ import annotations
 
 import glob
@@ -64,9 +65,12 @@ def _ssh_base(host: str) -> list[str]:
     """Ssh argv that never prompts, so a bad key fails fast instead of hanging."""
     return [
         "ssh",
-        "-o", "BatchMode=yes",
-        "-o", f"ConnectTimeout={_SSH_CONNECT_TIMEOUT}",
-        "-o", "StrictHostKeyChecking=accept-new",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={_SSH_CONNECT_TIMEOUT}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
         host,
     ]
 
@@ -111,8 +115,9 @@ def _timed(cmd: list[str], timeout: int = _PROBE_TIMEOUT) -> tuple[int | None, f
     return result.returncode, time.perf_counter() - start
 
 
-def _timed_retry(cmd: list[str],
-                 timeout: int = _PROBE_TIMEOUT) -> tuple[int | None, float]:
+def _timed_retry(
+    cmd: list[str], timeout: int = _PROBE_TIMEOUT
+) -> tuple[int | None, float]:
     """_timed, retried past sshd's startup throttle.
 
     Only the successful attempt's elapsed time is returned, so a refused
@@ -127,8 +132,9 @@ def _timed_retry(cmd: list[str],
     return None, 0.0
 
 
-def _timed_upload(cmd: list[str], size_mb: int,
-                  timeout: int = _PROBE_TIMEOUT) -> tuple[int | None, float]:
+def _timed_upload(
+    cmd: list[str], size_mb: int, timeout: int = _PROBE_TIMEOUT
+) -> tuple[int | None, float]:
     """Feed size_mb of zeros to a command's stdin, return (returncode, elapsed)."""
     start = time.perf_counter()
     try:
@@ -158,8 +164,9 @@ def _timed_upload(cmd: list[str], size_mb: int,
     return rc, time.perf_counter() - start
 
 
-def _ssh_capture(host: str, remote_cmd: str,
-                 timeout: int = _PROBE_TIMEOUT) -> str | None:
+def _ssh_capture(
+    host: str, remote_cmd: str, timeout: int = _PROBE_TIMEOUT
+) -> str | None:
     """Run a remote command and return its stdout, or None on any failure.
 
     Retried, because a refused connection here is usually sshd's startup
@@ -193,6 +200,7 @@ def resolve_hostname(host: str) -> str | None:
 # --------------------------------------------------------------------------
 # local link context
 # --------------------------------------------------------------------------
+
 
 def _parse_link_speed(text: str) -> float | None:
     """'2.5 Gbps' -> 2500.0 (Mbit/s). Windows also reports a bare bits/s int."""
@@ -273,6 +281,7 @@ def local_link_mbps() -> dict[str, Any] | None:
 # probes
 # --------------------------------------------------------------------------
 
+
 def _ping_rtts(target: str, samples: int) -> list[float]:
     """Parse per-reply RTTs out of the platform ping."""
     if sys.platform == "win32":
@@ -291,7 +300,7 @@ def _ping_rtts(target: str, samples: int) -> list[float]:
             continue
         # the RTT is the number right after the 'time' marker: 'time=0.4 ms',
         # 'time<1ms', 'time=1ms'
-        tail = low[marker + 4:].lstrip("=<").strip()
+        tail = low[marker + 4 :].lstrip("=<").strip()
         number = ""
         for ch in tail:
             if ch.isdigit() or ch == ".":
@@ -433,8 +442,9 @@ def probe_ssh_throughput(host: str, size_mb: int = _DEFAULT_SIZE_MB) -> dict[str
     return result
 
 
-def probe_parallel_streams(host: str, streams: int = 4,
-                           size_mb: int = 256) -> dict[str, Any]:
+def probe_parallel_streams(
+    host: str, streams: int = 4, size_mb: int = 256
+) -> dict[str, Any]:
     """Aggregate throughput across N concurrent SSH streams.
 
     The diagnostic that separates a saturated link from a slow protocol: if
@@ -445,14 +455,15 @@ def probe_parallel_streams(host: str, streams: int = 4,
     start = time.perf_counter()
     for _ in range(streams):
         try:
-            procs.append(subprocess.Popen(
-                _ssh_base(host) + [
-                    f"dd if=/dev/zero bs=1M count={size_mb} status=none"
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=_no_window_flags(),
-            ))
+            procs.append(
+                subprocess.Popen(
+                    _ssh_base(host)
+                    + [f"dd if=/dev/zero bs=1M count={size_mb} status=none"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=_no_window_flags(),
+                )
+            )
         except (FileNotFoundError, OSError):
             break
     if not procs:
@@ -513,8 +524,9 @@ def probe_remote_mount(host: str, path: str) -> dict[str, Any]:
     return info
 
 
-def probe_remote_read(host: str, path: str, size_mb: int = _DEFAULT_SIZE_MB,
-                      skip_mb: int = 0) -> dict[str, Any]:
+def probe_remote_read(
+    host: str, path: str, size_mb: int = _DEFAULT_SIZE_MB, skip_mb: int = 0
+) -> dict[str, Any]:
     """Read speed of the remote storage as seen by the remote host itself.
 
     ``skip_mb`` reads from an offset to sidestep page cache from a prior run;
@@ -550,17 +562,17 @@ def probe_remote_read(host: str, path: str, size_mb: int = _DEFAULT_SIZE_MB,
     }
 
 
-def probe_end_to_end(host: str, path: str, size_mb: int = _DEFAULT_SIZE_MB,
-                     skip_mb: int = 0) -> dict[str, Any]:
+def probe_end_to_end(
+    host: str, path: str, size_mb: int = _DEFAULT_SIZE_MB, skip_mb: int = 0
+) -> dict[str, Any]:
     """Storage -> remote host -> workstation, the path `mbo view` actually takes.
 
     Always the slowest of the three, and the only one that predicts how a
     remote dataset will feel to open.
     """
     rc, elapsed = _timed_retry(
-        _ssh_base(host) + [
-            f"dd if={_shq(path)} bs=1M skip={skip_mb} count={size_mb} status=none"
-        ]
+        _ssh_base(host)
+        + [f"dd if={_shq(path)} bs=1M skip={skip_mb} count={size_mb} status=none"]
     )
     if rc != 0 or elapsed <= 0:
         return {"ok": False, "path": path}
@@ -572,8 +584,9 @@ def probe_end_to_end(host: str, path: str, size_mb: int = _DEFAULT_SIZE_MB,
     }
 
 
-def probe_metadata(host: str, path: str,
-                   samples: int = _STAT_SAMPLES) -> dict[str, Any]:
+def probe_metadata(
+    host: str, path: str, samples: int = _STAT_SAMPLES
+) -> dict[str, Any]:
     """Per-operation stat and directory-listing latency on the remote path.
 
     Browsing a folder is thousands of these, not one big read. On a
@@ -607,14 +620,21 @@ def probe_metadata(host: str, path: str,
 # orchestration
 # --------------------------------------------------------------------------
 
-def run_checks(host: str, path: str | None = None,
-               size_mb: int = _DEFAULT_SIZE_MB, streams: int = 4,
-               quick: bool = False, on_progress=None) -> dict[str, Any]:
+
+def run_checks(
+    host: str,
+    path: str | None = None,
+    size_mb: int = _DEFAULT_SIZE_MB,
+    streams: int = 4,
+    quick: bool = False,
+    on_progress=None,
+) -> dict[str, Any]:
     """Run the probe set and return one result dict.
 
     Probe failures are recorded in the result rather than raised: a partial
     report is more use than a traceback when the point is to find what broke.
     """
+
     def _note(msg: str) -> None:
         if on_progress is not None:
             on_progress(msg)
@@ -658,9 +678,7 @@ def run_checks(host: str, path: str | None = None,
         results["remote_read"] = probe_remote_read(host, path, size_mb, skip_mb=1024)
         if not quick:
             _note("end-to-end read")
-            results["end_to_end"] = probe_end_to_end(
-                host, path, size_mb, skip_mb=2048
-            )
+            results["end_to_end"] = probe_end_to_end(host, path, size_mb, skip_mb=2048)
 
     return results
 
@@ -668,6 +686,7 @@ def run_checks(host: str, path: str | None = None,
 # --------------------------------------------------------------------------
 # reporting
 # --------------------------------------------------------------------------
+
 
 def _mibs(value: float | None) -> str:
     if value is None:
@@ -771,8 +790,7 @@ def format_report(results: dict[str, Any]) -> str:
             )
             if mount.get("size"):
                 lines.append(
-                    f"  {_kib(mount['size'])} total, "
-                    f"{mount.get('used_pct', '?')} used"
+                    f"  {_kib(mount['size'])} total, {mount.get('used_pct', '?')} used"
                 )
         elif mount:
             lines.append(f"  {results.get('path')}  [mount lookup failed]")
@@ -798,8 +816,7 @@ def format_report(results: dict[str, Any]) -> str:
         lines.append("End-to-end (storage -> server -> here):")
         lines.append(f"  {_mibs(e2e['throughput_mibs'])}")
         lines.append(
-            f"  ~{_eta(e2e['throughput_mibs'], 6.2 * 1024)} "
-            f"for a 6.2 GB session file"
+            f"  ~{_eta(e2e['throughput_mibs'], 6.2 * 1024)} for a 6.2 GB session file"
         )
 
     verdict = _verdict(results, line_rate)
@@ -823,12 +840,16 @@ def _verdict(results: dict[str, Any], line_rate: float | None) -> list[str]:
     # judge saturation on the best throughput any probe reached, not on one
     # direction: run-to-run variance is several percent, and a single sample
     # sitting on the threshold flips the verdict for no physical reason
-    observed = [v for v in (
-        down,
-        ssh.get("upload_mibs"),
-        agg,
-        e2e.get("throughput_mibs") if e2e.get("ok") else None,
-    ) if v]
+    observed = [
+        v
+        for v in (
+            down,
+            ssh.get("upload_mibs"),
+            agg,
+            e2e.get("throughput_mibs") if e2e.get("ok") else None,
+        )
+        if v
+    ]
     peak = max(observed) if observed else None
 
     if peak and line_rate:

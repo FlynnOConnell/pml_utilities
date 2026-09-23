@@ -73,7 +73,7 @@ SET_COLORS: tuple[tuple[float, float, float], ...] = (
 
 
 def set_color(index: int) -> tuple[float, float, float]:
-    """rgb in 0-1 for a derived set (wraps past the palette end)."""
+    """Rgb in 0-1 for a derived set (wraps past the palette end)."""
     return SET_COLORS[index % len(SET_COLORS)]
 
 
@@ -132,7 +132,8 @@ class RoiRunManager:
     def submit(self, run: RoiRun, fn, *, heavy: bool = False) -> RoiRun:
         """Run ``fn(job)`` on a daemon thread; its return value reaches
         :meth:`poll` as the run's payload (None and ``run.error`` set when
-        it raised)."""
+        it raised).
+        """
         pm = self._pm or get_process_manager()
         run.job = pm.start_job(run.kind, run.description)
 
@@ -161,7 +162,8 @@ class RoiRunManager:
 
     def spawn(self, run: RoiRun, task_type: str, args: dict) -> RoiRun:
         """Start a detached worker for ``run``; progress arrives through the
-        process manager's sidecar polling."""
+        process manager's sidecar polling.
+        """
         pm = self._pm or get_process_manager()
         if run.out_root is None and args.get("output_dir"):
             run.out_root = Path(args["output_dir"])
@@ -180,7 +182,8 @@ class RoiRunManager:
 
     def poll(self, pm) -> list[tuple[RoiRun, object]]:
         """``(run, payload)`` per newly finished run; errors land on
-        ``run.error`` (spawned runs always carry a None payload)."""
+        ``run.error`` (spawned runs always carry a None payload).
+        """
         done: list[tuple[RoiRun, object]] = []
         while True:
             try:
@@ -198,7 +201,9 @@ class RoiRunManager:
                 if info is None:
                     # a completed entry is pruned from the console after a
                     # few minutes; outputs on disk mean the run succeeded
-                    if run.out_root is None or not finished_dirs(run.out_root, run.planes):
+                    if run.out_root is None or not finished_dirs(
+                        run.out_root, run.planes
+                    ):
                         run.error = "process stopped"
                 elif info.status == "completed":
                     pass
@@ -304,7 +309,8 @@ def footprint_radius(ypix, xpix, scale: float = RING_SCALE) -> float:
     """Radius of the circle standing in for a footprint: its equal-area
     circle (``sqrt(npix / pi)``, which for a compact mask lands just outside
     the edge), scaled, and floored at ``MIN_RING_RADIUS`` so the few-pixel
-    masks this was written for still get something to look at."""
+    masks this was written for still get something to look at.
+    """
     n = max(len(ypix), 1)
     return max(float(np.sqrt(n / np.pi)) * float(scale), MIN_RING_RADIUS)
 
@@ -343,12 +349,14 @@ def footprint_edges(ypix, xpix) -> np.ndarray:
     mask = np.zeros((h + 2, w + 2), bool)
     mask[ypix - y0 + 1, xpix - x0 + 1] = True
     inner = mask[1:-1, 1:-1]
-    sides = np.stack([
-        inner & ~mask[:-2, 1:-1],  # nothing above: its top edge shows
-        inner & ~mask[2:, 1:-1],  # nothing below
-        inner & ~mask[1:-1, :-2],  # nothing to the left
-        inner & ~mask[1:-1, 2:],  # nothing to the right
-    ])
+    sides = np.stack(
+        [
+            inner & ~mask[:-2, 1:-1],  # nothing above: its top edge shows
+            inner & ~mask[2:, 1:-1],  # nothing below
+            inner & ~mask[1:-1, :-2],  # nothing to the left
+            inner & ~mask[1:-1, 2:],  # nothing to the right
+        ]
+    )
     side, rows, cols = np.nonzero(sides)
     if not len(side):
         return np.zeros((0, 2), np.float32)
@@ -367,7 +375,8 @@ def outline_paths(
     segments: int = RING_SEGMENTS,
 ) -> list[np.ndarray]:
     """One footprint's paths in ``mode``: its traced border, or the circle
-    standing in for it. An empty footprint gives nothing to draw."""
+    standing in for it. An empty footprint gives nothing to draw.
+    """
     if mode == "outline":
         edges = footprint_edges(ypix, xpix)
         if len(edges):
@@ -415,7 +424,8 @@ def outline_data(
 
 def stitch_paths(paths, colors) -> tuple[np.ndarray, np.ndarray]:
     """Join ``(n, 2)`` paths into one ``(m, 3)`` position array with a NaN
-    row between pieces, plus the matching ``(m, 4)`` per-vertex colors."""
+    row between pieces, plus the matching ``(m, 4)`` per-vertex colors.
+    """
     if not paths:
         return np.zeros((0, 3), np.float32), np.zeros((0, 4), np.float32)
     total = sum(len(p) for p in paths) + len(paths) - 1
@@ -459,7 +469,9 @@ def derived_comps(
             if (id(s), k) in grouped:
                 fill = SELECTED_ALPHA
                 halo.append((row["ypix"], row["xpix"]))
-            comps.append((row["ypix"], row["xpix"], row["lam"], component_color(s, k), fill))
+            comps.append(
+                (row["ypix"], row["xpix"], row["lam"], component_color(s, k), fill)
+            )
     if selected is not None:
         s, k = selected
         if s in sets_on_z and s.visible and k not in s.discarded:
@@ -512,7 +524,8 @@ def result_traces(res: RunResult, uids=None) -> list[RoiTrace]:
     """One :class:`RoiTrace` per row of a run result that carries traces,
     keyed by the store uid ``uids`` gives for that row (``res.uids`` when
     None); rows without a uid are skipped. ``z`` / ``c`` are the read
-    coordinates the run recorded, else its store plane."""
+    coordinates the run recorded, else its store plane.
+    """
     if res.F is None:
         return []
     uids = res.uids if uids is None else uids
@@ -528,14 +541,21 @@ def result_traces(res: RunResult, uids=None) -> list[RoiTrace]:
                 uid=uid,
                 z=res.z if res.read_z is None else int(res.read_z),
                 c=0 if res.read_c is None else int(res.read_c),
-                engine=res.engine or ("masknmf" if res.kind in ("demix", "masknmf") else "mean"),
+                engine=res.engine
+                or ("masknmf" if res.kind in ("demix", "masknmf") else "mean"),
                 source=res.path.name,
                 F=np.asarray(res.F[row], np.float32),
-                Fneu=None if res.Fneu is None else np.asarray(res.Fneu[row], np.float32),
-                norm=None if res.norm is None else np.asarray(res.norm[row], np.float32),
+                Fneu=None
+                if res.Fneu is None
+                else np.asarray(res.Fneu[row], np.float32),
+                norm=None
+                if res.norm is None
+                else np.asarray(res.norm[row], np.float32),
                 frames=res.frames,
                 path=res.path,
-                extra={} if res.tp_indices is None or res.frames is not None else {"tp_indices": list(res.tp_indices)},
+                extra={}
+                if res.tp_indices is None or res.frames is not None
+                else {"tp_indices": list(res.tp_indices)},
             )
         )
     return out
@@ -544,7 +564,8 @@ def result_traces(res: RunResult, uids=None) -> list[RoiTrace]:
 def component_color(s: DerivedSet, k: int) -> tuple[float, float, float]:
     """One component's rgb in 0-1: its explicit group color when set, its
     class color when labeled, else a hue of its own - the same treatment
-    drawn ROIs get."""
+    drawn ROIs get.
+    """
     rgb = s.colors.get(k)
     if rgb is not None:
         return tuple(rgb)
@@ -598,7 +619,8 @@ def _kind_of(ops: dict) -> str:
 def run_dir_complete(d) -> bool:
     """True when ``d`` holds a loadable run: ``stat.npy`` + ``ops.npy``, a
     results file (``mbo_utilities.results``), or one unit inside one
-    (``<file>.zarr/zplane01``)."""
+    (``<file>.zarr/zplane01``).
+    """
     from mbo_utilities.results import results_pipeline
 
     d = Path(d)
@@ -606,14 +628,19 @@ def run_dir_complete(d) -> bool:
         return True
     if results_pipeline(d) is not None:
         return True
-    return d.parent.suffix == ".zarr" and results_pipeline(d.parent) is not None and (d / "zarr.json").is_file()
+    return (
+        d.parent.suffix == ".zarr"
+        and results_pipeline(d.parent) is not None
+        and (d / "zarr.json").is_file()
+    )
 
 
 def finished_dirs(out_root, planes=None) -> list[Path]:
     """Completed output dirs under ``out_root`` for 1-based ``planes`` (any
     plane when None): the root itself when it holds outputs, else its
     ``zplaneNN*`` children - pipelines may suffix the name with a frame
-    range, so match by prefix."""
+    range, so match by prefix.
+    """
     root = Path(out_root)
     if run_dir_complete(root):
         return [root]
@@ -703,7 +730,15 @@ def scan_run_dirs(fpath) -> list[dict]:
     return rows
 
 
-def full_plane_args(kind: str, fpath, plane_1based: int, iw, host=None, channel: int | None = None, tp_indices=None) -> dict:
+def full_plane_args(
+    kind: str,
+    fpath,
+    plane_1based: int,
+    iw,
+    host=None,
+    channel: int | None = None,
+    tp_indices=None,
+) -> dict:
     """``task_suite2p`` / ``task_masknmf`` worker args for one plane.
 
     Parameters
@@ -787,7 +822,8 @@ def _default_masknmf_settings() -> dict:
 
 def masknmf_settings(host) -> dict | None:
     """The masknmf settings the Run tab is holding, or None when it has not
-    built that pipeline yet."""
+    built that pipeline yet.
+    """
     instances = getattr(host, "_pipeline_instances", None) or {}
     settings = getattr(instances.get("MaskNMF"), "settings", None)
     if settings is None:
@@ -800,7 +836,8 @@ def masknmf_settings(host) -> dict | None:
 
 def registry_path(fpath, tag: str = "") -> Path:
     """``roi_runs.json`` beside ``manual_labels.zarr``; ``roi_runs_<tag>.json``
-    for one recording of a file holding several (``labels_path``)."""
+    for one recording of a file holding several (``labels_path``).
+    """
     name = f"{REGISTRY_NAME[:-5]}_{tag}.json" if tag else REGISTRY_NAME
     return labels_path(fpath).parent / name
 
@@ -827,8 +864,7 @@ def load_run_registry(path) -> list[dict]:
                     "kind": str(row.get("kind", "")),
                     "discarded": [int(i) for i in row.get("discarded", [])],
                     "classes": {
-                        int(k): int(v)
-                        for k, v in (row.get("classes") or {}).items()
+                        int(k): int(v) for k, v in (row.get("classes") or {}).items()
                     },
                     "colors": {
                         int(k): tuple(float(x) for x in v)
@@ -841,7 +877,8 @@ def load_run_registry(path) -> list[dict]:
 
 def save_run_registry(path, entries: list[dict]) -> None:
     """Write the sidecar: ``{"runs": [{"path", "kind", "discarded", "classes",
-    "colors"}]}``."""
+    "colors"}]}``.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     runs = [
@@ -849,9 +886,7 @@ def save_run_registry(path, entries: list[dict]) -> None:
             "path": str(e["path"]),
             "kind": str(e.get("kind", "")),
             "discarded": sorted(int(i) for i in e.get("discarded", [])),
-            "classes": {
-                str(k): int(v) for k, v in (e.get("classes") or {}).items()
-            },
+            "classes": {str(k): int(v) for k, v in (e.get("classes") or {}).items()},
             "colors": {
                 str(k): [float(x) for x in v]
                 for k, v in (e.get("colors") or {}).items()

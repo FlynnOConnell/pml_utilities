@@ -28,7 +28,9 @@ def listify_index(index, dim_size):
     if isinstance(index, slice):
         start, stop, step = index.indices(dim_size)
         return list(range(start, stop, step))
-    raise TypeError(f"index {index} is not integer, slice or array/list/tuple of integers")
+    raise TypeError(
+        f"index {index} is not integer, slice or array/list/tuple of integers"
+    )
 
 
 def index_length(index, dim_size):
@@ -44,6 +46,7 @@ def index_length(index, dim_size):
         return max(0, (start - stop - step - 1) // (-step))
     raise TypeError(f"index {index} is not integer, slice or array")
 
+
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
     from typing import Any
@@ -54,14 +57,14 @@ SPATIAL_DIMS = {"Y", "X"}
 
 def normalize_dim_key(dim_name: str) -> str:
     """
-    normalize dimension name to its single-letter key.
+    Normalize dimension name to its single-letter key.
 
-    parameters
+    Parameters
     ----------
     dim_name : str
         dimension name (e.g., "timepoints", "z-planes", "T", "Z")
 
-    returns
+    Returns
     -------
     str
         the letter (T, Z, C, V, R, B, A) or uppercase input
@@ -77,9 +80,9 @@ def parse_selection(
     one_based: bool = True,
 ) -> list[int]:
     """
-    parse a selection into a list of 0-based indices.
+    Parse a selection into a list of 0-based indices.
 
-    parameters
+    Parameters
     ----------
     selection : int | slice | list | Sequence[int] | str | None
         selection specification:
@@ -93,12 +96,12 @@ def parse_selection(
     one_based : bool
         if True, input indices are 1-based and will be converted to 0-based
 
-    returns
+    Returns
     -------
     list[int]
         0-based indices
 
-    examples
+    Examples
     --------
     >>> parse_selection("1:10", 100, one_based=True)  # frames 1-10 -> indices 0-9
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -179,24 +182,24 @@ class TimeSelection:
 
     @property
     def final_indices(self) -> list[int]:
-        """indices after removing excluded."""
+        """Indices after removing excluded."""
         exclude_set = set(self.exclude_indices)
         return [i for i in self.include_indices if i not in exclude_set]
 
     @property
     def count(self) -> int:
-        """number of final indices."""
+        """Number of final indices."""
         return len(self.final_indices)
 
     def has_overlap(self) -> bool:
-        """check if exclude overlaps with include (valid exclusion)."""
+        """Check if exclude overlaps with include (valid exclusion)."""
         if not self.exclude_indices:
             return False
         include_set = set(self.include_indices)
         return any(i in include_set for i in self.exclude_indices)
 
     def to_metadata(self, max_explicit: int = 1024) -> dict:
-        """convert to metadata dict for saving.
+        """Convert to metadata dict for saving.
 
         the include/exclude strings plus count always round-trip through
         parse_timepoint_selection; an explicit index list (include or
@@ -236,12 +239,12 @@ def parse_timepoint_selection(
     one_based: bool = True,
 ) -> TimeSelection:
     """
-    parse timepoint selection string with optional exclude range.
+    Parse timepoint selection string with optional exclude range.
 
     format: "include_range" or "include_range,exclude_range"
     where each range is "start:stop:step" or "start:stop" (step defaults to 1)
 
-    parameters
+    Parameters
     ----------
     selection_str : str
         selection string, e.g., "1:100", "1:100:2", "1:100,50:60"
@@ -250,18 +253,18 @@ def parse_timepoint_selection(
     one_based : bool
         if True, input indices are 1-based
 
-    returns
+    Returns
     -------
     TimeSelection
         parsed selection with include/exclude indices
 
-    examples
+    Examples
     --------
     >>> sel = parse_timepoint_selection("1:100", 1000)  # frames 1-100
     >>> sel = parse_timepoint_selection("1:100:2", 1000)  # every other frame
     >>> sel = parse_timepoint_selection("1:100,50:60", 1000)  # 1-100 excluding 50-60
 
-    raises
+    Raises
     ------
     ValueError
         if exclude range doesn't overlap with include range (invalid exclusion)
@@ -308,7 +311,7 @@ class DimSelection:
 
     @property
     def count(self) -> int:
-        """number of selected indices."""
+        """Number of selected indices."""
         return len(self.indices)
 
 
@@ -332,11 +335,11 @@ class ArraySlicing:
         arr,
         selections: dict[str, Any] | None = None,
         one_based: bool = True,
-    ) -> "ArraySlicing":
+    ) -> ArraySlicing:
         """
-        create slicing state from array and optional selections.
+        Create slicing state from array and optional selections.
 
-        parameters
+        Parameters
         ----------
         arr : array-like
             array with shape, dtype, and dims
@@ -345,7 +348,7 @@ class ArraySlicing:
         one_based : bool
             if True, selections use 1-based indexing
 
-        returns
+        Returns
         -------
         ArraySlicing
             slicing state
@@ -383,7 +386,7 @@ class ArraySlicing:
 
     @property
     def output_shape(self) -> tuple[int, ...]:
-        """shape after applying selections."""
+        """Shape after applying selections."""
         result = []
         for i, dim_key in enumerate(self.dims):
             if dim_key in SPATIAL_DIMS:
@@ -395,7 +398,7 @@ class ArraySlicing:
         return tuple(result)
 
     def bytes_per_frame(self) -> int:
-        """bytes for one frame (all spatial dims, one index per non-spatial dim)."""
+        """Bytes for one frame (all spatial dims, one index per non-spatial dim)."""
         Ly, Lx = self.spatial_shape
         n_planes = 1
         n_channels = 1
@@ -407,14 +410,14 @@ class ArraySlicing:
 
     def calculate_chunk_size(self, target_mb: float = 50.0) -> int:
         """
-        calculate number of frames per chunk for target memory.
+        Calculate number of frames per chunk for target memory.
 
-        parameters
+        Parameters
         ----------
         target_mb : float
             target chunk size in megabytes
 
-        returns
+        Returns
         -------
         int
             number of frames (T dimension) per chunk
@@ -430,11 +433,11 @@ class ArraySlicing:
         chunk_dim: str = "T",
         chunk_size: int | None = None,
         target_mb: float = 50.0,
-    ) -> Iterator["ChunkInfo"]:
+    ) -> Iterator[ChunkInfo]:
         """
-        iterate over chunks along a dimension.
+        Iterate over chunks along a dimension.
 
-        parameters
+        Parameters
         ----------
         chunk_dim : str
             dimension to chunk along (default "T")
@@ -443,7 +446,7 @@ class ArraySlicing:
         target_mb : float
             target chunk size in MB (used if chunk_size is None)
 
-        yields
+        Yields
         ------
         ChunkInfo
             chunk metadata with indices for each dimension
@@ -497,14 +500,14 @@ class ChunkInfo:
 
     @property
     def progress(self) -> float:
-        """progress fraction (0.0 to 1.0)."""
+        """Progress fraction (0.0 to 1.0)."""
         if self.total_chunks <= 0:
             return 1.0
         return (self.chunk_index + 1) / self.total_chunks
 
 
 def _is_contiguous(indices: list[int]) -> bool:
-    """check if indices form a contiguous range (e.g. [3,4,5])."""
+    """Check if indices form a contiguous range (e.g. [3,4,5])."""
     if not indices:
         return False
     return len(indices) == (indices[-1] - indices[0] + 1) and all(
@@ -518,12 +521,12 @@ def read_chunk(
     dims: tuple[str, ...],
 ) -> np.ndarray:
     """
-    read a chunk from a lazy array.
+    Read a chunk from a lazy array.
 
     reads frame-by-frame to avoid np.ix_ which lazy arrays don't support.
     handles TZYX, TCYX, TYX, ZYX, and 5D arrays with views (TZVYX) dimension orderings.
 
-    parameters
+    Parameters
     ----------
     arr : array-like
         lazy array supporting indexing
@@ -532,7 +535,7 @@ def read_chunk(
     dims : tuple[str, ...]
         normalized dimension labels (e.g., ("T", "Z", "Y", "X"))
 
-    returns
+    Returns
     -------
     np.ndarray
         chunk data with shape (T_chunk, Z_sel, Y, X) or (T_chunk, Y, X)

@@ -94,7 +94,8 @@ class DataVis:
 
     def show(self, **kwargs):
         """Show the figure. Returns the canvas, which a notebook cell displays
-        when it is the last expression."""
+        when it is the last expression.
+        """
         from mbo_utilities.gui.run_gui import _after_show
 
         if not self._shown:

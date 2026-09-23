@@ -10,10 +10,12 @@ land as suite2p-shaped plane dirs readable by the existing results tooling.
 
 import dataclasses
 import math
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from imgui_bundle import imgui, portable_file_dialogs as pfd
+from imgui_bundle import imgui
+from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities.gui._imgui_helpers import (
     PopupAutoSize,
@@ -189,7 +191,11 @@ def _collect_modified(settings) -> list[tuple[str, Any, Any]]:
                 continue
             if not _is_default(obj, f.name):
                 rows.append(
-                    (f"{prefix}.{f.name}", getattr(obj, f.name), _field_default(obj, f.name))
+                    (
+                        f"{prefix}.{f.name}",
+                        getattr(obj, f.name),
+                        _field_default(obj, f.name),
+                    )
                 )
     return rows
 
@@ -244,7 +250,8 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
     def _hydrate_from_run(self, fpath) -> None:
         """Fill parameters + output dir from a previous run's tree
-        (suite2p parity: opening results hydrates the Run tab)."""
+        (suite2p parity: opening results hydrates the Run tab).
+        """
         from mbo_utilities.masknmf.params import MasknmfSettings
 
         params, outdir = find_masknmf_run(fpath)
@@ -346,7 +353,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
             imgui.set_tooltip(path_str)
         filenames = getattr(arr, "filenames", None) or ([path_str] if path_str else [])
         if filenames:
-            imgui.text(f"Size on disk: {_format_size(_dataset_size_bytes(self, filenames))}")
+            imgui.text(
+                f"Size on disk: {_format_size(_dataset_size_bytes(self, filenames))}"
+            )
         try:
             shape_text = " × ".join(str(s) for s in arr.shape)
             imgui.text(f"Shape: {shape_text}")
@@ -374,7 +383,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
             self._outdir_dialog = None
 
         imgui.text_colored(_SUB_COLOR, "Output folder")
-        imgui.set_next_item_width(max(imgui.get_content_region_avail().x - _BTN_W - 12, 100))
+        imgui.set_next_item_width(
+            max(imgui.get_content_region_avail().x - _BTN_W - 12, 100)
+        )
         _, self._outdir = imgui.input_text("##masknmf_outdir", self._outdir)
         set_tooltip("Save path. One zplaneNN dir per plane.", show_mark=False)
         imgui.same_line()
@@ -451,7 +462,8 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
     def _param_label(self, obj, field: str, text: str) -> None:
         """suite2p _emp_label pattern: bold boxed label for important
-        fields, plain text otherwise; modified-orange tint on both."""
+        fields, plain text otherwise; modified-orange tint on both.
+        """
         pushed = self._mod_push(obj, field)
         if field in _IMPORTANT_FIELDS:
             draw_boxed_label(text, font=getattr(self.parent, "_bold_font", None))
@@ -544,12 +556,24 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 imgui.close_current_popup()
                 return
             columns = (
-                ("Registration", self.settings.registration, "do_registration",
-                 self._draw_registration_params),
-                ("Compression (PMD)", self.settings.compression, "do_compression",
-                 self._draw_compression_params),
-                ("Demixing", self.settings.demixing, "do_demixing",
-                 self._draw_demixing_params),
+                (
+                    "Registration",
+                    self.settings.registration,
+                    "do_registration",
+                    self._draw_registration_params,
+                ),
+                (
+                    "Compression (PMD)",
+                    self.settings.compression,
+                    "do_compression",
+                    self._draw_compression_params,
+                ),
+                (
+                    "Demixing",
+                    self.settings.demixing,
+                    "do_demixing",
+                    self._draw_demixing_params,
+                ),
             )
             avail_w = imgui.get_content_region_avail().x
             col_w = max((avail_w - 16) / 3, 220)
@@ -565,9 +589,15 @@ class MaskNMFPipelineWidget(PipelineWidget):
             imgui.separator()
 
             # Defaults (orange) / Close (red, right-aligned) — suite2p layout
-            imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.60, 0.35, 0.10, 1.0))
-            imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.70, 0.42, 0.14, 1.0))
-            imgui.push_style_color(imgui.Col_.button_active, imgui.ImVec4(0.50, 0.28, 0.08, 1.0))
+            imgui.push_style_color(
+                imgui.Col_.button, imgui.ImVec4(0.60, 0.35, 0.10, 1.0)
+            )
+            imgui.push_style_color(
+                imgui.Col_.button_hovered, imgui.ImVec4(0.70, 0.42, 0.14, 1.0)
+            )
+            imgui.push_style_color(
+                imgui.Col_.button_active, imgui.ImVec4(0.50, 0.28, 0.08, 1.0)
+            )
             if imgui.button("Defaults##masknmf_defaults", imgui.ImVec2(_BTN_W, 0)):
                 from mbo_utilities.masknmf.params import MasknmfSettings
 
@@ -578,9 +608,15 @@ class MaskNMFPipelineWidget(PipelineWidget):
             imgui.same_line()
             _pad_x = imgui.get_style().window_padding.x
             imgui.set_cursor_pos_x(imgui.get_window_width() - _BTN_W - _pad_x)
-            imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.55, 0.13, 0.13, 1.0))
-            imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.65, 0.18, 0.18, 1.0))
-            imgui.push_style_color(imgui.Col_.button_active, imgui.ImVec4(0.45, 0.10, 0.10, 1.0))
+            imgui.push_style_color(
+                imgui.Col_.button, imgui.ImVec4(0.55, 0.13, 0.13, 1.0)
+            )
+            imgui.push_style_color(
+                imgui.Col_.button_hovered, imgui.ImVec4(0.65, 0.18, 0.18, 1.0)
+            )
+            imgui.push_style_color(
+                imgui.Col_.button_active, imgui.ImVec4(0.45, 0.10, 0.10, 1.0)
+            )
             if imgui.button("Close##masknmf_settings_close", imgui.ImVec2(_BTN_W, 0)):
                 imgui.close_current_popup()
             imgui.pop_style_color(3)
@@ -633,9 +669,11 @@ class MaskNMFPipelineWidget(PipelineWidget):
         if changed:
             reg.strategy = "pwrigid" if idx == 1 else "rigid"
         self._f_int2(
-            reg, "max_shifts", "Max shifts",
+            reg,
+            "max_shifts",
+            "Max shifts",
             tooltip="Max allowed shift in px (y, x). Raise it if the shift "
-                    "traces look clipped/flat at the extremes.",
+            "traces look clipped/flat at the extremes.",
         )
         if reg.strategy == "pwrigid":
             self._f_int2(reg, "num_blocks", "Blocks")
@@ -645,20 +683,29 @@ class MaskNMFPipelineWidget(PipelineWidget):
     def _draw_compression_params(self) -> None:
         comp = self.settings.compression
         self._f_check(
-            comp, "denoise", "Temporal denoiser",
+            comp,
+            "denoise",
+            "Temporal denoiser",
             tooltip="Train a blind-spot denoiser and re-run PMD.",
         )
         self._f_check(
-            comp, "detrend", "Detrend",
+            comp,
+            "detrend",
+            "Detrend",
             tooltip="Maximin spline detrend sized from the frame rate.",
         )
         self._f_int2(
-            comp, "block_sizes", "Block sizes", lo=4,
+            comp,
+            "block_sizes",
+            "Block sizes",
+            lo=4,
             tooltip="PMD patch size in px; ~2x the largest feature you "
-                    "expect (10-20 for dendrites/spines, 20+ for somata).",
+            "expect (10-20 for dendrites/spines, 20+ for somata).",
         )
         self._f_int(
-            comp, "max_components", "Max components",
+            comp,
+            "max_components",
+            "Max components",
             tooltip="Max PMD components per block.",
         )
 
@@ -675,28 +722,38 @@ class MaskNMFPipelineWidget(PipelineWidget):
     def _draw_demixing_params(self) -> None:
         dmx = self.settings.demixing
         self._f_float(
-            dmx, "mad_correlation_threshold", "Correlation thr",
+            dmx,
+            "mad_correlation_threshold",
+            "Correlation thr",
             tooltip="Superpixel seed threshold — the main signal-vs-noise "
-                    "knob. Lower finds more, dimmer cells.",
+            "knob. Lower finds more, dimmer cells.",
         )
         self._f_float(
-            dmx, "filter_sigma", "Highpass sigma", step=0.5, fmt="%.1f",
+            dmx,
+            "filter_sigma",
+            "Highpass sigma",
+            step=0.5,
+            fmt="%.1f",
             tooltip="Spatial highpass width (px) for the init passes.",
         )
         self._f_float(
-            dmx, "merge_threshold", "Merge thr",
-            tooltip="Temporal correlation above which overlapping "
-                    "components merge.",
+            dmx,
+            "merge_threshold",
+            "Merge thr",
+            tooltip="Temporal correlation above which overlapping components merge.",
         )
         self._f_int(
-            dmx, "maxiter", "NMF iterations",
+            dmx,
+            "maxiter",
+            "NMF iterations",
             tooltip="HALS iterations per pass.",
         )
         pushed = self._mod_push(dmx, "sign")
         sign_idx = ("positive", "negative", "unconstrained").index(dmx.sign)
         imgui.set_next_item_width(140)
         changed, sign_idx = imgui.combo(
-            "Signal sign##masknmf_sign", sign_idx,
+            "Signal sign##masknmf_sign",
+            sign_idx,
             ["Positive", "Negative", "Unconstrained"],
         )
         self._mod_pop(pushed)
@@ -766,7 +823,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
         set_tooltip("Registered movie as suite2p binary.", show_mark=False)
         imgui.same_line()
         pushed = self._mod_push(rt, "keep_raw")
-        _, rt.keep_raw = imgui.checkbox("Keep data_raw.bin##masknmf_keepraw", rt.keep_raw)
+        _, rt.keep_raw = imgui.checkbox(
+            "Keep data_raw.bin##masknmf_keepraw", rt.keep_raw
+        )
         self._mod_pop(pushed)
 
     def _draw_modified_table(self) -> None:
@@ -785,13 +844,21 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 | imgui.TableFlags_.sizing_stretch_prop
             )
             if imgui.begin_table("##masknmf_mod_tbl", 3, flags):
-                imgui.table_setup_column("Parameter", imgui.TableColumnFlags_.width_stretch, 4.0)
-                imgui.table_setup_column("Current", imgui.TableColumnFlags_.width_stretch, 2.5)
-                imgui.table_setup_column("Default", imgui.TableColumnFlags_.width_stretch, 2.5)
+                imgui.table_setup_column(
+                    "Parameter", imgui.TableColumnFlags_.width_stretch, 4.0
+                )
+                imgui.table_setup_column(
+                    "Current", imgui.TableColumnFlags_.width_stretch, 2.5
+                )
+                imgui.table_setup_column(
+                    "Default", imgui.TableColumnFlags_.width_stretch, 2.5
+                )
                 imgui.table_headers_row()
                 for field, cur, default in mods:
                     cur_s = f"{cur:.3g}" if isinstance(cur, float) else str(cur)
-                    def_s = f"{default:.3g}" if isinstance(default, float) else str(default)
+                    def_s = (
+                        f"{default:.3g}" if isinstance(default, float) else str(default)
+                    )
                     stable = field.split(".", 1)[-1] in _STABLE_FIELDS
                     imgui.table_next_row()
                     imgui.table_set_column_index(0)
@@ -818,13 +885,19 @@ class MaskNMFPipelineWidget(PipelineWidget):
         ready = has_save_path and bool(fpath) and bool(planes)
 
         imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.13, 0.55, 0.13, 1.0))
-        imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0))
-        imgui.push_style_color(imgui.Col_.button_active, imgui.ImVec4(0.1, 0.45, 0.1, 1.0))
+        imgui.push_style_color(
+            imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0)
+        )
+        imgui.push_style_color(
+            imgui.Col_.button_active, imgui.ImVec4(0.1, 0.45, 0.1, 1.0)
+        )
         if not ready:
             imgui.begin_disabled()
         run_avail = imgui.get_content_region_avail().x
         if run_avail > _RUN_W:
-            imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + (run_avail - _RUN_W) * 0.5)
+            imgui.set_cursor_pos_x(
+                imgui.get_cursor_pos_x() + (run_avail - _RUN_W) * 0.5
+            )
         clicked = imgui.button("Run MaskNMF", imgui.ImVec2(_RUN_W, 0))
         if not ready:
             imgui.end_disabled()

@@ -11,7 +11,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from mbo_utilities.metadata.base import (
     PROVENANCE_PATH_KEYS,
     rebase_provenance_paths,
