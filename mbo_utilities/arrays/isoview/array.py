@@ -727,15 +727,8 @@ _VIEW_METADATA_FIELDS = (
     "pixel_resolution_um",
     "camera",
 )
-# Fields dropped from the reported metadata entirely. Either duplicates of a
-# canonical field (z_step/y_step/axial_step -> dz; objective_mag -> magnification;
-# camera_pixel_size_um -> camera_pixel_pitch_um; specimen_XYZT -> stage_x/y/z;
-# tile_name -> specimen_name; dimensions/planes -> shape) or unused synthetic
-# helpers with no consumer (camera_pair/view/channel identifiers,
-# camera_channel_map, channel_idx_by_xml_ch). The piezo-offset calibration
-# strings (z/y_offset_planes) are large and unused. Processing-only identifiers
-# that ARE consumed (specimen, timepoint, camera_view_map) are kept and only
-# hidden from the GUI viewer.
+# dropped from the reported metadata: duplicates of a canonical field, or
+# synthetic helpers with no consumer
 _DROPPED_METADATA_FIELDS = (
     "view",
     "channel",
@@ -2620,14 +2613,8 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
         out_shape = (len(t_indices), len(c_indices), z_size, y_size, x_size)
         result = np.empty(out_shape, dtype=self._dtype)
 
-        # _read_slab reads only the requested slab and never fills the
-        # whole-volume cache. route single (t, view) reads through it, and
-        # any single-plane read (z is an int) regardless of how many
-        # timepoints are asked for. zstats strides T at a fixed Z; without
-        # the single-plane carve-out each sampled timepoint would cache a
-        # full Z*Y*X volume that is never released. genuine multi-plane
-        # bulk reads still cache the full volume so the same (t, view) is
-        # not re-decompressed at every Z.
+        # a single-plane read never caches the whole volume: zstats would cache
+        # one per sampled timepoint
         single_tv = len(t_indices) == 1 and len(c_indices) == 1
         single_plane = isinstance(z_key, (int, np.integer))
 

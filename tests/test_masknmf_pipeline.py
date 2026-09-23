@@ -16,8 +16,6 @@ from mbo_utilities.masknmf.params import (
     stage_action,
 )
 
-# ---- params -----------------------------------------------------------------
-
 
 def test_settings_roundtrip_json():
     s = MasknmfSettings()
@@ -58,8 +56,6 @@ def test_nmf_kwargs_detrender_never_tuple():
     assert kw["ring_model_start_pt"] is None
 
 
-# ---- stage gating -----------------------------------------------------------
-
 
 @pytest.mark.parametrize(
     "tri,cached,expected",
@@ -75,8 +71,6 @@ def test_nmf_kwargs_detrender_never_tuple():
 def test_stage_action(tri, cached, expected):
     assert stage_action(tri, cached) == expected
 
-
-# ---- suite2p-shaped outputs -------------------------------------------------
 
 
 def _toy_footprints():
@@ -199,8 +193,6 @@ def test_merge_ops_roundtrip(tmp_path):
     loaded = np.load(tmp_path / "ops.npy", allow_pickle=True).item()
     assert loaded["nframes"] == 50
 
-
-# ---- task registration ------------------------------------------------------
 
 
 def test_task_registered():

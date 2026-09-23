@@ -194,10 +194,6 @@ class _Dashboard:
         where = self.source.name if self.source is not None else "vnoiser"
         return f"Event curation - {where}"
 
-    # ------------------------------------------------------------------
-    # what to curate
-    # ------------------------------------------------------------------
-
     def open(self, path) -> None:
         """Point the dashboard at ``path``."""
         from mbo_utilities.vnoiser import voltage_run_for_mesc
@@ -240,10 +236,6 @@ class CurationApp(_Dashboard):
         self.frames = 0
         self.max_frames: int | None = None
         super().__init__(path, channel=channel, logger=logger)
-
-    # ------------------------------------------------------------------
-    # drawing
-    # ------------------------------------------------------------------
 
     def draw(self) -> None:
         """One frame of the window."""

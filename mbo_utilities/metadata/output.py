@@ -272,16 +272,8 @@ class OutputMetadata:
             return len(z_sel)
         return self.source_num_planes
 
-    # scale properties
-    #
-    # provenance model: stride-aware fields (dz, fs) carry a small
-    # `_metadata_provenance` dict through every reactive pass so re-reading
-    # already-scaled metadata doesn't double-scale. one invariant per field:
-    #   effective_dz = base_dz * cumulative_stride
-    #   effective_fs = base_fs / cumulative_stride
-    # on each write we read the prior base+stride (or treat raw `dz`/`fs`
-    # as the base when no provenance is present — legacy path), multiply in
-    # this pass's stride, and emit the updated provenance in to_dict().
+    # dz and fs carry `_metadata_provenance` so a second pass over already-scaled
+    # metadata does not scale it twice: dz = base * stride, fs = base / stride
 
     def _provenance(self) -> dict:
         """Current provenance dict from source (empty when absent)."""

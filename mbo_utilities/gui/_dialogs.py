@@ -176,13 +176,8 @@ def _try_hydrate_s2p_from_binary(parent: Any, path: str | Path) -> bool:
     except Exception as e:
         parent.logger.warning(f"suite2p hydrate: schema import failed: {e}")
         return False
-    # Force-load suite2p.parameters.SETTINGS now (synchronous, idempotent).
-    # `is_default` short-circuits to True while the schema is unloaded, so
-    # without this the hydrated values would not be flagged as modified
-    # in the Run tab summary or tinted in the Pipeline Settings popup
-    # until something else triggered the import. The user is opening
-    # suite2p data here, so paying the import cost during file-load is
-    # appropriate.
+    # `is_default` answers True while the schema is unloaded, so nothing would
+    # show as modified until some later import
     try:
         _warm_up_schema()
     except Exception as e:
@@ -204,13 +199,8 @@ def _try_hydrate_s2p_from_binary(parent: Any, path: str | Path) -> bool:
             # other db fields with entries in _FLAT_TO_MBO.
             loaded.update(_from_flat(d))
             sources.append("db.npy")
-    # ALSO read ops.npy: it's the only file that carries lsp's mbo-only
-    # post-processing knobs (dff_window_size / dff_percentile /
-    # dff_smooth_window — written at the dff_calculation step in
-    # run_lsp.py). We `setdefault` instead of `update` so existing
-    # entries from settings.npy / db.npy aren't overwritten by ops.npy
-    # (settings.npy is the canonical source for suite2p settings; ops.npy
-    # may have stale or run-time-mutated values for those same keys).
+    # ops.npy alone carries lsp's dff knobs; setdefault, because settings.npy is
+    # canonical for everything the two share
     if ops_file.is_file():
         d = _load_npy_dict(ops_file)
         if d:
@@ -298,14 +288,8 @@ def _try_hydrate_s2p_from_binary(parent: Any, path: str | Path) -> bool:
         else:
             skipped.append(field)
             continue
-        # coerce to current field's type — the loaded value may be a
-        # numpy scalar (int64, float32, bool_) which imgui inputs don't
-        # handle uniformly. _s2p_schema._to_py normalizes numpy types
-        # to Python equivalents at the loader boundary, but a leaked
-        # ndarray here would still crash bool()/int()/float() with
-        # `truth value ambiguous`. The whole block is best-effort: any
-        # failure leaves the existing (well-typed) default in place
-        # rather than tanking the load.
+        # a leaked ndarray would crash bool()/int()/float(); best-effort, a failure
+        # leaves the well-typed default
         cur = getattr(target, field)
         if value is not None and cur is not None:
             # defensive: skip multi-element arrays — they shouldn't

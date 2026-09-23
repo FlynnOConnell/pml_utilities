@@ -50,10 +50,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-# ============================================================
-# helpers
-# ============================================================
-
 
 class LazyStandIn:
     """Array-protocol lazy stand-in: dtype/shape/ndim/__getitem__ only.
@@ -171,10 +167,6 @@ def viewer5d(base5d):
     iw.close()
 
 
-# ============================================================
-# construction
-# ============================================================
-
 
 class TestConstruction:
     def test_factory_returns_adapter(self, viewer5d):
@@ -224,10 +216,6 @@ class TestConstruction:
         frame = viewer5d.figure.canvas.draw()
         assert getattr(frame, "shape", None) is not None
 
-
-# ============================================================
-# indices semantics
-# ============================================================
 
 
 class TestIndices:
@@ -294,10 +282,6 @@ class TestIndices:
         assert set(iw.current_index.keys()) == set(iw.ndwidget.indices.dims)
 
 
-# ============================================================
-# window funcs / frame_apply routing
-# ============================================================
-
 
 class TestWindowFuncs:
     def test_legacy_dict_routed_with_window_order(self, viewer5d):
@@ -362,10 +346,6 @@ class TestWindowFuncs:
         )
 
 
-# ============================================================
-# contrast resets
-# ============================================================
-
 
 class TestContrastResets:
     def test_reset_vmin_vmax_full_sample(self, viewer5d, base5d):
@@ -400,10 +380,6 @@ class TestContrastResets:
         assert iw.cmap == ["viridis"]
         iw.cmap = "gnuplot2"
 
-
-# ============================================================
-# playback bar adapter (fps seeding, loop, space toggle)
-# ============================================================
 
 
 class TestSlidersUI:
@@ -538,10 +514,6 @@ class TestTogglePlaybackVendoredShape:
         parent = _StubParent(None)
         toggle_playback(parent)  # must not raise
 
-
-# ============================================================
-# data swaps
-# ============================================================
 
 
 def _make_viewer(data, **kwargs):
@@ -990,10 +962,6 @@ class TestShowPassthrough:
             viewer5d._ndw.show = original
 
 
-# ============================================================
-# bare-path dim naming + fps seeding
-# ============================================================
-
 
 class _WithLabels(LazyStandIn):
     slider_dim_labels = ("Timepoint", "Channel", "Z-plane")
@@ -1093,10 +1061,6 @@ class TestFpsSeedingFromData:
             iw.close()
 
 
-# ============================================================
-# find_slider_name aliases (arrays/features/_dim_labels.py)
-# ============================================================
-
 
 class TestFindSliderNameAliases:
     def test_mesc_depth_and_cube_labels_resolve_to_z(self):
@@ -1112,10 +1076,6 @@ class TestFindSliderNameAliases:
         assert find_slider_name(("t", "c", "z"), "z") == "z"
         assert find_slider_name(("Timepoint", "Channel"), "z") is None
 
-
-# ============================================================
-# multi-array (multi-ROI) construction
-# ============================================================
 
 
 class TestMultiArray:
@@ -1145,10 +1105,6 @@ class TestMultiArray:
         finally:
             iw.close()
 
-
-# ============================================================
-# lifecycle
-# ============================================================
 
 
 class TestClose:

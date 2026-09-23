@@ -122,10 +122,6 @@ class InstallStatus:
         return next((f for f in self.features if f.name == name), None)
 
 
-# ---------------------------------------------------------------------------
-# wheels that match this machine
-# ---------------------------------------------------------------------------
-
 _TORCH_INDEX = "https://download.pytorch.org/whl/"
 _SUITE2P_HINT = "uv pip install lbm-suite2p-python suite2p rastermap --no-deps"
 _MASKNMF_HINT = "uv pip install git+https://github.com/apasarkar/masknmf-toolbox.git"
@@ -213,10 +209,6 @@ def _arch_supported(arches: list[str], capability: tuple[int, int]) -> bool:
             return True
     return not arches
 
-
-# ---------------------------------------------------------------------------
-# checks
-# ---------------------------------------------------------------------------
 
 _TORCH_PURPOSE = "suite2p registration, cellpose and masknmf run on its device"
 _CUPY_PURPOSE = (

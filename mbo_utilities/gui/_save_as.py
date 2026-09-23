@@ -26,7 +26,6 @@ from mbo_utilities.gui._imgui_helpers import (
     checkbox_with_tooltip,
     set_tooltip,
 )
-from mbo_utilities.gui._metadata_editor import _check_missing_metadata
 from mbo_utilities.gui._selection_ui import (
     draw_frame_average_input,
     draw_selection_table,
@@ -265,49 +264,6 @@ def draw_saveas_popup(parent: Any):
 
         imgui.end_popup()
 
-        # mROI section - commented out for later use
-        # try:
-        #     num_rois = parent.image_widget.data[0].num_rois
-        # except (AttributeError, Exception):
-        #     num_rois = 1
-        #
-        # # Only show multi-ROI option if data actually has multiple ROIs
-        # if num_rois > 1:
-        #     parent._saveas_rois = checkbox_with_tooltip(
-        #         "Save ScanImage multi-ROI Separately",
-        #         parent._saveas_rois,
-        #         "Enable to save each mROI individually."
-        #         " mROI's are saved to subfolders: plane1_roi1, plane1_roi2, etc."
-        #         " These subfolders can be merged later using mbo_utilities.merge_rois()."
-        #         " This can be helpful as often mROI's are non-contiguous and can drift in orthogonal directions over time.",
-        #     )
-        #     if parent._saveas_rois:
-        #         imgui.spacing()
-        #         imgui.separator()
-        #         imgui.text_colored(imgui.ImVec4(0.8, 0.8, 0.2, 1.0), "Choose mROI(s):")
-        #         imgui.dummy(imgui.ImVec2(0, 5))
-        #
-        #         if imgui.button("All##roi"):
-        #             parent._saveas_selected_roi = set(range(num_rois))
-        #         imgui.same_line()
-        #         if imgui.button("None##roi"):
-        #             parent._saveas_selected_roi = set()
-        #
-        #         imgui.columns(2, borders=False)
-        #         for i in range(num_rois):
-        #             imgui.push_id(f"roi_{i}")
-        #             selected = i in parent._saveas_selected_roi
-        #             _, selected = imgui.checkbox(f"mROI {i + 1}", selected)
-        #             if selected:
-        #                 parent._saveas_selected_roi.add(i)
-        #             else:
-        #                 parent._saveas_selected_roi.discard(i)
-        #             imgui.pop_id()
-        #             imgui.next_column()
-        #         imgui.columns(1)
-        # else:
-        #     # Reset multi-ROI state when not applicable
-        #     parent._saveas_rois = False
 
 
 def _draw_options_popup(parent: Any):
@@ -531,11 +487,6 @@ def _draw_options_popup(parent: Any):
                     "mean/nearest/gaussian also available.",
                 )
                 methods = ["median", "mode", "mean", "nearest", "gaussian"]
-                current_idx = (
-                    methods.index(parent._zarr_pyramid_method)
-                    if parent._zarr_pyramid_method in methods
-                    else 0
-                )
                 imgui.set_next_item_width(hello_imgui.em_size(10))
                 if imgui.begin_combo("##pyramid_method", parent._zarr_pyramid_method):
                     for method in methods:
@@ -1288,8 +1239,6 @@ def _draw_selection_section(parent: Any):
 
 def _draw_save_button(parent: Any):
     """Draw the save/cancel buttons and handle save logic."""
-    # check for missing metadata (for warning indicator, not blocking)
-    missing_fields = _check_missing_metadata(parent)
     no_planes = (
         parent._selected_planes is not None and len(parent._selected_planes) == 0
     )

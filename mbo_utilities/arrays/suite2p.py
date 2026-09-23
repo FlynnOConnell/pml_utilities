@@ -787,13 +787,7 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         self.num_rois = get_param(self._metadata, "num_rois", default=1)
         self.filenames = [p.active_file for p in self._planes]
 
-        # Trust ops.npy's `dz` / `_metadata_provenance` as the authoritative
-        # stride-aware record — they were stamped by the writer.
-        # Flag the legacy case: stride-suggesting dir names + no
-        # provenance marker => the writer that produced this dir may
-        # pre-date provenance tracking. We don't mutate dz — we leave it
-        # to the user to set explicitly if it's wrong — but log once so
-        # the mismatch is visible.
+        # ops.npy's dz is authoritative; a stride-named dir without provenance only warns
         if self._nz > 1 and "_metadata_provenance" not in self._metadata:
             plane_nums = [_extract_plane_number(pdir.name) for pdir in plane_dirs]
             plane_nums = [n for n in plane_nums if n is not None]

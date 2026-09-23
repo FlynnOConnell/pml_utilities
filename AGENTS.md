@@ -1208,21 +1208,23 @@ ones. Remove an entry when its fix lands.
 
 **Style**
 
-Counts from `ruff check` on the `voltage-pipeline` branch (2026-09-15), before the
-first `format.yml` run on `main`. The workflow autofixes what it can; the rest is
-fix-on-touch. When a family reaches zero, move its rule into `select`.
+Counts from `ruff check` on `manual-roi-model` (2026-09-23), after the banner and
+dead-code sweep. The workflow autofixes what it can; the rest is fix-on-touch.
+When a family reaches zero, move its rule into `select`.
 
-- Selected, not autofixable: `PTH` 39, `ERA001` 44, `F841` 11, `F403`/`F405` star
-  imports 4, `D301` 14, `D200` 5, `D404` 2, `UP` 13, `E402`/`E702`/`E721`/`E741` 17.
-- Ignored until swept: `E501` 1827 (recount after the first format run; the rest are
-  long strings and comments), `D205` 505, `D400` 37.
-- Not yet selected: `T20` 111 `print` calls in library code, `BLE001` 414 blind
-  excepts, `S110` 117 `try`/`except`/`pass`, `B` 76, `SIM` 125, `N` 281, `G004` 424
-  f-strings in log calls, `PLC0415` 1475 function-local imports (most are the
-  sanctioned heavy packages; needs per-import `noqa` before enabling).
-- Not ruff-checkable: 195 banner comments and 251 section-header comments in 22
-  files, 19 `logging.getLogger` calls, 73 nested `def`s in the library and 60 in
-  tests.
+- Selected, not autofixable: `PTH` 43, `D301` 15, `ERA001` 9 (all false positives
+  on prose that reads like code), `E402`/`E721`/`E741` 10, `D200` 5, `UP` 4,
+  `F403`/`F405` star imports 4, `D404` 2.
+- Two real defects ruff finds and nobody has fixed: `cli.py:2405` uses an undefined
+  `as_zarr`, and `arrays/zarr.py:31` rebinds `logger`.
+- Ignored until swept: `D205` 671, `E501` 521, `D400` 35.
+- Not yet selected: `PLC0415` 1688 function-local imports (most are the sanctioned
+  heavy packages; needs per-import `noqa` before enabling), `G004` 441 f-strings in
+  log calls, `BLE001` 414 blind excepts, `N` 350, `T20` 181 `print` calls, `SIM`
+  131, `S110` 126 `try`/`except`/`pass`, `B` 82.
+- Not ruff-checkable: 0 banner or section-header comments (swept 2026-09-23; do not
+  add more), 34 `logging.getLogger` calls, 172 nested `def`s in the library and 96
+  in tests.
 
 ## 16. Imgui spacing
 

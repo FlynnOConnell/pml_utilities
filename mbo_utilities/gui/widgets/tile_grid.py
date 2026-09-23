@@ -201,13 +201,8 @@ class TileGridViewer(Widget):
         self._range: tuple[float, float] | None = None
         self._range_sig: tuple | None = None
 
-        # Background tile readers. Only `_mip_cache` is shared with the draw
-        # thread (workers write, draw reads) and is guarded by `_cache_lock`;
-        # `_cache_gen` bumps on reset so an in-flight read can't commit stale
-        # data after a dataset change. A pool of workers drains `_prefetch_req`
-        # (jobs are (ti, c, view_mode, plane)) via the `_prefetch_pos` cursor,
-        # which hands each job to exactly one worker. The job list spans every
-        # z-block, nearest-to-current first, so scrubbing Z finds tiles cached.
+        # `_mip_cache` is the only state shared with the draw thread; `_cache_gen`
+        # bumps on reset so an in-flight read cannot commit after a dataset change
         self._cache_lock = threading.Lock()
         self._cache_gen: int = 0
         self._mip_cache_max: int = _MIP_CACHE_FLOOR

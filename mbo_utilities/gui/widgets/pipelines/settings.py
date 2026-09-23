@@ -215,15 +215,7 @@ _PROFILE_HELP = (
 )
 
 
-# "Look at these first" — fields whose label is rendered in a bold font
-# inside a thin rounded box in the pipeline-settings popup, so users know
-# which knobs typically matter most. Add / remove freely; the emphasis is
-# applied automatically by `_emp_label` inside `_draw_section_suite2p_content`
-# whenever its `field` argument is in this set.
-#
-# The bold font (Roboto-Bold.ttf) is loaded in `gui/widgets/preview_data.py`
-# and stashed on the parent widget as `self._bold_font`. If that's None
-# (font file missing) the box is still drawn but with the regular font.
+# the knobs that matter most: `_emp_label` boxes and bolds these labels
 _IMPORTANT_FIELDS: set[str] = {
     "algorithm",
     "tau",
@@ -1065,17 +1057,8 @@ class MboSuite2pExtras:
     by mbo's pre/post-processing (dF/F, target_timepoints clipping).
     """
 
-    # lbm_suite2p_python.run_plane kwargs that are MBO-only (no upstream
-    # equivalent). The `keep_raw`/`keep_reg` kwargs are still passed to
-    # run_plane at runtime, but they're derived from upstream fields:
-    #   keep_raw <- self.s2p_db.keep_movie_raw
-    #   keep_reg <- not self.s2p.delete_bin
-    # so we don't store duplicate state here.
-    #
-    # force_reg / force_detect are also derived at call time from
-    # `Suite2pSettings.do_registration == 2` and
-    # `Suite2pSettings.do_detection == 2` (the Skip/Run/Force radios are
-    # the single source of truth).
+    # keep_raw, keep_reg, force_reg and force_detect are derived at call time from
+    # the upstream fields, never stored here
 
     # when True, lbm's run_plane keeps every detected ROI after upstream
     # classification (mirrors the `accept_all_cells` kwarg in lsp.pipeline).
@@ -1103,15 +1086,8 @@ class MboSuite2pExtras:
     max_diameter_um_enabled: bool = False
     max_diameter_um: float = 0.0
 
-    # baseline cell filter (lsp's `baseline` filter — rejects ROIs whose
-    # F0 baseline is negative, sub-photon-floor, or sub-fraction-of-median).
-    # baseline scoring inherits the dF/F window/percentile and the top-level
-    # correct_neuropil toggle so the filter sees the same trace the dF/F
-    # plot does.
-    # always-on master flag — UI doesn't expose it; build_cell_filters()
-    # consults the per-criterion enables below. Default True so a fresh
-    # dataclass matches the runtime contract; loaded settings.npy values
-    # round-trip unchanged.
+    # always on and not exposed; build_cell_filters() reads the per-criterion
+    # enables below
     baseline_filter_enabled: bool = True
     baseline_reject_negative_F0: bool = False
     baseline_min_F0_abs_enabled: bool = False
@@ -1158,15 +1134,8 @@ class MboSuite2pExtras:
     target_timepoints: int = -1
     frames_include: int = -1
 
-    # parallel processing — forwarded to lsp.pipeline(workers=...,
-    # threads_per_worker=..., skip_volumetric=...). workers=1 keeps the
-    # sequential path; 0 or negative means auto = min(num_planes,
-    # cpu_count//2, 8). threads_per_worker caps BLAS / OMP / numba /
-    # torch threads inside each worker so workers*threads doesn't
-    # oversubscribe the CPU (the SVD-heavy registration step balloons
-    # ~10x without this cap). 0 or negative = library defaults.
-    # skip_volumetric drops merge_mrois/volume_stats/volume plots after
-    # the per-plane loop — useful when farming planes across machines.
+    # threads_per_worker caps BLAS/OMP/numba/torch inside each worker: without it
+    # the SVD-heavy registration step balloons ~10x
     workers: int = field(default_factory=_default_workers)
     threads_per_worker: int = 2
     skip_volumetric: bool = False
@@ -1174,13 +1143,6 @@ class MboSuite2pExtras:
     # gui-only display
     aspect: float = 1.0
 
-    # NOTE: removed dead fields (none read by suite2p>=v1 or lbm pipeline):
-    #   force_refImg, pad_fft  — pre-v1 reg flags, gone from upstream
-    #   do_1Preg, spatial_hp_reg, pre_smooth  — old 1P-specific keys; modern
-    #     advice is to bump smooth_sigma / spatial_taper directly
-    #   report_time           — never consumed; suite2p logs plane_times always
-    #   keep_raw, keep_reg    — supplanted by db.keep_movie_raw / io.delete_bin;
-    #     the run path now derives them from those upstream fields
 
     def to_dict(self) -> dict:
         return {
@@ -1967,10 +1929,6 @@ def draw_section_suite2p(self):
     """Draw Suite2p configuration UI with button-based popups."""
     imgui.spacing()
 
-    # consistent input width
-    INPUT_WIDTH = 80
-
-    # set proper padding and spacing using context manager for safety
     with imgui_ctx.push_style_var(imgui.StyleVar_.item_spacing, imgui.ImVec2(8, 4)):
         with imgui_ctx.push_style_var(
             imgui.StyleVar_.frame_padding, imgui.ImVec2(4, 2)
@@ -1982,21 +1940,8 @@ def _draw_section_suite2p_content(self):
     """Inner content for suite2p section (called within style context)."""
     INPUT_WIDTH = 80
 
-    # Local `_hi` shadows the module-level one to drop the font-push
-    # behavior. Emphasis (bold + box) now lives in `_emp_label` so only
-    # the parameter name (e.g. "Tau (s)") gets emphasized — not the
-    # input value (e.g. "1.00"). Call sites for fields in
-    # _IMPORTANT_FIELDS use the pattern:
-    #
-    #   imgui.set_next_item_width(INPUT_WIDTH)
-    #   with _hi("tau", self.s2p.tau):
-    #       _, self.s2p.tau = imgui.input_float("##tau", self.s2p.tau)
-    #   imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
-    #   _emp_label("tau", self.s2p.tau, "Tau (s)")
-    #   set_tooltip(...)
-    #
-    # `_hi` still wraps the widget so the modified-color tint applies to
-    # the value; `_emp_label` separately tints + emphasizes the label.
+    # local `_hi` drops the module-level font push: `_hi` tints the value,
+    # `_emp_label` emphasizes the label
     _bold_font = getattr(self, "_bold_font", None)
 
     @contextmanager
@@ -2106,14 +2051,6 @@ def _draw_section_suite2p_content(self):
 
     draw_gpu_status(self.s2p.torch_device or "auto")
 
-    # === OUTPUT FOLDER ===
-    # Section title + small folder-icon Browse button + full-width
-    # editable path. The text input below is fully editable — typing or
-    # pasting works the same as picking via the dialog. Both write to
-    # self._s2p_outdir.
-    #
-    # NOTE: the "Metadata" button was removed — the metadata editor is
-    # now accessible only via File menu → "Set Metadata" or Shift+M.
     imgui.spacing()
     imgui.separator()
     imgui.spacing()
@@ -2451,16 +2388,8 @@ def _draw_section_suite2p_content(self):
         imgui.spacing()
         imgui.spacing()
 
-        # --- Rastermap ---
-        # Tri-state stage gate (Skip/Run/Force) on the title row, matching
-        # the pipeline-step radio convention used for Registration / ROI
-        # Detection. When Run/Force, the Planar and Volumetric checkboxes
-        # become editable; their sub-params only render when the parent
-        # checkbox is on. build_rastermap_kwargs() composes the unified
-        # lsp dict from this state at run time.
-        # When rastermap isn't installed, force Skip and clear the
-        # sub-modes so the stage can't run; the title goes red and the
-        # Skip/Run/Force radios + Planar/Volumetric checkboxes grey out.
+        # without rastermap installed the stage is forced to Skip and its sub-modes
+        # cleared, so it cannot run
         _rm_available = _check_rastermap_available()
         if not _rm_available:
             self.s2p_extras.rastermap_mode = 0
@@ -2681,16 +2610,8 @@ def _draw_section_suite2p_content(self):
 
         imgui.end_child()  # close Suite2p Main box
 
-    # --- Registration ---
-    # body only — Skip/Run/Force is rendered inline on the column title by
-    # the popup loop (drives self.s2p.do_registration 0/1/2; force position
-    # → force_reg=True at run time).
-    #
-    # Field ordering follows suite2p.parameters.SETTINGS["registration"]:
-    # align_by_chan2, nimg_init, maxregshift, do_bidiphase, bidiphase,
-    # batch_size, nonrigid (tree), block_size (tree), smooth_sigma_*,
-    # spatial_taper, th_badframes, norm_frames, snr_thresh (tree),
-    # subpixel, two_step_registration, reg_tif, reg_tif_chan2.
+    # body only: the popup loop draws Skip/Run/Force inline on the column title.
+    # field order follows suite2p.parameters.SETTINGS["registration"].
     def draw_registration_settings():
         # Output binaries — both upstream suite2p options:
         #   keep_movie_raw (db)  → keep data_raw.bin  (unregistered movie)
@@ -2906,14 +2827,8 @@ def _draw_section_suite2p_content(self):
         # data is to raise `smooth_sigma` (3-5) and `spatial_taper` (larger)
         # directly — both already exposed in the main Registration body.
 
-    # --- ROI Detection ---
-    # body only — Skip/Run/Force is rendered inline on the column title by
-    # the popup loop (drives self.s2p.do_detection 0/1/2; force position
-    # → force_detect=True at run time).
-    #
-    # Layout: shared settings on top (apply to every algorithm), then the
-    # algorithm selector, then the matching algorithm-specific block —
-    # only the selected branch (cellpose / sparsery / sourcery) renders.
+    # body only: the popup loop draws Skip/Run/Force inline on the column title.
+    # shared settings, then the algorithm selector, then the selected branch.
     def draw_roi_detection_settings():
         # shared settings — ordered to match upstream detection top-level
         # source order (denoise/block_size, nbins, bin_size, highpass_time,
@@ -3632,13 +3547,6 @@ def _draw_section_suite2p_content(self):
 
     imgui.spacing()
 
-    # === MODIFIED PARAMETERS PREVIEW ===
-    # Shows fields whose current value differs from the mbo default (the
-    # Suite2pSettings/Suite2pDB dataclass default the GUI starts from).
-    # Driven by collect_modified_params() which iterates the _MBO_TO_S2P /
-    # _MBO_DB_TO_S2P maps and uses _is_default() for the diff check. Useful
-    # right after a settings.npy hydration so the user can see at a glance
-    # what's changed.
     _mods = collect_modified_params(self.s2p, self.s2p_db, self.s2p_extras)
     _n_mods = len(_mods)
     imgui.text(f"Modified parameters ({_n_mods})")
@@ -3771,42 +3679,11 @@ def _draw_section_suite2p_content(self):
             except Exception as e:
                 self.logger.log("error", f"Installation failed: {e}")
 
-    # === Unified Pipeline Settings popup ===
-    # two-row layout. row 1 = Main / Registration / ROI Detection (always
-    # expanded). row 2 = Classification / Extraction / Deconvolution
-    # (collapsing-header per column, collapsed by default — these stages
-    # are wired up by the run-time pipeline and rarely need adjusting).
-    # each row's columns flex-share that row's full width every frame so
-    # resizing the popup re-flows them. the popup's min-size constraint
-    # is clamped to the viewport so it can never demand a width larger
-    # than the screen (otherwise imgui flickers between min-size and
-    # screen-clamp).
-    # section schema: (title, draw_fn, mode_kind, mode_attr)
-    #   mode_kind:
-    #     None = no inline control (Main has no skip/run concept)
-    #     "tri"  = Skip/Run/Force, drives an int 0/1/2 on self.s2p
-    #     "bool" = Skip/Run only, drives a bool on self.s2p (no Force —
-    #              suite2p / lbm don't expose force_extract or force_deconv)
-    #   mode_attr: attribute name on self.s2p
-    # mode_kind notes:
-    # - Main: no skip — global params, not a stage gate.
-    # - Registration / ROI Detection: tri-state via int 0/1/2 (force_reg /
-    #   force_detect derived at run time).
-    # - Classification: NO skip — runs alongside detection upstream;
-    #   do_detection gates the whole detect→classify block.
-    # - Extraction: NO skip — upstream pipeline_s2p calls
-    #   extraction_wrapper unconditionally. neuropil_extract is a knob
-    #   inside the body (not a stage gate); setting it False also crashes
-    #   upstream's extract_traces (their bug, not ours).
-    # - Deconvolution: bool — do_deconvolution gates the OASIS step
-    #   cleanly (pipeline_s2p falls through to spks=zeros when False).
-    # Registration column stacks two self-titled bordered boxes:
-    #   Box 1: Suite2p Main Settings (torch device, tau, fs)
-    #   Box 2: Registration (with inline Skip/Run/Force radios on the
-    #          title row, mirroring the popup-level title controls used
-    #          by non-self-titled columns)
-    # The Registration body is wrapped in begin_disabled when do_registration
-    # is Skip (0), matching the disable-on-skip behavior of the popup loop.
+    # (title, draw_fn, mode_kind, mode_attr), mode_kind None, "tri" (an int
+    # 0/1/2) or "bool". Classification and Extraction have no gate of their own:
+    # do_detection gates detect->classify, and upstream always extracts.
+    # The popup's min size is clamped to the viewport, else imgui flickers
+    # between min-size and screen-clamp.
     def draw_main_above_registration():
         draw_main_settings()
 
@@ -4026,14 +3903,8 @@ def _draw_section_suite2p_content(self):
                             child_size,
                             child_flags,
                         ):
-                            # row 2 columns render as collapsing headers
-                            # (collapsed by default each open). row 1
-                            # uses the original title-text path so it's
-                            # always visible.
-                            # columns whose draw_fn renders its own header
-                            # (e.g. one that splits into multiple internally-
-                            # labeled boxes) skip the popup-level title +
-                            # separator so the label doesn't appear twice.
+                            # a column whose draw_fn renders its own header skips the
+                            # popup-level title, else the label appears twice
                             self_titled = title in _SELF_TITLED_COLUMNS
                             if is_row2:
                                 imgui.set_next_item_open(False, imgui.Cond_.appearing)
@@ -4646,14 +4517,8 @@ def run_process(self):
                             "fix_phase": fix_phase,
                             "use_fft": use_fft,
                             "frame_average": frame_average,
-                            # User-set metadata (e.g. dz from the metadata
-                            # editor) lives on parent._custom_metadata, NOT
-                            # on arr.metadata. Snapshot it here so the
-                            # worker can merge it before computing voxel
-                            # size — otherwise the user's z_step is
-                            # silently dropped and the source-file dz
-                            # (often None for LBM, 1.0 default otherwise)
-                            # ends up in ops.npy.
+                            # user-set metadata lives on parent._custom_metadata, not on
+                            # arr.metadata; snapshot it or the user's dz is dropped
                             "custom_metadata": dict(
                                 getattr(self, "_custom_metadata", {})
                             ),
@@ -4796,13 +4661,8 @@ def _run_plane_worker_thread(config):
     # timepoint aliases. Add only the per-plane bookkeeping on top.
     md = out_meta.to_dict()
 
-    # When the source is itself a pipeline output (re-run of a copied
-    # suite2p dir), its metadata carries the ORIGINAL machine's paths.
-    # Repair them against the actually-opened tree — or drop them — so
-    # the new run's db.npy/ops.npy never re-embed dead provenance. The
-    # fresh ops_path/save_path/raw_file assignments below still win.
-    # Skipped when no fpath was loaded (anchoring at Path('') == cwd
-    # would embed '.'-relative provenance).
+    # a copied suite2p dir carries the original machine's paths; repair or drop
+    # them so this run never re-embeds dead provenance
     md = _rebase_worker_provenance(md, config["fpath"], config["logger"])
 
     # Strip fs/dz keys if they're None — otherwise `defaults.update(md)`

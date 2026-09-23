@@ -340,19 +340,8 @@ class PreviewDataWidget(EdgeWindow):
 
     def _init_suite2p(self):
         """Initialize Suite2p settings (lazy)."""
-        # NOTE: removed the eager `start_preload()` call here. The preload
-        # spawned a daemon thread that, despite a 1s sleep, ended up
-        # contending for the GIL during fastplotlib's first-paint, so the
-        # widget felt frozen for ~3.5s after the window appeared (suite2p
-        # imports torch/numba/cellpose/scipy — ~3500 modules total).
-        #
-        # Pipeline registration is now fully lazy: `_register_pipelines()`
-        # is called the first time the user opens the Pipeline Settings
-        # popup, and it falls back to a synchronous import on that one
-        # click. Trade-off: ~3.5s pause when the user FIRST opens the
-        # popup, vs. instant widget startup. If you want the preload back
-        # on a different trigger (e.g. when the user navigates to the Run
-        # tab), call `start_preload()` from there.
+        # pipelines register lazily: preloading suite2p here contends for the GIL
+        # during fastplotlib's first paint and freezes the window for seconds
 
         # defer dataclass creation until actually needed. all three are
         # lazy-initialized by matching properties below.

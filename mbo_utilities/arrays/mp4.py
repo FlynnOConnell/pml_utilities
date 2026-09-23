@@ -179,47 +179,18 @@ def _draw_time_overlay(frame_rgb: np.ndarray, t_seconds: float) -> None:
     )
 
 
-# Encoder tiers, ordered fast/small -> slow/exact. Three things set fidelity,
-# and only one of them is the crf:
-#
-#   rate     -crf N, or -qp 0 which enables libx264's true lossless mode.
-#   preset   x264's speed/efficiency dial. This is the "Quick -> Slow" axis;
-#            it does not change fidelity at a fixed rate, only encode time and
-#            file size, so it has to move together with the rate to make the
-#            tier ordering mean what the names promise.
-#   pix_fmt  the yuvj* variants are FULL RANGE (luma 0-255). The plain yuv*
-#            variants make ffmpeg squeeze the incoming 0-255 RGB into limited
-#            "TV" range (16-235) and stretch it back on decode. That round trip
-#            alone costs ~2 dB PSNR at every crf and is pure loss for
-#            scientific data -- it was the dominant error source here, not the
-#            crf. Passed to imageio as `pixelformat=`, never as a bare
-#            -pix_fmt in output_params (that collides with imageio's own).
-#
-# Chroma layout is the other axis. For grayscale frames R=G=B, so chroma is
-# constant and 4:2:0 subsampling is free. For colormapped frames (cmap=...)
-# 4:2:0 halves the chroma resolution and costs real accuracy, which is why the
-# lossless tier is 4:4:4.
-#
-# Measured round-trip error vs. the exact uint8 frames handed to the encoder
-# (512x512, 60 frames, sharp structure + scalebar + time overlay):
+# Encoder tiers, fast/small -> slow/exact. The pix_fmt matters more than the
+# crf: the yuvj* variants are full range, the plain yuv* ones squeeze 0-255 RGB
+# into 16-235 and back, which costs ~2 dB PSNR at every crf. Measured
+# round-trip error on 512x512 x 60 frames of sharp structure:
 #
 #   preview            PSNR 36.2 dB   max err 74/255
 #   high               PSNR 38.5 dB   max err 64/255
 #   visually lossless  PSNR 54.7 dB   max err  8/255
 #   lossless           bit-exact      max err  0
 #
-# "lossless" is exact for grayscale frames, where R=G=B survives the RGB->YUV
-# matrix untouched. With a colormap it lands within 1/255 per channel: that
-# residue is the 8-bit RGB<->YUV matrix rounding, and it is the floor for
-# H.264 here. gbrp (planar RGB, no matrix at all) would remove it, but this
-# libx264 build rejects it and silently falls back to *limited-range* yuv444p,
-# which is worse than what we ask for -- so yuvj444p is the best available.
-#
-# Player support: the first three are standard High profile and play
-# everywhere (Chrome, Windows Photos, PowerPoint, QuickTime). "lossless" is
-# High 4:4:4 Predictive, which only ffmpeg-based players decode -- see the
-# warning emitted by `_build_video_output_params`. Use "visually lossless"
-# when the file has to open in a browser or a slide deck.
+# "lossless" is High 4:4:4 Predictive, which only ffmpeg-based players decode;
+# "visually lossless" is the one that opens in a browser or a slide deck.
 _X264_TIERS = {
     "preview": {"rate": ["-crf", "23"], "preset": "veryfast", "pix_fmt": "yuvj420p"},
     "high": {"rate": ["-crf", "17"], "preset": "medium", "pix_fmt": "yuvj420p"},
@@ -290,14 +261,8 @@ def _build_video_output_params(
     return ["-q:v", str(_MPEG4_QSCALE_TABLE[preset])], None
 
 
-# Small sensor FOVs (spine imaging, line scans) come off the scope only a few
-# hundred pixels wide. A 128x50 movie is pixelated because it holds 6400
-# pixels, not because the codec failed it, and the scalebar label lands at
-# ~8px tall where the glyph and its outline smear into one blob. Replicating
-# every source pixel into an NxN block fixes both: nearest-neighbour at an
-# integer factor is exact (no interpolation, no invented detail, so
-# quality="lossless" stays honest) and it gives the overlays a real pixel
-# budget to draw into.
+# integer nearest-neighbour upscale: exact, and it gives the overlays a pixel
+# budget to draw into on a small FOV
 _UPSCALE_TARGET_SHORT_SIDE = 480
 _UPSCALE_MAX_LONG_SIDE = 2048
 

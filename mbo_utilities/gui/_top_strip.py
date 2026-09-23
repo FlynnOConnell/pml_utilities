@@ -115,10 +115,6 @@ class TopStrip(ImguiWindow):
             self, location="top", size=self._want_size(), title=None
         )
 
-    # ------------------------------------------------------------------
-    # registration
-    # ------------------------------------------------------------------
-
     def register(self, panel: TopPanel) -> None:
         """Add or replace the panel with this key."""
         self.panels = sorted(
@@ -156,10 +152,6 @@ class TopStrip(ImguiWindow):
         self._closed = True
         if self.figure.imgui_windows.get("top") is self:
             self.figure.remove_imgui_window("top")
-
-    # ------------------------------------------------------------------
-    # selection
-    # ------------------------------------------------------------------
 
     def focus(self, key: str) -> None:
         """Select ``key`` on the next frame."""
@@ -252,10 +244,6 @@ class TopStrip(ImguiWindow):
         want = self._want_size()
         if self.size != want:
             self.size = want
-
-    # ------------------------------------------------------------------
-    # drawing
-    # ------------------------------------------------------------------
 
     def update(self) -> None:
         # the selected panel sets the height; resize before drawing so the

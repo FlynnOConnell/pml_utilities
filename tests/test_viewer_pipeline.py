@@ -21,10 +21,6 @@ from mbo_utilities.gui.widgets.window_functions import (
     WindowFunctionsWidget,
 )
 
-# ============================================================
-# fakes
-# ============================================================
-
 
 class FakeArr:
     """Minimal lazy array — backed by an ndarray, with shape/ndim/dims."""
@@ -52,10 +48,6 @@ class FakeParent:
     def __init__(self, arr):
         self.image_widget = type("IW", (), {"data": [arr]})()
 
-
-# ============================================================
-# _SqueezeSingletonDims: shape correctness across all patterns
-# ============================================================
 
 # truth table for the 8 combinations of T/C/Z ∈ {1, >1}
 SINGLETON_PATTERNS = [
@@ -128,10 +120,6 @@ class TestSqueezeWrapperNumpyLeak:
             w.__array_interface__
 
 
-# ============================================================
-# Feature gating: window/spatial widget is_supported
-# ============================================================
-
 GATING_CASES = [
     # (shape, dims, expect_window, expect_spatial, label)
     ((64, 48), ("Y", "X"), False, False, "2D image"),
@@ -172,10 +160,6 @@ class TestFeatureGating:
             f"{label}: SpatialFunctions gating wrong"
         )
 
-
-# ============================================================
-# Reload-via-file-dialog parity with initial launch
-# ============================================================
 
 
 class TestReloadDataConsistency:
@@ -312,10 +296,6 @@ class TestPerDataStateReset:
             "PreviewDataWidget._init_state must call _reset_per_data_state"
         )
 
-
-# ============================================================
-# Custom metadata propagation through suite2p paths
-# ============================================================
 
 
 class TestCustomMetadataPropagation:
@@ -469,10 +449,6 @@ class TestCustomMetadataPropagation:
         )
 
 
-# ============================================================
-# Output metadata frame-count consistency
-# ============================================================
-
 # All seven aliases for "number of timepoints in the output". Whatever
 # logic computes this value must propagate it to every key — downstream
 # readers (and humans inspecting ops.npy) read different ones.
@@ -591,10 +567,6 @@ class TestOutputTimepointConsistency:
                 f"{bin_files[0].name}: bin has {actual_frames} frames, ops says {values}"
             )
 
-
-# ============================================================
-# Reactive fs/dz scaling for the suite2p Run path
-# ============================================================
 
 
 class TestReactiveFsZScaling:

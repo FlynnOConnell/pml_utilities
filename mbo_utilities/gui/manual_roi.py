@@ -4527,13 +4527,8 @@ class ManualRoiWidget:
         if not implot.begin_plot("##roi_trace_plot", imgui.ImVec2(-1, height), flags):
             return
         try:
-            # no auto-fit flags: the axes stay interactive between refits.
-            # each line takes its ROI's mask color via a single-color
-            # colormap; neuropil is always the same blue
-            # implot has no modifier for locking an axis while scrolling, and
-            # its OverrideMod (ctrl) swallows input entirely, so hold shift to
-            # zoom x only / alt to zoom y only by dropping input on the other
-            # axis for this frame
+            # implot has no axis lock and its OverrideMod swallows input, so shift
+            # and alt drop input on the other axis for this frame
             io = imgui.get_io()
             none = implot.AxisFlags_.none
             locked = implot.AxisFlags_.lock

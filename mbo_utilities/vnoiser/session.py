@@ -107,10 +107,6 @@ class CurationSession:
         )
         self.recording_id: str = ""
 
-    # ------------------------------------------------------------------
-    # data source
-    # ------------------------------------------------------------------
-
     @property
     def mode(self) -> str:
         return self.dash.mode
@@ -264,10 +260,6 @@ class CurationSession:
     def cache_status(self) -> str:
         return self.dash.pipeline_cache_status
 
-    # ------------------------------------------------------------------
-    # traces
-    # ------------------------------------------------------------------
-
     @property
     def fs(self) -> float:
         return float(self.dash.recording.fs_hz) if self.loaded else 0.0
@@ -290,10 +282,6 @@ class CurationSession:
     @property
     def second_pass(self) -> np.ndarray:
         return self.dash.second_pass
-
-    # ------------------------------------------------------------------
-    # detection settings
-    # ------------------------------------------------------------------
 
     @property
     def threshold(self) -> float:
@@ -446,10 +434,6 @@ class CurationSession:
             return
         self.dash._auto_template_threshold_changed({"new": value})
 
-    # ------------------------------------------------------------------
-    # candidates and labels
-    # ------------------------------------------------------------------
-
     @property
     def candidates(self):
         return self.dash.candidates
@@ -596,10 +580,6 @@ class CurationSession:
             "seed": bool(i in set(self.dash.seed_indices.tolist())),
         }
 
-    # ------------------------------------------------------------------
-    # template and features
-    # ------------------------------------------------------------------
-
     @property
     def template(self) -> np.ndarray | None:
         return self.dash.template
@@ -643,10 +623,6 @@ class CurationSession:
         """Half-width of the focused-candidate view."""
         return 500.0 if self.mode == "slow" else 100.0
 
-
-# ----------------------------------------------------------------------
-# the processed PF folder that belongs to a raw line-scan .mesc
-# ----------------------------------------------------------------------
 
 
 def voltage_run_for_mesc(mesc_path) -> Path | None:

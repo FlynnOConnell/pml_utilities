@@ -32,10 +32,6 @@ def _array(shape=(4, 1, 3, 32, 32)):
     return NumpyArray(data, dims="TCZYX")
 
 
-# ----------------------------------------------------------------------
-# where are we
-# ----------------------------------------------------------------------
-
 
 class TestInNotebook:
     """Only a kernel counts; ``ipython`` in a terminal wants a window."""
@@ -93,10 +89,6 @@ class TestFigureKwargsForHere:
         assert kwargs["size"] == (640, 480)
 
 
-# ----------------------------------------------------------------------
-# DataVis
-# ----------------------------------------------------------------------
-
 
 class TestDataVis:
     def test_build_show_close(self):
@@ -148,10 +140,6 @@ class TestDataVis:
 
         assert mbo.DataVis is DataVis
 
-
-# ----------------------------------------------------------------------
-# run_gui on top
-# ----------------------------------------------------------------------
 
 
 class TestRunGuiWhereItRuns:
@@ -261,10 +249,6 @@ class TestMescInNotebook:
         rg, path = self._mesc(tmp_path, monkeypatch, [{"key": "a"}, {"key": "b"}])
         assert rg._resolve_mesc_unit(path, 1) == ({"unit": 1}, True)
 
-
-# ----------------------------------------------------------------------
-# opening a path without a native dialog
-# ----------------------------------------------------------------------
 
 
 class TestNativeDialogs:

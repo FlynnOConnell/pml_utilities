@@ -299,7 +299,6 @@ def _write_plane(
     dshape = (nframes_target, *dshape[1:])
     metadata["shape"] = dshape
 
-    H0, W0 = data.shape[-2], data.shape[-1]
     fname = filename
     writer = _get_file_writer(fname.suffix, overwrite=overwrite)
 
@@ -939,8 +938,6 @@ def _write_volumetric_tiff(
     if filename.exists():
         filename.unlink()
 
-    # get target shape after selection
-    output_shape = slicing.output_shape
     n_frames = slicing.selections["T"].count if "T" in slicing.selections else 1
     n_planes = slicing.selections["Z"].count if "Z" in slicing.selections else 1
     n_channels = slicing.selections["C"].count if "C" in slicing.selections else 1
@@ -1448,9 +1445,6 @@ def _write_volumetric_zarr(
     if metadata is None:
         metadata = {}
 
-    # get dimension labels from array (canonical form)
-    dims = get_dims(data)
-
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
 
@@ -1554,13 +1548,7 @@ def _write_volumetric_zarr(
     inner_codecs = _build_inner_codecs(compressor, compression_level, shuffle=shuffle)
 
     if sharded:
-        # one shard per (c, z) at all T — the GUI's fixed-(c, z) scrub
-        # opens exactly one shard file per channel-plane and reads chunks
-        # from it sequentially. File count = C * Z * ceil(T / shard_t),
-        # which is C*Z when target_chunk_mb is large enough to hold the
-        # whole T axis (the 2 GB default covers ~1400 frames at 1848x768
-        # uint16). Bump target_chunk_mb to widen the per-(c,z) shard or
-        # shrink it to split T across multiple shards.
+        # one shard per (c, z) at all T, so a fixed-(c, z) scrub opens exactly one file
         target_bytes = target_chunk_mb * 1024 * 1024
         max_shard_t = max(1, target_bytes // max(1, bytes_per_yx))
         shard_t = min(n_frames, max_shard_t)
@@ -1780,14 +1768,7 @@ def _write_volumetric_zarr(
 
             level_data = downsample_block(prev_data, factor, pyramid_method)
 
-            # compute chunk + shard shapes for this level using the SAME
-            # recipe as level 0: one Y×X plane per chunk (T, C, Z pinned to
-            # 1), all T per (c, z) shard. Y and X come from the downsampled
-            # level shape; Z may shrink at deep levels but the chunk still
-            # pins one plane. Without this, lower-resolution levels were
-            # stored as a single huge chunk, forcing a full-volume decompress
-            # to view any frame and breaking T-scrub when a viewer fell back
-            # to a pyramid level.
+            # level 0's chunk recipe, else a pyramid level is one huge chunk and T-scrub breaks
             lvl_shape = level_data.shape
             lvl_Y = lvl_shape[-2]
             lvl_X = lvl_shape[-1]
