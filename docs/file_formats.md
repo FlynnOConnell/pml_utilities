@@ -59,7 +59,7 @@ the 5D array underneath for writers and the viewer.
 | ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
 | **`.zarr`** | `ZarrArray` | `(T, C, Z, Y, X)` | Zarr v3 / OME-Zarr |
-| ↳ `<date>_<tags>.zarr` results | `PfArray` (voltage) / `read_results` | traces, not an image | A pipeline's results file (`mbo_utilities.results`); suite2p and masknmf ones are read with `read_results` |
+| ↳ `<stem>.<stamp>.<pipeline>.zarr` results | `ResultsArray` / `read_results` | traces, not an image | Any pipeline's results file (`mbo_utilities.results`); one reader whichever pipeline wrote it |
 | **`.npy`** | `NumpyArray` | `(T, C, Z, Y, X)` | Memory-mapped numpy |
 | **`np.ndarray`** | `NumpyArray` | `(T, C, Z, Y, X)` | In-memory wrapper |
 | **Directory** | | | |
@@ -313,14 +313,15 @@ arr = mbo.imread("scan.mesc", unit="MUnit_2")  # or by key
 ```
 
 From the CLI, `mbo info scan.mesc` prints the unit table and
-`mbo scan.mesc --unit 2` opens one directly. Without `--unit`, opening a
-`.mesc` always pops a picker listing every unit — which scan to look at is
-never a safe default to guess at.
+`mbo scan.mesc --unit 2` opens one directly. Without `--unit`, the viewer
+opens the first AOD scan (line scan, chessboard or ribbon), or the first unit
+when there is none.
 
-Once the viewer is up, the **MESc Units** panel at the top of the Preview tab
-switches between units in place, re-deriving the sliders each time (a z-stack
-scrolls Z, a ribbon scrolls time and ROI, a reference snapshot scrolls nothing).
-Units stay open behind the panel, so switching back is instant.
+Once the viewer is up, the **MESc** tab (the first tab for a `.mesc`) lists
+every unit; clicking a row switches to it in place, re-deriving the sliders
+each time (a z-stack scrolls Z, a ribbon scrolls time and ROI, a reference
+snapshot scrolls nothing). Units stay open behind the tab, so switching back
+is instant.
 
 #### Layout
 

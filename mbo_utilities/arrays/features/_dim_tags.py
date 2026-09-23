@@ -244,9 +244,10 @@ class OutputFilename:
         returns
         -------
         str
-            filename like "tp00001-10000_zplane01-14.tif"
+            filename like "tp00001-10000_zplane01-14.tif"; ``ext=""`` names a
+            folder ("ch01_zplane02")
         """
-        if not ext.startswith("."):
+        if ext and not ext.startswith("."):
             ext = "." + ext
 
         parts = [tag.to_string() for tag in self.tags]

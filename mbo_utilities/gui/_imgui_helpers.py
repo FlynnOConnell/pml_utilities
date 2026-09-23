@@ -25,9 +25,12 @@ __all__ = [
     "fit_width",
     "fmt_multivalue",
     "fmt_value",
+    "right_aligned_text",
     "selected_button_style",
     "set_tooltip",
+    "settings_row",
     "settings_row_with_popup",
+    "settings_table",
     "style_imgui_opaque",
     "style_seaborn_dark",
     "text_wrapped_cell",
@@ -486,6 +489,48 @@ def set_tooltip(
         imgui.text_unformatted(tooltip)
         imgui.pop_text_wrap_pos()
         imgui.end_tooltip()
+
+
+@contextmanager
+def settings_table(table_id: str, captions):
+    """A two-column settings table: captions in a fixed column exactly as
+    wide as the longest of ``captions``, controls in the stretch column.
+    Yields False when the table is clipped. Start each row with
+    :func:`settings_row`.
+    """
+    caption_w = max(imgui.calc_text_size(c).x for c in captions) + imgui.get_font_size() * 0.8
+    flags = imgui.TableFlags_.sizing_stretch_prop | imgui.TableFlags_.no_pad_outer_x
+    if not imgui.begin_table(table_id, 2, flags):
+        yield False
+        return
+    try:
+        imgui.table_setup_column("caption", imgui.TableColumnFlags_.width_fixed, caption_w)
+        imgui.table_setup_column("control", imgui.TableColumnFlags_.width_stretch)
+        yield True
+    finally:
+        imgui.end_table()
+
+
+def settings_row(caption: str) -> None:
+    """Start a row of a :func:`settings_table`: the dim caption on the frame
+    baseline of its row's widgets, the cursor in the control cell."""
+    imgui.table_next_row()
+    imgui.table_next_column()
+    imgui.align_text_to_frame_padding()
+    imgui.text_disabled(caption)
+    imgui.table_next_column()
+
+
+def right_aligned_text(text: str, color: ImVec4 | None = None) -> None:
+    """``text`` flush with the right edge of the current cell or window,
+    dim unless ``color`` is given."""
+    room = imgui.get_content_region_avail().x - imgui.calc_text_size(text).x
+    if room > 0:
+        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + room)
+    if color is None:
+        imgui.text_disabled(text)
+    else:
+        imgui.text_colored(color, text)
 
 
 @contextmanager

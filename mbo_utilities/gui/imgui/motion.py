@@ -46,6 +46,10 @@ class MotionPlot:
             idx, values = decimate_minmax(shift, points)
             ts = np.asarray(t, dtype=np.float64)[idx.astype(int)]
             self.traces[label] = (np.ascontiguousarray(ts), np.ascontiguousarray(values))
+        # x in the host's units, converted once per unit change, not per frame
+        self._scaled: tuple[float, dict[str, np.ndarray]] = (
+            1.0, {label: t for label, (t, _v) in self.traces.items()}
+        )
         self.duration_s = motion.duration_s if motion else 0.0
         self.y_label = f"{motion.source} shift ({motion.unit})" if motion else ""
         self._fit = True
@@ -86,10 +90,14 @@ class MotionPlot:
             implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, x_max)
             if fit:
                 implot.setup_axis_limits(implot.ImAxis_.x1, 0.0, x_max, implot.Cond_.always)
-            for label, (t, v) in self.traces.items():
+            if self._scaled[0] != x_per_second:
+                self._scaled = (
+                    x_per_second,
+                    {label: t * x_per_second for label, (t, _v) in self.traces.items()},
+                )
+            for label, (_t, v) in self.traces.items():
                 r, g, b = MOTION_COLORS.get(label[0], (0.8, 0.8, 0.8))
-                x = t if x_per_second == 1.0 else t * x_per_second
-                line(label, v, x=x, color=(r, g, b, 0.9), weight=1.0)
+                line(label, v, x=self._scaled[1][label], color=(r, g, b, 0.9), weight=1.0)
             if cursor is None:
                 return None, False
             if cursor_id is None:

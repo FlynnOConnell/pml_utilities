@@ -52,6 +52,11 @@ from mbo_utilities.arrays import ScanImageArray
 from mbo_utilities.gui._availability import HAS_SUITE2P
 from mbo_utilities.gui._imgui_helpers import push_font_safe
 from mbo_utilities.gui.widgets.gui_logger import GuiLogger, GuiLogHandler
+from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_windows
+from mbo_utilities.gui.widgets.style_editor import (
+    apply_saved_style,
+    draw_style_editor_window,
+)
 from mbo_utilities.gui.widgets.progress_bar import start_output_capture
 from mbo_utilities.gui.widgets import get_supported_widgets, draw_all_widgets
 from mbo_utilities import log
@@ -253,9 +258,11 @@ class PreviewDataWidget(EdgeWindow):
         if implot.get_current_context() is None:
             implot.create_context()
 
-        # apply opaque imgui style (idempotent, runs once per process)
+        # apply opaque imgui style (idempotent, runs once per process), then
+        # whatever the style editor last saved, so a user style wins over it
         from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
         style_imgui_opaque()
+        apply_saved_style()
 
         # Setup ImGui fonts
         self._init_fonts()
@@ -683,8 +690,8 @@ class PreviewDataWidget(EdgeWindow):
         """Claim the figure's top edge for the menu row.
 
         The strip spans the canvas's full width, so it is also where the
-        panels that want that width register themselves — Manual ROI's ROI
-        and Traces cards, the Signal Quality plot.
+        panels that want that width register themselves: Manual ROI's trace
+        plot, the Signal Quality plot.
         """
         from mbo_utilities.gui._top_strip import TopStrip
 
@@ -702,7 +709,7 @@ class PreviewDataWidget(EdgeWindow):
             self.top_strip.register(
                 TopPanel(
                     "zstats", "Signal Quality", self.draw_stats_plot,
-                    height=ZSTATS_PANEL_HEIGHT, right_tab="signal_quality", priority=20,
+                    height=ZSTATS_PANEL_HEIGHT, priority=20,
                 )
             )
         elif not want:
@@ -733,8 +740,9 @@ class PreviewDataWidget(EdgeWindow):
     def sync_manual_roi(self, enabled: bool) -> None:
         """Create or tear down the manual-ROI widget to match the toggle.
 
-        Building it attaches an overlay graphic to the subplot and claims the
-        figure's top strip and right-widget tabs, so it is created lazily the
+        Building it attaches an overlay graphic to the subplot, puts its
+        Traces panel on the figure's top strip and fills the right widget's
+        ROIs and Traces tabs, so it is created lazily the
         first time the widget is switched on and dropped again when it is
         switched off.
         """
@@ -1294,6 +1302,8 @@ class PreviewDataWidget(EdgeWindow):
         draw_keybinds_popup(self)
         draw_help_popup(self)
         draw_options_popup(self)
+        draw_imgui_debug_windows(self)
+        draw_style_editor_window(self)
         from mbo_utilities.gui._cloud import draw_cloud_popup
         from mbo_utilities.gui.widgets.biohpc import draw_biohpc_popup
 

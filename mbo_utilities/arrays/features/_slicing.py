@@ -54,7 +54,7 @@ SPATIAL_DIMS = {"Y", "X"}
 
 def normalize_dim_key(dim_name: str) -> str:
     """
-    normalize dimension name to canonical single-letter key.
+    normalize dimension name to its single-letter key.
 
     parameters
     ----------
@@ -64,7 +64,7 @@ def normalize_dim_key(dim_name: str) -> str:
     returns
     -------
     str
-        canonical key (T, Z, C, V, R, B, A) or uppercase input
+        the letter (T, Z, C, V, R, B, A) or uppercase input
     """
     if len(dim_name) == 1:
         return dim_name.upper()
@@ -301,7 +301,7 @@ def parse_timepoint_selection(
 class DimSelection:
     """selection state for a single dimension."""
 
-    dim_key: str  # canonical key (T, Z, C, etc.)
+    dim_key: str  # the axis letter (T, Z, C, ...)
     dim_index: int  # position in shape tuple
     dim_size: int  # total size of dimension
     indices: list[int]  # 0-based selected indices
@@ -584,3 +584,31 @@ def read_chunk(
     if not isinstance(z_sel, slice):
         out = out[:, :, z_sel]
     return out
+
+
+def index_window(indices) -> tuple[int, int, int] | None:
+    """``(start, stop, step)`` when 0-based ``indices`` are evenly spaced
+    (``range(start, stop, step)`` reproduces them), else None: a selection
+    with exclusions has no window and is carried as the index list.
+
+    >>> index_window([3, 4, 5, 6])
+    (3, 7, 1)
+    >>> index_window([0, 2, 4])
+    (0, 5, 2)
+    >>> index_window([0, 1, 5]) is None
+    True
+    """
+    if indices is None:
+        return None
+    idx = [int(i) for i in indices]
+    if not idx:
+        return None
+    if len(idx) == 1:
+        return (idx[0], idx[0] + 1, 1)
+    steps = {b - a for a, b in zip(idx, idx[1:])}
+    if len(steps) != 1:
+        return None
+    step = steps.pop()
+    if step < 1:
+        return None
+    return (idx[0], idx[-1] + 1, step)

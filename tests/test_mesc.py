@@ -703,7 +703,7 @@ def single_unit_mesc(tmp_path_factory):
 
 class TestUnitPicker:
     """A `.mesc` always opens straight to its first unit, no prompt, no Qt;
-    the Image tab's MESc Units combo (ImGui) is how the rest get picked."""
+    the MESc tab (ImGui) is how the rest get picked."""
 
     def test_single_unit_file_opens_without_prompting(self, single_unit_mesc):
         from mbo_utilities.gui.run_gui import _resolve_mesc_unit
@@ -781,74 +781,6 @@ class TestViewerFit:
         assert mesc_array_of(np.zeros((3, 3))) is None
 
 
-class TestUnitWidgetSupport:
-    def test_supported_only_for_mesc_backed_viewers(self, mesc_path):
-        from mbo_utilities.gui.widgets.mesc_units import (
-            MescUnitsWidget,
-            display_wrap,
-        )
-
-        class FakeIW:
-            def __init__(self, data):
-                self.data = data
-
-        class FakeParent:
-            def __init__(self, data):
-                self.image_widget = FakeIW(data)
-
-        arr = MescArray(mesc_path, unit=4)
-        assert MescUnitsWidget.is_supported(FakeParent([display_wrap(arr)]))
-        assert not MescUnitsWidget.is_supported(FakeParent([np.zeros((4, 4, 4))]))
-        assert not MescUnitsWidget.is_supported(FakeParent([]))
-        assert not MescUnitsWidget.is_supported(FakeParent(None))
-
-
-def test_unit_switching_stands_down_on_split_roi_views(mesc_path):
-    """`--roi 0` fans ROIs across subplots; swapping would strand all but one."""
-    from mbo_utilities.gui.widgets.mesc_units import MescUnitsWidget, display_wrap
-
-    arr = MescArray(mesc_path, unit=1, roi=0)
-    views = [display_wrap(arr) for _ in range(arr.num_rois)]
-
-    drawn = []
-
-    class FakeIW:
-        data = views
-
-        class figure:  # noqa: N801 - stands in for the fastplotlib figure
-            pass
-
-    class FakeParent:
-        image_widget = FakeIW()
-        logger = None
-
-    widget = MescUnitsWidget(FakeParent())
-    assert widget.is_supported(FakeParent())
-
-    # draw() must bail before touching any combo state for a multi-subplot view
-    import mbo_utilities.gui.widgets.mesc_units as mod
-
-    class _Recorder:
-        def __getattr__(self, name):
-            def _call(*args, **kwargs):
-                drawn.append(name)
-                if name == "combo":
-                    raise AssertionError("combo drawn for a split-ROI view")
-                if name == "get_content_region_avail":
-                    return type("V", (), {"x": 100.0})()
-                return None
-
-            return _call
-
-    original = mod.imgui
-    mod.imgui = _Recorder()
-    try:
-        widget.draw()
-    finally:
-        mod.imgui = original
-    assert "text_disabled" in drawn
-
-
 def test_rtmc_traces_are_read_in_um_and_empty_curves_dropped(mesc_path):
     arr = MescArray(mesc_path, unit="MUnit_1")
     assert sorted(arr.rtmc) == ["X intercycle", "X total", "Y total", "Y total layer 3"]
@@ -860,6 +792,10 @@ def test_rtmc_traces_are_read_in_um_and_empty_curves_dropped(mesc_path):
     assert "RTMC Z correction (total)" in arr.curves
     assert "Z total" not in arr.rtmc
     arr.close()
+    # the listing carries the same verdict without opening the unit
+    units = {u["munit"]: u for u in list_mesc_units(mesc_path)}
+    assert units["MUnit_1"]["rtmc"] == sorted(arr.rtmc) and units["MUnit_1"]["rtmc_armed"] is True
+    assert units["MUnit_2"]["rtmc"] == [] and units["MUnit_2"]["rtmc_armed"] is False
 
 
 def test_units_without_rtmc_report_none(mesc_path):
@@ -972,5 +908,11 @@ def test_linked_units_and_leading_slash_keys(tmp_path):
     assert units["MSession_0/MUnit_0"]["rtmc_unit"] == "MSession_1/MUnit_1"
     assert units["MSession_1/MUnit_1"]["rtmc_unit"] is None
     assert units["MSession_1/MUnit_1"]["background_unit"] is None
+    # a reference unit alone says nothing about whether RTMC moved
+    assert units["MSession_0/MUnit_0"]["rtmc"] == [] and units["MSession_0/MUnit_0"]["rtmc_armed"] is False
+    # the snapshot and stream know which scan they belong to
+    assert units["MSession_1/MUnit_0"]["scans"] == ["MSession_0/MUnit_0"]
+    assert units["MSession_1/MUnit_1"]["rtmc_of"] == ["MSession_0/MUnit_0"]
+    assert units["MSession_0/MUnit_0"]["scans"] == [] and units["MSession_0/MUnit_0"]["rtmc_of"] == []
     for a in (arr, ref, snap):
         a.close()

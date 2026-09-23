@@ -9,7 +9,7 @@ import contextlib
 from imgui_bundle import imgui, hello_imgui
 
 from mbo_utilities.arrays.features._slicing import parse_timepoint_selection
-from mbo_utilities.arrays.features._dim_labels import find_slider_name
+from mbo_utilities.arrays.features._dim_labels import find_slider_name, slider_roles
 
 
 def source_timepoints(widget) -> int:
@@ -99,10 +99,13 @@ def resolve_dim_labels(parent) -> tuple[str, str, str]:
     Returns ``(tp_label, z_label, c_label)``.
     """
     iw = getattr(parent, "image_widget", None)
+    # sliders are the array's T, C, Z axes by position; aliases only for a host without dim names
+    positional = tuple(getattr(iw, "dim_names", None) or ()) if iw is not None else ()
+    roles = {role: name for name, role in slider_roles(positional).items()}
     names = getattr(iw, "_slider_dim_names", None) or () if iw is not None else ()
     out = []
     for canon in ("t", "z", "c"):
-        match = find_slider_name(names, canon)
+        match = roles.get(canon) or find_slider_name(names, canon)
         out.append(match if match and len(match) > 1 else _DEFAULT_DIM_LABELS[canon])
     return tuple(out)
 

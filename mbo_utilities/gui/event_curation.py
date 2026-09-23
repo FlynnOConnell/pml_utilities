@@ -36,7 +36,7 @@ import numpy as np
 from imgui_bundle import imgui, imgui_ctx, implot, portable_file_dialogs as pfd
 
 from mbo_utilities.arrays.mesc import rtmc_motion, unit_rtmc
-from mbo_utilities.arrays.pf import TRACES_FILE, PfArray, pf_dir_of
+from mbo_utilities.results import TRACES_PKL, ResultsArray, results_dir_of
 from mbo_utilities.gui import _theme as theme
 from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.gui._imgui_helpers import set_tooltip
@@ -50,7 +50,7 @@ from mbo_utilities.gui.imgui.motion import MotionPlot
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.preferences import get_last_dir, set_last_dir
-from mbo_utilities.vnoiser import MODES, CurationSession, pf_dir_for_mesc
+from mbo_utilities.vnoiser import MODES, CurationSession, voltage_run_for_mesc
 
 __all__ = [
     "KEYBINDS",
@@ -191,18 +191,18 @@ def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[di
 
 @dataclass
 class Recording:
-    """One curatable recording: a scan / domain trace of a PF folder
-    (``source`` is the folder, ``scan`` and ``domain`` say which) or a raw
-    trace handed over in memory (``source`` is the file it came from)."""
+    """One curatable recording: one ROI trace of one unit of a run
+    (``source`` is the run, ``unit`` and ``roi`` say which) or a raw trace
+    handed over in memory (``source`` is the file it came from)."""
 
     rid: str
     label: str
     source: str
     pre_denoised: bool
-    # why the last load failed (the pipeline never wrote this scan / domain)
+    # why the last load failed (the pipeline never wrote this unit / ROI)
     error: str = ""
-    scan: str = ""
-    domain: str = ""
+    unit: str = ""
+    roi: str = ""
 
 
 class EventCurationWidget:
@@ -226,7 +226,7 @@ class EventCurationWidget:
         self._own_strip = strip is None
         self.strip = TopStrip(self.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
-        self.panel = TopPanel("curation", "Curation", self.draw_panel, PANEL_HEIGHT, None, 12)
+        self.panel = TopPanel("curation", "Curation", self.draw_panel, PANEL_HEIGHT, 12)
         self.strip.register(self.panel)
 
         self.mode = "fast"
@@ -234,8 +234,8 @@ class EventCurationWidget:
         self.catalog: list[Recording] = []
         self.sessions: dict[tuple[str, str], CurationSession] = {}
         self.current = ""
-        # the PF folder the catalog lists, its traces read once for every load
-        self._pf: PfArray | None = None
+        # the run the catalog lists, its traces read once for every load
+        self._run: ResultsArray | None = None
         # traces handed over in memory (line-scan ROIs), by recording id
         self._trace_sources: dict[str, dict] = {}
         # the motion correction of each scan, by (mesc path, unit), read on
@@ -357,52 +357,53 @@ class EventCurationWidget:
         return out
 
     def scan(self, path) -> None:
-        """Catalog every scan / domain trace of a PF folder and start loading
-        them. ``path`` is the folder, its traces file, the experiment folder
-        holding it, or a line scan with one beside it."""
+        """Catalog every ROI trace of a voltage run and start loading them.
+        ``path`` is the run (a results file or a ``PF`` folder of pickles),
+        its traces file, the folder holding it, or a line scan with one
+        beside it."""
         self.sessions.clear()
         self._trace_sources.clear()
         self.catalog = []
         self.current = ""
-        self._pf = None
+        self._run = None
         path = Path(path).expanduser()
         note = ""
         if path.suffix.lower() == ".mesc":
-            pf = pf_dir_for_mesc(path)
-            if pf is None:
+            run = voltage_run_for_mesc(path)
+            if run is None:
                 self.data_path = ""
                 self.status = (
-                    f"{path.name} is a raw line scan with no PF folder beside it. Open it "
-                    "with `mbo curate <file>.mesc` and curate its lines there, or point at "
-                    "a PF folder."
+                    f"{path.name} is a raw line scan with no voltage run beside it. Open it "
+                    "with 'mbo curate <file>.mesc' and curate its lines there, or point at "
+                    "a run."
                 )
                 return
-            note = f" (PF folder of {path.name})"
-            path = pf
-        pf_dir = pf_dir_of(path)
-        if pf_dir is None:
+            note = f" (voltage run of {path.name})"
+            path = run
+        run_dir = results_dir_of(path)
+        if run_dir is None:
             self.data_path = ""
             self.status = (
-                f"no PF folder at {path}: expected the folder the voltage pipeline wrote "
-                f"({TRACES_FILE} or a results zarr), the experiment folder holding it, or a "
-                "line scan with one beside it."
+                f"no voltage run at {path}: expected what the pipeline wrote (a results "
+                f"file or a PF folder of {TRACES_PKL}), the folder holding it, or a line "
+                "scan with one beside it."
             )
             return
-        self.data_path = str(pf_dir)
+        self.data_path = str(run_dir)
         try:
-            self._pf = PfArray(pf_dir, source=False)
+            self._run = ResultsArray(run_dir, source=False)
         except Exception as error:
-            self.logger.warning("cannot open %s", pf_dir, exc_info=True)
-            self.status = f"cannot open {pf_dir}: {error}"
+            self.logger.warning("cannot open %s", run_dir, exc_info=True)
+            self.status = f"cannot open {run_dir}: {error}"
             self.data_path = ""
             return
-        self.catalog = _build_catalog(self._pf)
+        self.catalog = _build_catalog(self._run)
         set_last_dir("vnoiser", self.data_path)
         self.prompt.path = self.data_path
         if not self.catalog:
-            self.status = f"no scan / domain traces in {pf_dir}"
+            self.status = f"no ROI traces in {run_dir}"
             return
-        self.status = f"{len(self.catalog)} recordings ({len(self._pf.scan_ids)} scans) in {pf_dir}{note}"
+        self.status = f"{len(self.catalog)} recordings ({len(self._run.results.units)} units) in {run_dir}{note}"
         first = next((r for r in self.shown), None)
         if first is not None:
             self.current = first.rid
@@ -504,10 +505,12 @@ class EventCurationWidget:
             if path.suffix.lower() != ".mesc" or len(parts) < 3:
                 return None
             return str(path), parts[1]
-        pf = self._pf
-        if not rec.pre_denoised or pf is None or pf.source_mesc is None:
+        run = self._run
+        if not rec.pre_denoised or run is None or run.source_recording is None:
             return None
-        return str(pf.source_mesc), pf.source_units.get(rec.scan, f"MUnit_{rec.scan}")
+        unit = run.results.units.get(rec.unit)
+        key = str((unit.attrs.get("source_unit") if unit is not None else "") or f"MUnit_{rec.unit}")
+        return str(run.source_recording), key
 
     @property
     def motion_plot(self) -> MotionPlot | None:
@@ -525,7 +528,7 @@ class EventCurationWidget:
         self._trace_sources.clear()
         self.catalog = []
         self.current = ""
-        self._pf = None
+        self._run = None
         n = 0
         for unit in raw_linescan_traces(mesc_path, channel):
             for i in range(unit["n_rois"]):
@@ -550,7 +553,7 @@ class EventCurationWidget:
         key = (mode, rec.rid)
         self._busy.add(key)
         source = self._trace_sources.get(rec.rid)
-        pf = self._pf
+        run = self._run
         cutoff = self.slow_cutoff_hz
 
         def work():
@@ -562,7 +565,7 @@ class EventCurationWidget:
                     source["trace"] = source["trace"]()
                 message = session.load_trace(**source)
             else:
-                message = session.load_pf(pf, rec.scan, rec.domain)
+                message = session.load_run(run, rec.unit, rec.roi)
             # the scan's motion correction, read once for all its recordings
             scan_key = self.scan_source(rec)
             self._scan_keys[rec.rid] = scan_key
@@ -1536,17 +1539,17 @@ class EventCurationWidget:
         return LABEL_RGBA.get(label, LABEL_RGBA["unlabeled"])
 
 
-def _build_catalog(pf: PfArray) -> list[Recording]:
-    """Every scan / domain trace a PF folder holds, scans in the pipeline's
-    order and domains in the ROI table's; a scan without a sampling rate is
-    left out."""
+def _build_catalog(run: ResultsArray) -> list[Recording]:
+    """Every denoised ROI trace a run holds, units in the pipeline's order and
+    ROIs in the run's; a unit without a sampling rate is left out."""
+    from mbo_utilities.vnoiser import recording_id, trace_label
+
     return [
         Recording(
-            pf.recording_id(domain, scan), f"scan {scan} / {domain}", str(pf.pf_dir), True,
-            scan=scan, domain=domain,
+            recording_id(unit, roi), trace_label(unit, roi), str(run.path), True,
+            unit=name, roi=roi,
         )
-        for scan in pf.scan_ids
-        if scan in pf.fs_by_scan
-        for domain in pf.domain_names
-        if domain in pf.traces.get(scan, {})
+        for name, unit in run.results.units.items()
+        if unit.fs and "denoised" in unit.traces
+        for roi in unit.roi_names
     ]

@@ -25,6 +25,7 @@ from mbo_utilities.arrays.mesc_geometry import (
     slices_with_rois,
     um_to_pixels,
     viewport_geometry,
+    zstack_contents,
     zstack_depth_info,
 )
 
@@ -232,16 +233,59 @@ def test_snapshot_overlay_is_every_line_drawn_on_it(mesc_path):
 
 
 def test_zstack_overlay_places_lines_and_patches_on_slices(mesc_path):
+    """Each ROI on the slice nearest its depth. The line and the patch scanned
+    20 um below the stack are left out: the stack holds no picture of them, and
+    drawing them on slice 0 would put an outline on tissue they never touched."""
     recs = image_overlays(mesc_path, "MSession_0/MUnit_0")
     assert [(r["munit"], r["roi"]) for r in recs] == [
-        ("MUnit_1", 0), ("MUnit_1", 1), ("MUnit_1", 2), ("MUnit_1", 3), ("MUnit_3", 0), ("MUnit_3", 1),
+        ("MUnit_1", 0), ("MUnit_1", 1), ("MUnit_1", 2), ("MUnit_3", 0),
     ]
-    assert [r["slice"] for r in recs] == [3, 7, 3, 0, 7, 0]
-    assert [r["on_plane"] for r in recs] == [True, True, True, False, True, False]
-    assert np.allclose([r["dz_um"] for r in recs], [0.0, 0.0, 0.1, -10.0, 0.0, -10.0])
-    patch = recs[4]
+    assert [r["slice"] for r in recs] == [3, 7, 3, 7]
+    assert all(r["on_plane"] for r in recs)
+    assert np.allclose([r["dz_um"] for r in recs], [0.0, 0.0, 0.1, 0.0])
+    patch = recs[3]
     assert patch["kind"] == "patch" and patch["color"] is None
     assert np.allclose(patch["pixels"], [[20, 20], [60, 20], [60, 60], [20, 60], [20, 20]])
+
+
+def test_list_mesc_units_reports_outlines_and_links(mesc_path):
+    from mbo_utilities.arrays.mesc import list_mesc_units
+
+    units = {u["munit"]: u for u in list_mesc_units(mesc_path)}
+    assert (units["MUnit_1"]["outline_kind"], units["MUnit_1"]["n_outlines"]) == ("line", 4)
+    assert (units["MUnit_3"]["outline_kind"], units["MUnit_3"]["n_outlines"]) == ("patch", 2)
+    assert (units["MUnit_0"]["outline_kind"], units["MUnit_0"]["n_outlines"]) == (None, 0)
+    assert units["MUnit_1"]["background_unit"] == "MSession_0/MUnit_4"
+    assert units["MUnit_4"]["scans"] == ["MSession_0/MUnit_1"]
+    assert units["MUnit_0"]["scans"] == [] and units["MUnit_1"]["scans"] == []
+    assert all(u["rtmc_of"] == [] for u in units.values())
+
+
+def test_zstack_contents_lists_the_scans_inside_each_stack(mesc_path):
+    assert zstack_contents(mesc_path) == {
+        "MSession_0/MUnit_0": ["MSession_0/MUnit_1", "MSession_0/MUnit_3"]
+    }
+
+
+def test_a_scan_recorded_outside_every_stack_is_in_none_of_them(mesc_path, tmp_path):
+    """A scan whose ROIs were all recorded above or below the stack is not
+    listed as inside it, however well their x and y line up: the file's one
+    chessboard box sits 720 um under the stack on the 2026-09-14 rig, and
+    drawing it on an edge slice put it on unrelated tissue."""
+    import shutil
+
+    path = tmp_path / "far.mesc"
+    shutil.copy(mesc_path, path)
+    with h5py.File(path, "a") as f:
+        unit = f["MSession_0/MUnit_3"]
+        maps = json.loads(unit.attrs["CoordinateMapJSON"])
+        for patch in maps["maps"][0]["contours"]:
+            patch[2] = [-770.0] * len(patch[2])
+        unit.attrs["CoordinateMapJSON"] = json.dumps(maps)
+    assert zstack_contents(path) == {"MSession_0/MUnit_0": ["MSession_0/MUnit_1"]}
+    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_0")} == {"MUnit_1"}
+    # it is still drawn on the picture it was drawn on, whatever its depth
+    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_4")} == {"MUnit_1"}
 
 
 def test_overlay_skips_a_unit_whose_outlines_do_not_pair_with_its_rois(mesc_path):
@@ -253,3 +297,21 @@ def test_overlay_skips_a_unit_whose_outlines_do_not_pair_with_its_rois(mesc_path
             u["nrois"] = 3
     recs = image_overlays(mesc_path, "MSession_0/MUnit_0", units)
     assert {r["munit"] for r in recs} == {"MUnit_3"}
+
+
+def test_a_reference_units_placeholder_viewport_is_no_position(tmp_path):
+    """MEScan stamps an RTMC reference unit with a 1 um square at the origin;
+    that is not where anything was scanned, so it has no viewport."""
+    path = tmp_path / "ref.mesc"
+    with h5py.File(path, "w") as f:
+        u = f.create_group("MSession_1").create_group("MUnit_0")
+        u.attrs.update(
+            {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 1.0,
+             "MeasurementDatePosix": 0, "ImageRoleDebugString": "motionCorrection"}
+        )
+        u.attrs["ReferenceViewportJSON"] = json.dumps(
+            {"viewports": [{"geomTransTransl": [0, 0, 0], "width": 1, "height": 1}]}
+        )
+        u.create_dataset("Channel_0", data=np.zeros((3, 20, 20), np.uint16))
+    assert viewport_geometry(path, "MSession_1/MUnit_0") is None
+    assert image_overlays(path, "MSession_1/MUnit_0") == []

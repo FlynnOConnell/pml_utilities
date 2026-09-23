@@ -27,6 +27,8 @@ from time import perf_counter
 from typing import Callable, Sequence
 
 import numpy as np
+
+from mbo_utilities.arrays.features._dim_labels import default_dim_letters
 from imgui_bundle import imgui, icons_fontawesome_6 as fa
 
 from fastplotlib.utils import calculate_figure_shape
@@ -50,17 +52,7 @@ def sliders_height(n_sliders: int) -> int:
 # preview_data/_update_window_funcs and seed_fps callers pass)
 _SLIDER_LETTERS = ("t", "z", "c")
 
-# canonical per-rank axis letters for UNNAMED dims. mbo data is canonical
-# (T, C, Z, Y, X) at 5D and (T, Z, Y, X) at 4D, so the letters must follow
-# the rank — naming 5D axes with the vendored positional order t/z/c would
-# put the 'z' slider on the C axis (real bug on unsqueezed MescArrays).
-_CANONICAL_LETTERS = {1: ("t",), 2: ("t", "z"), 3: ("t", "c", "z")}
-
-
-def _default_dim_letters(n: int) -> tuple[str, ...]:
-    """canonical letters for ``n`` unnamed slider axes (+ dimN beyond 3)"""
-    base = _CANONICAL_LETTERS.get(min(n, 3), ())
-    return tuple(base) + tuple(f"dim{j}" for j in range(3, n))
+_default_dim_letters = default_dim_letters
 
 # reserved spatial dim names — reserved so they can never collide with a
 # user-supplied slider label

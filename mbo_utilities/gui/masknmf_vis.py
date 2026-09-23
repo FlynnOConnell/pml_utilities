@@ -24,21 +24,30 @@ from mbo_utilities.masknmf.params import MOCO_FILE, PMD_FILE
 logger = log.get("gui.masknmf_vis")
 
 KINDS = ("demixing", "compression", "classification")
+PMD_GROUP = "PMDArray"
+SHIFT_GROUPS = ("PiecewiseRigidRegistrationArray", "RigidRegistrationArray")
 
 
 def run_files(path: Path | str) -> dict[str, Path | None]:
-    """The stage files beside a demixing result, ``None`` when absent.
+    """The files holding each stage of the run, ``None`` when absent.
 
-    ``compression`` and ``motion`` are the PMD and motion-correction exports
-    of the same folder; ``raw`` and ``ops`` are the plane binary and its
+    masknmf's pipelines write every stage into one results file, so
+    ``compression`` and ``motion`` are that same file when it carries the PMD
+    export or a registration array; a run that kept a file per stage finds
+    them beside it instead. ``raw`` and ``ops`` are the plane binary and its
     ``ops.npy`` the MaskNMF pipeline writes there.
     """
     p = Path(path)
     folder = p.parent
+    try:
+        with h5py.File(p, "r") as f:
+            groups = set(f)
+    except OSError:
+        groups = set()
     found = {
         "demixing": p,
-        "compression": folder / PMD_FILE,
-        "motion": folder / MOCO_FILE,
+        "compression": p if PMD_GROUP in groups else folder / PMD_FILE,
+        "motion": p if groups.intersection(SHIFT_GROUPS) else folder / MOCO_FILE,
         "raw": folder / "data_raw.bin",
         "ops": folder / "ops.npy",
     }
@@ -135,7 +144,10 @@ class MasknmfViewers:
             vis = ClassificationVis.from_masknmf([str(self.path)])
         else:
             if self.files["compression"] is None:
-                raise FileNotFoundError(f"no {PMD_FILE} beside {self.path.name}")
+                raise FileNotFoundError(
+                    f"no PMD export: {self.path.name} holds no {PMD_GROUP} group and there is "
+                    f"no {PMD_FILE} beside it"
+                )
             raw = self._raw_movie(required=True)
             pmd = masknmf.PMDArray.from_hdf5(str(self.files["compression"]))
             moco = raw
@@ -143,7 +155,7 @@ class MasknmfViewers:
                 import torch
 
                 with h5py.File(self.files["motion"], "r") as f:
-                    names = [n for n in ("PiecewiseRigidRegistrationArray", "RigidRegistrationArray") if n in f]
+                    names = [n for n in SHIFT_GROUPS if n in f]
                 if names:
                     moco = getattr(masknmf, names[0]).from_hdf5(str(self.files["motion"]), input_movie=raw)
                     moco.output_device = torch.device(self.device)

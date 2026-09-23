@@ -62,12 +62,9 @@ __all__ = [
     "neighbour_slices",
     "um_to_pixels",
     "image_overlays",
+    "zstack_contents",
+    "line_positions",
 ]
-
-
-# ---------------------------------------------------------------------------
-# raw attr readers
-# ---------------------------------------------------------------------------
 
 
 def _outlines_of(unit) -> list[np.ndarray] | None:
@@ -93,11 +90,13 @@ def _viewport_of(unit) -> dict | None:
     if not viewports:
         return None
     vp = viewports[0]
-    return {
-        "transl": tuple(float(v) for v in vp["geomTransTransl"]),
-        "width": float(vp["width"]),
-        "height": float(vp["height"]),
-    }
+    transl = tuple(float(v) for v in vp["geomTransTransl"])
+    width, height = float(vp["width"]), float(vp["height"])
+    # MEScan stamps an RTMC reference unit with a 1 um square at the origin:
+    # a placeholder, not where the reference region was scanned
+    if transl == (0.0, 0.0, 0.0) and width == 1.0 and height == 1.0:
+        return None
+    return {"transl": transl, "width": width, "height": height}
 
 
 def roi_outlines_um(mesc_path, unit_key: str) -> list[np.ndarray] | None:
@@ -121,7 +120,8 @@ linescan_endpoints_um = roi_outlines_um
 def viewport_geometry(mesc_path, unit_key: str) -> dict | None:
     """``{"transl": (x, y, z), "width": um, "height": um}`` for a unit's FOV.
 
-    ``None`` if this unit has no ``ReferenceViewportJSON``.
+    ``None`` if this unit has no ``ReferenceViewportJSON``, or only the
+    1 um placeholder MEScan writes on an RTMC reference unit.
     """
     with h5py.File(mesc_path, "r") as f:
         unit = f.get(unit_key)
@@ -148,11 +148,6 @@ def zstack_depth_info(mesc_path, unit_key: str) -> dict | None:
             "max_z": float(unit.attrs["MaxZ"]),
             "zdim": int(unit.attrs["ZDim"]),
         }
-
-
-# ---------------------------------------------------------------------------
-# depth placement
-# ---------------------------------------------------------------------------
 
 
 def _z_step(depth: dict) -> float:
@@ -260,11 +255,6 @@ def neighbour_slices(current: int, occupied) -> tuple[int | None, int | None]:
     return (below[-1] if below else None, above[0] if above else None)
 
 
-# ---------------------------------------------------------------------------
-# XY placement
-# ---------------------------------------------------------------------------
-
-
 def um_to_pixels(
     points_xy_um: np.ndarray,
     viewport: dict,
@@ -308,8 +298,11 @@ def image_overlays(
     2). A snapshot carries the ROIs of every multi-ROI unit whose
     ``BackgroundImagePath`` names it, which is what the MESc GUI draws on it:
     all of them, whatever their depth. A Z-stack carries the ROIs of every
-    multi-ROI unit whose outlines fall inside its field, each on the slice
-    nearest its depth (:func:`roi_placements`).
+    multi-ROI unit whose outlines fall inside its field **and its depth
+    range**, each on the slice nearest its depth (:func:`roi_placements`).
+    An ROI scanned above or below the stack is left out: the stack holds no
+    picture of it, and drawing it on an edge slice puts an outline on tissue
+    it was never scanned in.
 
     One dict per ROI, unit order then ROI order::
 
@@ -323,8 +316,8 @@ def image_overlays(
         dz_um      snapshot: offset from its plane; stack: from the slice it
                    is drawn on
         slice      0-based Z-stack slice, None on a snapshot
-        on_plane   snapshot: ``|dz_um| <= plane_tol_um``; stack: scanned
-                   inside the depth range
+        on_plane   snapshot: ``|dz_um| <= plane_tol_um``; stack: always True,
+                   an ROI outside the depth range having been left out
 
     A unit whose outline count differs from its ROI count is left out:
     pairing them by order would be a guess. ``units`` is
@@ -380,7 +373,9 @@ def image_overlays(
             for i, seg in enumerate(outlines):
                 x, y = float(seg[0].mean()), float(seg[1].mean())
                 if depth is not None and not (
-                    tx <= x <= tx + vp["width"] and ty <= y <= ty + vp["height"]
+                    tx <= x <= tx + vp["width"]
+                    and ty <= y <= ty + vp["height"]
+                    and placements[i]["in_range"]
                 ):
                     continue
                 kind = "patch" if seg.shape[1] == 4 else "line"
@@ -391,7 +386,7 @@ def image_overlays(
                 if placements is None:
                     dz, k, on = z_um - tz, None, abs(z_um - tz) <= plane_tol_um
                 else:
-                    dz, k, on = placements[i]["dz_um"], placements[i]["slice"], placements[i]["in_range"]
+                    dz, k, on = placements[i]["dz_um"], placements[i]["slice"], True
                 out.append(
                     {
                         "unit": u["key"],
@@ -406,4 +401,90 @@ def image_overlays(
                         "on_plane": bool(on),
                     }
                 )
+    return out
+
+
+def zstack_contents(mesc_path, units: list[dict] | None = None) -> dict[str, list[str]]:
+    """Which scans each Z-stack of the file holds: stack key -> the keys of
+    every multi-ROI unit with at least one outline inside the stack's field
+    and depth range (:func:`image_overlays`), in unit order. A snapshot's
+    scans are its ``scans`` entry from ``list_mesc_units``; a stack has no
+    such link, only geometry."""
+    if units is None:
+        units = list_mesc_units(mesc_path)
+    return {
+        u["key"]: list(dict.fromkeys(r["unit"] for r in image_overlays(mesc_path, u["key"], units)))
+        for u in units
+        if u["kind"] == "zstack"
+    }
+
+
+def line_positions(mesc_path, unit_key: str, sample_counts: list[int] | None = None) -> list[dict] | None:
+    """Where each of a multi-ROI unit's scanned lines or patches sits, one
+    dict per ROI in ROI order, or None when the unit has no geometry.
+
+    Everything is in the file's absolute micron frame (the one every
+    ``ReferenceViewportJSON`` and ``driftEndPoints`` share)::
+
+        index       ROI index (the unit's ROI / Z axis position)
+        start_um    ``[x, y, z]`` of the first point
+        end_um      ``[x, y, z]`` of the last point (a patch: its second corner)
+        z_um        mean depth of the ROI
+        length_um   XY length first -> last point
+        sample_um   microns per pixel along the line, from ``sample_counts``
+                    (``mesc_roi_extents[i]["width"]``); None without them
+        dz_um       depth against the snapshot the lines were drawn on (the
+                    unit's ``BackgroundImagePath``); None without one
+        stack       the first Z-stack whose field and depth range hold the
+                    line (:func:`image_overlays`); ``slice`` its 0-based
+                    slice nearest the line, ``slice_dz_um`` the line's offset
+                    from it, ``in_stack`` True; all None when no stack was
+                    scanned around the line
+
+    The snapshot's plane is where MESc draws every line whatever its depth;
+    ``dz_um`` says how far off that plane each one really is.
+    """
+    with h5py.File(mesc_path, "r") as f:
+        unit = f.get(unit_key)
+        if unit is None:
+            return None
+        outlines = _outlines_of(unit)
+        if not outlines:
+            return None
+        raw = unit.attrs.get("BackgroundImagePath")
+        path = raw.decode() if isinstance(raw, bytes) else raw
+        snapshot = _viewport_of(f[path]) if path and path in f else None
+    out = []
+    for i, seg in enumerate(outlines):
+        seg = np.asarray(seg, dtype=float)
+        end = 1 if seg.shape[1] == 4 else -1
+        length = float(np.hypot(*(seg[:2, end] - seg[:2, 0])))
+        n = None if sample_counts is None or i >= len(sample_counts) else int(sample_counts[i])
+        z_um = float(seg[2].mean())
+        out.append(
+            {
+                "index": i,
+                "start_um": [float(v) for v in seg[:, 0]],
+                "end_um": [float(v) for v in seg[:, end]],
+                "z_um": z_um,
+                "length_um": length,
+                "sample_um": (length / n) if n else None,
+                "dz_um": None if snapshot is None else z_um - snapshot["transl"][2],
+                "stack": None,
+                "slice": None,
+                "slice_dz_um": None,
+                "in_stack": None,
+            }
+        )
+    # the first Z-stack whose field holds each line: its slice and offset
+    units = list_mesc_units(mesc_path)
+    key = str(unit_key).strip("/")
+    for stack in (u["key"] for u in units if u["kind"] == "zstack"):
+        placed = {
+            r["roi"]: r for r in image_overlays(mesc_path, stack, units) if r["unit"].strip("/") == key
+        }
+        for p in out:
+            r = placed.get(p["index"])
+            if r is not None and p["stack"] is None:
+                p.update(stack=stack, slice=r["slice"], slice_dz_um=r["dz_um"], in_stack=r["on_plane"])
     return out
