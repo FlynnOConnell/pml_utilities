@@ -11,10 +11,10 @@ CMAPS = ("viridis", "gray", "magma", "plasma")
 
 
 class MovieApp(App):
-    """The open movie as an image graphic, scrubbed by a shared MoviePlayer.
+    """The open movie as an image graphic, scrubbed by a MoviePlayer.
 
-    The player owns the transport and the host owns the cursor, so the two
-    are reconciled once a frame: whichever of them moved wins, and every
+    The player owns the transport and the host owns the playhead, so the
+    two are reconciled once a frame: whichever of them moved wins, and every
     other app follows the host. The player advances from its own controls,
     so playback runs while they are on screen and stops when they are not.
     """
@@ -39,11 +39,13 @@ class MovieApp(App):
 
     def mount(self, host, subplot) -> None:
         self.player.set_movie(host.data)
-        self.player.jump_to(host.index)
+        self.player.jump_to(host.frame)
         self.graphic = subplot.add_image(
-            host.data[host.index], name="movie", cmap=self.cmap
+            host.data[host.frame, host.channel, host.zplane],
+            name="movie",
+            cmap=self.cmap,
         )
-        self._shown = host.index
+        self._shown = host.frame
 
     def unmount(self, host) -> None:
         self.graphic = None
@@ -51,12 +53,12 @@ class MovieApp(App):
 
     def frame(self, host) -> None:
         if self.player.t != self._shown:
-            host.index = self.player.t
-        elif host.index != self.player.t:
-            self.player.jump_to(host.index)
-        if self.graphic is not None and host.index != self._shown:
-            self.graphic.data = host.data[host.index]
-        self._shown = host.index
+            host.seek_frame(self.player.t, source=self)
+        elif host.frame != self.player.t:
+            self.player.jump_to(host.frame)
+        if self.graphic is not None and host.frame != self._shown:
+            self.graphic.data = host.data[host.frame, host.channel, host.zplane]
+        self._shown = host.frame
 
     def draw_options(self, host) -> None:
         self.player.draw(
@@ -71,6 +73,6 @@ class MovieApp(App):
         if self.graphic is None:
             imgui.text_disabled("not on a slot")
             return
-        frame = host.data[host.index]
+        frame = host.data[host.frame, host.channel, host.zplane]
         imgui.text(f"{frame.shape[1]} x {frame.shape[0]}")
         imgui.text(f"{float(frame.min()):.3g} .. {float(frame.max()):.3g}")

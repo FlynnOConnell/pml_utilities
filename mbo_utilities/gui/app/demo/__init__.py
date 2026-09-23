@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
+from mbo_utilities import imread
 from mbo_utilities.gui.app._app import App
+from mbo_utilities.gui.app._host import AppHost
 from mbo_utilities.gui.app.demo.image_viewer import ImageViewerApp
 from mbo_utilities.gui.app.demo.movie import MovieApp
 from mbo_utilities.gui.app.demo.traces import TracesApp
@@ -12,11 +16,34 @@ from mbo_utilities.gui.app.demo.traces import TracesApp
 # orbit radius as a fraction of the frame, period in frames, blob width in pixels
 BLOBS = ((0.30, 90.0, 9.0), (0.18, 55.0, 6.0), (0.38, 140.0, 12.0))
 
-__all__ = ["ImageViewerApp", "MovieApp", "TracesApp", "demo_apps", "movie_data"]
+__all__ = [
+    "ImageViewerApp",
+    "MovieApp",
+    "TracesApp",
+    "demo_apps",
+    "demo_host",
+    "movie_data",
+]
 
 
 def demo_apps() -> list[App]:
     return [MovieApp(), TracesApp(), ImageViewerApp()]
+
+
+def demo_host(data: Any = None, size: tuple[int, int] = (1400, 900)) -> AppHost:
+    """A plain figure with two slots, the movie and traces mounted on them.
+
+    No viewer: this is the host's slot machinery on its own, what a scene
+    app sees when it is granted a subplot.
+    """
+    import fastplotlib as fpl
+
+    figure = fpl.Figure(shape=(1, 2), names=[["scene", "traces"]], size=size)
+    host = AppHost(figure, data=imread(movie_data() if data is None else data))
+    host.register(*demo_apps())
+    host.mount("movie", 0)
+    host.mount("traces", 1)
+    return host
 
 
 def movie_data(nt: int = 240, ny: int = 128, nx: int = 128) -> np.ndarray:
