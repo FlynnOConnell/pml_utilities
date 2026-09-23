@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from mbo_utilities import log
+from imgui_bundle import imgui, implot
+
+from mbo_utilities import __version__, log
+from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
 from mbo_utilities.gui.app._app import DOCKS, App
 from mbo_utilities.gui.app._dock import Dock
 from mbo_utilities.gui.app._menu import MenuBar
 from mbo_utilities.gui.app._window import AppWindow
+from mbo_utilities.gui.playhead import Playhead, TimeAxis
+from mbo_utilities.gui.widgets.style_editor import apply_saved_style
+from mbo_utilities.preferences import get_mbo_dirs
 
 if TYPE_CHECKING:
     from fastplotlib.layouts import ImguiFigure, Subplot
@@ -30,23 +37,40 @@ class AppHost:
     the slots it will ever have and apps are granted one rather than making
     their own. Swapping a slot is graphics coming out and going in, which is
     supported, and the day subplots become dynamic only ``mount`` changes.
+    ``slots`` leaves out the subplots something else already draws on, such
+    as the viewer's images.
 
     An app reaches the host for three things: what data is open, where its
-    graphics go, and the shared cursor. That list is the contract; an app
-    never puts state of its own on the host.
+    graphics go, and the shared position (the playhead, the channel and the
+    z-plane on screen). That list is the contract; an app never puts state
+    of its own on the host.
     """
 
-    def __init__(self, figure: ImguiFigure, data: Any = None):
+    def __init__(
+        self,
+        figure: ImguiFigure,
+        data: Any = None,
+        slots: list[Subplot] | None = None,
+    ):
+        # the fps overlay's renderer leaves its own context current; use the figure's
+        imgui.set_current_context(figure.imgui_renderer.imgui_context)
+        if implot.get_current_context() is None:
+            implot.create_context()
+        style_imgui_opaque()
+        apply_saved_style()
+        imgui.get_io().set_ini_filename(str(Path(get_mbo_dirs()["imgui"]) / "app.ini"))
+
         self.figure = figure
         self.data = data
         self.apps: dict[str, App] = {}
         self.windows: dict[str, AppWindow] = {}
-        self.slots: list[Subplot] = list(figure)
+        self.slots: list[Subplot] = list(figure) if slots is None else list(slots)
         # subplot index -> the id of the app mounted on it
         self.stage: dict[int, str | None] = {}
-        # the one time on screen, shared by every app; gui.playhead.Playhead
-        # takes this over when the session lands
-        self.index = 0
+        # the position on screen, shared by every app; indices are 0-based
+        self.playhead = Playhead()
+        self.channel = 0
+        self.zplane = 0
         self.docks = {edge: Dock(self, edge) for edge in DOCKS}
         self.menu = MenuBar(self)
         figure.add_animations(self._frame)
@@ -65,6 +89,22 @@ class AppHost:
 
     def ordered(self) -> list[App]:
         return sorted(self.apps.values(), key=lambda app: (app.order, app.title))
+
+    def time_axis(self) -> TimeAxis:
+        """The open data's T axis on the playhead's clock."""
+        return TimeAxis.sampled(None if self.data is None else self.data.fs)
+
+    @property
+    def frame(self) -> int:
+        """The playhead as an index into the open data's T axis."""
+        if self.data is None:
+            return 0
+        frame = round(self.time_axis().units(self.playhead.time))
+        return min(max(frame, 0), self.data.shape[0] - 1)
+
+    def seek_frame(self, frame: int, source=None) -> None:
+        """Move the playhead to T index ``frame``."""
+        self.playhead.seek(self.time_axis().seconds(frame), source=source)
 
     def mount(self, app_id: str | None, slot: int = 0) -> None:
         """Put ``app_id`` on subplot ``slot``, taking off whatever was there."""
@@ -91,21 +131,36 @@ class AppHost:
         logger.debug(f"mounted {app_id} on slot {slot}")
 
     def set_data(self, data: Any) -> None:
-        """Open something else: every mounted app is taken off and put back.
+        """Open something else: every app hears it, then mounted apps are remounted.
 
-        Per-dataset state lives in what ``mount`` builds, so unmounting is
-        what clears it. Nothing keeps a list of what to reset.
+        Per-dataset state lives in what ``mount`` builds and in what
+        ``data_changed`` drops, so nothing keeps a list of what to reset.
         """
         self.data = data
-        self.index = 0
+        self.channel = 0
+        self.zplane = 0
+        self.playhead.seek(0.0, source=self)
+        for app in list(self.apps.values()):
+            app.data_changed(self)
         for slot, app_id in list(self.stage.items()):
             if app_id is None:
                 continue
             self.mount(None, slot)
             self.mount(app_id, slot)
+        self.figure.canvas.set_title(self.title())
+
+    def title(self) -> str:
+        """The window title: the program and what it has open."""
+        source = None if self.data is None else self.data.source_path
+        name = Path(source).name if source else "untitled"
+        return f"Miller Brain Studio v{__version__} - {name}"
 
     def status(self) -> str:
-        return f"t {self.index}"
+        if self.data is None:
+            return "nothing open"
+        if self.data.fs:
+            return f"t {self.frame}  {self.playhead.time:.3f} s"
+        return f"t {self.frame}"
 
     def close(self) -> None:
         """Take every app off the stage and release what they hold.

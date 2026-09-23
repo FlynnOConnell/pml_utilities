@@ -13,6 +13,7 @@ from mbo_utilities.gui.app.apps.panels import (
     SummaryImagesApp,
     TileGridApp,
 )
+from mbo_utilities.gui.app.apps.viewer import ViewerApp
 
 __all__ = [
     "DiagnosticsApp",
@@ -22,6 +23,7 @@ __all__ = [
     "ProjectionsApp",
     "SummaryImagesApp",
     "TileGridApp",
+    "ViewerApp",
     "debug_apps",
     "ported_apps",
 ]

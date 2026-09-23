@@ -2464,36 +2464,28 @@ def results(path, out, overwrite):
 @main.command("app")
 @click.argument("path", type=click.Path(exists=True), required=False)
 @click.option(
-    "--nt",
-    type=int,
-    default=500,
-    show_default=True,
-    help="Timepoints read from PATH into memory.",
-)
-@click.option(
     "--frames",
     type=int,
     default=0,
     help="Draw N frames on an offscreen canvas and exit, for a smoke test.",
 )
-def app(path, nt, frames):
-    r"""The app host: apps drawn on one canvas, swappable between its areas.
+def app(path, frames):
+    r"""The app host: the viewer and the apps drawn around it on one canvas.
 
-    Opens PATH as (T, Y, X) from its first z-plane and colour channel, or a
-    synthetic movie when no path is given. The Apps menu switches each app on
-    and off, and each subplot's menu says which app draws on it.
+    Opens PATH lazily with imread, or a synthetic movie when no path is
+    given. The Apps menu switches each app on and off.
 
-    
+    \b
     Examples:
-      mbo app                          Synthetic movie, traces and image viewer
-      mbo app /data/raw.tiff --nt 200  The first 200 timepoints of a file
+      mbo app                          Synthetic movie
+      mbo app /data/raw.tiff           A file or folder imread opens
       mbo app --frames 5               Draw 5 frames offscreen and exit
     """
     if frames > 0:
         os.environ["RENDERCANVAS_FORCE_OFFSCREEN"] = "1"
     from mbo_utilities.gui.app import run_app
 
-    run_app(path, nt=nt, frames=frames)
+    run_app(path, frames=frames)
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ class TracesApp(App):
         return host.data is not None
 
     def mount(self, host, subplot) -> None:
-        movie = host.data
+        movie = np.asarray(host.data[:, host.channel, host.zplane])
         nt, ny, nx = movie.shape
         t = np.arange(nt, dtype=np.float32)
         for i, (fy, fx) in enumerate(BOXES):
@@ -47,12 +47,12 @@ class TracesApp(App):
             self.lines.append(subplot.add_line(line, colors=COLORS[i], name=f"box{i}"))
         span = (len(BOXES) + 1) * self.offset
         self.cursor = subplot.add_line(
-            np.array([[host.index, -span], [host.index, span]], dtype=np.float32),
+            np.array([[host.frame, -span], [host.frame, span]], dtype=np.float32),
             colors="w",
             thickness=2,
             name="cursor",
         )
-        self._shown = host.index
+        self._shown = host.frame
 
     def unmount(self, host) -> None:
         self.lines = []
@@ -61,9 +61,9 @@ class TracesApp(App):
         self._shown = -1
 
     def frame(self, host) -> None:
-        if self.cursor is not None and host.index != self._shown:
-            self.cursor.data[:, 0] = host.index
-            self._shown = host.index
+        if self.cursor is not None and host.frame != self._shown:
+            self.cursor.data[:, 0] = host.frame
+            self._shown = host.frame
 
     def draw_options(self, host) -> None:
         if self.cursor is None:
