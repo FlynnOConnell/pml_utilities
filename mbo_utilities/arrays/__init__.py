@@ -92,10 +92,7 @@ if TYPE_CHECKING:
     from mbo_utilities.arrays.mesc import (
         MescArray as MescArray,
     )
-    from mbo_utilities.arrays.pf import (
-        PfArray as PfArray,
-        list_mesc_units as list_mesc_units,
-    )
+    from mbo_utilities.arrays.mesc import list_mesc_units as list_mesc_units
     from mbo_utilities.arrays.isoview import (
         IsoviewArray as IsoviewArray,
         consolidate_isoview as consolidate_isoview,
@@ -133,7 +130,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "H5Array": (".h5", "H5Array"),
     "list_h5_datasets": (".h5", "list_h5_datasets"),
     "MescArray": (".mesc", "MescArray"),
-    "PfArray": (".pf", "PfArray"),
     "list_mesc_units": (".mesc", "list_mesc_units"),
     "DemixingArray": (".demixing", "DemixingArray"),
     "list_demixing_results": (".demixing", "list_demixing_results"),
@@ -221,7 +217,6 @@ __all__ = [
     "detect_isoview_kind",
     "LBMArray",
     "MescArray",
-    "PfArray",
     "MP4Array",
     "NumpyArray",
     "PiezoArray",

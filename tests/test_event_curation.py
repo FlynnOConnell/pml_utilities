@@ -71,11 +71,11 @@ RID = "scan=10/domain=soma"
 
 def _loaded(data_root, mode="fast"):
     """A session on the fixture's one scan / domain trace."""
-    from mbo_utilities.arrays.pf import PfArray
+    from mbo_utilities.results import ResultsArray
     from mbo_utilities.vnoiser import CurationSession
 
     session = CurationSession(data_root / PF, mode=mode)
-    session.load_pf(PfArray(data_root / PF, source=False), "10", "soma")
+    session.load_run(ResultsArray(data_root / PF, source=False), "scan10", "soma")
     return session
 
 
@@ -108,15 +108,15 @@ class TestSession:
         assert "denoised" in session.cache_status
 
     def test_a_scan_or_domain_the_folder_lacks_raises(self, data_root):
-        from mbo_utilities.arrays.pf import PfArray
+        from mbo_utilities.results import ResultsArray
         from mbo_utilities.vnoiser import CurationSession
 
-        pf = PfArray(data_root / PF, source=False)
+        run = ResultsArray(data_root / PF, source=False)
         session = CurationSession(data_root / PF, mode="fast")
         with pytest.raises(KeyError):
-            session.load_pf(pf, "99", "soma")
+            session.load_run(run, "scan99", "soma")
         with pytest.raises(KeyError):
-            session.load_pf(pf, "10", "nope")
+            session.load_run(run, "scan10", "nope")
         assert not session.loaded and session.recording_id == ""
 
     def test_labels_go_to_vnoiser_json(self, data_root):
@@ -519,12 +519,12 @@ class TestWidget:
     def test_registers_one_top_panel(self, curation):
         # the notebook's dashboard is a single tab: no separate Candidates tab
         assert [p.key for p in curation.strip.panels] == ["curation"]
-        assert curation.strip.panels[0] is curation.panel and curation.panel.right_tab is None
+        assert curation.strip.panels[0] is curation.panel
         _frames(curation)
 
     def test_scope_narrows_what_is_shown_and_flipped(self, curation, data_root, tmp_path):
         _add_scan(data_root / PF)
-        curation.scope = lambda rec: rec.scan == "20"
+        curation.scope = lambda rec: rec.unit == "scan20"
         _load(curation, data_root)
         rids = [r.rid for r in curation.catalog]
         assert len(rids) == 2 and any("scan=10" in r for r in rids)
@@ -568,11 +568,11 @@ class TestWidget:
             curation.scan(path)
             assert curation.data_path == str(data_root / PF), path
         assert [r.rid for r in curation.catalog] == ["scan=10/domain=soma", "scan=20/domain=soma"]
-        assert [(r.scan, r.domain, r.label) for r in curation.catalog] == [
-            ("10", "soma", "scan 10 / soma"), ("20", "soma", "scan 20 / soma"),
+        assert [(r.unit, r.roi, r.label) for r in curation.catalog] == [
+            ("scan10", "soma", "scan 10 / soma"), ("scan20", "soma", "scan 20 / soma"),
         ]
         assert curation.current == curation.catalog[0].rid
-        assert "2 recordings (2 scans)" in curation.status
+        assert "2 recordings (2 units)" in curation.status
         curation.wait(60)
         assert [r.rid for r, _ in curation.loaded()] == [r.rid for r in curation.catalog]
         assert curation.session.recording_id == "scan=10/domain=soma"
@@ -585,7 +585,7 @@ class TestWidget:
         curation.scan(empty)
         assert curation.catalog == []
         assert curation.session is None
-        assert "no PF folder" in curation.status
+        assert "no voltage run" in curation.status
         _frames(curation)
 
     def test_load_runs_off_the_frame_and_draws_every_panel(self, curation, data_root):
@@ -755,11 +755,11 @@ class TestViewerIntegration:
     def test_a_pf_folder_opens_in_the_viewer_without_a_curation_panel(self, data_root):
         if not _offscreen_selected():
             pytest.skip("needs the offscreen rendercanvas")
-        from mbo_utilities.arrays.pf import PfArray
+        from mbo_utilities.results import ResultsArray
         from mbo_utilities.gui.data_vis import DataVis
 
         pf_dir = data_root / "expt1" / "PF"
-        vis = DataVis(PfArray(pf_dir), size=FIGURE_SIZE)
+        vis = DataVis(ResultsArray(pf_dir), size=FIGURE_SIZE)
         vis.show()
         try:
             parent = vis.widget
@@ -951,34 +951,36 @@ def _mesc_beside_pf(tmp_path):
 
 class TestPfForMesc:
     def test_pf_folder_and_scan_are_found_beside_the_mesc(self, tmp_path):
-        from mbo_utilities.vnoiser import pf_dir_for_mesc, pf_scan_for_mesc
+        from mbo_utilities.vnoiser import recording_id, voltage_run_for_mesc, voltage_unit_for_mesc
 
         mesc, pf_dir = _mesc_beside_pf(tmp_path)
-        assert pf_dir_for_mesc(mesc) == pf_dir
-        scan = pf_scan_for_mesc(mesc, "MSession_0/MUnit_10")
-        assert scan is not None and scan.pf_dir == pf_dir
-        assert scan.scan == "10" and scan.domains == {"soma": [0]}
-        assert scan.domain_of_line(0) == "soma" and scan.domain_of_line(7) is None
-        assert scan.recording_id("soma") == "scan=10/domain=soma"
+        assert voltage_run_for_mesc(mesc) == pf_dir
+        run = voltage_unit_for_mesc(mesc, "MSession_0/MUnit_10")
+        assert run is not None and run.path == pf_dir
+        unit = run.results.units[run.unit]
+        assert run.unit == "scan10" and unit.roi_names == ["soma"]
+        assert [m.tolist() for m in unit.members] == [[0]]
+        assert unit.member_roi(0) == 0 and unit.member_roi(7) is None
+        assert recording_id(unit, "soma") == "scan=10/domain=soma"
 
     def test_unprocessed_scan_or_missing_pf_gives_none(self, tmp_path):
-        from mbo_utilities.vnoiser import pf_dir_for_mesc, pf_scan_for_mesc
+        from mbo_utilities.vnoiser import voltage_run_for_mesc, voltage_unit_for_mesc
 
         mesc, _pf_dir = _mesc_beside_pf(tmp_path)
-        assert pf_scan_for_mesc(mesc, "MUnit_99") is None
+        assert voltage_unit_for_mesc(mesc, "MUnit_99") is None
         lone = tmp_path / "elsewhere" / "scan.mesc"
         lone.parent.mkdir()
         lone.write_bytes(b"x")
-        assert pf_dir_for_mesc(lone) is None
-        assert pf_scan_for_mesc(lone, "MUnit_10") is None
+        assert voltage_run_for_mesc(lone) is None
+        assert voltage_unit_for_mesc(lone, "MUnit_10") is None
 
     def test_domain_trace_loads_by_its_recording_id(self, tmp_path):
-        from mbo_utilities.vnoiser import CurationSession, pf_scan_for_mesc
+        from mbo_utilities.vnoiser import CurationSession, voltage_unit_for_mesc
 
         mesc, pf_dir = _mesc_beside_pf(tmp_path)
-        scan = pf_scan_for_mesc(mesc, "MUnit_10")
+        run = voltage_unit_for_mesc(mesc, "MUnit_10")
         session = CurationSession(pf_dir, mode="fast")
-        session.load_pf(scan, scan.scan, "soma")
+        session.load_run(run, run.unit, "soma")
         assert session.loaded and session.n == 3
         assert session.recording_id == "scan=10/domain=soma"
 
@@ -991,7 +993,7 @@ class TestPfForMesc:
         mesc.write_bytes(b"x")
         curation.scan(mesc)
         assert curation.data_path == str(pf_dir)
-        assert "PF folder of" in curation.status
+        assert "voltage run of" in curation.status
         assert curation.catalog
         curation.wait(60)
         lone = tmp_path / "elsewhere" / "scan.mesc"
@@ -1149,7 +1151,7 @@ class TestExperimentFolder:
         monkeypatch.setattr(rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a))
         rg._run_gui_impl(data_in=experiment)
         rg._run_gui_impl(data_in=str(experiment / "PF"))
-        # the folder itself is handed over: imread opens it as a PfArray
+        # the folder itself is handed over: imread opens it as a ResultsArray
         assert [a[0] for a in standard] == [experiment, str(experiment / "PF")]
 
     def test_a_folder_without_line_scans_falls_through(self, tmp_path, monkeypatch):
@@ -1213,10 +1215,10 @@ class TestCurationWindow:
             assert app.title.endswith("expt1")
         finally:
             app.widget.close()
-        # a folder with no PF folder in it lists nothing and says so
+        # a folder with no voltage run in it lists nothing and says so
         app = open_curation_viewer(data_root, run=False)
         try:
-            assert app.widget.catalog == [] and "no PF folder" in app.widget.status
+            assert app.widget.catalog == [] and "no voltage run" in app.widget.status
         finally:
             app.widget.close()
 
@@ -1344,7 +1346,7 @@ def _mesc_with_rtmc(path, munit=10):
     """A line-scan ``.mesc`` whose unit ran with RTMC: X and Y totals (X in
     MEScan's counts), an X intercycle trace, 50 samples 30 ms apart."""
     from tests.test_mesc import _RTMC_UM, _curve
-    from tests.test_pf_array import write_mesc
+    from tests.test_results_array import write_mesc
 
     path.parent.mkdir(parents=True, exist_ok=True)
     write_mesc(path, munits=(munit,))
@@ -1432,7 +1434,7 @@ class TestMotion:
         assert curation.panel.height == PANEL_HEIGHT
 
     def test_a_scan_without_rtmc_shows_no_motion_plot(self, curation, data_root):
-        from tests.test_pf_array import write_mesc
+        from tests.test_results_array import write_mesc
 
         from mbo_utilities.gui.event_curation import PANEL_HEIGHT
 

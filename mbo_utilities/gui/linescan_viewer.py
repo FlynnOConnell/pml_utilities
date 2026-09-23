@@ -187,33 +187,31 @@ def _limits(sample) -> tuple[float, float]:
     return float(lo), float(hi if hi > lo else lo + 1)
 
 
-def pf_roi_traces(mesc_path, unit_key: str, n_rois: int) -> tuple[np.ndarray, str] | None:
-    """``(K, T)`` traces for a line-scan unit from the experiment's PF folder:
-    each ROI carries the denoised trace of the domain that averages it, ROIs
-    outside every domain (the pipeline's background lines) are zero. Returns
-    the array and a description, or None when there is no PF folder or the
-    pipeline never processed this scan."""
-    from mbo_utilities.arrays.pf import PfArray, pf_dir_of
+def run_roi_traces(mesc_path, unit_key: str, n_rois: int) -> tuple[np.ndarray, str] | None:
+    """``(K, T)`` traces for a line-scan unit from the experiment's voltage run:
+    each line carries the denoised trace of the ROI that averages it, lines
+    outside every ROI (the pipeline's background lines) are zero. Returns the
+    array and a description, or None when there is no run or the pipeline
+    never processed this scan."""
+    from mbo_utilities.results import ResultsArray, results_dir_of, unit_for_source
 
-    pf_dir = pf_dir_of(Path(mesc_path).parent.parent) or pf_dir_of(Path(mesc_path).parent)
-    if pf_dir is None:
+    run_dir = results_dir_of(Path(mesc_path).parent.parent) or results_dir_of(Path(mesc_path).parent)
+    if run_dir is None:
         return None
-    scan = str(unit_key).rsplit("_", 1)[-1]
-    pf = PfArray(pf_dir, source=False)
-    if scan not in pf.traces:
+    run = ResultsArray(run_dir, source=False)
+    name = unit_for_source(run.results, unit_key)
+    unit = run.results.units.get(name) if name else None
+    if unit is None or "denoised" not in unit.traces:
         return None
-    traces = pf.traces[scan]
-    T = max(len(t) for t in traces.values())
-    F = np.zeros((n_rois, T), dtype=np.float32)
+    denoised = unit.traces["denoised"]
+    F = np.zeros((n_rois, unit.n_timepoints), dtype=np.float32)
     used = []
-    for domain, rois in pf.domains.items():
-        if domain not in traces:
-            continue
-        for roi in rois:
-            if 0 <= roi < n_rois:
-                F[roi, : len(traces[domain])] = traces[domain]
-                used.append(domain)
-    return F, f"PF scan {scan} ({len(set(used))} domains) from {pf_dir}"
+    for k, members in enumerate(unit.members):
+        for line in members:
+            if 0 <= line < n_rois:
+                F[int(line)] = denoised[k]
+                used.append(unit.roi_names[k])
+    return F, f"{run.pipeline} {unit.name} ({len(set(used))} ROIs) from {run_dir}"
 
 
 def saved_roi_traces(ref_arr, traces_dir: Path | None = None) -> tuple[np.ndarray, str] | None:
@@ -224,9 +222,9 @@ def saved_roi_traces(ref_arr, traces_dir: Path | None = None) -> tuple[np.ndarra
     when there is neither; nothing is written."""
     n_rois = len(ref_arr.metadata.get("mesc_roi_extents") or [])
     munit = ref_arr.metadata["mesc_unit"].rsplit("/", 1)[-1]
-    pf = pf_roi_traces(ref_arr.source_path, munit, n_rois)
-    if pf is not None:
-        return pf
+    found = run_roi_traces(ref_arr.source_path, munit, n_rois)
+    if found is not None:
+        return found
     if traces_dir is None:
         candidate = Path(ref_arr.source_path).parent / "rois_linescan" / munit
         if (candidate / "F.npy").exists():
@@ -373,11 +371,11 @@ def default_linescan_unit(mesc_path, units: list[dict]) -> str:
     vnoiser pipeline processed (a PF scan with its number), else the first."""
     packed = [u for u in units if u.get("kind") == "packed"] or list(units)
     try:
-        from mbo_utilities.vnoiser import pf_scan_for_mesc
+        from mbo_utilities.vnoiser import voltage_unit_for_mesc
     except ImportError:
         return packed[0]["key"]
     for u in packed:
-        if pf_scan_for_mesc(mesc_path, u["key"]) is not None:
+        if voltage_unit_for_mesc(mesc_path, u["key"]) is not None:
             return u["key"]
     return packed[0]["key"]
 
@@ -498,6 +496,10 @@ class LineScanOverlay:
         self.trace_stack = None
         self.selector = None
         self.fs = fs
+        from mbo_utilities.gui.playhead import Playhead
+
+        self.playhead = Playhead()
+        self.playhead.add_event_handler(self._on_playhead, "time")
         if traces is not None and trace_index is not None and len(ndw.figure) > trace_index:
             tr_sp = ndw[trace_index].subplot
             self.trace_subplot = tr_sp
@@ -513,7 +515,6 @@ class LineScanOverlay:
         self.goto_slice(self.placements[0]["slice"])
         self._update_titles()
 
-    # ----------------------------------------------------------------- traces
     def _build_traces(self, subplot, traces: np.ndarray) -> None:
         T = traces.shape[1]
         stride = max(1, T // 250_000)
@@ -546,14 +547,32 @@ class LineScanOverlay:
     def _on_selector(self, ev) -> None:
         if self._busy or self.t_dim is None:
             return
-        t_index = int(round(float(self.selector.selection) * self.fs))
+        self.playhead.seek(float(self.selector.selection), source=self.selector)
+
+    def _on_playhead(self, event) -> None:
+        """The playhead moved: the Timepoint slider follows, then the selector
+        follows the slider (the slider's own move comes back through
+        ``_on_indices`` with this overlay as the source)."""
+        t_s = float(event.info["seconds"])
+        if event.info.get("source") is self:
+            if self.selector is not None and not self._busy:
+                self._busy = True
+                try:
+                    self.selector.selection = t_s
+                finally:
+                    self._busy = False
+            return
+        if self.t_dim is None:
+            return
+        index = max(0, int(round(t_s * self.fs)))
+        if index == self.t_index:
+            return
         self._busy = True
         try:
-            self.ndw.indices.set_dim_index(self.t_dim, t_index + 1)
+            self.ndw.indices.set_dim_index(self.t_dim, index + 1)
         finally:
             self._busy = False
 
-    # --------------------------------------------------------------- styling
     def _label_text(self, p: dict) -> str:
         # a ghost (another slice) gets its index only: seventeen full labels
         # on one panel are unreadable, and the side table has the numbers
@@ -621,7 +640,6 @@ class LineScanOverlay:
             f"{z_name}  slice {self.slice + 1}/{self.zdim}  z {z_here:+.1f} um  |  {where}"
         )
 
-    # ---------------------------------------------------------------- events
     def _on_indices(self, indices: dict) -> None:
         if self.z_dim is not None:
             k = self._ref_to_index(indices[self.z_dim])
@@ -636,12 +654,7 @@ class LineScanOverlay:
                     self.goto_slice(self.placements[i]["slice"])
         if self.t_dim is not None:
             self.t_index = self._ref_to_index(indices[self.t_dim])
-        if self.t_dim is not None and self.selector is not None and not self._busy:
-            self._busy = True
-            try:
-                self.selector.selection = self.t_index / self.fs
-            finally:
-                self._busy = False
+            self.playhead.seek(self.t_index / self.fs, source=self)
         self._update_titles()
 
     def _on_line_click(self, i: int, ev) -> None:
@@ -662,7 +675,6 @@ class LineScanOverlay:
         elif key == "p":
             self.select_roi((self.selected - 1) % self.n)
 
-    # ------------------------------------------------------------ public api
     def goto_slice(self, k: int) -> None:
         k = int(np.clip(k, 0, self.zdim - 1))
         if self.z_dim is None:
@@ -695,11 +707,8 @@ class LineScanOverlay:
             self._apply_selection(self.selected)
 
     def goto_time(self, t_s: float) -> None:
-        """Move the Reference's Timepoint (and the trace cursor) to ``t_s``."""
-        if self.t_dim is None:
-            return
-        index = max(0, int(round(float(t_s) * self.fs)))
-        self.ndw.indices.set_dim_index(self.t_dim, index + 1)
+        """Move the playhead (the Timepoint slider and every cursor) to ``t_s``."""
+        self.playhead.seek(float(t_s))
 
 
 class LinePanel:
@@ -822,16 +831,17 @@ class LinePanel:
             self.curation.draw()
 
 
-
 class StandardTraces:
-    """A line-scan unit's per-ROI traces on the standard viewer (``mbo
-    file.mesc``): a :class:`TraceJob` for the traces, its progress on the
-    ROI widget's Traces tab until they are in, then one external
-    :class:`~mbo_utilities.gui.roi_runs.TraceSet` there, one row per ROI.
-    The plotted row follows the ROI slider and the slider follows a row
-    picked in the trace table; the unit's motion correction reaches the tab
-    through the array (``motion_correction``). Kept on
-    ``parent.linescan_traces``; ``close`` takes the set off."""
+    """An AOD unit's per-ROI traces on the standard viewer (``mbo
+    file.mesc``), a line scan's lines or a chessboard / ribbon scan's
+    patches, one per Z index: a :class:`TraceJob` for the traces, its progress on the
+    ROI widget's Traces tab until they are in, then one
+    :class:`~mbo_utilities.annotation.RoiTrace` row per ROI in its trace
+    table (``member`` rows under this unit's source name). The plotted row
+    follows the ROI slider and the slider follows a row picked in the trace
+    table; the unit's motion correction reaches the tab through the array
+    (``motion_correction``). Kept on ``parent.linescan_traces``; ``close``
+    takes the rows off."""
 
     def __init__(self, parent, arr):
         from mbo_utilities.preferences import get_linescan_auto_traces
@@ -844,7 +854,8 @@ class StandardTraces:
         names = tuple(getattr(self.iw, "_slider_dim_names", None) or ())
         self.roi_dim = next((d for d in names if d.lower() == "roi"), None)
         munit = arr.metadata["mesc_unit"].rsplit("/", 1)[-1]
-        self.name = f"{munit} lines"
+        # the rows' source names what the unit's ROIs are
+        self.name = f"{munit} lines" if arr.metadata.get("mesc_layout") == "packed" else f"{munit} patches"
         self.job = TraceJob(arr, 0, None, auto=get_linescan_auto_traces())
         self.attached = False
         self._last_roi = None
@@ -858,24 +869,24 @@ class StandardTraces:
             if not (self.job.done and self.job.result is not None):
                 return
             self._attach()
-        ts = self.roi.trace_sets.get(self.name)
-        if ts is None:
+        rows = self.roi.traces.from_source(self.name)
+        if not rows:
             return
         # the ROI slider and the trace table pick the same line
-        n = len(ts.data)
+        n = len(rows)
         selected = min(max(int(self.iw.indices[self.roi_dim]), 0), n - 1) if self.roi_dim is not None else 0
         sel = self.roi.trace_sel
         if selected != self._last_roi:
             self._last_roi = selected
-            self.roi.select_trace(("uid", self.name, selected))
+            self.roi.select_trace(("member", self.name, selected))
             self._last_sel = set(self.roi.trace_sel)
         elif sel != self._last_sel:
             self._last_sel = set(sel)
             if len(sel) == 1:
-                origin, name, k = next(iter(sel))
-                if origin == "uid" and name == self.name and self.roi_dim is not None:
-                    self.iw.indices[self.roi_dim] = int(k)
-                    self._last_roi = int(k)
+                key = next(iter(sel))
+                if key[0] == "member" and key[1] == self.name and self.roi_dim is not None:
+                    self.iw.indices[self.roi_dim] = int(key[2])
+                    self._last_roi = int(key[2])
 
     def draw_pending(self) -> None:
         """On the Traces tab while the job has nothing to show: progress
@@ -902,40 +913,48 @@ class StandardTraces:
             imgui.progress_bar(done / total if total else 0.0, imgui.ImVec2(-1, 0), "")
 
     def _attach(self) -> None:
-        from mbo_utilities.gui.roi_runs import TraceSet
+        from mbo_utilities.annotation import RoiTrace
+        from mbo_utilities.lazy_array import base_array
 
         md = self.arr.metadata
-        n = len(md.get("mesc_roi_extents") or []) or int(self.job.result.shape[0])
+        extents = md.get("mesc_roi_extents") or []
+        n = len(extents) or int(self.job.result.shape[0])
         fs = float(self.arr.fs or 1.0)
         traces = np.asarray(self.job.result[:n], dtype=np.float32)
-        ts = TraceSet(self.name, self.job.source, external=True)
+        # positions come from the scan geometry (the reader's facet), never from the row
+        positions = getattr(base_array(self.arr), "line_positions", None)
+        self.roi.traces.drop_source(self.name)
         for k in range(traces.shape[0]):
-            ts.data[k] = {"label": f"ROI {k}", "fs": fs, "F": traces[k]}
-        self.roi.trace_sets[self.name] = ts
+            extra = {"line": k}
+            label = f"ROI {k}"
+            if positions is not None and k < len(positions):
+                extra.update(positions[k])
+            self.roi.traces.add(RoiTrace(
+                uid=0, member=k, source=self.name, engine=str(self.job.source),
+                label=label, fs=fs, z=k, c=int(self.job.channel), F=traces[k], extra=extra,
+            ))
         self.roi.pending_traces = None
-        self.roi._traces_changed()
-        self.roi.focus_traces = True
         self.attached = True
 
     def close(self) -> None:
         self.strip.remove_hook(self)
         self.roi.pending_traces = None
-        if self.roi.trace_sets.pop(self.name, None) is not None:
-            self.roi._traces_changed()
+        self.roi.traces.drop_source(self.name)
 
 
 def attach_standard_traces(parent) -> StandardTraces | None:
-    """The line traces of a ``PreviewDataWidget`` showing a line-scan
-    ``.mesc`` unit, on its ROI widget's Traces tab; None (nothing added) for
+    """The per-ROI traces of a ``PreviewDataWidget`` showing an AOD ``.mesc``
+    unit (a line scan, chessboard or ribbon scan: ``ROI_LAYOUTS``, one ROI
+    per Z index), on its ROI widget's Traces tab; None (nothing added) for
     anything else, and without the ROI widget (Widgets > Manual ROI
     Labeling), whose tab they live on."""
-    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray
     from mbo_utilities.lazy_array import base_array
 
     data = getattr(getattr(parent, "image_widget", None), "data", None)
     # the viewer wraps the array in proxies; the traces come from the file
     arr = base_array(data[0]) if data else None
-    if not isinstance(arr, MescArray) or arr.metadata.get("mesc_layout") != "packed":
+    if not isinstance(arr, MescArray) or arr.metadata.get("mesc_layout") not in ROI_LAYOUTS:
         return None
     if getattr(parent, "manual_roi", None) is None or getattr(parent, "top_strip", None) is None:
         return None
@@ -984,7 +1003,7 @@ class LineTracesPanel:
         self._ratios = implot.SubplotsRowColRatios(row_ratios=[TRACE_SHARE, 1.0 - TRACE_SHARE])
         if tab:
             height = TRACES_MOTION_PANEL_HEIGHT if self.motion else TRACES_PANEL_HEIGHT
-            self.strip.register(TopPanel("traces", "Traces", self.draw_tab, height, None, 10))
+            self.strip.register(TopPanel("traces", "Traces", self.draw_tab, height, 10))
 
     def close(self) -> None:
         self.strip.unregister("traces")
@@ -1028,7 +1047,7 @@ class LineTracesPanel:
                 )
         imgui.same_line(0, 12)
         imgui.text_disabled(
-            f"ROI {ov.selected} · t {ov.t_index / self.fs:.3f} s · raw F (band) and 25 ms mean; "
+            f"ROI {ov.selected} · t {ov.playhead.time:.3f} s · raw F (band) and 25 ms mean; "
             "drag the cursor to scrub, drag pans, scroll zooms, double-click fits"
         )
         avail = max(imgui.get_content_region_avail().y - 2, 60.0)
@@ -1073,18 +1092,18 @@ class LineTracesPanel:
             r, g, b = (float(v) for v in ov.colors[i][:3])
             line(f"ROI {i} raw", band, x=t_band, color=(r, g, b, 0.28), weight=0.8)
             line(f"ROI {i}", smooth, x=ts, color=(r, g, b, 1.0), weight=1.8)
-            cursor, held = drag_vline(99, ov.t_index / self.fs, (1.0, 0.85, 0.3, 0.9), 1.5)
+            cursor, held = drag_vline(99, ov.playhead.time, (1.0, 0.85, 0.3, 0.9), 1.5)
             if held:
-                ov.goto_time(cursor)
+                ov.playhead.seek(cursor, source="line_traces")
 
     def draw_motion(self, height: float) -> None:
         """The motion plot with the Timepoint cursor; dragging it scrubs."""
         ov = self.overlay
         cursor, held = self.motion.draw(
-            "##line_motion_plot", height, cursor=ov.t_index / self.fs, cursor_id=98, duration_s=self.duration_s,
+            "##line_motion_plot", height, cursor=ov.playhead.time, cursor_id=98, duration_s=self.duration_s,
         )
-        if held:
-            ov.goto_time(cursor)
+        if held and cursor is not None:
+            ov.playhead.seek(cursor, source="line_motion")
 
 
 class LineCuration:
@@ -1099,7 +1118,7 @@ class LineCuration:
     """
 
     def __init__(self, widget, overlay: LineScanOverlay, traces: np.ndarray, mesc_path, ref_key: str):
-        from mbo_utilities.vnoiser import pf_scan_for_mesc
+        from mbo_utilities.vnoiser import voltage_unit_for_mesc
 
         self.widget = widget
         self.overlay = overlay
@@ -1107,24 +1126,25 @@ class LineCuration:
         self.mesc_path = Path(mesc_path)
         self.munit = ref_key.rsplit("/", 1)[-1]
         # the pipeline's processed traces for this scan, when the experiment
-        # has a PF folder: what the curation notebook shows, per domain
+        # has a voltage run: what the curation notebook shows, per ROI
         # (a group of lines), no denoising needed
-        self.pf = pf_scan_for_mesc(self.mesc_path, ref_key)
-        self.auto = self.pf is not None
+        self.run = voltage_unit_for_mesc(self.mesc_path, ref_key)
+        self.unit = None if self.run is None else self.run.results.units[self.run.unit]
+        self.auto = self.run is not None
         self.curated: int | None = None
         self.curated_domain: str | None = None
-        if self.pf is not None:
-            print(f"\nPF traces for scan {self.pf.scan}: {', '.join(self.pf.domains)} "
-                  f"({self.pf.pf_dir})")
-            # the curation shows this scan's domains: the recordings of the
-            # unit on screen (another scan is the combo in the panel); the
-            # folder's other scans stay in the catalog but out of view
-            scan_id = self.pf.scan
-            widget.scope = lambda rec: rec.scan == scan_id
-            # every domain of this scan loads now; a line click then just
-            # focuses its domain
-            widget.scan(str(self.pf.pf_dir))
-            widget.status = "loading every domain; select a line to focus its trace"
+        if self.run is not None:
+            print(f"\nrun traces for {self.unit.name}: {', '.join(self.unit.roi_names)} "
+                  f"({self.run.path})")
+            # the curation shows this scan's ROIs: the recordings of the unit
+            # on screen (another unit is the combo in the panel); the run's
+            # other units stay in the catalog but out of view
+            shown = self.run.unit
+            widget.scope = lambda rec: rec.unit == shown
+            # every ROI of this unit loads now; a line click then just
+            # focuses its trace
+            widget.scan(str(self.run.path))
+            widget.status = "loading every ROI; select a line to focus its trace"
         else:
             widget.status = "select a line, then denoise it"
         widget.on_focus = self._on_focus
@@ -1159,12 +1179,12 @@ class LineCuration:
 
     def _on_recording(self, rid: str) -> None:
         """Select a line of the domain (or the ROI) that was flipped to."""
-        if "domain=" in rid and self.pf is not None:
+        if "domain=" in rid and self.unit is not None:
             domain = rid.rsplit("domain=", 1)[-1]
-            rois = self.pf.domains.get(domain, [])
-            if rois and self.overlay.selected not in rois:
+            lines = self.lines_of(domain)
+            if lines and self.overlay.selected not in lines:
                 self.curated_domain = domain
-                self.overlay.select_roi(rois[0])
+                self.overlay.select_roi(lines[0])
         elif "roi=" in rid:
             try:
                 roi = int(rid.rsplit("roi=", 1)[-1])
@@ -1174,10 +1194,21 @@ class LineCuration:
             if roi != self.overlay.selected:
                 self.overlay.select_roi(roi)
 
+    def lines_of(self, domain: str) -> list[int]:
+        """The lines the run averaged into ROI ``domain``."""
+        if self.unit is None or domain not in self.unit.roi_names:
+            return []
+        return [int(m) for m in self.unit.members[self.unit.roi_names.index(domain)]]
+
+    def domain_of_line(self, i: int) -> str | None:
+        """The run ROI that averages line ``i``, or None."""
+        k = None if self.unit is None else self.unit.member_roi(int(i))
+        return None if k is None else self.unit.roi_names[k]
+
     def curate(self, i: int) -> None:
-        """Curate line ``i``: its PF domain trace when the pipeline ran on
-        this scan, else its raw trace through the denoiser."""
-        domain = self.pf.domain_of_line(i) if self.pf is not None else None
+        """Curate line ``i``: its run ROI trace when the pipeline ran on this
+        scan, else its raw trace through the denoiser."""
+        domain = self.domain_of_line(i)
         if domain is not None:
             self.curate_domain(domain)
         else:
@@ -1186,15 +1217,17 @@ class LineCuration:
     def curate_domain(self, domain: str) -> None:
         """Load the pipeline's processed trace of ``domain`` (the notebook's
         data for this scan) into the curation."""
-        if self.pf is None or domain not in self.pf.domains:
+        from mbo_utilities.vnoiser import recording_id as curation_id
+
+        if self.unit is None or domain not in self.unit.roi_names:
             return
-        pf_dir = str(self.pf.pf_dir)
-        if self.widget.data_path != pf_dir:
-            # catalogs the experiment and loads this scan's domains
-            self.widget.scan(pf_dir)
+        run_dir = str(self.run.path)
+        if self.widget.data_path != run_dir:
+            # catalogs the experiment and loads this unit's ROIs
+            self.widget.scan(run_dir)
         self.curated_domain = domain
         self.curated = None
-        self.widget.load(self.pf.recording_id(domain))
+        self.widget.load(curation_id(self.unit, domain))
 
     def denoise(self, i: int) -> None:
         """Run the raw trace of line ``i`` through vnoiser's denoiser (or
@@ -1215,7 +1248,7 @@ class LineCuration:
     def _on_select(self, i: int) -> None:
         if not self.auto:
             return
-        domain = self.pf.domain_of_line(i) if self.pf is not None else None
+        domain = self.domain_of_line(i)
         if domain is not None:
             if domain != self.curated_domain:
                 self.curate_domain(domain)
@@ -1233,10 +1266,10 @@ class LineCuration:
         section("Curation")
         i = self.overlay.selected
         loading = self.widget.loading
-        domain = self.pf.domain_of_line(i) if self.pf is not None else None
+        domain = self.domain_of_line(i)
         imgui.begin_disabled(loading)
         if domain is not None:
-            rois = ", ".join(str(r) for r in self.pf.domains[domain])
+            rois = ", ".join(str(r) for r in self.lines_of(domain))
             if imgui.button(f"curate {domain}"):
                 self.curate_domain(domain)
             if imgui.is_item_hovered():

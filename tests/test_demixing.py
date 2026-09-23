@@ -151,6 +151,20 @@ def test_run_files_finds_the_stage_exports(planes_dir, tmp_path):
     assert files["raw"] == run / "data_raw.bin" and files["ops"] == run / "ops.npy"
 
 
+def test_run_files_takes_the_stages_from_one_results_file(tmp_path):
+    from mbo_utilities.gui.masknmf_vis import run_files
+
+    merged = tmp_path / "results.hdf5"
+    write_demixing(merged)
+    with h5py.File(merged, "r+") as f:
+        f.create_group("PMDArray")
+        f.create_group("RigidRegistrationArray")
+
+    files = run_files(merged)
+    assert files["compression"] == merged
+    assert files["motion"] == merged
+
+
 def test_viewers_need_masknmf(run_dir):
     # masknmf's import fails with AttributeError on a mismatched fastplotlib
     # pin, which importorskip would report as a failure

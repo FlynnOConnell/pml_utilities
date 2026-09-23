@@ -5,6 +5,7 @@ This module is designed for fast startup - heavy imports are deferred until need
 Operations like --check-install should be near-instant.
 """
 import functools
+import os
 import math
 import sys
 from pathlib import Path
@@ -784,7 +785,7 @@ def _create_image_widget(
         from fastplotlib.utils import calculate_figure_shape
 
         from mbo_utilities.gui._top_strip import MENU_HEIGHT, MENU_MIN_WIDTH, strip_height
-        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT, roi_panel_min_width
+        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
         from mbo_utilities.gui.widgets.preview_data import ZSTATS_PANEL_HEIGHT
 
         rgb = bool(getattr(arrays[0], "rgb", False))
@@ -792,11 +793,11 @@ def _create_image_widget(
         top, right, min_width = 0, 0, 0.0
         if widget != "none":
             top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
-        # the strip is as tall as the tab that will be selected: the ROI panel
-        # registers first, else the Signal Quality plot once its stats are in
+        # the strip is as tall as the tab that will be selected: the Traces
+        # panel registers first, else the Signal Quality plot once its stats
+        # are in; the ROI controls are a right-bar tab and need no width
         if manual_roi:
             top = strip_height(PANEL_HEIGHT)
-            min_width = max(min_width, roi_panel_min_width())
         elif signal_quality:
             top = strip_height(ZSTATS_PANEL_HEIGHT)
         figure_kwargs = _figure_kwargs_for_here(
@@ -880,10 +881,10 @@ def _run_gui_impl(
         if _gpu_idx >= 0 and 0 <= _gpu_idx < len(_adapters):
             import fastplotlib as fpl
             fpl.select_adapter(_adapters[_gpu_idx])
-        if get_debug_logging():
-            import logging
+        # an explicit MBO_DEBUG (mbo --debug / --no-debug) wins over the preference
+        if get_debug_logging() and "MBO_DEBUG" not in os.environ:
             from mbo_utilities import log as _mbo_log
-            _mbo_log.set_global_level(logging.DEBUG)
+            _mbo_log.set_debug(True)
     except Exception:
         pass
 
@@ -956,7 +957,7 @@ def _run_gui_impl(
         # patches) opens on the first one with no prompt: the Voltage
         # pipeline follows the unit on screen and offers the other scans
         # there, and its Curate button opens the curation window. A PF or
-        # experiment folder opens as a PfArray through imread, like a suite2p
+        # experiment folder opens as a ResultsArray through imread, like a suite2p
         # folder.
         # Other .mesc files prompt for their unit once, here.
         if _is_mesc(data_in):
@@ -996,8 +997,8 @@ def _resolve_mesc_unit(data_in, unit):
 
     Every ``.mesc`` opens straight to its first measurement unit, no prompt.
     A file with more than one MUnit (unrelated scans the operator ran back
-    to back) is switched between from the Image tab's MESc Units combo
-    (``mbo_utilities.gui.widgets.mesc_units.MescUnitsWidget``), an ImGui
+    to back) is switched between from the MESc tab
+    (``mbo_utilities.gui.widgets.mesc_units.MescTabWidget``), an ImGui
     widget like the rest of the viewer — no Qt involved anywhere in this
     path. An explicit ``unit`` is the deliberate bypass.
 
@@ -1029,7 +1030,7 @@ def _resolve_mesc_unit(data_in, unit):
     if len(units) > 1:
         logger.info(
             f"{path.name} holds {len(units)} measurement units; opening "
-            f"{units[0]['key']} (switch from the Image tab)."
+            f"{units[0]['key']} (switch from the MESc tab)."
         )
     return {"unit": units[0]["key"]}, True
 
@@ -1075,7 +1076,7 @@ def _first_linescan_unit(path) -> str | None:
     the file (the voltage pipeline's output) the unit of its first scan wins,
     so the viewer opens on a processed scan."""
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
-    from mbo_utilities.arrays.pf import TRACES_FILE, PfArray
+    from mbo_utilities.results import ResultsArray, newest_results, results_dir_of
 
     try:
         units = [u for u in list_mesc_units(path) if u.get("kind") in ROI_LAYOUTS]
@@ -1083,13 +1084,17 @@ def _first_linescan_unit(path) -> str | None:
         return None
     path = Path(path)
     for parent in (path.parent.parent, path.parent):
-        if not (parent / "PF" / TRACES_FILE).is_file():
+        found = newest_results(parent, "voltage") or results_dir_of(parent / "PF")
+        if found is None:
             continue
         try:
-            pf = PfArray(parent / "PF", source=False)
+            run = ResultsArray(found, source=False)
         except Exception:
             break
-        wanted = {pf.source_units.get(s, f"MUnit_{s}").rsplit("/", 1)[-1] for s in pf.scan_ids}
+        wanted = {
+            str(u.attrs.get("source_unit", "")).rsplit("/", 1)[-1]
+            for u in run.results.units.values()
+        }
         for u in units:
             if u["key"].rsplit("/", 1)[-1] in wanted:
                 return u["key"]

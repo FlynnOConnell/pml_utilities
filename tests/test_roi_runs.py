@@ -438,35 +438,26 @@ def test_component_color_is_class_color_when_labeled():
     assert rr.component_color(s, 0) == class_color(1) != hue
 
 
-def test_display_trace_matches_the_lsp_recipe():
-    F = np.array([10.0, 10.0, 30.0, 10.0], np.float32)
-    Fneu = np.array([2.0, 2.0, 2.0, 2.0], np.float32)
-    corr = F - 0.7 * Fneu
-    f0 = float(np.percentile(corr, 20))
-    expected = (corr - f0) / f0 * 100.0
-    got = rr.display_trace({"F": F, "Fneu": Fneu})
-    np.testing.assert_allclose(got, expected, rtol=1e-5)
-    # correction off: raw F baseline
-    f0 = float(np.percentile(F, 20))
-    np.testing.assert_allclose(
-        rr.display_trace({"F": F, "Fneu": Fneu}, correct_neuropil=False),
-        (F - f0) / f0 * 100.0, rtol=1e-5,
+def test_result_traces_carry_the_read_coordinates(tmp_path):
+    stat = np.array([_row([0], [0], [1.0])] * 2, object)
+    res = rw.RunResult(
+        path=tmp_path / "rois_manual", kind="extract", z=3, shape=(8, 9), stat=stat,
+        F=np.arange(8, dtype=np.float32).reshape(2, 4), Fneu=np.zeros((2, 4), np.float32),
+        norm=None, iscell=None, uids=np.array([5, 0]), store_indices=None,
+        engine="suite2p", read_z=1, read_c=2,
     )
-    # the run's own norm_traces win outright
-    norm = np.array([0.0, 5.0, 50.0, 0.0], np.float32)
-    np.testing.assert_array_equal(rr.display_trace({"F": F, "norm": norm}), norm)
-    # neuropil rides the same percent scale; absent -> None
-    assert rr.display_fneu({"F": F}) is None
-    yneu = rr.display_fneu({"F": F, "Fneu": Fneu})
-    np.testing.assert_allclose(yneu, np.zeros(4), atol=1e-3)
-
-
-def test_trace_set_prune_keeps_live_uids():
-    ts = rr.TraceSet("quick", "extract", {3: {"F": np.ones(4)}, 7: {"F": np.zeros(4)}})
-    ts.prune([7, 9])
-    assert list(ts.data) == [7]
-    ts.prune([])
-    assert ts.data == {}
+    (trace,) = rr.result_traces(res)
+    assert trace.key == ("roi", 5, 1, 2, "suite2p")
+    assert trace.source == "rois_manual" and trace.path == res.path
+    np.testing.assert_array_equal(trace.F, [0, 1, 2, 3])
+    # no read coordinates recorded: the store plane stands in for z
+    plain = rw.RunResult(
+        path=tmp_path / "find01", kind="demix", z=3, shape=(8, 9), stat=stat,
+        F=res.F, Fneu=None, norm=None, iscell=None, uids=None, store_indices=None,
+    )
+    assert rr.result_traces(plain) == []
+    (t0, t1) = rr.result_traces(plain, uids=[7, 8])
+    assert (t0.z, t0.c, t0.engine) == (3, 0, "masknmf") and t1.uid == 8
 
 
 # ---- disk helpers -----------------------------------------------------------
@@ -706,3 +697,12 @@ def test_registration_does_not_leave_roidetect_behind(tmp_path):
     # missing file / missing key are both no-ops
     _drop_run_gates(ops_path, logging.getLogger("test.gates"))
     _drop_run_gates(tmp_path / "nope.npy", logging.getLogger("test.gates"))
+
+
+def test_full_plane_args_carry_a_channel_and_a_frame_window(tmp_path):
+    fpath = tmp_path / "raw.tif"
+    args = rr.full_plane_args("suite2p", fpath, 2, None, channel=2, tp_indices=range(0, 5))
+    assert args["channel"] == 2
+    assert args["tp_indices"] == [0, 1, 2, 3, 4] and args["selected_planes_0based"] == [1]
+    args = rr.full_plane_args("masknmf", fpath, 1, None, channel=1)
+    assert args["channel"] == 1 and "tp_indices" not in args

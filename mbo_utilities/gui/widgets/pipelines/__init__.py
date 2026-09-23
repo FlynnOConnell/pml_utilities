@@ -72,6 +72,12 @@ def _register_pipelines_sync() -> None:
         except Exception:
             pass
 
+        try:
+            from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
+            _PIPELINE_CLASSES.append(RoiPipelineWidget)
+        except Exception:
+            pass
+
         # third-party pipelines from the "mbo_utilities.pipelines"
         # entry-point group. Loaded last so a plugin never shadows a
         # built-in in the selector order.

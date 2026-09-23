@@ -11,8 +11,10 @@ from mbo_utilities.vnoiser.session import (
     PC1_SIDES,
     CurationSession,
     hex_rgba,
-    pf_dir_for_mesc,
-    pf_scan_for_mesc,
+    recording_id,
+    trace_label,
+    voltage_run_for_mesc,
+    voltage_unit_for_mesc,
 )
 
 __all__ = [
@@ -21,6 +23,8 @@ __all__ = [
     "PC1_SIDES",
     "CurationSession",
     "hex_rgba",
-    "pf_dir_for_mesc",
-    "pf_scan_for_mesc",
+    "recording_id",
+    "trace_label",
+    "voltage_run_for_mesc",
+    "voltage_unit_for_mesc",
 ]

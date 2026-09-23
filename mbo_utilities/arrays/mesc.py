@@ -802,7 +802,16 @@ def list_mesc_units(path: Path | str) -> list[dict]:
         scan the operator ran, ``"background"`` and ``"motionCorrection"``
         for the snapshot and RTMC stream it saves beside one; ``""`` when
         unset), ``background_unit`` and ``rtmc_unit`` (the keys of that
-        snapshot and stream, None when the scan links none), ``comment``
+        snapshot and stream, None when the scan links none), ``scans`` and
+        ``rtmc_of`` (the reverse: the keys of the scans drawn on this
+        snapshot, or whose RTMC this stream watched), ``n_outlines`` and
+        ``outline_kind`` (the ROI outlines the scan recorded in
+        ``CoordinateMapJSON``: ``"line"`` ends or ``"patch"`` corners; 0 and
+        None for a unit without them), ``rtmc`` (the RTMC curves that moved,
+        ``["X total", "Y total", "Z total"]``, per layer on a Z-stack; empty
+        when RTMC never moved) and ``rtmc_armed`` (True when the scan carries
+        RTMC curves at all: a scan that armed RTMC without the tissue ever
+        moving keeps one-sample curves and an empty ``rtmc``), ``comment``
         and ``start_time``.
 
     Examples
@@ -825,8 +834,9 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                 if "Channel_0" not in unit:
                     continue
                 modality = int(_attr(unit, "MethodType", 0) or 0)
+                curves = _parse_curves(unit)
                 try:
-                    layout = _resolve_layout(unit, modality, _parse_curves(unit))
+                    layout = _resolve_layout(unit, modality, curves)
                 except (ValueError, KeyError) as e:
                     logger.warning(f"skipping {session_key}/{munit_key}: {e}")
                     continue
@@ -839,6 +849,14 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                     planned_ms = float(_attr(unit, "MeasurementLengthInMs") or 0)
                 except (TypeError, ValueError):
                     planned_ms = 0.0
+                maps = (_json_attr(unit, "CoordinateMapJSON") or {}).get("maps") or []
+                outlines = maps[0] if maps else {}
+                if outlines.get("driftEndPoints"):
+                    outline_kind, n_outlines = "line", len(outlines["driftEndPoints"])
+                elif outlines.get("contours"):
+                    outline_kind, n_outlines = "patch", len(outlines["contours"])
+                else:
+                    outline_kind, n_outlines = None, 0
                 units.append(
                     {
                         "session": session_key,
@@ -868,10 +886,22 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                         "role": str(_attr(unit, "ImageRoleDebugString", "") or ""),
                         "background_unit": _linked_unit(unit, "BackgroundImagePath"),
                         "rtmc_unit": _linked_unit(unit, "MotionCorrectionImagePath"),
+                        "scans": [],
+                        "rtmc_of": [],
+                        "n_outlines": n_outlines,
+                        "outline_kind": outline_kind,
+                        "rtmc": sorted(_rtmc_traces(curves)),
+                        "rtmc_armed": any(_RTMC_NAME.match(name) for name in curves),
                         "comment": _attr(unit, "Comment", "") or "",
                         "start_time": _iso_time(_attr(unit, "MeasurementDatePosix")),
                     }
                 )
+    by_key = {u["key"]: u for u in units}
+    for u in units:
+        for link, field in (("background_unit", "scans"), ("rtmc_unit", "rtmc_of")):
+            target = by_key.get(u[link])
+            if target is not None:
+                target[field].append(u["key"])
     return units
 
 
@@ -1016,6 +1046,8 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         self._unit = self._f[self.unit_key]
         self._curves = _parse_curves(self._unit)
         self._rtmc = _rtmc_traces(self._curves)
+        self._line_positions: list[dict] | None = None
+        self._line_positions_read = False
         if self._rtmc:
             logger.info(f"{self.unit_key}: RTMC traces {sorted(self._rtmc)}")
         else:
@@ -1360,6 +1392,23 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
     def motion_correction(self) -> MotionCorrection | None:
         """The RTMC totals as a :class:`MotionCorrection` (``rtmc_motion``)."""
         return rtmc_motion(self._rtmc)
+
+    @property
+    def line_positions(self) -> list[dict] | None:
+        """Where each scanned line or patch of an AOD unit sits, from the
+        file's geometry (``mesc_geometry.line_positions``): one dict per ROI
+        with ``z_um``, ``dz_um`` against the snapshot it was drawn on,
+        ``start_um`` / ``end_um``, ``length_um``, ``sample_um``; None for a
+        unit without ROIs or geometry. Read once."""
+        if not self._line_positions_read:
+            from mbo_utilities.arrays.mesc_geometry import line_positions
+
+            extents = self._metadata.get("mesc_roi_extents") or []
+            self._line_positions = line_positions(
+                self.filenames[0], self.unit_key, [int(e["width"]) for e in extents] or None
+            )
+            self._line_positions_read = True
+        return self._line_positions
 
     @property
     def metadata(self) -> dict:

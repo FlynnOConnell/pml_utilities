@@ -92,15 +92,14 @@ class PanelHost:
     """Stands in for a figure's ``TopStrip`` when there is no figure.
 
     The curation widget registers its panel and a frame hook here exactly as
-    it would on the strip; the app draws the panel itself, so the tab bar,
-    resizing and right-bar sync the strip does are not needed.
+    it would on the strip; the app draws the panel itself, so the tab bar
+    and resizing the strip does are not needed.
     """
 
     def __init__(self) -> None:
         self.panels: list = []
         self.hooks: list[Callable[[], None]] = []
         self.active: str | None = None
-        self.right_tab = ""
 
     def register(self, panel) -> None:
         self.panels = [p for p in self.panels if p.key != panel.key] + [panel]
@@ -126,12 +125,6 @@ class PanelHost:
     def focus(self, key: str) -> None:
         if self.has(key):
             self.active = key
-
-    def report_right_tab(self, name: str) -> None:
-        self.right_tab = name
-
-    def take_right_focus(self, name: str) -> bool:
-        return False
 
     def close(self) -> None:
         self.panels = []
@@ -196,11 +189,11 @@ class _Dashboard:
 
     def open(self, path) -> None:
         """Point the dashboard at ``path``."""
-        from mbo_utilities.vnoiser import pf_dir_for_mesc
+        from mbo_utilities.vnoiser import voltage_run_for_mesc
 
         path = Path(path).expanduser()
         self.source = path
-        if path.is_file() and path.suffix.lower() == ".mesc" and pf_dir_for_mesc(path) is None:
+        if path.is_file() and path.suffix.lower() == ".mesc" and voltage_run_for_mesc(path) is None:
             self.open_raw_mesc(path)
         else:
             # a PF folder (or the folder holding it), and a .mesc with one beside it
@@ -409,7 +402,7 @@ def curation_target(path) -> Path | None:
     """What of a viewer's open path the curation window can take: a ``.mesc``
     itself, or the ``PF`` folder a path names (the folder, its traces
     pickle, or the experiment holding it); None for anything else."""
-    from mbo_utilities.arrays.pf import pf_dir_of
+    from mbo_utilities.results import results_dir_of
 
     if isinstance(path, (list, tuple)):
         path = path[0] if path else None
@@ -418,7 +411,7 @@ def curation_target(path) -> Path | None:
     path = Path(str(path))
     if path.is_file() and path.suffix.lower() == ".mesc":
         return path
-    return pf_dir_of(path)
+    return results_dir_of(path)
 
 
 def launch_curation_window(path, channel: int = 0) -> int:

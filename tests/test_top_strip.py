@@ -20,10 +20,10 @@ def figure():
     iw.close()
 
 
-def panel(key, label="P", height=100, right_tab=None, priority=100, min_width=0.0):
+def panel(key, label="P", height=100, priority=100, min_width=0.0):
     from mbo_utilities.gui._top_strip import TopPanel
 
-    return TopPanel(key, label, lambda: None, height, right_tab, priority, min_width)
+    return TopPanel(key, label, lambda: None, height, priority, min_width)
 
 
 class TestTopStrip:
@@ -106,15 +106,6 @@ class TestTopStrip:
         figure.canvas.set_logical_size(FIGURE_SIZE[0], FIGURE_SIZE[1] * 2)
         strip._resize()
         assert strip.size == strip_height(100)
-
-    def test_right_focus_is_one_shot(self, figure):
-        from mbo_utilities.gui._top_strip import TopStrip
-
-        strip = TopStrip(figure)
-        strip._right_focus = "rois"
-        assert not strip.take_right_focus("traces")
-        assert strip.take_right_focus("rois")
-        assert not strip.take_right_focus("rois")
 
     def test_hooks_run_once_per_frame(self, figure):
         from mbo_utilities.gui._top_strip import TopStrip
@@ -219,16 +210,13 @@ class TestSignalQualitySplit:
         finally:
             iw.close()
 
-    def test_the_two_halves_draw_and_pair_with_the_right_tab(self):
+    def test_the_two_halves_draw(self):
         import traceback
 
         iw, gui = self._gui()
         try:
             self._fake_zstats(gui)
             gui._sync_top_panels()
-            spot = next(p for p in gui.top_strip.panels if p.key == "zstats")
-            assert spot.right_tab == "signal_quality"
-
             errors = []
 
             def body():

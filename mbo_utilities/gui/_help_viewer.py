@@ -28,12 +28,19 @@ DOCS = [
 # not a file: the ROI tool writes its own guide, so it stays next to the
 # code it documents instead of drifting in a shipped markdown file
 ROI_DOC = "::roi::"
+# what a .mesc holds; the MESc tab's (?) opens it
+MESC_DOC = "mesc.md"
 
 
 def docs_for(parent: Any) -> list[tuple[str, str]]:
-    """The doc tabs to show: the shipped ones, plus the ROI tool's guide as
-    a section when that widget is on. One Help button for the whole app."""
+    """The doc tabs to show: the shipped ones, the MESc page while a
+    ``.mesc`` unit is on screen, plus the ROI tool's guide as a section when
+    that widget is on. One Help button for the whole app."""
     docs = list(DOCS)
+    data = getattr(getattr(parent, "image_widget", None), "data", None) or []
+    md = getattr(data[0], "metadata", None) if len(data) else None
+    if isinstance(md, dict) and "mesc_unit" in md:
+        docs.append(("MESc files", MESC_DOC))
     if getattr(parent, "manual_roi", None) is not None:
         docs.append(("ROI Labeling", ROI_DOC))
     return docs
@@ -95,12 +102,16 @@ def draw_help_popup(parent: Any) -> None:
         else:
             # doc selector tabs
             docs = docs_for(parent)
+            # a widget's (?) asks for its page by file name, for one frame
+            wanted = getattr(parent, "_help_select_doc", None)
             if imgui.begin_tab_bar("##HelpTabs"):
                 for i, (name, filename) in enumerate(docs):
-                    if imgui.begin_tab_item(name)[0]:
+                    flags = imgui.TabItemFlags_.set_selected if filename == wanted else imgui.TabItemFlags_.none
+                    if imgui.begin_tab_item(name, None, flags)[0]:
                         parent._help_selected_doc = i
                         imgui.end_tab_item()
                 imgui.end_tab_bar()
+            parent._help_select_doc = None
 
             imgui.separator()
             imgui.spacing()
@@ -139,6 +150,10 @@ _C_H1 = imgui.ImVec4(1.0, 0.9, 0.4, 1.0)
 _C_H2 = imgui.ImVec4(0.6, 0.85, 1.0, 1.0)
 _C_H3 = imgui.ImVec4(0.85, 0.85, 0.85, 1.0)
 _C_BULLET_TERM = imgui.ImVec4(0.9, 0.9, 0.5, 1.0)
+
+# slack _render_inline keeps before it wraps, and a table column must grant
+# on top of the text it measures
+_WRAP_SLACK = 4.0
 
 # Tokenizer for inline markdown spans:
 #   **bold** | `code` | plain
@@ -187,7 +202,7 @@ def _render_inline(text: str, base_color: imgui.ImVec4 = _C_NORMAL) -> None:
     start_x = imgui.get_cursor_pos_x()
     cur_x = start_x
     first_on_line = True
-    space_pad = 4.0  # imgui's default item spacing slack
+    space_pad = _WRAP_SLACK
 
     for piece, color, is_space in tokens:
         # leading whitespace at the start of a wrapped line is dropped
@@ -215,7 +230,11 @@ def _render_markdown(content: str) -> None:
     """render markdown content with basic formatting."""
     in_code_block = False
 
-    for line in content.split("\n"):
+    lines = content.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
         stripped = line.strip()
 
         # code blocks
@@ -253,6 +272,75 @@ def _render_markdown(content: str) -> None:
         if stripped.startswith("### "):
             imgui.spacing()
             imgui.text_colored(_C_H3, stripped[4:])
+            continue
+
+        # a pipe table: header row, a |---|---| rule, then body rows
+        rule = lines[i].strip() if i < len(lines) else ""
+        if (
+            stripped.startswith("|")
+            and rule.startswith("|")
+            and "-" in rule
+            and set(rule) <= set("|-: ")
+        ):
+            block = [stripped]
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                block.append(lines[i].strip())
+                i += 1
+            rows = [[c.strip() for c in r.strip("|").split("|")] for r in block]
+            ncol = max(len(r) for r in rows)
+            # widths off the unwrapped text: an auto-fit column would measure
+            # what _render_inline just wrapped to it and never widen again
+            pad = 2.0 * imgui.get_style().cell_padding.x + _WRAP_SLACK
+            text = [
+                [
+                    row[c].replace("**", "").replace("`", "") if c < len(row) else ""
+                    for row in rows
+                ]
+                for c in range(ncol)
+            ]
+            natural = [
+                pad + max([imgui.calc_text_size(t).x for t in col] + [1.0])
+                for col in text
+            ]
+            floor = [
+                pad
+                + max(
+                    [imgui.calc_text_size(w).x for t in col for w in t.split()] + [1.0]
+                )
+                for col in text
+            ]
+            # the last column takes the rest and wraps; the others keep their
+            # own width, shrunk together when they crowd it out but never
+            # under the longest word they hold, which would wrap a label
+            head = sum(natural[:-1])
+            budget = imgui.get_content_region_avail().x * 0.6
+            scale = min(1.0, budget / head) if head else 1.0
+            if imgui.begin_table(
+                f"##md_table_{i}",
+                ncol,
+                imgui.TableFlags_.borders_inner | imgui.TableFlags_.row_bg,
+            ):
+                for c, width in enumerate(natural):
+                    if c == ncol - 1:
+                        imgui.table_setup_column(
+                            "", imgui.TableColumnFlags_.width_stretch
+                        )
+                    else:
+                        imgui.table_setup_column(
+                            "",
+                            imgui.TableColumnFlags_.width_fixed,
+                            max(floor[c], width * scale),
+                        )
+                for r, row in enumerate(rows):
+                    imgui.table_next_row()
+                    for c in range(ncol):
+                        imgui.table_next_column()
+                        cell = row[c] if c < len(row) else ""
+                        if cell:
+                            _render_inline(cell, _C_BOLD if r == 0 else _C_NORMAL)
+                imgui.end_table()
+            imgui.spacing()
             continue
 
         # bullet points (definition style: - **term**: description)
