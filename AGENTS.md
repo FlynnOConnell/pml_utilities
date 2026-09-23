@@ -31,6 +31,7 @@ pml_utilities/
 │   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # Miller Brain Studio (imgui + fastplotlib)
+│   │   ├── app/              # `mbo app`: the viewer and apps docked or windowed around it (§17.1)
 │   │   ├── playhead.py       # one time in seconds shared by every view (§7.6)
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
@@ -1098,6 +1099,8 @@ When they disagree, fix the docs.
   style wins over the shipped theme. Window geometry stays imgui's, in
   `imgui/assets/app_settings/preview_settings.ini`. Nothing else writes the
   style; `imgui_debug.py` deliberately has no style entry.
+- The app host (`gui/app`) keeps its window geometry apart from the preview
+  window's, in `get_mbo_dirs()["imgui"]/app.ini`.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,
   `KEEP_TEST_OUTPUT`, `MBO_PIPELINE_TIFF`; logging and retention variables are
   listed in §8.5.
@@ -1553,6 +1556,17 @@ Four places already have the shape and are the template:
 - `Playhead` (§7.6): one piece of shared state every view subscribes to.
 - `TraceProfile` (§7.6) and the results zarr (§7.5): the pipeline declares what its
   data means, generic views render any pipeline.
+- `gui/app` (`mbo app`), the preview window's replacement in progress. `AppHost`
+  is built on the viewer's figure (an `NDWidget` makes its own), holds the open
+  `LazyArray`, the `Playhead` and the channel and z-plane on screen, and says
+  `data_changed` to every app when other data opens. An `App` draws through
+  `draw_options` / `draw_canvas` into a dock tab or a floating window the host
+  picks. Ported: the viewer (`ViewerApp`), Open, Summary Images, Projections,
+  Tile Grid, Metadata, Diagnostics, Log and the imgui tools. Not yet: window and
+  spatial functions, frame averaging, scan phase, Signal Quality, keyboard
+  shortcuts, Save As, Set Metadata, the Process tab, Manual ROI, MESc, IsoView
+  tools, the process console, Help / Keybinds / Options, BioHPC / Cloud.
+  `HostAsParent` is the shim a ported `Widget` reads; it only shrinks.
 
 Everything else is the opposite shape (counts from 2026-09-19):
 
