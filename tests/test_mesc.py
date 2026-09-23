@@ -17,7 +17,7 @@ import h5py
 import numpy as np
 import pytest
 
-from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
+from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray, list_mesc_units
 from mbo_utilities.reader import imread
 
 
@@ -25,14 +25,23 @@ from mbo_utilities.reader import imread
 # synthetic fixture
 # ============================================================
 
-def _curve(unit, idx, name, values, delta=1.0):
+def _curve(unit, idx, name, values, delta=1.0, **attrs):
     g = unit.create_group(f"Curve_{idx}")
     g.attrs["Name"] = name
     g.attrs["CurveDataXRawDelta"] = delta
+    g.attrs.update(attrs)
     g.create_dataset(
         "CurveDataYIdxNextSample", data=np.arange(1, len(values) + 1, dtype=np.int64)
     )
     g.create_dataset("CurveDataYRawData", data=np.asarray(values))
+
+
+# how MEScan stores RTMC curves: uint32-style counts with a linear conversion to um
+_RTMC_UM = {
+    "CurveDataYConversionType": np.uint32(1),
+    "CurveDataYConversionConversionLinearScale": 0.0009765625,
+    "CurveDataYConversionConversionLinearOffset": -8192.0,
+}
 
 
 def _protocol(pattern):
@@ -93,6 +102,13 @@ def mesc_path(tmp_path_factory):
                 f"Channel_{c}",
                 data=np.arange(6 * 32 * 96, dtype=np.uint16).reshape(6, 32, 96) + c,
             )
+        # RTMC ran on this scan: X moved (counts -> um), Y is stored in um
+        # already, Z never moved (one sample), plus an intercycle X trace
+        _curve(u, 0, "RTMC X correction (total)", 8388608.0 + 1024.0 * np.arange(5), 0.03, **_RTMC_UM)
+        _curve(u, 1, "RTMC Y correction (total)", [0.0, -0.5, -1.0, -1.5], 0.03)
+        _curve(u, 2, "RTMC Z correction (total)", [8388608.0], 0.03, **_RTMC_UM)
+        _curve(u, 3, "RTMC X correction (intercycle)", [0.0, 1.0, 0.0], 0.03)
+        _curve(u, 4, "RTMC Y correction (total) layer 3", [0.0, 2.0], 0.03)
 
         # MUnit_2 - MethodType 9 ribbon transverse: ragged ROI boxes
         u = s.create_group("MUnit_2")
@@ -131,7 +147,8 @@ def mesc_path(tmp_path_factory):
         u = s.create_group("MUnit_4")
         u.attrs.update(
             {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 100.0,
-             "MeasurementDatePosix": 1_700_000_400, "Comment": "timeseries"}
+             "MeasurementDatePosix": 1_700_000_400, "Comment": "timeseries",
+             "ImageRoleDebugString": "measurement", "MeasurementLengthInMs": 700.0}
         )
         u.create_dataset(
             "Channel_0", data=np.arange(7 * 16 * 18, dtype=np.uint16).reshape(7, 16, 18)
@@ -219,6 +236,16 @@ def test_list_units_reports_every_layout(mesc_path):
     assert units[6]["fs"] == pytest.approx(1000 / 60)
     assert units[6]["duration_s"] == pytest.approx(3 * 60 / 1000)
     assert units[0]["duration_s"] is None  # a z-stack has one timepoint
+    # MEScan's role label and planned length ride along when the unit declares them
+    assert [u["role"] for u in units] == ["", "", "", "", "measurement", "", ""]
+    assert units[4]["planned_s"] == pytest.approx(0.7)
+    assert all(u["planned_s"] is None for u in units if u["munit"] != "MUnit_4")
+    assert [u["kind"] in ROI_LAYOUTS for u in units] == [False, True, True, True, False, True, False]
+    # MEScan's role label and planned length ride along when the unit declares them
+    assert [u["role"] for u in units] == ["", "", "", "", "measurement", "", ""]
+    assert units[4]["planned_s"] == pytest.approx(0.7)
+    assert all(u["planned_s"] is None for u in units if u["munit"] != "MUnit_4")
+    assert [u["kind"] in ROI_LAYOUTS for u in units] == [False, True, True, True, False, True, False]
 
 
 def test_imread_dispatches_to_mesc_array(mesc_path):
@@ -675,61 +702,41 @@ def single_unit_mesc(tmp_path_factory):
 
 
 class TestUnitPicker:
-    """`.mesc` always asks which unit to open — it is never a safe default."""
+    """A `.mesc` always opens straight to its first unit, no prompt, no Qt;
+    the MESc tab (ImGui) is how the rest get picked."""
 
-    @staticmethod
-    def _patch(monkeypatch, result):
-        from mbo_utilities.gui import run_gui as rg
-
-        calls = []
-
-        def _fake(path, units):
-            calls.append((Path(path).name, len(units)))
-            return result
-
-        monkeypatch.setattr(rg, "_prompt_for_mesc_unit", _fake)
-        return calls
-
-    def test_prompts_even_when_the_file_holds_one_unit(
-        self, single_unit_mesc, monkeypatch
-    ):
+    def test_single_unit_file_opens_without_prompting(self, single_unit_mesc):
         from mbo_utilities.gui.run_gui import _resolve_mesc_unit
 
-        calls = self._patch(monkeypatch, "MSession_0/MUnit_0")
         kwargs, proceed = _resolve_mesc_unit(single_unit_mesc, None)
-        assert calls == [("one.mesc", 1)]
-        assert (kwargs, proceed) == ({"unit": "MSession_0/MUnit_0"}, True)
+        assert proceed is True
+        assert kwargs["unit"] == "MSession_0/MUnit_0"
 
-    def test_explicit_unit_bypasses_the_picker(self, mesc_path, monkeypatch):
-        from mbo_utilities.gui.run_gui import _resolve_mesc_unit
-
-        calls = self._patch(monkeypatch, "MSession_0/MUnit_0")
-        assert _resolve_mesc_unit(mesc_path, 3) == ({"unit": 3}, True)
-        assert calls == []
-
-    def test_cancelling_aborts_instead_of_opening_something(
-        self, mesc_path, monkeypatch
+    def test_multi_unit_file_opens_the_first_unit_without_prompting(
+        self, mesc_path
     ):
+        from mbo_utilities.arrays.mesc import list_mesc_units
         from mbo_utilities.gui.run_gui import _resolve_mesc_unit
 
-        self._patch(monkeypatch, None)
-        assert _resolve_mesc_unit(mesc_path, None) == ({}, False)
+        units = list_mesc_units(mesc_path)
+        assert len(units) > 1
+        assert _resolve_mesc_unit(mesc_path, None) == (
+            {"unit": units[0]["key"]},
+            True,
+        )
 
-    def test_no_qt_falls_through_to_the_first_unit(self, mesc_path, monkeypatch):
-        from mbo_utilities.gui import run_gui as rg
-
-        self._patch(monkeypatch, rg._PICKER_UNAVAILABLE)
-        assert rg._resolve_mesc_unit(mesc_path, None) == ({}, True)
-
-    def test_non_mesc_inputs_are_left_alone(self, tmp_path, monkeypatch):
+    def test_explicit_unit_bypasses_scanning(self, mesc_path):
         from mbo_utilities.gui.run_gui import _resolve_mesc_unit
 
-        calls = self._patch(monkeypatch, "MSession_0/MUnit_0")
+        assert _resolve_mesc_unit(mesc_path, 3) == ({"unit": 3}, True)
+
+    def test_non_mesc_inputs_are_left_alone(self, tmp_path):
+        from mbo_utilities.gui.run_gui import _resolve_mesc_unit
+
         other = tmp_path / "scan.tif"
         other.touch()
         assert _resolve_mesc_unit(other, None) == ({}, True)
         assert _resolve_mesc_unit(tmp_path, None) == ({}, True)
-        assert calls == []
 
 
 # ============================================================
@@ -774,69 +781,138 @@ class TestViewerFit:
         assert mesc_array_of(np.zeros((3, 3))) is None
 
 
-class TestUnitWidgetSupport:
-    def test_supported_only_for_mesc_backed_viewers(self, mesc_path):
-        from mbo_utilities.gui.widgets.mesc_units import (
-            MescUnitsWidget,
-            display_wrap,
+def test_rtmc_traces_are_read_in_um_and_empty_curves_dropped(mesc_path):
+    arr = MescArray(mesc_path, unit="MUnit_1")
+    assert sorted(arr.rtmc) == ["X intercycle", "X total", "Y total", "Y total layer 3"]
+    assert arr.metadata["mesc_rtmc"] == sorted(arr.rtmc)
+    x = arr.rtmc["X total"]
+    np.testing.assert_allclose(x["um"], np.arange(5))
+    np.testing.assert_allclose(x["t"], np.arange(5) * 0.03 / 1000.0)
+    np.testing.assert_allclose(arr.rtmc["Y total"]["um"], [0.0, -0.5, -1.0, -1.5])
+    assert "RTMC Z correction (total)" in arr.curves
+    assert "Z total" not in arr.rtmc
+    arr.close()
+    # the listing carries the same verdict without opening the unit
+    units = {u["munit"]: u for u in list_mesc_units(mesc_path)}
+    assert units["MUnit_1"]["rtmc"] == sorted(arr.rtmc) and units["MUnit_1"]["rtmc_armed"] is True
+    assert units["MUnit_2"]["rtmc"] == [] and units["MUnit_2"]["rtmc_armed"] is False
+
+
+def test_units_without_rtmc_report_none(mesc_path):
+    arr = MescArray(mesc_path, unit="MUnit_2")
+    assert arr.rtmc == {}
+    assert arr.metadata["mesc_rtmc"] == []
+    assert arr.motion_correction is None
+    arr.close()
+
+
+def test_rtmc_totals_are_the_units_motion_correction(mesc_path):
+    from mbo_utilities.arrays.features import MotionCorrection
+    from mbo_utilities.arrays.mesc import rtmc_motion
+
+    arr = MescArray(mesc_path, unit="MUnit_1")
+    motion = arr.motion_correction
+    assert isinstance(motion, MotionCorrection) and motion
+    assert motion.source == "RTMC" and motion.unit == "um"
+    # the applied shift per axis (and per layer of a z-stack), labelled by
+    # axis; the intercycle increments stay on ``rtmc``
+    assert sorted(motion.traces) == ["X", "Y", "Y layer 3"]
+    t, um = motion.traces["X"]
+    np.testing.assert_allclose(um, np.arange(5))
+    np.testing.assert_allclose(t, np.arange(5) * 0.03 / 1000.0)
+    assert motion.duration_s == pytest.approx(4 * 0.03 / 1000.0)
+    assert rtmc_motion(arr.rtmc).traces.keys() == motion.traces.keys()
+    arr.close()
+
+
+def test_unit_rtmc_reads_a_units_traces_without_opening_it(mesc_path, tmp_path):
+    from mbo_utilities.arrays.mesc import unit_rtmc
+
+    arr = MescArray(mesc_path, unit="MUnit_1")
+    traces = unit_rtmc(mesc_path, "MUnit_1")
+    assert sorted(traces) == sorted(arr.rtmc)
+    np.testing.assert_allclose(traces["X total"]["um"], arr.rtmc["X total"]["um"])
+    np.testing.assert_allclose(traces["X total"]["t"], arr.rtmc["X total"]["t"])
+    assert unit_rtmc(mesc_path, "MSession_0/MUnit_1").keys() == traces.keys()
+    arr.close()
+    assert unit_rtmc(mesc_path, "MUnit_2") == {}
+    assert unit_rtmc(mesc_path, "MUnit_99") == {}
+    not_hdf5 = tmp_path / "scan.mesc"
+    not_hdf5.write_bytes(b"x")
+    assert unit_rtmc(not_hdf5, "MUnit_1") == {}
+    assert unit_rtmc(tmp_path / "missing.mesc", "MUnit_1") == {}
+
+
+def test_chessboard_pattern_index_is_zero_based_on_mesc_462(tmp_path):
+    # 4.6.2 stores `scanners` as a list and a 0-based `protocol.mainPatternIndex`
+    path = tmp_path / "chess462.mesc"
+    rng = np.random.default_rng(1)
+    with h5py.File(path, "w") as f:
+        u = f.create_group("MSession_0").create_group("MUnit_0")
+        u.attrs.update(
+            {"MethodType": 8, "VecChannelsSize": 1, "TStepInMs": 50.0,
+             "MeasurementDatePosix": 1_700_000_100}
         )
+        u.attrs["MultiROIProtocolJSON"] = json.dumps(
+            {
+                "protocol": {"mainPatternIndex": 1, "scanners": [{"name": "AO1"}]},
+                "scanPatterns": {
+                    "patterns": [
+                        {"centerPoints": [[0.0], [0.0], [0.0]], "pixelSizeX": 1.0, "rotation": [0, 0, 0, 1]},
+                        {
+                            "centerPoints": np.arange(12).reshape(3, 4).tolist(),
+                            "pixelSizeX": 0.8,
+                            "rotation": [0, 0, 0, 1],
+                        },
+                    ]
+                },
+            }
+        )
+        u.create_dataset("Channel_0", data=rng.integers(0, 4000, (6, 32, 96)).astype(np.uint16))
+    arr = MescArray(path, unit="MSession_0/MUnit_0")
+    assert arr.shape == (6, 1, 4, 32, 24)
+    assert len(arr.metadata["mesc_centroids"]) == 4
+    assert arr.metadata["mesc_rotations"] == [[0, 0, 0, 1]] * 4
 
-        class FakeIW:
-            def __init__(self, data):
-                self.data = data
 
-        class FakeParent:
-            def __init__(self, data):
-                self.image_widget = FakeIW(data)
-
-        arr = MescArray(mesc_path, unit=4)
-        assert MescUnitsWidget.is_supported(FakeParent([display_wrap(arr)]))
-        assert not MescUnitsWidget.is_supported(FakeParent([np.zeros((4, 4, 4))]))
-        assert not MescUnitsWidget.is_supported(FakeParent([]))
-        assert not MescUnitsWidget.is_supported(FakeParent(None))
-
-
-def test_unit_switching_stands_down_on_split_roi_views(mesc_path):
-    """`--roi 0` fans ROIs across subplots; swapping would strand all but one."""
-    from mbo_utilities.gui.widgets.mesc_units import MescUnitsWidget, display_wrap
-
-    arr = MescArray(mesc_path, unit=1, roi=0)
-    views = [display_wrap(arr) for _ in range(arr.num_rois)]
-
-    drawn = []
-
-    class FakeIW:
-        data = views
-
-        class figure:  # noqa: N801 - stands in for the fastplotlib figure
-            pass
-
-    class FakeParent:
-        image_widget = FakeIW()
-        logger = None
-
-    widget = MescUnitsWidget(FakeParent())
-    assert widget.is_supported(FakeParent())
-
-    # draw() must bail before touching any combo state for a multi-subplot view
-    import mbo_utilities.gui.widgets.mesc_units as mod
-
-    class _Recorder:
-        def __getattr__(self, name):
-            def _call(*args, **kwargs):
-                drawn.append(name)
-                if name == "combo":
-                    raise AssertionError("combo drawn for a split-ROI view")
-                if name == "get_content_region_avail":
-                    return type("V", (), {"x": 100.0})()
-                return None
-
-            return _call
-
-    original = mod.imgui
-    mod.imgui = _Recorder()
-    try:
-        widget.draw()
-    finally:
-        mod.imgui = original
-    assert "text_disabled" in drawn
+def test_linked_units_and_leading_slash_keys(tmp_path):
+    # MEScan links a scan to its snapshot and RTMC stream as absolute HDF5 paths
+    path = tmp_path / "linked.mesc"
+    with h5py.File(path, "w") as f:
+        scan = f.create_group("MSession_0").create_group("MUnit_0")
+        scan.attrs.update(
+            {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 10.0, "MeasurementDatePosix": 1,
+             "ImageRoleDebugString": "measurement", "BackgroundImagePath": "/MSession_1/MUnit_0",
+             "MotionCorrectionImagePath": "/MSession_1/MUnit_1"}
+        )
+        scan.create_dataset("Channel_0", data=np.zeros((3, 8, 8), np.uint16))
+        refs = f.create_group("MSession_1")
+        for i, role in enumerate(("background", "motionCorrection")):
+            u = refs.create_group(f"MUnit_{i}")
+            u.attrs.update(
+                {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 10.0, "MeasurementDatePosix": 1,
+                 "ImageRoleDebugString": role, "MotionCorrectionImagePath": ""}
+            )
+            u.create_dataset("Channel_0", data=np.zeros((1, 8, 8), np.uint16))
+    arr = MescArray(path, unit="MSession_0/MUnit_0")
+    assert arr.metadata["mesc_background_unit"] == "MSession_1/MUnit_0"
+    assert arr.metadata["mesc_rtmc_unit"] == "MSession_1/MUnit_1"
+    ref = MescArray(path, unit=arr.metadata["mesc_rtmc_unit"])
+    assert ref.unit_key == "MSession_1/MUnit_1"
+    assert ref.metadata["mesc_background_unit"] is None
+    assert ref.metadata["mesc_rtmc_unit"] is None
+    snap = MescArray(path, unit="/MSession_1/MUnit_0")
+    assert snap.unit_key == "MSession_1/MUnit_0"
+    units = {u["key"]: u for u in list_mesc_units(path)}
+    assert units["MSession_0/MUnit_0"]["background_unit"] == "MSession_1/MUnit_0"
+    assert units["MSession_0/MUnit_0"]["rtmc_unit"] == "MSession_1/MUnit_1"
+    assert units["MSession_1/MUnit_1"]["rtmc_unit"] is None
+    assert units["MSession_1/MUnit_1"]["background_unit"] is None
+    # a reference unit alone says nothing about whether RTMC moved
+    assert units["MSession_0/MUnit_0"]["rtmc"] == [] and units["MSession_0/MUnit_0"]["rtmc_armed"] is False
+    # the snapshot and stream know which scan they belong to
+    assert units["MSession_1/MUnit_0"]["scans"] == ["MSession_0/MUnit_0"]
+    assert units["MSession_1/MUnit_1"]["rtmc_of"] == ["MSession_0/MUnit_0"]
+    assert units["MSession_0/MUnit_0"]["scans"] == [] and units["MSession_0/MUnit_0"]["rtmc_of"] == []
+    for a in (arr, ref, snap):
+        a.close()

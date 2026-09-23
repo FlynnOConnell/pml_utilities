@@ -289,9 +289,9 @@ class TestViewerLock:
                 iw.figure.canvas.draw()
                 time.sleep(0.02)
             key = roi._sorted_trace_rows()[0]
-            entry = roi._trace_entry(key)
-            assert entry["F"].size == 12
-            assert entry["frame_average"] == 10
+            trace = roi.traces.get(key)
+            assert trace.F.size == 12
+            assert trace.frame_average == 10
 
             # the ROI itself is (Z, Y, X) and must survive unlocking
             gui.frame_average = 1

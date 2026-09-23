@@ -3,25 +3,34 @@
 ``RoiLabelStore`` holds everything the manual ROI GUI edits — a per-plane
 label volume, per-ROI records (plane, area, class, note) and the
 user-defined class-label set — with no GUI imports, so the same model can
-back a widget, a script, or a batch tool.
+back a widget, a script, or a batch tool. It is an :class:`Observable`:
+every mutation emits one ``"rois"`` event, so a view redraws from the
+event instead of polling.
 
 The volume is ``(P, Y, X)`` uint16: one plane per combination of the
 data's scrolling dims (plain z for most data — arrays without depth get a
 single plane). When channels or other scroll axes key their own masks,
 ``plane_axes`` records the layout ``((dim, size), ...)`` with z last, so
-``nz`` is the product and a z-only store keeps ``plane == z``. T is always
-shared. ROI ``i`` owns label value ``i + 1``; 0 is background. ROIs can
-never overlap: pixels already claimed by another ROI are dropped from a new
-one. Deleting an ROI renumbers the labels above it, so values stay
-contiguous ``1..N``.
+``nz`` is the product and a z-only store keeps ``plane == z``. The store
+owns that arithmetic: :meth:`plane_of` folds a slider position into a
+plane, :meth:`plane_pos` unfolds one, and :meth:`roi_z` / :meth:`roi_c`
+say which z-plane and channel an ROI was drawn on. T is always shared.
+ROI ``i`` owns label value ``i + 1``; 0 is background. ROIs can never
+overlap: pixels already claimed by another ROI are dropped from a new one.
+Deleting an ROI renumbers the labels above it, so values stay contiguous
+``1..N``.
 """
 
 from __future__ import annotations
 
 import colorsys
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 import numpy as np
+
+from mbo_utilities.annotation.events import Observable
+from mbo_utilities.arrays.features._dim_labels import find_slider_name
 
 __all__ = [
     "UNLABELED",
@@ -76,9 +85,13 @@ ROI_COLORS = _make_roi_colors()
 
 @dataclass
 class RoiRecord:
-    """Per-ROI metadata; the pixels live in the store's label volume."""
+    """Per-ROI metadata; the pixels live in the store's label volume.
 
-    z: int
+    ``plane`` is the flat index into the volume; the store decodes it into
+    a z-plane and a channel (:meth:`RoiLabelStore.roi_z`, :meth:`roi_c`).
+    """
+
+    plane: int
     area: int
     class_index: int = UNLABELED
     note: str = ""
@@ -87,13 +100,22 @@ class RoiRecord:
     color: tuple[int, int, int] | None = None  # explicit group color, uint8 rgb
 
 
-class RoiLabelStore:
+class RoiLabelStore(Observable):
     """Label volume + per-ROI records + the class-label name set.
 
-    Mutations record which z-planes changed in ``dirty_planes`` so a
+    Mutations record which planes changed in ``dirty_planes`` so a
     persistence layer can write incrementally (see ``ngff.LabelsZarr``);
-    the saver is expected to clear the set after writing.
+    the saver is expected to clear the set after writing. Every mutation
+    also emits a ``"rois"`` event whose ``info["action"]`` is one of
+    ``add``, ``delete``, ``clear``, ``class``, ``note``, ``color``,
+    ``labels``, ``tint``; ``index`` and ``uid`` name the ROI when one is
+    involved. ``axis_roles`` says which plane axis is the z-plane and which
+    the channel (``{"z": "ROI", "c": "Channel"}``) when their names do not
+    say so; ``tint`` is a display-only color per uid that wins over every
+    other color while set and is never saved.
     """
+
+    events = ("rois",)
 
     def __init__(
         self,
@@ -106,6 +128,7 @@ class RoiLabelStore:
         rois: list[RoiRecord] | None = None,
         next_uid: int = 0,
     ):
+        super().__init__()
         if labels is None:
             labels = np.zeros((int(nz), int(ny), int(nx)), np.uint16)
         else:
@@ -123,6 +146,8 @@ class RoiLabelStore:
         # what the plane axis means: ((dim name, size), ...) over the data's
         # scrolling dims with z last, so nz == product; empty = plain z planes
         self.plane_axes: tuple[tuple[str, int], ...] = ()
+        self.axis_roles: dict[str, str] = {}
+        self.tint: dict[int, tuple[int, int, int]] = {}
         self.min_pixels = int(min_pixels)
         self.dirty_planes: set[int] = set()
         self.next_uid = max(
@@ -134,10 +159,6 @@ class RoiLabelStore:
                 r.uid = self.next_uid
                 self.next_uid += 1
             seen.add(r.uid)
-
-    # ------------------------------------------------------------------
-    # shape
-    # ------------------------------------------------------------------
 
     @property
     def nz(self) -> int:
@@ -151,51 +172,111 @@ class RoiLabelStore:
     def nx(self) -> int:
         return self.labels.shape[2]
 
-    # ------------------------------------------------------------------
-    # roi mutations
-    # ------------------------------------------------------------------
+    def axis_name(self, role: str) -> str | None:
+        """The plane-axis name playing ``role`` (``"z"`` or ``"c"``), or None
+        when the volume is not keyed by that axis: ``axis_roles`` first, then
+        the name's own alias (``Zplane``, ``Cam``)."""
+        names = [name for name, _ in self.plane_axes]
+        named = self.axis_roles.get(role)
+        if named in names:
+            return named
+        return find_slider_name(names, role)
 
-    def add_roi(self, z: int, mask: np.ndarray, source: str = "") -> int | None:
-        """Claim the free pixels of a boolean ``(Y, X)`` mask on plane ``z``.
+    def axis_size(self, role: str) -> int:
+        """How many positions the ``role`` axis keys; 1 when it is not keyed."""
+        name = self.axis_name(role)
+        return dict(self.plane_axes).get(name, 1) if name is not None else 1
+
+    def plane_of(self, pos: Mapping[str, int]) -> int:
+        """Flat plane for a slider position ``{dim name: index}``; dims the
+        volume is not keyed by are ignored, missing ones sit at 0."""
+        if not self.plane_axes:
+            return 0
+        sizes = [n for _, n in self.plane_axes]
+        idx = [
+            int(np.clip(int(pos.get(name, 0)), 0, n - 1)) for name, n in self.plane_axes
+        ]
+        return int(np.ravel_multi_index(idx, sizes))
+
+    def plane_pos(self, plane: int) -> dict[str, int]:
+        """``{dim name: index}`` behind one flat plane."""
+        if not self.plane_axes:
+            return {}
+        sizes = [n for _, n in self.plane_axes]
+        vals = np.unravel_index(int(np.clip(plane, 0, self.nz - 1)), sizes)
+        return {name: int(v) for (name, _n), v in zip(self.plane_axes, vals)}
+
+    def plane_label(self, plane: int) -> str:
+        """``"3"`` for plain planes, ``"c2·z3"`` when more dims key them
+        (1-based); a worded axis keeps its space, ``"Channel 1 · ROI 3"``."""
+        pos = self.plane_pos(plane)
+        if not pos:
+            return "1"
+        if len(pos) == 1:
+            return f"{next(iter(pos.values())) + 1}"
+        if all(len(name) == 1 for name in pos):
+            return "·".join(f"{name}{v + 1}" for name, v in pos.items())
+        return " · ".join(f"{name} {v + 1}" for name, v in pos.items())
+
+    def roi_pos(self, index: int) -> dict[str, int]:
+        return self.plane_pos(self.rois[index].plane)
+
+    def roi_z(self, index: int) -> int:
+        """0-based z-plane ROI ``index`` was drawn on (0 when z is not keyed)."""
+        name = self.axis_name("z")
+        return self.roi_pos(index).get(name, 0) if name is not None else 0
+
+    def roi_c(self, index: int) -> int:
+        """0-based channel ROI ``index`` was drawn on (0 when c is not keyed)."""
+        name = self.axis_name("c")
+        return self.roi_pos(index).get(name, 0) if name is not None else 0
+
+    def add_roi(self, plane: int, mask: np.ndarray, source: str = "") -> int | None:
+        """Claim the free pixels of a boolean ``(Y, X)`` mask on ``plane``.
 
         Pixels already owned by another ROI are dropped. Returns the new
         ROI's index, or None when fewer than ``min_pixels`` free pixels
         remain (the volume is untouched then). ``source`` names where the
         mask came from ("" = drawn by hand).
         """
-        z = int(z)
-        plane = self.labels[z]
-        rows, cols = np.nonzero(np.asarray(mask, bool) & (plane == 0))
+        plane = int(plane)
+        image = self.labels[plane]
+        rows, cols = np.nonzero(np.asarray(mask, bool) & (image == 0))
         if rows.size < self.min_pixels:
             return None
-        self.rois.append(
-            RoiRecord(z=z, area=int(rows.size), uid=self.next_uid, source=str(source))
+        record = RoiRecord(
+            plane=plane, area=int(rows.size), uid=self.next_uid, source=str(source)
         )
+        self.rois.append(record)
         self.next_uid += 1
-        plane[rows, cols] = len(self.rois)
-        self.dirty_planes.add(z)
-        return len(self.rois) - 1
+        image[rows, cols] = len(self.rois)
+        self.dirty_planes.add(plane)
+        index = len(self.rois) - 1
+        self._emit("rois", action="add", index=index, uid=record.uid)
+        return index
 
     def delete_roi(self, index: int) -> bool:
         """Drop one ROI and renumber the label values above it."""
         if not 0 <= index < len(self.rois):
             return False
         # the deleted ROI's plane plus every plane holding a renumbered one
-        self.dirty_planes.add(self.rois[index].z)
-        self.dirty_planes.update(r.z for r in self.rois[index + 1 :])
+        self.dirty_planes.add(self.rois[index].plane)
+        self.dirty_planes.update(r.plane for r in self.rois[index + 1 :])
         self.labels[self.labels == index + 1] = 0
         self.labels[self.labels > index + 1] -= 1
-        self.rois.pop(index)
+        record = self.rois.pop(index)
+        self._emit("rois", action="delete", index=index, uid=record.uid)
         return True
 
     def clear(self) -> None:
         self.labels[:] = 0
         self.rois.clear()
         self.dirty_planes.update(range(self.nz))
+        self._emit("rois", action="clear")
 
     def snapshot(self) -> RoiLabelStore:
         """Deep copy (volume, records, names, ``next_uid``) that later
-        mutations of either store cannot reach."""
+        mutations of either store cannot reach; no handlers come along."""
         out = RoiLabelStore(
             self.nz,
             self.ny,
@@ -207,11 +288,8 @@ class RoiLabelStore:
             next_uid=self.next_uid,
         )
         out.plane_axes = self.plane_axes
+        out.axis_roles = dict(self.axis_roles)
         return out
-
-    # ------------------------------------------------------------------
-    # labels / notes
-    # ------------------------------------------------------------------
 
     def add_label_name(self, name: str) -> int:
         """Add a class name to the label set; returns its index (existing
@@ -222,6 +300,7 @@ class RoiLabelStore:
         if name in self.label_names:
             return self.label_names.index(name)
         self.label_names = (*self.label_names, name)
+        self._emit("rois", action="labels")
         return len(self.label_names) - 1
 
     def set_class(self, index: int, class_index: int) -> None:
@@ -229,18 +308,26 @@ class RoiLabelStore:
         if not UNLABELED <= class_index < len(self.label_names):
             raise IndexError(f"class index {class_index} out of range")
         self.rois[index].class_index = int(class_index)
+        self._emit("rois", action="class", index=index, uid=self.rois[index].uid)
 
     def set_note(self, index: int, note: str) -> None:
         self.rois[index].note = str(note)
+        self._emit("rois", action="note", index=index, uid=self.rois[index].uid)
 
     def set_color(self, index: int, rgb: tuple[int, int, int] | None) -> None:
         """Give ROI ``index`` an explicit display color; None reverts it to
         the class / hue color."""
         self.rois[index].color = None if rgb is None else tuple(int(v) for v in rgb)
+        self._emit("rois", action="color", index=index, uid=self.rois[index].uid)
 
-    # ------------------------------------------------------------------
-    # queries
-    # ------------------------------------------------------------------
+    def set_tint(self, colors: Mapping[int, tuple[int, int, int]] | None) -> None:
+        """Display colors keyed by uid that win over every other color while
+        set (a colormap over some per-ROI value); None clears them."""
+        self.tint = (
+            {} if not colors
+            else {int(u): tuple(int(v) for v in rgb) for u, rgb in colors.items()}
+        )
+        self._emit("rois", action="tint")
 
     def uid_index(self, uid: int) -> int | None:
         """ROI index currently holding ``uid``, or None when it is gone."""
@@ -249,11 +336,11 @@ class RoiLabelStore:
                 return i
         return None
 
-    def roi_at(self, z: int, row: int, col: int) -> int:
+    def roi_at(self, plane: int, row: int, col: int) -> int:
         """ROI index under a pixel, or -1 for background/out of range."""
-        if not (0 <= z < self.nz and 0 <= row < self.ny and 0 <= col < self.nx):
+        if not (0 <= plane < self.nz and 0 <= row < self.ny and 0 <= col < self.nx):
             return -1
-        return int(self.labels[z, row, col]) - 1
+        return int(self.labels[plane, row, col]) - 1
 
     def class_counts(self) -> list[int]:
         """number of ROIs per class name, in label-set order"""
@@ -263,8 +350,8 @@ class RoiLabelStore:
                 counts[r.class_index] += 1
         return counts
 
-    def rois_on_plane(self, z: int) -> list[int]:
-        return [i for i, r in enumerate(self.rois) if r.z == int(z)]
+    def rois_on_plane(self, plane: int) -> list[int]:
+        return [i for i, r in enumerate(self.rois) if r.plane == int(plane)]
 
     @property
     def counts(self) -> list[int]:
@@ -272,10 +359,13 @@ class RoiLabelStore:
         return [r.area for r in self.rois]
 
     def roi_rgb(self, index: int) -> tuple[int, int, int]:
-        """display color of one ROI: its explicit group color when set, else
-        its class color when classified, else its own hue from
-        ``ROI_COLORS`` (uint8 rgb)"""
+        """display color of one ROI: its tint while a colormap is on, else
+        its explicit group color when set, else its class color when
+        classified, else its own hue from ``ROI_COLORS`` (uint8 rgb)"""
         record = self.rois[index]
+        tinted = self.tint.get(record.uid)
+        if tinted is not None:
+            return tinted
         if record.color is not None:
             return tuple(int(v) for v in record.color)
         if record.class_index >= 0:

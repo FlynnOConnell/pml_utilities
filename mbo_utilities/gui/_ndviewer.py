@@ -27,33 +27,32 @@ from time import perf_counter
 from typing import Callable, Sequence
 
 import numpy as np
+
+from mbo_utilities.arrays.features._dim_labels import default_dim_letters
 from imgui_bundle import imgui, icons_fontawesome_6 as fa
 
 from fastplotlib.utils import calculate_figure_shape
-from fastplotlib.widgets.nd_widget import NDWidget, NDImage, NDImageProcessor
+from fastplotlib.widgets.nd_widget import NDWidget, NDImage, NDImageSlicer
 from fastplotlib.widgets.nd_widget._index import RangeContinuous
 from fastplotlib.widgets.nd_widget._async import run_sync
 from fastplotlib.widgets.nd_widget._ui import NDWidgetUI
 
-__all__ = ["MboNDViewer", "MboNDImageProcessor", "_sample_array"]
+from mbo_utilities.gui import _fpl_config  # noqa: F401
+
+__all__ = ["MboNDViewer", "MboNDImageSlicer", "_sample_array", "sliders_height"]
+
+
+def sliders_height(n_sliders: int) -> int:
+    """Height of the NDWidget controls window: the playback row and one row per slider."""
+    return 57 + 50 * n_sliders
 
 
 # positional letters for slider axes 0/1/2 — the vendored widget's internal
 # dim names, still accepted everywhere for name resolution ("t" is what
-# preview_data/_apply_legacy_window_funcs and seed_fps callers pass)
+# preview_data/_update_window_funcs and seed_fps callers pass)
 _SLIDER_LETTERS = ("t", "z", "c")
 
-# canonical per-rank axis letters for UNNAMED dims. mbo data is canonical
-# (T, C, Z, Y, X) at 5D and (T, Z, Y, X) at 4D, so the letters must follow
-# the rank — naming 5D axes with the vendored positional order t/z/c would
-# put the 'z' slider on the C axis (real bug on unsqueezed MescArrays).
-_CANONICAL_LETTERS = {1: ("t",), 2: ("t", "z"), 3: ("t", "c", "z")}
-
-
-def _default_dim_letters(n: int) -> tuple[str, ...]:
-    """canonical letters for ``n`` unnamed slider axes (+ dimN beyond 3)"""
-    base = _CANONICAL_LETTERS.get(min(n, 3), ())
-    return tuple(base) + tuple(f"dim{j}" for j in range(3, n))
+_default_dim_letters = default_dim_letters
 
 # reserved spatial dim names — reserved so they can never collide with a
 # user-supplied slider label
@@ -153,8 +152,8 @@ async def _noop_indices(*_args, **_kwargs):
     return None
 
 
-class MboNDImageProcessor(NDImageProcessor):
-    """``NDImageProcessor`` whose histogram uses mbo's scalar-key sampling.
+class MboNDImageSlicer(NDImageSlicer):
+    """``NDImageSlicer`` whose histogram uses mbo's scalar-key sampling.
 
     Upstream ``_recompute_histogram`` runs ``subsample_array`` — a single
     strided slice across every dim (``arr[::s1, ::s2, ...]``) — which mbo's
@@ -174,17 +173,17 @@ class MboNDImageProcessor(NDImageProcessor):
         the slice collapses to ``slice(n - 1, n - 1)`` — empty. A numpy array
         then renders an all-NaN frame ("Mean of empty slice"); a lazy reader
         returns something ``np.asarray`` folds to a 0-d object array, and the
-        fetch dies with "windowed_slice.ndim != len(spatial_dims): 0 != 2".
+        fetch dies with "windowed_slice.ndim != len(display_dims): 0 != 2".
 
         Recompute the stop against the correct bound. Calling super() first
         keeps this a no-op once upstream clamps with ``shape[dim]``.
         """
         indexer = super()._get_slider_dims_indexer(indices)
-        for dim in set(self.slider_dims) - set(self.spatial_dims):
+        for dim in set(self.slider_dims) - set(self.display_dims):
             func, size = self.window_funcs.get(dim, (None, None))
             if func is None or size is None or dim not in self.window_order:
                 continue
-            stop = self.slider_dim_transforms[dim](indices[dim] + size / 2)
+            stop = self.slider_maps[dim](indices[dim] + size / 2)
             start = indexer[dim].start
             indexer[dim] = slice(
                 start, min(self.shape[dim], max(stop, start + 1)), 1
@@ -230,7 +229,7 @@ class _NDDataList(list):
 
 
 class _MboIndicesView:
-    """mbo indices contract over the ReferenceIndex.
+    """mbo indices contract over the ReferenceIndices.
 
     Name-keyed get/set, iteration yields index VALUES in slider order
     (consumers snapshot positions with ``list(iw.indices)``), ``len`` is the
@@ -334,7 +333,7 @@ class _MboSlidersUI:
 
     @property
     def _ndui(self):
-        return self._viewer._ndw._sliders_ui
+        return self._viewer._ndw.ui_sliders
 
     # --- per-dim playback state (int/name keyed views) -------------------
 
@@ -425,6 +424,13 @@ class _MboNDWidgetUI(NDWidgetUI):
     """NDWidgetUI drawing integer sliders for integer ranges."""
 
     def update(self):
+        if len(self._ndwidget.indices) < 1 and len(self._update_calls) < 2:
+            # no slider dims and nothing appended to this window
+            if self.size != 0:
+                self.size = 0
+            self.collapsed = True
+            return
+
         now = perf_counter()
 
         for dim, current_index in self._ndwidget.indices:
@@ -576,7 +582,7 @@ class MboNDViewer:
             tuple(slider_dim_names) if slider_dim_names else None
         )
 
-        # shared positional slider-dim names (the ReferenceIndex dims)
+        # shared positional slider-dim names (the ReferenceIndices dims)
         counts = [self._n_slider_dims(a, r) for a, r in zip(arrays, self._rgb)]
         n_dims = max(counts) if counts else 0
         if self._slider_dim_names and len(self._slider_dim_names) == n_dims:
@@ -607,14 +613,15 @@ class MboNDViewer:
             else calculate_figure_shape(len(arrays))
         )
 
-        self._ndw = NDWidget(ref_ranges=ref_ranges, **fig_kwargs)
+        self._ndw = NDWidget(ranges=ref_ranges, **fig_kwargs)
 
         # int-slider UI; add_imgui_window replaces the existing bottom window
+        # and ui_sliders has no setter, so the attribute is written directly
         ui = _MboNDWidgetUI(self._ndw)
         self._ndw.figure.add_imgui_window(
             ui,
             location="bottom",
-            size=57 + 50 * len(self._ndw.indices),
+            size=sliders_height(len(self._ndw.indices)),
             title="NDWidget controls",
         )
         self._ndw._sliders_ui = ui
@@ -626,10 +633,9 @@ class MboNDViewer:
         # setters render synchronously in that case.
         self._offscreen = "offscreen" in type(self._ndw.figure.canvas).__module__
 
-        # graphic styling
-        gk = dict(graphic_kwargs or {})
-        vmin = gk.pop("vmin", None)
-        vmax = gk.pop("vmax", None)
+        # passed to every ImageGraphic at construction; vmin/vmax given here
+        # are kept by fastplotlib (no auto reset) and adopted by the colorbar
+        gk = {k: v for k, v in (graphic_kwargs or {}).items() if v is not None}
         gk.setdefault("cmap", cmap)
 
         # legacy func-state mirrors (for hasattr probes and getters)
@@ -638,7 +644,7 @@ class MboNDViewer:
         self._frame_apply_state: dict[int, Callable] = {}
         self._spatial_func_state = None
         # the USER spatial func routed to each graphic (unwrapped); the
-        # processor may hold a float32-cast wrapper around it instead
+        # slicer may hold a float32-cast wrapper around it instead
         self._routed_spatial: dict[int, Callable | None] = {}
 
         # one NDImage per array, in subplot order
@@ -648,9 +654,8 @@ class MboNDViewer:
             gname = None
             if names is not None and i < len(names):
                 gname = str(names[i])
-            ndg = self._add_image(nd_subplot, arr, self._rgb[i], name=gname)
+            ndg = self._add_image(nd_subplot, arr, self._rgb[i], name=gname, graphic_kwargs=gk)
             self._ndgraphics.append(ndg)
-            self._style_graphic(ndg, vmin=vmin, vmax=vmax, **gk)
 
         # window funcs: legacy dict {"t": (func, size)} or positional
         # (func, ...) matched with positional window_sizes
@@ -742,47 +747,22 @@ class MboNDViewer:
             out.append(name)
         return tuple(out)
 
-    def _add_image(self, nd_subplot, arr, rgb: bool, name: str | None = None):
+    def _add_image(self, nd_subplot, arr, rgb: bool, name: str | None = None, graphic_kwargs=None):
         k = self._n_slider_dims(arr, rgb)
         spatial = (_ROW, _COL) + ((_RGB,) if rgb else ())
         dims = tuple(self._dim_names[:k]) + spatial
         return nd_subplot.add_nd_image(
             data=arr,
             dims=dims,
-            spatial_dims=spatial,
+            display_dims=spatial,
             rgb_dim=_RGB if rgb else None,
             compute_histogram=self._histogram_widget,
-            processor_type=MboNDImageProcessor,
-            # fresh dict — the setter mutates
-            slider_dim_transforms={d: _ref_to_index for d in dims[:k]} or None,
+            slicer_type=MboNDImageSlicer,
+            # fresh dicts: fastplotlib stores and mutates both
+            slider_maps={d: _ref_to_index for d in dims[:k]} or None,
+            graphic_kwargs=dict(graphic_kwargs) if graphic_kwargs else None,
             name=name or "mbo_image",
         )
-
-    def _style_graphic(self, ndg, vmin=None, vmax=None, cmap=None, **extra):
-        g = ndg.graphic
-        if g is None:
-            return
-        if cmap is not None and getattr(g, "cmap", None) is not None:
-            with contextlib.suppress(Exception):
-                g.cmap = cmap
-        for key, val in extra.items():
-            with contextlib.suppress(Exception):
-                setattr(g, key, val)
-        if vmin is None and vmax is None:
-            return
-        cb = ndg.histogram_widget
-        # order matters: widen through vmax first so a new vmin above the
-        # old vmax is never momentarily inverted
-        if cb is not None:
-            if vmax is not None:
-                cb.vmax = float(vmax)
-            if vmin is not None:
-                cb.vmin = float(vmin)
-        else:
-            if vmax is not None:
-                g.vmax = float(vmax)
-            if vmin is not None:
-                g.vmin = float(vmin)
 
     # ------------------------------------------------------------------
     # name resolution
@@ -808,7 +788,7 @@ class MboNDViewer:
     def _check_index(self, dim: str, value) -> int:
         """validate an index for a (resolved) reference dim.
 
-        The upstream ReferenceIndex silently clamps; the vendored widget
+        The upstream ReferenceIndices silently clamps; the vendored widget
         raised — negative indexing was "not supported" and out-of-range
         raised an IndexError naming the dim, so keep that contract.
         """
@@ -953,10 +933,12 @@ class MboNDViewer:
         also be display names), positional ``(func, ...)`` tuples matched
         with ``window_sizes``, or None to clear.
 
-        Routed to per-graphic ``NDProcessor.window_funcs`` AND
+        Routed to per-graphic ``NDSlicer.window_funcs`` AND
         ``window_order`` — funcs for dims absent from ``window_order`` are
         silently ignored by fastplotlib. Sizes are in reference units, which
-        with our step-1 ranges equal frame counts.
+        with our step-1 ranges equal frame counts. The slicer-level setters
+        are used (not the ``NDGraphic`` aliases) so nothing re-renders per
+        graphic; one ``_force_render`` runs at the end.
         """
         self._window_funcs_state = value
         if value is None:
@@ -977,11 +959,11 @@ class MboNDViewer:
             wf = {
                 d: t
                 for d, t in translated.items()
-                if d in ndg.processor.slider_dims and t and t[0] is not None
+                if d in ndg.slicer.slider_dims and t and t[0] is not None
             }
             # fresh dict per graphic: the fpl setter mutates its argument
-            ndg.processor.window_funcs = dict(wf) if wf else None
-            ndg.processor.window_order = tuple(wf.keys()) if wf else None
+            ndg.slicer.window_funcs = dict(wf) if wf else None
+            ndg.slicer.window_order = tuple(wf.keys()) if wf else None
             # window activation can flip the float32-texture requirement
             self._apply_spatial(i)
         self._force_render()
@@ -1004,8 +986,8 @@ class MboNDViewer:
     @frame_apply.setter
     def frame_apply(self, value):
         """Legacy per-graphic post-processing ``{data_ix: func}`` — routed to
-        the per-graphic NDProcessor ``spatial_func`` (applied after window
-        funcs, before rendering). The processor-level setter is used so no
+        the per-graphic NDSlicer ``spatial_func`` (applied after window
+        funcs, before rendering). The slicer-level setter is used so no
         histogram recompute is triggered (the vendored frame_apply didn't
         touch the histogram either — mean-sub z-scrubbing sets this often).
         """
@@ -1042,12 +1024,12 @@ class MboNDViewer:
         self._force_render()
 
     def _route_spatial(self, i: int, func):
-        """record graphic i's USER spatial func and push it to the processor"""
+        """record graphic i's USER spatial func and push it to the slicer"""
         self._routed_spatial[i] = func
         self._apply_spatial(i)
 
     def _apply_spatial(self, i: int):
-        """Push graphic i's routed spatial func to its processor.
+        """Push graphic i's routed spatial func to its slicer.
 
         When window/spatial funcs are active over INTEGER data the func is
         wrapped in a float32 cast and the graphic's texture is upgraded to
@@ -1057,10 +1039,10 @@ class MboNDViewer:
         ndg = self._ndgraphics[i]
         func = self._routed_spatial.get(i)
         if self._needs_float(i):
-            ndg.processor.spatial_func = _with_float32_cast(func)
+            ndg.slicer.spatial_func = _with_float32_cast(func)
             self._ensure_float_texture(ndg)
         else:
-            ndg.processor.spatial_func = func
+            ndg.slicer.spatial_func = func
 
     def _needs_float(self, i: int) -> bool:
         """True when graphic i renders func output over integer data"""
@@ -1076,8 +1058,8 @@ class MboNDViewer:
             return False
         if self._routed_spatial.get(i) is not None:
             return True
-        wf = ndg.processor.window_funcs or {}
-        order = ndg.processor.window_order or ()
+        wf = ndg.slicer.window_funcs or {}
+        order = ndg.slicer.window_order or ()
         return any(
             d in order and (wf.get(d) or (None, None))[0] is not None
             for d in wf
@@ -1099,8 +1081,9 @@ class MboNDViewer:
         vmin = getattr(g, "vmin", None)
         vmax = getattr(g, "vmax", None)
         # _create_graphic re-fetches through the (now float-casting)
-        # processor, carries cmap over, and rebinds the colorbar — but it
-        # also resets vmin/vmax and re-frames the camera, so snapshot both.
+        # slicer, carries cmap over, and rebinds the colorbar — but it
+        # rebuilds with the construction-time vmin/vmax and re-frames the
+        # camera, so snapshot both.
         # The camera matters beyond losing the user's pan/zoom: show_object
         # parks it at the new graphic's depth, which put it *on* the manual
         # ROI overlays (they sit a unit in front of the image) and clipped
@@ -1151,7 +1134,7 @@ class MboNDViewer:
         Offscreen canvases never register with the rendercanvas loop, so its
         no-canvases self-stop cancels scheduled fetch tasks; a task cancelled
         before its first step skips ``_fetch_request``'s finally block and
-        leaves ``ReferenceIndex._fetch_request_active[ndg]`` True forever —
+        leaves ``ReferenceIndices._fetch_request_active[ndg]`` True forever —
         every later serial fetch just queues behind a task that no longer
         exists. There is no reliable loop to wait on offscreen, so render
         synchronously and drop the queued request that was just serviced
@@ -1227,13 +1210,13 @@ class MboNDViewer:
     # ------------------------------------------------------------------
 
     def _teardown_ndgraphic(self, ndg):
-        """fully retire one NDGraphic: processor executor, graphic, colorbar,
-        subplot registration, ReferenceIndex bookkeeping"""
+        """fully retire one NDGraphic: slicer executor, graphic, colorbar,
+        subplot registration, ReferenceIndices bookkeeping"""
         # already-scheduled fetches must not touch the dead graphic
         ndg._set_indices_ = _noop_indices
         ndg.pause = True
         with contextlib.suppress(Exception):
-            ndg.processor.close()
+            ndg.slicer.close()
         subplot = ndg._nd_subplot.subplot
         if ndg.graphic is not None:
             with contextlib.suppress(Exception):
@@ -1263,7 +1246,7 @@ class MboNDViewer:
         # else: deferred to _sweep_dead_fetch_state (next swap / close)
 
     def _sweep_dead_fetch_state(self):
-        """drop ReferenceIndex fetch bookkeeping for torn-down graphics.
+        """drop ReferenceIndices fetch bookkeeping for torn-down graphics.
 
         Keys whose fetch task was still scheduled at teardown time could not
         be removed then (the task itself indexes the queue dict); once the
@@ -1285,24 +1268,24 @@ class MboNDViewer:
                 ri._fetch_request_queue.pop(ndg, None)
 
     def _pop_ref_dim(self, name: str):
-        """remove one dim from the ReferenceIndex + every registered
-        NDWidget's slider UI (ReferenceIndex.pop_dim is an empty stub
+        """remove one dim from the ReferenceIndices + every registered
+        NDWidget's slider UI (ReferenceIndices.pop_dim is an empty stub
         upstream, so the removal is done directly)"""
         ri = self._ndw.indices
         ri._ref_ranges.pop(name, None)
         ri._indices.pop(name, None)
         for ndw in ri._ndwidgets:
-            if name in ndw._sliders_ui._playing:
-                ndw._sliders_ui.pop_dim(name)
+            if name in ndw.ui_sliders._playing:
+                ndw.ui_sliders.pop_dim(name)
 
     def _replace_data(self, i, new_array):
         """``data[i] = new_array``: the FULL mbo swap.
 
-        Re-derives dimensionality (rank may change 2D..5D — NDProcessor.dims
-        is read-only, so the NDImage is recreated and the ReferenceIndex
+        Re-derives dimensionality (rank may change 2D..5D — NDSlicer.dims
+        is read-only, so the NDImage is recreated and the ReferenceIndices
         dims are reshaped), rebuilds histogram/colorbar, clears
         window/spatial funcs, resets indices to 0, re-seeds the playback fps
-        from the new data, and shuts down the replaced graphic's processor
+        from the new data, and shuts down the replaced graphic's slicer
         executor. If installing the new array fails (a broken reader raises
         during histogram/first-frame reads), the old array is reinstalled so
         the viewer keeps working, and the failure is re-raised.
@@ -1360,7 +1343,7 @@ class MboNDViewer:
         ]
         need = max(counts) if counts else 0
         ri = self._ndw.indices
-        ndui = self._ndw._sliders_ui
+        ndui = self._ndw.ui_sliders
         fps_snapshot = self._sliders._snapshot_fps() if hasattr(self, "_sliders") else None
 
         if len(self._arrays) == 1:
@@ -1410,19 +1393,20 @@ class MboNDViewer:
         for j, ndg in enumerate(self._ndgraphics):
             if j == i:
                 continue
-            ndg.processor.window_funcs = None
-            ndg.processor.window_order = None
-            ndg.processor.spatial_func = None
+            ndg.slicer.window_funcs = None
+            ndg.slicer.window_order = None
+            ndg.slicer.spatial_func = None
 
         # start the new graphic at index 0 (ref 1) in every dim
         for dim in self._dim_names:
             ri._indices[dim] = 1
 
         # ---- rebuild the graphic + colorbar for the new array ----
-        new_ndg = self._add_image(nd_subplot, new_array, self._rgb[i], name=name)
+        new_ndg = self._add_image(
+            nd_subplot, new_array, self._rgb[i], name=name,
+            graphic_kwargs={"cmap": cmap} if cmap is not None else None,
+        )
         self._ndgraphics[i] = new_ndg
-        if cmap is not None:
-            self._style_graphic(new_ndg, cmap=cmap)
 
         # contrast for the new dataset (vendored parity: reset on swap;
         # NDImage already ran graphic.reset_vmin_vmax on the first frame,
@@ -1431,9 +1415,11 @@ class MboNDViewer:
             self._set_contrast(new_ndg, _sample_array(new_array))
 
         # resize the playback bar to the new slider count (it also
-        # auto-sizes on the next drawn frame)
+        # auto-sizes on the next drawn frame); a bar collapsed for 2D data
+        # must reopen when the new array brings sliders back
         with contextlib.suppress(Exception):
             ndui.size = 57 + 50 * len(self._dim_names)
+            ndui.collapsed = False
 
         # schedule a render of every graphic at the reset indices and fire
         # the indices handlers
@@ -1466,7 +1452,7 @@ class MboNDViewer:
     def close(self):
         """Close the viewer.
 
-        Shuts down every NDGraphic's processor executor (fastplotlib never
+        Shuts down every NDGraphic's slicer executor (fastplotlib never
         does) and guards the offscreen case where ``Figure._output`` was
         never set (``Figure.close()`` raises AttributeError there).
         """
@@ -1478,7 +1464,7 @@ class MboNDViewer:
         for ndg in self._ndgraphics:
             ndg._set_indices_ = _noop_indices
             with contextlib.suppress(Exception):
-                ndg.processor.close()
+                ndg.slicer.close()
         fig = self._ndw.figure
         if getattr(fig, "_output", None) is not None:
             with contextlib.suppress(Exception):

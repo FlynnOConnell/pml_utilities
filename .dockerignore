@@ -1,0 +1,10 @@
+.git
+.venv
+.pixi
+data
+tests/local
+notebooks
+demos
+docs/_build
+**/__pycache__
+**/*.pyc

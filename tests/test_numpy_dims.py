@@ -177,3 +177,13 @@ class TestOmeWriterLabeling:
         finally:
             import shutil
             shutil.rmtree(out, ignore_errors=True)
+
+
+def test_slider_roles_are_positional():
+    from mbo_utilities.arrays.features._dim_labels import default_dim_letters, slider_roles
+
+    assert default_dim_letters(3) == ("t", "c", "z") and default_dim_letters(2) == ("t", "z")
+    assert default_dim_letters(5) == ("t", "c", "z", "dim3", "dim4")
+    assert slider_roles(("Timepoint", "Channel", "ROI")) == {"Timepoint": "t", "Channel": "c", "ROI": "z"}
+    assert slider_roles(("t", "z")) == {"t": "t", "z": "z"}
+    assert slider_roles(()) == {}

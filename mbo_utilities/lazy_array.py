@@ -16,7 +16,10 @@ from __future__ import annotations
 
 from os.path import commonpath
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from mbo_utilities.arrays.features import MotionCorrection
 
 # canonical dims by reported rank (OME-NGFF 0.5: time -> channel -> space)
 _DEFAULT_DIMS_BY_NDIM: dict[int, tuple[str, ...]] = {
@@ -282,6 +285,14 @@ class LazyArray:
         return self.dim_index(label) is not None
 
     @property
+    def motion_correction(self) -> MotionCorrection | None:
+        """The shifts a motion-correction stage applied over this recording
+        (``features.MotionCorrection``), or None when the source records none.
+        A reader whose format carries them overrides this: MESc's RTMC curves
+        today; a registration's per-frame offsets take the same shape."""
+        return None
+
+    @property
     def source_path(self) -> Path | None:
         """canonical path `imread()` uses to reconstruct this array.
 
@@ -375,3 +386,23 @@ def _dispatch(path) -> type[LazyArray] | None:
         except Exception:
             continue
     return None
+
+
+def base_array(arr):
+    """The array ``imread`` returned under the viewer's display wrappers and
+    read-time views (timing proxy, squeezed singletons, frame averaging,
+    scan-phase correction, axial shifts), for ``isinstance`` checks."""
+    from mbo_utilities.arrays._average_view import FrameAveragedView
+    from mbo_utilities.arrays._phasecorr_view import PhaseCorrectedView
+    from mbo_utilities.arrays._registration import AxialShiftView
+    from mbo_utilities.squeeze import SqueezedView
+
+    while True:
+        if isinstance(arr, (FrameAveragedView, PhaseCorrectedView, AxialShiftView)):
+            arr = arr._source
+        elif isinstance(arr, SqueezedView):
+            arr = arr.base
+        elif type(arr).__name__ in ("_ScrubTimingProxy", "_SqueezeSingletonDims"):
+            arr = arr._arr
+        else:
+            return arr

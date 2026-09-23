@@ -9,7 +9,6 @@ Live GPU usage lives in the Process Console's System panel; the compute
 """
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any
 
@@ -20,7 +19,9 @@ from mbo_utilities.preferences import (
     get_gpu_index,
     set_gpu_index,
     get_compute_gpu,
+    get_linescan_auto_traces,
     set_compute_gpu,
+    set_linescan_auto_traces,
     get_debug_logging,
     set_debug_logging,
     get_mem_monitor,
@@ -252,6 +253,30 @@ def draw_memory_options(obj: Any, tooltip: Any = None) -> None:
     imgui.end_disabled()
 
 
+def draw_linescan_options(parent: Any, tooltip=None) -> None:
+    """The line-scan viewer's background trace toggle; shared by both
+    options popups. ``tooltip`` wraps long tooltips when given."""
+    if not hasattr(parent, "_options_linescan_auto"):
+        parent._options_linescan_auto = get_linescan_auto_traces()
+    changed, value = imgui.checkbox(
+        "Compute line-scan traces in the background", parent._options_linescan_auto
+    )
+    if imgui.is_item_hovered():
+        text = (
+            "When a line-scan unit has no saved traces (an `mbo linescan` F.npy "
+            "or a PF folder), reduce every ROI to a trace on a background thread "
+            "as the viewer opens. Off on an imaging rig to keep the CPU and the "
+            "file free: the viewer then shows a 'compute traces' button instead."
+        )
+        if tooltip is not None:
+            tooltip(text)
+        else:
+            imgui.set_tooltip(text)
+    if changed:
+        parent._options_linescan_auto = value
+        set_linescan_auto_traces(value)
+
+
 def draw_options_popup(parent: Any) -> None:
     """Draw the Options popup. Open with ``parent._show_options_popup = True``.
 
@@ -275,6 +300,7 @@ def draw_options_popup(parent: Any) -> None:
         # window aren't shadowed by a stale snapshot.
         parent._options_gpu_idx = get_gpu_index()
         parent._options_debug = get_debug_logging()
+        parent._options_linescan_auto = get_linescan_auto_traces()
         sync_memory_options(parent)
         # nvidia-smi is a subprocess; refresh the compute-device list once per
         # open, not per frame.
@@ -355,15 +381,10 @@ def draw_options_popup(parent: Any) -> None:
         if changed:
             parent._options_debug = new_debug
             set_debug_logging(new_debug)
-            # workers copy os.environ at spawn (ProcessManager.spawn), so set
-            # MBO_DEBUG here to carry the toggle into the next isoview run —
-            # the worker's isoview log bridge reads it to forward DEBUG.
-            os.environ["MBO_DEBUG"] = "1" if new_debug else "0"
-            _mbo_log.set_global_level(
-                logging.DEBUG if new_debug else logging.INFO
-            )
+            _mbo_log.set_debug(new_debug)
 
         draw_memory_options(parent)
+        draw_linescan_options(parent)
 
         imgui.dummy(imgui.ImVec2(0, 8))
         btn_w = hello_imgui.em_size(6)

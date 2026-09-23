@@ -9,6 +9,7 @@ from imgui_bundle import (
     portable_file_dialogs as pfd,
     icons_fontawesome_6 as fa,
 )
+from mbo_utilities import log as _mbo_log
 from mbo_utilities.gui import _setup  # triggers setup on import
 from mbo_utilities.preferences import (
     get_default_open_dir,
@@ -262,7 +263,9 @@ class FileDialog:
                 self._compute_devices = []
             # re-read prefs on open; they may have changed elsewhere
             from mbo_utilities.gui._options_popup import sync_memory_options
+            from mbo_utilities.preferences import get_linescan_auto_traces
             sync_memory_options(self)
+            self._options_linescan_auto = get_linescan_auto_traces()
             imgui.open_popup("##options_popup")
             self._show_options_popup = False
 
@@ -300,6 +303,7 @@ class FileDialog:
                 compute_gpu_options,
                 compute_gpu_current_index,
                 apply_compute_gpu,
+                draw_linescan_options,
                 draw_memory_options,
             )
             imgui.text_colored(COL_TEXT_DIM, "Compute GPU (suite2p / cellpose)")
@@ -330,17 +334,11 @@ class FileDialog:
             if changed:
                 self.debug_logging = new_debug
                 set_debug_logging(self.debug_logging)
-                # Apply immediately so the dialog itself sees the new level.
-                try:
-                    import logging
-                    from mbo_utilities import log as _mbo_log
-                    _mbo_log.set_global_level(
-                        logging.DEBUG if self.debug_logging else logging.INFO
-                    )
-                except Exception:
-                    pass
+                # applies now, and to every worker spawned after
+                _mbo_log.set_debug(self.debug_logging)
 
             draw_memory_options(self, tooltip=wrapped_tooltip)
+            draw_linescan_options(self, tooltip=wrapped_tooltip)
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.3))
             if imgui.button("Close", imgui.ImVec2(hello_imgui.em_size(6), 0)):
@@ -643,13 +641,12 @@ class FileDialog:
                 fa.ICON_FA_FILE_IMAGE,
                 "Open File(s)",
                 imgui.ImVec2(btn_w, btn_h),
-                "Select one or more image files" if NATIVE_DIALOGS else no_dialog_hint()
+                "Select one or more data files" if NATIVE_DIALOGS else no_dialog_hint()
             ):
                 self._open_multi = pfd.open_file(
                     "Select files",
                     self._default_dir,
-                    ["Image Files", "*.tif *.tiff *.zarr *.npy *.bin",
-                     "All Files", "*"],
+                    ["All Files", "*"],
                     pfd.opt.multiselect
                 )
 
@@ -660,7 +657,7 @@ class FileDialog:
                 fa.ICON_FA_FOLDER_OPEN,
                 "Select Folder",
                 imgui.ImVec2(btn_w, btn_h),
-                "Select folder with image data" if NATIVE_DIALOGS else no_dialog_hint()
+                "Select a data folder" if NATIVE_DIALOGS else no_dialog_hint()
             ):
                 self._select_folder = pfd.select_folder("Select folder", self._default_dir)
             if not NATIVE_DIALOGS:

@@ -19,14 +19,16 @@ The widget uses modular components:
 import logging
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 import os
 import importlib.util
 import time
 
 # Force rendercanvas to use Qt backend if PyQt6 is available
 # This must happen BEFORE importing fastplotlib to avoid glfw selection
-if importlib.util.find_spec("PyQt6") is not None:
+if importlib.util.find_spec("PyQt6") is not None and os.environ.get(
+    "RENDERCANVAS_BACKEND", "qt"
+).lower() in ("qt", "pyqt6"):
     os.environ.setdefault("RENDERCANVAS_BACKEND", "qt")
     import PyQt6  # noqa: F401 - Must be imported before rendercanvas.qt can load
 
@@ -50,6 +52,11 @@ from mbo_utilities.arrays import ScanImageArray
 from mbo_utilities.gui._availability import HAS_SUITE2P
 from mbo_utilities.gui._imgui_helpers import push_font_safe
 from mbo_utilities.gui.widgets.gui_logger import GuiLogger, GuiLogHandler
+from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_windows
+from mbo_utilities.gui.widgets.style_editor import (
+    apply_saved_style,
+    draw_style_editor_window,
+)
 from mbo_utilities.gui.widgets.progress_bar import start_output_capture
 from mbo_utilities.gui.widgets import get_supported_widgets, draw_all_widgets
 from mbo_utilities import log
@@ -72,9 +79,11 @@ from mbo_utilities.gui._metadata_editor import draw_metadata_popup
 from mbo_utilities.gui._options_popup import draw_options_popup
 
 
-import fastplotlib as fpl
 from mbo_utilities.gui._edge_window import EdgeWindow
 import contextlib
+
+if TYPE_CHECKING:
+    from mbo_utilities.gui._ndviewer import MboNDViewer
 
 __all__ = ["PreviewDataWidget"]
 
@@ -159,6 +168,10 @@ def _base_5d(arr):
             return arr
 
 
+# the Signal Quality plot on the top strip
+ZSTATS_PANEL_HEIGHT = 260
+
+
 class PreviewDataWidget(EdgeWindow):
     """
     Main GUI widget for data preview and processing.
@@ -171,8 +184,8 @@ class PreviewDataWidget(EdgeWindow):
 
     Parameters
     ----------
-    iw : fastplotlib.ImageWidget
-        The ImageWidget to attach to.
+    iw : MboNDViewer
+        The viewer to attach to.
     fpath : str | list | None
         Path(s) to the data file(s).
     threading_enabled : bool
@@ -192,7 +205,7 @@ class PreviewDataWidget(EdgeWindow):
 
     def __init__(
         self,
-        iw: "fpl.ImageWidget",
+        iw: "MboNDViewer",
         fpath: str | None | list = None,
         threading_enabled: bool = True,
         size: int | None = None,
@@ -245,9 +258,11 @@ class PreviewDataWidget(EdgeWindow):
         if implot.get_current_context() is None:
             implot.create_context()
 
-        # apply opaque imgui style (idempotent, runs once per process)
+        # apply opaque imgui style (idempotent, runs once per process), then
+        # whatever the style editor last saved, so a user style wins over it
         from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
         style_imgui_opaque()
+        apply_saved_style()
 
         # Setup ImGui fonts
         self._init_fonts()
@@ -423,8 +438,6 @@ class PreviewDataWidget(EdgeWindow):
 
     def _init_state(self):
         """Initialize widget state."""
-        for subplot in self.image_widget.figure:
-            subplot.toolbar = False
         self.image_widget._sliders_ui._loop = True
 
         # Determine nz and nc (z-planes and channels) using dims property
@@ -677,8 +690,8 @@ class PreviewDataWidget(EdgeWindow):
         """Claim the figure's top edge for the menu row.
 
         The strip spans the canvas's full width, so it is also where the
-        panels that want that width register themselves — Manual ROI's ROI
-        and Traces cards, the Signal Quality plot.
+        panels that want that width register themselves: Manual ROI's trace
+        plot, the Signal Quality plot.
         """
         from mbo_utilities.gui._top_strip import TopStrip
 
@@ -696,7 +709,7 @@ class PreviewDataWidget(EdgeWindow):
             self.top_strip.register(
                 TopPanel(
                     "zstats", "Signal Quality", self.draw_stats_plot,
-                    height=260, right_tab="signal_quality", priority=20,
+                    height=ZSTATS_PANEL_HEIGHT, priority=20,
                 )
             )
         elif not want:
@@ -727,19 +740,34 @@ class PreviewDataWidget(EdgeWindow):
     def sync_manual_roi(self, enabled: bool) -> None:
         """Create or tear down the manual-ROI widget to match the toggle.
 
-        Building it attaches an overlay graphic to the subplot and claims the
-        figure's top strip and right-widget tabs, so it is created lazily the
+        Building it attaches an overlay graphic to the subplot, puts its
+        Traces panel on the figure's top strip and fills the right widget's
+        ROIs and Traces tabs, so it is created lazily the
         first time the widget is switched on and dropped again when it is
         switched off.
         """
+        from mbo_utilities.gui.linescan_viewer import attach_standard_traces
         from mbo_utilities.gui.manual_roi import attach_roi_widget, detach_roi_widget
 
         current = getattr(self, "manual_roi", None)
-        if enabled and current is None:
+        if enabled == (current is not None):
+            return
+        # a line-scan unit's per-ROI traces live on the widget's Traces tab,
+        # so they come and go with it
+        traces = getattr(self, "linescan_traces", None)
+        if traces is not None:
+            traces.close()
+            self.linescan_traces = None
+        if enabled:
             # attach logs (never raises) when the widget cannot be built, and
             # adopts the store parked by the previous detach in this session
             attach_roi_widget(self)
-        elif not enabled and current is not None:
+            if getattr(self, "manual_roi", None) is not None:
+                try:
+                    attach_standard_traces(self)
+                except Exception:
+                    self.logger.warning("line-scan traces unavailable", exc_info=True)
+        else:
             try:
                 detach_roi_widget(self)
             except Exception:
@@ -778,21 +806,8 @@ class PreviewDataWidget(EdgeWindow):
 
     # === Properties ===
 
-    @property
-    def processors(self) -> list:
-        """Access to underlying NDImageProcessor instances.
-
-        Empty on stock fastplotlib (no processors API); every consumer
-        early-returns on an empty list, degrading projection/window
-        controls instead of crashing.
-        """
-        return getattr(self.image_widget, "_image_processors", [])
-
     def _get_data_arrays(self) -> list:
-        """Get underlying data arrays from image processors."""
-        procs = self.processors
-        if procs:
-            return [proc.data for proc in procs]
+        """the viewer's data arrays"""
         return list(getattr(self.image_widget, "data", None) or [])
 
     @property
@@ -1029,14 +1044,11 @@ class PreviewDataWidget(EdgeWindow):
                 self.logger.debug("manual ROI teardown failed", exc_info=True)
                 self.manual_roi = None
 
-        # the window funcs and the spatial closure are bound to the old t-rank
+        # the window funcs and the spatial closure are bound to the old
+        # t-rank; the swap itself clears the viewer's copies
         self._window_size = 1
         if hasattr(self, "_rebuild_spatial_func"):
             self._rebuild_spatial_func()
-        for proc in getattr(iw, "_image_processors", []):
-            proc.window_funcs = None
-            proc.window_sizes = None
-            proc.window_order = None
 
         iw.data[0] = wrapped
         if iw.n_sliders > 0:
@@ -1084,14 +1096,7 @@ class PreviewDataWidget(EdgeWindow):
             return
         self._window_size = value
         self.logger.debug(f"Window size set to {value}.")
-        if not self.processors:
-            self._apply_legacy_window_funcs()
-            return
-        n_slider_dims = self.processors[0].n_slider_dims
-        if n_slider_dims == 0:
-            return
-        per_processor_sizes = (self._window_size,) + (None,) * (n_slider_dims - 1)
-        self._set_processor_attr("window_sizes", per_processor_sizes)
+        self._update_window_funcs()
 
     # === Internal methods ===
 
@@ -1099,92 +1104,6 @@ class PreviewDataWidget(EdgeWindow):
         """Trigger a frame refresh on the ImageWidget."""
         current_indices = list(self.image_widget.indices)
         self.image_widget.indices = current_indices
-
-    def _set_processor_attr(self, attr: str, value):
-        """Set processor attribute without expensive histogram recomputation."""
-        if not self.processors:
-            self._set_legacy_iw_attr(attr, value)
-            return
-
-        # save histogram state and disable recomputation during update
-        saved = [(p._compute_histogram, p._histogram) for p in self.processors]
-        for proc in self.processors:
-            proc._compute_histogram = False
-
-        try:
-            if attr == "window_funcs":
-                if isinstance(value, tuple):
-                    value = [value] * len(self.processors)
-                self.image_widget.window_funcs = value
-            elif attr == "window_sizes":
-                if isinstance(value, (tuple, list)) and not isinstance(value[0], (tuple, list, type(None))):
-                    value = [value] * len(self.processors)
-                self.image_widget.window_sizes = value
-            elif attr == "spatial_func":
-                self.image_widget.spatial_func = value
-            else:
-                for proc in self.processors:
-                    setattr(proc, attr, value)
-                self._refresh_image_widget()
-        except Exception as e:
-            self.logger.exception(f"Error setting {attr}: {e}")
-        finally:
-            # restore histogram state
-            for proc, (orig_compute, orig_hist) in zip(self.processors, saved):
-                proc._compute_histogram = orig_compute
-                proc._histogram = orig_hist
-            # fix dock visibility (fastplotlib sets to 0 when histogram is None)
-            for subplot in self.image_widget.figure:
-                if subplot.docks["right"].size < 1:
-                    subplot.docks["right"].size = 80
-
-        # fpl's window_funcs/window_sizes/spatial_func setters refresh via
-        # `self.indices = self.indices`, but that runs *before* the histogram
-        # restore above and can leave the displayed graphic stale. Force a
-        # post-restore refresh so changes take effect immediately.
-        if attr in ("window_funcs", "window_sizes", "spatial_func"):
-            self._refresh_image_widget()
-
-    def _set_legacy_iw_attr(self, attr: str, value):
-        """No processors API (stock ImageWidget): translate to its native
-        ``window_funcs`` / ``frame_apply``."""
-        iw = self.image_widget
-        if not hasattr(iw, "window_funcs"):
-            return
-        try:
-            if attr in ("window_funcs", "window_sizes"):
-                self._apply_legacy_window_funcs()
-            elif attr == "spatial_func":
-                if isinstance(value, (list, tuple)):
-                    funcs = list(value)
-                else:
-                    funcs = [value] * self.num_graphics
-                iw.frame_apply = {
-                    i: f for i, f in enumerate(funcs) if f is not None
-                }
-        except Exception as e:
-            self.logger.exception(f"Error setting {attr}: {e}")
-
-    def _apply_legacy_window_funcs(self):
-        """Map projection mode + window size onto the stock ImageWidget's
-        ``window_funcs`` ({"t": (func, size)}). Its half-window math yields
-        an empty window for even/size<3 values, so sizes are odd-ified and
-        size<=1 clears the projection (raw frame)."""
-        iw = self.image_widget
-        if not hasattr(iw, "window_funcs"):
-            return
-        if "t" not in (getattr(iw, "slider_dims", None) or ()):
-            return
-        try:
-            size = int(self._window_size)
-            if size <= 1:
-                iw.window_funcs = None
-                return
-            proj_funcs = {"mean": np.mean, "max": np.max, "std": np.std}
-            func = proj_funcs.get(self._proj, np.mean)
-            iw.window_funcs = {"t": (func, max(3, size | 1))}
-        except Exception as e:
-            self.logger.exception(f"Error applying window funcs: {e}")
 
     def _refresh_widgets(self):
         """Refresh widgets based on current data capabilities."""
@@ -1240,9 +1159,7 @@ class PreviewDataWidget(EdgeWindow):
         )
 
         if not any_mean_sub and sigma is None:
-            def identity(frame):
-                return frame
-            self._set_processor_attr("spatial_func", identity)
+            self.image_widget.spatial_func = None
             return
 
         spatial_funcs = []
@@ -1260,7 +1177,7 @@ class PreviewDataWidget(EdgeWindow):
 
             spatial_funcs.append(self._make_spatial_func(mean_img, sigma))
 
-        self._set_processor_attr("spatial_func", spatial_funcs)
+        self.image_widget.spatial_func = spatial_funcs
 
     def _sampled_mean_pos(self, i: int, z_idx: int, n_rows: int) -> int:
         """Row in graphic ``i``'s mean-images stack for displayed plane z_idx.
@@ -1316,35 +1233,23 @@ class PreviewDataWidget(EdgeWindow):
         return spatial_func
 
     def _update_window_funcs(self):
-        """Update window_funcs on image widget based on current projection mode."""
-        if not self.processors:
-            self._apply_legacy_window_funcs()
+        """Map projection mode + window size onto the viewer's
+        ``window_funcs`` ({"t": (func, size)}). Sizes are odd-ified so the
+        window is centered on the current frame; size<=1 clears the
+        projection (raw frame)."""
+        iw = self.image_widget
+        if "t" not in (getattr(iw, "slider_dims", None) or ()):
             return
-
-        def mean_wrapper(data, axis, keepdims):
-            return np.mean(data, axis=axis, keepdims=keepdims)
-
-        def max_wrapper(data, axis, keepdims):
-            return np.max(data, axis=axis, keepdims=keepdims)
-
-        def std_wrapper(data, axis, keepdims):
-            return np.std(data, axis=axis, keepdims=keepdims)
-
-        proj_funcs = {"mean": mean_wrapper, "max": max_wrapper, "std": std_wrapper}
-        proj_func = proj_funcs.get(self._proj, mean_wrapper)
-
-        n_slider_dims = self.processors[0].n_slider_dims
-
-        if n_slider_dims == 0:
-            return
-        elif n_slider_dims == 1:
-            window_funcs = (proj_func,)
-        elif n_slider_dims == 2:
-            window_funcs = (proj_func, None)
-        else:
-            window_funcs = (proj_func,) + (None,) * (n_slider_dims - 1)
-
-        self._set_processor_attr("window_funcs", window_funcs)
+        try:
+            size = int(self._window_size)
+            if size <= 1:
+                iw.window_funcs = None
+                return
+            proj_funcs = {"mean": np.mean, "max": np.max, "std": np.std}
+            func = proj_funcs.get(self._proj, np.mean)
+            iw.window_funcs = {"t": (func, max(3, size | 1))}
+        except Exception as e:
+            self.logger.exception(f"Error applying window funcs: {e}")
 
     def gui_progress_callback(self, frac, meta=None):
         """Handle progress callbacks from save operations."""
@@ -1384,8 +1289,8 @@ class PreviewDataWidget(EdgeWindow):
 
     # === Rendering ===
 
-    def draw_window(self):
-        """Override parent to handle keyboard shortcuts and global popups."""
+    def draw(self):
+        """Keyboard shortcuts and the global popups, then the edge window."""
         handle_keyboard_shortcuts(self)
         check_file_dialogs(self)
 
@@ -1397,6 +1302,8 @@ class PreviewDataWidget(EdgeWindow):
         draw_keybinds_popup(self)
         draw_help_popup(self)
         draw_options_popup(self)
+        draw_imgui_debug_windows(self)
+        draw_style_editor_window(self)
         from mbo_utilities.gui._cloud import draw_cloud_popup
         from mbo_utilities.gui.widgets.biohpc import draw_biohpc_popup
 
@@ -1420,7 +1327,7 @@ class PreviewDataWidget(EdgeWindow):
         except Exception:
             pass
 
-        super().draw_window()
+        super().draw()
 
     def update(self):
         """Main render callback."""

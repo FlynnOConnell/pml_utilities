@@ -23,21 +23,24 @@ dependencies = [
 	"imageio[ffmpeg]",
 	"ffmpeg-python",
 	"matplotlib>=3.10.1",
+	"cmap>=0.7.2",
 	"opencv-contrib-python-headless",
 	"h5py",
+	"psutil>=7.0",
 	"tqdm",
 	"icecream>=2.1.4",
-	"glfw ; sys_platform != 'linux'",
+	"glfw",
 	"pyqt6>=6.7 ; sys_platform == 'linux'",
 	"pyqt6-sip ; sys_platform == 'linux'",
 	"pygfx>=0.15.2",
 	"llvmlite>=0.43.0",
 	"numba>=0.60.0",
-	"fastplotlib[imgui] @ git+https://github.com/fastplotlib/fastplotlib@b2132e3d11b9e2bd641e0bbfc0bbee3d413d1d88",
-	"masknmf",
-	#"masknmf[multisession,classification] @ git+https://github.com/apasarkar/masknmf-toolbox.git@xarray-compatability",
-	"rendercanvas>=2.4.2",
+	"fastplotlib",
+	"rendercanvas>=2.7.2",
+	"uvicorn>=0.30",
+	"websockets>=13",
 	"imgui-bundle>=1.92.801,<1.92.900",
+	"imgui_debugger>=0.2,<0.3",
 	"wgpu>=0.28.1",
 	"submitit>=1.5.0",
 	"imagecodecs>=2026.6.6",
@@ -58,8 +61,13 @@ zarr = "mbo_utilities.arrays.zarr:ZarrArray"
 suite2p = "mbo_utilities.arrays.suite2p:Suite2pArray"
 h5 = "mbo_utilities.arrays.h5:H5Array"
 mesc = "mbo_utilities.arrays.mesc:MescArray"
+results = "mbo_utilities.results:ResultsArray"
+demixing = "mbo_utilities.arrays.demixing:DemixingArray"
 numpy = "mbo_utilities.arrays.numpy:NumpyArray"
 isoview = "mbo_utilities.arrays.isoview.array:IsoviewArray"
+
+[project.entry-points."mbo_utilities.pipelines"]
+rois = "mbo_utilities.gui.widgets.pipelines.rois:RoiPipelineWidget"
 
 [project.urls]
 Homepage = "https://github.com/millerbrainobservatory/mbo_utilities"
@@ -104,6 +112,10 @@ docs = [
 ]
 all = ["pml_utilities[napari,notebooks]"]
 
+[tool.uv.sources]
+# imgui_debugger is not on PyPI yet; resolve it from the sibling checkout
+imgui_debugger = { path = "../imgui_debugger", editable = true }
+
 [tool.uv]
 default-groups = ["dev", "suite2p", "napari", "notebooks", "docs"]
 override-dependencies = [
@@ -129,28 +141,28 @@ extend-exclude = [
 
 [tool.ruff.lint]
 pydocstyle = { convention = "numpy" }
-select = ["ALL"]
+select = [
+    "F",    # pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # import grouping: stdlib, third-party, mbo_utilities
+    "TID",  # absolute imports inside the package
+    "UP",   # pyupgrade
+    "PTH",  # pathlib.Path, never os.path
+    "ERA",  # commented-out code
+    "D",    # numpy docstrings
+    "Q",    # quotes, matches ruff format
+]
 ignore = [
-    "EM101",  # Exception must not use string literal
-    "EM102",  # Exception must not use f-string literal
-    "TRY003", # Long exception messages
-    "I001",
-    "C901",   # Too complex
-    "PLR0912", # Too many branches
-    "PLR0913", # Too many arguments
-    "PLR0915", # Too many statements
-# Annotation rules - optional
-    "ANN",    # All missing type annotation rules (ANN001, ANN201, etc.)
-    "D401",   # First line should be in imperative mood (remove to opt in)
-    "COM812", # Missing trailing comma (conflicts with ruff format)
-    "ISC001", # Import sorting (conflicts with ruff format)
-    "FIX002", # Fixable issue
-    "DOC201", # TODO enable in follow-up PR; no doc for return type.
-    "FBT",    # TODO: enable in follow-up PR; require bool options to be keyword-only.
+    "E501",  # ruff format wraps code; long strings and comments remain (AGENTS.md §15)
+    "D1",    # docstrings are optional (STYLE.md)
+    "D205",  # blank line after summary; enable after the §15 sweep
+    "D400",  # trailing period on summary; enable after the §15 sweep
+    "D401",  # imperative mood
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"docs/*.py" = ["D"]
+"**/__init__.py" = ["F401"]
 
 [tool.setuptools]
 package-dir = {"" = "."}

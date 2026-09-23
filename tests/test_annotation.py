@@ -32,7 +32,7 @@ class TestStore:
     def test_add_roi_claims_pixels_on_its_plane(self, store):
         index = store.add_roi(1, disk(32, 32, 10, 10, 3))
         assert index == 0
-        assert store.rois[0].z == 1
+        assert store.rois[0].plane == 1
         assert store.labels[1, 10, 10] == 1
         assert store.labels[0].max() == 0 and store.labels[2].max() == 0
         assert store.counts == [store.rois[0].area]
@@ -136,9 +136,9 @@ class TestStore:
         labels = np.zeros((1, 8, 8), np.uint16)
         labels[0, 0, :3] = (1, 2, 3)
         rois = [
-            RoiRecord(z=0, area=1, uid=5),
-            RoiRecord(z=0, area=1),
-            RoiRecord(z=0, area=1, uid=5),
+            RoiRecord(plane=0, area=1, uid=5),
+            RoiRecord(plane=0, area=1),
+            RoiRecord(plane=0, area=1, uid=5),
         ]
         store = RoiLabelStore(1, 8, 8, labels=labels, rois=rois)
         assert [r.uid for r in store.rois] == [5, 6, 7]
@@ -188,7 +188,7 @@ class TestLabelsZarr:
         restored = LabelsZarr.load(path)
         assert np.array_equal(restored.labels, store.labels)
         assert restored.label_names == ("soma", "dendrite")
-        assert [r.z for r in restored.rois] == [0, 2]
+        assert [r.plane for r in restored.rois] == [0, 2]
         assert [r.area for r in restored.rois] == [r.area for r in store.rois]
         assert restored.rois[0].class_index == 1
         assert restored.rois[1].class_index == UNLABELED
@@ -304,7 +304,7 @@ class TestLabelsZarr:
         root.attrs.update({"version": "0.5", "labels": ["0"]})
         restored = LabelsZarr.load(path)
         assert np.array_equal(restored.labels, volume)
-        assert [r.z for r in restored.rois] == [0, 1]
+        assert [r.plane for r in restored.rois] == [0, 1]
         assert [r.area for r in restored.rois] == [16, 16]
         assert all(r.class_index == UNLABELED for r in restored.rois)
 

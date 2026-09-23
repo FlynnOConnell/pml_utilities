@@ -16,7 +16,7 @@ from mbo_utilities.arrays import ScanImageArray
 from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.preferences import add_recent_file, get_last_dir, set_last_dir
 
-_IMAGE_FILTERS = ["Image Files", "*.tif *.tiff *.zarr *.npy *.bin", "All Files", "*"]
+_IMAGE_FILTERS = ["All Files", "*"]
 
 
 def open_prompts(parent: Any) -> tuple[PathPrompt, PathPrompt]:
@@ -460,6 +460,68 @@ def _reset_per_data_state(parent: Any) -> None:
     parent._saveas_rois = False
 
 
+def swap_viewer_array(parent: Any, arr, title: str | None = None) -> None:
+    """Show ``arr`` in the running viewer in place of the current array.
+
+    For a sibling of what is open (another MESc unit): the file dialog path in `load_new_data` rebuilds the viewer,
+    this only re-derives the per-dataset display state. Stale closures are
+    dropped before the swap (the spatial func captured the previous array's
+    mean image and would be fed a differently shaped frame), then the
+    widget re-derives its dimensions from the new array.
+    """
+    from mbo_utilities.gui.run_gui import _ScrubTimingProxy, _SqueezeSingletonDims
+
+    iw = parent.image_widget
+
+    _reset_per_data_state(parent)
+    parent._rebuild_spatial_func()
+    for proc in getattr(iw, "_image_processors", []) or []:
+        proc.window_funcs = None
+        proc.window_sizes = None
+        proc.window_order = None
+
+    display = arr
+    shape = getattr(arr, "shape", ())
+    if len(shape) == 5 and any(shape[i] == 1 for i in range(3)):
+        display = _SqueezeSingletonDims(arr)
+    display = _ScrubTimingProxy(display)
+    iw.data[0] = display
+    # slider labels are a plain attribute on the widget; a swap can change
+    # both the count and the meaning (Z-plane vs ROI), so they have to be
+    # re-stamped alongside the data.
+    iw._slider_dim_names = tuple(arr.slider_dim_labels) or None
+    if getattr(iw, "n_sliders", 0) > 0:
+        iw.indices = [0] * iw.n_sliders
+
+    parent.shape = display.shape
+    _, nc, nz, _, _ = arr.shape
+    parent.nc, parent.nz = nc, nz
+    parent._custom_metadata = {}
+    parent._update_window_funcs()
+    parent.set_context_info()
+
+    if title:
+        try:
+            iw.figure[0, 0].title = title
+        except Exception:
+            parent.logger.debug("subplot title update skipped", exc_info=True)
+
+    # summary images / projections cache per-dataset statistics; the new
+    # array's are unrelated to the old one's.
+    try:
+        from mbo_utilities.gui.viewers import TimeSeriesViewer
+
+        if isinstance(getattr(parent, "_viewer", None), TimeSeriesViewer):
+            parent.refresh_zstats()
+    except Exception:
+        parent.logger.debug("zstats refresh skipped", exc_info=True)
+
+    # widget support can differ between arrays (a snapshot has no time axis,
+    # a z-stack no scan-phase). Rebinds parent._widgets to a new list; the
+    # frame currently iterating the old one finishes safely.
+    parent._refresh_widgets()
+
+
 def load_new_data(parent: Any, path: str):
     """
     Load new data from the specified path using iw-array API.
@@ -470,8 +532,6 @@ def load_new_data(parent: Any, path: str):
     from mbo_utilities.gui.run_gui import (
         _SqueezeSingletonDims,
         _ScrubTimingProxy,
-        _find_demixing_results,
-        _open_curation_gui,
     )
 
     path_obj = Path(path)
@@ -479,21 +539,6 @@ def load_new_data(parent: Any, path: str):
         parent.logger.error(f"Path does not exist: {path}")
         parent._load_status_msg = "Error: Path does not exist"
         parent._load_status_color = imgui.ImVec4(1.0, 0.3, 0.3, 1.0)
-        return
-
-    # masknmf demixing results open in masknmf's own curation GUI as a second
-    # window on the running loop, instead of being swapped into this viewer
-    demix_file = _find_demixing_results(path_obj)
-    if demix_file is not None:
-        try:
-            _open_curation_gui(demix_file)
-            parent.logger.info(f"Opened curation GUI for {demix_file}")
-            parent._load_status_msg = "Opened curation GUI"
-            parent._load_status_color = imgui.ImVec4(0.3, 1.0, 0.3, 1.0)
-        except Exception as e:
-            parent.logger.exception(f"Curation GUI failed: {e}")
-            parent._load_status_msg = f"Curation GUI failed: {e}"
-            parent._load_status_color = imgui.ImVec4(1.0, 0.3, 0.3, 1.0)
         return
 
     try:
@@ -544,20 +589,14 @@ def load_new_data(parent: Any, path: str):
         # so the reset contract can be tested in isolation.
         _reset_per_data_state(parent)
 
-        # Drop stale closures *before* swapping data. The processor's
-        # spatial_func is a closure that captured the previous dataset's
-        # mean_img, so the next render after data[0] = new_data would crash
-        # if the new shape differs. _reset_per_data_state already cleared
-        # _mean_subtraction and _gaussian_sigma, so _rebuild_spatial_func
-        # will install the identity passthrough. Window funcs/sizes get
-        # cleared too since they're bound to the old t-rank.
+        # Drop the stale spatial closure *before* swapping data: it captured
+        # the previous dataset's mean_img, so the next render after
+        # data[0] = new_data would crash if the new shape differs.
+        # _reset_per_data_state already cleared _mean_subtraction and
+        # _gaussian_sigma, so _rebuild_spatial_func clears the func. The
+        # viewer drops its own window funcs during the swap.
         if hasattr(parent, "_rebuild_spatial_func"):
             parent._rebuild_spatial_func()
-        if hasattr(parent, "image_widget") and parent.image_widget is not None:
-            for proc in getattr(parent.image_widget, "_image_processors", []):
-                proc.window_funcs = None
-                proc.window_sizes = None
-                proc.window_order = None
 
         # The manual ROI widget is bound to the old data's shape, store and
         # graphics; tear it down while the old scene is still intact and
