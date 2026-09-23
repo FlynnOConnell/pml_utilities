@@ -25,7 +25,7 @@ from vnoiser.curation import (
 )
 from vnoiser.dataset import RecordingSample
 
-from mbo_utilities.arrays.pf import TRACES_FILE, PfArray, pf_results_in
+from mbo_utilities.results import ResultsArray, newest_results, results_dir_of
 
 __all__ = [
     "LABEL_RGBA",
@@ -33,8 +33,10 @@ __all__ = [
     "PC1_SIDES",
     "CurationSession",
     "hex_rgba",
-    "pf_dir_for_mesc",
-    "pf_scan_for_mesc",
+    "voltage_run_for_mesc",
+    "voltage_unit_for_mesc",
+    "recording_id",
+    "trace_label",
 ]
 
 MODES = ("fast", "slow", "manual")
@@ -42,6 +44,21 @@ LABELS = ("yes", "no", "auto_yes", "auto_no", "unlabeled")
 VIEW_FILTERS = ("all", "yes", "no", "unlabeled")
 
 _TAGS = re.compile(r"<[^>]+>")
+
+
+def recording_id(unit, roi: str) -> str:
+    """The curation's id of one ROI trace, ``scan=<id>/domain=<name>``: what its
+    labels are keyed by under ``<run>/.curation``.
+
+    The words are the archive's and stay whatever the results file calls the
+    unit, so a trace curated before the run was a results file still matches.
+    """
+    return f"scan={unit.attrs.get('scan_id', unit.index)}/domain={roi}"
+
+
+def trace_label(unit, roi: str) -> str:
+    """How one ROI trace of a unit reads in the curation window."""
+    return f"scan {unit.attrs.get('scan_id', unit.index)} / {roi}"
 
 
 def hex_rgba(color: str, alpha: float = 1.0) -> tuple[float, float, float, float]:
@@ -100,21 +117,21 @@ class CurationSession:
     def data_path(self) -> Path:
         return self.dash.data_path
 
-    def load_pf(self, pf: PfArray, scan: str, domain: str) -> str:
-        """Curate the pipeline's denoised trace of one scan / domain of a
-        ``PF`` folder: no denoiser, labels in ``PF/.curation``. Returns the
-        status line; raises ``KeyError`` for a scan or domain the folder
-        does not hold."""
-        scan, domain = str(scan), str(domain)
-        if scan not in pf.traces or domain not in pf.traces[scan]:
-            raise KeyError(f"{pf.pf_dir} has no trace for scan {scan}, domain {domain}")
+    def load_run(self, arr: ResultsArray, unit: str, roi: str) -> str:
+        """Curate the pipeline's denoised trace of one ROI of one unit of a
+        run: no denoiser, labels in ``<run>/.curation``. Returns the status
+        line; raises ``KeyError`` for a unit or ROI the run does not hold."""
+        unit, roi = str(unit), str(roi)
+        found = arr.results.units.get(unit)
+        if found is None or roi not in found.roi_names or "denoised" not in found.traces:
+            raise KeyError(f"{arr.path} has no denoised trace for {unit} / {roi}")
         return self.load_trace(
-            pf.traces[scan][domain],
-            pf.fs_by_scan[scan],
-            recording_id=pf.recording_id(domain, scan),
-            label=f"scan {scan} / {domain}",
-            source_path=pf.results_path or pf.pf_dir / TRACES_FILE,
-            curation_dir=pf.pf_dir / ".curation",
+            arr.trace(roi, unit=unit),
+            found.fs,
+            recording_id=recording_id(found, roi),
+            label=trace_label(found, roi),
+            source_path=arr.path,
+            curation_dir=arr.path / ".curation",
             pre_denoised=True,
         )
 
@@ -605,30 +622,30 @@ class CurationSession:
 # the processed PF folder that belongs to a raw line-scan .mesc
 # ----------------------------------------------------------------------
 
-def pf_dir_for_mesc(mesc_path) -> Path | None:
+def voltage_run_for_mesc(mesc_path) -> Path | None:
     """What the voltage pipeline last left for a line scan: the newest results
-    zarr beside the file, else a ``PF`` folder of pickles beside it or one
-    folder up (the ``<expt>/<expt>/<expt>.mesc`` layout keeps ``<expt>/PF``);
-    None when there is none."""
+    file beside it, else a ``PF`` folder of pickles beside it or one folder up
+    (the ``<expt>/<expt>/<expt>.mesc`` layout keeps ``<expt>/PF``); None when
+    there is none."""
     mesc_path = Path(mesc_path)
-    found = pf_results_in(mesc_path.parent)
+    found = newest_results(mesc_path.parent, "voltage")
     if found is not None:
         return found
     for parent in (mesc_path.parent.parent, mesc_path.parent):
-        pf = parent / "PF"
-        if (pf / TRACES_FILE).is_file() or pf_results_in(pf) is not None:
-            return pf
+        found = results_dir_of(parent / "PF")
+        if found is not None:
+            return found
     return None
 
 
-def pf_scan_for_mesc(mesc_path, unit_key: str) -> PfArray | None:
-    """The line scan's ``PF`` folder opened on that unit's scan (``MUnit_35``
-    is scan ``35``; the image is left closed), or None when there is no
-    folder or the pipeline never processed the scan."""
-    pf_dir = pf_dir_for_mesc(mesc_path)
-    if pf_dir is None:
+def voltage_unit_for_mesc(mesc_path, unit_key: str) -> ResultsArray | None:
+    """The line scan's last voltage run opened on that recording unit (the
+    image is left closed), or None when there is no run or the pipeline never
+    processed the unit."""
+    run = voltage_run_for_mesc(mesc_path)
+    if run is None:
         return None
     try:
-        return PfArray(pf_dir, unit=unit_key, source=False)
+        return ResultsArray(run, unit=unit_key, source=False)
     except ValueError:
         return None

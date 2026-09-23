@@ -957,7 +957,7 @@ def _run_gui_impl(
         # patches) opens on the first one with no prompt: the Voltage
         # pipeline follows the unit on screen and offers the other scans
         # there, and its Curate button opens the curation window. A PF or
-        # experiment folder opens as a PfArray through imread, like a suite2p
+        # experiment folder opens as a ResultsArray through imread, like a suite2p
         # folder.
         # Other .mesc files prompt for their unit once, here.
         if _is_mesc(data_in):
@@ -1076,7 +1076,7 @@ def _first_linescan_unit(path) -> str | None:
     the file (the voltage pipeline's output) the unit of its first scan wins,
     so the viewer opens on a processed scan."""
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
-    from mbo_utilities.arrays.pf import TRACES_FILE, PfArray
+    from mbo_utilities.results import ResultsArray, newest_results, results_dir_of
 
     try:
         units = [u for u in list_mesc_units(path) if u.get("kind") in ROI_LAYOUTS]
@@ -1084,13 +1084,17 @@ def _first_linescan_unit(path) -> str | None:
         return None
     path = Path(path)
     for parent in (path.parent.parent, path.parent):
-        if not (parent / "PF" / TRACES_FILE).is_file():
+        found = newest_results(parent, "voltage") or results_dir_of(parent / "PF")
+        if found is None:
             continue
         try:
-            pf = PfArray(parent / "PF", source=False)
+            run = ResultsArray(found, source=False)
         except Exception:
             break
-        wanted = {pf.source_units.get(s, f"MUnit_{s}").rsplit("/", 1)[-1] for s in pf.scan_ids}
+        wanted = {
+            str(u.attrs.get("source_unit", "")).rsplit("/", 1)[-1]
+            for u in run.results.units.values()
+        }
         for u in units:
             if u["key"].rsplit("/", 1)[-1] in wanted:
                 return u["key"]

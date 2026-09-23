@@ -2102,11 +2102,16 @@ def results(path, out, overwrite):
       mbo results run/zplane01_tp00001-01574
       mbo results stan112_expt12/PF -o stan112_expt12/PF/2026-09-16_stan112_expt12.zarr
     """
-    from mbo_utilities.arrays.pf import pf_dir_of
-    from mbo_utilities.results import results_from_pf, results_from_suite2p, results_name, write_results
+    from mbo_utilities.results import (
+        results_dir_of,
+        results_from_pf,
+        results_from_suite2p,
+        results_name,
+        write_results,
+    )
 
     path = Path(path)
-    pf_dir = pf_dir_of(path)
+    pf_dir = results_dir_of(path)
     if pf_dir is not None:
         units, root = results_from_pf(pf_dir)
         source = (root["source"] or {}).get("mesc") or pf_dir

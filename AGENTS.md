@@ -22,11 +22,11 @@ pml_utilities/
 │   ├── arrays/               # one LazyArray subclass per format + read-time views
 │   │   ├── _base.py          # _imwrite_base, ReductionMixin, TiffReaderMixin, DIMS
 │   │   ├── features/         # dims, tags, slicing, selection, roi, phase, frame average, stats
-│   │   ├── tiff.py zarr.py h5.py numpy.py bin.py mesc.py pf.py suite2p.py mp4.py
+│   │   ├── tiff.py zarr.py h5.py numpy.py bin.py mesc.py suite2p.py mp4.py
 │   │   └── isoview/          # IsoView light-sheet trees (four layouts, one class)
 │   ├── metadata/             # canonical vocabulary, alias resolution, OutputMetadata
 │   ├── pipeline_registry.py  # PipelineInfo + entry-point loading
-│   ├── results.py            # the results zarr every pipeline molds into (§7.5)
+│   ├── results.py            # the results zarr every pipeline molds into + ResultsArray (§7.5)
 │   ├── masknmf/  vnoiser/    # pipeline packages: params / runner / outputs / qc
 │   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
@@ -183,7 +183,7 @@ never branch on rank.
 3. Every class in the `mbo_utilities.lazy_arrays` entry-point group (plus
    `register_array_class` calls) is asked `can_open(path)` in descending
    `PRIORITY`; ties keep entry-point order. First `True` wins. Priorities today:
-   `IsoviewArray` 90, `PfArray` 70, `MescArray` 60, everything else 50.
+   `IsoviewArray` 90, `ResultsArray` 70, `MescArray` 60, everything else 50.
 4. Inputs no class claims (file lists, `.bin`, `.klb`, `.mp4`, `reg_tif/`, mixed
    directories) fall through to the legacy chain in `reader._imread_impl`.
 
@@ -574,8 +574,10 @@ pipeline's native files stay its cache and its compatibility layer.
                                      they have them (a line scan's lines)
     events/frame  events/roi         detected events (peaks), sorted by ROI
     images/<kind>                    (Y, X) float32; kinds: mean, max, corr, ref (IMAGE_KINDS)
-  _sidecar/                          the pipeline's own files (SIDECAR): pipeline.json,
-                                     timings.json, its native h5 and npy, traces/
+  <pipeline>/                        the run's own files, in a folder named after the
+                                     pipeline that wrote it (`pipeline_files`):
+                                     pipeline.json, timings.json, its native h5 and npy,
+                                     traces/
 ```
 
 - **Naming.** `results_name(source, when, extra_tags, pipeline)` is the source
@@ -599,16 +601,22 @@ pipeline's native files stay its cache and its compatibility layer.
   (`VoltageSettings.runtime.output_format == "zarr"`, the Run tab's Output format):
   the run works in a `<name>.work` scratch folder, writes the results file beside the
   input, moves `test.h5`, `traces/`, `pipeline.json` and `timings.json` into its
-  `_sidecar/` (`pf_files`) and deletes the scratch folder, so one path is the whole
-  output and no `PF` folder is left. `mbo voltage --pkl` (`output_format == "pkl"`)
-  writes the archive's PF folder of pickles instead. `PfArray` opens the results file
-  itself, and the curation window opens either. `mbo results <dir>` converts an
-  existing suite2p, MaskNMF or PF folder.
-- **Reading.** `read_results(path)` returns `Results` (`.units[name]` → `ResultUnit`,
-  every array in memory). `results_pipeline(path)` and `results_summary(path)` read
-  only `zarr.json` files and are what `can_open` and the run scanners use: `ZarrArray`
-  declines a results file, `PfArray` claims a voltage one. `imread` never returns a
-  results file as an image.
+  `voltage/` (`pipeline_files`) and deletes the scratch folder, so one path is the
+  whole output and no `PF` folder is left. `mbo voltage --pkl` (`output_format ==
+  "pkl"`) writes the archive's PF folder of pickles instead. `mbo results <dir>`
+  converts an existing suite2p, MaskNMF or PF folder.
+- **Reading.** There is one reader and it is generic. `read_results(path)` returns
+  `Results` (`.units[name]` → `ResultUnit`, every array in memory); `mold_results(dir)`
+  turns a native output folder into the same object in memory without writing
+  anything, and `open_results(path)` is the one door that takes either. `imread`
+  returns a `ResultsArray` (`results.py`, `PRIORITY` 70) for a results file, a
+  voltage `PF` folder, or a folder holding one; `results_dir_of(path)` is what it
+  resolves with. No pipeline gets an array class of its own: a run's units, traces,
+  ROIs, events and images are on `arr.results`, and the recording it processed is
+  the image when `results.source` names a reachable file, else a trace raster.
+  `results_pipeline(path)` and `results_summary(path)` read only `zarr.json` files
+  and are what `can_open` and the run scanners use; `ZarrArray` declines a results
+  file. `imread` never returns a results file as a movie of itself.
 - **Viewing.** The ROI widget's Traces tab takes a results file through the same door
   as a run dir: `ManualRoiWidget.load_run(path)` (a file, or one unit as
   `<file>.zarr/zplane01`) calls `load_results`. A pixel unit becomes a `RunResult`

@@ -647,7 +647,7 @@ def run_voltage_pipeline(
         if as_zarr:
             import shutil
 
-            from mbo_utilities.results import SIDECAR, results_from_pf, write_results
+            from mbo_utilities.results import pipeline_files, results_from_pf, write_results
 
             if progress_callback is not None:
                 progress_callback(0.97, "writing the results zarr")
@@ -657,21 +657,22 @@ def run_voltage_pipeline(
             usage.end(f"wrote {results_path.name}")
             prov = _write_timing(pf_dir, usage)
             # the results file replaces the pickles; everything else the run
-            # made moves inside it, so one path is the whole output
-            sidecar = results_path / SIDECAR
-            sidecar.mkdir()
+            # made moves into its own folder inside it, named after the
+            # pipeline, so one path is the whole output
+            own = pipeline_files(results_path)
+            own.mkdir()
             paths = {}
             for name in (DFOF_FILE, PROVENANCE_FILE, TIMINGS_FILE, TRACES_DIR):
                 source = pf_dir / name
                 if source.exists():
-                    shutil.move(str(source), str(sidecar / name))
+                    shutil.move(str(source), str(own / name))
             shutil.rmtree(pf_dir, ignore_errors=True)
-            for item in sorted(sidecar.rglob("*")):
+            for item in sorted(own.rglob("*")):
                 if item.is_file():
-                    paths[f"{SIDECAR}/{item.relative_to(sidecar).as_posix()}"] = item
+                    paths[f"{own.name}/{item.relative_to(own).as_posix()}"] = item
             paths[results_path.name] = results_path
             zarr.open_group(str(results_path), mode="r+").attrs["provenance"] = prov
-            timings_at = sidecar / TIMINGS_FILE
+            timings_at = own / TIMINGS_FILE
         else:
             timings_at = pf_dir / TIMINGS_FILE
             paths[TIMINGS_FILE] = timings_at

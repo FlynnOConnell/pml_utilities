@@ -6,9 +6,9 @@ modified-orange tinting, the modified table and a green Run button that
 spawns the "voltage" worker. What is new is the scans-and-domains block:
 which AOD ROI units of the file (line scans, chessboard or ribbon patches)
 become scans and which ROIs make each domain. Settings are written for the
-archive's frame rate and scaled to the scans'. Results are a PF folder,
-which the Curate button opens in the curation window (``mbo curate``, its
-own process).
+archive's frame rate and scaled to the scans'. Results are the run's
+results zarr beside the input (``pkl`` writes a PF folder instead), which the
+Curate button opens in the curation window (``mbo curate``, its own process).
 """
 
 from __future__ import annotations
@@ -45,7 +45,13 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
 )
 from mbo_utilities.install import VNOISER_HINT
 from mbo_utilities.arrays.mesc import ROI_LAYOUTS
-from mbo_utilities.arrays.pf import PfArray, pf_results_in
+from mbo_utilities.results import (
+    EXCLUDED_DOMAINS,
+    PROVENANCE_FILE,
+    ResultsArray,
+    newest_results,
+    pipeline_files,
+)
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
@@ -95,7 +101,7 @@ def _is_default(obj, name: str) -> bool:
 
 
 class VoltagePipelineWidget(PipelineWidget):
-    """AOD ROI .mesc units (line scans, chessboard or ribbon patches) to a PF folder with vnoiser."""
+    """AOD ROI .mesc units (line scans, chessboard or ribbon patches) to a voltage results file with vnoiser."""
 
     name = "Voltage"
     is_available = HAS_VNOISER
@@ -109,8 +115,8 @@ class VoltagePipelineWidget(PipelineWidget):
         """True for any unit of a .mesc that holds an AOD ROI unit (the unit on screen need not be one)
         and for a PF folder whose source unit is reachable."""
         arr = base_array(arr)
-        if isinstance(arr, PfArray):
-            return arr.source_mesc is not None
+        if isinstance(arr, ResultsArray):
+            return arr.pipeline == "voltage" and arr.source_recording is not None
         if (getattr(arr, "metadata", None) or {}).get("mesc_layout") in ROI_LAYOUTS:
             return True
         filenames = getattr(arr, "filenames", None) or []
@@ -159,8 +165,8 @@ class VoltagePipelineWidget(PipelineWidget):
 
     def _mesc_path(self) -> Path | None:
         arr = self._array()
-        if isinstance(arr, PfArray):
-            return arr.source_mesc
+        if isinstance(arr, ResultsArray):
+            return arr.source_recording
         fpath = getattr(self.parent, "fpath", None)
         if isinstance(fpath, (list, tuple)):
             fpath = fpath[0] if fpath else None
@@ -175,7 +181,7 @@ class VoltagePipelineWidget(PipelineWidget):
     def _ensure_state(self) -> None:
         """Seed units, scans, domains, output folder and slicing when the dataset changes."""
         from mbo_utilities.arrays.mesc import list_mesc_units
-        from mbo_utilities.vnoiser import pf_dir_for_mesc
+        from mbo_utilities.vnoiser import voltage_run_for_mesc
         from mbo_utilities.vnoiser.params import VoltageSettings
         from mbo_utilities.vnoiser.pipeline import read_domains
 
@@ -209,20 +215,28 @@ class VoltagePipelineWidget(PipelineWidget):
         self._voltage_c_selection = "1"
         self._voltage_c_error = ""
         arr = self._array()
-        pf = arr.pf_dir if isinstance(arr, PfArray) else pf_dir_for_mesc(mesc)
-        self._outdir = str(arr.pf_dir) if isinstance(arr, PfArray) else self._default_outdir()
+        run = arr.path if isinstance(arr, ResultsArray) else voltage_run_for_mesc(mesc)
         domains, scan_ids, first_env = {}, [], []
-        if pf is not None:
+        if run is not None:
+            prov_file = pipeline_files(run) / PROVENANCE_FILE
             try:
-                from vnoiser import read_pf
+                if prov_file.is_file():
+                    prov = json.loads(prov_file.read_text())
+                    domains = prov.get("domains") or {}
+                    scan_ids = [str(s) for s in prov.get("scan_ids") or []]
+                    first_env = [str(s) for s in prov.get("first_env") or []]
+                else:
+                    from vnoiser import read_pf
 
-                files = read_pf(pf)
-                self.settings = VoltageSettings.from_provenance(files.provenance)
-                domains = {k: v for k, v in files.domains.items() if k not in ("All_domains", "bg")}
-                scan_ids, first_env = files.scan_ids, list(files.rois.get("scanID_1st_env", []))
-                self._set_status(f"Loaded the previous run's scans and domains from {pf}")
-            except Exception as e:
-                self._set_status(f"The PF folder beside the file could not be read: {e}", error=True)
+                    files = read_pf(run)
+                    prov = files.provenance or {}
+                    domains, scan_ids = files.domains, files.scan_ids
+                    first_env = [str(s) for s in files.rois.get("scanID_1st_env", [])]
+                self.settings = VoltageSettings.from_provenance(prov)
+                domains = {k: v for k, v in domains.items() if k not in EXCLUDED_DOMAINS}
+                self._set_status(f"Loaded the previous run's scans and domains from {run.name}")
+            except (OSError, ValueError, KeyError) as e:
+                self._set_status(f"The previous run at {run.name} could not be read: {e}", error=True)
         elif (mesc.parent / DOMAINS_FILE).exists():
             try:
                 spec = read_domains(mesc.parent / DOMAINS_FILE)
@@ -230,6 +244,8 @@ class VoltagePipelineWidget(PipelineWidget):
                 self._domains_path = str(mesc.parent / DOMAINS_FILE)
             except Exception as e:
                 self._domain_error = f"{DOMAINS_FILE}: {e}"
+        # after the previous run's settings land: the folder follows the output format
+        self._outdir = self._default_outdir()
         if not domains:
             domains = {f"roi{i}": [i] for i in range(n_lines)}
         self._domain_rows = [[name, ",".join(str(r) for r in rois)] for name, rois in domains.items()]
@@ -353,6 +369,9 @@ class VoltagePipelineWidget(PipelineWidget):
             return ""
         if self.settings.runtime.output_format == "zarr":
             return str(mesc.parent)
+        arr = self._array()
+        if isinstance(arr, ResultsArray) and arr.path.suffix != ".zarr":
+            return str(arr.path)
         return str(default_pf_dir(mesc))
 
     def _draw_output_row(self) -> None:
@@ -633,7 +652,7 @@ class VoltagePipelineWidget(PipelineWidget):
                 self._row_tail(
                     rt, "output_format", "Output format",
                     "zarr: one <input>.<timestamp>.voltage.zarr results file beside the input (the shape "
-                    "every pipeline's results share), the run's own files under _sidecar/ inside it. "
+                    "every pipeline's results share), the run's own files in a voltage/ folder inside it. "
                     "pkl: the archive's PF folder of pickles.",
                 )
                 imgui.spacing()
@@ -822,7 +841,7 @@ class VoltagePipelineWidget(PipelineWidget):
         if clicked and ready:
             self._submit(mesc, scans, domains, window, planes)
         pf_done = bool(self._outdir) and (Path(self._outdir) / "denoised_trace_scans.pkl").exists()
-        results = pf_results_in(self._outdir) if self._outdir and not pf_done else None
+        results = newest_results(self._outdir, "voltage") if self._outdir and not pf_done else None
         if results is not None:
             imgui.text_disabled(f"Results: {results.name}")
             if imgui.button("Load into Traces##voltage_load_traces", imgui.ImVec2(hello_imgui.em_size(11), 0)):

@@ -108,7 +108,7 @@ class VoltageRuntimeSettings:
     overwrite: bool = True
     reference_fs: float = 1075.2688
     # "zarr": one <stem>.<stamp>.voltage.zarr results file (mbo_utilities.results),
-    # its own files under _sidecar/; "pkl": the archive's PF folder of pickles
+    # its own files in a voltage/ folder inside it; "pkl": the archive's PF folder of pickles
     output_format: str = "zarr"
 
 

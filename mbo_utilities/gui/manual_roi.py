@@ -2884,9 +2884,9 @@ class ManualRoiWidget:
                 continue  # another dataset's run
             if info.task_type == "voltage":
                 # a zarr-format voltage run leaves one results file in the PF folder
-                from mbo_utilities.arrays.pf import pf_results_in
+                from mbo_utilities.results import newest_results
 
-                found = pf_results_in(out)
+                found = newest_results(out, "voltage")
                 dirs = [found] if found is not None and str(found) not in loaded else []
             else:
                 dirs = [

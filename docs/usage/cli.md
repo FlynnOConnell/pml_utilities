@@ -308,10 +308,10 @@ itself with every line of its line-scan units as a raw recording that the
 wavelet denoiser runs on when clicked. The Voltage pipeline is on the
 Process tab. `mbo <expt>`
 or `mbo <expt>/PF` opens the folder the same way: `imread` returns a
-`PfArray` for a `PF` folder, like a suite2p output folder, whose image is
-the line scan it came from (named in `pipeline.json`, or laid out beside
-it as `<expt>/<expt>/<expt>.mesc`) or, without that file, a raster of the
-denoised traces. The curation dashboard on its own, with no image, is
+`ResultsArray` for any run's output, like a suite2p output folder, whose
+image is the recording it came from (named in `pipeline.json`, or laid out
+beside it as `<expt>/<expt>/<expt>.mesc`) or, without that file, a raster of
+the denoised traces. The curation dashboard on its own, with no image, is
 `mbo curate PATH` (`python -m mbo_utilities.gui.curation_viewer PATH` from
 a script): it takes a `PF` folder (or the experiment folder holding it, or
 a line scan with one beside it), lists every scan / domain trace in it and
@@ -398,17 +398,18 @@ about 10 s; the dF/F baselines take about 12 s per domain and the read about
 voltage` prints them with a clock; the Run tab's worker writes them to the
 process console's log, where its progress bar follows every ROI read and every
 domain denoised. The same record is the `timing` in `pipeline.json`, the
-results zarr's `provenance` and `PfArray.metadata`, so a notebook can compare
-runs without the log.
+results zarr's `provenance` and `ResultsArray.metadata`, so a notebook can
+compare runs without the log.
 
-`--zarr` (the Run tab's **Output format**) writes the results as one
-`<yyyy-mm-dd>_<tags>.zarr` file in the PF folder instead of the pickles, the
-shape every pipeline's results share (`mbo_utilities.results`; the tags are
-the ones in the `.mesc` name, `session01`, else its stem). One group per
-scan holds the `denoised`, `dff` and `zscore` traces `(domain, frame)`, the
-lines of each domain, the lines' `raw` traces and the detected events;
-`read_results(path)` reads it back, `imread` still opens the folder as a
-`PfArray`. `test.h5`, `traces/`, `pipeline.json` and `timings.json` are written either way.
+`--zarr` (the Run tab's **Output format**, the default) writes the results as
+one `<stem>.<stamp>.voltage.zarr` file beside the input instead of a PF folder
+of pickles, the shape every pipeline's results share
+(`mbo_utilities.results`). One group per scan holds the `denoised`, `dff` and
+`zscore` traces `(ROI, frame)`, the lines of each ROI, the lines' `raw` traces
+and the detected events; `read_results(path)` reads it back and `imread` opens
+it as a `ResultsArray`. `test.h5`, `traces/`, `pipeline.json` and
+`timings.json` are written either way: inside the results file in a `voltage/`
+folder named after the pipeline, or loose in the PF folder with `--pkl`.
 The curation window opens either. `mbo results PATH` converts an
 existing PF, suite2p or masknmf folder the same way. In the viewer, "Load
 into Traces" on the Voltage tab (or loading the file as a run in Manual ROI
