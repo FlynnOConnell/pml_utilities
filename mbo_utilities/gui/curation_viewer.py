@@ -189,11 +189,11 @@ class _Dashboard:
 
     def open(self, path) -> None:
         """Point the dashboard at ``path``."""
-        from mbo_utilities.vnoiser import pf_dir_for_mesc
+        from mbo_utilities.vnoiser import voltage_run_for_mesc
 
         path = Path(path).expanduser()
         self.source = path
-        if path.is_file() and path.suffix.lower() == ".mesc" and pf_dir_for_mesc(path) is None:
+        if path.is_file() and path.suffix.lower() == ".mesc" and voltage_run_for_mesc(path) is None:
             self.open_raw_mesc(path)
         else:
             # a PF folder (or the folder holding it), and a .mesc with one beside it
@@ -402,7 +402,7 @@ def curation_target(path) -> Path | None:
     """What of a viewer's open path the curation window can take: a ``.mesc``
     itself, or the ``PF`` folder a path names (the folder, its traces
     pickle, or the experiment holding it); None for anything else."""
-    from mbo_utilities.arrays.pf import pf_dir_of
+    from mbo_utilities.results import results_dir_of
 
     if isinstance(path, (list, tuple)):
         path = path[0] if path else None
@@ -411,7 +411,7 @@ def curation_target(path) -> Path | None:
     path = Path(str(path))
     if path.is_file() and path.suffix.lower() == ".mesc":
         return path
-    return pf_dir_of(path)
+    return results_dir_of(path)
 
 
 def launch_curation_window(path, channel: int = 0) -> int:

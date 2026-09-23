@@ -13,7 +13,7 @@ import pytest
 
 pytest.importorskip("imgui_bundle")
 
-from tests.test_pf_array import write_mesc  # noqa: E402
+from tests.test_results_array import write_mesc  # noqa: E402
 
 FIGURE_SIZE = (640, 480)
 
