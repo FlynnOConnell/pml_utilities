@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from imgui_bundle import imgui
 
+from mbo_utilities import log
 from mbo_utilities.preferences import get_widget_toggles, set_widget_toggles
 
 __all__ = [
@@ -60,6 +61,9 @@ class WidgetEntry:
     # widget checkbox; lets a widget build/tear down live state (the ROI
     # overlay, say) instead of only gating its draw.
     on_toggle: Callable[[Any, bool], None] | None = field(default=None, compare=False)
+    # a development tool: absent from the menu and off whatever the stored
+    # state says unless debug logging is on (the MBO_DEBUG flag)
+    debug_only: bool = False
 
     def sub(self, key: str) -> SubWidget | None:
         for s in self.subwidgets:
@@ -81,7 +85,6 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         label="Image",
         tooltip="The Image tab and the control panels stacked inside it.",
         subwidgets=(
-            SubWidget("mesc_units", "MESc Units"),
             SubWidget("window_functions", "Window Functions"),
             SubWidget("spatial_functions", "Spatial Functions"),
             SubWidget("scan_phase", "Scan-Phase Correction"),
@@ -91,6 +94,13 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
             SubWidget("projections", "Projections"),
             SubWidget("tile_grid", "Tile Grid"),
         ),
+    ),
+    WidgetEntry(
+        key="mesc",
+        label="MESc",
+        tooltip="Every recording in the open .mesc file: shape, rate, the lines "
+                "or patches it scanned, the picture they were drawn on, whether "
+                "RTMC was on and the Z-stack around it; click a row to display it.",
     ),
     WidgetEntry(
         key="signal_quality",
@@ -104,18 +114,28 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         tooltip="Registration / segmentation pipelines.",
     ),
     WidgetEntry(
+        key="imgui_debug",
+        label="ImGui Debug",
+        tooltip="Dear ImGui's own debug windows: the metrics/debugger, the "
+                "debug log, the ID stack tool, the style editor and the demo. "
+                "Only with debug logging on.",
+        default=False,
+        debug_only=True,
+    ),
+    WidgetEntry(
         key="manual_roi",
         label="Manual ROI Labeling",
-        tooltip="Freehand ROI drawing and labelling: control cards and the trace "
-                "plot in a top panel; the ROI and trace tables in their own tabs.",
+        tooltip="Freehand ROI drawing and labelling: the ROIs tab holds the "
+                "controls over the ROI table, the trace plot is a panel over the "
+                "image and the Traces tab lists every trace. Running ROIs is the "
+                "Process tab's ROIs pipeline.",
         default=False,
         on_toggle=_toggle_manual_roi,
         subwidgets=(
             SubWidget("tools", "Drawing tools"),
             SubWidget("overlay", "Overlay controls"),
             SubWidget("labels", "Label editor"),
-            SubWidget("process", "Process card"),
-            SubWidget("table", "ROI table", tooltip="The ROIs tab in this panel."),
+            SubWidget("table", "ROI table", tooltip="The ROIs tab: the controls over the ROI table."),
             SubWidget("traces", "Trace table", tooltip="The Traces tab: every collected trace with stats."),
         ),
     ),
@@ -168,6 +188,9 @@ def widget_enabled(key: str) -> bool:
     widget is, so callers only need this one check.
     """
     widget_key, _, sub_key = key.partition(".")
+    entry = _BY_KEY.get(widget_key)
+    if entry is not None and entry.debug_only and not log.debug_enabled():
+        return False
     if sub_key and not bool(_load().get(widget_key, _default(widget_key))):
         return False
     return bool(_load().get(key, _default(key)))
@@ -257,6 +280,8 @@ def draw_widgets_menu(parent: Any) -> None:
         return
 
     for entry in WIDGET_REGISTRY:
+        if entry.debug_only and not log.debug_enabled():
+            continue
         enabled = widget_enabled(entry.key)
 
         # a widget with no subwidgets is just a checkbox; only one with

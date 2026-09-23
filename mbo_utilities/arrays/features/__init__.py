@@ -61,6 +61,7 @@ from mbo_utilities.arrays.features._frame_average import (
     FrameAverageFeature,
     apply_read_features,
 )
+from mbo_utilities.arrays.features._motion import MOTION_AXES, MotionCorrection
 from mbo_utilities.arrays.features._phase_correction import (
     PhaseCorrectionFeature,
     PhaseCorrectionMixin,
@@ -99,8 +100,8 @@ from mbo_utilities.arrays.features._slicing import (
     read_chunk,
 )
 from mbo_utilities.arrays.features._selection import (
-    canonical_axis_sizes,
-    selection_to_canonical,
+    axis_sizes,
+    selection_to_indices,
     to_isoview_kwargs,
     to_lsp_kwargs,
 )
@@ -120,6 +121,7 @@ __all__ = [
     "DIM_ALIASES",
     "DIM_DESCRIPTIONS",
     "KNOWN_ORDERINGS",
+    "MOTION_AXES",
     "SPATIAL_DIMS",
     "TAG_REGISTRY",
     # base
@@ -134,6 +136,8 @@ __all__ = [
     "get_ome_axis_type",
     "get_ome_axis_unit",
     "normalize_dims",
+    # motion correction
+    "MotionCorrection",
     # dim specs
     "DimRole",
     "DimensionSpec",
@@ -186,8 +190,8 @@ __all__ = [
     "parse_timepoint_selection",
     "read_chunk",
     # canonical selection conversion
-    "canonical_axis_sizes",
-    "selection_to_canonical",
+    "axis_sizes",
+    "selection_to_indices",
     "to_isoview_kwargs",
     "to_lsp_kwargs",
     # pyramid

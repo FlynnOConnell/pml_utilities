@@ -62,6 +62,7 @@ from mbo_utilities.arrays.mesc_geometry import (
 )
 
 __all__ = [
+    "experiment_linescan_mesc",
     "stim_events",
     "background_image",
     "zstack_candidates",
@@ -75,6 +76,48 @@ _FIG_BG = "black"
 _FIG_FG = "white"
 _TRAIN_GAP_MS = 100.0  # pulses closer than this belong to one train
 _SMOOTH_S = 0.02  # display / peak smoothing window for kHz traces
+
+
+# ---------------------------------------------------------------------------
+# the raw line scan of an experiment folder
+# ---------------------------------------------------------------------------
+
+
+def experiment_linescan_mesc(path) -> Path | None:
+    """The raw line-scan ``.mesc`` of an experiment laid out the way the
+    curation notebook's data path is: ``<animal>/<expt>/<expt>/<expt>.mesc``
+    with the processed traces in ``<animal>/<expt>/PF`` and the Z-stack in
+    ``<animal>/<expt>/<expt>_zstack.mesc``.
+
+    ``path`` may be the experiment folder, its ``PF`` folder, the inner
+    ``<expt>/<expt>`` folder, or the ``.mesc`` itself. Returns None when no
+    line scan is there (a Data or animal folder, or any other folder), so a
+    caller can fall through to whatever else the path may be.
+    """
+    path = Path(path).expanduser()
+    if path.is_file():
+        return path if path.suffix.lower() == ".mesc" else None
+    if not path.is_dir():
+        return None
+    if path.name == "PF" or (path.parent.name == path.name and path.parent != path):
+        experiment = path.parent
+    else:
+        experiment = path
+    folders = [experiment / experiment.name, experiment]
+    for folder in folders:
+        named = folder / f"{experiment.name}.mesc"
+        if named.is_file():
+            return named
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        found = sorted(
+            p for p in folder.glob("*.mesc")
+            if not p.stem.lower().endswith("_zstack")
+        )
+        if found:
+            return found[0]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -217,26 +260,30 @@ def _background_planes(mesc_path, bg: dict) -> dict[int, np.ndarray]:
 
 def zstack_candidates(
     mesc_path, unit_key: str, units: list[dict] | None = None, *, min_px_per_line: int = 10,
+    zstack_path=None,
 ) -> list[dict]:
     """Every Z-stack of the file scored against a line-scan unit's lines:
     ``xy_fraction`` / ``z_fraction`` of lines inside its field / depth range,
     ``um_per_px``, and ``coarse`` when it puts fewer than ``min_px_per_line``
     pixels along the median line. All stacks, including those holding no
-    line at all, so a picker can show why one is unsuitable."""
+    line at all, so a picker can show why one is unsuitable. ``zstack_path``
+    is the file holding the stacks when they were saved separately from the
+    line scan (``units`` then lists that file's units)."""
     from mbo_utilities.arrays.mesc import list_mesc_units
 
     lines = linescan_endpoints_um(mesc_path, unit_key)
     if not lines:
         return []
-    lengths = [float(np.hypot(*(seg[:2, 1] - seg[:2, 0]))) for seg in lines]
+    stack_path = mesc_path if zstack_path is None else zstack_path
+    lengths = [float(np.hypot(*(seg[:2, -1] - seg[:2, 0]))) for seg in lines]
     max_um_per_px = float(np.median(lengths)) / max(min_px_per_line, 1)
-    units = units if units is not None else list_mesc_units(mesc_path)
+    units = units if units is not None else list_mesc_units(stack_path)
     out = []
     for u in units:
         if u["modality_name"] != "zstack":
             continue
-        vp = viewport_geometry(mesc_path, u["key"])
-        depth = zstack_depth_info(mesc_path, u["key"])
+        vp = viewport_geometry(stack_path, u["key"])
+        depth = zstack_depth_info(stack_path, u["key"])
         if vp is None or depth is None:
             continue
         nx = int(u["shape"][-1])
@@ -257,6 +304,7 @@ def zstack_candidates(
 
 def pair_reference_zstack(
     mesc_path, unit_key: str, units: list[dict] | None = None, *, min_px_per_line: int = 10,
+    zstack_path=None,
 ) -> dict | None:
     """Pick the Z-stack unit of the same file that the lines were drawn on.
 
@@ -280,8 +328,13 @@ def pair_reference_zstack(
     Returns ``{"key", "munit", "xy_fraction", "z_fraction", "um_per_px",
     "coarse"}``.
     """
-    cands = [c for c in zstack_candidates(mesc_path, unit_key, units, min_px_per_line=min_px_per_line)
-             if c["xy_fraction"] > 0]
+    cands = [
+        c
+        for c in zstack_candidates(
+            mesc_path, unit_key, units, min_px_per_line=min_px_per_line, zstack_path=zstack_path
+        )
+        if c["xy_fraction"] > 0
+    ]
     if not cands:
         return None
     fine = [c for c in cands if not c["coarse"]]

@@ -297,14 +297,162 @@ chance. `--flip-y` remains for a rig that saves the other way round.
 | `06_roi_response_metrics.png` | per-ROI F0 (both channels), peak dF/F, latency, noise, SNR, response integral |
 | `07_motion_correction.png` | the AOD's real-time motion correction in X/Y/Z over the run |
 
-`--no-figures` skips them. To scrub the lines interactively, run
-`python scripts/reference_zstack_viewer.py scan.mesc --traces rois_linescan/MUnit_3`:
-three panels on top (the line-scan itself, the snapshot the lines were drawn
-on, the paired Z-stack) and the traces below. The Z-stack picker shows every
+`--no-figures` skips them.
+
+`mbo scan.mesc` opens the image viewer on the file's first line-scan unit
+with no unit prompt. The viewer has no curation panel of its own: with
+vnoiser installed, the Voltage pipeline's **Curate** button (and File >
+Curate) opens the curation window below in its own process, on the
+experiment's `PF` folder when one sits beside the file, else on the file
+itself with every line of its line-scan units as a raw recording that the
+wavelet denoiser runs on when clicked. The Voltage pipeline is on the
+Process tab. `mbo <expt>`
+or `mbo <expt>/PF` opens the folder the same way: `imread` returns a
+`ResultsArray` for any run's output, like a suite2p output folder, whose
+image is the recording it came from (named in `pipeline.json`, or laid out
+beside it as `<expt>/<expt>/<expt>.mesc`) or, without that file, a raster of
+the denoised traces. The curation dashboard on its own, with no image, is
+`mbo curate PATH` (`python -m mbo_utilities.gui.curation_viewer PATH` from
+a script): it takes a `PF` folder (or the experiment folder holding it, or
+a line scan with one beside it), lists every scan / domain trace in it and
+shows the trace and its candidates over the template, focused candidate
+and PCA, one recording at a time with arrows to flip, and the recordings
+table beside it. Labels are keyed `scan=<id>/domain=<name>` in
+`PF/.curation/<mode>_template_curation.json`.
+
+To curate from another machine, serve the dashboard instead of opening a
+window: `mbo curate PATH --serve` (or `python -m mbo_utilities.gui.curation_server
+PATH`) renders it where the data and the GPU are and streams it to any browser
+that opens the printed URL (default `http://localhost:60649/`); pointer and key
+events go back the same way, so nothing is installed on the laptop. Every
+connected browser sees the same frames and the longest-connected one drives.
+There is no login: leave `--host` on localhost and tunnel
+(`ssh -L 60649:localhost:60649 server`), or front it with an authenticating
+proxy; `--host 0.0.0.0` opens it to the network as is.
+
+To scrub the lines on the stack instead, run `mbo linescan scan.mesc --view`
+(or `mbo linescan <expt> --view`): three panels on top (the
+line-scan itself, the snapshot the lines were drawn on, the paired Z-stack)
+and the curation dashboard, scoped to the scan on screen, on the strip
+above them. The Z-stack picker shows every
 stack's fit (fraction of lines in its field and depth range, pixel size)
 and defaults to the paired one; a stack holding none of the lines is
 refused. `--dry-run` prints the choice and placement without a window,
 `--screenshot out.png` renders the window offscreen.
+
+## Voltage
+
+The spatial JEDI pipeline (Noguchi & Terada) on a `.mesc` with AOD ROI units,
+producing the `PF` folder the curation window reads. A unit's ROIs are the
+lines of a line scan or the patches of a chessboard or ribbon scan; each unit
+is one scan. Each ROI's mean fluorescence per frame is read as above, the ROIs
+of a domain (the soma, one branch, one cell's patch) are averaged
+pixel-weighted, dF/F and a sign-flipped z-score follow, then vnoiser's wavelet
+denoiser with the archive's settings, then the peak detector. The settings
+are written for the archive's 1075 Hz line scans; the parameters counted in
+samples are scaled to each scan's frame rate and the peak band-pass is capped
+below Nyquist, so a 200 Hz chessboard scan keeps the same baseline durations.
+One run takes scans of one frame rate.
+
+```bash
+mbo voltage stan112_expt12.mesc --init                      # domains.json template beside the file
+mbo voltage stan112_expt12.mesc                             # every scan in domains.json
+mbo voltage stan112_expt12.mesc --unit MUnit_35 -o PF_new   # one scan, elsewhere
+mbo voltage stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl --overwrite
+mbo voltage stan112_expt12.mesc -p 1 -p 2 -p 3              # only ROIs 1-3 (the unit's Z axis); domains are cut down to them
+mbo curate X:/data/asako/stan112/stan112_expt12             # then curate it
+```
+
+`domains.json` names the domains and their 0-based ROI indices (lines or
+patches, in drawing order), the scans in order and the first scan of each
+environment. `--init` writes one domain per ROI (`roi0: [0]`, ...); merge
+the lines of a soma or branch by hand, as the archive's layout below does:
+
+```json
+{"domains": {"soma1": [0, 1, 2], "basal1": [3, 4, 5]}, "scans": ["35", "38"], "first_env": ["35"]}
+```
+
+Written to `<expt>/PF` for the archive layout
+(`<expt>/<expt>/<expt>.mesc`), else `PF` beside the file:
+
+| file | contents |
+|------|----------|
+| `denoised_trace_scans.pkl` | `{scan: {domain: trace}}`, the trace the curation window shows (the masked wavelet sum, no baseline) |
+| `fs_scans.pkl`, `scanIDs_ROIs.pkl` | frame rate (rounded down, as the archive stored it) and the scan / domain / ROI tables |
+| `detected_events_peaks.pkl`, `param_spike_detect.pkl` | peaks per domain and the thresholds (`--events LO,HI,BP_SD,AMP_SD,DUR_MS`) |
+| `denoised_trace_components.pkl`, `test.h5` | the masked sum, 1 Hz / 100 Hz baselines and envelope; per-domain dF/F and z |
+| `cwts.h5` | the wavelet coefficients, only with `--save-cwt` (large) |
+| `pipeline.json` | provenance: source file and units, every parameter, versions, ROI pixel weights, the run's `timing` (below) and its `processing_history` (one `voltage_<step>` entry per step with `duration_seconds`, CPU seconds and memory, the shape suite2p's `ops.npy` uses) |
+| `timings.json` | the run's timing on its own: wall and CPU seconds, peak process memory, `totals` per step, `denoise_stages` (the denoiser's `cwt`, `cluster`, `reduce`, `mask`, `baseline`, `baseline_100hz` and `peaks` summed over domains), per scan the read and each domain's dF/F and denoising, and one flat row per step (`steps`; a denoise row carries its stages as `<stage>_s`) |
+| `traces/` | the same results as plain files, see below |
+
+Every step is logged as it runs, the way the suite2p pipeline reports its
+planes: the read of each ROI, each domain's dF/F, each domain's denoising with
+its event count and the seconds of each stage inside it, then the writes, each
+closed by one line with its wall time, CPU time and the process's memory
+(current, the step's peak, the system's share), and a summary line at the end
+with the totals per step and per denoiser stage. On a 476k-frame line scan at
+1587 Hz a domain's wavelet transform takes about 4 s and its whole denoising
+about 10 s; the dF/F baselines take about 12 s per domain and the read about
+20 s per 15 ROIs. `mbo
+voltage` prints them with a clock; the Run tab's worker writes them to the
+process console's log, where its progress bar follows every ROI read and every
+domain denoised. The same record is the `timing` in `pipeline.json`, the
+results zarr's `provenance` and `ResultsArray.metadata`, so a notebook can
+compare runs without the log.
+
+`--zarr` (the Run tab's **Output format**, the default) writes the results as
+one `<stem>.<stamp>.voltage.zarr` file beside the input instead of a PF folder
+of pickles, the shape every pipeline's results share
+(`mbo_utilities.results`). One group per scan holds the `denoised`, `dff` and
+`zscore` traces `(ROI, frame)`, the lines of each ROI, the lines' `raw` traces
+and the detected events; `read_results(path)` reads it back and `imread` opens
+it as a `ResultsArray`. `test.h5`, `traces/`, `pipeline.json` and
+`timings.json` are written either way: inside the results file in a `voltage/`
+folder named after the pipeline, or loose in the PF folder with `--pkl`.
+The curation window opens either. `mbo results PATH` converts an
+existing PF, suite2p or masknmf folder the same way. In the viewer, "Load
+into Traces" on the Voltage tab (or loading the file as a run in Manual ROI
+Labeling) puts every scan's denoised and line traces in the Traces tab; a
+finished zarr-format run started from the Process tab is picked up there on
+its own.
+
+`PF/traces/` needs only numpy and pandas to read
+(`demos/voltage_results.ipynb` walks through it). Row `i` of every
+`(domain, frame)` array is row `i` of `domains.csv`:
+
+| file | contents |
+|------|----------|
+| `scans.csv` | scan id, MESc unit, frame rate, frames, ROIs |
+| `domains.csv` | row index, domain name, ROI indices |
+| `scan<id>_rois.npy` | raw mean fluorescence, `(ROI, frame)` |
+| `scan<id>_dfof.npy`, `scan<id>_zscore.npy`, `scan<id>_denoised.npy` | dF/F, z-score and denoised trace per domain, `(domain, frame)` |
+| `scan<id>_peaks.csv` | detected events: domain, frame, time in seconds |
+| `scan<id>_denoised.png`, `scan<id>_rois.png` | the denoised domains with their events, and the raw ROIs, stacked |
+
+Events labelled in the curation window land in `PF/.curation/<mode>_template_curation.json`
+(`events`: recording, `source_event_index`, `source_event_time_s`, `label`).
+
+Run on `stan112_expt12`'s raw scans with the archive's `scanIDs_ROIs.pkl`, the
+output reproduces the archive's PF traces to float precision (the peaks on 7 of
+16 domains exactly, the rest with one to nine extra borderline events); the
+conversion is left off (`--convert` applies the file's offset so zero means no
+photons, which the archive never did).
+
+The same pipeline is the **Voltage** entry of the viewer's Process tab (`mbo
+scan.mesc`, or `mbo <expt>/PF` to run it again on a folder's source scan): the dataset block, output folder, slice popup
+(a frame window and the channel; every line is used), a Scans block ticking
+which units become scans, a Domains table naming which lines make each domain
+(loaded from or saved to `domains.json`, seeded from a `PF` folder beside the
+file when one exists), the settings popup with the archive's values as
+defaults, and Run, which spawns a worker the process console tracks: its
+progress follows each ROI read and each domain denoised, and its log lists
+every step with its time and memory. **Curate** opens the curation window
+(`mbo curate`, its own process) on the folder once it is written, before
+that on the file's raw lines. The curation window only reads results: every
+scan of the PF folder is listed, and a scan that went through motion
+correction (the AOD's RTMC) shows it over the candidate trace on the same time
+axis behind the `MC` checkbox. `mbo scan.mesc` opens on the first scan the folder holds.
 
 ## Formats
 

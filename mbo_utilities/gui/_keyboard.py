@@ -108,32 +108,16 @@ def handle_keyboard_shortcuts(parent: Any):
 
 
 def _get_sliders_ui(parent: Any):
-    """Return fpl's ImageWidgetSliders instance, or None."""
-    iw = getattr(parent, "image_widget", None)
-    if iw is None:
-        return None
-    sliders = getattr(iw, "_sliders_ui", None)
-    if sliders is not None:
-        return sliders
-    figure = getattr(iw, "figure", None)
-    guis = getattr(figure, "guis", None) or {}
-    for gui in (guis.values() if hasattr(guis, "values") else guis):
-        if gui is not None and gui.__class__.__name__ == "ImageWidgetSliders":
-            return gui
-    return None
+    """the viewer's playback-bar adapter, or None"""
+    return getattr(getattr(parent, "image_widget", None), "_sliders_ui", None)
 
 
 def toggle_playback(parent: Any, dim_index: int = 0) -> None:
     """Toggle play/pause on the given slider dim (default 0 = T).
 
-    Playback state is keyed by dim NAME on both slider UIs — the NDWidget
-    adapter's per-dim views and the vendored ImageWidgetSliders' str-keyed
-    defaultdicts. The old positional-int indexing toggled a phantom integer
-    key on the vendored stack (a silent no-op), so ``dim_index`` is resolved
-    to a name first: iterating the playing mapping yields the dim names in
-    slider order on both stacks, with ``iw.slider_dims`` (positional
-    letters) as the fallback when that mapping is still unpopulated (the
-    vendored defaultdicts only fill in on the first drawn frame).
+    Playback state is keyed by dim name; ``dim_index`` is resolved to a
+    name by iterating the playing mapping (slider order), falling back to
+    ``iw.slider_dims`` when that mapping is still unpopulated.
     """
     sliders = _get_sliders_ui(parent)
     if sliders is None or not hasattr(sliders, "_playing"):

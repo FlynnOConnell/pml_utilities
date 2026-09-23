@@ -4,6 +4,9 @@ CLI entry point for mbo_utilities GUI.
 This module is designed for fast startup - heavy imports are deferred until needed.
 Operations like --check-install should be near-instant.
 """
+import functools
+import os
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -507,56 +510,106 @@ def _squeeze_for_viewer(arr):
 
 
 _NOTEBOOK_SIZE = (1400, 900)
+# the PreviewDataWidget on the figure's right edge
+_PREVIEW_WIDTH = 300
 
 
-def _figure_kwargs_for_here(size: tuple[int, int] | None = None) -> dict:
+def screen_box() -> tuple[int, int] | None:
+    """The screen's available work area less the window frame and title bar,
+    ``None`` when there is no Qt screen to ask."""
+    try:
+        from PyQt6.QtGui import QGuiApplication
+
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return None
+        avail = screen.availableGeometry()
+    except Exception:
+        return None
+    return max(400, avail.width() - 40), max(400, avail.height() - 100)
+
+
+def fit_figure_size(
+    box: tuple[int, int],
+    image_hw: tuple[int, int],
+    grid: tuple[int, int] = (1, 1),
+    top: int = 0,
+    bottom: int = 0,
+    right: int = 0,
+    min_width: float = 0.0,
+) -> tuple[int, int]:
+    """Canvas size whose render area has the images' aspect.
+
+    The image column fills the height of ``box`` (w, h) and the width follows
+    from the aspect, so the subplot shows no black band around the image. The
+    edge windows (``top`` strip, ``bottom`` sliders, ``right`` widget) and each
+    subplot's histogram dock and frame padding are added around it. The window
+    is widened only as far as ``min_width`` needs to keep the top strip on one
+    row; that is the one place the image gets a margin.
+    """
+    from mbo_utilities.gui._fpl_config import HISTOGRAM_WIDTH, SUBPLOT_PAD_H, SUBPLOT_PAD_W
+    from mbo_utilities.gui._top_strip import MIN_RENDER_AREA
+
+    nrows, ncols = grid
+    h, w = max(float(image_hw[0]), 1.0), max(float(image_hw[1]), 1.0)
+    col_pad = HISTOGRAM_WIDTH + SUBPLOT_PAD_W
+    img_h = (box[1] - top - bottom) / nrows - SUBPLOT_PAD_H
+    img_w = img_h * w / h
+    width = ncols * (img_w + col_pad) + right
+    if width > box[0]:
+        img_w = (box[0] - right) / ncols - col_pad
+        img_h = img_w * h / w
+        width = box[0]
+    height = nrows * (img_h + SUBPLOT_PAD_H) + top + bottom
+    return int(max(width, min_width)), int(max(height, top + bottom + MIN_RENDER_AREA))
+
+
+def _figure_kwargs_for_here(size: tuple[int, int] | None = None, fit: dict | None = None) -> dict:
     """The canvas and size for wherever this process is running.
 
     A notebook gets the jupyter canvas: it belongs in the output cell, not
     in a Qt window the browser cannot see, which is what the pyqt6 branch
     would build whenever PyQt6 happens to be installed (napari pulls it in).
     jupyter_rfb streams the same wgpu frames over the kernel, so this is also
-    what makes a remote/JupyterHub session work. Its default size is a floor,
-    not a preference: the edge windows reserve fixed pixels (300 for the side
-    widget, the strip's menu row + panel, the NDWidget controls), and a canvas
-    too small for them leaves pygfx a negative viewport, which fails
-    validation and blanks the whole frame. A notebook cell has no screen to
-    measure, so ask for room.
+    what makes a remote/JupyterHub session work. A notebook cell has no
+    screen to measure, so its room is a fixed box with space for the edge
+    windows; a desktop window's room is the screen's available work area,
+    so launches on shorter monitors (laptops, 1080p with a taskbar) don't run
+    past the bottom of the screen.
 
-    A desktop window is clamped to the screen's available work area so
-    launches on shorter monitors (laptops, 1080p with a taskbar) don't run
-    past the bottom of the screen; (1000, 1000) when Qt can't be asked.
+    ``size`` is used as given. Otherwise ``fit``, the keyword arguments of
+    :func:`fit_figure_size`, sizes the canvas to the images within that room,
+    and without either the canvas is the room itself, at most 1000 px a side.
     """
+    # every viewer asks here right before it builds its figure
+    from mbo_utilities.gui import _fpl_config  # noqa: F401
+
     if in_notebook():
-        return {"canvas": "jupyter", "size": tuple(size or _NOTEBOOK_SIZE)}
+        if size is None:
+            size = fit_figure_size(_NOTEBOOK_SIZE, **fit) if fit else _NOTEBOOK_SIZE
+        return {"canvas": "jupyter", "size": tuple(size)}
 
     import os
 
     if os.environ.get("RENDERCANVAS_FORCE_OFFSCREEN"):
         # tests and headless capture: rendercanvas.auto already resolved to
         # the offscreen backend, and a Qt canvas would fight it
-        return {"size": tuple(size or (1000, 1000))}
+        if size is None:
+            size = fit_figure_size((1000, 1000), **fit) if fit else (1000, 1000)
+        return {"size": tuple(size)}
 
-    try:
-        from rendercanvas.pyqt6 import RenderCanvas
-    except (ImportError, RuntimeError):  # RuntimeError if qt is already selected
+    if os.environ.get("RENDERCANVAS_BACKEND", "qt").lower() not in ("qt", "pyqt6"):
+        # a chosen backend is left to rendercanvas.auto, which honors the variable
         RenderCanvas = None
+    else:
+        try:
+            from rendercanvas.pyqt6 import RenderCanvas
+        except (ImportError, RuntimeError):  # RuntimeError if qt is already selected
+            RenderCanvas = None
 
     if size is None:
-        fig_w, fig_h = 1000, 1000
-        try:
-            from PyQt6.QtGui import QGuiApplication
-            screen = QGuiApplication.primaryScreen()
-            if screen is not None:
-                avail = screen.availableGeometry()
-                # leave headroom for window chrome, side widget, and OS bars.
-                # PreviewDataWidget is ~300 px wide, added by add_gui — so the
-                # canvas itself wants the remaining width.
-                fig_w = max(400, min(fig_w, avail.width() - 360))
-                fig_h = max(400, min(fig_h, avail.height() - 120))
-        except Exception:
-            pass
-        size = (fig_w, fig_h)
+        box = screen_box() or (1000, 1000)
+        size = fit_figure_size(box, **fit) if fit else (min(1000, box[0]), min(1000, box[1]))
 
     if RenderCanvas is not None:
         # present_method="screen" renders the wgpu surface directly. The
@@ -571,14 +624,55 @@ def _figure_kwargs_for_here(size: tuple[int, int] | None = None) -> dict:
     return {"size": tuple(size)}
 
 
+# the smallest render viewport a subplot keeps, per side, when the window is
+# dragged narrow; below this the window stops shrinking
+_MIN_VIEWPORT = 24
+
+
+def _clamp_window_to_layout(figure, event=None) -> None:
+    """Keep the Qt window at least as big as its edge windows, docks and
+    per-subplot imgui windows need.
+
+    The figure clamps its render area to 1 px, then each subplot subtracts
+    its histogram window, docks and spacing from its share, so a canvas
+    narrower than the panels gives pygfx a negative viewport and a
+    validation error every frame. Registered on the canvas ``resize``
+    event so it follows whatever the edges are sized to at the time.
+    """
+    canvas = figure.canvas
+    area_w, area_h = figure.get_pygfx_render_area()[2:]
+    need_w = need_h = 0.0
+    for subplot in figure:
+        frame = subplot.frame
+        fw, fh = frame.rect[2:]
+        vw, vh = frame.viewport.rect[2:]
+        # the overhead a subplot carries at any size, scaled back up by its
+        # fraction of the render area
+        need_w = max(need_w, (fw - vw + _MIN_VIEWPORT) * area_w / fw)
+        need_h = max(need_h, (fh - vh + _MIN_VIEWPORT) * area_h / fh)
+    edges = figure.imgui_windows
+    for side in ("left", "right"):
+        need_w += edges[side].size if edges[side] is not None else 0
+    for side in ("top", "bottom"):
+        need_h += edges[side].size if edges[side] is not None else 0
+    min_w, min_h = int(math.ceil(need_w)), int(math.ceil(need_h))
+    current = canvas.minimumSize()
+    if (current.width(), current.height()) != (min_w, min_h):
+        canvas.setMinimumSize(min_w, min_h)
+
+
 def _after_show(iw) -> None:
-    """Window title and icon; only meaningful once a desktop canvas exists."""
+    """Window title, icon and minimum size; only meaningful once a desktop
+    canvas exists."""
     from mbo_utilities import __version__
 
     canvas = iw.figure.canvas
     if hasattr(canvas, "set_title"):
         canvas.set_title(f"Miller Brain Studio v{__version__}")
     _set_qt_icon()
+    if hasattr(canvas, "setMinimumSize"):
+        canvas.add_event_handler(functools.partial(_clamp_window_to_layout, iw.figure), "resize")
+        _clamp_window_to_layout(iw.figure)
 
 
 def _create_image_widget(
@@ -602,10 +696,31 @@ def _create_image_widget(
     import copy
     import numpy as np
 
-    if figure_kwargs_override is not None:
-        figure_kwargs = figure_kwargs_override
-    else:
-        figure_kwargs = _figure_kwargs_for_here()
+    if isinstance(widget, bool) or widget is None:
+        widget = "preview" if widget else "none"
+    if widget not in ("preview", "manualroi", "none"):
+        raise ValueError(
+            f"unknown widget {widget!r}, expected one of: preview, manualroi, none"
+        )
+
+    # drawing needs the windowing controls to see anything, so the ROI
+    # ui takes the top strip and right-widget tabs alongside the preview
+    # widget, not instead of it. Flip the Widgets-menu toggle on for this session
+    # when asked for, or when this data has annotations or pipeline ROIs
+    # beside it; the widget builds itself from the toggle. Not persisted — the
+    # flag came from the command line or the disk, not the menu.
+    manual_roi = signal_quality = False
+    if widget != "none":
+        from mbo_utilities.gui.manual_roi import labels_path
+        from mbo_utilities.gui.roi_runs import run_dir_complete
+        from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
+
+        src = data_array.source_path
+        manual_roi = widget == "manualroi" or widget_enabled("manual_roi") or (
+            src is not None
+            and (labels_path(src).exists() or run_dir_complete(labels_path(src).parent))
+        )
+        signal_quality = widget_enabled("signal_quality")
 
     # Determine slider dimension names from array's dims property if available
     from mbo_utilities.arrays.features import get_slider_dims
@@ -658,76 +773,76 @@ def _create_image_widget(
             arr.roi = r
             arrays.append(_squeeze_for_viewer(arr))
             names.append(f"ROI {r}" if r else (base_name or "Full Image"))
-
-        from mbo_utilities.gui._ndviewer import MboNDViewer
-
-        iw = MboNDViewer(
-            data=arrays,
-            names=names,
-            slider_dim_names=slider_dim_names,
-            window_funcs=window_funcs,
-            window_sizes=window_sizes,
-            cmap="gnuplot2",
-            histogram_widget=True,
-            figure_kwargs=figure_kwargs,
-            graphic_kwargs=graphic_kwargs,
-        )
     else:
-        from mbo_utilities.gui._ndviewer import MboNDViewer
+        arrays = [_squeeze_for_viewer(data_array)]
+        names = None
 
-        iw = MboNDViewer(
-            data=_squeeze_for_viewer(data_array),
-            slider_dim_names=slider_dim_names,
-            window_funcs=window_funcs,
-            window_sizes=window_sizes,
-            cmap="gnuplot2",
-            histogram_widget=True,
-            figure_kwargs=figure_kwargs,
-            graphic_kwargs=graphic_kwargs,
+    from mbo_utilities.gui._ndviewer import MboNDViewer, sliders_height
+
+    if figure_kwargs_override is not None:
+        figure_kwargs = figure_kwargs_override
+    else:
+        from fastplotlib.utils import calculate_figure_shape
+
+        from mbo_utilities.gui._top_strip import MENU_HEIGHT, MENU_MIN_WIDTH, strip_height
+        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
+        from mbo_utilities.gui.widgets.preview_data import ZSTATS_PANEL_HEIGHT
+
+        rgb = bool(getattr(arrays[0], "rgb", False))
+        shape = tuple(arrays[0].shape)
+        top, right, min_width = 0, 0, 0.0
+        if widget != "none":
+            top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
+        # the strip is as tall as the tab that will be selected: the Traces
+        # panel registers first, else the Signal Quality plot once its stats
+        # are in; the ROI controls are a right-bar tab and need no width
+        if manual_roi:
+            top = strip_height(PANEL_HEIGHT)
+        elif signal_quality:
+            top = strip_height(ZSTATS_PANEL_HEIGHT)
+        figure_kwargs = _figure_kwargs_for_here(
+            fit=dict(
+                image_hw=shape[-3:-1] if rgb else shape[-2:],
+                grid=calculate_figure_shape(len(arrays)),
+                top=top,
+                bottom=sliders_height(MboNDViewer._n_slider_dims(arrays[0], rgb)),
+                right=right,
+                min_width=min_width,
+            )
         )
+
+    iw = MboNDViewer(
+        data=arrays,
+        names=names,
+        slider_dim_names=slider_dim_names,
+        window_funcs=window_funcs,
+        window_sizes=window_sizes,
+        cmap="gnuplot2",
+        histogram_widget=True,
+        figure_kwargs=figure_kwargs,
+        graphic_kwargs=graphic_kwargs,
+    )
 
     if show:
         iw.show()
         _after_show(iw)
 
-    # Attach the requested side widget
-    if isinstance(widget, bool) or widget is None:
-        widget = "preview" if widget else "none"
-    if widget in ("preview", "manualroi"):
+    if widget != "none":
         from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
-
-        # drawing needs the windowing controls to see anything, so the ROI
-        # ui takes the top strip and right-widget tabs alongside the preview
-        # widget, not instead of it. Flip the Widgets-menu toggle on for this session
-        # when asked for, or when this data has annotations or pipeline ROIs
-        # beside it; the widget builds itself from the toggle. Not persisted — the
-        # flag came from the command line or the disk, not the menu.
-        from mbo_utilities.gui.manual_roi import labels_path
-        from mbo_utilities.gui.roi_runs import run_dir_complete
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        src = data_array.source_path
-        if widget == "manualroi" or (
-            src is not None
-            and (labels_path(src).exists() or run_dir_complete(labels_path(src).parent))
-        ):
+        if manual_roi:
             set_widget_enabled("manual_roi", True, persist=False)
-
         gui = PreviewDataWidget(
             iw=iw,
             fpath=data_array.source_path,
-            size=300,
+            size=_PREVIEW_WIDTH,
         )
         # the EdgeWindow shim registers itself with the figure during
         # __init__; add_gui exists only on mbo-fastplotlib
         add_gui = getattr(iw.figure, "add_gui", None)
         if add_gui is not None:
             add_gui(gui)
-    elif widget != "none":
-        raise ValueError(
-            f"unknown widget {widget!r}, expected one of: preview, manualroi, none"
-        )
-
     return iw
 
 
@@ -746,6 +861,9 @@ def _run_gui_impl(
     runner_params: Any | None = None,
     mode: str = "Fastplotlib viewer (default)",
     unit: int | str | None = None,
+    vis: str = "demixing",
+    raw_path: str | Path | None = None,
+    motion_correction_path: str | Path | None = None,
 ):
     """Internal implementation of run_gui with all heavy imports."""
     # Apply persisted Options (GPU adapter, debug logging) before any
@@ -763,10 +881,10 @@ def _run_gui_impl(
         if _gpu_idx >= 0 and 0 <= _gpu_idx < len(_adapters):
             import fastplotlib as fpl
             fpl.select_adapter(_adapters[_gpu_idx])
-        if get_debug_logging():
-            import logging
+        # an explicit MBO_DEBUG (mbo --debug / --no-debug) wins over the preference
+        if get_debug_logging() and "MBO_DEBUG" not in os.environ:
             from mbo_utilities import log as _mbo_log
-            _mbo_log.set_global_level(logging.DEBUG)
+            _mbo_log.set_debug(True)
     except Exception:
         pass
 
@@ -806,11 +924,49 @@ def _run_gui_impl(
         if select_only:
             return data_in
 
-        # masknmf demixing results open in masknmf's own curation GUI
-        # (accept/reject + class labeling) instead of the standard viewer
-        demix_file = _find_demixing_results(data_in)
-        if demix_file is not None:
-            return _launch_curation_gui(demix_file)
+        # the file dialog hands back a list even for one file
+        if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
+            data_in = data_in[0]
+        # a masknmf demixing result opens in masknmf's own viewers
+        from mbo_utilities.arrays.demixing import has_demixing_results
+
+        if not metadata_only and isinstance(data_in, (str, Path)) and has_demixing_results(data_in):
+            import importlib.util
+
+            from mbo_utilities.install import _MASKNMF_HINT
+
+            if importlib.util.find_spec("masknmf") is None or importlib.util.find_spec("torch") is None:
+                raise click.ClickException(
+                    f"{Path(data_in).name} is a masknmf demixing result and opens in masknmf's "
+                    f"viewers, but masknmf (with torch) is not installed here: {_MASKNMF_HINT}"
+                )
+            from mbo_utilities.gui.masknmf_vis import MasknmfViewers
+
+            viewers = MasknmfViewers(
+                data_in, raw_path=raw_path, motion_correction_path=motion_correction_path
+            )
+            output = viewers.open(vis)
+            if in_notebook():
+                display_widget(output)
+                return viewers
+            import fastplotlib as fpl
+
+            fpl.loop.run()
+            return None
+        # a .mesc holding AOD ROI units (line scans, chessboard or ribbon
+        # patches) opens on the first one with no prompt: the Voltage
+        # pipeline follows the unit on screen and offers the other scans
+        # there, and its Curate button opens the curation window. A PF or
+        # experiment folder opens as a ResultsArray through imread, like a suite2p
+        # folder.
+        # Other .mesc files prompt for their unit once, here.
+        if _is_mesc(data_in):
+            if unit is None:
+                unit = _first_linescan_unit(data_in)
+            mesc_kwargs, proceed = _resolve_mesc_unit(data_in, unit)
+            if not proceed:
+                return None
+            unit = mesc_kwargs.get("unit", unit)
 
         # Dispatch based on Mode
         # pollen calibration is auto-detected in the fastplotlib viewer via get_viewer_class()
@@ -826,11 +982,6 @@ def _run_gui_impl(
             splash.close()
 
 
-# returned by the picker when no Qt binding is importable, so the caller can
-# tell "couldn't ask" apart from "user said no".
-_PICKER_UNAVAILABLE = object()
-
-
 def _fmt_duration(seconds):
     """Compact recording length: '' when unknown, seconds under a minute."""
     if not seconds:
@@ -841,124 +992,19 @@ def _fmt_duration(seconds):
     return f"{m}m {s:02d}s"
 
 
-def _prompt_for_mesc_unit(path, units):
-    """Pop a Qt dialog listing the measurement units in a ``.mesc`` file.
-
-    A ``.mesc`` holds one MUnit per scan the operator ran — a z-stack, a
-    ribbon time series, a snapshot — and they are unrelated recordings with
-    different shapes, so there is no sensible way to merge them into one
-    array. The user picks which one to open.
-
-    Returns the chosen ``"MSession_N/MUnit_M"`` key, None if the user
-    cancelled, or `_PICKER_UNAVAILABLE` when no Qt binding is importable — the
-    caller then opens the file's default (first) unit rather than treating a
-    dialog we never showed as a refusal.
-    """
-    try:
-        from qtpy.QtCore import Qt
-        from qtpy.QtWidgets import (
-            QAbstractItemView,
-            QApplication,
-            QDialog,
-            QDialogButtonBox,
-            QHeaderView,
-            QLabel,
-            QTableWidget,
-            QTableWidgetItem,
-            QVBoxLayout,
-        )
-    except ImportError:
-        from mbo_utilities.log import get as _get
-        _get("gui.boot").info(
-            "no Qt binding available for the MESc unit picker; "
-            "opening the first unit."
-        )
-        return _PICKER_UNAVAILABLE
-
-    app = QApplication.instance() or QApplication([])
-
-    dialog = QDialog()
-    dialog.setWindowTitle(f"Select a measurement unit — {Path(path).name}")
-    dialog.resize(860, 420)
-    layout = QVBoxLayout(dialog)
-    plural = "unit" if len(units) == 1 else "units"
-    layout.addWidget(
-        QLabel(
-            f"{Path(path).name} contains {len(units)} measurement {plural} "
-            f"(one per scan). Choose which to open:"
-        )
-    )
-
-    columns = (
-        "Unit", "Type", "T", "C", "Z / ROI", "Y", "X",
-        "Duration", "Acquired", "Comment",
-    )
-    table = QTableWidget(len(units), len(columns))
-    table.setHorizontalHeaderLabels(columns)
-    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    table.verticalHeader().setVisible(False)
-    for row, unit in enumerate(units):
-        t, c, z, y, x = unit["shape"]
-        if unit["kind"] == "multicube":
-            # Z holds cubes x z-slices, not ROIs
-            z_text = (
-                f"{unit['nrois']}x{z // unit['nrois']}"
-                if unit["nrois"] > 1
-                else str(z)
-            )
-        else:
-            z_text = f"{z} ROI" if unit["nrois"] > 1 else str(z)
-        cells = (
-            unit["munit"],
-            unit["modality_name"],
-            str(t),
-            str(c),
-            z_text,
-            str(y),
-            str(x),
-            _fmt_duration(unit.get("duration_s")),
-            (unit["start_time"] or "")[:19].replace("T", " "),
-            unit["comment"],
-        )
-        for col, text in enumerate(cells):
-            table.setItem(row, col, QTableWidgetItem(text))
-    table.resizeColumnsToContents()
-    table.horizontalHeader().setStretchLastSection(True)
-    table.horizontalHeader().setSectionResizeMode(
-        len(columns) - 1, QHeaderView.ResizeMode.Stretch
-    )
-    table.selectRow(0)
-    table.cellDoubleClicked.connect(lambda *_: dialog.accept())
-    layout.addWidget(table)
-
-    buttons = QDialogButtonBox(
-        QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel
-    )
-    buttons.accepted.connect(dialog.accept)
-    buttons.rejected.connect(dialog.reject)
-    layout.addWidget(buttons)
-
-    dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    accepted = dialog.exec()
-    app.processEvents()
-    if not accepted:
-        return None
-    row = table.currentRow()
-    return units[max(0, row)]["key"]
-
-
 def _resolve_mesc_unit(data_in, unit):
     """Reader kwargs selecting which MUnit of a ``.mesc`` to open.
 
-    Every ``.mesc`` prompts — a file holds one MUnit per scan the operator
-    ran, so which one to open is always the user's call, never a default worth
-    guessing at. An explicit ``unit`` is the deliberate bypass.
+    Every ``.mesc`` opens straight to its first measurement unit, no prompt.
+    A file with more than one MUnit (unrelated scans the operator ran back
+    to back) is switched between from the MESc tab
+    (``mbo_utilities.gui.widgets.mesc_units.MescTabWidget``), an ImGui
+    widget like the rest of the viewer — no Qt involved anywhere in this
+    path. An explicit ``unit`` is the deliberate bypass.
 
     Returns ``({}, True)`` for anything that isn't a ``.mesc``. The second
-    element is False only when the user cancelled the picker, in which case
-    the caller should abort instead of opening something arbitrary.
+    element is kept (always True now) so existing callers that check for a
+    cancelled picker don't need to change.
     """
     from mbo_utilities.log import get as _get
 
@@ -981,84 +1027,79 @@ def _resolve_mesc_unit(data_in, unit):
         return {}, True
     if not units:
         return {}, True  # let imread raise the real "nothing readable" error
-
-    if in_notebook():
-        # the picker is a Qt dialog on the kernel's machine; in a notebook
-        # the unit is an argument, and the error lists what there is to pick
-        if len(units) == 1:
-            return {"unit": units[0]}, True
-        listing = "\n".join(f"  {i}: {u}" for i, u in enumerate(units))
-        raise ValueError(
-            f"{path.name} holds {len(units)} measurement units; pass unit= "
-            f"(an index or key) to choose one:\n{listing}"
+    if len(units) > 1:
+        logger.info(
+            f"{path.name} holds {len(units)} measurement units; opening "
+            f"{units[0]['key']} (switch from the MESc tab)."
         )
-
-    chosen = _prompt_for_mesc_unit(path, units)
-    if chosen is _PICKER_UNAVAILABLE:
-        return {}, True
-    if chosen is None:
-        logger.info(f"MESc unit selection cancelled for {path.name}")
-        return {}, False
-    logger.info(f"MESc unit selected: {chosen}")
-    return {"unit": chosen}, True
+    return {"unit": units[0]["key"]}, True
 
 
-def _find_demixing_results(path) -> Path | None:
-    """Resolve a masknmf demixing results file for an opened path.
-
-    Matches the file itself (an hdf5 with a DemixingResults group) or a
-    selected folder directly containing ``demixing_results.hdf5``.
-    """
+def _is_mesc(path) -> bool:
     try:
         p = Path(path)
     except TypeError:
-        return None
-    if p.is_dir():
-        from mbo_utilities.masknmf.params import DEMIX_FILE
+        return False
+    return p.is_file() and p.suffix.lower() == ".mesc"
 
-        p = p / DEMIX_FILE
-    if not (p.is_file() and p.suffix.lower() in (".h5", ".hdf5")):
-        return None
+
+def _mesc_unit(path, unit) -> dict | None:
+    """The unit record ``unit`` names in the ``.mesc``: an index, a
+    ``MSession_0/MUnit_3`` key or a bare ``MUnit_3``; None picks the first."""
+    from mbo_utilities.arrays.mesc import list_mesc_units
+
     try:
-        import h5py
-
-        with h5py.File(p, "r") as f:
-            return p if "DemixingResults" in f else None
+        units = list_mesc_units(path)
     except Exception:
         return None
+    if not units:
+        return None
+    if unit is None:
+        return units[0]
+    if isinstance(unit, int):
+        return units[unit] if 0 <= unit < len(units) else None
+    return next((u for u in units if unit in (u["key"], u["munit"])), None)
 
 
-# curation windows opened onto an already-running loop; referenced here so
-# they aren't garbage collected when the opener returns
-_curation_windows: list = []
+def _is_linescan_unit(path, unit) -> bool:
+    """Whether the unit is an AOD line scan (a "packed" unit: one row per
+    line, one column per sample along it)."""
+    if unit is None:
+        return False
+    chosen = _mesc_unit(path, unit)
+    return chosen is not None and chosen.get("kind") == "packed"
 
 
-def _open_curation_gui(path):
-    """Show masknmf's curation GUI (accept/reject + class labels) for the file.
+def _first_linescan_unit(path) -> str | None:
+    """The key of the first AOD ROI unit (a line scan, chessboard or ribbon
+    scan: ``ROI_LAYOUTS``) in a ``.mesc``, or None. With a PF folder beside
+    the file (the voltage pipeline's output) the unit of its first scan wins,
+    so the viewer opens on a processed scan."""
+    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
+    from mbo_utilities.results import ResultsArray, newest_results, results_dir_of
 
-    ``from_masknmf`` restores any labels saved in the ``<results>.labels.hdf5``
-    sidecar and autosaves edits back into it. Does not run the event loop — a
-    caller on an already-running loop (File -> Open) just gets the extra window.
-    """
-    from masknmf.visualization.classification_vis import ClassificationVis
-
-    vis = ClassificationVis.from_masknmf([str(path)])
-    vis.show()
-    _curation_windows.append(vis)
-    return vis
-
-
-def _launch_curation_gui(path):
-    """Open the curation GUI from a cold start and run the event loop."""
-    import fastplotlib as fpl
-
-    vis = _open_curation_gui(path)
-    if in_notebook():
-        # show() already ran; the canvas it returned is what the cell needs
-        display_widget(vis.show())
-        return vis
-    fpl.loop.run()
-    return None
+    try:
+        units = [u for u in list_mesc_units(path) if u.get("kind") in ROI_LAYOUTS]
+    except Exception:
+        return None
+    path = Path(path)
+    for parent in (path.parent.parent, path.parent):
+        found = newest_results(parent, "voltage") or results_dir_of(parent / "PF")
+        if found is None:
+            continue
+        try:
+            run = ResultsArray(found, source=False)
+        except Exception:
+            break
+        wanted = {
+            str(u.attrs.get("source_unit", "")).rsplit("/", 1)[-1]
+            for u in run.results.units.values()
+        }
+        for u in units:
+            if u["key"].rsplit("/", 1)[-1] in wanted:
+                return u["key"]
+        break
+    return units[0]["key"] if units else None
 
 
 class ViewerCancelled(Exception):
@@ -1538,9 +1579,19 @@ def run_gui(
     select_only: bool = False,
     runner_params: Any | None = None,
     unit: int | str | None = None,
+    vis: str = "demixing",
+    raw_path: str | Path | None = None,
+    motion_correction_path: str | Path | None = None,
 ):
     """
     Open a GUI to preview data of any supported type.
+
+    A masknmf demixing result opens in masknmf's own viewer instead:
+    ``vis`` picks ``demixing`` (default), ``compression`` or
+    ``classification`` before launch; the viewer window is masknmf's as is.
+    ``raw_path`` and ``motion_correction_path`` give the demixing viewer its
+    raw panel and shift traces (and the compression viewer its raw movie);
+    omitted, the files beside the result are used when present.
 
     The one-call form of ``DataVis``: it builds the viewer, picks the canvas
     and size for wherever it is running, and shows it. In a terminal or
@@ -1619,6 +1670,9 @@ def run_gui(
         select_only=select_only,
         runner_params=runner_params,
         unit=unit,
+        vis=vis,
+        raw_path=raw_path,
+        motion_correction_path=motion_correction_path,
     )
 
 

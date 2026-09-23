@@ -201,6 +201,8 @@ _DIR_KEYS = {
     "grid_search": "last_grid_search_dir",  # Grid search results folder
     # MaskNMF pipeline
     "masknmf_outdir": "last_masknmf_outdir_dir",  # Run tab > Browse for output
+    # vnoiser event curation data path
+    "vnoiser": "last_vnoiser_dir",
 }
 
 
@@ -523,6 +525,18 @@ def get_compute_gpu() -> str:
 def set_compute_gpu(value: str) -> None:
     """Persist the compute-GPU policy for future launches."""
     _set_option("compute_gpu", str(value))
+
+
+def get_linescan_auto_traces() -> bool:
+    """Whether the line-scan viewer computes per-ROI traces on a background
+    thread when no saved traces (``F.npy`` or PF) exist. Off on an imaging
+    rig: the viewer only loads saved traces and offers a button to compute."""
+    return bool(_get_options().get("linescan_auto_traces", True))
+
+
+def set_linescan_auto_traces(value: bool) -> None:
+    """Persist whether the line-scan viewer computes missing traces itself."""
+    _set_option("linescan_auto_traces", bool(value))
 
 
 def get_s2p_torch_device() -> str:

@@ -120,6 +120,20 @@ def _create_windows_shortcut(name: str) -> Path:
     return Path(out) if out else base / f"{name}.lnk"
 
 
+def _linux_desktop_dir() -> Path:
+    """Resolve the user's real desktop directory, honoring xdg-user-dirs."""
+    try:
+        result = subprocess.run(
+            ["xdg-user-dir", "DESKTOP"], capture_output=True, text=True, check=True,
+        )
+        out = result.stdout.strip()
+        if out:
+            return Path(out)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+    return Path.home() / "Desktop"
+
+
 def _create_linux_shortcut(name: str) -> Path:
     from mbo_utilities import get_mbo_dirs
 
@@ -132,7 +146,7 @@ def _create_linux_shortcut(name: str) -> Path:
     base = get_mbo_dirs()["base"]
     icon = _copy_icon(".png", base)
 
-    desktop = Path.home() / "Desktop"
+    desktop = _linux_desktop_dir()
     desktop.mkdir(parents=True, exist_ok=True)
     entry = desktop / "miller-brain-studio.desktop"
     entry.write_text(

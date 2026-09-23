@@ -1533,10 +1533,70 @@ def task_roi_workflow(args: dict, logger: logging.Logger) -> None:
         raise
 
 
+def task_voltage(args: dict, logger: logging.Logger) -> None:
+    """
+    Voltage pipeline task: AOD ROI units of a .mesc to a PF folder.
+
+    Runs mbo_utilities.vnoiser.pipeline.run_voltage_pipeline with the Run
+    tab's settings (scaled there to the scans' frame rate); every ticked
+    unit is one scan, the domain table says which ROIs make each domain.
+    The runner logs every step (each ROI read, each domain denoised, the
+    writes) with its time and memory through ``logger`` and drives the
+    progress sidecar through ``monitor.update``.
+    """
+    from mbo_utilities.metadata import strip_for_export
+    from mbo_utilities.vnoiser.params import VoltageSettings
+    from mbo_utilities.vnoiser.pipeline import run_voltage_pipeline
+
+    monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
+    monitor.update(0.01, "Opening the source...")
+    settings = VoltageSettings.from_dict(args.get("settings"))
+    units = list(args.get("units") or [])
+    domains = {str(k): [int(v) for v in rois] for k, rois in (args.get("domains") or {}).items()}
+    frames = args.get("frames")
+    try:
+        src_arr = imread(args["input_path"], **(args.get("reader_kwargs") or {}))
+        metadata = dict(getattr(src_arr, "metadata", {}) or {})
+        metadata.update(args.get("custom_metadata") or {})
+    except Exception as e:
+        monitor.fail(str(e), details={"traceback": traceback.format_exc()})
+        logger.exception(f"voltage: cannot open input {args.get('input_path')!r}: {e}")
+        raise
+    logger.info(f"Input: {args['input_path']}  units: {units}")
+    logger.info(f"Output: {args['output_dir']}")
+    logger.info(f"Domains: {domains}")
+    try:
+        paths = run_voltage_pipeline(
+            args["input_path"],
+            domains=domains,
+            units=units or None,
+            first_env=args.get("first_env") or (),
+            out=args["output_dir"],
+            channel=int(args.get("channel") or 0),
+            convert=settings.runtime.convert,
+            frames=None if frames is None else (int(frames[0]), int(frames[1])),
+            planes=args.get("planes"),
+            save_cwt=settings.runtime.save_cwt,
+            settings=settings,
+            detect=settings.events.detect,
+            overwrite=settings.runtime.overwrite,
+            provenance={"settings": settings.to_dict(), "source_metadata": strip_for_export(metadata)},
+            progress_callback=monitor.update,
+            logger=logger,
+        )
+        monitor.finish(f"Voltage pipeline wrote {len(paths)} files to {args['output_dir']}")
+        logger.info(f"voltage completed: {sorted(paths)}")
+    except Exception as e:
+        monitor.fail(str(e), details={"traceback": traceback.format_exc()})
+        logger.exception(f"voltage failed: {e}")
+        raise
+
+
 TASKS = {
     "save_as": task_save_as,
     "suite2p": task_suite2p,
     "masknmf": task_masknmf,
+    "voltage": task_voltage,
     "roi_workflow": task_roi_workflow,
     "isoview": task_isoview,
     "isoview_correct": task_correct_stack,

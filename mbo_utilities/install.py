@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import os
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
@@ -40,6 +42,7 @@ HAS_CUPY: bool = _get_cached_flag("cupy", lambda: _check_import("cupy"))
 HAS_TORCH: bool = _get_cached_flag("torch", lambda: _check_import("torch"))
 HAS_RASTERMAP: bool = _get_cached_flag("rastermap", lambda: _check_import("rastermap"))
 HAS_MASKNMF: bool = _get_cached_flag("masknmf", lambda: _check_import("masknmf"))
+HAS_VNOISER: bool = _get_cached_flag("vnoiser", lambda: _check_import("vnoiser"))
 HAS_IMGUI: bool = _get_cached_flag("imgui_bundle", lambda: _check_import("imgui_bundle"))
 HAS_FASTPLOTLIB: bool = _get_cached_flag("fastplotlib", lambda: _check_import("fastplotlib"))
 HAS_PYQT6: bool = _get_cached_flag("pyqt6", lambda: _check_import("PyQt6"))
@@ -122,6 +125,17 @@ class InstallStatus:
 _TORCH_INDEX = "https://download.pytorch.org/whl/"
 _SUITE2P_HINT = "uv pip install lbm-suite2p-python suite2p rastermap --no-deps"
 _MASKNMF_HINT = "uv pip install git+https://github.com/apasarkar/masknmf-toolbox.git"
+VNOISER_HINT = "uv pip install -e <path to the vnoiser checkout>"
+# system libraries qt's xcb platform plugin loads at startup (README, Linux system libraries)
+LINUX_QT_APT_PACKAGES = (
+    "libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 "
+    "libxcb-render-util0 libxcb-render0 libxcb-shape0 libxcb-shm0 libxcb-sync1 "
+    "libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 libxkbcommon0 "
+    "libx11-xcb1 libegl1 libgl1 libfontconfig1 libdbus-1-3"
+)
+LINUX_QT_HINT = (
+    f"sudo apt install {LINUX_QT_APT_PACKAGES}  |  or run without qt: RENDERCANVAS_BACKEND=glfw mbo"
+)
 
 
 def _major(ver: str | None) -> int | None:
@@ -363,6 +377,10 @@ def check_installation(callback=None) -> InstallStatus:
             torch,
         ),
         _check_pkg("rastermap", "rastermap", "Rastermap", "sorts suite2p traces", _SUITE2P_HINT),
+        _check_pkg(
+            "vnoiser", "vnoiser", "vnoiser",
+            "wavelet denoising and event curation of voltage traces", VNOISER_HINT,
+        ),
     ]
 
     _update(0.9, "Checking napari...")
@@ -374,6 +392,28 @@ def check_installation(callback=None) -> InstallStatus:
             _check_pkg("napari_ome_zarr", "napari-ome-zarr", "napari-ome-zarr", "zarr in napari", napari_hint),
             _check_pkg("napari_animation", "napari-animation", "napari-animation", "movies from napari", napari_hint),
         ]
+    if sys.platform.startswith("linux") and HAS_PYQT6:
+        _update(0.95, "Checking the Qt window backend...")
+        purpose = "window backend for the viewer on Linux (PyQt6); glfw is the fallback"
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            status.features.append(FeatureStatus(
+                "Qt display", Status.WARN, message="no DISPLAY or WAYLAND_DISPLAY in this shell",
+                purpose=purpose, hint="run from a desktop session, ssh -X, or a VNC/virtual desktop",
+            ))
+        else:
+            # qt aborts the process when the xcb plugin cannot load, so probe in a subprocess
+            probe = subprocess.run(
+                [sys.executable, "-c", "from PyQt6.QtGui import QGuiApplication; QGuiApplication([])"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if probe.returncode == 0:
+                status.features.append(FeatureStatus("Qt display", Status.OK, purpose=purpose))
+            else:
+                lines = [ln for ln in probe.stderr.splitlines() if ln.strip()]
+                message = lines[0] if lines else f"qt exited with code {probe.returncode}"
+                status.features.append(FeatureStatus(
+                    "Qt display", Status.ERROR, message=message, purpose=purpose, hint=LINUX_QT_HINT,
+                ))
     _update(1.0, "Done")
     return status
 

@@ -8,10 +8,15 @@ examples:
     tp00001-10000_zplane01-14.tif  (TZYX)
     zplane01-14.tif                (ZYX, single timepoint)
     tp00001-10000.tif              (TYX, single plane)
+
+the same vocabulary reads tags back out of a filename (``filename_tags``):
+``mouse_V1_session1.tif`` carries ``session01``, ``plane_03.bin`` carries
+``zplane03``; results files are named from them (``mbo_utilities.results``).
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -90,10 +95,53 @@ TAG_REGISTRY: dict[str, TagDefinition] = {
     "C": TagDefinition("ch", "channel", zero_pad=2),
     "V": TagDefinition("view", "view", zero_pad=2),
     "R": TagDefinition("roi", "region", zero_pad=2),
+    "S": TagDefinition("session", "session", zero_pad=2),
     # future extensions
     "B": TagDefinition("beamlet", "beamlet", zero_pad=2),
     "A": TagDefinition("cm", "camera", zero_pad=2),
 }
+
+# one filename token: label, start, optional stop and step, bounded by separators
+_TAG_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z][A-Za-z]+)[_-]?(\d+)(?:-(\d+)(?:-(\d+))?)?(?![A-Za-z0-9])"
+)
+
+
+def parse_tag(token: str) -> DimensionTag | None:
+    """The tag a filename token spells, or None when its label is not in the vocabulary.
+
+    ``session1`` and ``session_01`` are ``session01``; ``plane3`` is ``zplane03``;
+    ``tp00001-10000`` keeps its range. ``stan112`` is not a tag, and neither is a
+    one-letter label (``V1`` is a brain region, not a view).
+    """
+    match = _TAG_TOKEN.fullmatch(token)
+    if match is None:
+        return None
+    label, start, stop, step = match.groups()
+    key = DIM_ALIASES.get(label.lower())
+    if key is None:
+        key = next((k for k, d in TAG_REGISTRY.items() if d.label == label.lower()), None)
+    if key is None or key not in TAG_REGISTRY:
+        return None
+    return DimensionTag(
+        TAG_REGISTRY[key], int(start), None if stop is None else int(stop), 1 if step is None else int(step),
+    )
+
+
+def filename_tags(path) -> list[DimensionTag]:
+    """Every tag in a file or folder name, in the order written.
+
+    A tag is a ``label``-``number`` token whose label :func:`parse_tag` knows,
+    so ``mouse_V1_GCaMP6f_session01.tif`` yields ``[session01]``,
+    ``plane_03.bin`` yields ``[zplane03]`` and ``tp00001-01574_zplane01-14.tif``
+    yields both of its tags.
+    """
+    from pathlib import Path
+
+    name = Path(path).name
+    stem = name[: -len(".zarr")] if name.endswith(".zarr") else Path(name).stem
+    tags = [parse_tag(m.group(0)) for m in _TAG_TOKEN.finditer(stem)]
+    return [t for t in tags if t is not None]
 
 
 @dataclass
@@ -196,9 +244,10 @@ class OutputFilename:
         returns
         -------
         str
-            filename like "tp00001-10000_zplane01-14.tif"
+            filename like "tp00001-10000_zplane01-14.tif"; ``ext=""`` names a
+            folder ("ch01_zplane02")
         """
-        if not ext.startswith("."):
+        if ext and not ext.startswith("."):
             ext = "." + ext
 
         parts = [tag.to_string() for tag in self.tags]

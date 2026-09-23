@@ -91,8 +91,8 @@ if TYPE_CHECKING:
     )
     from mbo_utilities.arrays.mesc import (
         MescArray as MescArray,
-        list_mesc_units as list_mesc_units,
     )
+    from mbo_utilities.arrays.mesc import list_mesc_units as list_mesc_units
     from mbo_utilities.arrays.isoview import (
         IsoviewArray as IsoviewArray,
         consolidate_isoview as consolidate_isoview,
@@ -131,6 +131,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "list_h5_datasets": (".h5", "list_h5_datasets"),
     "MescArray": (".mesc", "MescArray"),
     "list_mesc_units": (".mesc", "list_mesc_units"),
+    "DemixingArray": (".demixing", "DemixingArray"),
+    "list_demixing_results": (".demixing", "list_demixing_results"),
     "MP4Array": (".mp4", "MP4Array"),
     "TiffArray": (".tiff", "TiffArray"),
     "ScanImageArray": (".tiff", "ScanImageArray"),
@@ -207,6 +209,7 @@ __all__ = [
     "CHUNKS_3D",
     "CHUNKS_4D",
     "BinArray",
+    "DemixingArray",
     "LBMPiezoArray",
     "H5Array",
     "IsoviewArray",
@@ -232,6 +235,7 @@ __all__ = [
     # Features subpackage
     "features",
     "isoview_to_ome_zarr",
+    "list_demixing_results",
     "list_h5_datasets",
     "list_mesc_units",
     "iter_rois",

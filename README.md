@@ -83,6 +83,47 @@ uv pip install "mbo_utilities[notebooks]"
 uv pip install "mbo_utilities[all]"
 ```
 
+### Linux system libraries (Ubuntu/Debian)
+
+On Linux the viewer opens its window through PyQt6. The PyQt6 wheel ships Qt
+itself, but Qt's X11 platform plugin (`xcb`) loads a set of system libraries at
+startup that a fresh or minimal Ubuntu install does not have. Without them `mbo`
+prints a list of available platform plugins and aborts before any window opens.
+
+```bash
+sudo apt update
+sudo apt install --no-install-recommends   libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1   libxcb-randr0 libxcb-render-util0 libxcb-render0 libxcb-shape0   libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0   libxcb-xkb1 libxkbcommon-x11-0 libxkbcommon0 libx11-xcb1   libegl1 libgl1 libfontconfig1 libdbus-1-3 ffmpeg
+```
+
+- `apt` resolves the whole list before installing anything, so one bad name
+  installs nothing. If it reports `Unable to locate package`, the name was most
+  likely mangled by copy-paste (a non-breaking space shows up as extra spaces in
+  the error). Retype that name, or confirm the spelling with
+  `apt-cache search libxcb-`.
+- `mbo --check-install` starts Qt in a subprocess and reports whether the
+  platform plugin loads, with the command above as the fix.
+- To see exactly which library the plugin cannot find:
+
+  ```bash
+  QT_DEBUG_PLUGINS=1 mbo
+  ```
+
+- `ffmpeg` is only needed for `.mp4` export.
+
+**Running without Qt.** The viewer does not need Qt; it needs any window backend
+[rendercanvas](https://rendercanvas.readthedocs.io/) can drive. If the system
+libraries cannot be installed (no `sudo`), use the bundled glfw backend instead:
+
+```bash
+RENDERCANVAS_BACKEND=glfw mbo /path/to/data
+# or for every launch
+echo 'export RENDERCANVAS_BACKEND=glfw' >> ~/.bashrc
+```
+
+`mbo` respects `RENDERCANVAS_BACKEND` and skips Qt entirely when it names
+another backend. glfw needs only `libgl1` (or `libegl1`) and a running X11 or
+Wayland session.
+
 ### GPU dependencies
 
 PyTorch and CuPy require CUDA-specific wheels that must be installed separately.

@@ -11,10 +11,13 @@ from typing import Any
 
 from imgui_bundle import imgui, imgui_ctx
 
+from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._dialogs import start_open_prompt
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
+from mbo_utilities.gui.widgets.style_editor import draw_style_menu_item
 from mbo_utilities.gui.widgets.widget_toggles import draw_widgets_menu
+from mbo_utilities.install import VNOISER_HINT
 
 
 def draw_menu_bar(parent: Any):
@@ -48,16 +51,28 @@ def draw_menu_bar(parent: Any):
                     "Save as", "s", p_selected=False, enabled=can_save
                 )[0]:
                     parent._saveas_popup_open = True
-                if not can_save and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
-                    imgui.begin_tooltip()
-                    arr_type = type(parent.image_widget.data[0]).__name__ if parent.image_widget and parent.image_widget.data else "Unknown"
-                    imgui.text(f"{arr_type} does not support saving.")
-                    imgui.end_tooltip()
+                # the curation window (`mbo curate`) on the open PF folder or
+                # .mesc, in its own process; its module brings hello_imgui
+                from mbo_utilities.gui.curation_viewer import curation_target, launch_curation_window
+
+                target = curation_target(getattr(parent, "fpath", None))
+                if imgui.menu_item("Curate", "", p_selected=False, enabled=HAS_VNOISER and target is not None)[0]:
+                    launch_curation_window(target)
+                if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+                    imgui.set_tooltip(
+                        f"vnoiser is not installed: {VNOISER_HINT}" if not HAS_VNOISER
+                        else "Open a PF folder or a .mesc line scan first." if target is None
+                        else f"Open {target.name} in the curation window (its own window, what `mbo curate` opens)."
+                    )
                 imgui.separator()
                 if imgui.menu_item("Options", "", p_selected=False, enabled=True)[0]:
                     parent._show_options_popup = True
+                draw_style_menu_item()
                 if imgui.is_item_hovered():
-                    imgui.set_tooltip("Render GPU adapter, debug logging, and other settings")
+                    imgui.set_tooltip(
+                        "Sizes, spacing and colours of the running imgui style. "
+                        "Saved under ~/.mbo/imgui and applied at the next launch."
+                    )
                 imgui.end_menu()
             draw_widgets_menu(parent)
             if imgui.begin_menu("Docs", True):
@@ -233,7 +248,6 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
 
     if imgui.is_item_hovered():
         imgui.set_mouse_cursor(imgui.MouseCursor_.hand)
-        imgui.set_tooltip("Toggle the process console (tasks + live CPU / RAM / GPU)")
 
     # 2. Metadata / help / keybinds buttons, all in the same dark grey with
     # their hotkeys greyed out beside them. Help and Keybinds are one button

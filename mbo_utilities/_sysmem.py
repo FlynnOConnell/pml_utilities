@@ -256,7 +256,7 @@ class MemoryMonitor:
                 due = self.log_s is None or (
                     self.log_s > 0 and now - last_log >= self.log_s
                 )
-                if first or new_peak or due:
+                if new_peak or due:
                     peak = max(peak, pg)
                     first = False
                     last_log = now
