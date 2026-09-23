@@ -25,7 +25,8 @@ def _gres_count(gres: str) -> int:
 
 def analyze(cfg, n_planes, nt, ly, lx, partition, mode):
     """Pure analysis. Returns (report_lines, suggestions) where each suggestion
-    is (toml_key, value_or_None, reason)."""
+    is (toml_key, value_or_None, reason).
+    """
     report, suggestions = [], []
     F = cfg.pipeline.planes_per_gpu
     bin_gb = nt * ly * lx * 2 / 1e9
@@ -35,37 +36,65 @@ def analyze(cfg, n_planes, nt, ly, lx, partition, mode):
     report.append(f"{n_planes} planes, {nt} frames, {ly}x{lx}")
     report.append(f"per-plane binary : {bin_gb:.1f} GB")
     report.append(f"planes_per_gpu F : {F}")
-    report.append(f"est. peak RAM    : ~{est_peak:.0f} GB   (~{_RAM_FACTOR} x F x binary, rough)")
+    report.append(
+        f"est. peak RAM    : ~{est_peak:.0f} GB   (~{_RAM_FACTOR} x F x binary, rough)"
+    )
     report.append(f"mem_gb requested : {mem}")
     if est_peak > mem:
-        report.append(f"-> est. peak (~{est_peak:.0f} GB) exceeds mem_gb ({mem}); OOM risk")
+        report.append(
+            f"-> est. peak (~{est_peak:.0f} GB) exceeds mem_gb ({mem}); OOM risk"
+        )
 
     fit_F = max(1, int(mem / (_RAM_FACTOR * bin_gb))) if bin_gb else F
 
     if partition is None:
-        report.append("partition not found via sinfo (off-cluster?); node checks skipped")
+        report.append(
+            "partition not found via sinfo (off-cluster?); node checks skipped"
+        )
         if est_peak > mem:
-            suggestions.append(("[slurm] mem_gb", math.ceil(est_peak * 1.1),
-                                f"est. peak ~{est_peak:.0f} GB > {mem}"))
+            suggestions.append(
+                (
+                    "[slurm] mem_gb",
+                    math.ceil(est_peak * 1.1),
+                    f"est. peak ~{est_peak:.0f} GB > {mem}",
+                )
+            )
             if fit_F < F:
-                suggestions.append(("[pipeline] planes_per_gpu", fit_F,
-                                    f"or drop F to {fit_F} to fit {mem} GB"))
+                suggestions.append(
+                    (
+                        "[pipeline] planes_per_gpu",
+                        fit_F,
+                        f"or drop F to {fit_F} to fit {mem} GB",
+                    )
+                )
         return report, suggestions
 
     node_mem = partition.mem_mb / 1024
     free = partition.free_mb_max / 1024
-    report.append(f"partition {partition.name}: {partition.nodes} node(s), "
-                  f"{partition.cpus_per_node} CPUs/node, {node_mem:.0f} GB/node "
-                  f"({free:.0f} GB free), {partition.gres or '-'}")
+    report.append(
+        f"partition {partition.name}: {partition.nodes} node(s), "
+        f"{partition.cpus_per_node} CPUs/node, {node_mem:.0f} GB/node "
+        f"({free:.0f} GB free), {partition.gres or '-'}"
+    )
 
     # memory: advisory (no hard fail)
     if est_peak > mem and node_mem > mem:
         rec = int(min(node_mem, math.ceil(est_peak * 1.1)))
-        suggestions.append(("[slurm] mem_gb", rec,
-            f"node has {node_mem:.0f} GB; {mem} caps below est. peak ~{est_peak:.0f}"))
+        suggestions.append(
+            (
+                "[slurm] mem_gb",
+                rec,
+                f"node has {node_mem:.0f} GB; {mem} caps below est. peak ~{est_peak:.0f}",
+            )
+        )
     if est_peak > mem and fit_F < F:
-        suggestions.append(("[pipeline] planes_per_gpu", fit_F,
-                            f"or drop F to {fit_F} to fit {mem} GB"))
+        suggestions.append(
+            (
+                "[pipeline] planes_per_gpu",
+                fit_F,
+                f"or drop F to {fit_F} to fit {mem} GB",
+            )
+        )
 
     n_tasks = math.ceil(n_planes / F) if F else n_planes
 
@@ -82,41 +111,65 @@ def analyze(cfg, n_planes, nt, ly, lx, partition, mode):
             fit_gpu = partition.gpus_per_node or n_tasks
             concurrent = max(1, min(n_tasks, fit_cpu, fit_gpu))
         need = per_task * concurrent
-        line = f"node-local /tmp  : {tmp_gb:.0f} GB/node; staging ~{per_task:.0f} GB/task"
+        line = (
+            f"node-local /tmp  : {tmp_gb:.0f} GB/node; staging ~{per_task:.0f} GB/task"
+        )
         if concurrent > 1:
             line += f" x {concurrent} co-resident = ~{need:.0f} GB"
         report.append(line)
         if need > tmp_gb:
-            suggestions.append(("[pipeline] node_local", "false",
-                f"staging ~{need:.0f} GB > {tmp_gb:.0f} GB /tmp on {partition.name}; "
-                f"or lower planes_per_gpu"))
+            suggestions.append(
+                (
+                    "[pipeline] node_local",
+                    "false",
+                    f"staging ~{need:.0f} GB > {tmp_gb:.0f} GB /tmp on {partition.name}; "
+                    f"or lower planes_per_gpu",
+                )
+            )
 
     # array buys nothing on a single-node partition
     if mode == "array" and partition.nodes <= 1:
-        suggestions.append(("--mode", "single",
-            f"{partition.name} is {partition.nodes} node; array can't spread, only packs onto it"))
+        suggestions.append(
+            (
+                "--mode",
+                "single",
+                f"{partition.name} is {partition.nodes} node; array can't spread, only packs onto it",
+            )
+        )
 
     # CPU oversubscription when array packs n_tasks onto one node
     if mode == "array" and partition.nodes <= 1:
         cpt = cfg.slurm.cpus_per_task
         fit = partition.cpus_per_node // max(1, cpt)
         if n_tasks > fit:
-            suggestions.append(("[slurm] cpus_per_task", None,
-                f"{cpt} x {n_tasks} tasks = {cpt * n_tasks} CPUs, node has "
-                f"{partition.cpus_per_node}; only {fit} run at once"))
+            suggestions.append(
+                (
+                    "[slurm] cpus_per_task",
+                    None,
+                    f"{cpt} x {n_tasks} tasks = {cpt * n_tasks} CPUs, node has "
+                    f"{partition.cpus_per_node}; only {fit} run at once",
+                )
+            )
 
     # GPUs per job vs node
     gj = _gres_count(cfg.slurm.gres)
     if partition.gpus_per_node and gj > partition.gpus_per_node:
-        suggestions.append(("[slurm] gres", None,
-            f"requests {gj} GPU(s)/job but node has {partition.gpus_per_node}"))
+        suggestions.append(
+            (
+                "[slurm] gres",
+                None,
+                f"requests {gj} GPU(s)/job but node has {partition.gpus_per_node}",
+            )
+        )
 
     return report, suggestions
 
 
 def run_check(cfg, mode="single"):
     import click
+
     from mbo_utilities import imread
+
     from .pipeline import num_planes
 
     arr = imread(cfg.io.input)
@@ -125,8 +178,11 @@ def run_check(cfg, mode="single"):
 
     partition = None
     if cluster.sinfo_available():
-        match = [p for p in cluster.query_partitions(cfg.slurm.partition)
-                 if p.name == cfg.slurm.partition]
+        match = [
+            p
+            for p in cluster.query_partitions(cfg.slurm.partition)
+            if p.name == cfg.slurm.partition
+        ]
         partition = match[0] if match else None
 
     report, suggestions = analyze(cfg, n_planes, nt, ly, lx, partition, mode)
@@ -140,4 +196,6 @@ def run_check(cfg, mode="single"):
             kv = f"{key} = {val}" if val is not None else key
             click.echo(f"  {kv}   # {why}")
     else:
-        click.secho("\nrequest looks consistent with the data and partition.", fg="green")
+        click.secho(
+            "\nrequest looks consistent with the data and partition.", fg="green"
+        )

@@ -107,7 +107,11 @@ def list_demixing_results(path: Path | str) -> list[dict]:
         here = folder.resolve()
         for sib in sorted(folder.parent.iterdir()):
             # a link back to this folder (pytest's `current` junction) is not a sibling
-            if sib.is_dir() and sib.resolve() != here and has_demixing_results(sib / p.name):
+            if (
+                sib.is_dir()
+                and sib.resolve() != here
+                and has_demixing_results(sib / p.name)
+            ):
                 entries.append(_describe(sib / p.name, sib.name))
     return entries
 
@@ -135,10 +139,17 @@ class DemixingArray(ReductionMixin, LazyArray):
             g = f[GROUP]
             self._shape3 = tuple(int(x) for x in g["shape"][()])
             a = g["a"]
-            self.num_rois = int(a["size"][1]) if isinstance(a, h5py.Group) else int(a.shape[1])
-            self.label_names = [
-                s.decode() if isinstance(s, bytes) else str(s) for s in g["label_names"][()]
-            ] if "label_names" in g else []
+            self.num_rois = (
+                int(a["size"][1]) if isinstance(a, h5py.Group) else int(a.shape[1])
+            )
+            self.label_names = (
+                [
+                    s.decode() if isinstance(s, bytes) else str(s)
+                    for s in g["label_names"][()]
+                ]
+                if "label_names" in g
+                else []
+            )
             self.class_labels = (
                 np.asarray(g["class_labels"][()], dtype=int)
                 if "class_labels" in g
@@ -149,8 +160,14 @@ class DemixingArray(ReductionMixin, LazyArray):
                 if "iscell" in g
                 else np.ones(self.num_rois, dtype=bool)
             )
-            self._mean_img = np.asarray(g["mean_img"][()], dtype=np.float32).reshape(self._shape3[1:])
-            prov = json.loads(f.attrs["mbo_provenance"]) if "mbo_provenance" in f.attrs else {}
+            self._mean_img = np.asarray(g["mean_img"][()], dtype=np.float32).reshape(
+                self._shape3[1:]
+            )
+            prov = (
+                json.loads(f.attrs["mbo_provenance"])
+                if "mbo_provenance" in f.attrs
+                else {}
+            )
         t, y, x = self._shape3
         self._metadata = {
             "num_timepoints": t,
@@ -214,7 +231,9 @@ class DemixingArray(ReductionMixin, LazyArray):
     def footprint(self, k: int) -> np.ndarray:
         """ROI ``k``'s footprint as a dense ``(Y, X)`` image."""
         _, y, x = self._shape3
-        return np.asarray(self.footprints[:, k].todense(), dtype=np.float32).reshape(y, x)
+        return np.asarray(self.footprints[:, k].todense(), dtype=np.float32).reshape(
+            y, x
+        )
 
     def _frames(self, c: int, ts: list[int]) -> np.ndarray:
         """View ``c`` at timepoints ``ts`` as ``(len(ts), Y * X)``."""
@@ -227,18 +246,27 @@ class DemixingArray(ReductionMixin, LazyArray):
             if want_cuda:
                 try:
                     import torch
+
                     from masknmf import DemixingResults
 
                     want_cuda = torch.cuda.is_available()
                 except (ImportError, AttributeError) as e:
-                    logger.warning(f"cuda requested but unusable ({e}); rebuilding frames with numpy")
+                    logger.warning(
+                        f"cuda requested but unusable ({e}); rebuilding frames with numpy"
+                    )
                     want_cuda = False
             if want_cuda:
                 device = self._device or "cuda"
-                logger.info(f"loading {self.filenames[0].name} with masknmf on {device}")
-                self._results = DemixingResults.from_hdf5(self.filenames[0], device=device)
+                logger.info(
+                    f"loading {self.filenames[0].name} with masknmf on {device}"
+                )
+                self._results = DemixingResults.from_hdf5(
+                    self.filenames[0], device=device
+                )
             else:
-                logger.info(f"loading {self.filenames[0].name} factors for numpy reconstruction")
+                logger.info(
+                    f"loading {self.filenames[0].name} factors for numpy reconstruction"
+                )
                 with h5py.File(self.filenames[0], "r") as f:
                     g = f[GROUP]
                     u = _read_sparse(g["u"]).tocsr()
@@ -246,8 +274,12 @@ class DemixingArray(ReductionMixin, LazyArray):
                     a = _read_sparse(g["a"]).tocsr()
                     cc = np.asarray(g["c"][()], dtype=np.float32)
                     if "factorized_bkgd_term1" in g and "factorized_bkgd_term2" in g:
-                        k1 = np.asarray(g["factorized_bkgd_term1"][()], dtype=np.float32)
-                        k2 = np.asarray(g["factorized_bkgd_term2"][()], dtype=np.float32)
+                        k1 = np.asarray(
+                            g["factorized_bkgd_term1"][()], dtype=np.float32
+                        )
+                        k2 = np.asarray(
+                            g["factorized_bkgd_term2"][()], dtype=np.float32
+                        )
                     else:
                         k1 = np.zeros((u.shape[1], 1), np.float32)
                         k2 = np.zeros((1, v.shape[1]), np.float32)
@@ -282,7 +314,9 @@ class DemixingArray(ReductionMixin, LazyArray):
         nt, nc, _, ny, nx = self._shape5d()
         ts = np.atleast_1d(np.arange(nt)[t_key]).tolist()
         cs = np.atleast_1d(np.arange(nc)[c_key]).tolist()
-        stack = np.stack([self._frames(c, ts).reshape(len(ts), ny, nx) for c in cs], axis=1)
+        stack = np.stack(
+            [self._frames(c, ts).reshape(len(ts), ny, nx) for c in cs], axis=1
+        )
         out = stack[:, :, None][:, :, z_key, y_key, x_key]
         if isinstance(c_key, (int, np.integer)):
             out = out[:, 0]

@@ -1,12 +1,8 @@
-from collections import defaultdict
-from collections.abc import Sequence
 import re
-
+from collections.abc import Sequence
 from pathlib import Path
-import numpy as np
 
-import dask.array as da
-from tifffile import tifffile
+import numpy as np
 
 from . import log
 
@@ -220,13 +216,18 @@ def load_npy(path):
     across operating systems.
     """
     import pathlib
-    import sys
     import pickle
+    import sys
 
     class CrossPlatformUnpickler(pickle.Unpickler):
         def find_class(self, module, name):
             if module == "pathlib":
-                if name in ("PosixPath", "WindowsPath", "PurePosixPath", "PureWindowsPath"):
+                if name in (
+                    "PosixPath",
+                    "WindowsPath",
+                    "PurePosixPath",
+                    "PureWindowsPath",
+                ):
                     return pathlib.Path
             return super().find_class(module, name)
 
@@ -265,12 +266,12 @@ def get_last_savedir_path() -> Path:
         Use :func:`mbo_utilities.preferences.get_last_save_dir` instead.
     """
     import warnings
+
     warnings.warn(
         "get_last_savedir_path() is deprecated. Use mbo_utilities.preferences.get_last_save_dir() instead.",
         DeprecationWarning,
         stacklevel=2,
     )
     from mbo_utilities.preferences import get_mbo_dirs
+
     return get_mbo_dirs()["user_settings"] / "last_savedir.json"
-
-

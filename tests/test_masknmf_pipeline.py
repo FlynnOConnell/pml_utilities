@@ -1,12 +1,13 @@
 """masknmf integration tests: params round-trip, stage gating, suite2p-shaped
 output conversion. No masknmf install required — the compute stages are only
-exercised when the package is present (none here yet)."""
+exercised when the package is present (none here yet).
+"""
 
 import json
 
 import numpy as np
 import pytest
-
+from mbo_utilities.masknmf import outputs
 from mbo_utilities.masknmf.params import (
     STAGE_FORCE,
     STAGE_RUN,
@@ -14,8 +15,6 @@ from mbo_utilities.masknmf.params import (
     MasknmfSettings,
     stage_action,
 )
-from mbo_utilities.masknmf import outputs
-
 
 # ---- params -----------------------------------------------------------------
 
@@ -110,7 +109,7 @@ def test_roi_stat_coordinates():
 
 
 def test_roi_calibration_unweighted_over_support():
-    """masknmf's convention: mean over the support, not a lam-weighted mean."""
+    """Masknmf's convention: mean over the support, not a lam-weighted mean."""
     indices, values, shape = _toy_footprints()
     per_roi = outputs.split_sparse_footprints(indices, values, 2)
     n_pix = shape[0] * shape[1]
@@ -156,9 +155,9 @@ def test_write_plane_outputs(tmp_path):
     n_pix = shape[0] * shape[1]
     # real demixed c is nonnegative (c_nonneg=True) with the baseline already
     # factored out into b, which is what makes dF/F well posed here
-    c = np.vstack(
-        [np.abs(np.sin(np.linspace(0, 6, 50))), np.ones(50)]
-    ).T.astype(np.float32)
+    c = np.vstack([np.abs(np.sin(np.linspace(0, 6, 50))), np.ones(50)]).T.astype(
+        np.float32
+    )
     info = outputs.write_plane_outputs(
         tmp_path,
         indices=indices,
@@ -322,7 +321,8 @@ class TestBackgroundDownsampling:
 
     def test_the_clamped_factor_survives_masknmfs_own_downsample(self):
         """The crash itself: masknmf pools the baseline image, squeezes, then
-        reshapes on ``shape[1]``. Run its code, not a model of it."""
+        reshapes on ``shape[1]``. Run its code, not a model of it.
+        """
         try:
             import torch
             from masknmf.compression.decomposition import spatial_downsample
@@ -342,7 +342,8 @@ class TestBackgroundDownsampling:
 
 class TestSplineDetrender:
     """The detrender reflect-pads by half its window; torch rejects a pad
-    wider than the axis, so a movie shorter than the window has to skip it."""
+    wider than the axis, so a movie shorter than the window has to skip it.
+    """
 
     def _make(self, nframes, fs, window_seconds=40):
         from mbo_utilities.masknmf.runner import _spline_detrender

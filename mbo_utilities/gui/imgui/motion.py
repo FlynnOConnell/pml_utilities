@@ -16,7 +16,13 @@ import numpy as np
 from imgui_bundle import implot
 
 from mbo_utilities.arrays.features import MotionCorrection
-from mbo_utilities.gui.imgui.lines import decimate_minmax, drag_vline, line, line_plot, vlines
+from mbo_utilities.gui.imgui.lines import (
+    decimate_minmax,
+    drag_vline,
+    line,
+    line_plot,
+    vlines,
+)
 
 __all__ = ["MOTION_COLORS", "MotionPlot"]
 
@@ -45,10 +51,14 @@ class MotionPlot:
         for label, (t, shift) in (motion.traces if motion else {}).items():
             idx, values = decimate_minmax(shift, points)
             ts = np.asarray(t, dtype=np.float64)[idx.astype(int)]
-            self.traces[label] = (np.ascontiguousarray(ts), np.ascontiguousarray(values))
+            self.traces[label] = (
+                np.ascontiguousarray(ts),
+                np.ascontiguousarray(values),
+            )
         # x in the host's units, converted once per unit change, not per frame
         self._scaled: tuple[float, dict[str, np.ndarray]] = (
-            1.0, {label: t for label, (t, _v) in self.traces.items()}
+            1.0,
+            {label: t for label, (t, _v) in self.traces.items()},
         )
         self.duration_s = motion.duration_s if motion else 0.0
         self.y_label = f"{motion.source} shift ({motion.unit})" if motion else ""
@@ -59,7 +69,8 @@ class MotionPlot:
 
     def refit(self) -> None:
         """Fit again on the next draw: a host that moved the plot into or
-        out of subplots hands implot a new plot, with no range of its own."""
+        out of subplots hands implot a new plot, with no range of its own.
+        """
         self._fit = True
 
     def draw(
@@ -78,18 +89,23 @@ class MotionPlot:
         whole recording (``duration_s``, the traces' own extent without),
         which is also as far as the x axis can pan. ``cursor`` marks a time
         in x units; with ``cursor_id`` it is draggable, and the moved time
-        and whether it is held come back."""
+        and whether it is held come back.
+        """
         fit, self._fit = self._fit, False
         duration = float(duration_s) if duration_s is not None else self.duration_s
         x_max = max(duration * x_per_second, 1e-3)
         if fit:
             implot.set_next_axis_to_fit(implot.ImAxis_.y1)
-        with line_plot(plot_id, x_label, self.y_label, height=height, legend=True) as ok:
+        with line_plot(
+            plot_id, x_label, self.y_label, height=height, legend=True
+        ) as ok:
             if not ok:
                 return cursor, False
             implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, x_max)
             if fit:
-                implot.setup_axis_limits(implot.ImAxis_.x1, 0.0, x_max, implot.Cond_.always)
+                implot.setup_axis_limits(
+                    implot.ImAxis_.x1, 0.0, x_max, implot.Cond_.always
+                )
             if self._scaled[0] != x_per_second:
                 self._scaled = (
                     x_per_second,
@@ -97,7 +113,9 @@ class MotionPlot:
                 )
             for label, (_t, v) in self.traces.items():
                 r, g, b = MOTION_COLORS.get(label[0], (0.8, 0.8, 0.8))
-                line(label, v, x=self._scaled[1][label], color=(r, g, b, 0.9), weight=1.0)
+                line(
+                    label, v, x=self._scaled[1][label], color=(r, g, b, 0.9), weight=1.0
+                )
             if cursor is None:
                 return None, False
             if cursor_id is None:

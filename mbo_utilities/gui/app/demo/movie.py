@@ -40,7 +40,9 @@ class MovieApp(App):
     def mount(self, host, subplot) -> None:
         self.player.set_movie(host.data)
         self.player.jump_to(host.index)
-        self.graphic = subplot.add_image(host.data[host.index], name="movie", cmap=self.cmap)
+        self.graphic = subplot.add_image(
+            host.data[host.index], name="movie", cmap=self.cmap
+        )
         self._shown = host.index
 
     def unmount(self, host) -> None:
@@ -57,7 +59,9 @@ class MovieApp(App):
         self._shown = host.index
 
     def draw_options(self, host) -> None:
-        self.player.draw(slider_width=imgui.get_content_region_avail().x - 12 * imgui.get_font_size())
+        self.player.draw(
+            slider_width=imgui.get_content_region_avail().x - 12 * imgui.get_font_size()
+        )
         imgui.set_next_item_width(-imgui.FLT_MIN)
         changed, index = imgui.combo("##cmap", CMAPS.index(self.cmap), list(CMAPS))
         if changed:

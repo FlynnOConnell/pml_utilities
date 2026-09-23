@@ -107,7 +107,10 @@ def parse_dims(
 
         log.get().warning(
             "dims %s have %d elements but array is %dD; inferring %s",
-            result, len(result), ndim, "".join(fallback),
+            result,
+            len(result),
+            ndim,
+            "".join(fallback),
         )
         return fallback
 
@@ -179,7 +182,11 @@ _SLIDER_NAME_ALIASES: dict[str, tuple[str, ...]] = {
 
 
 # a 5D array's sliders are T, C, Z in that order; t/z/c would put z on the C axis
-SLIDER_LETTERS_BY_COUNT: dict[int, tuple[str, ...]] = {1: ("t",), 2: ("t", "z"), 3: ("t", "c", "z")}
+SLIDER_LETTERS_BY_COUNT: dict[int, tuple[str, ...]] = {
+    1: ("t",),
+    2: ("t", "z"),
+    3: ("t", "c", "z"),
+}
 
 
 def default_dim_letters(n: int) -> tuple[str, ...]:
@@ -194,7 +201,8 @@ def slider_roles(names) -> dict[str, str]:
     (AGENTS.md §5.1) whatever the array labels them (``Timepoint`` /
     ``Channel`` / ``ROI`` for a MESc AOD unit, ``Tile`` / ``View`` for
     IsoView), so a consumer reads the right axis without guessing from the
-    label."""
+    label.
+    """
     names = tuple(str(n) for n in names)
     return dict(zip(names, default_dim_letters(len(names))))
 

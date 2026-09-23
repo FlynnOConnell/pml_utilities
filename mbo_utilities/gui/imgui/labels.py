@@ -1,18 +1,31 @@
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 from imgui_bundle import imgui
 
 LABEL_COLORS = (
-    (0.12, 0.47, 0.71), (1.00, 0.50, 0.05), (0.17, 0.63, 0.17),
-    (0.84, 0.15, 0.16), (0.58, 0.40, 0.74), (0.55, 0.34, 0.29),
-    (0.89, 0.47, 0.76), (0.50, 0.50, 0.50), (0.74, 0.74, 0.13),
+    (0.12, 0.47, 0.71),
+    (1.00, 0.50, 0.05),
+    (0.17, 0.63, 0.17),
+    (0.84, 0.15, 0.16),
+    (0.58, 0.40, 0.74),
+    (0.55, 0.34, 0.29),
+    (0.89, 0.47, 0.76),
+    (0.50, 0.50, 0.50),
+    (0.74, 0.74, 0.13),
     (0.09, 0.75, 0.81),
 )
 
 LABEL_KEYS = (
-    imgui.Key._1, imgui.Key._2, imgui.Key._3, imgui.Key._4, imgui.Key._5,
-    imgui.Key._6, imgui.Key._7, imgui.Key._8, imgui.Key._9,
+    imgui.Key._1,
+    imgui.Key._2,
+    imgui.Key._3,
+    imgui.Key._4,
+    imgui.Key._5,
+    imgui.Key._6,
+    imgui.Key._7,
+    imgui.Key._8,
+    imgui.Key._9,
 )
 
 UNLABELED = -1
@@ -32,7 +45,9 @@ class LabelSet:
         else:
             labels = np.asarray(labels).astype(np.int64)
             if labels.shape[0] != n_items:
-                raise ValueError(f"labels has {labels.shape[0]} entries, expected {n_items}")
+                raise ValueError(
+                    f"labels has {labels.shape[0]} entries, expected {n_items}"
+                )
         self._labels = labels
         self._extend_names_to_fit()
 
@@ -40,7 +55,10 @@ class LabelSet:
         # labels restored from disk can name classes this set doesn't have yet
         top = int(self._labels.max(initial=UNLABELED))
         if top >= len(self._names):
-            self._names = (*self._names, *(f"class{i}" for i in range(len(self._names), top + 1)))
+            self._names = (
+                *self._names,
+                *(f"class{i}" for i in range(len(self._names), top + 1)),
+            )
 
     @property
     def names(self) -> tuple:
@@ -96,7 +114,7 @@ class LabelSet:
         done = int((self._labels >= 0).sum())
         return done, len(self._labels)
 
-    def hotkey_pressed(self) -> Optional[int]:
+    def hotkey_pressed(self) -> int | None:
         """Label index for a pressed 1-9 key, -1 for 0, or None."""
         if imgui.is_key_pressed(imgui.Key._0, False):
             return UNLABELED

@@ -6,22 +6,27 @@ from imgui_bundle import (
     hello_imgui,
     imgui,
     imgui_ctx,
-    portable_file_dialogs as pfd,
+)
+from imgui_bundle import (
     icons_fontawesome_6 as fa,
 )
+from imgui_bundle import (
+    portable_file_dialogs as pfd,
+)
+
 from mbo_utilities import log as _mbo_log
 from mbo_utilities.gui import _setup  # triggers setup on import
-from mbo_utilities.preferences import (
-    get_default_open_dir,
-    set_last_dir,
-    add_recent_file,
-    get_gpu_index,
-    set_gpu_index,
-    get_debug_logging,
-    set_debug_logging,
-)
-from mbo_utilities.install import Status, check_installation, gpu_summary
 from mbo_utilities.gui._files import NATIVE_DIALOGS, no_dialog_hint
+from mbo_utilities.install import Status, check_installation, gpu_summary
+from mbo_utilities.preferences import (
+    add_recent_file,
+    get_debug_logging,
+    get_default_open_dir,
+    get_gpu_index,
+    set_debug_logging,
+    set_gpu_index,
+    set_last_dir,
+)
 
 # re-export for backwards compatibility
 setup_imgui = _setup.setup_imgui
@@ -48,7 +53,15 @@ COL_BG_POPUP = imgui.ImVec4(0.06, 0.06, 0.07, 1.0)
 COL_ROW_ALT = imgui.ImVec4(0.10, 0.10, 0.11, 1.0)
 
 # launcher table rows, in order; the CLI prints every feature
-_DEP_ROWS = ("PyTorch", "LBM-Suite2p-Python", "Cellpose", "MaskNMF", "CuPy", "Rastermap", "Napari")
+_DEP_ROWS = (
+    "PyTorch",
+    "LBM-Suite2p-Python",
+    "Cellpose",
+    "MaskNMF",
+    "CuPy",
+    "Rastermap",
+    "Napari",
+)
 _STATUS_GLYPH = {
     Status.OK: (fa.ICON_FA_CIRCLE_CHECK, COL_OK),
     Status.WARN: (fa.ICON_FA_CIRCLE_EXCLAMATION, COL_WARN),
@@ -58,7 +71,7 @@ _STATUS_GLYPH = {
 
 
 def _get_install_source() -> str:
-    """get install source label: 'PyPI', git branch name, or 'editable'."""
+    """Get install source label: 'PyPI', git branch name, or 'editable'."""
     try:
         import importlib.metadata
         import json
@@ -90,10 +103,11 @@ def _get_install_source() -> str:
 
 
 def _git_branch() -> str:
-    """get current git branch of the package source, or empty string."""
+    """Get current git branch of the package source, or empty string."""
     try:
         import subprocess
         from pathlib import Path
+
         import mbo_utilities
 
         pkg_dir = Path(mbo_utilities.__file__).parent.parent
@@ -101,7 +115,10 @@ def _git_branch() -> str:
             return ""
         r = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, cwd=str(pkg_dir), timeout=5,
+            capture_output=True,
+            text=True,
+            cwd=str(pkg_dir),
+            timeout=5,
         )
         return r.stdout.strip() if r.returncode == 0 else ""
     except Exception:
@@ -170,8 +187,12 @@ def icon_button(icon: str, label: str, size: imgui.ImVec2, tooltip: str = "") ->
     """
     # Style: dark gray bg, blue border, blue text
     imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.18, 0.18, 0.20, 1.0))
-    imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.22, 0.22, 0.25, 1.0))
-    imgui.push_style_color(imgui.Col_.button_active, imgui.ImVec4(0.15, 0.15, 0.17, 1.0))
+    imgui.push_style_color(
+        imgui.Col_.button_hovered, imgui.ImVec4(0.22, 0.22, 0.25, 1.0)
+    )
+    imgui.push_style_color(
+        imgui.Col_.button_active, imgui.ImVec4(0.15, 0.15, 0.17, 1.0)
+    )
     imgui.push_style_color(imgui.Col_.text, COL_ACCENT)
     imgui.push_style_color(imgui.Col_.border, COL_ACCENT)
     imgui.push_style_var(imgui.StyleVar_.frame_rounding, 6.0)
@@ -240,6 +261,7 @@ class FileDialog:
         if self._gpu_adapters is not None:
             return
         from mbo_utilities.gui._gpu_cache import get_adapters
+
         self._gpu_adapters = list(get_adapters())
         labels = ["auto (default)"]
         for i, a in enumerate(self._gpu_adapters):
@@ -258,12 +280,14 @@ class FileDialog:
         if self._show_options_popup:
             try:
                 from mbo_utilities.gpu import gpu_devices
+
                 self._compute_devices = gpu_devices()
             except Exception:
                 self._compute_devices = []
             # re-read prefs on open; they may have changed elsewhere
             from mbo_utilities.gui._options_popup import sync_memory_options
             from mbo_utilities.preferences import get_linescan_auto_traces
+
             sync_memory_options(self)
             self._options_linescan_auto = get_linescan_auto_traces()
             imgui.open_popup("##options_popup")
@@ -300,12 +324,13 @@ class FileDialog:
 
             # Compute GPU (suite2p / cellpose) — persisted + applied to new runs.
             from mbo_utilities.gui._options_popup import (
-                compute_gpu_options,
-                compute_gpu_current_index,
                 apply_compute_gpu,
+                compute_gpu_current_index,
+                compute_gpu_options,
                 draw_linescan_options,
                 draw_memory_options,
             )
+
             imgui.text_colored(COL_TEXT_DIM, "Compute GPU (suite2p / cellpose)")
             if imgui.is_item_hovered():
                 wrapped_tooltip(
@@ -409,7 +434,10 @@ class FileDialog:
         push_button_style(primary=False)
         if imgui.small_button(f"{fa.ICON_FA_BOOK}  docs"):
             import webbrowser
-            webbrowser.open("https://millerbrainobservatory.github.io/mbo_utilities/file_formats.html")
+
+            webbrowser.open(
+                "https://millerbrainobservatory.github.io/mbo_utilities/file_formats.html"
+            )
         pop_button_style()
         if imgui.is_item_hovered():
             wrapped_tooltip("Open documentation in browser")
@@ -426,9 +454,15 @@ class FileDialog:
             | imgui.TableFlags_.row_bg
             | imgui.TableFlags_.no_host_extend_x
         )
-        if imgui.begin_table("##array_types", 2, table_flags, imgui.ImVec2(table_width, 0)):
-            imgui.table_setup_column("Format", imgui.TableColumnFlags_.width_fixed, col1_width)
-            imgui.table_setup_column("Extensions", imgui.TableColumnFlags_.width_fixed, col2_width)
+        if imgui.begin_table(
+            "##array_types", 2, table_flags, imgui.ImVec2(table_width, 0)
+        ):
+            imgui.table_setup_column(
+                "Format", imgui.TableColumnFlags_.width_fixed, col1_width
+            )
+            imgui.table_setup_column(
+                "Extensions", imgui.TableColumnFlags_.width_fixed, col2_width
+            )
             imgui.table_headers_row()
 
             array_types = [
@@ -456,7 +490,9 @@ class FileDialog:
     def _draw_dependency_status_line(self):
         """One-line summary that opens the dependency table."""
         if self._install_status is None:
-            imgui.text_colored(COL_TEXT_DIM, f"{fa.ICON_FA_CIRCLE_NOTCH}  checking dependencies...")
+            imgui.text_colored(
+                COL_TEXT_DIM, f"{fa.ICON_FA_CIRCLE_NOTCH}  checking dependencies..."
+            )
             return
         rows = self._dep_rows()
         ready = sum(f.status is Status.OK for f in rows)
@@ -464,7 +500,9 @@ class FileDialog:
         icon, color = _STATUS_GLYPH[Status.WARN if issues else Status.OK]
         imgui.text_colored(color, icon)
         imgui.same_line()
-        label = f"{ready} of {len(rows)} ready" + (f", {issues} to fix" if issues else "")
+        label = f"{ready} of {len(rows)} ready" + (
+            f", {issues} to fix" if issues else ""
+        )
         push_button_style(primary=False)
         if imgui.small_button(f"dependencies: {label}"):
             self._show_deps_popup = True
@@ -483,7 +521,9 @@ class FileDialog:
         imgui.push_style_color(imgui.Col_.border, COL_ACCENT)
         imgui.push_style_color(imgui.Col_.table_row_bg_alt, COL_ROW_ALT)
         imgui.push_style_var(imgui.StyleVar_.window_border_size, 1.0)
-        imgui.push_style_var(imgui.StyleVar_.window_padding, hello_imgui.em_to_vec2(1.0, 0.8))
+        imgui.push_style_var(
+            imgui.StyleVar_.window_padding, hello_imgui.em_to_vec2(1.0, 0.8)
+        )
         try:
             if imgui.begin_popup("##deps_popup", imgui.WindowFlags_.always_auto_resize):
                 self._draw_dependency_table(rows)
@@ -521,7 +561,8 @@ class FileDialog:
         imgui.selectable(
             f"##dep-{f.name}",
             False,
-            imgui.SelectableFlags_.span_all_columns | imgui.SelectableFlags_.allow_overlap,
+            imgui.SelectableFlags_.span_all_columns
+            | imgui.SelectableFlags_.allow_overlap,
         )
         hovered = imgui.is_item_hovered()
         imgui.same_line(0, 0)
@@ -532,7 +573,9 @@ class FileDialog:
         imgui.text_colored(COL_TEXT_DIM, f.version if installed else "-")
         imgui.table_next_column()
         if installed and f.gpu_ok is not None:
-            imgui.text_colored(COL_OK if f.gpu_ok else COL_WARN, "GPU" if f.gpu_ok else "CPU")
+            imgui.text_colored(
+                COL_OK if f.gpu_ok else COL_WARN, "GPU" if f.gpu_ok else "CPU"
+            )
         imgui.table_next_column()
         fixable = bool(f.hint) and f.status is not Status.OK
         if fixable:
@@ -582,7 +625,9 @@ class FileDialog:
     def _center_widget(self, widget_width):
         """Set cursor to center a widget of given width."""
         avail_w = imgui.get_content_region_avail().x
-        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + (avail_w - widget_width) * 0.5)
+        imgui.set_cursor_pos_x(
+            imgui.get_cursor_pos_x() + (avail_w - widget_width) * 0.5
+        )
 
     def render(self):
         # global style
@@ -590,16 +635,30 @@ class FileDialog:
         imgui.push_style_color(imgui.Col_.child_bg, imgui.ImVec4(0, 0, 0, 0))
         imgui.push_style_color(imgui.Col_.text, COL_TEXT)
         imgui.push_style_color(imgui.Col_.border, COL_BORDER)
-        imgui.push_style_color(imgui.Col_.separator, imgui.ImVec4(0.35, 0.35, 0.37, 0.6))
+        imgui.push_style_color(
+            imgui.Col_.separator, imgui.ImVec4(0.35, 0.35, 0.37, 0.6)
+        )
         imgui.push_style_color(imgui.Col_.frame_bg, imgui.ImVec4(0.22, 0.22, 0.23, 1.0))
-        imgui.push_style_color(imgui.Col_.frame_bg_hovered, imgui.ImVec4(0.28, 0.28, 0.29, 1.0))
+        imgui.push_style_color(
+            imgui.Col_.frame_bg_hovered, imgui.ImVec4(0.28, 0.28, 0.29, 1.0)
+        )
         imgui.push_style_color(imgui.Col_.check_mark, COL_ACCENT)
-        imgui.push_style_var(imgui.StyleVar_.window_padding, hello_imgui.em_to_vec2(1.0, 0.8))
-        imgui.push_style_var(imgui.StyleVar_.frame_padding, hello_imgui.em_to_vec2(0.6, 0.4))
-        imgui.push_style_var(imgui.StyleVar_.item_spacing, hello_imgui.em_to_vec2(0.6, 0.4))
+        imgui.push_style_var(
+            imgui.StyleVar_.window_padding, hello_imgui.em_to_vec2(1.0, 0.8)
+        )
+        imgui.push_style_var(
+            imgui.StyleVar_.frame_padding, hello_imgui.em_to_vec2(0.6, 0.4)
+        )
+        imgui.push_style_var(
+            imgui.StyleVar_.item_spacing, hello_imgui.em_to_vec2(0.6, 0.4)
+        )
         imgui.push_style_var(imgui.StyleVar_.frame_rounding, 6.0)
 
-        with imgui_ctx.begin_child("##main", size=imgui.ImVec2(0, 0), window_flags=imgui.WindowFlags_.no_scrollbar):
+        with imgui_ctx.begin_child(
+            "##main",
+            size=imgui.ImVec2(0, 0),
+            window_flags=imgui.WindowFlags_.no_scrollbar,
+        ):
             imgui.push_id("pfd")
 
             # header
@@ -623,12 +682,12 @@ class FileDialog:
             # Simple combo
             # ret, idx = imgui.combo("##mode", current_item, items)
             _changed, self.selected_mode_index = imgui.combo(
-                "##mode",
-                self.selected_mode_index,
-                self.gui_modes
+                "##mode", self.selected_mode_index, self.gui_modes
             )
             if imgui.is_item_hovered():
-                wrapped_tooltip(f"Select Application: {self.gui_modes[self.selected_mode_index]}")
+                wrapped_tooltip(
+                    f"Select Application: {self.gui_modes[self.selected_mode_index]}"
+                )
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))
 
@@ -641,13 +700,13 @@ class FileDialog:
                 fa.ICON_FA_FILE_IMAGE,
                 "Open File(s)",
                 imgui.ImVec2(btn_w, btn_h),
-                "Select one or more data files" if NATIVE_DIALOGS else no_dialog_hint()
+                "Select one or more data files" if NATIVE_DIALOGS else no_dialog_hint(),
             ):
                 self._open_multi = pfd.open_file(
                     "Select files",
                     self._default_dir,
                     ["All Files", "*"],
-                    pfd.opt.multiselect
+                    pfd.opt.multiselect,
                 )
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))
@@ -657,9 +716,11 @@ class FileDialog:
                 fa.ICON_FA_FOLDER_OPEN,
                 "Select Folder",
                 imgui.ImVec2(btn_w, btn_h),
-                "Select a data folder" if NATIVE_DIALOGS else no_dialog_hint()
+                "Select a data folder" if NATIVE_DIALOGS else no_dialog_hint(),
             ):
-                self._select_folder = pfd.select_folder("Select folder", self._default_dir)
+                self._select_folder = pfd.select_folder(
+                    "Select folder", self._default_dir
+                )
             if not NATIVE_DIALOGS:
                 imgui.end_disabled()
 
@@ -694,13 +755,20 @@ class FileDialog:
 
             imgui.push_style_color(imgui.Col_.child_bg, COL_BG_CARD)
             imgui.push_style_var(imgui.StyleVar_.child_rounding, 6.0)
-            imgui.push_style_var(imgui.StyleVar_.cell_padding, hello_imgui.em_to_vec2(0.4, 0.2))
+            imgui.push_style_var(
+                imgui.StyleVar_.cell_padding, hello_imgui.em_to_vec2(0.4, 0.2)
+            )
 
             # auto-resize height to content, no scrollbar
             child_flags = imgui.ChildFlags_.borders | imgui.ChildFlags_.auto_resize_y
             window_flags = imgui.WindowFlags_.no_scrollbar
 
-            with imgui_ctx.begin_child("##formats", size=imgui.ImVec2(card_w, 0), child_flags=child_flags, window_flags=window_flags):
+            with imgui_ctx.begin_child(
+                "##formats",
+                size=imgui.ImVec2(card_w, 0),
+                child_flags=child_flags,
+                window_flags=window_flags,
+            ):
                 imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))
                 imgui.indent(hello_imgui.em_size(0.6))
 
@@ -720,7 +788,11 @@ class FileDialog:
             if self._open_multi and self._open_multi.ready():
                 self.selected_path = self._open_multi.result()
                 if self.selected_path:
-                    for p in (self.selected_path if isinstance(self.selected_path, list) else [self.selected_path]):
+                    for p in (
+                        self.selected_path
+                        if isinstance(self.selected_path, list)
+                        else [self.selected_path]
+                    ):
                         add_recent_file(p, file_type="file")
                         set_last_dir("open_file", p)
                     self._save_gui_preferences()
@@ -751,7 +823,9 @@ class FileDialog:
             if imgui.is_item_hovered():
                 wrapped_tooltip("GPU adapter, debug logging, and other settings")
             imgui.same_line()
-            if imgui.button(f"{fa.ICON_FA_XMARK}  Quit", imgui.ImVec2(quit_w, btn_h)) or imgui.is_key_pressed(imgui.Key.escape):
+            if imgui.button(
+                f"{fa.ICON_FA_XMARK}  Quit", imgui.ImVec2(quit_w, btn_h)
+            ) or imgui.is_key_pressed(imgui.Key.escape):
                 self.selected_path = None
                 hello_imgui.get_runner_params().app_shall_exit = True
             pop_button_style()

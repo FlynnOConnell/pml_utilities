@@ -82,7 +82,8 @@ def _probe(device: str) -> None:
 
 def get_status(device: str) -> dict | None:
     """Cached probe result for ``device``; starts a background probe and
-    returns None while it is still running."""
+    returns None while it is still running.
+    """
     with _lock:
         if device in _results:
             return _results[device]
@@ -96,7 +97,8 @@ def get_status(device: str) -> dict | None:
 
 def draw_gpu_status(device: str = "auto") -> None:
     """Colored dot + the device the analysis will run on, with a tooltip
-    holding the validation result."""
+    holding the validation result.
+    """
     device = device or "auto"
     status = get_status(device)
     if status is None:

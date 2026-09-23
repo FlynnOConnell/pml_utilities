@@ -22,6 +22,7 @@ from mbo_utilities.arrays._base import (
     supports_roi,
 )
 
+
 def files_to_dask(files: list[str | Path], astype=None, chunk_t=250):
     """Lazily build a Dask array or list of arrays depending on filename tags.
 
@@ -37,7 +38,9 @@ def files_to_dask(files: list[str | Path], astype=None, chunk_t=250):
     if not files:
         raise ValueError("No input files provided.")
 
-    has_plane = any(re.search(r"(plane|z|chan)[_-]?\d+", f.stem, re.IGNORECASE) for f in files)
+    has_plane = any(
+        re.search(r"(plane|z|chan)[_-]?\d+", f.stem, re.IGNORECASE) for f in files
+    )
     has_roi = any(re.search(r"roi[_-]?\d+", f.stem, re.IGNORECASE) for f in files)
 
     def load_lazy(f):
@@ -78,47 +81,77 @@ def files_to_dask(files: list[str | Path], astype=None, chunk_t=250):
 
 
 if TYPE_CHECKING:
+    from mbo_utilities.arrays._average_view import (
+        FrameAveragedView as FrameAveragedView,
+    )
+    from mbo_utilities.arrays._average_view import (
+        average_frames as average_frames,
+    )
+    from mbo_utilities.arrays._phasecorr_view import (
+        PhaseCorrectedView as PhaseCorrectedView,
+    )
+    from mbo_utilities.arrays._phasecorr_view import (
+        with_phasecorr as with_phasecorr,
+    )
     from mbo_utilities.arrays._registration import (
         AxialShiftView as AxialShiftView,
+    )
+    from mbo_utilities.arrays._registration import (
         compute_axial_shifts as compute_axial_shifts,
+    )
+    from mbo_utilities.arrays._registration import (
         validate_axial_shifts as validate_axial_shifts,
+    )
+    from mbo_utilities.arrays._registration import (
         with_axial_shifts as with_axial_shifts,
     )
     from mbo_utilities.arrays.bin import BinArray as BinArray
     from mbo_utilities.arrays.h5 import (
         H5Array as H5Array,
+    )
+    from mbo_utilities.arrays.h5 import (
         list_h5_datasets as list_h5_datasets,
+    )
+    from mbo_utilities.arrays.isoview import (
+        IsoviewArray as IsoviewArray,
+    )
+    from mbo_utilities.arrays.isoview import (
+        consolidate_isoview as consolidate_isoview,
+    )
+    from mbo_utilities.arrays.isoview import (
+        detect_isoview_kind as detect_isoview_kind,
+    )
+    from mbo_utilities.arrays.isoview import (
+        isoview_to_ome_zarr as isoview_to_ome_zarr,
     )
     from mbo_utilities.arrays.mesc import (
         MescArray as MescArray,
     )
     from mbo_utilities.arrays.mesc import list_mesc_units as list_mesc_units
-    from mbo_utilities.arrays.isoview import (
-        IsoviewArray as IsoviewArray,
-        consolidate_isoview as consolidate_isoview,
-        detect_isoview_kind as detect_isoview_kind,
-        isoview_to_ome_zarr as isoview_to_ome_zarr,
-    )
-    from mbo_utilities.arrays._phasecorr_view import (
-        PhaseCorrectedView as PhaseCorrectedView,
-        with_phasecorr as with_phasecorr,
-    )
-    from mbo_utilities.arrays._average_view import (
-        FrameAveragedView as FrameAveragedView,
-        average_frames as average_frames,
-    )
     from mbo_utilities.arrays.mp4 import MP4Array as MP4Array
     from mbo_utilities.arrays.numpy import NumpyArray as NumpyArray
     from mbo_utilities.arrays.suite2p import (
         Suite2pArray as Suite2pArray,
     )
     from mbo_utilities.arrays.tiff import (
-        LBMPiezoArray as LBMPiezoArray,
         LBMArray as LBMArray,
+    )
+    from mbo_utilities.arrays.tiff import (
+        LBMPiezoArray as LBMPiezoArray,
+    )
+    from mbo_utilities.arrays.tiff import (
         PiezoArray as PiezoArray,
+    )
+    from mbo_utilities.arrays.tiff import (
         ScanImageArray as ScanImageArray,
+    )
+    from mbo_utilities.arrays.tiff import (
         SinglePlaneArray as SinglePlaneArray,
+    )
+    from mbo_utilities.arrays.tiff import (
         TiffArray as TiffArray,
+    )
+    from mbo_utilities.arrays.tiff import (
         open_scanimage as open_scanimage,
     )
     from mbo_utilities.arrays.zarr import ZarrArray as ZarrArray

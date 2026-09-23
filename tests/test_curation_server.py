@@ -44,8 +44,12 @@ async def _get(app, path: str) -> tuple[int, bytes]:
     async def send(message):
         sent.append(message)
 
-    await app({"type": "http", "method": "GET", "path": path, "headers": []}, receive, send)
-    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    await app(
+        {"type": "http", "method": "GET", "path": path, "headers": []}, receive, send
+    )
+    body = b"".join(
+        m.get("body", b"") for m in sent if m["type"] == "http.response.body"
+    )
     return sent[0]["status"], body
 
 
@@ -66,7 +70,9 @@ class _Browser:
         async def send(message):
             await self.outbox.put(message)
 
-        self.task = asyncio.create_task(self.app({"type": "websocket", "path": "/"}, receive, send))
+        self.task = asyncio.create_task(
+            self.app({"type": "websocket", "path": "/"}, receive, send)
+        )
         first = await asyncio.wait_for(self.outbox.get(), 5)
         assert first["type"] == "websocket.accept"
 
@@ -75,7 +81,14 @@ class _Browser:
         await self.inbox.put({"type": "websocket.receive", "text": json.dumps(event)})
 
     async def resize(self, width: int, height: int):
-        await self.event(type="resize", width=width, height=height, pwidth=width, pheight=height, ratio=1)
+        await self.event(
+            type="resize",
+            width=width,
+            height=height,
+            pwidth=width,
+            pheight=height,
+            ratio=1,
+        )
 
     async def next_frame(self, timeout: float = 30.0) -> tuple[dict, list[bytes]]:
         """Wait for the next frame, acknowledge it as the client does."""
@@ -91,7 +104,12 @@ class _Browser:
                 message = await asyncio.wait_for(self.outbox.get(), timeout)
                 buffers.append(message["bytes"])
             self.frames.append((msg, buffers))
-            await self.event(type="_framefeedback", index=msg["index"], localtime=0, timestamp=msg["timestamp"])
+            await self.event(
+                type="_framefeedback",
+                index=msg["index"],
+                localtime=0,
+                timestamp=msg["timestamp"],
+            )
             return msg, buffers
 
     async def disconnect(self):
@@ -186,7 +204,16 @@ def test_a_browser_gets_frames_and_its_input_reaches_the_dashboard(data_root):
 
         # hover the dashboard, press k: the keybinds popup toggles
         assert not widget.show_keybinds
-        await browser.event(type="pointer_move", x=300, y=200, button=0, buttons=[], modifiers=[], ntouches=0, touches={})
+        await browser.event(
+            type="pointer_move",
+            x=300,
+            y=200,
+            button=0,
+            buttons=[],
+            modifiers=[],
+            ntouches=0,
+            touches={},
+        )
         await browser.next_frame()
         await browser.next_frame()
         await browser.event(type="key_down", key="k", modifiers=[])
@@ -219,7 +246,9 @@ def test_a_browser_gets_frames_and_its_input_reaches_the_dashboard(data_root):
         await browser.disconnect()
         assert server.clients() == 0
         server.close()
-        await asyncio.sleep(0.3)  # the rendercanvas loop notices the closed canvas and stops
+        await asyncio.sleep(
+            0.3
+        )  # the rendercanvas loop notices the closed canvas and stops
         await lifespan.stop()
 
     try:
@@ -230,7 +259,6 @@ def test_a_browser_gets_frames_and_its_input_reaches_the_dashboard(data_root):
 
 def test_cli_and_module_entry_points_exist():
     from click.testing import CliRunner
-
     from mbo_utilities.cli import main
     from mbo_utilities.gui import curation_server
 

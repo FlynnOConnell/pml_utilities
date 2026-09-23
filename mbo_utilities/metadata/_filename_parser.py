@@ -7,7 +7,8 @@ users can follow suggested naming conventions but deviations are handled gracefu
 naming convention (suggested):
     {animal}_{region}_{indicator}_{line}_{session}_{...}.tif
 
-examples:
+Examples
+--------
     mouse_V1_GCaMP6f_Cux2_session01.tif
     zf_OB_Cal520_20240115.tif
     rat_S1_jGCaMP8m_CaMKII_run3.tif
@@ -16,10 +17,9 @@ examples:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 
 # pattern definitions for each metadata field
 # each pattern is a tuple of (regex, canonical_value or None for direct match)
@@ -96,7 +96,7 @@ class FilenameMetadata:
     """
     metadata extracted from filename.
 
-    attributes
+    Attributes
     ----------
     calcium_indicator : str | None
         detected calcium indicator (e.g., "GCaMP6f", "Cal-520")
@@ -120,7 +120,7 @@ class FilenameMetadata:
     source_filename: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        """convert to dict, excluding None values."""
+        """Convert to dict, excluding None values."""
         result = {}
         if self.calcium_indicator:
             result["calcium_indicator"] = self.calcium_indicator
@@ -135,29 +135,29 @@ class FilenameMetadata:
         return result
 
     def __bool__(self) -> bool:
-        """true if any metadata was detected."""
+        """True if any metadata was detected."""
         return bool(self.to_dict())
 
     def __len__(self) -> int:
-        """number of detected fields."""
+        """Number of detected fields."""
         return len(self.to_dict())
 
 
 def parse_filename_metadata(filename: str | Path) -> FilenameMetadata:
     """
-    extract metadata from filename using pattern matching.
+    Extract metadata from filename using pattern matching.
 
-    parameters
+    Parameters
     ----------
     filename : str | Path
         filename or full path to parse
 
-    returns
+    Returns
     -------
     FilenameMetadata
         detected metadata fields
 
-    examples
+    Examples
     --------
     >>> meta = parse_filename_metadata("mouse_V1_GCaMP6f_Cux2.tif")
     >>> meta.animal_model
@@ -180,7 +180,13 @@ def parse_filename_metadata(filename: str | Path) -> FilenameMetadata:
             match = re.search(pattern, name, re.IGNORECASE if canonical else 0)
             if match:
                 # use canonical value if provided, else use the match
-                value = canonical if canonical else match.group(1) if match.lastindex else match.group(0)
+                value = (
+                    canonical
+                    if canonical
+                    else match.group(1)
+                    if match.lastindex
+                    else match.group(0)
+                )
                 setattr(result, field_name, value)
                 break  # first match wins for each field
 
@@ -189,7 +195,7 @@ def parse_filename_metadata(filename: str | Path) -> FilenameMetadata:
 
 def get_filename_suggestions() -> dict[str, dict]:
     """
-    get suggested metadata fields with their descriptions.
+    Get suggested metadata fields with their descriptions.
 
     returns dict of field definitions suitable for the metadata popup.
     """
@@ -199,7 +205,14 @@ def get_filename_suggestions() -> dict[str, dict]:
             "label": "Indicator",
             "dtype": str,
             "description": "Calcium indicator (e.g., GCaMP6f, Cal-520, jGCaMP8m)",
-            "examples": ["GCaMP6f", "GCaMP6s", "jGCaMP7f", "jGCaMP8m", "Cal-520", "OGB-1"],
+            "examples": [
+                "GCaMP6f",
+                "GCaMP6s",
+                "jGCaMP7f",
+                "jGCaMP8m",
+                "Cal-520",
+                "OGB-1",
+            ],
         },
         "animal_model": {
             "canonical": "animal_model",

@@ -67,10 +67,19 @@ def parse_sacct(text: str) -> list[dict]:
 
 
 def sacct_job(job_id) -> list[dict]:
-    return parse_sacct(_run([
-        "sacct", "-j", str(job_id), "-n", "-P",
-        "-o", ",".join(_SACCT_COLS),
-    ]))
+    return parse_sacct(
+        _run(
+            [
+                "sacct",
+                "-j",
+                str(job_id),
+                "-n",
+                "-P",
+                "-o",
+                ",".join(_SACCT_COLS),
+            ]
+        )
+    )
 
 
 def job_log_paths(job_id) -> tuple[Path | None, Path | None]:
@@ -99,15 +108,20 @@ def state_line(job_id) -> str:
     if rows:
         r = rows[0]
         node = r.get("NodeList", "")
-        return (f"job {job_id}: {r['State']}  (exit {r['ExitCode']}"
-                + (f", {node}" if node else "") + ")")
+        return (
+            f"job {job_id}: {r['State']}  (exit {r['ExitCode']}"
+            + (f", {node}" if node else "")
+            + ")"
+        )
     return f"job {job_id}: not found (scontrol/sacct)"
 
 
 def _table(rows: list[dict], cols: list[str]) -> str:
     head = [cols] + [[r.get(c, "") for c in cols] for r in rows]
     w = [max(len(str(row[i])) for row in head) for i in range(len(cols))]
-    return "\n".join("  ".join(str(c).ljust(w[i]) for i, c in enumerate(r)) for r in head)
+    return "\n".join(
+        "  ".join(str(c).ljust(w[i]) for i, c in enumerate(r)) for r in head
+    )
 
 
 def job_report(job_id) -> str:
@@ -119,13 +133,18 @@ def job_report(job_id) -> str:
     lines = [state_line(job_id)]
     rows = sacct_job(job_id)
     if rows:
-        lines.append(_table(rows, ["JobID", "State", "ExitCode", "Elapsed",
-                                   "MaxRSS", "ReqMem"]))
+        lines.append(
+            _table(rows, ["JobID", "State", "ExitCode", "Elapsed", "MaxRSS", "ReqMem"])
+        )
         states = {r["State"].split()[0] for r in rows}
         if any("OUT_OF_ME" in s for s in states):
-            lines.append("-> out of memory: raise [slurm] mem_gb or lower "
-                         "planes_per_gpu (see `mbo hpc check`)")
+            lines.append(
+                "-> out of memory: raise [slurm] mem_gb or lower "
+                "planes_per_gpu (see `mbo hpc check`)"
+            )
         elif states - {"COMPLETED", "RUNNING", "PENDING"}:
-            lines.append("-> a step failed; read its .err (`mbo hpc watch "
-                         f"{job_id}`) and any FAILURE_*.log in the output dir")
+            lines.append(
+                "-> a step failed; read its .err (`mbo hpc watch "
+                f"{job_id}`) and any FAILURE_*.log in the output dir"
+            )
     return "\n".join(lines)

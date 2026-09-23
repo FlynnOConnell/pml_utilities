@@ -12,7 +12,6 @@ from typing import Literal
 
 import numpy as np
 
-
 DownsampleMethod = Literal[
     "mean", "nearest", "gaussian", "local_mean", "median", "mode"
 ]
@@ -314,5 +313,3 @@ def _downsample_local_mean(data: np.ndarray, factors: tuple[int, ...]) -> np.nda
         return downscale_local_mean(data, factors).astype(data.dtype)
     except ImportError:
         return _downsample_mean(data, factors)
-
-

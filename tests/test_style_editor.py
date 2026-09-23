@@ -2,7 +2,6 @@
 
 import pytest
 from imgui_bundle import imgui
-
 from mbo_utilities.gui.widgets import style_editor
 
 

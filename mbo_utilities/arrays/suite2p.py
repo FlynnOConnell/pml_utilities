@@ -12,17 +12,21 @@ from __future__ import annotations
 import re
 import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from mbo_utilities import log
-from mbo_utilities.arrays._base import _imwrite_base, _normalize_key, ReductionMixin, Shape5DMixin
+from mbo_utilities.arrays._base import (
+    ReductionMixin,
+    Shape5DMixin,
+    _imwrite_base,
+    _normalize_key,
+)
+from mbo_utilities.file_io import load_npy
 from mbo_utilities.lazy_array import register_array_class
-
 from mbo_utilities.metadata import get_param, normalize_ops_arrays
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
-from mbo_utilities.file_io import load_npy
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -69,7 +73,8 @@ _REG_TIF_RE = re.compile(r"file(\d+)_chan(\d+)\.tiff?$", re.IGNORECASE)
 
 def find_suite2p_reg_tif_files(plane_dir: Path, channel: int = 0) -> list[Path]:
     """Return reg_tif files for ``channel`` in ``plane_dir/reg_tif/``, sorted by
-    the numeric frame_start parsed from the filename."""
+    the numeric frame_start parsed from the filename.
+    """
     reg_dir = plane_dir / "reg_tif"
     if not reg_dir.is_dir():
         return []
@@ -175,7 +180,8 @@ class _SinglePlaneReader:
             warnings.warn(
                 f"Binary file {self.active_file.name} has {leftover:,} extra bytes. "
                 f"Ignoring partial frame data.",
-                UserWarning, stacklevel=2,
+                UserWarning,
+                stacklevel=2,
             )
 
         self._file = np.memmap(
@@ -229,8 +235,10 @@ class _Suite2pRegTifPlaneReader:
 
         ops_ly = get_param(self.metadata, "Ly")
         ops_lx = get_param(self.metadata, "Lx")
-        if ops_ly is not None and ops_lx is not None and (
-            ops_ly != self.Ly or ops_lx != self.Lx
+        if (
+            ops_ly is not None
+            and ops_lx is not None
+            and (ops_ly != self.Ly or ops_lx != self.Lx)
         ):
             logger.warning(
                 f"reg_tif shape ({self.Ly}x{self.Lx}) differs from "
@@ -256,7 +264,9 @@ def _load_scanphase_sidecar(plane_dir: Path) -> dict | None:
         return None
 
 
-def _resolve_reconstruct_raw_source(sp: dict | None, ops: dict, plane_dir: Path | None = None):
+def _resolve_reconstruct_raw_source(
+    sp: dict | None, ops: dict, plane_dir: Path | None = None
+):
     """Open the raw movie the run registered from, as a 5D lazy array.
 
     Tries, in order: the scan-phase sidecar's raw_source dir then its file
@@ -330,7 +340,11 @@ def _resolve_reconstruct_raw_source(sp: dict | None, ops: dict, plane_dir: Path 
             continue
         seen.add(key)
         try:
-            exists = all(Path(x).exists() for x in c) if isinstance(c, list) else Path(c).exists()
+            exists = (
+                all(Path(x).exists() for x in c)
+                if isinstance(c, list)
+                else Path(c).exists()
+            )
         except Exception:
             exists = False
         if not exists:
@@ -341,7 +355,9 @@ def _resolve_reconstruct_raw_source(sp: dict | None, ops: dict, plane_dir: Path 
             logger.debug(f"reconstruct raw source {key} failed: {e}")
             continue
         if key in rebased_keys:
-            logger.info(f"reconstruct raw source: recorded path was dead, rebased to {key}")
+            logger.info(
+                f"reconstruct raw source: recorded path was dead, rebased to {key}"
+            )
         return arr, reader_kwargs
     return None, reader_kwargs
 
@@ -382,17 +398,16 @@ def _apply_registration(frames, yoff, xoff, yoff1, xoff1, blocks, device):
             )
         out = np.empty_like(frames)
         for k in range(len(frames)):
-            out[k] = np.roll(
-                frames[k], (-int(yoff[k]), -int(xoff[k])), axis=(0, 1)
-            )
+            out[k] = np.roll(frames[k], (-int(yoff[k]), -int(xoff[k])), axis=(0, 1))
     if out.ndim == 2:
         out = out[np.newaxis]
     return out.astype(np.int16, copy=False)
 
 
 def _resolve_replay_device(recorded):
-    """torch device for the reconstitution: the run's recorded device, else
-    auto (cuda if available, else cpu). None when torch is absent."""
+    """Torch device for the reconstitution: the run's recorded device, else
+    auto (cuda if available, else cpu). None when torch is absent.
+    """
     try:
         import torch
     except Exception:
@@ -440,7 +455,9 @@ class _Suite2pReconstructReader:
         self._nonrigid = bool(self.metadata.get("nonrigid", True))
 
         sp = _load_scanphase_sidecar(plane_dir)
-        self._raw, _ = _resolve_reconstruct_raw_source(sp, self.metadata, plane_dir=plane_dir)
+        self._raw, _ = _resolve_reconstruct_raw_source(
+            sp, self.metadata, plane_dir=plane_dir
+        )
         if self._raw is None:
             from mbo_utilities.metadata.base import _rebase_dirs
 
@@ -465,7 +482,9 @@ class _Suite2pReconstructReader:
             fm = sp.get("frame_map")
             self._frame_map = np.asarray(fm, dtype=np.int64) if fm is not None else None
             self._use_fft = bool(sp.get("use_fft", True))
-            self._plane_index = int(sp.get("plane_index", (int(self.metadata.get("plane", 1)) - 1)))
+            self._plane_index = int(
+                sp.get("plane_index", (int(self.metadata.get("plane", 1)) - 1))
+            )
             self._channel_index = int(sp.get("channel_index", 0))
         else:
             # no offsets recorded (streamed run, or an already-corrected
@@ -518,7 +537,9 @@ class _Suite2pReconstructReader:
             off = float(self._offsets[idx[k]]) if self._offsets is not None else 0.0
             s0 = self._source_frame(int(idx[k]))
             while j < n:
-                off_j = float(self._offsets[idx[j]]) if self._offsets is not None else 0.0
+                off_j = (
+                    float(self._offsets[idx[j]]) if self._offsets is not None else 0.0
+                )
                 if off_j != off or self._source_frame(int(idx[j])) != s0 + (j - k):
                     break
                 j += 1
@@ -630,9 +651,7 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         if p.is_dir():
             if (p / "ops.npy").exists():
                 return True
-            return any(
-                (d / "ops.npy").exists() for d in p.iterdir() if d.is_dir()
-            )
+            return any((d / "ops.npy").exists() for d in p.iterdir() if d.is_dir())
         return False
 
     def __init__(
@@ -694,9 +713,12 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
 
     def _make_plane_reader(self, ops_path: Path):
         """Pick reg_tif vs binary reader for one plane based on what's on
-        disk and the use_raw / use_reg_tif flags."""
+        disk and the use_raw / use_reg_tif flags.
+        """
         plane_dir = ops_path.parent
-        has_bin = (plane_dir / "data.bin").exists() or (plane_dir / "data_raw.bin").exists()
+        has_bin = (plane_dir / "data.bin").exists() or (
+            plane_dir / "data_raw.bin"
+        ).exists()
         has_reg_tif = bool(find_suite2p_reg_tif_files(plane_dir, channel=0))
 
         if self._use_reg_tif:
@@ -773,13 +795,13 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         # to the user to set explicitly if it's wrong — but log once so
         # the mismatch is visible.
         if self._nz > 1 and "_metadata_provenance" not in self._metadata:
-            plane_nums = [
-                _extract_plane_number(pdir.name) for pdir in plane_dirs
-            ]
+            plane_nums = [_extract_plane_number(pdir.name) for pdir in plane_dirs]
             plane_nums = [n for n in plane_nums if n is not None]
             if len(plane_nums) == self._nz:
-                steps = [plane_nums[i + 1] - plane_nums[i]
-                         for i in range(len(plane_nums) - 1)]
+                steps = [
+                    plane_nums[i + 1] - plane_nums[i]
+                    for i in range(len(plane_nums) - 1)
+                ]
                 if steps and len(set(steps)) == 1 and steps[0] > 1:
                     logger.info(
                         f"Plane dir names suggest stride={steps[0]} but ops.npy "
@@ -809,7 +831,12 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
     @property
     def dtype(self):
         from mbo_utilities.arrays._base import get_dtype
-        return self._target_dtype if hasattr(self, "_target_dtype") and self._target_dtype else get_dtype(self._dtype)
+
+        return (
+            self._target_dtype
+            if hasattr(self, "_target_dtype") and self._target_dtype
+            else get_dtype(self._dtype)
+        )
 
     @property
     def size(self) -> int:
@@ -840,7 +867,9 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
             if t_key < 0:
                 t_key = self._nframes + t_key
             if t_key >= self._nframes:
-                raise IndexError(f"Time index {t_key} out of bounds for {self._nframes} frames")
+                raise IndexError(
+                    f"Time index {t_key} out of bounds for {self._nframes} frames"
+                )
 
         # handle z indexing
         if isinstance(z_key, (int, np.integer)):
@@ -1000,9 +1029,9 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         histogram_widget = kwargs.get("histogram_widget", True)
         window_funcs = kwargs.get("window_funcs")
 
-        import fastplotlib as fpl
 
         from mbo_utilities.gui._ndviewer import MboNDViewer
+
         return MboNDViewer(
             data=arrays,
             names=names,
@@ -1084,7 +1113,9 @@ def _add_suite2p_labels(
             roi_id += 1
 
         masks[zi, :, :] = plane_mask
-        logger.debug(f"Added {(plane_mask > 0).sum()} labeled pixels for z-plane {zi + 1}/{Z}")
+        logger.debug(
+            f"Added {(plane_mask > 0).sum()} labeled pixels for z-plane {zi + 1}/{Z}"
+        )
 
     labels_metadata = {
         "version": "0.5",
@@ -1114,8 +1145,6 @@ def load_ops(ops_input: str | Path | list[str | Path]):
         return ops_input
     logger.warning("No valid ops file provided, returning empty dict.")
     return {}
-
-
 
 
 # priority above IsoviewArray (90): a suite2p folder living inside a

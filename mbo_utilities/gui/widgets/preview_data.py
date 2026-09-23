@@ -16,13 +16,12 @@ The widget uses modular components:
 - _stats.py: Z-stats computation and display
 """
 
+import importlib.util
 import logging
-import threading
+import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
-import os
-import importlib.util
-import time
 
 # Force rendercanvas to use Qt backend if PyQt6 is available
 # This must happen BEFORE importing fastplotlib to avoid glfw selection
@@ -34,53 +33,51 @@ if importlib.util.find_spec("PyQt6") is not None and os.environ.get(
 
     # Fix suite2p PyQt6 compatibility - must happen before any suite2p GUI imports
     from PyQt6.QtWidgets import QSlider
+
     if not hasattr(QSlider, "NoTicks"):
         QSlider.NoTicks = QSlider.TickPosition.NoTicks
 
+
 import imgui_bundle
 import numpy as np
-from numpy import ndarray
+from imgui_bundle import hello_imgui, imgui, imgui_ctx, implot
 from scipy.ndimage import gaussian_filter
 
-from imgui_bundle import imgui, hello_imgui, imgui_ctx, implot
-
-from mbo_utilities.preferences import get_mbo_dirs
-from mbo_utilities.reader import MBO_AVAILABLE_FTYPES
-from mbo_utilities.arrays.features import PhaseCorrectionFeature
-from mbo_utilities.preferences import get_last_dir
-from mbo_utilities.arrays import ScanImageArray
-from mbo_utilities.gui._availability import HAS_SUITE2P
-from mbo_utilities.gui._imgui_helpers import push_font_safe
-from mbo_utilities.gui.widgets.gui_logger import GuiLogger, GuiLogHandler
-from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_windows
-from mbo_utilities.gui.widgets.style_editor import (
-    apply_saved_style,
-    draw_style_editor_window,
-)
-from mbo_utilities.gui.widgets.progress_bar import start_output_capture
-from mbo_utilities.gui.widgets import get_supported_widgets, draw_all_widgets
 from mbo_utilities import log
-
-# Import modular components
-from mbo_utilities.gui.widgets.menu_bar import draw_menu_bar, draw_keybinds_popup
-from mbo_utilities.gui._popups import draw_tools_popups, draw_process_console_popup
-from mbo_utilities.gui._save_as import draw_saveas_popup
-from mbo_utilities.gui._keyboard import handle_keyboard_shortcuts, rebind_space_to_playback
+from mbo_utilities.arrays import ScanImageArray
+from mbo_utilities.arrays.features import PhaseCorrectionFeature
+from mbo_utilities.gui._availability import HAS_SUITE2P
 from mbo_utilities.gui._dialogs import check_file_dialogs
+from mbo_utilities.gui._edge_window import EdgeWindow
+from mbo_utilities.gui._help_viewer import draw_help_popup
+from mbo_utilities.gui._imgui_helpers import fit_width, push_font_safe
+from mbo_utilities.gui._keyboard import (
+    handle_keyboard_shortcuts,
+    rebind_space_to_playback,
+)
+from mbo_utilities.gui._metadata_editor import draw_metadata_popup
+from mbo_utilities.gui._options_popup import draw_options_popup
+from mbo_utilities.gui._popups import draw_process_console_popup, draw_tools_popups
+from mbo_utilities.gui._save_as import draw_saveas_popup
 from mbo_utilities.gui._stats import (
     compute_zstats,
     draw_stats_section,
     hydrate_zstats,
     refresh_zstats,
 )
-from mbo_utilities.gui._help_viewer import draw_help_popup
-from mbo_utilities.gui._imgui_helpers import fit_width
-from mbo_utilities.gui._metadata_editor import draw_metadata_popup
-from mbo_utilities.gui._options_popup import draw_options_popup
+from mbo_utilities.gui.widgets import draw_all_widgets, get_supported_widgets
+from mbo_utilities.gui.widgets.gui_logger import GuiLogger, GuiLogHandler
+from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_windows
 
-
-from mbo_utilities.gui._edge_window import EdgeWindow
-import contextlib
+# Import modular components
+from mbo_utilities.gui.widgets.menu_bar import draw_keybinds_popup, draw_menu_bar
+from mbo_utilities.gui.widgets.progress_bar import start_output_capture
+from mbo_utilities.gui.widgets.style_editor import (
+    apply_saved_style,
+    draw_style_editor_window,
+)
+from mbo_utilities.preferences import get_last_dir, get_mbo_dirs
+from mbo_utilities.reader import MBO_AVAILABLE_FTYPES
 
 if TYPE_CHECKING:
     from mbo_utilities.gui._ndviewer import MboNDViewer
@@ -155,7 +152,8 @@ def _derive_suite2p_output_dir(fpath) -> str | None:
 def _base_5d(arr):
     """Peel the viewer's display wrappers (`_ScrubTimingProxy`,
     `_SqueezeSingletonDims`, a `FrameAveragedView`) back to the 5D array the
-    frame-averaging view should wrap."""
+    frame-averaging view should wrap.
+    """
     from mbo_utilities.arrays import FrameAveragedView
     from mbo_utilities.gui.run_gui import _ScrubTimingProxy, _SqueezeSingletonDims
 
@@ -222,7 +220,6 @@ class PreviewDataWidget(EdgeWindow):
         window_flags: int | None = None,
         **kwargs,
     ):
-
         flags = (
             (imgui.WindowFlags_.no_title_bar if not show_title else 0)
             | (imgui.WindowFlags_.no_move if not movable else 0)
@@ -261,6 +258,7 @@ class PreviewDataWidget(EdgeWindow):
         # apply opaque imgui style (idempotent, runs once per process), then
         # whatever the style editor last saved, so a user style wins over it
         from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
+
         style_imgui_opaque()
         apply_saved_style()
 
@@ -279,13 +277,15 @@ class PreviewDataWidget(EdgeWindow):
         # Determine data type (ScanImage or volumetric TIFF).
         # Peel the squeeze wrapper so isinstance sees the real class.
         from mbo_utilities.arrays import TiffArray
+
         first_arr = self.image_widget.data[0]
         underlying = getattr(first_arr, "_arr", first_arr)
-        self.is_mbo_scan = (
-            isinstance(underlying, ScanImageArray) or
-            isinstance(underlying, TiffArray)
+        self.is_mbo_scan = isinstance(underlying, ScanImageArray) or isinstance(
+            underlying, TiffArray
         )
-        self.logger.debug(f"Data type: {type(first_arr).__name__}, is_mbo_scan: {self.is_mbo_scan}")
+        self.logger.debug(
+            f"Data type: {type(first_arr).__name__}, is_mbo_scan: {self.is_mbo_scan}"
+        )
 
         # Initialize state
         self._init_state()
@@ -307,7 +307,9 @@ class PreviewDataWidget(EdgeWindow):
             hydrated = hydrate_zstats(self)
             pending = [i for i in range(self.num_graphics) if not hydrated[i]]
             if pending:
-                self.logger.debug(f"Starting zstats computation for {len(pending)} array(s)...")
+                self.logger.debug(
+                    f"Starting zstats computation for {len(pending)} array(s)..."
+                )
                 for i in pending:
                     self._zstats_running[i] = True
                 compute_zstats(self, only=pending)
@@ -321,7 +323,9 @@ class PreviewDataWidget(EdgeWindow):
         log.attach(gui_handler)
 
         console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter("%(levelname)s - %(name)s - %(message)s"))
+        console_handler.setFormatter(
+            logging.Formatter("%(levelname)s - %(name)s - %(message)s")
+        )
         console_handler.setLevel(logging.DEBUG)
 
         if bool(int(os.getenv("MBO_DEBUG", "0"))):
@@ -366,6 +370,7 @@ class PreviewDataWidget(EdgeWindow):
         if self._s2p is None and HAS_SUITE2P:
             from mbo_utilities.gui.widgets.pipelines.settings import Suite2pSettings
             from mbo_utilities.preferences import get_s2p_torch_device
+
             self._s2p = Suite2pSettings()
             # apply the persisted torch device as the sticky default (a loaded
             # dataset's settings.npy still overrides via _try_hydrate_s2p).
@@ -381,6 +386,7 @@ class PreviewDataWidget(EdgeWindow):
         """Suite2p input/output db (paths, plane counts) — upstream schema."""
         if self._s2p_db is None and HAS_SUITE2P:
             from mbo_utilities.gui.widgets.pipelines.settings import Suite2pDB
+
             self._s2p_db = Suite2pDB()
         return self._s2p_db
 
@@ -393,6 +399,7 @@ class PreviewDataWidget(EdgeWindow):
         """Mbo-only suite2p helper fields (dff_*, accept_all_cells, etc.)."""
         if self._s2p_extras is None and HAS_SUITE2P:
             from mbo_utilities.gui.widgets.pipelines.settings import MboSuite2pExtras
+
             self._s2p_extras = MboSuite2pExtras()
         return self._s2p_extras
 
@@ -449,7 +456,9 @@ class PreviewDataWidget(EdgeWindow):
         if dims_lower is not None and "z" in dims_lower:
             z_idx = dims_lower.index("z")
             self.nz = self.shape[z_idx]
-        elif dims_lower is not None and any(d in dims_lower for d in ("z-planes", "z-slices")):
+        elif dims_lower is not None and any(
+            d in dims_lower for d in ("z-planes", "z-slices")
+        ):
             for d in ("z-planes", "z-slices"):
                 if d in dims_lower:
                     z_idx = dims_lower.index(d)
@@ -461,7 +470,11 @@ class PreviewDataWidget(EdgeWindow):
                 self.nz = arr.num_slices
             else:
                 vol_idx = dims_lower.index("volumes")
-                if len(self.shape) >= 2 and self.shape[vol_idx] <= 1 and vol_idx + 1 < len(self.shape):
+                if (
+                    len(self.shape) >= 2
+                    and self.shape[vol_idx] <= 1
+                    and vol_idx + 1 < len(self.shape)
+                ):
                     self.nz = self.shape[vol_idx + 1]
                 else:
                     self.nz = self.shape[vol_idx]
@@ -497,7 +510,9 @@ class PreviewDataWidget(EdgeWindow):
             cm_idx = dims_lower.index("cm")
             self.n_views = self.shape[cm_idx]
 
-        self.logger.debug(f"Detected nz={self.nz}, nc={self.nc}, n_views={self.n_views} from dims={dims}")
+        self.logger.debug(
+            f"Detected nz={self.nz}, nc={self.nc}, n_views={self.n_views} from dims={dims}"
+        )
 
         # Window/projection/contrast state — all per-data widget controls
         # are reset by _reset_per_data_state. Also called on every reload
@@ -505,6 +520,7 @@ class PreviewDataWidget(EdgeWindow):
         # never drift.
         self._auto_update = False  # not data-specific, kept here
         from mbo_utilities.gui._dialogs import _reset_per_data_state
+
         _reset_per_data_state(self)
 
         # Registration state
@@ -636,6 +652,7 @@ class PreviewDataWidget(EdgeWindow):
         # data_array.source_path which is the plane / volume directory).
         try:
             from mbo_utilities.gui._dialogs import _try_hydrate_s2p_from_binary
+
             _try_hydrate_s2p_from_binary(self, self.fpath)
         except Exception as _e:
             self.logger.debug(f"suite2p hydrate (init): {_e}")
@@ -676,10 +693,15 @@ class PreviewDataWidget(EdgeWindow):
         self._saveas_video_temporal_mode_idx = 0  # 0=mean 1=max 2=std
         self._saveas_video_spatial_smooth = 0.0
         self._saveas_video_gamma = 1.0
-        from mbo_utilities.gui._colormaps import DEFAULT_COLORMAPS, DEFAULT_COLORMAP
+        from mbo_utilities.gui._colormaps import DEFAULT_COLORMAP, DEFAULT_COLORMAPS
+
         self._saveas_video_cmaps: list[str] = list(DEFAULT_COLORMAPS)
-        self._saveas_video_cmap_idx: int = self._saveas_video_cmaps.index(DEFAULT_COLORMAP)
-        self._saveas_video_quality_idx = 2  # 0=preview 1=high 2=visually lossless 3=lossless
+        self._saveas_video_cmap_idx: int = self._saveas_video_cmaps.index(
+            DEFAULT_COLORMAP
+        )
+        self._saveas_video_quality_idx = (
+            2  # 0=preview 1=high 2=visually lossless 3=lossless
+        )
         self._saveas_video_codec_idx = 0  # 0 = libx264
         self._saveas_video_mean_subtract = False
         self._saveas_video_time_overlay = False
@@ -708,8 +730,11 @@ class PreviewDataWidget(EdgeWindow):
         if want and not self.top_strip.has("zstats"):
             self.top_strip.register(
                 TopPanel(
-                    "zstats", "Signal Quality", self.draw_stats_plot,
-                    height=ZSTATS_PANEL_HEIGHT, priority=20,
+                    "zstats",
+                    "Signal Quality",
+                    self.draw_stats_plot,
+                    height=ZSTATS_PANEL_HEIGHT,
+                    priority=20,
                 )
             )
         elif not want:
@@ -718,6 +743,7 @@ class PreviewDataWidget(EdgeWindow):
     def _init_viewer(self):
         """Initialize the viewer based on data type."""
         from mbo_utilities.gui.viewers import get_viewer_class
+
         self._init_top_strip()
         viewer_cls = get_viewer_class(self.image_widget.data[0])
         self._viewer = viewer_cls(self.image_widget, self.fpath, parent=self)
@@ -730,11 +756,13 @@ class PreviewDataWidget(EdgeWindow):
             from mbo_utilities.gui.widgets.pipelines.isoview import (
                 maybe_spawn_raw_projections,
             )
+
             maybe_spawn_raw_projections(self)
         except Exception:
             self.logger.debug("raw projection prefetch skipped", exc_info=True)
         # honour a persisted / CLI-set "Manual ROI Labeling" toggle
         from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
+
         self.sync_manual_roi(widget_enabled("manual_roi"))
 
     def sync_manual_roi(self, enabled: bool) -> None:
@@ -785,8 +813,10 @@ class PreviewDataWidget(EdgeWindow):
             fs = getattr(arr, "fs", None)
             if fs is None:
                 from mbo_utilities.metadata import get_param
+
                 fs = get_param(getattr(arr, "metadata", None), "fs")
             from mbo_utilities.gui._keyboard import _get_sliders_ui
+
             sliders = _get_sliders_ui(self)
             if sliders is not None and hasattr(sliders, "seed_fps"):
                 sliders.seed_fps("t", fs)
@@ -799,15 +829,22 @@ class PreviewDataWidget(EdgeWindow):
             if self.fpath is None:
                 return
             from mbo_utilities import __version__
-            name = Path(self.fpath[0]).parent.name if isinstance(self.fpath, list) else Path(self.fpath).name
-            hello_imgui.get_runner_params().app_shallow_settings.window_title = f"Miller Brain Studio v{__version__} - {name}"
+
+            name = (
+                Path(self.fpath[0]).parent.name
+                if isinstance(self.fpath, list)
+                else Path(self.fpath).name
+            )
+            hello_imgui.get_runner_params().app_shallow_settings.window_title = (
+                f"Miller Brain Studio v{__version__} - {name}"
+            )
         except (RuntimeError, TypeError):
             pass
 
     # === Properties ===
 
     def _get_data_arrays(self) -> list:
-        """the viewer's data arrays"""
+        """The viewer's data arrays"""
         return list(getattr(self.image_widget, "data", None) or [])
 
     @property
@@ -826,6 +863,7 @@ class PreviewDataWidget(EdgeWindow):
         # current displayed indices, defaulting to 0 when a slider is absent
         # (e.g. T-only data has no z slider, so we report z=0).
         from mbo_utilities.arrays.features import find_slider_name
+
         indices = {}
         names = ()
         if self.image_widget is not None:
@@ -864,7 +902,9 @@ class PreviewDataWidget(EdgeWindow):
     def has_raster_scan_support(self) -> bool:
         """Check if any data array supports raster scan phase correction."""
         for arr in self._get_data_arrays():
-            if hasattr(arr, "phase_correction") and isinstance(arr.phase_correction, PhaseCorrectionFeature):
+            if hasattr(arr, "phase_correction") and isinstance(
+                arr.phase_correction, PhaseCorrectionFeature
+            ):
                 return True
             if hasattr(arr, "fix_phase") and hasattr(arr, "use_fft"):
                 return True
@@ -877,7 +917,9 @@ class PreviewDataWidget(EdgeWindow):
         if not arrays:
             return False
         arr = arrays[0]
-        if hasattr(arr, "phase_correction") and isinstance(arr.phase_correction, PhaseCorrectionFeature):
+        if hasattr(arr, "phase_correction") and isinstance(
+            arr.phase_correction, PhaseCorrectionFeature
+        ):
             return arr.phase_correction.enabled
         return getattr(arr, "fix_phase", False)
 
@@ -885,7 +927,9 @@ class PreviewDataWidget(EdgeWindow):
     def fix_phase(self, value: bool):
         self.logger.debug(f"Setting fix_phase to {value}.")
         for arr in self._get_data_arrays():
-            if hasattr(arr, "phase_correction") and isinstance(arr.phase_correction, PhaseCorrectionFeature):
+            if hasattr(arr, "phase_correction") and isinstance(
+                arr.phase_correction, PhaseCorrectionFeature
+            ):
                 arr.phase_correction.enabled = value
             elif hasattr(arr, "fix_phase"):
                 arr.fix_phase = value
@@ -898,7 +942,9 @@ class PreviewDataWidget(EdgeWindow):
         if not arrays:
             return False
         arr = arrays[0]
-        if hasattr(arr, "phase_correction") and isinstance(arr.phase_correction, PhaseCorrectionFeature):
+        if hasattr(arr, "phase_correction") and isinstance(
+            arr.phase_correction, PhaseCorrectionFeature
+        ):
             return arr.phase_correction.use_fft
         return getattr(arr, "use_fft", False)
 
@@ -906,7 +952,9 @@ class PreviewDataWidget(EdgeWindow):
     def use_fft(self, value: bool):
         self.logger.debug(f"Setting use_fft to {value}.")
         for arr in self._get_data_arrays():
-            if hasattr(arr, "phase_correction") and isinstance(arr.phase_correction, PhaseCorrectionFeature):
+            if hasattr(arr, "phase_correction") and isinstance(
+                arr.phase_correction, PhaseCorrectionFeature
+            ):
                 arr.phase_correction.use_fft = value
             elif hasattr(arr, "use_fft"):
                 arr.use_fft = value
@@ -919,7 +967,9 @@ class PreviewDataWidget(EdgeWindow):
         if not arrays:
             return 3
         arr = arrays[0]
-        if hasattr(arr, "phase_correction") and isinstance(arr.phase_correction, PhaseCorrectionFeature):
+        if hasattr(arr, "phase_correction") and isinstance(
+            arr.phase_correction, PhaseCorrectionFeature
+        ):
             return arr.phase_correction.border
         return getattr(arr, "border", 3)
 
@@ -927,7 +977,9 @@ class PreviewDataWidget(EdgeWindow):
     def border(self, value: int):
         self.logger.debug(f"Setting border to {value}.")
         for arr in self._get_data_arrays():
-            if hasattr(arr, "phase_correction") and isinstance(arr.phase_correction, PhaseCorrectionFeature):
+            if hasattr(arr, "phase_correction") and isinstance(
+                arr.phase_correction, PhaseCorrectionFeature
+            ):
                 arr.phase_correction.border = value
             elif hasattr(arr, "border"):
                 arr.border = value
@@ -1013,10 +1065,11 @@ class PreviewDataWidget(EdgeWindow):
         self._apply_frame_average(source, value)
 
     def _sync_frame_average_options(self, factor: int) -> None:
-        """"Apply to dataset" is the default for every run started from
+        """ "Apply to dataset" is the default for every run started from
         here: the save-as, suite2p and masknmf option menus pick up the
         factor the way their Fix Phase defaults track the data, and each can
-        still be changed per run in its own Options."""
+        still be changed per run in its own Options.
+        """
         self._saveas_frame_average = factor
         self._s2p_frame_average = factor
         self._masknmf_frame_average = factor
@@ -1123,6 +1176,7 @@ class PreviewDataWidget(EdgeWindow):
     def _rebuild_spatial_func(self):
         """Rebuild and apply the combined spatial function."""
         from mbo_utilities.arrays.features import find_slider_name
+
         names = self.image_widget._slider_dim_names or ()
         # fastplotlib's `indices` is case-sensitive; isoview uses
         # descriptive labels (Tile/Timepoint, Cam/View, Zplane), LBM
@@ -1226,17 +1280,20 @@ class PreviewDataWidget(EdgeWindow):
             if sigma is not None and sigma > 0 and result.ndim == 2:
                 try:
                     import cv2
+
                     result = cv2.GaussianBlur(result, (ksize, ksize), sigma)
                 except ImportError:
                     result = gaussian_filter(result, sigma=sigma)
             return result
+
         return spatial_func
 
     def _update_window_funcs(self):
         """Map projection mode + window size onto the viewer's
         ``window_funcs`` ({"t": (func, size)}). Sizes are odd-ified so the
         window is centered on the current frame; size<=1 clears the
-        projection (raw frame)."""
+        projection (raw frame).
+        """
         iw = self.image_widget
         if "t" not in (getattr(iw, "slider_dims", None) or ()):
             return
@@ -1310,19 +1367,28 @@ class PreviewDataWidget(EdgeWindow):
         draw_biohpc_popup(self)
         draw_cloud_popup(self)
         try:
-            from mbo_utilities.gui.widgets.isoview_crop import draw_window as _draw_iso_crop_window
+            from mbo_utilities.gui.widgets.isoview_crop import (
+                draw_window as _draw_iso_crop_window,
+            )
+
             _draw_iso_crop_window(self)
         except Exception:
             # Optional widget — skip silently when its deps aren't loaded
             # (e.g. immvision unavailable in the running imgui_bundle).
             pass
         try:
-            from mbo_utilities.gui.widgets.isoview_segment import draw_window as _draw_iso_seg_window
+            from mbo_utilities.gui.widgets.isoview_segment import (
+                draw_window as _draw_iso_seg_window,
+            )
+
             _draw_iso_seg_window(self)
         except Exception:
             pass
         try:
-            from mbo_utilities.gui.widgets.isoview_deadpixel import draw_window as _draw_iso_dp_window
+            from mbo_utilities.gui.widgets.isoview_deadpixel import (
+                draw_window as _draw_iso_dp_window,
+            )
+
             _draw_iso_dp_window(self)
         except Exception:
             pass
@@ -1332,6 +1398,7 @@ class PreviewDataWidget(EdgeWindow):
     def update(self):
         """Main render callback."""
         import time
+
         t0 = time.perf_counter()
         # `gap` measures wall-clock time since the previous frame entered
         # update(). On a healthy GUI this should hover near the canvas's
@@ -1350,6 +1417,7 @@ class PreviewDataWidget(EdgeWindow):
             from mbo_utilities.gui.widgets.pipelines.isoview import (
                 maybe_refresh_raw_projections,
             )
+
             maybe_refresh_raw_projections(self)
         except Exception:
             self.logger.debug("raw projection refresh skipped", exc_info=True)
@@ -1375,6 +1443,7 @@ class PreviewDataWidget(EdgeWindow):
         # slider list before indexing (isoview uses descriptive labels,
         # LBM uses lowercase t/c/z).
         from mbo_utilities.arrays.features import find_slider_name
+
         names = self.image_widget._slider_dim_names or ()
         z_name = find_slider_name(names, "z")
         c_name = find_slider_name(names, "c")
@@ -1399,7 +1468,8 @@ class PreviewDataWidget(EdgeWindow):
 
     def draw_stats_section(self):
         """The Signal Quality tab: the metric table (the plot is the top
-        strip's ``Signal Quality`` panel, which has the width for it)."""
+        strip's ``Signal Quality`` panel, which has the width for it).
+        """
         draw_stats_section(self, plot=False)
 
     def draw_stats_plot(self):
@@ -1409,7 +1479,9 @@ class PreviewDataWidget(EdgeWindow):
     def draw_preview_section(self):
         """Draw preview section using modular UI widgets."""
         imgui.dummy(imgui.ImVec2(0, 5))
-        with imgui_ctx.begin_child("##PreviewChild", imgui.ImVec2(0, 0), imgui.ChildFlags_.none):
+        with imgui_ctx.begin_child(
+            "##PreviewChild", imgui.ImVec2(0, 0), imgui.ChildFlags_.none
+        ):
             with fit_width():
                 draw_all_widgets(self, self._widgets)
 
@@ -1423,8 +1495,8 @@ class PreviewDataWidget(EdgeWindow):
 
     def cleanup(self):
         """Clean up resources when the GUI is closing."""
-        from mbo_utilities.gui.widgets.pipelines import cleanup_pipelines
         from mbo_utilities.gui.widgets import cleanup_all_widgets
+        from mbo_utilities.gui.widgets.pipelines import cleanup_pipelines
 
         cleanup_pipelines(self)
         cleanup_all_widgets(self._widgets)

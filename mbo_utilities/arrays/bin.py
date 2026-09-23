@@ -13,11 +13,11 @@ from pathlib import Path
 import numpy as np
 
 from mbo_utilities import log
-from mbo_utilities.arrays._base import _imwrite_base, ReductionMixin, Shape5DMixin
-from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
-from mbo_utilities.file_io import load_npy
 from mbo_utilities._writers import _convert_paths_to_strings
+from mbo_utilities.arrays._base import ReductionMixin, Shape5DMixin, _imwrite_base
+from mbo_utilities.file_io import load_npy
 from mbo_utilities.metadata.base import normalize_ops_arrays
+from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 logger = log.get("arrays.bin")
 
@@ -156,7 +156,6 @@ class BinArray(ReductionMixin, Shape5DMixin):
     def ndim(self):
         return len(self.shape)
 
-
     @property
     def nframes(self):
         return self.shape[0]
@@ -212,7 +211,12 @@ class BinArray(ReductionMixin, Shape5DMixin):
         # Fast memmap copy only when no selection is requested. Any
         # frames/planes/channels filter must go through _imwrite_base
         # so the selection is honored.
-        if ext_clean == "bin" and frames is None and planes is None and channels is None:
+        if (
+            ext_clean == "bin"
+            and frames is None
+            and planes is None
+            and channels is None
+        ):
             md = dict(self.metadata) if self.metadata else {}
             md["Ly"] = self.Ly
             md["Lx"] = self.Lx

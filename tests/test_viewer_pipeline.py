@@ -15,17 +15,16 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from mbo_utilities.gui.run_gui import _SqueezeSingletonDims
 from mbo_utilities.gui.widgets.window_functions import (
     SpatialFunctionsWidget,
     WindowFunctionsWidget,
 )
 
-
 # ============================================================
 # fakes
 # ============================================================
+
 
 class FakeArr:
     """Minimal lazy array — backed by an ndarray, with shape/ndim/dims."""
@@ -97,19 +96,19 @@ class TestSqueezeWrapperNumpyLeak:
         arr = FakeArr((1, 1, 1, 64, 48), ("T", "C", "Z", "Y", "X"))
         w = _SqueezeSingletonDims(arr)
         out = np.asarray(w)
-        assert out.shape == (64, 48), \
+        assert out.shape == (64, 48), (
             f"np.asarray leaked underlying shape: got {out.shape}"
+        )
 
     def test_astype_honors_squeeze(self):
         arr = FakeArr((1, 1, 1, 64, 48), ("T", "C", "Z", "Y", "X"))
         w = _SqueezeSingletonDims(arr)
         out = w.astype(np.float32)
-        assert out.shape == (64, 48), \
-            f"astype leaked underlying shape: got {out.shape}"
+        assert out.shape == (64, 48), f"astype leaked underlying shape: got {out.shape}"
         assert out.dtype == np.float32
 
     def test_isolated_buffer_assignment(self):
-        """fastplotlib's TextureArray._fix_data path: allocate zeros at
+        """Fastplotlib's TextureArray._fix_data path: allocate zeros at
         wrapper.shape, then assign wrapper[:] into it. Both ends must agree.
         """
         arr = FakeArr((1, 1, 1, 64, 48), ("T", "C", "Z", "Y", "X"))
@@ -119,7 +118,7 @@ class TestSqueezeWrapperNumpyLeak:
         assert buf.shape == (64, 48)
 
     def test_dunder_lookups_dont_leak(self):
-        """numpy may probe `__array_interface__` etc. via getattr — those
+        """Numpy may probe `__array_interface__` etc. via getattr — those
         must not silently fall through to the underlying array.
         """
         arr = FakeArr((1, 1, 1, 64, 48), ("T", "C", "Z", "Y", "X"))
@@ -135,12 +134,12 @@ class TestSqueezeWrapperNumpyLeak:
 
 GATING_CASES = [
     # (shape, dims, expect_window, expect_spatial, label)
-    ((64, 48),               ("Y", "X"),               False, False, "2D image"),
-    ((100, 64, 48),          ("T", "Y", "X"),          True,  True,  "3D time series"),
-    ((37, 64, 48),           ("Z", "Y", "X"),          False, True,  "3D z-stack no time"),
-    ((20, 5, 64, 48),        ("T", "Z", "Y", "X"),     True,  True,  "4D TZYX"),
-    ((20, 2, 5, 64, 48),     ("T", "C", "Z", "Y", "X"), True, True,  "5D TCZYX"),
-    ((1, 14, 64, 48),        ("C", "Z", "Y", "X"),     False, True,  "post-squeeze pollen"),
+    ((64, 48), ("Y", "X"), False, False, "2D image"),
+    ((100, 64, 48), ("T", "Y", "X"), True, True, "3D time series"),
+    ((37, 64, 48), ("Z", "Y", "X"), False, True, "3D z-stack no time"),
+    ((20, 5, 64, 48), ("T", "Z", "Y", "X"), True, True, "4D TZYX"),
+    ((20, 2, 5, 64, 48), ("T", "C", "Z", "Y", "X"), True, True, "5D TCZYX"),
+    ((1, 14, 64, 48), ("C", "Z", "Y", "X"), False, True, "post-squeeze pollen"),
 ]
 
 
@@ -151,22 +150,33 @@ class TestFeatureGating:
     misfired for natural-rank 2D and lower-rank data.
     """
 
-    @pytest.mark.parametrize("shape,dims,expect_window,expect_spatial,label", GATING_CASES)
-    def test_window_functions_supported(self, shape, dims, expect_window, expect_spatial, label):
+    @pytest.mark.parametrize(
+        "shape,dims,expect_window,expect_spatial,label", GATING_CASES
+    )
+    def test_window_functions_supported(
+        self, shape, dims, expect_window, expect_spatial, label
+    ):
         parent = FakeParent(FakeArr(shape, dims))
-        assert WindowFunctionsWidget.is_supported(parent) == expect_window, \
+        assert WindowFunctionsWidget.is_supported(parent) == expect_window, (
             f"{label}: WindowFunctions gating wrong"
+        )
 
-    @pytest.mark.parametrize("shape,dims,expect_window,expect_spatial,label", GATING_CASES)
-    def test_spatial_functions_supported(self, shape, dims, expect_window, expect_spatial, label):
+    @pytest.mark.parametrize(
+        "shape,dims,expect_window,expect_spatial,label", GATING_CASES
+    )
+    def test_spatial_functions_supported(
+        self, shape, dims, expect_window, expect_spatial, label
+    ):
         parent = FakeParent(FakeArr(shape, dims))
-        assert SpatialFunctionsWidget.is_supported(parent) == expect_spatial, \
+        assert SpatialFunctionsWidget.is_supported(parent) == expect_spatial, (
             f"{label}: SpatialFunctions gating wrong"
+        )
 
 
 # ============================================================
 # Reload-via-file-dialog parity with initial launch
 # ============================================================
+
 
 class TestReloadDataConsistency:
     """`load_new_data` (file-dialog reload) must produce the same view as
@@ -210,16 +220,16 @@ class TestPerDataStateReset:
 
     # canonical (field, dirty_value, expected_after_reset) tuples
     RESET_FIELDS = [
-        ("_mean_subtraction",   True,         False),
-        ("_gaussian_sigma",     5.0,          0.0),
-        ("_proj",               "max",        "mean"),
-        ("_window_size",        10,           1),
-        ("_frame_average",      10,           1),
-        ("_frame_average_source", object(),   None),
-        ("_auto_contrast_on_z", True,         False),
-        ("_last_z_idx",         42,           0),
-        ("_saveas_selected_roi", {1, 2, 3},   set()),
-        ("_saveas_rois",        True,         False),
+        ("_mean_subtraction", True, False),
+        ("_gaussian_sigma", 5.0, 0.0),
+        ("_proj", "max", "mean"),
+        ("_window_size", 10, 1),
+        ("_frame_average", 10, 1),
+        ("_frame_average_source", object(), None),
+        ("_auto_contrast_on_z", True, False),
+        ("_last_z_idx", 42, 0),
+        ("_saveas_selected_roi", {1, 2, 3}, set()),
+        ("_saveas_rois", True, False),
     ]
 
     def test_resets_every_field(self):
@@ -236,12 +246,14 @@ class TestPerDataStateReset:
         # every field must equal its expected default
         for field, _, expected in self.RESET_FIELDS:
             actual = getattr(p, field)
-            assert actual == expected, \
+            assert actual == expected, (
                 f"{field}: expected {expected!r} after reset, got {actual!r}"
+            )
 
     def test_idempotent_on_clean_state(self):
         """Reset must be idempotent — calling it on a clean parent
-        should not error or change anything inappropriately."""
+        should not error or change anything inappropriately.
+        """
         from mbo_utilities.gui._dialogs import _reset_per_data_state
 
         p = type("P", (), {})()
@@ -261,10 +273,13 @@ class TestPerDataStateReset:
         helper call so the contract can't silently regress.
         """
         import inspect
+
         from mbo_utilities.gui import _dialogs
+
         src = inspect.getsource(_dialogs.load_new_data)
-        assert "_reset_per_data_state(parent)" in src, \
+        assert "_reset_per_data_state(parent)" in src, (
             "load_new_data must call _reset_per_data_state"
+        )
 
     def test_load_new_data_rebuilds_the_roi_widget(self):
         """Pin that load_new_data tears down and reattaches the manual ROI
@@ -273,7 +288,9 @@ class TestPerDataStateReset:
         and run on the new data. Source pin, same reasoning as above.
         """
         import inspect
+
         from mbo_utilities.gui import _dialogs
+
         src = inspect.getsource(_dialogs.load_new_data)
         assert "detach_roi_widget(parent)" in src
         assert "attach_roi_widget(parent)" in src
@@ -287,15 +304,19 @@ class TestPerDataStateReset:
         widget module just to check this contract).
         """
         from pathlib import Path
+
         import mbo_utilities.gui.widgets.preview_data as preview_data_mod
+
         src = Path(preview_data_mod.__file__).read_text()
-        assert "_reset_per_data_state(self)" in src, \
+        assert "_reset_per_data_state(self)" in src, (
             "PreviewDataWidget._init_state must call _reset_per_data_state"
+        )
 
 
 # ============================================================
 # Custom metadata propagation through suite2p paths
 # ============================================================
+
 
 class TestCustomMetadataPropagation:
     """User-set values from the metadata editor (e.g. dz, fs) live on
@@ -317,7 +338,7 @@ class TestCustomMetadataPropagation:
         """
         import numpy as np
         from mbo_utilities import imwrite
-        from mbo_utilities.arrays import NumpyArray, Suite2pArray
+        from mbo_utilities.arrays import NumpyArray
 
         rng = np.random.RandomState(0)
         # synthetic 5D (T, C=1, Z=4, Y, X) — bypasses natural-rank to
@@ -333,8 +354,9 @@ class TestCustomMetadataPropagation:
         assert ops_files, "no ops.npy written"
         for ops_file in ops_files:
             ops = np.load(ops_file, allow_pickle=True).item()
-            assert ops.get("dz") == 15.0, \
+            assert ops.get("dz") == 15.0, (
                 f"{ops_file}: expected dz=15.0, got {ops.get('dz')}"
+            )
 
     def test_natural_rank_tiff_bin_write(self, tmp_path):
         """Volumetric TiffArray (T, 1, Z, Y, X) writes one bin per plane.
@@ -365,8 +387,9 @@ class TestCustomMetadataPropagation:
         imwrite(arr, out, ext=".bin")  # must not crash
 
         bin_files = sorted(out.rglob("*.bin"))
-        assert len(bin_files) == nz, \
+        assert len(bin_files) == nz, (
             f"expected {nz} bin files (one per plane), got {len(bin_files)}"
+        )
 
     def test_run_plane_worker_thread_merges_custom_metadata(self):
         """`_run_plane_worker_thread` (the daemon-thread suite2p path)
@@ -377,18 +400,21 @@ class TestCustomMetadataPropagation:
         """
         import inspect
         import re
+
         from mbo_utilities.gui.widgets.pipelines import settings as s
 
         src = inspect.getsource(s._run_plane_worker_thread)
-        assert 'config.get("custom_metadata")' in src or "config['custom_metadata']" in src, \
-            "_run_plane_worker_thread must read config['custom_metadata']"
+        assert (
+            'config.get("custom_metadata")' in src or "config['custom_metadata']" in src
+        ), "_run_plane_worker_thread must read config['custom_metadata']"
         # the merge must happen before OutputMetadata is constructed —
         # otherwise the user's edits don't reach the reactive layer.
         merge_idx = re.search(r"lazy_mdata\.update\(custom_metadata\)", src)
         out_idx = re.search(r"OutputMetadata\s*\(", src)
         assert merge_idx and out_idx, "missing merge or OutputMetadata call"
-        assert merge_idx.start() < out_idx.start(), \
+        assert merge_idx.start() < out_idx.start(), (
             "lazy_mdata.update(custom_metadata) must come BEFORE OutputMetadata(...)"
+        )
 
     def test_settings_thread_config_includes_custom_metadata(self):
         """The thread-path job-config builder in settings.py must
@@ -396,10 +422,13 @@ class TestCustomMetadataPropagation:
         Inspect the source rather than driving the GUI.
         """
         from pathlib import Path
+
         import mbo_utilities.gui.widgets.pipelines.settings as settings_mod
+
         src = Path(settings_mod.__file__).read_text()
-        assert '"custom_metadata": dict(getattr(self, "_custom_metadata"' in src, \
+        assert '"custom_metadata": dict(getattr(self, "_custom_metadata"' in src, (
             "thread-path job config must snapshot _custom_metadata"
+        )
 
     def test_settings_spawn_worker_args_include_custom_metadata(self):
         """The spawn-process worker_args builder must also snapshot
@@ -407,12 +436,15 @@ class TestCustomMetadataPropagation:
         invoking lbm_suite2p_python.pipeline.
         """
         from pathlib import Path
+
         import mbo_utilities.gui.widgets.pipelines.settings as settings_mod
+
         src = Path(settings_mod.__file__).read_text()
         # there are two snapshot sites (thread + spawn) — at least one
         # must be inside a worker_args dict
-        assert "worker_args" in src and 'dict(getattr(self, "_custom_metadata"' in src, \
-            "spawn-process worker_args must snapshot _custom_metadata"
+        assert (
+            "worker_args" in src and 'dict(getattr(self, "_custom_metadata"' in src
+        ), "spawn-process worker_args must snapshot _custom_metadata"
 
     def test_task_suite2p_applies_custom_metadata_to_ops(self):
         """`task_suite2p` (the spawn-process subprocess entry point)
@@ -421,17 +453,20 @@ class TestCustomMetadataPropagation:
         """
         import inspect
         import re
+
         from mbo_utilities.gui import tasks
 
         src = inspect.getsource(tasks.task_suite2p)
-        assert 'args.get("custom_metadata"' in src, \
+        assert 'args.get("custom_metadata"' in src, (
             "task_suite2p must read args['custom_metadata']"
+        )
         # the merge must happen before pipeline() is called
         merge = re.search(r"ops\.update\(custom_metadata\)", src)
         pipeline_call = re.search(r"\bpipeline\s*\(", src)
         assert merge and pipeline_call, "missing ops.update or pipeline() call"
-        assert merge.start() < pipeline_call.start(), \
+        assert merge.start() < pipeline_call.start(), (
             "ops.update(custom_metadata) must come BEFORE pipeline(...)"
+        )
 
 
 # ============================================================
@@ -442,8 +477,13 @@ class TestCustomMetadataPropagation:
 # logic computes this value must propagate it to every key — downstream
 # readers (and humans inspecting ops.npy) read different ones.
 TIMEPOINT_ALIASES = (
-    "num_timepoints", "nframes", "num_frames",
-    "n_frames", "T", "nt", "timepoints",
+    "num_timepoints",
+    "nframes",
+    "num_frames",
+    "n_frames",
+    "T",
+    "nt",
+    "timepoints",
 )
 
 
@@ -465,6 +505,7 @@ class TestOutputTimepointConsistency:
 
     def _load_first_ops(self, out_dir):
         import numpy as np
+
         ops_files = sorted(out_dir.rglob("ops.npy"))
         assert ops_files, f"no ops.npy under {out_dir}"
         return np.load(ops_files[0], allow_pickle=True).item()
@@ -472,6 +513,7 @@ class TestOutputTimepointConsistency:
     def _make_arr(self, nt=1574, nz=4, h=16, w=16):
         import numpy as np
         from mbo_utilities.arrays import NumpyArray
+
         rng = np.random.RandomState(0)
         return NumpyArray(rng.randint(0, 4096, size=(nt, 1, nz, h, w), dtype=np.int16))
 
@@ -481,46 +523,53 @@ class TestOutputTimepointConsistency:
         placeholder).
         """
         from mbo_utilities import imwrite
+
         arr = self._make_arr(nt=1574)
         out = tmp_path / "out"
         imwrite(arr, out, ext=".bin", num_frames=700)
 
         ops = self._load_first_ops(out)
         for key in TIMEPOINT_ALIASES:
-            assert ops.get(key) == 700, \
+            assert ops.get(key) == 700, (
                 f"{key}: expected 700 (truncated), got {ops.get(key)!r}"
+            )
 
     def test_explicit_frames_selection(self, tmp_path):
         """imwrite(frames=[1..700]) — every alias must read 700."""
         from mbo_utilities import imwrite
+
         arr = self._make_arr(nt=1574)
         out = tmp_path / "out"
         imwrite(arr, out, ext=".bin", frames=list(range(1, 701)))
 
         ops = self._load_first_ops(out)
         for key in TIMEPOINT_ALIASES:
-            assert ops.get(key) == 700, \
+            assert ops.get(key) == 700, (
                 f"{key}: expected 700 (selected), got {ops.get(key)!r}"
+            )
 
     def test_no_selection_uses_source_count(self, tmp_path):
         """imwrite() without truncation/selection — every alias reads
         the full source count.
         """
         from mbo_utilities import imwrite
+
         arr = self._make_arr(nt=1574)
         out = tmp_path / "out"
         imwrite(arr, out, ext=".bin")
 
         ops = self._load_first_ops(out)
         for key in TIMEPOINT_ALIASES:
-            assert ops.get(key) == 1574, \
+            assert ops.get(key) == 1574, (
                 f"{key}: expected 1574 (source), got {ops.get(key)!r}"
+            )
 
     def test_aliases_internally_consistent(self, tmp_path):
         """Independent of value, all 7 aliases in ops.npy must agree
         with each other AND with the actual binary file size.
         """
         from mbo_utilities import imwrite
+
         arr = self._make_arr(nt=1574)
         out = tmp_path / "out"
         imwrite(arr, out, ext=".bin", num_frames=421)
@@ -528,23 +577,25 @@ class TestOutputTimepointConsistency:
         ops_files = sorted(out.rglob("ops.npy"))
         for ops_file in ops_files:
             import numpy as np
+
             ops = np.load(ops_file, allow_pickle=True).item()
             values = {k: ops.get(k) for k in TIMEPOINT_ALIASES}
             unique = set(values.values())
-            assert len(unique) == 1, \
-                f"{ops_file.name}: aliases disagree: {values}"
+            assert len(unique) == 1, f"{ops_file.name}: aliases disagree: {values}"
 
             # also check actual bin file size matches
             bin_files = list(ops_file.parent.glob("*.bin"))
             assert bin_files, "no bin file alongside ops.npy"
             actual_frames = bin_files[0].stat().st_size // (16 * 16 * 2)
-            assert actual_frames == 421, \
+            assert actual_frames == 421, (
                 f"{bin_files[0].name}: bin has {actual_frames} frames, ops says {values}"
+            )
 
 
 # ============================================================
 # Reactive fs/dz scaling for the suite2p Run path
 # ============================================================
+
 
 class TestReactiveFsZScaling:
     """The Run-Suite2p worker must use OutputMetadata to reactively
@@ -563,6 +614,7 @@ class TestReactiveFsZScaling:
     def test_reactive_fs_halves_with_stride_2(self):
         """Direct OutputMetadata test: stride 2 halves fs."""
         from mbo_utilities.metadata import OutputMetadata
+
         out = OutputMetadata(
             source={"fs": 30.0, "dz": 10.0, "dx": 0.5, "dy": 0.5},
             source_shape=(1574, 1, 14, 256, 256),
@@ -577,6 +629,7 @@ class TestReactiveFsZScaling:
     def test_reactive_dz_doubles_with_z_stride_2(self):
         """Direct OutputMetadata test: every-other-plane doubles dz."""
         from mbo_utilities.metadata import OutputMetadata
+
         out = OutputMetadata(
             source={"fs": 30.0, "dz": 10.0, "dx": 0.5, "dy": 0.5},
             source_shape=(1574, 1, 14, 256, 256),
@@ -591,6 +644,7 @@ class TestReactiveFsZScaling:
     def test_reactive_both_stride_simultaneous(self):
         """Both selections active — both reactive scales fire."""
         from mbo_utilities.metadata import OutputMetadata
+
         out = OutputMetadata(
             source={"fs": 30.0, "dz": 10.0, "dx": 0.5, "dy": 0.5},
             source_shape=(1574, 1, 14, 256, 256),
@@ -610,13 +664,16 @@ class TestReactiveFsZScaling:
         so that fs/dz get reactively scaled.
         """
         import inspect
+
         from mbo_utilities.gui.widgets.pipelines import settings as s
 
         src = inspect.getsource(s._run_plane_worker_thread)
-        assert "OutputMetadata(" in src, \
+        assert "OutputMetadata(" in src, (
             "_run_plane_worker_thread must use OutputMetadata"
-        assert "tp_indices" in src and "selected_planes_0based" in src, \
+        )
+        assert "tp_indices" in src and "selected_planes_0based" in src, (
             "worker must consume config['tp_indices'] and config['selected_planes_0based']"
+        )
         assert 'selections["T"]' in src, "T selection must be set on OutputMetadata"
         assert 'selections["Z"]' in src, "Z selection must be set on OutputMetadata"
 
@@ -625,17 +682,20 @@ class TestReactiveFsZScaling:
         stride selection — `num_frames=` alone is just truncation.
         """
         import inspect
+
         from mbo_utilities.gui.widgets.pipelines import settings as s
 
         src = inspect.getsource(s._run_plane_worker_thread)
-        assert "frames=frames_arg" in src, \
+        assert "frames=frames_arg" in src, (
             "worker must pass frames= to imwrite (not just num_frames=)"
+        )
 
     def test_worker_warns_on_missing_fs(self):
         """Missing fs in source must warn (not crash) so the user knows
         their ops.npy will have a default frame rate.
         """
         import inspect
+
         from mbo_utilities.gui.widgets.pipelines import settings as s
 
         src = inspect.getsource(s._run_plane_worker_thread)
@@ -647,33 +707,43 @@ class TestReactiveFsZScaling:
         timepoint indices and the full plane selection (0-based).
         """
         from pathlib import Path
+
         import mbo_utilities.gui.widgets.pipelines.settings as settings_mod
+
         src = Path(settings_mod.__file__).read_text()
-        assert '"tp_indices":' in src, \
+        assert '"tp_indices":' in src, (
             "config must capture tp_indices from _s2p_tp_parsed"
-        assert '"selected_planes_0based":' in src, \
+        )
+        assert '"selected_planes_0based":' in src, (
             "config must capture full plane selection (0-based)"
+        )
 
     def test_spawn_worker_args_include_stride_selections(self):
         """Same for the spawn-process path's worker_args."""
         from pathlib import Path
+
         import mbo_utilities.gui.widgets.pipelines.settings as settings_mod
+
         src = Path(settings_mod.__file__).read_text()
         # both branches set these — check the spawn one is wired too
-        assert src.count('"tp_indices":') >= 2, \
+        assert src.count('"tp_indices":') >= 2, (
             "spawn worker_args must also capture tp_indices"
-        assert src.count('"selected_planes_0based":') >= 2, \
+        )
+        assert src.count('"selected_planes_0based":') >= 2, (
             "spawn worker_args must also capture selected_planes_0based"
+        )
 
     def test_task_suite2p_uses_output_metadata(self):
         """The spawn-process task must construct OutputMetadata when
         stride selections are present.
         """
         import inspect
+
         from mbo_utilities.gui import tasks
 
         src = inspect.getsource(tasks.task_suite2p)
-        assert "OutputMetadata(" in src, \
+        assert "OutputMetadata(" in src, (
             "task_suite2p must use OutputMetadata for reactive scaling"
+        )
         assert 'args.get("tp_indices")' in src
         assert 'args.get("selected_planes_0based")' in src

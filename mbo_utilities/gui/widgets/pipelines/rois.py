@@ -54,18 +54,34 @@ _RUN_GREEN = (
 
 # which drawn ROIs a run takes: (key, label, tooltip)
 TARGETS = (
-    ("selected", "selected", "The selected ROI, or every ROI in the ctrl / shift click group"),
+    (
+        "selected",
+        "selected",
+        "The selected ROI, or every ROI in the ctrl / shift click group",
+    ),
     ("listed", "listed", "Every drawn ROI the ROIs tab lists (its filters apply)"),
     ("plane", "this slice", "Every ROI drawn on the slice the sliders show"),
     ("all", "all", "Every drawn ROI, whatever plane it is on"),
-    ("full", "full image", "The whole frame as one mask: its mean trace with mean, a full "
-                          "suite2p / masknmf detection of that z-plane and channel otherwise"),
+    (
+        "full",
+        "full image",
+        "The whole frame as one mask: its mean trace with mean, a full "
+        "suite2p / masknmf detection of that z-plane and channel otherwise",
+    ),
 )
 # where the pixels come from: (key, label, tooltip)
 WHERE = (
-    ("drawn", "as drawn", "Each mask is read on the z-plane and channel it was drawn on"),
-    ("screen", "slice on screen", "Each mask is read on the z-plane and channel the sliders show "
-                                 "when the run starts: scroll to another channel and run again"),
+    (
+        "drawn",
+        "as drawn",
+        "Each mask is read on the z-plane and channel it was drawn on",
+    ),
+    (
+        "screen",
+        "slice on screen",
+        "Each mask is read on the z-plane and channel the sliders show "
+        "when the run starts: scroll to another channel and run again",
+    ),
     ("fixed", "fixed", "Each mask is read on the z-plane and channel picked here"),
 )
 # the settings table's captions; the caption column is as wide as the longest
@@ -144,9 +160,13 @@ class RoiPipelineWidget(PipelineWidget):
         if roi is None:
             imgui.text_colored(_TITLE_COLOR, "Manual ROI Labeling is off")
             imgui.spacing()
-            imgui.text_disabled("Draw ROIs on the image first: the tool adds the ROI cards and tabs.")
+            imgui.text_disabled(
+                "Draw ROIs on the image first: the tool adds the ROI cards and tabs."
+            )
             imgui.spacing()
-            if imgui.button("Turn on Manual ROI Labeling##rois_on", imgui.ImVec2(_em(16), 0)):
+            if imgui.button(
+                "Turn on Manual ROI Labeling##rois_on", imgui.ImVec2(_em(16), 0)
+            ):
                 self._turn_on()
             if self._last_status:
                 imgui.text_colored(_MISSING_COLOR, self._last_status)
@@ -165,13 +185,16 @@ class RoiPipelineWidget(PipelineWidget):
 
     def _draw_facts(self, roi) -> None:
         """What is there to run: counts as a key / value block, the keys in
-        one dim column so the numbers line up."""
+        one dim column so the numbers line up.
+        """
         imgui.text_colored(_TITLE_COLOR, "Drawn ROIs")
         on_plane = len(roi.store.rois_on_plane(roi.z))
         grouped = len([1 for si, _k in roi.buffer if si < 0])
         picked = (
-            f"{grouped} grouped" if grouped > 1
-            else f"ROI {roi.selected} selected" if roi.selected >= 0
+            f"{grouped} grouped"
+            if grouped > 1
+            else f"ROI {roi.selected} selected"
+            if roi.selected >= 0
             else "none selected"
         )
         traced = len([t for t in roi.traces if t.stands_for_roi])
@@ -182,13 +205,18 @@ class RoiPipelineWidget(PipelineWidget):
         rows = (
             ("drawn", drawn),
             ("selection", picked),
-            ("traces", f"{traced} of drawn ROIs" + (f" · {other} other" if other else "")),
+            (
+                "traces",
+                f"{traced} of drawn ROIs" + (f" · {other} other" if other else ""),
+            ),
         )
         flags = imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_pad_outer_x
         with imgui_ctx.begin_table("##rois_facts", 2, flags) as table:
             if not table:
                 return
-            imgui.table_setup_column("key", imgui.TableColumnFlags_.width_fixed, _em(5.5))
+            imgui.table_setup_column(
+                "key", imgui.TableColumnFlags_.width_fixed, _em(5.5)
+            )
             imgui.table_setup_column("value", imgui.TableColumnFlags_.width_stretch)
             for key, value in rows:
                 imgui.table_next_row()
@@ -200,7 +228,8 @@ class RoiPipelineWidget(PipelineWidget):
     def _draw_settings(self, roi) -> None:
         """The run settings as one table: captions in a fixed column exactly
         as wide as the longest of them, controls in the stretch column, every
-        caption on the frame baseline of its row's widgets."""
+        caption on the frame baseline of its row's widgets.
+        """
         with settings_table("##rois_settings", _CAPTIONS) as table:
             if not table:
                 return
@@ -232,7 +261,11 @@ class RoiPipelineWidget(PipelineWidget):
                 self.target = key
             if imgui.is_item_hovered():
                 imgui.set_tooltip(tip)
-        count = "the whole frame" if self.target == "full" else f"{len(self.target_indices())} ROI(s)"
+        count = (
+            "the whole frame"
+            if self.target == "full"
+            else f"{len(self.target_indices())} ROI(s)"
+        )
         imgui.same_line(0, _em(0.6))
         right_aligned_text(count)
 
@@ -262,7 +295,9 @@ class RoiPipelineWidget(PipelineWidget):
             imgui.set_next_item_width(_em(4))
             current = getattr(roi, attr)
             idx = 0 if current is None else min(int(current), size - 1)
-            changed, idx = imgui.combo(f"##rois_fixed_{role}", idx, [str(i + 1) for i in range(size)])
+            changed, idx = imgui.combo(
+                f"##rois_fixed_{role}", idx, [str(i + 1) for i in range(size)]
+            )
             if changed or current is None:
                 setattr(roi, attr, int(idx))
 
@@ -280,7 +315,12 @@ class RoiPipelineWidget(PipelineWidget):
             else:
                 try:
                     # the selection string every Save As and pipeline row takes
-                    indices = [int(t) for t in parse_timepoint_selection(text, max_frames).final_indices]
+                    indices = [
+                        int(t)
+                        for t in parse_timepoint_selection(
+                            text, max_frames
+                        ).final_indices
+                    ]
                     roi.run_tp = None if indices == list(range(max_frames)) else indices
                     self._frames_error = ""
                 except (ValueError, IndexError) as e:
@@ -306,11 +346,14 @@ class RoiPipelineWidget(PipelineWidget):
         from mbo_utilities.gui.manual_roi import ENGINE_HELP
 
         imgui.set_next_item_width(_em(6.5))
-        changed, sel = imgui.combo("##rois_engine", ENGINES.index(roi.engine), list(ENGINES))
+        changed, sel = imgui.combo(
+            "##rois_engine", ENGINES.index(roi.engine), list(ENGINES)
+        )
         if changed:
             roi.engine = ENGINES[sel]
         set_tooltip(
-            "Which signal to pull out of the masks:\n\n" + "\n\n".join(ENGINE_HELP[e] for e in ENGINES),
+            "Which signal to pull out of the masks:\n\n"
+            + "\n\n".join(ENGINE_HELP[e] for e in ENGINES),
             show_mark=False,
         )
         imgui.same_line(0, _em(0.6))
@@ -361,8 +404,13 @@ class RoiPipelineWidget(PipelineWidget):
         run_w, trace_w, gap = _em(11), _em(7), _em(0.6)
         avail = imgui.get_content_region_avail().x
         if avail > run_w + gap + trace_w:
-            imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + (avail - run_w - gap - trace_w) * 0.5)
-        for slot, color in zip((imgui.Col_.button, imgui.Col_.button_hovered, imgui.Col_.button_active), _RUN_GREEN):
+            imgui.set_cursor_pos_x(
+                imgui.get_cursor_pos_x() + (avail - run_w - gap - trace_w) * 0.5
+            )
+        for slot, color in zip(
+            (imgui.Col_.button, imgui.Col_.button_hovered, imgui.Col_.button_active),
+            _RUN_GREEN,
+        ):
             imgui.push_style_color(slot, color)
         if not ready:
             imgui.begin_disabled()
@@ -376,8 +424,10 @@ class RoiPipelineWidget(PipelineWidget):
             elif full:
                 what = f"Full {roi.engine} detection of the z-plane and channel ({roi._where_label()}) as a detached worker"
             else:
-                what = (f"Run {len(indices)} ROI(s) through {roi.engine} ({roi._where_label()}) "
-                        f"-> rois_{roi.effective_tag}/; the rows land in the Traces tab")
+                what = (
+                    f"Run {len(indices)} ROI(s) through {roi.engine} ({roi._where_label()}) "
+                    f"-> rois_{roi.effective_tag}/; the rows land in the Traces tab"
+                )
             imgui.set_tooltip(reason or what)
         if clicked and ready:
             if full and roi.engine == "mean":
@@ -395,10 +445,12 @@ class RoiPipelineWidget(PipelineWidget):
             imgui.end_disabled()
         if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
             imgui.set_tooltip(
-                "No (T, Y, X) movie behind this view." if no_movie
-                else "No drawn ROI matches the choice above." if not (full or indices)
+                "No (T, Y, X) movie behind this view."
+                if no_movie
+                else "No drawn ROI matches the choice above."
+                if not (full or indices)
                 else f"Mean trace of {'the whole frame' if full else f'{len(indices)} ROI(s)'} in memory "
-                     f"({roi._where_label()}), no files written"
+                f"({roi._where_label()}), no files written"
             )
         if traced and can_trace:
             if full:
@@ -416,13 +468,17 @@ class RoiPipelineWidget(PipelineWidget):
     def _draw_find_row(self, roi) -> None:
         have_region = roi.region is not None
         with selected_button_style(roi.region_mode):
-            if imgui.button(("Region" if have_region else "Draw region") + "##rois_region", imgui.ImVec2(_em(7), 0)):
+            if imgui.button(
+                ("Region" if have_region else "Draw region") + "##rois_region",
+                imgui.ImVec2(_em(7), 0),
+            ):
                 roi.set_region_mode(not roi.region_mode)
         if imgui.is_item_hovered():
             y0, y1, x0, x1 = roi.region if have_region else (0, 0, 0, 0)
             imgui.set_tooltip(
                 f"Region {y1 - y0}x{x1 - x0} px - drag again to replace it (r)"
-                if have_region else "Drag a box on the image to mark where to look (r)"
+                if have_region
+                else "Drag a box on the image to mark where to look (r)"
             )
         for kind in ("suite2p", "masknmf"):
             imgui.same_line(0, _em(0.6))
@@ -436,8 +492,8 @@ class RoiPipelineWidget(PipelineWidget):
             if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
                 imgui.set_tooltip(
                     f"Draw a region first, then {kind} looks for cells inside it"
-                    if not have_region else
-                    f"Look for cells inside the region with {kind}, unseeded; they "
+                    if not have_region
+                    else f"Look for cells inside the region with {kind}, unseeded; they "
                     "arrive as an algo overlay to promote or discard"
                 )
         if have_region:

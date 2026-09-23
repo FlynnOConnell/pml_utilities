@@ -11,19 +11,17 @@ expectations read straight out of h5py.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
-
 from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray, list_mesc_units
 from mbo_utilities.reader import imread
-
 
 # ============================================================
 # synthetic fixture
 # ============================================================
+
 
 def _curve(unit, idx, name, values, delta=1.0, **attrs):
     g = unit.create_group(f"Curve_{idx}")
@@ -75,8 +73,13 @@ def mesc_path(tmp_path_factory):
         # MUnit_0 - MethodType 2 z-stack: axis 0 is depth, no time axis
         u = s.create_group("MUnit_0")
         u.attrs.update(
-            {"MethodType": 2, "VecChannelsSize": 2, "TStepInMs": 33.0,
-             "MeasurementDatePosix": 1_700_000_000, "Comment": "zstack"}
+            {
+                "MethodType": 2,
+                "VecChannelsSize": 2,
+                "TStepInMs": 33.0,
+                "MeasurementDatePosix": 1_700_000_000,
+                "Comment": "zstack",
+            }
         )
         for c in range(2):
             u.create_dataset(
@@ -87,8 +90,13 @@ def mesc_path(tmp_path_factory):
         # MUnit_1 - MethodType 8 chessboard: 4 ROIs tiled along X
         u = s.create_group("MUnit_1")
         u.attrs.update(
-            {"MethodType": 8, "VecChannelsSize": 2, "TStepInMs": 50.0,
-             "MeasurementDatePosix": 1_700_000_100, "Comment": "chessboard"}
+            {
+                "MethodType": 8,
+                "VecChannelsSize": 2,
+                "TStepInMs": 50.0,
+                "MeasurementDatePosix": 1_700_000_100,
+                "Comment": "chessboard",
+            }
         )
         u.attrs["MultiROIProtocolJSON"] = _protocol(
             {
@@ -104,7 +112,14 @@ def mesc_path(tmp_path_factory):
             )
         # RTMC ran on this scan: X moved (counts -> um), Y is stored in um
         # already, Z never moved (one sample), plus an intercycle X trace
-        _curve(u, 0, "RTMC X correction (total)", 8388608.0 + 1024.0 * np.arange(5), 0.03, **_RTMC_UM)
+        _curve(
+            u,
+            0,
+            "RTMC X correction (total)",
+            8388608.0 + 1024.0 * np.arange(5),
+            0.03,
+            **_RTMC_UM,
+        )
         _curve(u, 1, "RTMC Y correction (total)", [0.0, -0.5, -1.0, -1.5], 0.03)
         _curve(u, 2, "RTMC Z correction (total)", [8388608.0], 0.03, **_RTMC_UM)
         _curve(u, 3, "RTMC X correction (intercycle)", [0.0, 1.0, 0.0], 0.03)
@@ -113,8 +128,13 @@ def mesc_path(tmp_path_factory):
         # MUnit_2 - MethodType 9 ribbon transverse: ragged ROI boxes
         u = s.create_group("MUnit_2")
         u.attrs.update(
-            {"MethodType": 9, "VecChannelsSize": 1, "TStepInMs": 25.0,
-             "MeasurementDatePosix": 1_700_000_200, "Comment": "ribbon"}
+            {
+                "MethodType": 9,
+                "VecChannelsSize": 1,
+                "TStepInMs": 25.0,
+                "MeasurementDatePosix": 1_700_000_200,
+                "Comment": "ribbon",
+            }
         )
         u.attrs["BreakViewJSON"] = json.dumps(
             {"measurementROIMaps": _boxes([(0, 10, 0, 20), (12, 30, 0, 16)])}
@@ -129,8 +149,13 @@ def mesc_path(tmp_path_factory):
         # MUnit_3 - MethodType 6 linescan: 8 frames of 4 lines packed into Y
         u = s.create_group("MUnit_3")
         u.attrs.update(
-            {"MethodType": 6, "VecChannelsSize": 1, "TStepInMs": 2.0,
-             "MeasurementDatePosix": 1_700_000_300, "Comment": "linescan"}
+            {
+                "MethodType": 6,
+                "VecChannelsSize": 1,
+                "TStepInMs": 2.0,
+                "MeasurementDatePosix": 1_700_000_300,
+                "Comment": "linescan",
+            }
         )
         u.attrs["CoordinateMapJSON"] = json.dumps(
             {"maps": [{"measurementROIs": _boxes([(0, 4, 0, 12), (0, 4, 12, 30)])}]}
@@ -146,9 +171,15 @@ def mesc_path(tmp_path_factory):
         # MUnit_4 - MethodType 1 plain timeseries
         u = s.create_group("MUnit_4")
         u.attrs.update(
-            {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 100.0,
-             "MeasurementDatePosix": 1_700_000_400, "Comment": "timeseries",
-             "ImageRoleDebugString": "measurement", "MeasurementLengthInMs": 700.0}
+            {
+                "MethodType": 1,
+                "VecChannelsSize": 1,
+                "TStepInMs": 100.0,
+                "MeasurementDatePosix": 1_700_000_400,
+                "Comment": "timeseries",
+                "ImageRoleDebugString": "measurement",
+                "MeasurementLengthInMs": 700.0,
+            }
         )
         u.create_dataset(
             "Channel_0", data=np.arange(7 * 16 * 18, dtype=np.uint16).reshape(7, 16, 18)
@@ -157,8 +188,13 @@ def mesc_path(tmp_path_factory):
         # MUnit_5 - MethodType 7 multiline with dichroic light-path switching
         u = s.create_group("MUnit_5")
         u.attrs.update(
-            {"MethodType": 7, "VecChannelsSize": 2, "TStepInMs": 3.0,
-             "MeasurementDatePosix": 1_700_000_500, "Comment": "dichro"}
+            {
+                "MethodType": 7,
+                "VecChannelsSize": 2,
+                "TStepInMs": 3.0,
+                "MeasurementDatePosix": 1_700_000_500,
+                "Comment": "dichro",
+            }
         )
         u.attrs["CoordinateMapJSON"] = json.dumps(
             {"maps": [{"measurementROIs": _boxes([(0, 2, 0, 10)])}]}
@@ -177,9 +213,14 @@ def mesc_path(tmp_path_factory):
         # MUnit_6 - MethodType 11 multicube: z-slices interleaved on axis 0
         u = s.create_group("MUnit_6")
         u.attrs.update(
-            {"MethodType": 11, "VecChannelsSize": 1, "TStepInMs": 60.0,
-             "Slices": 4, "MeasurementDatePosix": 1_700_000_600,
-             "Comment": "multicube"}
+            {
+                "MethodType": 11,
+                "VecChannelsSize": 1,
+                "TStepInMs": 60.0,
+                "Slices": 4,
+                "MeasurementDatePosix": 1_700_000_600,
+                "Comment": "multicube",
+            }
         )
         u.attrs["MultiROIProtocolJSON"] = _protocol(
             {
@@ -194,8 +235,11 @@ def mesc_path(tmp_path_factory):
             }
         )
         u.attrs["CoordinateMapJSON"] = json.dumps(
-            {"maps": [{"layerOffsetVectors":
-                       [[0] * 4, [0] * 4, [3.0, 1.0, -1.0, -3.0]]}]}
+            {
+                "maps": [
+                    {"layerOffsetVectors": [[0] * 4, [0] * 4, [3.0, 1.0, -1.0, -3.0]]}
+                ]
+            }
         )
         u.attrs["BreakViewJSON"] = json.dumps(
             {"measurementROIMaps": _boxes([(0, 8, 0, 6)])}
@@ -217,11 +261,18 @@ def raw(mesc_path):
 # discovery + dispatch
 # ============================================================
 
+
 def test_list_units_reports_every_layout(mesc_path):
     units = list_mesc_units(mesc_path)
     assert [u["munit"] for u in units] == [f"MUnit_{i}" for i in range(7)]
     assert [u["kind"] for u in units] == [
-        "zstack", "tiled", "boxes", "packed", "frames", "packed", "multicube",
+        "zstack",
+        "tiled",
+        "boxes",
+        "packed",
+        "frames",
+        "packed",
+        "multicube",
     ]
     assert [u["shape"] for u in units] == [
         (1, 2, 20, 64, 48),
@@ -240,12 +291,28 @@ def test_list_units_reports_every_layout(mesc_path):
     assert [u["role"] for u in units] == ["", "", "", "", "measurement", "", ""]
     assert units[4]["planned_s"] == pytest.approx(0.7)
     assert all(u["planned_s"] is None for u in units if u["munit"] != "MUnit_4")
-    assert [u["kind"] in ROI_LAYOUTS for u in units] == [False, True, True, True, False, True, False]
+    assert [u["kind"] in ROI_LAYOUTS for u in units] == [
+        False,
+        True,
+        True,
+        True,
+        False,
+        True,
+        False,
+    ]
     # MEScan's role label and planned length ride along when the unit declares them
     assert [u["role"] for u in units] == ["", "", "", "", "measurement", "", ""]
     assert units[4]["planned_s"] == pytest.approx(0.7)
     assert all(u["planned_s"] is None for u in units if u["munit"] != "MUnit_4")
-    assert [u["kind"] in ROI_LAYOUTS for u in units] == [False, True, True, True, False, True, False]
+    assert [u["kind"] in ROI_LAYOUTS for u in units] == [
+        False,
+        True,
+        True,
+        True,
+        False,
+        True,
+        False,
+    ]
 
 
 def test_imread_dispatches_to_mesc_array(mesc_path):
@@ -270,6 +337,7 @@ def test_bad_unit_selector_raises(mesc_path, selector):
 # ============================================================
 # per-layout unpacking
 # ============================================================
+
 
 def test_zstack_axis0_is_depth(mesc_path, raw):
     arr = MescArray(mesc_path, unit=0)
@@ -391,8 +459,13 @@ def test_list_units_multicube_reports_cubes_not_rois(tmp_path):
     with h5py.File(path, "w") as f:
         u = f.create_group("MSession_0").create_group("MUnit_0")
         u.attrs.update(
-            {"MethodType": 11, "VecChannelsSize": 1, "TStepInMs": 60.0,
-             "Slices": 3, "Comment": "two cubes"}
+            {
+                "MethodType": 11,
+                "VecChannelsSize": 1,
+                "TStepInMs": 60.0,
+                "Slices": 3,
+                "Comment": "two cubes",
+            }
         )
         # two cube boxes side by side on an 8x12 page; multi-cube packing is
         # inferred, not verified against reference data (see _resolve_layout)
@@ -433,6 +506,7 @@ def test_multicube_without_slices_attr_falls_back_to_frames(
 # ROI interface
 # ============================================================
 
+
 def test_roi_selection_collapses_z_to_one_roi(mesc_path, raw):
     arr = MescArray(mesc_path, unit=1)
     src = raw["MSession_0/MUnit_1/Channel_0"][:]
@@ -463,6 +537,7 @@ def test_slider_labels_match_what_the_viewer_renders(mesc_path):
 # alignment + metadata
 # ============================================================
 
+
 def test_sync_frame_is_reported_but_not_applied_by_default(mesc_path):
     arr = MescArray(mesc_path, unit=3)
     assert arr.metadata["mesc_sync_frame"] == 2
@@ -483,7 +558,7 @@ def test_start_frame_beyond_the_recording_is_ignored(mesc_path):
 
 
 def test_dichroic_frame_rate_follows_the_timepoints_reported(mesc_path):
-    """fs must describe the T axis, not the scanner.
+    """Fs must describe the T axis, not the scanner.
 
     Switching hands each light path every other raw frame, so a channel's own
     timepoints arrive half as fast as TStepInMs ticks. Reporting the raw rate
@@ -519,8 +594,13 @@ def test_dichroic_sync_frame_is_converted_to_light_path_timepoints(tmp_path):
     with h5py.File(path, "w") as f:
         u = f.create_group("MSession_0").create_group("MUnit_0")
         u.attrs.update(
-            {"MethodType": 7, "VecChannelsSize": 2, "TStepInMs": 2.0,
-             "MeasurementDatePosix": 1_700_000_000, "Comment": "dichro+sync"}
+            {
+                "MethodType": 7,
+                "VecChannelsSize": 2,
+                "TStepInMs": 2.0,
+                "MeasurementDatePosix": 1_700_000_000,
+                "Comment": "dichro+sync",
+            }
         )
         u.attrs["CoordinateMapJSON"] = json.dumps(
             {"maps": [{"measurementROIs": _boxes([(0, 2, 0, 10)])}]}
@@ -571,6 +651,7 @@ def test_metadata_overrides_do_not_touch_the_read_only_file(mesc_path):
 # ============================================================
 # lazy-array contract
 # ============================================================
+
 
 def test_reads_only_the_requested_frames(mesc_path, monkeypatch):
     """A single-timepoint read must not pull the whole channel into memory."""
@@ -680,13 +761,17 @@ def test_imwrite_roi_zero_fans_out_one_directory_per_roi(mesc_path, tmp_path):
     out.mkdir()
     imwrite(arr, out, ext=".tiff", overwrite=True)
     assert sorted(p.name for p in out.iterdir()) == [
-        "roi01", "roi02", "roi03", "roi04",
+        "roi01",
+        "roi02",
+        "roi03",
+        "roi04",
     ]
 
 
 # ============================================================
 # launch picker
 # ============================================================
+
 
 @pytest.fixture(scope="module")
 def single_unit_mesc(tmp_path_factory):
@@ -695,15 +780,14 @@ def single_unit_mesc(tmp_path_factory):
     with h5py.File(path, "w") as f:
         u = f.create_group("MSession_0").create_group("MUnit_0")
         u.attrs.update({"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 50.0})
-        u.create_dataset(
-            "Channel_0", data=np.zeros((4, 8, 8), dtype=np.uint16)
-        )
+        u.create_dataset("Channel_0", data=np.zeros((4, 8, 8), dtype=np.uint16))
     return path
 
 
 class TestUnitPicker:
     """A `.mesc` always opens straight to its first unit, no prompt, no Qt;
-    the MESc tab (ImGui) is how the rest get picked."""
+    the MESc tab (ImGui) is how the rest get picked.
+    """
 
     def test_single_unit_file_opens_without_prompting(self, single_unit_mesc):
         from mbo_utilities.gui.run_gui import _resolve_mesc_unit
@@ -712,9 +796,7 @@ class TestUnitPicker:
         assert proceed is True
         assert kwargs["unit"] == "MSession_0/MUnit_0"
 
-    def test_multi_unit_file_opens_the_first_unit_without_prompting(
-        self, mesc_path
-    ):
+    def test_multi_unit_file_opens_the_first_unit_without_prompting(self, mesc_path):
         from mbo_utilities.arrays.mesc import list_mesc_units
         from mbo_utilities.gui.run_gui import _resolve_mesc_unit
 
@@ -743,6 +825,7 @@ class TestUnitPicker:
 # viewer fit + unit widget
 # ============================================================
 
+
 class TestViewerFit:
     """Every non-spatial axis is a slider — no ROI pinning, no subplot fan-out."""
 
@@ -764,10 +847,12 @@ class TestViewerFit:
     def test_roi_axis_is_labelled_roi_not_z(self, mesc_path):
         # a ribbon unit's Z axis holds ROIs; a real z-stack's holds depth
         assert MescArray(mesc_path, unit=2).slider_dim_labels == (
-            "Timepoint", "ROI",
+            "Timepoint",
+            "ROI",
         )
         assert MescArray(mesc_path, unit=0).slider_dim_labels == (
-            "Channel", "Z-plane",
+            "Channel",
+            "Z-plane",
         )
 
     def test_mesc_array_is_found_through_the_display_wrappers(self, mesc_path):
@@ -794,7 +879,10 @@ def test_rtmc_traces_are_read_in_um_and_empty_curves_dropped(mesc_path):
     arr.close()
     # the listing carries the same verdict without opening the unit
     units = {u["munit"]: u for u in list_mesc_units(mesc_path)}
-    assert units["MUnit_1"]["rtmc"] == sorted(arr.rtmc) and units["MUnit_1"]["rtmc_armed"] is True
+    assert (
+        units["MUnit_1"]["rtmc"] == sorted(arr.rtmc)
+        and units["MUnit_1"]["rtmc_armed"] is True
+    )
     assert units["MUnit_2"]["rtmc"] == [] and units["MUnit_2"]["rtmc_armed"] is False
 
 
@@ -850,15 +938,23 @@ def test_chessboard_pattern_index_is_zero_based_on_mesc_462(tmp_path):
     with h5py.File(path, "w") as f:
         u = f.create_group("MSession_0").create_group("MUnit_0")
         u.attrs.update(
-            {"MethodType": 8, "VecChannelsSize": 1, "TStepInMs": 50.0,
-             "MeasurementDatePosix": 1_700_000_100}
+            {
+                "MethodType": 8,
+                "VecChannelsSize": 1,
+                "TStepInMs": 50.0,
+                "MeasurementDatePosix": 1_700_000_100,
+            }
         )
         u.attrs["MultiROIProtocolJSON"] = json.dumps(
             {
                 "protocol": {"mainPatternIndex": 1, "scanners": [{"name": "AO1"}]},
                 "scanPatterns": {
                     "patterns": [
-                        {"centerPoints": [[0.0], [0.0], [0.0]], "pixelSizeX": 1.0, "rotation": [0, 0, 0, 1]},
+                        {
+                            "centerPoints": [[0.0], [0.0], [0.0]],
+                            "pixelSizeX": 1.0,
+                            "rotation": [0, 0, 0, 1],
+                        },
                         {
                             "centerPoints": np.arange(12).reshape(3, 4).tolist(),
                             "pixelSizeX": 0.8,
@@ -868,7 +964,9 @@ def test_chessboard_pattern_index_is_zero_based_on_mesc_462(tmp_path):
                 },
             }
         )
-        u.create_dataset("Channel_0", data=rng.integers(0, 4000, (6, 32, 96)).astype(np.uint16))
+        u.create_dataset(
+            "Channel_0", data=rng.integers(0, 4000, (6, 32, 96)).astype(np.uint16)
+        )
     arr = MescArray(path, unit="MSession_0/MUnit_0")
     assert arr.shape == (6, 1, 4, 32, 24)
     assert len(arr.metadata["mesc_centroids"]) == 4
@@ -881,17 +979,29 @@ def test_linked_units_and_leading_slash_keys(tmp_path):
     with h5py.File(path, "w") as f:
         scan = f.create_group("MSession_0").create_group("MUnit_0")
         scan.attrs.update(
-            {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 10.0, "MeasurementDatePosix": 1,
-             "ImageRoleDebugString": "measurement", "BackgroundImagePath": "/MSession_1/MUnit_0",
-             "MotionCorrectionImagePath": "/MSession_1/MUnit_1"}
+            {
+                "MethodType": 1,
+                "VecChannelsSize": 1,
+                "TStepInMs": 10.0,
+                "MeasurementDatePosix": 1,
+                "ImageRoleDebugString": "measurement",
+                "BackgroundImagePath": "/MSession_1/MUnit_0",
+                "MotionCorrectionImagePath": "/MSession_1/MUnit_1",
+            }
         )
         scan.create_dataset("Channel_0", data=np.zeros((3, 8, 8), np.uint16))
         refs = f.create_group("MSession_1")
         for i, role in enumerate(("background", "motionCorrection")):
             u = refs.create_group(f"MUnit_{i}")
             u.attrs.update(
-                {"MethodType": 1, "VecChannelsSize": 1, "TStepInMs": 10.0, "MeasurementDatePosix": 1,
-                 "ImageRoleDebugString": role, "MotionCorrectionImagePath": ""}
+                {
+                    "MethodType": 1,
+                    "VecChannelsSize": 1,
+                    "TStepInMs": 10.0,
+                    "MeasurementDatePosix": 1,
+                    "ImageRoleDebugString": role,
+                    "MotionCorrectionImagePath": "",
+                }
             )
             u.create_dataset("Channel_0", data=np.zeros((1, 8, 8), np.uint16))
     arr = MescArray(path, unit="MSession_0/MUnit_0")
@@ -909,10 +1019,16 @@ def test_linked_units_and_leading_slash_keys(tmp_path):
     assert units["MSession_1/MUnit_1"]["rtmc_unit"] is None
     assert units["MSession_1/MUnit_1"]["background_unit"] is None
     # a reference unit alone says nothing about whether RTMC moved
-    assert units["MSession_0/MUnit_0"]["rtmc"] == [] and units["MSession_0/MUnit_0"]["rtmc_armed"] is False
+    assert (
+        units["MSession_0/MUnit_0"]["rtmc"] == []
+        and units["MSession_0/MUnit_0"]["rtmc_armed"] is False
+    )
     # the snapshot and stream know which scan they belong to
     assert units["MSession_1/MUnit_0"]["scans"] == ["MSession_0/MUnit_0"]
     assert units["MSession_1/MUnit_1"]["rtmc_of"] == ["MSession_0/MUnit_0"]
-    assert units["MSession_0/MUnit_0"]["scans"] == [] and units["MSession_0/MUnit_0"]["rtmc_of"] == []
+    assert (
+        units["MSession_0/MUnit_0"]["scans"] == []
+        and units["MSession_0/MUnit_0"]["rtmc_of"] == []
+    )
     for a in (arr, ref, snap):
         a.close()

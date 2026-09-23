@@ -24,32 +24,41 @@ recording, each with its own JSON file, as the notebook's sections have.
 from __future__ import annotations
 
 import logging
-from functools import partial
 import queue
 import threading
 import time
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from imgui_bundle import imgui, imgui_ctx, implot, portable_file_dialogs as pfd
+from imgui_bundle import imgui, imgui_ctx, implot
+from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities.arrays.mesc import rtmc_motion, unit_rtmc
-from mbo_utilities.results import TRACES_PKL, ResultsArray, results_dir_of
 from mbo_utilities.gui import _theme as theme
 from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui._theme import card, em, section
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
 from mbo_utilities.gui.imgui.lines import (
-    decimate_minmax, dotted_vline, drag_hline, drag_vline, line, line_plot, subplots, vec4, vlines,
+    decimate_minmax,
+    dotted_vline,
+    drag_hline,
+    drag_vline,
+    line,
+    line_plot,
+    subplots,
+    vec4,
+    vlines,
 )
-from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.gui.imgui.motion import MotionPlot
+from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.preferences import get_last_dir, set_last_dir
+from mbo_utilities.results import TRACES_PKL, ResultsArray, results_dir_of
 from mbo_utilities.vnoiser import MODES, CurationSession, voltage_run_for_mesc
 
 __all__ = [
@@ -103,10 +112,16 @@ KEYBINDS = (
     ("\u2190 / \u2192", "previous / next candidate in view"),
     ("\u2191 / \u2193", "previous / next recording"),
     ("click", "focus a candidate on the trace or the PCA plot"),
-    ("Box accept / reject", "box mode: right-drag a box on the trace or the PCA, then drag its edges"),
+    (
+        "Box accept / reject",
+        "box mode: right-drag a box on the trace or the PCA, then drag its edges",
+    ),
     ("enter", "apply the box"),
     ("esc", "leave box mode"),
-    ("drag line", "move the threshold (red) / auto-pass (teal) line on the trace, or the PC1 (purple) line on the PCA"),
+    (
+        "drag line",
+        "move the threshold (red) / auto-pass (teal) line on the trace, or the PC1 (purple) line on the PCA",
+    ),
     ("scroll", "zoom (shift: x only, alt: y only); drag pans; double-click fits"),
     ("k", "this list"),
 )
@@ -127,7 +142,8 @@ class UnitTraces:
     asked for (on the curation worker, never at open): the pipeline's own
     PF traces or an ``F.npy`` when the unit has them, else the
     ``.curation/cache`` copy of an earlier reduction keyed by the file's
-    size and mtime, else the reduction itself, cached there for next time."""
+    size and mtime, else the reduction itself, cached there for next time.
+    """
 
     def __init__(self, mesc_path: Path, unit: dict, channel: int, traces_dir=None):
         self.mesc_path = Path(mesc_path)
@@ -151,15 +167,23 @@ class UnitTraces:
             return self.traces
         stat = self.mesc_path.stat()
         cache_dir = self.mesc_path.parent / ".curation" / "cache"
-        cache = cache_dir / f"{self.mesc_path.stem}_{self.unit['munit']}_ch{self.channel}_traces.npz"
+        cache = (
+            cache_dir
+            / f"{self.mesc_path.stem}_{self.unit['munit']}_ch{self.channel}_traces.npz"
+        )
         if cache.exists():
             with np.load(cache) as saved:
-                if int(saved["size"]) == stat.st_size and int(saved["mtime_ns"]) == stat.st_mtime_ns:
+                if (
+                    int(saved["size"]) == stat.st_size
+                    and int(saved["mtime_ns"]) == stat.st_mtime_ns
+                ):
                     self.traces = np.asarray(saved["traces"])
                     return self.traces
         self.traces = np.asarray(linescan_roi_means(arr, channel=self.channel))
         cache_dir.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(cache, traces=self.traces, size=stat.st_size, mtime_ns=stat.st_mtime_ns)
+        np.savez_compressed(
+            cache, traces=self.traces, size=stat.st_size, mtime_ns=stat.st_mtime_ns
+        )
         return self.traces
 
     def roi(self, i: int) -> np.ndarray:
@@ -171,7 +195,8 @@ def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[di
     ``.mesc``: ``[{"key", "munit", "fs", "n_rois", "traces"}, ...]`` where
     ``traces`` is a :class:`UnitTraces`, read when first asked for. Nothing
     is read here beyond the units' metadata, so opening a file with many
-    long scans costs nothing until a ROI is clicked."""
+    long scans costs nothing until a ROI is clicked.
+    """
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
 
     mesc_path = Path(mesc_path)
@@ -179,13 +204,15 @@ def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[di
     for unit in list_mesc_units(mesc_path):
         if unit.get("kind") not in ROI_LAYOUTS:
             continue
-        out.append({
-            "key": unit["key"],
-            "munit": unit["munit"],
-            "fs": float(unit["fs"]),
-            "n_rois": int(unit["nrois"]),
-            "traces": UnitTraces(mesc_path, unit, channel, traces_dir),
-        })
+        out.append(
+            {
+                "key": unit["key"],
+                "munit": unit["munit"],
+                "fs": float(unit["fs"]),
+                "n_rois": int(unit["nrois"]),
+                "traces": UnitTraces(mesc_path, unit, channel, traces_dir),
+            }
+        )
     return out
 
 
@@ -193,7 +220,8 @@ def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[di
 class Recording:
     """One curatable recording: one ROI trace of one unit of a run
     (``source`` is the run, ``unit`` and ``roi`` say which) or a raw trace
-    handed over in memory (``source`` is the file it came from)."""
+    handed over in memory (``source`` is the file it came from).
+    """
 
     rid: str
     label: str
@@ -219,7 +247,9 @@ class EventCurationWidget:
         Path to scan at once; None reopens the last one, "" none.
     """
 
-    def __init__(self, parent: Any, strip: TopStrip | None = None, data_path: str | None = None):
+    def __init__(
+        self, parent: Any, strip: TopStrip | None = None, data_path: str | None = None
+    ):
         self.parent = parent
         self.logger = getattr(parent, "logger", None) or logging.getLogger(__name__)
         self.figure = parent.image_widget.figure
@@ -243,7 +273,9 @@ class EventCurationWidget:
         # is of; whether the MC checkbox shows it over the trace
         self.motion: dict[tuple[str, str], MotionPlot] = {}
         self._scan_keys: dict[str, tuple[str, str] | None] = {}
-        self._motion_ratios = implot.SubplotsRowColRatios(row_ratios=[MOTION_SHARE, 1.0 - MOTION_SHARE])
+        self._motion_ratios = implot.SubplotsRowColRatios(
+            row_ratios=[MOTION_SHARE, 1.0 - MOTION_SHARE]
+        )
         self.show_motion = True
         self._motion_shown = False
         # called with the focused candidate's time (s) whenever it changes
@@ -346,13 +378,19 @@ class EventCurationWidget:
     def recording(self, rid: str) -> Recording | None:
         return next((r for r in self.catalog if r.rid == rid), None)
 
-    def loaded(self, mode: str | None = None) -> list[tuple[Recording, CurationSession]]:
+    def loaded(
+        self, mode: str | None = None
+    ) -> list[tuple[Recording, CurationSession]]:
         """Every loaded recording of ``mode`` (the current one), catalog order."""
         mode = mode or self.mode
         out = []
         for rec in self.shown:
             session = self.sessions.get((mode, rec.rid))
-            if session is not None and session.loaded and (mode, rec.rid) not in self._busy:
+            if (
+                session is not None
+                and session.loaded
+                and (mode, rec.rid) not in self._busy
+            ):
                 out.append((rec, session))
         return out
 
@@ -360,7 +398,8 @@ class EventCurationWidget:
         """Catalog every ROI trace of a voltage run and start loading them.
         ``path`` is the run (a results file or a ``PF`` folder of pickles),
         its traces file, the folder holding it, or a line scan with one
-        beside it."""
+        beside it.
+        """
         self.sessions.clear()
         self._trace_sources.clear()
         self.catalog = []
@@ -450,7 +489,8 @@ class EventCurationWidget:
 
     def load_all(self) -> None:
         """Load every shown recording that can load without a click: the
-        folder's traces and the raw traces handed over."""
+        folder's traces and the raw traces handed over.
+        """
         for rec in self.shown:
             if not rec.pre_denoised and rec.rid not in self._trace_sources:
                 continue
@@ -458,14 +498,19 @@ class EventCurationWidget:
             if key not in self.sessions and key not in self._busy:
                 self._enqueue(rec, self.mode)
         if not self.current:
-            first = next((r for r in self.catalog if (self.mode, r.rid) in self._busy), None)
+            first = next(
+                (r for r in self.catalog if (self.mode, r.rid) in self._busy), None
+            )
             if first is not None:
                 self.current = first.rid
 
-    def add_trace(self, trace, fs_hz, *, recording_id, label, source_path, curation_dir=None) -> Recording:
+    def add_trace(
+        self, trace, fs_hz, *, recording_id, label, source_path, curation_dir=None
+    ) -> Recording:
         """List a trace held in memory (a line-scan ROI) as a raw recording;
         loading it runs vnoiser's denoiser on the worker unless a cache
-        exists. See :meth:`CurationSession.load_trace`."""
+        exists. See :meth:`CurationSession.load_trace`.
+        """
         source_path = str(Path(source_path))
         rid = str(recording_id)
         rec = self.recording(rid)
@@ -484,11 +529,17 @@ class EventCurationWidget:
             self.sessions.pop(key)
         return rec
 
-    def load_trace(self, trace, fs_hz, *, recording_id, label, source_path, curation_dir=None) -> None:
+    def load_trace(
+        self, trace, fs_hz, *, recording_id, label, source_path, curation_dir=None
+    ) -> None:
         """:meth:`add_trace`, then load it."""
         rec = self.add_trace(
-            trace, fs_hz, recording_id=recording_id, label=label,
-            source_path=source_path, curation_dir=curation_dir,
+            trace,
+            fs_hz,
+            recording_id=recording_id,
+            label=label,
+            source_path=source_path,
+            curation_dir=curation_dir,
         )
         self.load(rec.rid)
 
@@ -497,7 +548,8 @@ class EventCurationWidget:
         file a raw trace came from (its id is ``<stem>/<unit>/roi=<n>``), or
         the PF folder's source line scan (named in its ``pipeline.json``, or
         laid out beside it) and the scan's unit; None when no line scan is
-        reachable."""
+        reachable.
+        """
         source = self._trace_sources.get(rec.rid)
         if source is not None:
             path = Path(source["source_path"])
@@ -509,20 +561,25 @@ class EventCurationWidget:
         if not rec.pre_denoised or run is None or run.source_recording is None:
             return None
         unit = run.results.units.get(rec.unit)
-        key = str((unit.attrs.get("source_unit") if unit is not None else "") or f"MUnit_{rec.unit}")
+        key = str(
+            (unit.attrs.get("source_unit") if unit is not None else "")
+            or f"MUnit_{rec.unit}"
+        )
         return str(run.source_recording), key
 
     @property
     def motion_plot(self) -> MotionPlot | None:
         """The focused recording's motion correction, once its scan has been
-        read and went through one; None otherwise."""
+        read and went through one; None otherwise.
+        """
         plot = self.motion.get(self._scan_keys.get(self.current))
         return plot if plot else None
 
     def scan_raw_mesc(self, mesc_path, channel: int = 0) -> int:
         """Every ROI of every AOD ROI unit of a ``.mesc`` (line scans,
         chessboard or ribbon patches) as a raw recording the denoiser runs
-        on when clicked. Returns how many."""
+        on when clicked. Returns how many.
+        """
         mesc_path = Path(mesc_path)
         self.sessions.clear()
         self._trace_sources.clear()
@@ -534,7 +591,8 @@ class EventCurationWidget:
             for i in range(unit["n_rois"]):
                 # read on the worker when the recording is clicked
                 self.add_trace(
-                    partial(unit["traces"].roi, i), unit["fs"],
+                    partial(unit["traces"].roi, i),
+                    unit["fs"],
                     recording_id=f"{mesc_path.stem}/{unit['munit']}/roi={i}",
                     label=f"{unit['munit']} ROI {i}",
                     source_path=mesc_path,
@@ -545,7 +603,8 @@ class EventCurationWidget:
         self.status = (
             f"{n} raw ROI traces in {mesc_path.name}; no PF folder beside it, so click a "
             "recording to run vnoiser's denoiser on it (minutes the first time, cached after)"
-            if n else f"no AOD ROI units in {mesc_path.name}"
+            if n
+            else f"no AOD ROI units in {mesc_path.name}"
         )
         return n
 
@@ -575,7 +634,9 @@ class EventCurationWidget:
 
         self._jobs.put((key, rec.label, work))
         if self._worker is None or not self._worker.is_alive():
-            self._worker = threading.Thread(target=self._run_jobs, name="vnoiser-load", daemon=True)
+            self._worker = threading.Thread(
+                target=self._run_jobs, name="vnoiser-load", daemon=True
+            )
             self._worker.start()
 
     def _run_jobs(self) -> None:
@@ -663,7 +724,9 @@ class EventCurationWidget:
         self._poll_folder_dialog()
         self._draw_prompt()
         self._handle_keys()
-        self.show_keybinds = draw_keybinds_popup(KEYBINDS, self.show_keybinds, "Curation keybinds")
+        self.show_keybinds = draw_keybinds_popup(
+            KEYBINDS, self.show_keybinds, "Curation keybinds"
+        )
         self._report_focus()
         self._hovered = False
 
@@ -677,7 +740,9 @@ class EventCurationWidget:
                 try:
                     self.on_recording(session.recording_id)
                 except Exception:
-                    self.logger.debug("curation recording callback failed", exc_info=True)
+                    self.logger.debug(
+                        "curation recording callback failed", exc_info=True
+                    )
         if not session.n:
             return
         key = (session.mode, session.recording_id, session.current)
@@ -702,7 +767,11 @@ class EventCurationWidget:
             else:
                 self.prompt.status = "no such path"
         if browse and self._folder_dialog is None:
-            start = self.prompt.path if Path(self.prompt.path or "").exists() else str(Path.home())
+            start = (
+                self.prompt.path
+                if Path(self.prompt.path or "").exists()
+                else str(Path.home())
+            )
             self._folder_dialog = pfd.select_folder("Curation data", start)
 
     def _poll_folder_dialog(self) -> None:
@@ -753,7 +822,8 @@ class EventCurationWidget:
     def loadable(self) -> list[Recording]:
         """The recordings a flip can land on: processed ones and traces handed over."""
         return [
-            r for r in self.shown
+            r
+            for r in self.shown
             if not r.error and (r.pre_denoised or r.rid in self._trace_sources)
         ]
 
@@ -778,7 +848,8 @@ class EventCurationWidget:
         The trace row (A with the threshold / auto-pass, Decision and
         Navigation cards) sits over the candidate row (B to D); the rows
         share the height the strip gives in the ratio they asked for, the
-        trace row taking MOTION_HEIGHT more while the motion plot shows."""
+        trace row taking MOTION_HEIGHT more while the motion plot shows.
+        """
         self._mark_hovered()
         self._draw_flip_row()
         session = self._ready()
@@ -802,14 +873,17 @@ class EventCurationWidget:
         with imgui_ctx.begin_child("##curation_row_b", imgui.ImVec2(0, 0)):
             self._draw_candidate_row(session)
 
-    def _draw_timeline_row(self, session: CurationSession, plot: MotionPlot | None) -> None:
+    def _draw_timeline_row(
+        self, session: CurationSession, plot: MotionPlot | None
+    ) -> None:
         """A: the trace with its candidates, as wide as the row allows, and
         the slider card (A1 to A4) beside it. A scan that went through motion
         correction gets its motion plot over the trace, in linked subplots so
         the two share one time axis and line up; ``MC`` on the title line
         shows it.
         Decision and Navigation live in the controls column (``draw_tab``),
-        not in this row."""
+        not in this row.
+        """
         kind = _mode_title(session.mode, self.slow_cutoff_hz)
         imgui.text_disabled(f"A. {kind}: {session.n} ({len(session.visible)} in view)")
         imgui.same_line(0, 12)
@@ -818,7 +892,9 @@ class EventCurationWidget:
         set_tooltip("k", show_mark=False)
         if plot is not None:
             imgui.same_line(0, em(1.2))
-            _changed, self.show_motion = imgui.checkbox("MC##curation_motion", self.show_motion)
+            _changed, self.show_motion = imgui.checkbox(
+                "MC##curation_motion", self.show_motion
+            )
             set_tooltip(
                 f"{plot.y_label}: the motion correction applied while the scan ran, "
                 "over the trace on the same time axis",
@@ -826,7 +902,11 @@ class EventCurationWidget:
             )
         avail = imgui.get_content_region_avail()
         n_cols = 4 if session.seeded else 1
-        card_w = em(SLIDER_COL_EM) * n_cols + em(SLIDER_GAP_EM) * (n_cols - 1) + em(SLIDER_CARD_PAD_EM)
+        card_w = (
+            em(SLIDER_COL_EM) * n_cols
+            + em(SLIDER_GAP_EM) * (n_cols - 1)
+            + em(SLIDER_CARD_PAD_EM)
+        )
         plot_w = max(avail.x - card_w - em(0.5), em(10))
         with imgui_ctx.begin_child("##curation_trace", imgui.ImVec2(plot_w, 0)):
             if plot is None or not self.show_motion:
@@ -834,10 +914,20 @@ class EventCurationWidget:
             else:
                 height = max(imgui.get_content_region_avail().y - 2, 60.0)
                 link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
-                with subplots("##curation_a", 2, 1, height, flags=link, ratios=self._motion_ratios) as ok:
+                with subplots(
+                    "##curation_a", 2, 1, height, flags=link, ratios=self._motion_ratios
+                ) as ok:
                     if ok:
-                        focus = float(session.times_s[session.current]) if session.n else None
-                        plot.draw("##curation_motion", cursor=focus, duration_s=float(session.t[-1]))
+                        focus = (
+                            float(session.times_s[session.current])
+                            if session.n
+                            else None
+                        )
+                        plot.draw(
+                            "##curation_motion",
+                            cursor=focus,
+                            duration_s=float(session.t[-1]),
+                        )
                         self._draw_timeline(session)
         imgui.same_line(0, em(0.5))
         self._draw_slider_card(session, card_w, avail.y)
@@ -866,10 +956,13 @@ class EventCurationWidget:
             imgui.same_line(0, em(0.6))
             imgui.text_disabled(self.loading_line() or "loading...")
 
-    def _cached_trace(self, name: str, t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def _cached_trace(
+        self, name: str, t: np.ndarray, y: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Min/max-decimated ``(t, y)`` for the timeline trace, cached per
         recording so zooming does not replot the full-resolution array every
-        frame (mirrors the notebook's ``downsample_xy`` before plotly)."""
+        frame (mirrors the notebook's ``downsample_xy`` before plotly).
+        """
         cached = self._timeline_trace_cache.get(name)
         if cached is None:
             idx, values = decimate_minmax(y, 4000)
@@ -887,7 +980,9 @@ class EventCurationWidget:
         self._fit_timeline = False
         height = max(imgui.get_content_region_avail().y - 2, 60.0)
         flags = BOX_PLOT_FLAGS if self.box_mode is not None else 0
-        with line_plot("##curation_timeline", "time (s)", "z", height=height, fit=fit, flags=flags) as ok:
+        with line_plot(
+            "##curation_timeline", "time (s)", "z", height=height, fit=fit, flags=flags
+        ) as ok:
             if not ok:
                 return
             t = session.t
@@ -895,14 +990,23 @@ class EventCurationWidget:
             line("denoised", denoised_plot, x=t_plot, color=TRACE_COLOR, weight=1.0)
             marker_source = session.denoised
             if session.mode == "slow":
-                t_lp, lp_plot = self._cached_trace("analysis", t, session.analysis_trace)
+                t_lp, lp_plot = self._cached_trace(
+                    "analysis", t, session.analysis_trace
+                )
                 line(
                     f"<{self.slow_cutoff_hz:g} Hz low-pass",
-                    lp_plot, x=t_lp, color=LOWPASS_COLOR, weight=1.6,
+                    lp_plot,
+                    x=t_lp,
+                    color=LOWPASS_COLOR,
+                    weight=1.6,
                 )
                 marker_source = session.analysis_trace
 
-            shown = self._threshold_drag if self._threshold_drag is not None else session.threshold
+            shown = (
+                self._threshold_drag
+                if self._threshold_drag is not None
+                else session.threshold
+            )
             value, held = drag_hline(1, shown, THRESHOLD_COLOR)
             if held:
                 self._threshold_drag = value
@@ -911,7 +1015,11 @@ class EventCurationWidget:
                 self._threshold_drag = None
 
             if session.seeded and session.auto_pass is not None:
-                shown = self._auto_pass_drag if self._auto_pass_drag is not None else session.auto_pass
+                shown = (
+                    self._auto_pass_drag
+                    if self._auto_pass_drag is not None
+                    else session.auto_pass
+                )
                 value, held = drag_hline(2, shown, AUTO_PASS_COLOR)
                 if held:
                     self._auto_pass_drag = value
@@ -926,7 +1034,9 @@ class EventCurationWidget:
             ys = np.interp(xs, t, marker_source)
             focused = np.flatnonzero(visible == session.current)
             picked = self.timeline_points.items(
-                xs, ys, session.colors(visible),
+                xs,
+                ys,
+                session.colors(visible),
                 focused=int(focused[0]) if focused.size else None,
                 label="candidates",
                 tooltip=lambda i: f"candidate {visible[i] + 1}: {xs[i]:.3f} s, {session.label(visible[i])}",
@@ -934,7 +1044,13 @@ class EventCurationWidget:
             if picked is not None:
                 session.select(int(visible[picked]))
             self._box_select("timeline", xs, ys, visible, self.timeline_points)
-            vlines("##focus", [session.times_s[session.current]], FOCUS_COLOR, 1.0, legend=False)
+            vlines(
+                "##focus",
+                [session.times_s[session.current]],
+                FOCUS_COLOR,
+                1.0,
+                legend=False,
+            )
 
     # ------------------------------------------------------------------
     # box mode: Box accept / Box reject draw a rectangle on the trace or
@@ -943,7 +1059,8 @@ class EventCurationWidget:
 
     def set_box_mode(self, mode: str | None) -> None:
         """Enter box mode for ``mode`` ("yes" / "no"); the same mode again
-        leaves it. Any box drawn so far is dropped."""
+        leaves it. Any box drawn so far is dropped.
+        """
         self.box_mode = None if mode == self.box_mode else mode
         self.clear_box()
 
@@ -959,19 +1076,28 @@ class EventCurationWidget:
         """Inside an open plot, in box mode: a right-drag starts the box on
         this plot; once the button is up the box stays as an implot drag
         rectangle whose edges and corners resize it. The candidates inside
-        are ringed and remembered for :meth:`apply_box`."""
+        are ringed and remembered for :meth:`apply_box`.
+        """
         if self.box_mode is None:
             return
         color = BOX_COLORS[self.box_mode]
-        rect = self._box_rect if self._box_rect is not None and self._box_rect["plot"] == name else None
+        rect = (
+            self._box_rect
+            if self._box_rect is not None and self._box_rect["plot"] == name
+            else None
+        )
         mouse = implot.get_plot_mouse_pos()
         if rect is None:
             if not (implot.is_plot_hovered() and imgui.is_mouse_clicked(1)):
                 return
             # a new box here drops one drawn on the other plot
             rect = self._box_rect = {
-                "plot": name, "x0": float(mouse.x), "y0": float(mouse.y),
-                "x1": float(mouse.x), "y1": float(mouse.y), "drawing": True,
+                "plot": name,
+                "x0": float(mouse.x),
+                "y0": float(mouse.y),
+                "x1": float(mouse.x),
+                "y1": float(mouse.y),
+                "drawing": True,
             }
             self._box = None
         if rect["drawing"]:
@@ -980,12 +1106,22 @@ class EventCurationWidget:
             else:
                 rect["drawing"] = False
             implot.drag_rect(
-                BOX_TOOL_ID, rect["x0"], rect["y0"], rect["x1"], rect["y1"], vec4(color),
+                BOX_TOOL_ID,
+                rect["x0"],
+                rect["y0"],
+                rect["x1"],
+                rect["y1"],
+                vec4(color),
                 implot.DragToolFlags_.no_inputs,
             )
         else:
             changed, x0, y0, x1, y1, _clicked, _hovered, _held = implot.drag_rect(
-                BOX_TOOL_ID, rect["x0"], rect["y0"], rect["x1"], rect["y1"], vec4(color),
+                BOX_TOOL_ID,
+                rect["x0"],
+                rect["y0"],
+                rect["x1"],
+                rect["y1"],
+                vec4(color),
                 implot.DragToolFlags_.no_fit,
             )
             if changed:
@@ -1003,7 +1139,8 @@ class EventCurationWidget:
 
     def apply_box(self, label: str | None = None) -> int:
         """Label every boxed candidate (the mode's label unless given) and
-        drop the box; the mode stays on for the next one. Returns how many."""
+        drop the box; the mode stays on for the next one. Returns how many.
+        """
         label = label or self.box_mode
         session = self._ready()
         idx = self.boxed()
@@ -1018,7 +1155,8 @@ class EventCurationWidget:
         (red, also the red line on the trace); in a seeded mode also the
         auto-pass peak (teal, the teal line), the PC1 line of the PCA
         (purple, drawn on panel D; the arrow picks the passing side) and the
-        seed-template cosine at or above which a candidate passes (amber)."""
+        seed-template cosine at or above which a candidate passes (amber).
+        """
         title = "A1 - A4" if session.seeded else "A1"
         with card("##curation_sliders", title, height, width):
             set_tooltip(
@@ -1034,17 +1172,31 @@ class EventCurationWidget:
             )
             lo, hi, _step = session.threshold_range
             self._slider_column(
-                "a1", "thr", session.threshold, lo, hi, session.set_threshold, THRESHOLD_COLOR,
-                f"{session.n} found", "candidate threshold: local maxima of the trace above it",
+                "a1",
+                "thr",
+                session.threshold,
+                lo,
+                hi,
+                session.set_threshold,
+                THRESHOLD_COLOR,
+                f"{session.n} found",
+                "candidate threshold: local maxima of the trace above it",
             )
             if not session.seeded:
                 return
             alo, ahi, _step = session.auto_pass_range
             imgui.same_line(0, em(SLIDER_GAP_EM))
             self._slider_column(
-                "a2", "peak", session.auto_pass if session.auto_pass is not None else ahi,
-                alo, ahi, session.set_auto_pass, AUTO_PASS_COLOR,
-                "off" if session.auto_pass is None else f"{session.auto_pass_count()}/{session.n}",
+                "a2",
+                "peak",
+                session.auto_pass if session.auto_pass is not None else ahi,
+                alo,
+                ahi,
+                session.set_auto_pass,
+                AUTO_PASS_COLOR,
+                "off"
+                if session.auto_pass is None
+                else f"{session.auto_pass_count()}/{session.n}",
                 "auto-pass peak: candidates whose marker sits at or above the teal "
                 "line on the trace pass; at the bottom all pass",
             )
@@ -1052,29 +1204,59 @@ class EventCurationWidget:
             side = session.auto_pass_pc1_side
             imgui.same_line(0, em(SLIDER_GAP_EM))
             self._slider_column(
-                "a3", "PC1", session.auto_pass_pc1_shown, plo, phi, session.set_auto_pass_pc1, PC1_COLOR,
-                "off" if session.auto_pass_pc1 is None else f"{session.auto_pass_pc1_count()}/{session.n}",
+                "a3",
+                "PC1",
+                session.auto_pass_pc1_shown,
+                plo,
+                phi,
+                session.set_auto_pass_pc1,
+                PC1_COLOR,
+                "off"
+                if session.auto_pass_pc1 is None
+                else f"{session.auto_pass_pc1_count()}/{session.n}",
                 f"PC1 auto-pass: candidates at or {'above' if side == 'right' else 'below'} the "
                 "purple line on the PCA pass; the arrow flips the side",
-                side=side, flip=lambda: session.set_auto_pass_pc1_side("left" if side == "right" else "right"),
+                side=side,
+                flip=lambda: session.set_auto_pass_pc1_side(
+                    "left" if side == "right" else "right"
+                ),
             )
             clo, chi, _step = session.auto_template_threshold_range
             imgui.same_line(0, em(SLIDER_GAP_EM))
             self._slider_column(
-                "a4", "cos", session.auto_template_threshold, clo, chi,
-                session.set_auto_template_threshold, COSINE_COLOR,
+                "a4",
+                "cos",
+                session.auto_template_threshold,
+                clo,
+                chi,
+                session.set_auto_template_threshold,
+                COSINE_COLOR,
                 f"{session.auto_template_count()}/{session.n}",
                 "cosine auto-pass: candidates whose seed-template cosine is at or above it pass, "
                 "below it they are rejected",
             )
 
-    def _slider_column(self, key, name, value, lo, hi, apply, color, count, tooltip, *,
-                       side=None, flip=None) -> None:
+    def _slider_column(
+        self,
+        key,
+        name,
+        value,
+        lo,
+        hi,
+        apply,
+        color,
+        count,
+        tooltip,
+        *,
+        side=None,
+        flip=None,
+    ) -> None:
         """One column of the slider card: the range's top, a vertical slider
         that applies on release (a drag does not rebuild the candidates every
         frame), the range's bottom, the rule's short name (``side`` adds the
         PC1 arrow before it; ``flip`` is called when it is clicked) and a
-        count. Everything is centred on a SLIDER_COL_EM column."""
+        count. Everything is centred on a SLIDER_COL_EM column.
+        """
         width = em(SLIDER_COL_EM)
         pending = self._slider_pending.get(key)
         shown = pending if pending is not None else float(value)
@@ -1084,7 +1266,9 @@ class EventCurationWidget:
         x0 = imgui.get_cursor_pos_x()
 
         def centred(text: str) -> None:
-            imgui.set_cursor_pos_x(x0 + max((width - imgui.calc_text_size(text).x) / 2, 0.0))
+            imgui.set_cursor_pos_x(
+                x0 + max((width - imgui.calc_text_size(text).x) / 2, 0.0)
+            )
             imgui.text_disabled(text)
 
         centred(f"{hi:.2f}")
@@ -1093,7 +1277,12 @@ class EventCurationWidget:
         imgui.push_style_color(imgui.Col_.slider_grab, vec4(color, 0.85))
         imgui.push_style_color(imgui.Col_.slider_grab_active, vec4(color, 1.0))
         changed, shown = imgui.v_slider_float(
-            f"##{key}", imgui.ImVec2(slider_w, track_h), shown, float(lo), float(hi), "%.2f",
+            f"##{key}",
+            imgui.ImVec2(slider_w, track_h),
+            shown,
+            float(lo),
+            float(hi),
+            "%.2f",
         )
         imgui.pop_style_color(2)
         if changed:
@@ -1107,8 +1296,12 @@ class EventCurationWidget:
         else:
             arrow_w = imgui.get_frame_height()
             name_w = imgui.calc_text_size(name).x
-            imgui.set_cursor_pos_x(x0 + max((width - arrow_w - em(0.3) - name_w) / 2, 0.0))
-            if imgui.arrow_button(f"##{key}_side", imgui.Dir.right if side == "right" else imgui.Dir.left):
+            imgui.set_cursor_pos_x(
+                x0 + max((width - arrow_w - em(0.3) - name_w) / 2, 0.0)
+            )
+            if imgui.arrow_button(
+                f"##{key}_side", imgui.Dir.right if side == "right" else imgui.Dir.left
+            ):
                 flip()
             imgui.same_line(0, em(0.3))
             imgui.text_disabled(name)
@@ -1155,9 +1348,16 @@ class EventCurationWidget:
 
     def _draw_template(self, session, height: float) -> None:
         source = session.template_source
-        fit = self._fit_for("template", (session.mode, session.recording_id, len(source)))
+        fit = self._fit_for(
+            "template", (session.mode, session.recording_id, len(source))
+        )
         with line_plot(
-            "##curation_b", "aligned time (ms)", "z", height=height, fit=fit, legend=False,
+            "##curation_b",
+            "aligned time (ms)",
+            "z",
+            height=height,
+            fit=fit,
+            legend=False,
         ) as ok:
             if not ok:
                 return
@@ -1166,7 +1366,13 @@ class EventCurationWidget:
                 return
             t_ms = session.template_time_ms
             for i in source:
-                line(f"##snippet{i}", session.short_snippet(i), x=t_ms, color=SNIPPET_COLOR, alpha=0.18)
+                line(
+                    f"##snippet{i}",
+                    session.short_snippet(i),
+                    x=t_ms,
+                    color=SNIPPET_COLOR,
+                    alpha=0.18,
+                )
             line("template", session.template, x=t_ms, color=TEMPLATE_COLOR, weight=3.0)
 
     def _draw_candidate(self, session, height: float) -> None:
@@ -1174,20 +1380,32 @@ class EventCurationWidget:
         half = session.candidate_window_ms
         t_ms = session.long_time_ms
         y = session.long_snippet(i)
-        if self._fit_for("candidate", (session.mode, session.recording_id, i, session.threshold)):
+        if self._fit_for(
+            "candidate", (session.mode, session.recording_id, i, session.threshold)
+        ):
             inside = (t_ms >= -half) & (t_ms <= half) & np.isfinite(y)
             ys = y[inside] if inside.any() else y[np.isfinite(y)]
             if session.template is not None:
                 ys = np.concatenate([ys, session.template])
             lo, hi = (float(np.min(ys)), float(np.max(ys))) if ys.size else (-1.0, 1.0)
             pad = 0.05 * (hi - lo or 1.0)
-            implot.set_next_axes_limits(-half, half, lo - pad, hi + pad, imgui.Cond_.always)
-        with line_plot("##curation_c", "time from event (ms)", "z", height=height, legend=True) as ok:
+            implot.set_next_axes_limits(
+                -half, half, lo - pad, hi + pad, imgui.Cond_.always
+            )
+        with line_plot(
+            "##curation_c", "time from event (ms)", "z", height=height, legend=True
+        ) as ok:
             if not ok:
                 return
             line("candidate", y, x=t_ms, color=SNIPPET_COLOR, weight=1.2)
             if session.template is not None:
-                line("template", session.template, x=session.template_time_ms, color=TEMPLATE_COLOR, weight=2.5)
+                line(
+                    "template",
+                    session.template,
+                    x=session.template_time_ms,
+                    color=TEMPLATE_COLOR,
+                    weight=2.5,
+                )
             dotted_vline(0.0, ZERO_COLOR)
 
     def _draw_pca(self, session, height: float) -> None:
@@ -1198,7 +1416,9 @@ class EventCurationWidget:
         if self._fit_for("pca", (session.mode, session.recording_id, session.n)):
             self.pca.refit()
         picked = self.pca.draw(
-            scores[visible, 0], scores[visible, 1], session.colors(visible),
+            scores[visible, 0],
+            scores[visible, 1],
+            session.colors(visible),
             x_label=f"PC1 ({explained[0]:.1f}%)",
             y_label=f"PC2 ({explained[1]:.1f}%)",
             height=height,
@@ -1214,15 +1434,22 @@ class EventCurationWidget:
             session.select(int(visible[picked]))
 
     def _pca_inside(self, session, scores, visible) -> None:
-        self._box_select("pca", scores[visible, 0], scores[visible, 1], visible, self.pca)
+        self._box_select(
+            "pca", scores[visible, 0], scores[visible, 1], visible, self.pca
+        )
         self._draw_pc1_line(session)
 
     def _draw_pc1_line(self, session) -> None:
         """The A3 line on the PCA: drag it to set the PC1 auto-pass, applied
-        on release like the trace's lines; the label names the passing side."""
+        on release like the trace's lines; the label names the passing side.
+        """
         if not session.seeded:
             return
-        shown = self._pc1_drag if self._pc1_drag is not None else session.auto_pass_pc1_shown
+        shown = (
+            self._pc1_drag
+            if self._pc1_drag is not None
+            else session.auto_pass_pc1_shown
+        )
         value, held = drag_vline(PC1_LINE_ID, shown, PC1_COLOR)
         if held:
             self._pc1_drag = value
@@ -1234,7 +1461,9 @@ class EventCurationWidget:
         half_w = 0.5 * imgui.calc_text_size(text).x
         top = implot.get_plot_limits().y.max
         implot.push_style_color(implot.Col_.inlay_text, vec4(PC1_COLOR))
-        implot.plot_text(text, value, top, imgui.ImVec2(-(half_w + 6) if left else half_w + 6, 8))
+        implot.plot_text(
+            text, value, top, imgui.ImVec2(-(half_w + 6) if left else half_w + 6, 8)
+        )
         implot.pop_style_color()
 
     # ------------------------------------------------------------------
@@ -1244,13 +1473,15 @@ class EventCurationWidget:
     def draw_tab(self) -> None:
         """The controls column, two tabs: Decision (with the event, navigation,
         view filter and files under it) and Recordings (mode, source, the
-        table): the column beside the dashboard in the curation window."""
+        table): the column beside the dashboard in the curation window.
+        """
         self._mark_hovered()
         self._draw_tabs(source=True)
 
     def draw_embedded(self) -> None:
         """The tabs without the source picker, for a host that hands traces
-        over itself (the line-scan viewer's ROI panel)."""
+        over itself (the line-scan viewer's ROI panel).
+        """
         self._mark_hovered()
         self._draw_tabs(source=False)
 
@@ -1297,10 +1528,15 @@ class EventCurationWidget:
         if self.mode == "slow":
             imgui.same_line(0, em(0.6))
             imgui.set_next_item_width(em(4.5))
-            _changed, value = imgui.input_float("Hz", self.slow_cutoff_hz, 0.0, 0.0, "%.0f")
+            _changed, value = imgui.input_float(
+                "Hz", self.slow_cutoff_hz, 0.0, 0.0, "%.0f"
+            )
             if imgui.is_item_deactivated_after_edit():
                 self.set_slow_cutoff(value)
-            set_tooltip("Low-pass cutoff of the slow analysis trace; changing it reloads.", show_mark=False)
+            set_tooltip(
+                "Low-pass cutoff of the slow analysis trace; changing it reloads.",
+                show_mark=False,
+            )
 
     def _draw_source(self) -> None:
         section("Source")
@@ -1325,7 +1561,9 @@ class EventCurationWidget:
         if self._busy:
             imgui.text_wrapped(self.loading_line())
         if self._trace_sources and not self._busy:
-            imgui.text_disabled("raw lines: the first load runs the wavelet denoiser, about 1 min per 100 s of recording; cached after")
+            imgui.text_disabled(
+                "raw lines: the first load runs the wavelet denoiser, about 1 min per 100 s of recording; cached after"
+            )
         # no fixed height and no scroll region: the table takes as many
         # rows as it has and the tab itself scrolls when they overflow
         flags = (
@@ -1345,13 +1583,16 @@ class EventCurationWidget:
             imgui.table_next_row()
             imgui.table_next_column()
             clicked, _ = imgui.selectable(
-                f"{rec.label}##rec{rec.rid}", rec.rid == self.current,
+                f"{rec.label}##rec{rec.rid}",
+                rec.rid == self.current,
                 imgui.SelectableFlags_.span_all_columns,
             )
             if clicked:
                 self.load(rec.rid)
             if imgui.is_item_hovered():
-                imgui.set_tooltip(rec.label if not rec.pre_denoised else f"{rec.label}\n{rec.source}")
+                imgui.set_tooltip(
+                    rec.label if not rec.pre_denoised else f"{rec.label}\n{rec.source}"
+                )
             imgui.table_next_column()
             if ready:
                 imgui.text(str(session.n))
@@ -1408,10 +1649,12 @@ class EventCurationWidget:
         # Box accept / reject: a mode. Right-drag a box on the trace or the
         # PCA, drag its edges to adjust, Apply (enter) labels what it holds.
         wide = imgui.ImVec2(em(5.6), em(1.8))
-        for i, (mode, caption, base) in enumerate((
-            ("yes", "Box accept", (0.11, 0.60, 0.55, 1.0)),
-            ("no", "Box reject", (0.84, 0.15, 0.24, 1.0)),
-        )):
+        for i, (mode, caption, base) in enumerate(
+            (
+                ("yes", "Box accept", (0.11, 0.60, 0.55, 1.0)),
+                ("no", "Box reject", (0.84, 0.15, 0.24, 1.0)),
+            )
+        ):
             if i:
                 imgui.same_line(0, em(0.5))
             hot = BOX_COLORS[mode]
@@ -1476,7 +1719,9 @@ class EventCurationWidget:
         imgui.same_line(0, em(0.6))
         imgui.text_disabled("prev / next")
         imgui.set_next_item_width(-em(3.5))
-        changed, value = imgui.slider_int("event", session.current + 1, 1, max(1, session.n))
+        changed, value = imgui.slider_int(
+            "event", session.current + 1, 1, max(1, session.n)
+        )
         if changed:
             session.select(value - 1)
         if not session.n:
@@ -1494,19 +1739,26 @@ class EventCurationWidget:
         imgui.text(f"event {info['index'] + 1}/{session.n}")
         imgui.text("label: ")
         imgui.same_line(0, 0)
-        imgui.text_colored(theme.to_vec4(self._label_color(info["shown"])), info["shown"])
+        imgui.text_colored(
+            theme.to_vec4(self._label_color(info["shown"])), info["shown"]
+        )
         imgui.text_disabled(
             f"time {info['time_s']:.3f} s · peak {info['peak']:.2f} · amplitude {info['amplitude']:.2f}"
         )
         imgui.text_disabled(f"source: {info['source']}")
         score = info["template_cosine"]
-        imgui.text_disabled(f"template cosine: {'n/a' if not np.isfinite(score) else f'{score:.2f}'}")
+        imgui.text_disabled(
+            f"template cosine: {'n/a' if not np.isfinite(score) else f'{score:.2f}'}"
+        )
         if session.seeded:
             initial = info["initial_cosine"]
             initial_text = "n/a" if not np.isfinite(initial) else f"{initial:.2f}"
-            auto_pass = "off" if session.auto_pass is None else f"{session.auto_pass:.2f}"
+            auto_pass = (
+                "off" if session.auto_pass is None else f"{session.auto_pass:.2f}"
+            )
             pc1_line = (
-                "off" if session.auto_pass_pc1 is None
+                "off"
+                if session.auto_pass_pc1 is None
                 else f"{session.auto_pass_pc1:.2f} {session.auto_pass_pc1_side}"
             )
             # the checkbox is gone from the card: A4 at its floor rejects
@@ -1527,7 +1779,9 @@ class EventCurationWidget:
         imgui.text_disabled(f"yes {yes} · no {no} · unlabeled {unlabeled}")
         imgui.text_disabled(f"template source events: {len(session.template_source)}")
         # the path is long: wrap it to the column instead of running off it
-        imgui.push_style_color(imgui.Col_.text, imgui.get_style_color_vec4(imgui.Col_.text_disabled))
+        imgui.push_style_color(
+            imgui.Col_.text, imgui.get_style_color_vec4(imgui.Col_.text_disabled)
+        )
         imgui.text_wrapped(f"curation file: {session.label_path}")
         imgui.pop_style_color()
         imgui.text_disabled(f"cache: {session.cache_status}")
@@ -1541,13 +1795,18 @@ class EventCurationWidget:
 
 def _build_catalog(run: ResultsArray) -> list[Recording]:
     """Every denoised ROI trace a run holds, units in the pipeline's order and
-    ROIs in the run's; a unit without a sampling rate is left out."""
+    ROIs in the run's; a unit without a sampling rate is left out.
+    """
     from mbo_utilities.vnoiser import recording_id, trace_label
 
     return [
         Recording(
-            recording_id(unit, roi), trace_label(unit, roi), str(run.path), True,
-            unit=name, roi=roi,
+            recording_id(unit, roi),
+            trace_label(unit, roi),
+            str(run.path),
+            True,
+            unit=name,
+            roi=roi,
         )
         for name, unit in run.results.units.items()
         if unit.fs and "denoised" in unit.traces

@@ -35,9 +35,21 @@ class _TeeWriter:
 
     _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07")
     _BOX_REPLACEMENTS = {
-        "█": "#", "▏": "|", "▎": "|", "▍": "|", "▌": "|",
-        "▋": "|", "▊": "|", "▉": "|", "░": "-", "▒": "=",
-        "▓": "#", "━": "-", "┃": "|", "╸": ">", "╺": "<",
+        "█": "#",
+        "▏": "|",
+        "▎": "|",
+        "▍": "|",
+        "▌": "|",
+        "▋": "|",
+        "▊": "|",
+        "▉": "|",
+        "░": "-",
+        "▒": "=",
+        "▓": "#",
+        "━": "-",
+        "┃": "|",
+        "╸": ">",
+        "╺": "<",
     }
     _TQDM_PATTERNS = [
         re.compile(r"\d+%\|"),
@@ -134,40 +146,62 @@ def _get_active_progress_items(self) -> list[dict]:
     saveas_done = getattr(self, "_saveas_done", False)
 
     if saveas_running or (0.0 < saveas_progress < 1.0):
-        text = "Starting save..." if saveas_progress == 0.0 else f"Saving z-plane {saveas_current}"
-        items.append({
-            "key": "saveas",
-            "text": text,
-            "progress": max(0.01, saveas_progress),
-            "done": False,
-        })
+        text = (
+            "Starting save..."
+            if saveas_progress == 0.0
+            else f"Saving z-plane {saveas_current}"
+        )
+        items.append(
+            {
+                "key": "saveas",
+                "text": text,
+                "progress": max(0.01, saveas_progress),
+                "done": False,
+            }
+        )
     elif saveas_done:
-        items.append({
-            "key": "saveas",
-            "text": "Save complete",
-            "progress": 1.0,
-            "done": True,
-        })
+        items.append(
+            {
+                "key": "saveas",
+                "text": "Save complete",
+                "progress": 1.0,
+                "done": True,
+            }
+        )
 
     num_graphics = getattr(self, "num_graphics", 1)
     zstats_running = getattr(self, "_zstats_running", [])
     zstats_progress = getattr(self, "_zstats_progress", [])
 
     for i in range(num_graphics):
-        running = zstats_running[i] if isinstance(zstats_running, list) and i < len(zstats_running) else False
-        progress = zstats_progress[i] if isinstance(zstats_progress, list) and i < len(zstats_progress) else 0.0
+        running = (
+            zstats_running[i]
+            if isinstance(zstats_running, list) and i < len(zstats_running)
+            else False
+        )
+        progress = (
+            zstats_progress[i]
+            if isinstance(zstats_progress, list) and i < len(zstats_progress)
+            else 0.0
+        )
 
         if running or (0.0 < progress < 1.0):
             # report the monotonic overall fraction, not the per-plane
             # index — the latter resets each channel/camera and reads as
             # the bar jumping backward.
-            text = f"Z-stats {i+1}: starting..." if progress == 0.0 else f"Z-stats: computing {progress * 100:.0f}%"
-            items.append({
-                "key": f"zstats_{i}",
-                "text": text,
-                "progress": max(0.01, progress),
-                "done": False,
-            })
+            text = (
+                f"Z-stats {i + 1}: starting..."
+                if progress == 0.0
+                else f"Z-stats: computing {progress * 100:.0f}%"
+            )
+            items.append(
+                {
+                    "key": f"zstats_{i}",
+                    "text": text,
+                    "progress": max(0.01, progress),
+                    "done": False,
+                }
+            )
 
     register_running = getattr(self, "_register_z_running", False)
     register_progress = getattr(self, "_register_z_progress", 0.0)
@@ -176,19 +210,23 @@ def _get_active_progress_items(self) -> list[dict]:
 
     if register_running or (0.0 < register_progress < 1.0):
         msg = register_msg if register_msg else "Starting..."
-        items.append({
-            "key": "register_z",
-            "text": f"Z-Reg: {msg}",
-            "progress": max(0.01, register_progress),
-            "done": False,
-        })
+        items.append(
+            {
+                "key": "register_z",
+                "text": f"Z-Reg: {msg}",
+                "progress": max(0.01, register_progress),
+                "done": False,
+            }
+        )
     elif register_done and register_msg:
-        items.append({
-            "key": "register_z",
-            "text": f"Z-Reg: {register_msg}",
-            "progress": 1.0,
-            "done": True,
-        })
+        items.append(
+            {
+                "key": "register_z",
+                "text": f"Z-Reg: {register_msg}",
+                "progress": 1.0,
+                "done": True,
+            }
+        )
 
     return items
 

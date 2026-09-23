@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import numpy as np
 import wgpu
@@ -62,7 +62,7 @@ class GpuImage:
         self._texture = None
         self._view = None
         self.ref = None
-        self.rgba: Optional[np.ndarray] = None
+        self.rgba: np.ndarray | None = None
         self._upload()
 
     def _upload(self):
@@ -131,15 +131,15 @@ class SummaryImageViewer:
     def __init__(
         self,
         figure=None,
-        images: Optional[dict] = None,
+        images: dict | None = None,
         backend=None,
         title: str = "Full FOV",
-        roi_provider: Optional[Callable] = None,
-        on_export: Optional[Callable] = None,
-        extra_toolbar: Optional[Callable] = None,
+        roi_provider: Callable | None = None,
+        on_export: Callable | None = None,
+        extra_toolbar: Callable | None = None,
         window_id: str = "summary_image_popup",
         show_rois: bool = False,
-        on_pick: Optional[Callable] = None,
+        on_pick: Callable | None = None,
     ):
         self._figure = figure
         self._explicit_backend = backend
@@ -188,7 +188,7 @@ class SummaryImageViewer:
         return float(self._zoom)
 
     @property
-    def current_key(self) -> Optional[str]:
+    def current_key(self) -> str | None:
         """The image the combo is on, or None with nothing to show."""
         keys = list(self._images) + list(self._movies)
         return keys[self._selected] if self._selected < len(keys) else None
@@ -200,7 +200,7 @@ class SummaryImageViewer:
     def close(self):
         self._popup_open = False
 
-    def set_images(self, images: dict, selected: Optional[str] = None):
+    def set_images(self, images: dict, selected: str | None = None):
         for key, gpu in list(self._gpu.items()):
             if images.get(key) is not gpu.arr:
                 gpu.destroy()
@@ -219,7 +219,7 @@ class SummaryImageViewer:
         self._movie_key = None
         self._movie_range.clear()
 
-    def set_highlight(self, rect: Optional[tuple]):
+    def set_highlight(self, rect: tuple | None):
         """Outline (y0, x0, height, width) in image coords, or None."""
         self._highlight = rect
 
@@ -257,7 +257,7 @@ class SummaryImageViewer:
             return lo, (hi if hi > lo else lo + 1e-6)
         return data_range(arr)
 
-    def _ensure_gpu(self, key: str, arr: np.ndarray) -> Optional[GpuImage]:
+    def _ensure_gpu(self, key: str, arr: np.ndarray) -> GpuImage | None:
         backend = self._backend()
         if backend is None:
             return None
@@ -303,7 +303,9 @@ class SummaryImageViewer:
         if imgui.button("reset"):
             self._reset_view()
         imgui.same_line()
-        _, self._show_pixel_values = imgui.checkbox("pixel values", self._show_pixel_values)
+        _, self._show_pixel_values = imgui.checkbox(
+            "pixel values", self._show_pixel_values
+        )
         if self.roi_provider is not None:
             imgui.same_line()
             _, self._show_rois = imgui.checkbox("rois", self._show_rois)
@@ -329,7 +331,9 @@ class SummaryImageViewer:
             self._manual_lo[key], self._manual_hi[key] = lo, hi
 
         bins = self._get_histogram(key, arr)
-        if imgui.begin_child("##levels", imgui.ImVec2(0, 32), child_flags=imgui.ChildFlags_.borders):
+        if imgui.begin_child(
+            "##levels", imgui.ImVec2(0, 32), child_flags=imgui.ChildFlags_.borders
+        ):
             avail_w = max(imgui.get_content_region_avail().x, 100.0)
             hist_w = avail_w * 0.32
             slider_w = (avail_w - hist_w - 28) * 0.5
@@ -368,7 +372,11 @@ class SummaryImageViewer:
             for x in range(x0, x1):
                 sx = canvas_pos.x + self._pan_x + x * z + z * 0.5
                 txt = format_value(float(arr[y, x]), arr.dtype)
-                draw_list.add_text(imgui.ImVec2(sx - len(txt) * 3.0, sy - 6.5), theme.text_on(luma[y, x]), txt)
+                draw_list.add_text(
+                    imgui.ImVec2(sx - len(txt) * 3.0, sy - 6.5),
+                    theme.text_on(luma[y, x]),
+                    txt,
+                )
 
     def _draw_rois(self, draw_list, img_min, key: str):
         contours = self.roi_provider(key)
@@ -377,16 +385,21 @@ class SummaryImageViewer:
         default = theme.u32(theme.CONTOUR)
         z = self._zoom
         for contour in contours:
-            pts, rgba, thickness = (contour, None, 1.0) if isinstance(contour, np.ndarray) else contour
+            pts, rgba, thickness = (
+                (contour, None, 1.0) if isinstance(contour, np.ndarray) else contour
+            )
             pts = np.asarray(pts)
             if pts.ndim != 2 or pts.shape[0] < 2:
                 continue
-            color = default if rgba is None else imgui.get_color_u32(imgui.ImVec4(*rgba))
+            color = (
+                default if rgba is None else imgui.get_color_u32(imgui.ImVec4(*rgba))
+            )
             for (y0, x0), (y1, x1) in zip(pts[:-1], pts[1:]):
                 draw_list.add_line(
                     imgui.ImVec2(img_min.x + x0 * z, img_min.y + y0 * z),
                     imgui.ImVec2(img_min.x + x1 * z, img_min.y + y1 * z),
-                    color, float(thickness),
+                    color,
+                    float(thickness),
                 )
 
     def draw(self):
@@ -399,12 +412,16 @@ class SummaryImageViewer:
         viewport = imgui.get_main_viewport()
         em = imgui.get_font_size()
         imgui.set_next_window_size(
-            imgui.ImVec2(min(52.0 * em, viewport.size.x * 0.92),
-                         min(56.0 * em, viewport.size.y * 0.92)),
+            imgui.ImVec2(
+                min(52.0 * em, viewport.size.x * 0.92),
+                min(56.0 * em, viewport.size.y * 0.92),
+            ),
             imgui.Cond_.first_use_ever,
         )
         imgui.set_next_window_pos(
-            viewport.get_center(), imgui.Cond_.first_use_ever, pivot=imgui.ImVec2(0.5, 0.5)
+            viewport.get_center(),
+            imgui.Cond_.first_use_ever,
+            pivot=imgui.ImVec2(0.5, 0.5),
         )
         opened, self._popup_open = imgui.begin(
             f"{self._title}###{self._window_id}",
@@ -435,8 +452,11 @@ class SummaryImageViewer:
 
         h, w = gpu.h, gpu.w
         imgui.begin_child(
-            "##canvas", imgui.ImVec2(0, -28), child_flags=0,
-            window_flags=imgui.WindowFlags_.no_scrollbar | imgui.WindowFlags_.no_scroll_with_mouse,
+            "##canvas",
+            imgui.ImVec2(0, -28),
+            child_flags=0,
+            window_flags=imgui.WindowFlags_.no_scrollbar
+            | imgui.WindowFlags_.no_scroll_with_mouse,
         )
         canvas_pos = imgui.get_cursor_screen_pos()
         canvas_size = imgui.get_content_region_avail()
@@ -470,14 +490,18 @@ class SummaryImageViewer:
                 if abs(io.mouse_pos.x - sx) < 4 and abs(io.mouse_pos.y - sy) < 4:
                     self.on_pick(
                         key,
-                        (io.mouse_pos.y - canvas_pos.y - self._pan_y) / max(self._zoom, 1e-6),
-                        (io.mouse_pos.x - canvas_pos.x - self._pan_x) / max(self._zoom, 1e-6),
+                        (io.mouse_pos.y - canvas_pos.y - self._pan_y)
+                        / max(self._zoom, 1e-6),
+                        (io.mouse_pos.x - canvas_pos.x - self._pan_x)
+                        / max(self._zoom, 1e-6),
                     )
 
         img_min = imgui.ImVec2(canvas_pos.x + self._pan_x, canvas_pos.y + self._pan_y)
         img_max = imgui.ImVec2(img_min.x + w * self._zoom, img_min.y + h * self._zoom)
         draw_list = imgui.get_window_draw_list()
-        draw_list.push_clip_rect(canvas_pos, imgui.ImVec2(canvas_pos.x + cw, canvas_pos.y + ch), True)
+        draw_list.push_clip_rect(
+            canvas_pos, imgui.ImVec2(canvas_pos.x + cw, canvas_pos.y + ch), True
+        )
         draw_list.add_image(gpu.ref, img_min, img_max)
         if self._highlight is not None:
             y0, x0, hh, ww = self._highlight

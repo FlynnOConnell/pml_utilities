@@ -1,7 +1,6 @@
 """The ImGui tab: Dear ImGui's own debug windows, only while MBO_DEBUG is on."""
 
 from imgui_bundle import imgui
-
 from mbo_utilities.gui.widgets import imgui_debug
 from mbo_utilities.gui.widgets.widget_toggles import (
     get_entry,

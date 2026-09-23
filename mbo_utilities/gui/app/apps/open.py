@@ -32,12 +32,19 @@ class OpenApp(App):
         if not self.open:
             return
         self.open, self.path, confirmed = draw_path_popup(
-            "Open", self.open, self.path, "path to a file or folder", "Open", note=self.note
+            "Open",
+            self.open,
+            self.path,
+            "path to a file or folder",
+            "Open",
+            note=self.note,
         )
         if not confirmed:
             return
         from mbo_utilities import imread
 
         array = imread(self.path)
-        host.set_data(np.asarray(array[: min(self.nt, array.shape[0]), 0, 0], dtype=np.float32))
+        host.set_data(
+            np.asarray(array[: min(self.nt, array.shape[0]), 0, 0], dtype=np.float32)
+        )
         self.open = False

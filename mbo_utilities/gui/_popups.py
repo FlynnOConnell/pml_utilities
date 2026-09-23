@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import imgui, imgui_ctx, ImVec2
+from imgui_bundle import ImVec2, imgui
 
 from mbo_utilities.gui._imgui_helpers import begin_popup_size
 from mbo_utilities.gui._metadata import draw_metadata_inspector
@@ -25,11 +25,10 @@ from mbo_utilities.gui.panels.debug_log import draw_scope
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.preferences import (
     get_gpu_index,
-    set_gpu_index,
     get_mem_monitor_interval,
     get_mem_warn_pct,
+    set_gpu_index,
 )
-
 
 _SYS_TITLE = imgui.ImVec4(0.5, 0.8, 1.0, 1.0)
 _SYS_LABEL = imgui.ImVec4(0.7, 0.7, 0.72, 1.0)
@@ -117,7 +116,9 @@ def _draw_gpu_meter(d: dict) -> None:
         caption.append(f"{dm}→{dm_pending}" if dm_pending and dm_pending != dm else dm)
     caption_s = ("  " + " · ".join(caption)) if caption else ""
 
-    _draw_meter(f"GPU {d.get('index', '?')}: {d.get('name', '?')}", frac, pct, caption_s)
+    _draw_meter(
+        f"GPU {d.get('index', '?')}: {d.get('name', '?')}", frac, pct, caption_s
+    )
 
 
 def _cpu_temp() -> float | None:
@@ -129,6 +130,7 @@ def _cpu_temp() -> float | None:
     """
     try:
         import psutil
+
         fn = getattr(psutil, "sensors_temperatures", None)
         if fn is None:
             return None
@@ -147,7 +149,8 @@ def _cpu_temp() -> float | None:
 
 def _draw_cpu_meter(cpu_pct: float) -> None:
     """Total CPU as a usage meter, formatted like the GPU meters (temperature
-    in the caption). RAM has its own meter below."""
+    in the caption). RAM has its own meter below.
+    """
     temp = _cpu_temp()
     caption_s = f"  {temp:.0f}C" if temp is not None else ""
     _draw_meter("CPU", cpu_pct / 100.0, f"{cpu_pct:.0f}%", caption_s)
@@ -232,15 +235,19 @@ def _draw_system_info_header(parent: Any) -> None:
     # subprocess; cpu_percent(interval=None) needs a gap between calls to be
     # meaningful — both want the ~1.5s window, not per-frame.
     now = time.monotonic()
-    if (not hasattr(parent, "_sys_gpu_devices")
-            or now - getattr(parent, "_sys_gpu_last_refresh", 0.0) >= 1.5):
+    if (
+        not hasattr(parent, "_sys_gpu_devices")
+        or now - getattr(parent, "_sys_gpu_last_refresh", 0.0) >= 1.5
+    ):
         from mbo_utilities.gpu import gpu_devices
+
         try:
             parent._sys_gpu_devices = gpu_devices()
         except Exception:
             parent._sys_gpu_devices = []
         try:
             import psutil
+
             parent._sys_cpu_pct = psutil.cpu_percent(interval=None)
         except Exception:
             parent._sys_cpu_pct = None
@@ -252,9 +259,12 @@ def _draw_system_info_header(parent: Any) -> None:
     # follows the user's tick rate rather than the frame rate or the slower
     # nvidia-smi window.
     tick = max(0.25, min(get_mem_monitor_interval(), 2.0))
-    if (not hasattr(parent, "_sys_mem")
-            or now - getattr(parent, "_sys_mem_last_refresh", 0.0) >= tick):
+    if (
+        not hasattr(parent, "_sys_mem")
+        or now - getattr(parent, "_sys_mem_last_refresh", 0.0) >= tick
+    ):
         from mbo_utilities._sysmem import mem_snapshot
+
         try:
             parent._sys_mem = mem_snapshot()
         except Exception:
@@ -265,14 +275,13 @@ def _draw_system_info_header(parent: Any) -> None:
     # CPU core counts via psutil (static). Live RAM moves to the CPU meter.
     try:
         import psutil
+
         cpu_phys = psutil.cpu_count(logical=False)
         cpu_log = psutil.cpu_count(logical=True)
-        cpu_str = (
-            f"{cpu_phys}p / {cpu_log}t"
-            if cpu_phys else f"{cpu_log or '?'}"
-        )
+        cpu_str = f"{cpu_phys}p / {cpu_log}t" if cpu_phys else f"{cpu_log or '?'}"
     except ImportError:
         import os as _os
+
         cpu_str = f"{_os.cpu_count() or '?'}"
 
     adapters = getattr(parent, "_options_gpu_adapters", []) or []
@@ -283,9 +292,7 @@ def _draw_system_info_header(parent: Any) -> None:
         info_d = getattr(adapters[sel_idx], "info", {}) or {}
         sel_name = info_d.get("device", "?")
         sel_backend = info_d.get("backend_type", "")
-        selected_str = (
-            f"{sel_name} [{sel_backend}]" if sel_backend else sel_name
-        )
+        selected_str = f"{sel_name} [{sel_backend}]" if sel_backend else sel_name
     else:
         selected_str = "auto (wgpu picks)"
 
@@ -306,15 +313,9 @@ def _draw_system_info_header(parent: Any) -> None:
 
     imgui.spacing()
 
-    if imgui.begin_table(
-        "##sysinfo_table", 2, imgui.TableFlags_.sizing_fixed_fit
-    ):
-        imgui.table_setup_column(
-            "k", imgui.TableColumnFlags_.width_fixed, 140
-        )
-        imgui.table_setup_column(
-            "v", imgui.TableColumnFlags_.width_stretch
-        )
+    if imgui.begin_table("##sysinfo_table", 2, imgui.TableFlags_.sizing_fixed_fit):
+        imgui.table_setup_column("k", imgui.TableColumnFlags_.width_fixed, 140)
+        imgui.table_setup_column("v", imgui.TableColumnFlags_.width_stretch)
 
         def _row(k: str, v: str, value_color: Any = None) -> None:
             imgui.table_next_row()
@@ -453,12 +454,16 @@ def draw_process_console_popup(parent: Any):
     imgui.set_next_window_size(parent._process_console_size, imgui.Cond_.appearing)
     # low minimum height on purpose: the window can be shrunk down to just
     # the System meters and parked next to the viewer.
-    imgui.set_next_window_size_constraints(imgui.ImVec2(340, 120), imgui.ImVec2(max_w, max_h))
+    imgui.set_next_window_size_constraints(
+        imgui.ImVec2(340, 120), imgui.ImVec2(max_w, max_h)
+    )
 
     # grow to fit content (requested last frame); width preserved, height bounded
     if parent._process_console_grow_to is not None:
         imgui.set_next_window_size(
-            imgui.ImVec2(parent._process_console_size.x, parent._process_console_grow_to),
+            imgui.ImVec2(
+                parent._process_console_size.x, parent._process_console_grow_to
+            ),
             imgui.Cond_.always,
         )
         parent._process_console_grow_to = None
@@ -487,7 +492,10 @@ def draw_process_console_popup(parent: Any):
             running = pm.get_running()
             jobs = pm.get_jobs()
 
-            from mbo_utilities.gui.widgets.progress_bar import _get_active_progress_items
+            from mbo_utilities.gui.widgets.progress_bar import (
+                _get_active_progress_items,
+            )
+
             progress_items = _get_active_progress_items(parent)
 
             # recompute available height AFTER the header so the scroll
@@ -496,14 +504,19 @@ def draw_process_console_popup(parent: Any):
             # clamp positive: while resizing, the popup can momentarily have
             # near-zero client area, which would give begin_child a degenerate
             # (negative) size and make it clip to false.
-            content_height = max(1.0, avail.y - 35)  # space for separator + close button
+            content_height = max(
+                1.0, avail.y - 35
+            )  # space for separator + close button
 
             # split leftover height evenly among expanded log boxes so they
             # fill the area. uses last frame's non-box height and box count
             # (stable on resize) against this frame's available height.
             n_boxes = parent._proc_log_count
             if n_boxes > 0:
-                log_fill_h = max(_MIN_LOG_BOX_H, (content_height - parent._proc_log_fixed_h) / n_boxes)
+                log_fill_h = max(
+                    _MIN_LOG_BOX_H,
+                    (content_height - parent._proc_log_fixed_h) / n_boxes,
+                )
             else:
                 log_fill_h = _MIN_LOG_BOX_H
             expanded_boxes = 0
@@ -518,7 +531,9 @@ def draw_process_console_popup(parent: Any):
             if content_open:
                 # active tasks section
                 if progress_items:
-                    imgui.text_colored(_SYS_TITLE, f"Active Tasks ({len(progress_items)})")
+                    imgui.text_colored(
+                        _SYS_TITLE, f"Active Tasks ({len(progress_items)})"
+                    )
                     imgui.separator()
                     imgui.spacing()
 
@@ -526,7 +541,10 @@ def draw_process_console_popup(parent: Any):
                         pct = int(item["progress"] * 100)
                         imgui.push_text_wrap_pos(0.0)
                         if item.get("done", False):
-                            imgui.text_colored(imgui.ImVec4(0.4, 1.0, 0.4, 1.0), f"[Done] {item['text']}")
+                            imgui.text_colored(
+                                imgui.ImVec4(0.4, 1.0, 0.4, 1.0),
+                                f"[Done] {item['text']}",
+                            )
                         else:
                             imgui.text(f"{item['text']}")
                         imgui.pop_text_wrap_pos()
@@ -572,7 +590,9 @@ def draw_process_console_popup(parent: Any):
 
                 # background processes section
                 if running:
-                    imgui.text_colored(_SYS_TITLE, f"Background Processes ({len(running)})")
+                    imgui.text_colored(
+                        _SYS_TITLE, f"Background Processes ({len(running)})"
+                    )
                     imgui.separator()
                     imgui.spacing()
 
@@ -602,7 +622,9 @@ def draw_process_console_popup(parent: Any):
             # skip on frames where a log box was just toggled (box count
             # changed): the measured height is transiently off by one box.
             win_h = imgui.get_window_height()
-            target_h = min(win_h - content_height + parent._process_console_content_h, max_h)
+            target_h = min(
+                win_h - content_height + parent._process_console_content_h, max_h
+            )
             if target_h > win_h + 1.0 and expanded_boxes == n_boxes:
                 parent._process_console_grow_to = target_h
 
@@ -620,7 +642,9 @@ def draw_process_console_popup(parent: Any):
                 parent._process_console_open = False
             if finished:
                 imgui.same_line()
-                if imgui.button(f"Dismiss finished ({len(finished)})", ImVec2(dismiss_w, 0)):
+                if imgui.button(
+                    f"Dismiss finished ({len(finished)})", ImVec2(dismiss_w, 0)
+                ):
                     for p in finished:
                         pm._processes.pop(p.pid, None)
                     pm._save()

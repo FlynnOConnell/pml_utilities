@@ -66,7 +66,9 @@ class PathPrompt:
         line under the title saying what the path is for
     """
 
-    def __init__(self, title: str, path: str = "", action: str = "open", hint: str = ""):
+    def __init__(
+        self, title: str, path: str = "", action: str = "open", hint: str = ""
+    ):
         self.title = title
         self.path = path
         self.action = action
@@ -114,7 +116,9 @@ def draw_path_prompt(prompt: PathPrompt) -> tuple[str | None, bool]:
         )
         imgui.set_next_item_width(em(28))
         entered, prompt.path = imgui.input_text(
-            f"##path-{prompt.title}", prompt.path, imgui.InputTextFlags_.enter_returns_true
+            f"##path-{prompt.title}",
+            prompt.path,
+            imgui.InputTextFlags_.enter_returns_true,
         )
         if imgui.is_window_appearing():
             imgui.set_keyboard_focus_here(-1)

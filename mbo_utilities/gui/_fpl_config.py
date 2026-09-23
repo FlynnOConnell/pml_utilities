@@ -1,12 +1,19 @@
 """fastplotlib config for every mbo figure, applied on import: no subplot
 toolbar, a thin frame, no axes, and the image filling its subplot (auto_scale
-fits the camera to the image's bounding box, so zoom 1 is the exact fill)."""
+fits the camera to the image's bounding box, so zoom 1 is the exact fill).
+"""
 
 from fastplotlib import Figure
 from fastplotlib.layouts import Subplot
 from fastplotlib.utils import global_config
 
-FRAME_SPACING = {"x0": 1, "sides": 2, "title_flanks": 2, "resize_handle_space": 0, "bottom": 2}
+FRAME_SPACING = {
+    "x0": 1,
+    "sides": 2,
+    "title_flanks": 2,
+    "resize_handle_space": 0,
+    "bottom": 2,
+}
 TITLE_FONT_SIZE = 12
 
 FPL_CONFIG = {
@@ -25,7 +32,9 @@ FPL_CONFIG = {
 
 # canvas pixels the frame takes beside, and above plus below, a subplot's image
 SUBPLOT_PAD_W = FRAME_SPACING["sides"]
-SUBPLOT_PAD_H = TITLE_FONT_SIZE + FRAME_SPACING["bottom"] + FRAME_SPACING["resize_handle_space"]
+SUBPLOT_PAD_H = (
+    TITLE_FONT_SIZE + FRAME_SPACING["bottom"] + FRAME_SPACING["resize_handle_space"]
+)
 # the histogram dock NDImage puts on the right of its subplot
 HISTOGRAM_WIDTH = 100
 

@@ -15,7 +15,7 @@ import numpy as np
 from tqdm import tqdm
 
 from mbo_utilities import log
-from mbo_utilities.arrays._base import _imwrite_base, ReductionMixin, Shape5DMixin
+from mbo_utilities.arrays._base import ReductionMixin, Shape5DMixin, _imwrite_base
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 logger = log.get("arrays.mp4")
@@ -73,6 +73,7 @@ def _draw_scalebar(frame_rgb: np.ndarray, dx_um: float) -> None:
     the label never gets cut off on the bottom or the left.
     """
     import cv2
+
     h, w = frame_rgb.shape[:2]
     bar_px = max(2, int(round(w * 0.10)))
     bar_um = bar_px * dx_um
@@ -82,7 +83,10 @@ def _draw_scalebar(frame_rgb: np.ndarray, dx_um: float) -> None:
     font_scale = max(0.3, min(0.6, h / 900.0))
     font_thickness = 1
     (text_w, text_h), text_baseline = cv2.getTextSize(
-        text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness,
+        text,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        font_thickness,
     )
 
     bar_h = max(2, int(round(h * 0.010)))
@@ -109,43 +113,71 @@ def _draw_scalebar(frame_rgb: np.ndarray, dx_um: float) -> None:
     # black backing under the bar for contrast on bright cmaps
     cv2.rectangle(
         frame_rgb,
-        (bar_x0 - 1, bar_top_y - 1), (bar_x1 + 1, bar_bottom_y + 1),
-        (0, 0, 0), -1,
+        (bar_x0 - 1, bar_top_y - 1),
+        (bar_x1 + 1, bar_bottom_y + 1),
+        (0, 0, 0),
+        -1,
     )
     cv2.rectangle(
         frame_rgb,
-        (bar_x0, bar_top_y), (bar_x1, bar_bottom_y),
-        (255, 255, 255), -1,
+        (bar_x0, bar_top_y),
+        (bar_x1, bar_bottom_y),
+        (255, 255, 255),
+        -1,
     )
 
     cv2.putText(
-        frame_rgb, text, (text_x, label_baseline_y),
-        cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-        (0, 0, 0), font_thickness + 2, cv2.LINE_AA,
+        frame_rgb,
+        text,
+        (text_x, label_baseline_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        (0, 0, 0),
+        font_thickness + 2,
+        cv2.LINE_AA,
     )
     cv2.putText(
-        frame_rgb, text, (text_x, label_baseline_y),
-        cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-        (255, 255, 255), font_thickness, cv2.LINE_AA,
+        frame_rgb,
+        text,
+        (text_x, label_baseline_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        (255, 255, 255),
+        font_thickness,
+        cv2.LINE_AA,
     )
 
 
 def _draw_time_overlay(frame_rgb: np.ndarray, t_seconds: float) -> None:
     """Draw an MM:SS / X.Xs clock on `frame_rgb` in-place (top-left)."""
     import cv2
+
     h = frame_rgb.shape[0]
     text = _format_overlay_time(t_seconds)
     scale = max(0.4, min(1.5, h / 600.0))
     thickness = max(1, int(round(scale * 1.6)))
     pos = (max(6, int(scale * 12)), max(18, int(scale * 28)))
     cv2.putText(
-        frame_rgb, text, pos, cv2.FONT_HERSHEY_SIMPLEX, scale,
-        (0, 0, 0), thickness + 2, cv2.LINE_AA,
+        frame_rgb,
+        text,
+        pos,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        scale,
+        (0, 0, 0),
+        thickness + 2,
+        cv2.LINE_AA,
     )
     cv2.putText(
-        frame_rgb, text, pos, cv2.FONT_HERSHEY_SIMPLEX, scale,
-        (255, 255, 255), thickness, cv2.LINE_AA,
+        frame_rgb,
+        text,
+        pos,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        scale,
+        (255, 255, 255),
+        thickness,
+        cv2.LINE_AA,
     )
+
 
 # Encoder tiers, ordered fast/small -> slow/exact. Three things set fidelity,
 # and only one of them is the crf:
@@ -189,10 +221,14 @@ def _draw_time_overlay(frame_rgb: np.ndarray, t_seconds: float) -> None:
 # warning emitted by `_build_video_output_params`. Use "visually lossless"
 # when the file has to open in a browser or a slide deck.
 _X264_TIERS = {
-    "preview":           {"rate": ["-crf", "23"], "preset": "veryfast", "pix_fmt": "yuvj420p"},
-    "high":              {"rate": ["-crf", "17"], "preset": "medium",   "pix_fmt": "yuvj420p"},
-    "visually lossless": {"rate": ["-crf",  "1"], "preset": "slow",     "pix_fmt": "yuvj420p"},
-    "lossless":          {"rate": ["-qp",   "0"], "preset": "veryslow", "pix_fmt": "yuvj444p"},
+    "preview": {"rate": ["-crf", "23"], "preset": "veryfast", "pix_fmt": "yuvj420p"},
+    "high": {"rate": ["-crf", "17"], "preset": "medium", "pix_fmt": "yuvj420p"},
+    "visually lossless": {
+        "rate": ["-crf", "1"],
+        "preset": "slow",
+        "pix_fmt": "yuvj420p",
+    },
+    "lossless": {"rate": ["-qp", "0"], "preset": "veryslow", "pix_fmt": "yuvj444p"},
 }
 
 # x264's lossless mode forces the High 4:4:4 Predictive profile regardless of
@@ -227,8 +263,10 @@ def _resolve_quality_preset(quality: str | int) -> str:
     return "lossless"
 
 
-def _build_video_output_params(codec: str, quality: str | int) -> tuple[list[str], str | None]:
-    """ffmpeg output_params and pixel format for (codec, quality preset).
+def _build_video_output_params(
+    codec: str, quality: str | int
+) -> tuple[list[str], str | None]:
+    """Ffmpeg output_params and pixel format for (codec, quality preset).
 
     The pixel format is returned separately because it goes to imageio as
     `pixelformat=`; putting a bare -pix_fmt in output_params duplicates
@@ -278,7 +316,7 @@ def _resolve_upscale(height: int, width: int, upscale: int | None) -> int:
             raise ValueError(f"upscale must be >= 1, got {upscale!r}")
         return f
     short, long = min(height, width), max(height, width)
-    f = -(-_UPSCALE_TARGET_SHORT_SIDE // short)          # ceil division
+    f = -(-_UPSCALE_TARGET_SHORT_SIDE // short)  # ceil division
     while f > 1 and long * f > _UPSCALE_MAX_LONG_SIDE:
         f -= 1
     return max(1, f)
@@ -486,9 +524,7 @@ def to_video(
     if max_frames is not None:
         order = order[:max_frames]
     n_frames = len(order)
-    logger.info(
-        f"Exporting plane {plane_idx}: {n_frames} frames, {height}x{width}"
-    )
+    logger.info(f"Exporting plane {plane_idx}: {n_frames} frames, {height}x{width}")
 
     # Calculate output fps based on speed factor
     output_fps = int(fps * speed_factor)
@@ -571,8 +607,8 @@ def to_video(
 
     _temporal_aggregators = {
         "mean": lambda buf: np.mean(buf, axis=0),
-        "max":  lambda buf: np.max(buf, axis=0),
-        "std":  lambda buf: np.std(buf, axis=0),
+        "max": lambda buf: np.max(buf, axis=0),
+        "std": lambda buf: np.std(buf, axis=0),
     }
     if temporal_mode not in _temporal_aggregators:
         raise ValueError(
@@ -637,7 +673,9 @@ def to_video(
             # output resolution. np.repeat on both axes is plain pixel
             # replication -- the source values survive exactly.
             if factor > 1:
-                frame_rgb = np.repeat(np.repeat(frame_rgb, factor, axis=0), factor, axis=1)
+                frame_rgb = np.repeat(
+                    np.repeat(frame_rgb, factor, axis=0), factor, axis=1
+                )
 
             if time_overlay or scalebar:
                 # cv2 draws in-place; ensure the array is contiguous and writable
@@ -865,9 +903,9 @@ class MP4Array(ReductionMixin, Shape5DMixin):
         per-plane mean images; the (c, z) slice is forwarded to `to_video`.
         """
         from mbo_utilities.arrays.features import (
-            OutputFilename,
-            DimensionTag,
             TAG_REGISTRY,
+            DimensionTag,
+            OutputFilename,
         )
 
         outpath = Path(outpath)
@@ -883,7 +921,9 @@ class MP4Array(ReductionMixin, Shape5DMixin):
         nframes_total = s5[0]
 
         planes_0idx = [p - 1 for p in planes] if planes else list(range(num_planes))
-        channels_0idx = [c - 1 for c in channels] if channels else list(range(num_channels))
+        channels_0idx = (
+            [c - 1 for c in channels] if channels else list(range(num_channels))
+        )
 
         if frames:
             frame_indices_0 = [f - 1 for f in frames]
@@ -905,10 +945,16 @@ class MP4Array(ReductionMixin, Shape5DMixin):
 
         for plane_idx in planes_0idx:
             for c_idx in channels_0idx:
-                z_tag = DimensionTag.from_dim_size(TAG_REGISTRY["Z"], num_planes, [plane_idx + 1])
-                c_tag = DimensionTag.from_dim_size(TAG_REGISTRY["C"], num_channels, [c_idx + 1])
+                z_tag = DimensionTag.from_dim_size(
+                    TAG_REGISTRY["Z"], num_planes, [plane_idx + 1]
+                )
+                c_tag = DimensionTag.from_dim_size(
+                    TAG_REGISTRY["C"], num_channels, [c_idx + 1]
+                )
 
-                filename = OutputFilename([z_tag, c_tag, t_tag], suffix=suffix).build(f".{ext_clean}")
+                filename = OutputFilename([z_tag, c_tag, t_tag], suffix=suffix).build(
+                    f".{ext_clean}"
+                )
                 target = outpath / filename
 
                 if target.exists() and not overwrite:

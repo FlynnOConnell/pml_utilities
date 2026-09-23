@@ -55,7 +55,8 @@ class PreviewTabWidget(Widget):
 class SignalQualityTabWidget(Widget):
     """The Signal Quality tab: the metric table, once the z-stats have been
     computed. Its plot is the top strip's Signal Quality panel, which has the
-    canvas's full width."""
+    canvas's full width.
+    """
 
     name = "Signal Quality"
     tab_label = "Signal Quality"
@@ -112,7 +113,9 @@ class RunTabWidget(Widget):
 
         pipelines = get_available_pipelines()
         if not pipelines:
-            return "No pipelines registered.\nInstall with: uv pip install mbo_utilities"
+            return (
+                "No pipelines registered.\nInstall with: uv pip install mbo_utilities"
+            )
         lines = ["No pipeline is installed.\nInstall one of:"]
         for cls in pipelines:
             lines.append(f"  {cls.name}: {cls.install_command}")
@@ -182,7 +185,8 @@ class RoiTableTabWidget(Widget):
 
 class TraceTableTabWidget(Widget):
     """The Traces tab: every collected trace with stats; the rows selected
-    here are what the top strip's Traces panel plots."""
+    here are what the top strip's Traces panel plots.
+    """
 
     name = "Traces"
     tab_label = "Traces"
@@ -207,5 +211,7 @@ class TraceTableTabWidget(Widget):
         if roi is None:
             imgui.text_disabled("Manual ROI Labeling is off.")
             return
-        with imgui_ctx.begin_child("##TraceTableContent", imgui.ImVec2(0, 0), imgui.ChildFlags_.none):
+        with imgui_ctx.begin_child(
+            "##TraceTableContent", imgui.ImVec2(0, 0), imgui.ChildFlags_.none
+        ):
             roi.draw_trace_table()

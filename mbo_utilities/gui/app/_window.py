@@ -42,7 +42,9 @@ class AppWindow(ImguiWindow):
             return
         if not app.open:
             return
-        imgui.set_next_window_size(imgui.ImVec2(*app.window_size), imgui.Cond_.first_use_ever)
+        imgui.set_next_window_size(
+            imgui.ImVec2(*app.window_size), imgui.Cond_.first_use_ever
+        )
         expanded, app.open = imgui.begin(f"{app.title}###{app.id}", app.open)
         if expanded:
             draw_guarded(app, self.host)

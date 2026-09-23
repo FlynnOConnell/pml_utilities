@@ -5,19 +5,17 @@ These functions are extracted from pollen/pollen_calibration_mbo.py
 to be used by the PollenCalibrationWidget.
 """
 
-
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.ndimage import uniform_filter1d
-from scipy.signal import correlate
-from scipy.optimize import curve_fit
-
 from mbo_utilities.metadata import get_param
+from scipy.ndimage import uniform_filter1d
+from scipy.optimize import curve_fit
+from scipy.signal import correlate
 
 
 def _upsample_traces(Iz, DZ):
-    """upsample z-traces to ~1um effective resolution using cubic interpolation.
+    """Upsample z-traces to ~1um effective resolution using cubic interpolation.
 
     for coarse z-steps (e.g. 5um), the raw traces have too few samples
     per peak for accurate smoothing and peak detection. upsampling to
@@ -40,8 +38,6 @@ def _upsample_traces(Iz, DZ):
 
     DZ_eff = DZ / upsample
     return Iz_fine, DZ_eff, nz_fine
-
-
 
 
 def get_pollen_h5_path(filepath):
@@ -87,31 +83,32 @@ def get_mode_group(h5_file, mode, create=True):
 
 class Colors:
     """Dark color theme for use across GUI widgets."""
+
     # Background colors
-    BG_DARK = "#1e1e1e"       # Main figure background
-    BG_AXES = "#2d2d2d"       # Axes background
+    BG_DARK = "#1e1e1e"  # Main figure background
+    BG_AXES = "#2d2d2d"  # Axes background
 
     # Text colors
-    TEXT = "#e0e0e0"          # Primary text
-    TEXT_DIM = "#999999"      # Dimmed/secondary text
+    TEXT = "#e0e0e0"  # Primary text
+    TEXT_DIM = "#999999"  # Dimmed/secondary text
 
     # Line/edge colors
-    EDGE = "#555555"          # Axes edges, borders
-    GRID = "#444444"          # Grid lines
+    EDGE = "#555555"  # Axes edges, borders
+    GRID = "#444444"  # Grid lines
 
     # Data colors - primary series
-    AUTO = "#00bfff"          # Auto mode - cyan/sky blue
-    MANUAL = "#66ff66"        # Manual mode - bright green
-    CAVITY_A = "#00bfff"      # Cavity A - cyan (same as auto)
-    CAVITY_B = "#66ff66"      # Cavity B - light green (same as manual)
+    AUTO = "#00bfff"  # Auto mode - cyan/sky blue
+    MANUAL = "#66ff66"  # Manual mode - bright green
+    CAVITY_A = "#00bfff"  # Cavity A - cyan (same as auto)
+    CAVITY_B = "#66ff66"  # Cavity B - light green (same as manual)
 
     # Data colors - secondary/accents
-    WHITE = "#ffffff"         # Markers, emphasis
-    FIT_A = "#ff6666"         # Fit line for cavity A - light red
-    FIT_B = "#ffaa00"         # Fit line for cavity B - orange
+    WHITE = "#ffffff"  # Markers, emphasis
+    FIT_A = "#ff6666"  # Fit line for cavity A - light red
+    FIT_B = "#ffaa00"  # Fit line for cavity B - orange
     FIT_COMBINED = "#ff66ff"  # Combined fit - magenta
-    DIFF_X = "#ff6666"        # X difference - light red
-    DIFF_Y = "#ffaa00"        # Y difference - orange
+    DIFF_X = "#ff6666"  # X difference - light red
+    DIFF_Y = "#ffaa00"  # Y difference - orange
 
     @staticmethod
     def mode_label(mode: str) -> str:
@@ -255,18 +252,23 @@ def plot_beamlet_grid(vol, order, filepath, mode="auto"):
         ax = axes[idx]
         channel = order[idx] if idx < len(order) else idx
         img = Imax[channel, :, :].T
-        ax.imshow(img, cmap="gray", vmin=np.percentile(img, 1), vmax=np.percentile(img, 99))
+        ax.imshow(
+            img, cmap="gray", vmin=np.percentile(img, 1), vmax=np.percentile(img, 99)
+        )
         ax.set_xlim([0, ny])
         ax.set_ylim([0, nx])
         ax.set_xticks([])
         ax.set_yticks([])
-        ax.set_title(f"Beam {idx+1}", fontsize=8, color=Colors.TEXT)
+        ax.set_title(f"Beam {idx + 1}", fontsize=8, color=Colors.TEXT)
 
     for idx in range(nc, len(axes)):
         axes[idx].axis("off")
 
-    fig.suptitle(f"Max-Projected Beamlet Images ({Colors.mode_label(mode)})",
-                 fontweight="bold", color=Colors.TEXT)
+    fig.suptitle(
+        f"Max-Projected Beamlet Images ({Colors.mode_label(mode)})",
+        fontweight="bold",
+        color=Colors.TEXT,
+    )
     plt.tight_layout()
     out_name = f"pollen_{mode}_beamlet_grid.png"
     plt.savefig(filepath.with_name(out_name), dpi=150)
@@ -313,18 +315,22 @@ def analyze_power_vs_z(Iz, filepath, DZ, order, nc, mode="auto"):
 
     # x-axis: extend until outermost beams' plot curves drop near y=0
     first_beam = int(np.argmin(zoi))  # peak at highest z (right side)
-    last_beam = int(np.argmax(zoi))   # peak at lowest z (left side)
+    last_beam = int(np.argmax(zoi))  # peak at lowest z (left side)
     y_near_zero = 2.0  # threshold on the sqrt scale
 
     # right bound: first beam's tail toward lower indices (higher z)
-    curve_r = plot_data[first_beam, :zoi[first_beam]]
+    curve_r = plot_data[first_beam, : zoi[first_beam]]
     below_r = np.where(curve_r < y_near_zero)[0]
     i_lo = max(0, below_r[-1]) if len(below_r) > 0 else 0
 
     # left bound: last beam's tail toward higher indices (lower z)
-    curve_l = plot_data[last_beam, zoi[last_beam]:]
+    curve_l = plot_data[last_beam, zoi[last_beam] :]
     below_l = np.where(curve_l < y_near_zero)[0]
-    i_hi = min(len(ZZ) - 1, zoi[last_beam] + below_l[0]) if len(below_l) > 0 else len(ZZ) - 1
+    i_hi = (
+        min(len(ZZ) - 1, zoi[last_beam] + below_l[0])
+        if len(below_l) > 0
+        else len(ZZ) - 1
+    )
 
     ax.set_xlabel("Piezo Z (um)", fontweight="bold")
     ax.set_ylabel("2p signal (a.u.)", fontweight="bold")
@@ -345,7 +351,7 @@ def analyze_power_vs_z(Iz, filepath, DZ, order, nc, mode="auto"):
 
 
 def plot_z_extent(ZZ, smoothed, z_peaks, pp, order, filepath, mode="auto"):
-    """plot start, peak, and stop z-plane for each beam.
+    """Plot start, peak, and stop z-plane for each beam.
 
     uses half-max of each beam's curve as the threshold for start/stop.
     """
@@ -360,7 +366,7 @@ def plot_z_extent(ZZ, smoothed, z_peaks, pp, order, filepath, mode="auto"):
         above = curve >= half_max
         indices = np.where(above)[0]
         if len(indices) > 0:
-            z_starts[i] = ZZ[indices[-1]]   # ZZ is flipped (descending)
+            z_starts[i] = ZZ[indices[-1]]  # ZZ is flipped (descending)
             z_stops[i] = ZZ[indices[0]]
         else:
             z_starts[i] = z_peaks[i]
@@ -369,13 +375,20 @@ def plot_z_extent(ZZ, smoothed, z_peaks, pp, order, filepath, mode="auto"):
     _fig, ax = plt.subplots(figsize=(8, 5))
 
     for i in range(n_beams):
-        ax.plot([i + 1, i + 1], [z_starts[i], z_stops[i]],
-                color=Colors.CAVITY_A, linewidth=2, solid_capstyle="round")
+        ax.plot(
+            [i + 1, i + 1],
+            [z_starts[i], z_stops[i]],
+            color=Colors.CAVITY_A,
+            linewidth=2,
+            solid_capstyle="round",
+        )
         ax.plot(i + 1, z_peaks[i], "o", color=Colors.WHITE, markersize=6, zorder=5)
 
     ax.set_xlabel("Beam number", fontweight="bold")
     ax.set_ylabel("Z position (um)", fontweight="bold")
-    ax.set_title(f"Z Extent per Beam - FWHM ({Colors.mode_label(mode)})", fontweight="bold")
+    ax.set_title(
+        f"Z Extent per Beam - FWHM ({Colors.mode_label(mode)})", fontweight="bold"
+    )
     ax.set_xticks(range(1, n_beams + 1))
     ax.grid(True, axis="y")
     plt.tight_layout()
@@ -410,16 +423,22 @@ def analyze_z_positions(z_peaks, order, filepath, cavity_info, mode="auto"):
 
     if cavity_a_beams:
         ax.plot(
-            [i+1 for i in cavity_a_beams],
+            [i + 1 for i in cavity_a_beams],
             [z_rel[i] for i in cavity_a_beams],
-            "o", color=Colors.CAVITY_A, markersize=6, label="Cavity A"
+            "o",
+            color=Colors.CAVITY_A,
+            markersize=6,
+            label="Cavity A",
         )
 
     if cavity_b_beams:
         ax.plot(
-            [i+1 for i in cavity_b_beams],
+            [i + 1 for i in cavity_b_beams],
             [z_rel[i] for i in cavity_b_beams],
-            "s", color=Colors.CAVITY_B, markersize=6, label="Cavity B"
+            "s",
+            color=Colors.CAVITY_B,
+            markersize=6,
+            label="Cavity B",
         )
 
     beam_nums = np.arange(1, n_beams + 1)
@@ -436,14 +455,21 @@ def analyze_z_positions(z_peaks, order, filepath, cavity_info, mode="auto"):
         z_slope = coeffs[0]
 
         x_fit = np.linspace(0, n_beams + 1, 101)
-        ax.plot(x_fit, poly(x_fit), "-", color=Colors.WHITE,
-                label=f"Linear fit (r² = {r_squared:.3f})\ny = {coeffs[0]:.2f}x + {coeffs[1]:.2f}")
+        ax.plot(
+            x_fit,
+            poly(x_fit),
+            "-",
+            color=Colors.WHITE,
+            label=f"Linear fit (r² = {r_squared:.3f})\ny = {coeffs[0]:.2f}x + {coeffs[1]:.2f}",
+        )
     except Exception:
         pass
 
     ax.set_xlabel("Beam number", fontweight="bold")
     ax.set_ylabel("Z position (um)", fontweight="bold")
-    ax.set_title(f"Z Position vs. Beam Number ({Colors.mode_label(mode)})", fontweight="bold")
+    ax.set_title(
+        f"Z Position vs. Beam Number ({Colors.mode_label(mode)})", fontweight="bold"
+    )
     ax.legend(loc="best")
     ax.grid(True)
     plt.tight_layout()
@@ -463,6 +489,7 @@ def analyze_z_positions(z_peaks, order, filepath, cavity_info, mode="auto"):
 
 def fit_exp_decay(z_peaks, order, filepath, pp, cavity_info, DZ, nz, mode="auto"):
     """Fit exponential decay with cavity splits."""
+
     def exp_func(z, a, b):
         return a * np.exp(b * z)
 
@@ -486,11 +513,19 @@ def fit_exp_decay(z_peaks, order, filepath, pp, cavity_info, DZ, nz, mode="auto"
     z_all = z_peaks
     p_all = np.sqrt(pp)
 
-    z1 = np.array([z_all[i] for i in cavity_a_beams]) if cavity_a_beams else np.array([])
-    p1 = np.array([p_all[i] for i in cavity_a_beams]) if cavity_a_beams else np.array([])
+    z1 = (
+        np.array([z_all[i] for i in cavity_a_beams]) if cavity_a_beams else np.array([])
+    )
+    p1 = (
+        np.array([p_all[i] for i in cavity_a_beams]) if cavity_a_beams else np.array([])
+    )
 
-    z2 = np.array([z_all[i] for i in cavity_b_beams]) if cavity_b_beams else np.array([])
-    p2 = np.array([p_all[i] for i in cavity_b_beams]) if cavity_b_beams else np.array([])
+    z2 = (
+        np.array([z_all[i] for i in cavity_b_beams]) if cavity_b_beams else np.array([])
+    )
+    p2 = (
+        np.array([p_all[i] for i in cavity_b_beams]) if cavity_b_beams else np.array([])
+    )
 
     # Linear scale plot
     _fig, ax = plt.subplots(figsize=(8, 6))
@@ -512,18 +547,26 @@ def fit_exp_decay(z_peaks, order, filepath, pp, cavity_info, DZ, nz, mode="auto"
     if len(z1) > 2:
         try:
             popt1, _ = curve_fit(exp_func, z1, p1, p0=(p1.max(), -0.01), maxfev=5000)
-            decay_length_a = abs(1/popt1[1])
-            ax.plot(z_fit_range, exp_func(z_fit_range, *popt1), color=Colors.FIT_A,
-                    label=f"Fit C1 (ls = {decay_length_a:.0f} um)")
+            decay_length_a = abs(1 / popt1[1])
+            ax.plot(
+                z_fit_range,
+                exp_func(z_fit_range, *popt1),
+                color=Colors.FIT_A,
+                label=f"Fit C1 (ls = {decay_length_a:.0f} um)",
+            )
         except Exception:
             pass
 
     if len(z2) > 2:
         try:
             popt2, _ = curve_fit(exp_func, z2, p2, p0=(p2.max(), -0.01), maxfev=5000)
-            decay_length_b = abs(1/popt2[1])
-            ax.plot(z_fit_range, exp_func(z_fit_range, *popt2), color=Colors.FIT_B,
-                    label=f"Fit C2 (ls = {decay_length_b:.0f} um)")
+            decay_length_b = abs(1 / popt2[1])
+            ax.plot(
+                z_fit_range,
+                exp_func(z_fit_range, *popt2),
+                color=Colors.FIT_B,
+                label=f"Fit C2 (ls = {decay_length_b:.0f} um)",
+            )
         except Exception:
             pass
 
@@ -533,10 +576,20 @@ def fit_exp_decay(z_peaks, order, filepath, pp, cavity_info, DZ, nz, mode="auto"
 
     if len(z_combined) > 2:
         try:
-            popt3, _ = curve_fit(exp_func, z_combined, p_combined, p0=(p_combined.max(), -0.01), maxfev=5000)
-            decay_length_combined = abs(1/popt3[1])
-            ax.plot(z_fit_range, exp_func(z_fit_range, *popt3), color=Colors.FIT_COMBINED,
-                    label=f"Fit both (ls = {decay_length_combined:.0f} um)")
+            popt3, _ = curve_fit(
+                exp_func,
+                z_combined,
+                p_combined,
+                p0=(p_combined.max(), -0.01),
+                maxfev=5000,
+            )
+            decay_length_combined = abs(1 / popt3[1])
+            ax.plot(
+                z_fit_range,
+                exp_func(z_fit_range, *popt3),
+                color=Colors.FIT_COMBINED,
+                label=f"Fit both (ls = {decay_length_combined:.0f} um)",
+            )
         except Exception:
             pass
 
@@ -583,7 +636,9 @@ def plot_z_spacing(z_peaks, order, filepath, mode="auto"):
     ax.plot(range(1, len(z_diff) + 1), z_diff, "o", color=Colors.WHITE, markersize=10)
     ax.set_xlabel("Beam pair", fontweight="bold")
     ax.set_ylabel("dZ (um)", fontweight="bold")
-    ax.set_title(f"Z Spacing Between Beams ({Colors.mode_label(mode)})", fontweight="bold")
+    ax.set_title(
+        f"Z Spacing Between Beams ({Colors.mode_label(mode)})", fontweight="bold"
+    )
     ax.grid(True)
     plt.tight_layout()
     out_name = f"pollen_{mode}_z_spacing.png"
@@ -626,8 +681,14 @@ def calibrate_xy(xs, ys, III, filepath, dx, dy, nx, ny, cavity_info, mode="auto"
     ax.plot(xs_um, ys_um, "o", color=Colors.mode_color(mode), markersize=8)
 
     for i in range(n_patches):
-        ax.annotate(str(i + 1), (xs_um[i], ys_um[i]), textcoords="offset points",
-                    xytext=(5, 5), fontsize=8, color=Colors.TEXT)
+        ax.annotate(
+            str(i + 1),
+            (xs_um[i], ys_um[i]),
+            textcoords="offset points",
+            xytext=(5, 5),
+            fontsize=8,
+            color=Colors.TEXT,
+        )
 
     ax.set_xlabel("X (um)", fontweight="bold")
     ax.set_ylabel("Y (um)", fontweight="bold")
@@ -649,10 +710,14 @@ def calibrate_xy(xs, ys, III, filepath, dx, dy, nx, ny, cavity_info, mode="auto"
     diffy = ys_um.copy()
 
     if n_patches >= n_cavity_a > 0:
-        diffx = diffx - max(diffx[0] if n_patches > 0 else 0,
-                           diffx[n_cavity_a-1] if n_patches >= n_cavity_a else 0)
-        diffy = diffy - min(diffy[0] if n_patches > 0 else 0,
-                           diffy[n_cavity_a-1] if n_patches >= n_cavity_a else 0)
+        diffx = diffx - max(
+            diffx[0] if n_patches > 0 else 0,
+            diffx[n_cavity_a - 1] if n_patches >= n_cavity_a else 0,
+        )
+        diffy = diffy - min(
+            diffy[0] if n_patches > 0 else 0,
+            diffy[n_cavity_a - 1] if n_patches >= n_cavity_a else 0,
+        )
 
     # Save to unified H5 file with mode-specific group
     h5_path = get_pollen_h5_path(filepath)
@@ -663,8 +728,16 @@ def calibrate_xy(xs, ys, III, filepath, dx, dy, nx, ny, cavity_info, mode="auto"
 
         # Store mode-specific data in group
         grp = get_mode_group(f, mode)
-        for key in ["diffx", "diffy", "xs_um", "ys_um", "centroid_offx", "centroid_offy",
-                    "cavity_a_channels", "cavity_b_channels"]:
+        for key in [
+            "diffx",
+            "diffy",
+            "xs_um",
+            "ys_um",
+            "centroid_offx",
+            "centroid_offy",
+            "cavity_a_channels",
+            "cavity_b_channels",
+        ]:
             if key in grp:
                 del grp[key]
 
@@ -730,12 +803,28 @@ def plot_comparison(filepath):
 
     # Top left: XY positions comparison
     ax = axes[0, 0]
-    ax.plot(auto_xs, auto_ys, "o", color=Colors.AUTO, markersize=8, label="Auto", alpha=0.8)
-    ax.plot(manual_xs, manual_ys, "s", color=Colors.MANUAL, markersize=8, label="Manual", alpha=0.8)
+    ax.plot(
+        auto_xs, auto_ys, "o", color=Colors.AUTO, markersize=8, label="Auto", alpha=0.8
+    )
+    ax.plot(
+        manual_xs,
+        manual_ys,
+        "s",
+        color=Colors.MANUAL,
+        markersize=8,
+        label="Manual",
+        alpha=0.8,
+    )
     # Draw lines connecting corresponding points
     for i in range(n_beams):
-        ax.plot([auto_xs[i], manual_xs[i]], [auto_ys[i], manual_ys[i]],
-                "-", color=Colors.WHITE, alpha=0.3, linewidth=1)
+        ax.plot(
+            [auto_xs[i], manual_xs[i]],
+            [auto_ys[i], manual_ys[i]],
+            "-",
+            color=Colors.WHITE,
+            alpha=0.3,
+            linewidth=1,
+        )
     ax.set_xlabel("X (um)", fontweight="bold")
     ax.set_ylabel("Y (um)", fontweight="bold")
     ax.set_title("XY Positions: Auto vs Manual", fontweight="bold")
@@ -746,8 +835,22 @@ def plot_comparison(filepath):
     # Top right: dX comparison
     ax = axes[0, 1]
     width = 0.35
-    ax.bar(beam_nums - width/2, auto_dx, width, color=Colors.AUTO, label="Auto", alpha=0.8)
-    ax.bar(beam_nums + width/2, manual_dx, width, color=Colors.MANUAL, label="Manual", alpha=0.8)
+    ax.bar(
+        beam_nums - width / 2,
+        auto_dx,
+        width,
+        color=Colors.AUTO,
+        label="Auto",
+        alpha=0.8,
+    )
+    ax.bar(
+        beam_nums + width / 2,
+        manual_dx,
+        width,
+        color=Colors.MANUAL,
+        label="Manual",
+        alpha=0.8,
+    )
     ax.set_xlabel("Beam Number", fontweight="bold")
     ax.set_ylabel("dX (um)", fontweight="bold")
     ax.set_title("X Offset: Auto vs Manual", fontweight="bold")
@@ -756,8 +859,22 @@ def plot_comparison(filepath):
 
     # Bottom left: dY comparison
     ax = axes[1, 0]
-    ax.bar(beam_nums - width/2, auto_dy, width, color=Colors.AUTO, label="Auto", alpha=0.8)
-    ax.bar(beam_nums + width/2, manual_dy, width, color=Colors.MANUAL, label="Manual", alpha=0.8)
+    ax.bar(
+        beam_nums - width / 2,
+        auto_dy,
+        width,
+        color=Colors.AUTO,
+        label="Auto",
+        alpha=0.8,
+    )
+    ax.bar(
+        beam_nums + width / 2,
+        manual_dy,
+        width,
+        color=Colors.MANUAL,
+        label="Manual",
+        alpha=0.8,
+    )
     ax.set_xlabel("Beam Number", fontweight="bold")
     ax.set_ylabel("dY (um)", fontweight="bold")
     ax.set_title("Y Offset: Auto vs Manual", fontweight="bold")
@@ -768,8 +885,12 @@ def plot_comparison(filepath):
     ax = axes[1, 1]
     diff_x = manual_dx - auto_dx
     diff_y = manual_dy - auto_dy
-    ax.bar(beam_nums - width/2, diff_x, width, color=Colors.DIFF_X, label="ΔX", alpha=0.8)
-    ax.bar(beam_nums + width/2, diff_y, width, color=Colors.DIFF_Y, label="ΔY", alpha=0.8)
+    ax.bar(
+        beam_nums - width / 2, diff_x, width, color=Colors.DIFF_X, label="ΔX", alpha=0.8
+    )
+    ax.bar(
+        beam_nums + width / 2, diff_y, width, color=Colors.DIFF_Y, label="ΔY", alpha=0.8
+    )
     ax.axhline(y=0, color=Colors.WHITE, linestyle="--", alpha=0.5)
     ax.set_xlabel("Beam Number", fontweight="bold")
     ax.set_ylabel("Difference (um)", fontweight="bold")
@@ -783,8 +904,12 @@ def plot_comparison(filepath):
     stats_text = f"RMS diff: X={rms_x:.2f}um, Y={rms_y:.2f}um"
     fig.text(0.5, 0.02, stats_text, ha="center", fontsize=11, color=Colors.TEXT)
 
-    fig.suptitle("Auto vs Manual Calibration Comparison", fontweight="bold",
-                 fontsize=14, color=Colors.TEXT)
+    fig.suptitle(
+        "Auto vs Manual Calibration Comparison",
+        fontweight="bold",
+        fontsize=14,
+        color=Colors.TEXT,
+    )
     plt.tight_layout(rect=[0, 0.04, 1, 0.96])
 
     out_name = "pollen_comparison.png"
@@ -811,6 +936,7 @@ def extract_calibration_summary(h5_path: str, mode: str = None) -> dict | None:
         Dictionary with calibration summary metrics, or None if file not found.
     """
     from pathlib import Path
+
     h5_path = Path(h5_path)
     if not h5_path.exists():
         return None
@@ -845,8 +971,12 @@ def extract_calibration_summary(h5_path: str, mode: str = None) -> dict | None:
             summary["z_fit_r_squared"] = grp.attrs.get("z_fit_r_squared")
             summary["z_slope_um_per_beam"] = grp.attrs.get("z_slope_um_per_beam")
             summary["decay_length_um"] = grp.attrs.get("decay_length_um")
-            summary["decay_length_cavity_a_um"] = grp.attrs.get("decay_length_cavity_a_um")
-            summary["decay_length_cavity_b_um"] = grp.attrs.get("decay_length_cavity_b_um")
+            summary["decay_length_cavity_a_um"] = grp.attrs.get(
+                "decay_length_cavity_a_um"
+            )
+            summary["decay_length_cavity_b_um"] = grp.attrs.get(
+                "decay_length_cavity_b_um"
+            )
 
             # Load arrays from group
             if "diffx" in grp and "diffy" in grp:
@@ -885,6 +1015,7 @@ def get_available_modes(h5_path: str) -> list[str]:
         List of available mode names ('auto', 'manual').
     """
     from pathlib import Path
+
     h5_path = Path(h5_path)
     if not h5_path.exists():
         return []

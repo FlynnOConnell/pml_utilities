@@ -8,8 +8,6 @@ reduce roles), the per-array override hook, metric reducers, and the resolved
 from __future__ import annotations
 
 import numpy as np
-import pytest
-
 from mbo_utilities.arrays.features import (
     DEFAULT_METRICS,
     StatsDimRole,

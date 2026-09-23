@@ -45,7 +45,9 @@ class Dock(ImguiWindow):
             return
         want = max(app.size for app in apps)
         if not held:
-            self.host.figure.add_imgui_window(self, location=self.edge, size=want, title=None)
+            self.host.figure.add_imgui_window(
+                self, location=self.edge, size=want, title=None
+            )
         elif self.size != want:
             self.size = want
 
@@ -58,7 +60,9 @@ class Dock(ImguiWindow):
             return
         if imgui.begin_tab_bar(f"##dock_{self.edge}"):
             for app in apps:
-                if imgui.begin_tab_item(f"{app.title}###{app.id}", None, imgui.TabItemFlags_.none)[0]:
+                if imgui.begin_tab_item(
+                    f"{app.title}###{app.id}", None, imgui.TabItemFlags_.none
+                )[0]:
                     self._body(app)
                     imgui.end_tab_item()
             imgui.end_tab_bar()

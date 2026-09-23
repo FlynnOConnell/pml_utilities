@@ -6,9 +6,7 @@ Provides chunking configuration for lazy/dask arrays.
 
 from __future__ import annotations
 
-
 import numpy as np
-
 
 # default chunk patterns
 CHUNKS_2D = (-1, -1)  # full spatial

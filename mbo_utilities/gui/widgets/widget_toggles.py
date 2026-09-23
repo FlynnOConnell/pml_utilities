@@ -12,8 +12,9 @@ mapping falls back to the registry default.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from imgui_bundle import imgui
 
@@ -99,8 +100,8 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         key="mesc",
         label="MESc",
         tooltip="Every recording in the open .mesc file: shape, rate, the lines "
-                "or patches it scanned, the picture they were drawn on, whether "
-                "RTMC was on and the Z-stack around it; click a row to display it.",
+        "or patches it scanned, the picture they were drawn on, whether "
+        "RTMC was on and the Z-stack around it; click a row to display it.",
     ),
     WidgetEntry(
         key="signal_quality",
@@ -117,8 +118,8 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         key="imgui_debug",
         label="ImGui Debug",
         tooltip="Dear ImGui's own debug windows: the metrics/debugger, the "
-                "debug log, the ID stack tool, the style editor and the demo. "
-                "Only with debug logging on.",
+        "debug log, the ID stack tool, the style editor and the demo. "
+        "Only with debug logging on.",
         default=False,
         debug_only=True,
     ),
@@ -126,17 +127,25 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         key="manual_roi",
         label="Manual ROI Labeling",
         tooltip="Freehand ROI drawing and labelling: the ROIs tab holds the "
-                "controls over the ROI table, the trace plot is a panel over the "
-                "image and the Traces tab lists every trace. Running ROIs is the "
-                "Process tab's ROIs pipeline.",
+        "controls over the ROI table, the trace plot is a panel over the "
+        "image and the Traces tab lists every trace. Running ROIs is the "
+        "Process tab's ROIs pipeline.",
         default=False,
         on_toggle=_toggle_manual_roi,
         subwidgets=(
             SubWidget("tools", "Drawing tools"),
             SubWidget("overlay", "Overlay controls"),
             SubWidget("labels", "Label editor"),
-            SubWidget("table", "ROI table", tooltip="The ROIs tab: the controls over the ROI table."),
-            SubWidget("traces", "Trace table", tooltip="The Traces tab: every collected trace with stats."),
+            SubWidget(
+                "table",
+                "ROI table",
+                tooltip="The ROIs tab: the controls over the ROI table.",
+            ),
+            SubWidget(
+                "traces",
+                "Trace table",
+                tooltip="The Traces tab: every collected trace with stats.",
+            ),
         ),
     ),
 )
@@ -302,9 +311,7 @@ def draw_widgets_menu(parent: Any) -> None:
             imgui.text_disabled(entry.tooltip)
             imgui.separator()
 
-        clicked, new_value = imgui.menu_item(
-            f"Show {entry.label}", "", enabled, True
-        )
+        clicked, new_value = imgui.menu_item(f"Show {entry.label}", "", enabled, True)
         if clicked and new_value != enabled:
             _apply_toggle(parent, entry, new_value)
             enabled = new_value
@@ -314,12 +321,8 @@ def draw_widgets_menu(parent: Any) -> None:
             if not enabled:
                 imgui.begin_disabled()
             for sub in entry.subwidgets:
-                sub_on = bool(
-                    _load().get(f"{entry.key}.{sub.key}", sub.default)
-                )
-                sub_clicked, sub_value = imgui.menu_item(
-                    sub.label, "", sub_on, True
-                )
+                sub_on = bool(_load().get(f"{entry.key}.{sub.key}", sub.default))
+                sub_clicked, sub_value = imgui.menu_item(sub.label, "", sub_on, True)
                 if sub.tooltip and imgui.is_item_hovered(
                     imgui.HoveredFlags_.allow_when_disabled
                 ):

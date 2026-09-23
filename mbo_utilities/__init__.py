@@ -8,7 +8,9 @@ like numpy, dask, and tifffile are only loaded when actually needed.
 import warnings
 
 # Suppress annoying CuPy warning about CUDA path (usually harmless if CUDA works)
-warnings.filterwarnings("ignore", category=UserWarning, message="CUDA path could not be detected")
+warnings.filterwarnings(
+    "ignore", category=UserWarning, message="CUDA path could not be detected"
+)
 
 
 # Define what's available for lazy loading
@@ -72,6 +74,7 @@ def __getattr__(name):
     # Version (importlib.metadata pulls email + zipfile; defer to keep CLI startup fast)
     if name == "__version__":
         from importlib.metadata import PackageNotFoundError, version
+
         for dist in ("pml_utilities", "mbo_utilities"):
             try:
                 return version(dist)
@@ -82,21 +85,26 @@ def __getattr__(name):
     # Core I/O
     if name == "imread":
         from .reader import imread
+
         return imread
     if name == "imwrite":
         from .writer import imwrite
+
         return imwrite
     if name == "MBO_SUPPORTED_FTYPES":
         from .reader import MBO_SUPPORTED_FTYPES
+
         return MBO_SUPPORTED_FTYPES
 
     # Pluggable array API (dependency-light; safe to import early)
     if name in ("LazyArray", "register_array_class"):
         from .lazy_array import LazyArray, register_array_class
+
         return LazyArray if name == "LazyArray" else register_array_class
 
     if name == "get_mbo_dirs":
         from .preferences import get_mbo_dirs
+
         return get_mbo_dirs
 
     # Memory monitoring (psutil-backed; cheap import)
@@ -108,20 +116,24 @@ def __getattr__(name):
         "stop_memory_monitor",
     ):
         from . import _sysmem
+
         return getattr(_sysmem, name)
 
     if name == "files_to_dask":
         from .arrays import files_to_dask
+
         return files_to_dask
 
     # Axial plane-shift apply/remove (read-time, non-destructive)
     if name in ("with_axial_shifts", "AxialShiftView"):
-        from .arrays import with_axial_shifts, AxialShiftView
+        from .arrays import AxialShiftView, with_axial_shifts
+
         return with_axial_shifts if name == "with_axial_shifts" else AxialShiftView
 
     # Read-time bidirectional phase correction (non-destructive)
     if name == "with_phasecorr":
         from .arrays import with_phasecorr
+
         return with_phasecorr
 
     # File utilities (file_io -> tifffile, zarr)
@@ -131,19 +143,29 @@ def __getattr__(name):
         "merge_zarr_zplanes",
     ):
         from . import file_io
+
         return getattr(file_io, name)
 
     # Suite2p ops utilities
     if name == "load_ops":
         from .arrays.suite2p import load_ops
+
         return load_ops
     if name == "write_ops":
         from ._writers import write_ops
+
         return write_ops
 
     # Metadata (metadata -> tifffile)
-    if name in ("is_raw_scanimage", "get_metadata", "get_voxel_size", "normalize_resolution", "VoxelSize"):
+    if name in (
+        "is_raw_scanimage",
+        "get_metadata",
+        "get_voxel_size",
+        "normalize_resolution",
+        "VoxelSize",
+    ):
         from . import metadata
+
         return getattr(metadata, name)
 
     # Preferences (lightweight, no heavy deps)
@@ -156,15 +178,18 @@ def __getattr__(name):
         "set_last_save_dir",
     ):
         from . import preferences
+
         return getattr(preferences, name)
 
     if name == "load_npy":
         from .file_io import load_npy
+
         return load_npy
 
     # Video export (_writers -> imageio)
     if name == "to_video":
         from ._writers import to_video
+
         return to_video
 
     # The viewer. `from .gui import run_gui` cannot be used here: importing the
@@ -173,14 +198,17 @@ def __getattr__(name):
     # the function. Reaching into the submodule directly is unambiguous.
     if name == "run_gui":
         from .gui.run_gui import run_gui
+
         return run_gui
     if name == "DataVis":
         from .gui.data_vis import DataVis
+
         return DataVis
 
     # File/folder selection (widgets -> imgui, wgpu)
     if name in ("select_folder", "select_files"):
-        from .gui.widgets.simple_selector import select_folder, select_files
+        from .gui.widgets.simple_selector import select_files, select_folder
+
         return select_folder if name == "select_folder" else select_files
 
     # Pipeline registry (triggers array module imports to register pipelines)
@@ -193,9 +221,11 @@ def __getattr__(name):
     ):
         # first register all pipelines
         from .arrays import register_all_pipelines
+
         register_all_pipelines()
         # then return the requested function
         from . import pipeline_registry
+
         return getattr(pipeline_registry, name)
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

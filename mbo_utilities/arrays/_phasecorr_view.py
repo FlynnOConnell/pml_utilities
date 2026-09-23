@@ -117,7 +117,7 @@ class PhaseCorrectedView(PhaseCorrectionMixin):
         if Ellipsis in key:
             i = key.index(Ellipsis)
             n_missing = 5 - (len(key) - 1)
-            key = key[:i] + (slice(None),) * max(n_missing, 0) + key[i + 1:]
+            key = key[:i] + (slice(None),) * max(n_missing, 0) + key[i + 1 :]
         if len(key) > 5:
             raise IndexError(f"too many indices for 5D array: {len(key)}")
         if len(key) < 5:

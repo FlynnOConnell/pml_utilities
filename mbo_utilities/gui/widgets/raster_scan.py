@@ -7,10 +7,10 @@ that supports phase correction (has fix_phase and use_fft attributes).
 
 from typing import Any
 
-from imgui_bundle import imgui, hello_imgui
+from imgui_bundle import hello_imgui, imgui
 
-from mbo_utilities.gui.widgets._base import Widget
 from mbo_utilities.gui._imgui_helpers import set_tooltip
+from mbo_utilities.gui.widgets._base import Widget
 
 
 class RasterScanWidget(Widget):
@@ -31,9 +31,7 @@ class RasterScanWidget(Widget):
 
         imgui.spacing()
         imgui.separator()
-        imgui.text_colored(
-            imgui.ImVec4(0.8, 0.8, 0.2, 1.0), "Scan-Phase Correction"
-        )
+        imgui.text_colored(imgui.ImVec4(0.8, 0.8, 0.2, 1.0), "Scan-Phase Correction")
         imgui.spacing()
         imgui.spacing()
 
@@ -53,9 +51,7 @@ class RasterScanWidget(Widget):
             imgui.begin_disabled()
         imgui.set_next_item_width(hello_imgui.em_size(10))
         fft_changed, fft_value = imgui.checkbox("Sub-Pixel (slower)", parent.use_fft)
-        set_tooltip(
-            "Use FFT-based sub-pixel registration (slower but more accurate)."
-        )
+        set_tooltip("Use FFT-based sub-pixel registration (slower but more accurate).")
         if fft_changed:
             parent.use_fft = fft_value
         if not fix_phase_on:

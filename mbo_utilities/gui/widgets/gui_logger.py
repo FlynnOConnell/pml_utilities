@@ -5,19 +5,22 @@ debug panel for mbo_utilities GUI.
 displays log messages from all mbo.* loggers with filtering,
 level control, and message management.
 """
+
 import logging
 import time
+
 from imgui_bundle import imgui
+
 from mbo_utilities import log
 
 LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LEVEL_VAL = {n: getattr(logging, n) for n in LEVELS}
 LEVEL_COLORS = {
-    "debug": imgui.ImVec4(0.5, 0.5, 0.5, 1.0),      # gray
-    "info": imgui.ImVec4(0.8, 0.8, 0.8, 1.0),       # light gray
-    "warning": imgui.ImVec4(1.0, 0.7, 0.2, 1.0),    # orange
-    "error": imgui.ImVec4(1.0, 0.3, 0.3, 1.0),      # red
-    "critical": imgui.ImVec4(1.0, 0.1, 0.5, 1.0),   # magenta
+    "debug": imgui.ImVec4(0.5, 0.5, 0.5, 1.0),  # gray
+    "info": imgui.ImVec4(0.8, 0.8, 0.8, 1.0),  # light gray
+    "warning": imgui.ImVec4(1.0, 0.7, 0.2, 1.0),  # orange
+    "error": imgui.ImVec4(1.0, 0.3, 0.3, 1.0),  # red
+    "critical": imgui.ImVec4(1.0, 0.1, 0.5, 1.0),  # magenta
 }
 
 
@@ -182,16 +185,22 @@ class GuiLogger:
 
             # draw grouped loggers in columns
             columns = min(3, len(groups))
-            if imgui.begin_table("logger_table", columns, imgui.TableFlags_.borders_inner_v):
+            if imgui.begin_table(
+                "logger_table", columns, imgui.TableFlags_.borders_inner_v
+            ):
                 for group_name in sorted(groups.keys()):
                     imgui.table_next_column()
-                    imgui.text_colored(imgui.ImVec4(0.6, 0.8, 1.0, 1.0), f"[{group_name}]")
+                    imgui.text_colored(
+                        imgui.ImVec4(0.6, 0.8, 1.0, 1.0), f"[{group_name}]"
+                    )
 
                     for name in groups[group_name]:
                         short = name.split(".")[-1]
                         imgui.push_id(f"lg_{name}")
 
-                        changed, state = imgui.checkbox(short, self.active_loggers[name])
+                        changed, state = imgui.checkbox(
+                            short, self.active_loggers[name]
+                        )
                         if changed:
                             self.active_loggers[name] = state
 

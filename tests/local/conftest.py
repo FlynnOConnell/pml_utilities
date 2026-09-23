@@ -5,12 +5,12 @@ import pytest
 
 
 def pytest_configure(config):
-    """register custom markers."""
+    """Register custom markers."""
     config.addinivalue_line("markers", "local: tests requiring local data")
 
 
 def pytest_collection_modifyitems(config, items):
-    """add local marker to all tests in this directory."""
+    """Add local marker to all tests in this directory."""
     for item in items:
         if "local" in str(item.fspath):
             item.add_marker(pytest.mark.local)

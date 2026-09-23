@@ -58,8 +58,8 @@ class Partition:
     free_mb_max: int = 0
     gres: str = ""
     cpus_alloc: int = 0  # CPUs allocated across the partition's nodes
-    cpus_idle: int = 0   # CPUs idle across the partition's nodes
-    gpus_used: int = 0   # GPUs in use across the partition's nodes
+    cpus_idle: int = 0  # CPUs idle across the partition's nodes
+    gpus_used: int = 0  # GPUs in use across the partition's nodes
     gpus_total: int = 0  # GPUs present across the partition's nodes
     tmp_mb: int = 0  # configured node-local /tmp (sinfo TmpDisk), 0 = unreported
     states: set = field(default_factory=set)
@@ -71,7 +71,8 @@ class Partition:
 
 def parse_sinfo(text: str, pattern: str = "hpc") -> list[Partition]:
     """Aggregate per-node `sinfo` lines into partitions whose name matches
-    the regex `pattern` (default 'hpc' so it isn't tied to one cluster)."""
+    the regex `pattern` (default 'hpc' so it isn't tied to one cluster).
+    """
     rx = re.compile(pattern)
     parts: dict[str, Partition] = {}
     for line in text.splitlines():
@@ -110,7 +111,9 @@ def sinfo_available() -> bool:
 def query_partitions(pattern: str = "hpc") -> list[Partition]:
     out = subprocess.run(
         ["sinfo", "-h", "-N", "-O", _SINFO_FIELDS],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     ).stdout
     return parse_sinfo(out, pattern)
 
@@ -127,10 +130,16 @@ def format_partitions(parts: list[Partition]) -> str:
         else:
             free = _gb(p.free_mb_max)
         gpu = f"{p.gpus_used}/{p.gpus_total}" if p.gpus_total else "-"
-        rows.append((
-            p.name, str(p.nodes), f"{p.cpus_alloc}/{p.cpus_idle}",
-            _gb(p.mem_mb), free, gpu,
-            ",".join(sorted(p.states)),
-        ))
+        rows.append(
+            (
+                p.name,
+                str(p.nodes),
+                f"{p.cpus_alloc}/{p.cpus_idle}",
+                _gb(p.mem_mb),
+                free,
+                gpu,
+                ",".join(sorted(p.states)),
+            )
+        )
     w = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     return "\n".join("  ".join(c.ljust(w[i]) for i, c in enumerate(r)) for r in rows)

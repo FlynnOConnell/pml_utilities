@@ -122,6 +122,7 @@ class _KeyReader:
         try:
             import termios
             import tty
+
             self._fd = sys.stdin.fileno()
             self._old = termios.tcgetattr(self._fd)
             tty.setcbreak(self._fd)
@@ -133,6 +134,7 @@ class _KeyReader:
     def __exit__(self, *exc):
         if self._fd is not None and self._old is not None:
             import termios
+
             termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old)
 
     def get(self):
@@ -140,8 +142,10 @@ class _KeyReader:
             return None
         if os.name == "nt":
             import msvcrt
+
             return msvcrt.getwch() if msvcrt.kbhit() else None
         import select
+
         r, _, _ = select.select([sys.stdin], [], [], 0)
         return sys.stdin.read(1) if r else None
 
@@ -158,7 +162,8 @@ def _header(path: Path, stream: str, interactive: bool, n_files: int) -> str:
 
 def _resolve_target(target):
     """(logs_dir, output_dir, job_id). Accepts a SLURM job id, a config file,
-    or a directory. job_id is set only when the target is a numeric id."""
+    or a directory. job_id is set only when the target is a numeric id.
+    """
     from . import slurm
 
     if slurm.is_job_id(target):
@@ -194,8 +199,10 @@ def _surface_terminal_state(logs_dir, output_dir) -> bool:
         return True
     timings = (output_dir / "timings.json") if output_dir is not None else None
     if timings is not None and timings.exists():
-        print(f"run finished (no streamed logs — local run?). timings: {timings}\n"
-              f"  mbo hpc status {output_dir}")
+        print(
+            f"run finished (no streamed logs — local run?). timings: {timings}\n"
+            f"  mbo hpc status {output_dir}"
+        )
         return True
     return False
 
@@ -213,8 +220,9 @@ def watch(target="hpc.toml", stream="err", follow=True, lines=40) -> None:
     if job_id is not None:
         print(slurm.state_line(job_id))
 
-    have_logs = logs_dir is not None and bool(list_logs(logs_dir, "err")
-                                              or list_logs(logs_dir, "out"))
+    have_logs = logs_dir is not None and bool(
+        list_logs(logs_dir, "err") or list_logs(logs_dir, "out")
+    )
     if not have_logs:
         # No streamed .out/.err. The run may have already failed or finished
         # (local runs never produce them) — surface that instead of waiting.
@@ -253,7 +261,9 @@ def watch(target="hpc.toml", stream="err", follow=True, lines=40) -> None:
         other = "out" if stream == "err" else "err"
         n_other = n_out if other == "out" else n_err
         if n_other:
-            print(f"\n({n_other} .{other} log(s); -o for .out, drop --no-follow to follow)")
+            print(
+                f"\n({n_other} .{other} log(s); -o for .out, drop --no-follow to follow)"
+            )
         return
 
     with _KeyReader() as keys:

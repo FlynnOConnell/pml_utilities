@@ -36,34 +36,43 @@ def __getattr__(name):
 
     if name == "run_gui":
         from .run_gui import run_gui
+
         return run_gui
     if name == "DataVis":
         from .data_vis import DataVis
+
         return DataVis
     if name == "PreviewDataWidget":
         from . import _setup  # triggers setup on import
         from .widgets.preview_data import PreviewDataWidget
+
         return PreviewDataWidget
     if name == "GridSearchViewer":
         from .widgets.grid_search import GridSearchViewer
+
         return GridSearchViewer
     if name == "setup_imgui":
         from ._setup import setup_imgui
+
         return setup_imgui
     if name == "set_qt_icon":
         from ._setup import set_qt_icon
+
         return set_qt_icon
     if name == "get_default_ini_path":
         from ._setup import get_default_ini_path
+
         return get_default_ini_path
 
     # === New architecture: Viewers ===
 
     if name == "BaseViewer":
         from .viewers import BaseViewer
+
         return BaseViewer
     if name == "TimeSeriesViewer":
         from .viewers import TimeSeriesViewer
+
         return TimeSeriesViewer
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

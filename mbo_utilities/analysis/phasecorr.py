@@ -12,7 +12,9 @@ MBO_WINDOW_METHODS = {
     "mean-sub": lambda X: X[0] - np.mean(X, axis=0),
 }
 
-ALL_PHASECORR_METHODS = set(TWO_DIM_PHASECORR_METHODS) | set(THREE_DIM_PHASECORR_METHODS)
+ALL_PHASECORR_METHODS = set(TWO_DIM_PHASECORR_METHODS) | set(
+    THREE_DIM_PHASECORR_METHODS
+)
 
 logger = log.get("phasecorr")
 
@@ -20,7 +22,8 @@ logger = log.get("phasecorr")
 def _phase_corr_2d(frame, border=0, max_offset=4, use_fft=True):
     """Estimate horizontal shift between odd and even rows via 1D rFFT phase
     correlation along x. Parabolic peak refinement gives ~0.05 px precision.
-    `use_fft=False` returns the integer-rounded result."""
+    `use_fft=False` returns the integer-rounded result.
+    """
     if frame.ndim != 2:
         raise ValueError(f"Expected 2D frame, got shape {frame.shape}")
 
@@ -32,17 +35,19 @@ def _phase_corr_2d(frame, border=0, max_offset=4, use_fft=True):
     # split into even/odd FIRST, then crop. cropping the full frame before
     # splitting flips parity when t is odd (rows 3,5,7,... become "even").
     h, w = frame.shape
-    pre  = frame[::2]
+    pre = frame[::2]
     post = frame[1::2]
     m = min(pre.shape[0], post.shape[0])
-    pre  = pre[t:m - b if b else m, l:w - r if r else w]
-    post = post[t:m - b if b else m, l:w - r if r else w]
+    pre = pre[t : m - b if b else m, l : w - r if r else w]
+    post = post[t : m - b if b else m, l : w - r if r else w]
     even = pre.astype(np.float32, copy=False)
-    odd  = post.astype(np.float32, copy=False)
+    odd = post.astype(np.float32, copy=False)
 
     Lx = even.shape[-1]
-    fe = np.fft.rfft(even, axis=-1); fe /= np.abs(fe) + 1e-5
-    fo = np.fft.rfft(odd,  axis=-1); fo /= np.abs(fo) + 1e-5
+    fe = np.fft.rfft(even, axis=-1)
+    fe /= np.abs(fe) + 1e-5
+    fo = np.fft.rfft(odd, axis=-1)
+    fo /= np.abs(fo) + 1e-5
     cc = np.fft.fftshift(np.fft.irfft(fe * np.conj(fo), n=Lx, axis=-1).mean(axis=0))
 
     win = max_offset or Lx // 2
@@ -63,7 +68,8 @@ def _phase_corr_2d(frame, border=0, max_offset=4, use_fft=True):
 
 def _apply_offset(img, offset, use_fft=False):
     """Shift every odd row of `img` by `offset` pixels along x, in place.
-    Subpixel via 1D rFFT along x; otherwise integer np.roll."""
+    Subpixel via 1D rFFT along x; otherwise integer np.roll.
+    """
     if img.ndim < 2:
         return img
     rows = img[..., 1::2, :]
@@ -97,9 +103,9 @@ def bidir_phasecorr(
     else:
         flat = arr.reshape(arr.shape[0], *arr.shape[-2:])
         if method == "frame":
-            offs = np.array([
-                _phase_corr_2d(f, border, max_offset, use_fft) for f in flat
-            ])
+            offs = np.array(
+                [_phase_corr_2d(f, border, max_offset, use_fft) for f in flat]
+            )
         elif method in MBO_WINDOW_METHODS:
             offs = _phase_corr_2d(
                 MBO_WINDOW_METHODS[method](flat), border, max_offset, use_fft
@@ -110,8 +116,10 @@ def bidir_phasecorr(
     if np.ndim(offs) == 0:
         out = _apply_offset(arr.copy(), float(offs), use_fft)
     else:
-        out = np.stack([
-            _apply_offset(f.copy(), float(s), use_fft)
-            for f, s in zip(arr, offs, strict=False)
-        ])
+        out = np.stack(
+            [
+                _apply_offset(f.copy(), float(s), use_fft)
+                for f, s in zip(arr, offs, strict=False)
+            ]
+        )
     return out, offs

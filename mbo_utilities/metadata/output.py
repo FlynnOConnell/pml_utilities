@@ -13,14 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from mbo_utilities.metadata.params import get_param, get_voxel_size
 from mbo_utilities.metadata.base import METADATA_PARAMS, VoxelSize
+from mbo_utilities.metadata.params import get_param
 
 # lowercase spellings of every registered rate key, used to keep all rate
 # aliases present in a source dict consistent with the recomputed rate
-_FS_ALIASES_LOWER = frozenset(
-    a.lower() for a in ("fs", *METADATA_PARAMS["fs"].aliases)
-)
+_FS_ALIASES_LOWER = frozenset(a.lower() for a in ("fs", *METADATA_PARAMS["fs"].aliases))
 _FINTERVAL_ALIASES_LOWER = frozenset(
     a.lower() for a in ("finterval", *METADATA_PARAMS["finterval"].aliases)
 )
@@ -35,7 +33,7 @@ class OutputMetadata:
     when subsets of data are being written (e.g., every Nth z-plane,
     specific frame ranges, spatial cropping, etc.)
 
-    parameters
+    Parameters
     ----------
     source : dict
         source metadata dictionary
@@ -47,7 +45,7 @@ class OutputMetadata:
         mapping of dim name -> 0-based indices selected
         e.g., {"T": [0,1,2], "Z": [0,2,4], "Y": range(100,400), "X": range(50,450)}
 
-    examples
+    Examples
     --------
     >>> meta = {"dz": 5.0, "fs": 30.0, "dx": 0.5, "dy": 0.5}
     >>> out = OutputMetadata(meta, (100, 28, 512, 512), ("T", "Z", "Y", "X"),
@@ -78,7 +76,7 @@ class OutputMetadata:
     _output_shape: tuple[int, ...] = field(default_factory=tuple, init=False)
 
     def __post_init__(self):
-        """compute derived values after init."""
+        """Compute derived values after init."""
         # migrate legacy params to selections dict
         if self.selections is None:
             self.selections = {}
@@ -98,7 +96,7 @@ class OutputMetadata:
         self._compute_output_shape()
 
     def _compute_contiguity(self):
-        """determine if frame selection is contiguous with uniform step."""
+        """Determine if frame selection is contiguous with uniform step."""
         t_sel = self.selections.get("T") if self.selections else None
         if t_sel is None:
             t_sel = self.frame_indices
@@ -124,7 +122,7 @@ class OutputMetadata:
             self._frame_step = 1
 
     def _compute_z_step_factor(self):
-        """compute z-step multiplication factor from plane selection."""
+        """Compute z-step multiplication factor from plane selection."""
         z_sel = self.selections.get("Z") if self.selections else None
         if z_sel is None:
             z_sel = self.plane_indices
@@ -144,6 +142,7 @@ class OutputMetadata:
             self._z_step_factor = steps[0]
         else:
             import logging
+
             logging.getLogger("mbo_utilities").warning(
                 f"Non-uniform z-plane spacing detected (steps: {steps[:5]}...). "
                 f"Using first step ({steps[0]}) for dz calculation."
@@ -151,7 +150,7 @@ class OutputMetadata:
             self._z_step_factor = steps[0]
 
     def _compute_output_shape(self):
-        """compute output shape based on selections."""
+        """Compute output shape based on selections."""
         if not self.source_shape or not self.source_dims:
             self._output_shape = self.source_shape
             return
@@ -168,7 +167,7 @@ class OutputMetadata:
         self._output_shape = tuple(output)
 
     def _get_step_factor(self, dim: str) -> int:
-        """get step factor for a dimension (1 if not uniformly spaced)."""
+        """Get step factor for a dimension (1 if not uniformly spaced)."""
         sel = self.selections.get(dim.upper()) if self.selections else None
         if sel is None or len(sel) <= 1:
             return 1
@@ -183,12 +182,12 @@ class OutputMetadata:
 
     @property
     def output_shape(self) -> tuple[int, ...]:
-        """shape of output array after selections."""
+        """Shape of output array after selections."""
         return self._output_shape
 
     @property
     def Lx(self) -> int:
-        """output width (X dimension size)."""
+        """Output width (X dimension size)."""
         if not self.source_dims:
             return self.source_shape[-1] if self.source_shape else 0
         try:
@@ -199,7 +198,7 @@ class OutputMetadata:
 
     @property
     def Ly(self) -> int:
-        """output height (Y dimension size)."""
+        """Output height (Y dimension size)."""
         if not self.source_dims:
             return self.source_shape[-2] if len(self.source_shape) >= 2 else 0
         try:
@@ -210,7 +209,7 @@ class OutputMetadata:
 
     @property
     def num_timepoints(self) -> int:
-        """number of timepoints in output."""
+        """Number of timepoints in output."""
         if not self.source_dims:
             return self.num_frames or 1
         try:
@@ -221,7 +220,7 @@ class OutputMetadata:
 
     @property
     def num_zplanes(self) -> int:
-        """number of z-planes in output."""
+        """Number of z-planes in output."""
         if not self.source_dims:
             return self.num_planes or 1
         try:
@@ -232,7 +231,7 @@ class OutputMetadata:
 
     @property
     def num_color_channels(self) -> int:
-        """number of color channels in output."""
+        """Number of color channels in output."""
         if not self.source_dims:
             return get_param(self.source, "num_color_channels", default=1) or 1
         try:
@@ -245,17 +244,17 @@ class OutputMetadata:
 
     @property
     def is_contiguous(self) -> bool:
-        """whether frame selection is contiguous with uniform step."""
+        """Whether frame selection is contiguous with uniform step."""
         return self._is_contiguous
 
     @property
     def z_step_factor(self) -> int:
-        """multiplication factor for z-step (step between selected planes)."""
+        """Multiplication factor for z-step (step between selected planes)."""
         return self._z_step_factor
 
     @property
     def num_frames(self) -> int | None:
-        """number of frames in output (legacy, use num_timepoints)."""
+        """Number of frames in output (legacy, use num_timepoints)."""
         t_sel = self.selections.get("T") if self.selections else None
         if t_sel is None:
             t_sel = self.frame_indices
@@ -265,7 +264,7 @@ class OutputMetadata:
 
     @property
     def num_planes(self) -> int | None:
-        """number of planes in output (legacy, use num_zplanes)."""
+        """Number of planes in output (legacy, use num_zplanes)."""
         z_sel = self.selections.get("Z") if self.selections else None
         if z_sel is None:
             z_sel = self.plane_indices
@@ -303,7 +302,7 @@ class OutputMetadata:
 
     @property
     def dz(self) -> float | None:
-        """adjusted z-step for output planes."""
+        """Adjusted z-step for output planes."""
         base, prior = self._field_base_and_prior_stride("dz")
         if base is None:
             return None
@@ -311,26 +310,26 @@ class OutputMetadata:
 
     @property
     def dx(self) -> float:
-        """pixel size in x (adjusted if X selection has step > 1)."""
+        """Pixel size in x (adjusted if X selection has step > 1)."""
         source_dx = get_param(self.source, "dx", default=1.0) or 1.0
         x_step = self._get_step_factor("X")
         return source_dx * x_step
 
     @property
     def dy(self) -> float:
-        """pixel size in y (adjusted if Y selection has step > 1)."""
+        """Pixel size in y (adjusted if Y selection has step > 1)."""
         source_dy = get_param(self.source, "dy", default=1.0) or 1.0
         y_step = self._get_step_factor("Y")
         return source_dy * y_step
 
     @property
     def voxel_size(self) -> VoxelSize:
-        """adjusted voxel size for output."""
+        """Adjusted voxel size for output."""
         return VoxelSize(dx=self.dx, dy=self.dy, dz=self.dz)
 
     @property
     def fs(self) -> float | None:
-        """frame rate - only valid for contiguous frames."""
+        """Frame rate - only valid for contiguous frames."""
         if not self._is_contiguous:
             return None
         base, prior = self._field_base_and_prior_stride("fs")
@@ -343,7 +342,8 @@ class OutputMetadata:
 
     def _build_provenance_stamp(self) -> dict:
         """Return the provenance dict to emit on the output, accumulating
-        this pass's stride into the existing record."""
+        this pass's stride into the existing record.
+        """
         prov = self._provenance()
         dz_base, dz_prior = self._field_base_and_prior_stride("dz")
         fs_base, fs_prior = self._field_base_and_prior_stride("fs")
@@ -361,7 +361,7 @@ class OutputMetadata:
 
     @property
     def finterval(self) -> float | None:
-        """frame interval in seconds (1/fs)."""
+        """Frame interval in seconds (1/fs)."""
         fs = self.fs
         if fs is None or fs <= 0:
             return None
@@ -369,14 +369,14 @@ class OutputMetadata:
 
     def to_imagej(self, shape: tuple) -> tuple[dict, tuple]:
         """
-        build ImageJ-compatible metadata dict and resolution tuple.
+        Build ImageJ-compatible metadata dict and resolution tuple.
 
-        parameters
+        Parameters
         ----------
         shape : tuple
             output array shape, always 5D TZCYX
 
-        returns
+        Returns
         -------
         tuple[dict, tuple]
             (imagej_metadata, resolution) ready for tifffile
@@ -411,14 +411,14 @@ class OutputMetadata:
 
     def to_ome_ngff(self, dims: tuple[str, ...] = ("T", "Z", "Y", "X")) -> dict:
         """
-        build OME-NGFF v0.5 compliant metadata.
+        Build OME-NGFF v0.5 compliant metadata.
 
-        parameters
+        Parameters
         ----------
         dims : tuple[str, ...]
             dimension labels for the output array
 
-        returns
+        Returns
         -------
         dict
             OME-NGFF v0.5 multiscales metadata
@@ -454,7 +454,7 @@ class OutputMetadata:
         }
 
     def to_napari_scale(self, dims: tuple[str, ...] = ("T", "Z", "Y", "X")) -> tuple:
-        """build napari-compatible scale tuple."""
+        """Build napari-compatible scale tuple."""
         vs = self.voxel_size
         scale = []
 
@@ -478,16 +478,16 @@ class OutputMetadata:
 
     def to_dict(self, include_aliases: bool = True) -> dict:
         """
-        export as flat metadata dict with all reactive values.
+        Export as flat metadata dict with all reactive values.
 
         all dimension sizes and scales are adjusted based on selections.
 
-        parameters
+        Parameters
         ----------
         include_aliases : bool
             if True, includes all standard aliases (OME, ImageJ, legacy)
 
-        returns
+        Returns
         -------
         dict
             metadata dictionary with adjusted values

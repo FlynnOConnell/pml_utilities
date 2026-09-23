@@ -62,7 +62,8 @@ class _ChannelView(LazyArray):
     @property
     def reader_kwargs(self) -> dict:
         """The source's selectors (``frame_average``, ``unit``, ``dataset``);
-        ``channel`` itself is added by the task that builds the view."""
+        ``channel`` itself is added by the task that builds the view.
+        """
         return dict(getattr(self._arr, "reader_kwargs", None) or {})
 
     @property
@@ -88,6 +89,4 @@ class _ChannelView(LazyArray):
     def _imwrite(self, outpath, planes=None, ext=".tiff", **kwargs):
         from mbo_utilities.arrays._base import _imwrite_base
 
-        return _imwrite_base(
-            self, outpath, planes=planes, ext=ext, **kwargs
-        )
+        return _imwrite_base(self, outpath, planes=planes, ext=ext, **kwargs)

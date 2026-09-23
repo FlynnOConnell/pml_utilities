@@ -18,6 +18,7 @@ The store is keyed by the raw acquisition path, so crops set against a
 raw IsoviewArray persist when the user later reopens the corrected or
 fused output.
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -25,11 +26,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from imgui_bundle import imgui, hello_imgui, icons_fontawesome_6 as fa
+from imgui_bundle import icons_fontawesome_6 as fa
+from imgui_bundle import imgui
 
 from mbo_utilities.gui import _isoview_crop_state as crop_state
 from mbo_utilities.gui._imgui_helpers import button_width, draw_toolbar_row
-
 
 _DEFAULT_CAMERA_VIEW_MAP = {0: 0, 1: 0, 2: 90, 3: 90}
 # Per-camera colors (match the segmentation / dead-pixel widgets).
@@ -67,7 +68,7 @@ def cameras_for_crop(arr: Any) -> list[int]:
     Falls back to the map, then to 4 cameras.
     """
     out: list[int] = []
-    for v in (getattr(arr, "views", None) or []):
+    for v in getattr(arr, "views", None) or []:
         if isinstance(v, tuple) and v:
             out.append(int(v[0]))
         else:
@@ -100,6 +101,7 @@ def _view_int_from_label(label: str) -> int | None:
         return None
     if label.startswith("VW") and label[2:].isdigit():
         from mbo_utilities.arrays.isoview.array import camera_from_view_label
+
         cam = camera_from_view_label(label)
         return cam if cam is not None else int(label[2:])
     if label.startswith("CM") and label[2:].isdigit():
@@ -112,7 +114,8 @@ def _view_int_from_label(label: str) -> int | None:
 
 def _tp_label(slot, arr=None) -> str:
     """Display label for a tiled projection slot: the tile's specimen_name
-    grid token (e.g. TL010) when the array can resolve it, else SPM##."""
+    grid token (e.g. TL010) when the array can resolve it, else SPM##.
+    """
     fn = getattr(arr, "tile_label", None)
     if callable(fn):
         try:
@@ -123,7 +126,8 @@ def _tp_label(slot, arr=None) -> str:
 
 
 def _build_projection_index(
-    arr: Any, projections: dict | None,
+    arr: Any,
+    projections: dict | None,
 ) -> dict[int, dict[int, Path]]:
     """Return ``{camera_int: {timepoint: xy_projection_path}}``.
 
@@ -210,6 +214,7 @@ def _get_iso_array(parent: Any) -> Any | None:
     arr = iw.data[0]
     try:
         from mbo_utilities.gui.widgets.pipelines.isoview import _unwrap_array
+
         return _unwrap_array(arr)
     except Exception:
         return arr
@@ -280,7 +285,9 @@ def _get_or_upload(parent: Any, view: int, timepoint: int) -> Any | None:
             pass
         parent._iso_crop_gpu_lru.append(key)
         gpu.reupload_if_changed(
-            "gray", float(parent._iso_crop_vmin), float(parent._iso_crop_vmax),
+            "gray",
+            float(parent._iso_crop_vmin),
+            float(parent._iso_crop_vmax),
         )
         return gpu
 
@@ -295,10 +302,14 @@ def _get_or_upload(parent: Any, view: int, timepoint: int) -> Any | None:
     if backend is None:
         return None
     from mbo_utilities.gui.widgets.summary_image import _GpuImage
+
     try:
         gpu = _GpuImage(
-            backend, proj, "gray",
-            float(parent._iso_crop_vmin), float(parent._iso_crop_vmax),
+            backend,
+            proj,
+            "gray",
+            float(parent._iso_crop_vmin),
+            float(parent._iso_crop_vmax),
         )
     except Exception:
         return None
@@ -329,7 +340,8 @@ def _seed_bounds(existing: dict | None, shp: tuple[int, int, int]) -> dict:
 
 def _pending_tile(parent: Any, arr: Any):
     """Active tile key for pending crops: current tile token when tiled,
-    else None."""
+    else None.
+    """
     if bool(getattr(arr, "is_tiled", False)):
         return parent._iso_crop_current_tp
     return None
@@ -378,13 +390,15 @@ def _ensure_loaded_for(parent: Any, arr: Any) -> None:
             existing_cams = tile_crops.get(tile, {})
             for cam in cameras:
                 parent._iso_crop_pending[(tile, cam)] = _seed_bounds(
-                    existing_cams.get(cam), shp,
+                    existing_cams.get(cam),
+                    shp,
                 )
     else:
         existing = crop_state.get_crops(arr)
         for cam in cameras:
             parent._iso_crop_pending[(None, cam)] = _seed_bounds(
-                existing.get(cam), shp,
+                existing.get(cam),
+                shp,
             )
 
     vmin, vmax = _initial_display_range(parent, arr)
@@ -441,7 +455,9 @@ def draw_window(parent: Any) -> None:
         | imgui.WindowFlags_.no_saved_settings
     )
     expanded, parent._iso_crop_window_open = imgui.begin(
-        title, p_open=parent._iso_crop_window_open, flags=flags,
+        title,
+        p_open=parent._iso_crop_window_open,
+        flags=flags,
     )
     try:
         if not expanded:
@@ -481,11 +497,16 @@ def draw_window(parent: Any) -> None:
         region_h = max(140.0, imgui.get_content_region_avail().y - reserve_bottom)
         per_cam_h = region_h / max(1, len(sorted_cams))
         if imgui.begin_child(
-            "##iso_crop_sections", imgui.ImVec2(0, region_h),
+            "##iso_crop_sections",
+            imgui.ImVec2(0, region_h),
         ):
             for i, cam in enumerate(sorted_cams):
                 _draw_camera_section(
-                    parent, arr, cam, is_first=(i == 0), max_h=per_cam_h,
+                    parent,
+                    arr,
+                    cam,
+                    is_first=(i == 0),
+                    max_h=per_cam_h,
                 )
                 imgui.spacing()
         imgui.end_child()
@@ -494,7 +515,9 @@ def draw_window(parent: Any) -> None:
         tiled = bool(getattr(arr, "is_tiled", False))
         if tiled and len(parent._iso_crop_timepoints) > 1:
             cur = parent._iso_crop_current_tp
-            if imgui.button(f"Copy {_tp_label(cur, arr)} crop to all tiles", imgui.ImVec2(0, 0)):
+            if imgui.button(
+                f"Copy {_tp_label(cur, arr)} crop to all tiles", imgui.ImVec2(0, 0)
+            ):
                 for cam in parent._iso_crop_shapes:
                     src = parent._iso_crop_pending.get((cur, cam))
                     if src is None:
@@ -506,7 +529,9 @@ def draw_window(parent: Any) -> None:
             for (tile, cam), _ in list(parent._iso_crop_pending.items()):
                 nz, ny, nx = parent._iso_crop_shapes.get(cam, (0, 0, 0))
                 parent._iso_crop_pending[(tile, cam)] = {
-                    "z": (0, nz), "y": (0, ny), "x": (0, nx),
+                    "z": (0, nz),
+                    "y": (0, ny),
+                    "x": (0, nx),
                 }
         imgui.same_line()
         if imgui.button("Cancel", imgui.ImVec2(120, 0)):
@@ -526,14 +551,21 @@ def draw_window(parent: Any) -> None:
                     nz, ny, nx = shp
                     if tile is None:
                         crop_state.set_camera_bounds(
-                            arr, cam,
-                            z=pending["z"], y=pending["y"], x=pending["x"],
+                            arr,
+                            cam,
+                            z=pending["z"],
+                            y=pending["y"],
+                            x=pending["x"],
                             shape=(nz, ny, nx),
                         )
                     else:
                         crop_state.set_tile_camera_bounds(
-                            arr, tile, cam,
-                            z=pending["z"], y=pending["y"], x=pending["x"],
+                            arr,
+                            tile,
+                            cam,
+                            z=pending["z"],
+                            y=pending["y"],
+                            x=pending["x"],
                             shape=(nz, ny, nx),
                         )
                 parent._iso_crop_window_open = False
@@ -549,12 +581,22 @@ def _draw_display_controls(parent: Any, arr: Any) -> None:
 
     def _vmin():
         _, parent._iso_crop_vmin = imgui.drag_float(
-            "##iso_crop_vmin", float(parent._iso_crop_vmin), speed, 0.0, 0.0, "%.0f",
+            "##iso_crop_vmin",
+            float(parent._iso_crop_vmin),
+            speed,
+            0.0,
+            0.0,
+            "%.0f",
         )
 
     def _vmax():
         _, parent._iso_crop_vmax = imgui.drag_float(
-            "##iso_crop_vmax", float(parent._iso_crop_vmax), speed, 0.0, 0.0, "%.0f",
+            "##iso_crop_vmax",
+            float(parent._iso_crop_vmax),
+            speed,
+            0.0,
+            0.0,
+            "%.0f",
         )
 
     def _auto():
@@ -587,10 +629,15 @@ def _draw_display_controls(parent: Any, arr: Any) -> None:
 
         def _tp():
             ch, v = imgui.slider_int(
-                "##iso_crop_tp", cur_idx, 0, max(0, len(tps) - 1), value_fmt,
+                "##iso_crop_tp",
+                cur_idx,
+                0,
+                max(0, len(tps) - 1),
+                value_fmt,
             )
             if ch:
                 parent._iso_crop_current_tp = tps[max(0, min(v, len(tps) - 1))]
+
         items.append((label, 220.0, _tp))
 
     draw_toolbar_row(items)
@@ -605,22 +652,32 @@ def _draw_display_controls(parent: Any, arr: Any) -> None:
 
 
 def _draw_camera_section(
-    parent: Any, arr: Any, camera: int, *,
-    is_first: bool = False, max_h: float | None = None,
+    parent: Any,
+    arr: Any,
+    camera: int,
+    *,
+    is_first: bool = False,
+    max_h: float | None = None,
 ) -> None:
     nz, ny, nx = parent._iso_crop_shapes[camera]
     tile = _pending_tile(parent, arr)
     key = (tile, camera)
 
     # All edits go through pending state so the user can Cancel cleanly.
-    pending = parent._iso_crop_pending.setdefault(key, {
-        "z": (0, nz), "y": (0, ny), "x": (0, nx),
-    })
+    pending = parent._iso_crop_pending.setdefault(
+        key,
+        {
+            "z": (0, nz),
+            "y": (0, ny),
+            "x": (0, nx),
+        },
+    )
     z0, z1 = pending["z"]
     y0, y1 = pending["y"]
     x0, x1 = pending["x"]
 
     from mbo_utilities.arrays.isoview.array import camera_view_label
+
     color = _CAMERA_COLORS.get(camera, (0.6, 0.8, 1.0, 1.0))
     spm = f"{_tp_label(tile, arr)}  " if tile is not None else ""
     imgui.text_colored(
@@ -639,7 +696,8 @@ def _draw_camera_section(
         # can be ~600px tall, pushing the rest off-window.
         header_h = imgui.get_text_line_height_with_spacing()
         preview_h = (
-            preview_w if max_h is None
+            preview_w
+            if max_h is None
             else max(96.0, max_h - header_h - imgui.get_style().item_spacing.y)
         )
 
@@ -676,16 +734,25 @@ def _draw_camera_section(
         imgui.begin_group()
         try:
             _draw_view_preview(
-                parent, camera, preview_w,
-                ny=ny, nx=nx,
-                y0=y0, y1=y1, x0=x0, x1=x1,
-                color=color, preview_h=preview_h,
+                parent,
+                camera,
+                preview_w,
+                ny=ny,
+                nx=nx,
+                y0=y0,
+                y1=y1,
+                x0=x0,
+                x1=x1,
+                color=color,
+                preview_h=preview_h,
             )
         finally:
             imgui.end_group()
 
         parent._iso_crop_pending[key] = {
-            "z": (z0, z1), "y": (y0, y1), "x": (x0, x1),
+            "z": (z0, z1),
+            "y": (y0, y1),
+            "x": (x0, x1),
         }
     finally:
         imgui.pop_id()
@@ -697,8 +764,12 @@ def _apply_button_style():
     action. Keeps the "this is the commit" affordance consistent.
     """
     imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.13, 0.55, 0.13, 1.0))
-    imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0))
-    imgui.push_style_color(imgui.Col_.button_active, imgui.ImVec4(0.10, 0.45, 0.10, 1.0))
+    imgui.push_style_color(
+        imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0)
+    )
+    imgui.push_style_color(
+        imgui.Col_.button_active, imgui.ImVec4(0.10, 0.45, 0.10, 1.0)
+    )
     try:
         yield
     finally:
@@ -713,23 +784,35 @@ def _drag_pair(axis: str, lo: int, hi: int, vmin: int, vmax: int) -> tuple[int, 
     imgui.same_line()
     imgui.set_next_item_width(_DRAG_W)
     _, lo = imgui.slider_int(
-        f"##iso_crop_{axis}_lo", int(lo), int(vmin), max(int(vmin), int(vmax) - 1),
+        f"##iso_crop_{axis}_lo",
+        int(lo),
+        int(vmin),
+        max(int(vmin), int(vmax) - 1),
         "%d",
     )
     imgui.same_line()
     imgui.set_next_item_width(_DRAG_W)
     _, hi = imgui.slider_int(
-        f"##iso_crop_{axis}_hi", int(hi), int(vmin) + 1, int(vmax),
+        f"##iso_crop_{axis}_hi",
+        int(hi),
+        int(vmin) + 1,
+        int(vmax),
         "%d",
     )
     return int(lo), int(hi)
 
 
 def _draw_view_preview(
-    parent: Any, view: int, preview_w: float,
+    parent: Any,
+    view: int,
+    preview_w: float,
     *,
-    ny: int, nx: int,
-    y0: int, y1: int, x0: int, x1: int,
+    ny: int,
+    nx: int,
+    y0: int,
+    y1: int,
+    x0: int,
+    x1: int,
     color: tuple[float, float, float, float],
     preview_h: float | None = None,
 ) -> None:

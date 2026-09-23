@@ -42,15 +42,15 @@ import h5py
 import numpy as np
 import psutil
 import zarr
-from vnoiser import DfofConfig, ScanTraces, SpikeDetectConfig, read_pf
 from vnoiser.pf import DFOF_FILE, PROVENANCE_FILE, PfWriter, final_domain_name
-from vnoiser.pipeline import load_scan_rois, process_domain
 from vnoiser.preprocess import DomainTraces, domain_names, domain_zscore
 
 from mbo_utilities import log
 from mbo_utilities._sysmem import MemoryMonitor, mem_snapshot
 from mbo_utilities._writers import add_processing_step
 from mbo_utilities.vnoiser.params import OUTPUT_FORMATS, VoltageSettings
+from vnoiser import DfofConfig, ScanTraces, SpikeDetectConfig, read_pf
+from vnoiser.pipeline import load_scan_rois, process_domain
 
 __all__ = [
     "DOMAINS_FILE",
@@ -97,7 +97,12 @@ class _RunUsage:
         self._step = None
         self._step_peak = 0.0
         self.monitor = MemoryMonitor(
-            tick_s=2.0, log_s=0, warn_pct=90.0, logger=logger, log_peaks=False, on_sample=self._sample,
+            tick_s=2.0,
+            log_s=0,
+            warn_pct=90.0,
+            logger=logger,
+            log_peaks=False,
+            on_sample=self._sample,
         ).start()
 
     def _cpu(self) -> float:
@@ -129,7 +134,9 @@ class _RunUsage:
         }
         self.steps.append(row)
         add_processing_step(
-            self.history, f"voltage_{step}", duration_seconds=wall,
+            self.history,
+            f"voltage_{step}",
+            duration_seconds=wall,
             extra={k: v for k, v in row.items() if k not in ("step", "seconds")},
         )
         self.logger.info(
@@ -156,7 +163,9 @@ class _RunUsage:
             scan = scans.setdefault(row["scan"], {})
             scan[step] = round(scan.get(step, 0.0) + seconds, 3)
             if "domain" in row:
-                scan.setdefault("domains", {}).setdefault(row["domain"], {})[step] = seconds
+                scan.setdefault("domains", {}).setdefault(row["domain"], {})[step] = (
+                    seconds
+                )
         return {
             "started": self.started.isoformat(timespec="seconds"),
             "finished": datetime.now().isoformat(timespec="seconds"),
@@ -180,11 +189,15 @@ def _write_timing(pf_dir: Path, usage: _RunUsage) -> dict:
     prov["timing"] = timing
     prov["processing_history"] = list(usage.history.get("processing_history", []))
     (pf_dir / PROVENANCE_FILE).write_text(json.dumps(prov, indent=2))
-    (pf_dir / TIMINGS_FILE).write_text(json.dumps({**timing, "steps": usage.steps}, indent=2))
+    (pf_dir / TIMINGS_FILE).write_text(
+        json.dumps({**timing, "steps": usage.steps}, indent=2)
+    )
     return prov
 
 
-def _read_progress(logger, progress_callback, scan_id, k, n_scans, i, n, _seconds) -> None:
+def _read_progress(
+    logger, progress_callback, scan_id, k, n_scans, i, n, _seconds
+) -> None:
     """``linescan_roi_read``'s per-ROI callback: one log line, one progress tick.
 
     The line carries no elapsed time: the log's timestamps say when each ROI
@@ -193,7 +206,10 @@ def _read_progress(logger, progress_callback, scan_id, k, n_scans, i, n, _second
     """
     logger.info(f"scan {scan_id}: read ROI {i + 1}/{n}")
     if progress_callback is not None:
-        progress_callback(0.2 * min(1.0, (k + (i + 1) / n) / n_scans), f"scan {scan_id}: read ROI {i + 1}/{n}")
+        progress_callback(
+            0.2 * min(1.0, (k + (i + 1) / n) / n_scans),
+            f"scan {scan_id}: read ROI {i + 1}/{n}",
+        )
 
 
 def scan_traces_from_mesc(
@@ -224,12 +240,21 @@ def scan_traces_from_mesc(
     arr = MescArray(mesc_path, unit=unit_key)
     md = arr.metadata
     if md.get("mesc_layout") not in ROI_LAYOUTS:
-        raise ValueError(f"{unit_key} is a {md.get('mesc_modality_name')} unit with no AOD ROIs")
+        raise ValueError(
+            f"{unit_key} is a {md.get('mesc_modality_name')} unit with no AOD ROIs"
+        )
     if rois is not None and md.get("mesc_z_axis_meaning") != "roi_index":
-        raise ValueError(f"{unit_key}: Z means {md.get('mesc_z_axis_meaning')!r} here, not ROIs")
+        raise ValueError(
+            f"{unit_key}: Z means {md.get('mesc_z_axis_meaning')!r} here, not ROIs"
+        )
     F, _ = linescan_roi_read(
-        arr, channel=channel, convert=convert, batch_size=batch_size, dtype=np.float64,
-        progress=progress, rois=rois,
+        arr,
+        channel=channel,
+        convert=convert,
+        batch_size=batch_size,
+        dtype=np.float64,
+        progress=progress,
+        rois=rois,
     )
     if frames is not None:
         start, stop = int(frames[0]), int(frames[1])
@@ -240,9 +265,14 @@ def scan_traces_from_mesc(
     if rois is not None:
         extents = [extents[int(r)] for r in rois]
     traces = {int(e["index"]): F[i] for i, e in enumerate(extents)}
-    weights = {int(e["index"]): float(int(e["height"]) * int(e["width"])) for e in extents}
+    weights = {
+        int(e["index"]): float(int(e["height"]) * int(e["width"])) for e in extents
+    }
     return ScanTraces(
-        _munit_number(md.get("mesc_unit", unit_key)), float(md["fs"]), traces, weights,
+        _munit_number(md.get("mesc_unit", unit_key)),
+        float(md["fs"]),
+        traces,
+        weights,
         comment=str(md.get("comment", "") or ""),
     )
 
@@ -257,7 +287,11 @@ def read_domains(path) -> dict:
     path = Path(path)
     if path.suffix.lower() == ".pkl":
         rois = load_scan_rois(path)
-        return {"domains": rois["domains"], "scan_ids": rois["scan_ids"], "first_env": rois["first_env"]}
+        return {
+            "domains": rois["domains"],
+            "scan_ids": rois["scan_ids"],
+            "first_env": rois["first_env"],
+        }
     doc = json.loads(path.read_text())
     domains = {str(k): [int(v) for v in rois] for k, rois in doc["domains"].items()}
     if not domains:
@@ -269,12 +303,15 @@ def read_domains(path) -> dict:
     }
 
 
-def write_domains_template(mesc_path, path=None, *, units=None, per_domain: int = 1) -> Path:
+def write_domains_template(
+    mesc_path, path=None, *, units=None, per_domain: int = 1
+) -> Path:
     """Write a ``domains.json`` to edit: the file's AOD ROI units as
     ``scans`` and one domain per ROI (``roi0: [0]``, ...; ``per_domain``
     groups consecutive ROIs instead, the archive's three lines per
     domain), named from the unit comment when it lists as many names
-    (``'soma,bas1-3,api1-5'`` does not). Returns the path."""
+    (``'soma,bas1-3,api1-5'`` does not). Returns the path.
+    """
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
 
     mesc_path = Path(mesc_path)
@@ -286,17 +323,25 @@ def write_domains_template(mesc_path, path=None, *, units=None, per_domain: int 
     if not scans:
         raise ValueError(f"no AOD ROI units in {mesc_path}")
     n_rois = int(scans[0]["nrois"])
-    names = [n.strip() for n in str(scans[0].get("comment") or "").split(",") if n.strip()]
-    groups = [list(range(i, min(i + per_domain, n_rois))) for i in range(0, n_rois, per_domain)]
+    names = [
+        n.strip() for n in str(scans[0].get("comment") or "").split(",") if n.strip()
+    ]
+    groups = [
+        list(range(i, min(i + per_domain, n_rois)))
+        for i in range(0, n_rois, per_domain)
+    ]
     if len(names) != len(groups):
-        names = [f"roi{g[0]}" if len(g) == 1 else f"domain{i + 1}" for i, g in enumerate(groups)]
+        names = [
+            f"roi{g[0]}" if len(g) == 1 else f"domain{i + 1}"
+            for i, g in enumerate(groups)
+        ]
     doc = {
         "mesc": mesc_path.name,
         "scans": [_munit_number(u["key"]) for u in scans],
         "first_env": [_munit_number(scans[0]["key"])],
         "domains": {name: rois for name, rois in zip(names, groups, strict=True)},
         "note": "domains: name -> ROI indices (0-based, the order the lines or patches were drawn); "
-                "scans: MUnit numbers in order; first_env: the first scan of each environment",
+        "scans: MUnit numbers in order; first_env: the first scan of each environment",
     }
     path.write_text(json.dumps(doc, indent=2))
     return path
@@ -305,9 +350,13 @@ def write_domains_template(mesc_path, path=None, *, units=None, per_domain: int 
 def default_pf_dir(mesc_path) -> Path:
     """Where a ``pkl`` run's PF folder goes: ``<animal>/<expt>/PF`` for the
     archive's ``<animal>/<expt>/<expt>/<expt>.mesc`` layout, else ``PF``
-    beside the file."""
+    beside the file.
+    """
     mesc_path = Path(mesc_path)
-    if mesc_path.parent.name == mesc_path.stem and mesc_path.parent.parent != mesc_path.parent:
+    if (
+        mesc_path.parent.name == mesc_path.stem
+        and mesc_path.parent.parent != mesc_path.parent
+    ):
         return mesc_path.parent.parent / "PF"
     return mesc_path.parent / "PF"
 
@@ -417,9 +466,16 @@ def run_voltage_pipeline(
         for name in units:
             match = [u for u in roi_units if u["key"] == name or u["munit"] == name]
             if not match:
-                other = [u for u in all_units if u["key"] == name or (u["munit"] == name and name not in roi_munits)]
+                other = [
+                    u
+                    for u in all_units
+                    if u["key"] == name
+                    or (u["munit"] == name and name not in roi_munits)
+                ]
                 if other:
-                    raise ValueError(f"{name} is a {other[0]['modality_name']} unit with no AOD ROIs")
+                    raise ValueError(
+                        f"{name} is a {other[0]['modality_name']} unit with no AOD ROIs"
+                    )
                 raise ValueError(f"{name} is not in {mesc_path.name}")
             chosen.append(match[0])
     else:
@@ -429,10 +485,14 @@ def run_voltage_pipeline(
     rates = sorted({round(float(u["fs"] or 0), 3) for u in chosen})
     if len(rates) > 1:
         listed = ", ".join(f"{r:g}" for r in rates)
-        raise ValueError(f"the chosen scans differ in frame rate ({listed} Hz); run them separately")
+        raise ValueError(
+            f"the chosen scans differ in frame rate ({listed} Hz); run them separately"
+        )
     settings = (settings or VoltageSettings()).at_fs(float(chosen[0]["fs"]))
     if settings.runtime.output_format not in OUTPUT_FORMATS:
-        raise ValueError(f"output_format must be one of {OUTPUT_FORMATS}, got {settings.runtime.output_format!r}")
+        raise ValueError(
+            f"output_format must be one of {OUTPUT_FORMATS}, got {settings.runtime.output_format!r}"
+        )
     dfof_cfg = dfof_cfg or settings.dfof.config()
     spike_cfg = spike_cfg or settings.events.config()
     denoiser_factory = denoiser_factory or settings.denoiser.factory
@@ -443,20 +503,28 @@ def run_voltage_pipeline(
         bad = [r + 1 for r in rois if not 0 <= r < n_rois]
         if bad:
             raise ValueError(f"planes {bad} are outside 1..{n_rois}, the scans' ROIs")
-        kept = {name: [int(r) for r in rs if int(r) in rois] for name, rs in domains.items()}
+        kept = {
+            name: [int(r) for r in rs if int(r) in rois] for name, rs in domains.items()
+        }
         dropped = [name for name in domain_names(domains) if not kept[name]]
         domains = {name: rs for name, rs in kept.items() if rs}
         if not domain_names(domains):
-            raise ValueError(f"no domain has an ROI among planes {[r + 1 for r in rois]}")
+            raise ValueError(
+                f"no domain has an ROI among planes {[r + 1 for r in rois]}"
+            )
         if dropped:
-            logger.info(f"voltage: planes {[r + 1 for r in rois]} leave no ROI in domain(s) {dropped}; dropped")
+            logger.info(
+                f"voltage: planes {[r + 1 for r in rois]} leave no ROI in domain(s) {dropped}; dropped"
+            )
     names = domain_names(domains)
     # a zarr run works in a scratch folder the pipeline's own writers need and
     # folds it into the results file at the end; a pkl run works in PF itself
     as_zarr = settings.runtime.output_format == "zarr"
     results_path = default_results_path(mesc_path, out) if as_zarr else None
-    pf_dir = results_path.with_suffix(".work") if as_zarr else (
-        Path(out) if out is not None else default_pf_dir(mesc_path)
+    pf_dir = (
+        results_path.with_suffix(".work")
+        if as_zarr
+        else (Path(out) if out is not None else default_pf_dir(mesc_path))
     )
 
     mbo_version = None
@@ -484,16 +552,26 @@ def run_voltage_pipeline(
         scans = []
         for k, u in enumerate(chosen):
             sid = _munit_number(u["key"])
-            logger.info(f"scan {sid}: reading {u['key']} ({u['nrois']} ROIs x {u['nframes']} frames at {u['fs']:.2f} Hz)")
+            logger.info(
+                f"scan {sid}: reading {u['key']} ({u['nrois']} ROIs x {u['nframes']} frames at {u['fs']:.2f} Hz)"
+            )
             usage.begin("read", scan=sid, unit=u["key"])
             scan = scan_traces_from_mesc(
-                mesc_path, u["key"], channel=channel, convert=convert, frames=frames, rois=rois,
-                progress=partial(_read_progress, logger, progress_callback, sid, k, len(chosen)),
+                mesc_path,
+                u["key"],
+                channel=channel,
+                convert=convert,
+                frames=frames,
+                rois=rois,
+                progress=partial(
+                    _read_progress, logger, progress_callback, sid, k, len(chosen)
+                ),
             )
             scans.append(scan)
             usage.end(
                 f"scan {sid}: read {len(scan.traces)} ROIs x {scan.n_frames} frames",
-                n_rois=len(scan.traces), n_frames=scan.n_frames,
+                n_rois=len(scan.traces),
+                n_frames=scan.n_frames,
             )
 
         example = denoiser_factory(scans[0].fs_hz)
@@ -504,10 +582,15 @@ def run_voltage_pipeline(
             "denoiser": example.describe(),
             "events": asdict(spike_cfg) if detect else None,
             "comments": {s.scan_id: s.comment for s in scans if s.comment},
-            "roi_weights": {s.scan_id: {int(k): float(v) for k, v in s.weights.items()} for s in scans},
+            "roi_weights": {
+                s.scan_id: {int(k): float(v) for k, v in s.weights.items()}
+                for s in scans
+            },
             "source": {
                 "mesc": str(mesc_path),
-                "units": {s.scan_id: u["key"] for s, u in zip(scans, chosen, strict=True)},
+                "units": {
+                    s.scan_id: u["key"] for s, u in zip(scans, chosen, strict=True)
+                },
                 "channel": int(channel),
                 "convert": bool(convert),
                 "frames": None if frames is None else [int(frames[0]), int(frames[1])],
@@ -540,34 +623,58 @@ def run_voltage_pipeline(
                 if progress_callback is not None:
                     # dF/F is the next 30 % of the run, scan k of the run, domain row of the scan
                     fraction = 0.2 + 0.3 * min(1.0, (k + row / n_domains) / len(scans))
-                    progress_callback(fraction, f"scan {sid}: dF/F of {name} ({row + 1}/{len(names)})")
+                    progress_callback(
+                        fraction, f"scan {sid}: dF/F of {name} ({row + 1}/{len(names)})"
+                    )
                 usage.begin("dfof", scan=sid, domain=name)
-                one = domain_zscore(scan.traces, {name: domains[name]}, scan.weights, dfof_cfg)
+                one = domain_zscore(
+                    scan.traces, {name: domains[name]}, scan.weights, dfof_cfg
+                )
                 dfof_rows.append(one.dfof_raw[0])
                 z_rows.append(one.z[0])
-                usage.end(f"scan {sid}: dF/F and z-score of {name} ({row + 1}/{len(names)})")
-            traces = DomainTraces(names=list(names), dfof_raw=np.stack(dfof_rows), z=np.stack(z_rows))
+                usage.end(
+                    f"scan {sid}: dF/F and z-score of {name} ({row + 1}/{len(names)})"
+                )
+            traces = DomainTraces(
+                names=list(names), dfof_raw=np.stack(dfof_rows), z=np.stack(z_rows)
+            )
             writer.add_scan(sid, scan.fs_hz, traces.dfof_raw, traces.z)
             for row, name in enumerate(traces.names):
                 if progress_callback is not None:
                     # the denoising is the next 40 %
                     fraction = 0.5 + 0.4 * min(1.0, (k + row / n_domains) / len(scans))
-                    progress_callback(fraction, f"scan {sid}: denoising {name} ({row + 1}/{len(names)})")
+                    progress_callback(
+                        fraction,
+                        f"scan {sid}: denoising {name} ({row + 1}/{len(names)})",
+                    )
                 logger.info(f"scan {sid}: denoising {name} ({row + 1}/{len(names)})")
                 usage.begin("denoise", scan=sid, domain=name)
                 result = process_domain(
-                    traces.z[row], scan.fs_hz, denoiser=denoiser_factory(scan.fs_hz),
-                    spike_cfg=spike_cfg, detect=detect, keep_cwt=save_cwt,
+                    traces.z[row],
+                    scan.fs_hz,
+                    denoiser=denoiser_factory(scan.fs_hz),
+                    spike_cfg=spike_cfg,
+                    detect=detect,
+                    keep_cwt=save_cwt,
                 )
                 writer.add_domain(sid, name, result)
                 result.cwt = None
                 n_events = None if result.peaks is None else int(len(result.peaks))
                 events = "" if n_events is None else f", {n_events} events"
-                stages = {stage: float(seconds) for stage, seconds in (result.timing or {}).items()}
-                inside = ", ".join(f"{stage} {seconds:.1f}" for stage, seconds in stages.items())
+                stages = {
+                    stage: float(seconds)
+                    for stage, seconds in (result.timing or {}).items()
+                }
+                inside = ", ".join(
+                    f"{stage} {seconds:.1f}" for stage, seconds in stages.items()
+                )
                 usage.end(
                     f"scan {sid}: denoised {name} ({row + 1}/{len(names)}){events} [{inside} s]",
-                    n_events=n_events, **{f"{stage}_s": round(seconds, 3) for stage, seconds in stages.items()},
+                    n_events=n_events,
+                    **{
+                        f"{stage}_s": round(seconds, 3)
+                        for stage, seconds in stages.items()
+                    },
                 )
 
         if progress_callback is not None:
@@ -588,22 +695,48 @@ def run_voltage_pipeline(
             rows = csv.writer(fh)
             rows.writerow(["row", "domain", "rois"])
             for i, name in enumerate(names):
-                rows.writerow([i, final_domain_name(name), " ".join(str(r) for r in domains[name])])
+                rows.writerow(
+                    [
+                        i,
+                        final_domain_name(name),
+                        " ".join(str(r) for r in domains[name]),
+                    ]
+                )
         with h5py.File(pf_dir / DFOF_FILE, "r") as f:
             for s in scans:
                 sid = s.scan_id
                 rois = np.stack([np.asarray(s.traces[r]) for r in sorted(s.traces)])
                 np.save(traces_dir / f"scan{sid}_rois.npy", rois.astype(np.float32))
-                np.save(traces_dir / f"scan{sid}_dfof.npy", f[sid]["dfof_raw"][:].astype(np.float32))
-                np.save(traces_dir / f"scan{sid}_zscore.npy", f[sid]["dfof_zscore"][:].astype(np.float32))
-                denoised = np.stack([files.traces[sid][final_domain_name(n)] for n in names])
-                np.save(traces_dir / f"scan{sid}_denoised.npy", denoised.astype(np.float32))
+                np.save(
+                    traces_dir / f"scan{sid}_dfof.npy",
+                    f[sid]["dfof_raw"][:].astype(np.float32),
+                )
+                np.save(
+                    traces_dir / f"scan{sid}_zscore.npy",
+                    f[sid]["dfof_zscore"][:].astype(np.float32),
+                )
+                denoised = np.stack(
+                    [files.traces[sid][final_domain_name(n)] for n in names]
+                )
+                np.save(
+                    traces_dir / f"scan{sid}_denoised.npy", denoised.astype(np.float32)
+                )
                 with (traces_dir / f"scan{sid}_peaks.csv").open("w", newline="") as fh:
                     rows = csv.writer(fh)
                     rows.writerow(["domain", "frame", "time_s"])
                     for n in names:
-                        for frame in (files.peaks or {}).get(sid, {}).get(final_domain_name(n), ()):
-                            rows.writerow([final_domain_name(n), int(frame), f"{int(frame) / s.fs_hz:.6f}"])
+                        for frame in (
+                            (files.peaks or {})
+                            .get(sid, {})
+                            .get(final_domain_name(n), ())
+                        ):
+                            rows.writerow(
+                                [
+                                    final_domain_name(n),
+                                    int(frame),
+                                    f"{int(frame) / s.fs_hz:.6f}",
+                                ]
+                            )
         usage.end(f"wrote {TRACES_DIR}/ for {len(scans)} scan(s)")
         import matplotlib
 
@@ -615,7 +748,13 @@ def run_voltage_pipeline(
             sid = s.scan_id
             t = np.arange(s.n_frames) / s.fs_hz
             denoised = np.load(traces_dir / f"scan{sid}_denoised.npy")
-            fig, axes = plt.subplots(len(names), 1, figsize=(12, 1.6 * len(names) + 0.8), sharex=True, squeeze=False)
+            fig, axes = plt.subplots(
+                len(names),
+                1,
+                figsize=(12, 1.6 * len(names) + 0.8),
+                sharex=True,
+                squeeze=False,
+            )
             for ax, n, trace in zip(axes[:, 0], names, denoised, strict=True):
                 ax.plot(t, trace, lw=0.5, color="k")
                 frames = (files.peaks or {}).get(sid, {}).get(final_domain_name(n), ())
@@ -642,18 +781,26 @@ def run_voltage_pipeline(
             fig.savefig(traces_dir / f"scan{sid}_rois.png", dpi=120)
             plt.close(fig)
         usage.end(f"wrote {2 * len(scans)} figures")
-        paths.update({f"{TRACES_DIR}/{p.name}": p for p in sorted(traces_dir.iterdir())})
+        paths.update(
+            {f"{TRACES_DIR}/{p.name}": p for p in sorted(traces_dir.iterdir())}
+        )
         prov = _write_timing(pf_dir, usage)
         if as_zarr:
             import shutil
 
-            from mbo_utilities.results import pipeline_files, results_from_pf, write_results
+            from mbo_utilities.results import (
+                pipeline_files,
+                results_from_pf,
+                write_results,
+            )
 
             if progress_callback is not None:
                 progress_callback(0.97, "writing the results zarr")
             usage.begin("results")
             result_units, root = results_from_pf(pf_dir)
-            results_path = write_results(results_path, result_units, overwrite=True, **root)
+            results_path = write_results(
+                results_path, result_units, overwrite=True, **root
+            )
             usage.end(f"wrote {results_path.name}")
             prov = _write_timing(pf_dir, usage)
             # the results file replaces the pickles; everything else the run
@@ -678,15 +825,22 @@ def run_voltage_pipeline(
             paths[TIMINGS_FILE] = timings_at
         timing = prov["timing"]
         wall, cpu = timing["wall_seconds"], timing["cpu_seconds"]
-        totals = ", ".join(f"{step} {seconds:.1f} s" for step, seconds in timing["totals"].items())
-        stages = ", ".join(f"{stage} {seconds:.1f} s" for stage, seconds in timing["denoise_stages"].items())
+        totals = ", ".join(
+            f"{step} {seconds:.1f} s" for step, seconds in timing["totals"].items()
+        )
+        stages = ", ".join(
+            f"{stage} {seconds:.1f} s"
+            for stage, seconds in timing["denoise_stages"].items()
+        )
         logger.info(
             f"voltage done in {int(wall // 60)}m {wall % 60:04.1f}s (cpu {cpu:.0f} s, {cpu / max(wall, 1e-9):.1f} cores); "
             f"peak process memory {timing['peak_rss_gb']:.2f} GB; {totals}; denoise stages: {stages}; "
             f"timings in {timings_at}"
         )
         if progress_callback is not None:
-            progress_callback(1.0, f"wrote {len(paths)} files to {results_path or pf_dir}")
+            progress_callback(
+                1.0, f"wrote {len(paths)} files to {results_path or pf_dir}"
+            )
         return paths
     finally:
         usage.close()

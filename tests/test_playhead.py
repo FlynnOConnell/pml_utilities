@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from mbo_utilities.gui.playhead import Playhead, TimeAxis
 
 
@@ -48,7 +47,9 @@ def test_seek_emits_once_with_its_source():
     assert head.seek(1.5, source="plot") is True
     assert head.seek(1.5) is False, "no event for the same time"
     assert head.seek(-3.0) is True and head.time == 0.0, "never before zero"
-    assert [(e.info["seconds"], e.info["previous"], e.info["source"]) for e in seen] == [
+    assert [
+        (e.info["seconds"], e.info["previous"], e.info["source"]) for e in seen
+    ] == [
         (1.5, 0.0, "plot"),
         (0.0, 1.5, None),
     ]

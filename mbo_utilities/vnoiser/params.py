@@ -14,8 +14,9 @@ import math
 from dataclasses import asdict, dataclass, field, fields
 
 import numpy as np
-from vnoiser import Denoiser, DfofConfig, SpikeDetectConfig
 from vnoiser.denoiser import ClusteringConfig, cwtReducerConfig, thresConfig
+
+from vnoiser import Denoiser, DfofConfig, SpikeDetectConfig
 
 __all__ = [
     "VoltageDfofSettings",
@@ -35,8 +36,10 @@ class VoltageDfofSettings:
 
     def config(self) -> DfofConfig:
         return DfofConfig(
-            sigma_dfof=float(self.sigma_dfof), sigma_baseline=float(self.sigma_baseline),
-            n_startup=int(self.n_startup), negative=bool(self.negative),
+            sigma_dfof=float(self.sigma_dfof),
+            sigma_baseline=float(self.sigma_baseline),
+            n_startup=int(self.n_startup),
+            negative=bool(self.negative),
         )
 
 
@@ -61,22 +64,28 @@ class VoltageDenoiserSettings:
 
     def factory(self, fs: float) -> Denoiser:
         """The denoiser for one domain at ``fs``; ``run_pipeline``'s ``denoiser_factory``."""
-        scales = np.logspace(np.log10(self.scale_min), np.log10(self.scale_max), num=int(self.n_scales))
+        scales = np.logspace(
+            np.log10(self.scale_min), np.log10(self.scale_max), num=int(self.n_scales)
+        )
         return Denoiser(
             fs,
             freq_scales=scales,
             lp_cutoff=float(self.lp_cutoff_hz),
             fir_window_ms=float(self.fir_window_ms),
             cfg_clust=ClusteringConfig(
-                n_components=int(self.n_components), n_comp_clu=int(self.n_comp_clu),
-                n_clusters=int(self.n_clusters), n_subclusters=int(self.n_subclusters),
+                n_components=int(self.n_components),
+                n_comp_clu=int(self.n_comp_clu),
+                n_clusters=int(self.n_clusters),
+                n_subclusters=int(self.n_subclusters),
             ),
             cfg_reducer=cwtReducerConfig(
-                slow_upthres=float(self.slow_upthres), fast_upthres=float(self.fast_upthres),
+                slow_upthres=float(self.slow_upthres),
+                fast_upthres=float(self.fast_upthres),
                 complex_bands=bool(self.complex_bands),
             ),
             cfg_thres=thresConfig(
-                thres_type=self.thres_type, soft_levels=tuple(float(v) for v in self.soft_levels),
+                thres_type=self.thres_type,
+                soft_levels=tuple(float(v) for v in self.soft_levels),
                 hard_floor=float(self.hard_floor),
             ),
             fir_odd_taps=bool(self.fir_odd_taps),
@@ -95,8 +104,10 @@ class VoltageEventSettings:
 
     def config(self) -> SpikeDetectConfig:
         return SpikeDetectConfig(
-            bp=(float(self.bp_low), float(self.bp_high)), thres_bp_sd=float(self.thres_bp_sd),
-            thres_amp_sd=float(self.thres_amp_sd), duration_thres_ms=float(self.duration_thres_ms),
+            bp=(float(self.bp_low), float(self.bp_high)),
+            thres_bp_sd=float(self.thres_bp_sd),
+            thres_amp_sd=float(self.thres_amp_sd),
+            duration_thres_ms=float(self.duration_thres_ms),
             distance_samples=int(self.distance_samples),
         )
 
@@ -144,7 +155,8 @@ class VoltageSettings:
         are scaled by ``fs / runtime.reference_fs`` so they keep the
         archive's durations, and the peak band-pass is capped below Nyquist.
         The copy's ``reference_fs`` is ``fs``, so applying it again changes
-        nothing; at the reference rate the parameters are untouched."""
+        nothing; at the reference rate the parameters are untouched.
+        """
         out = copy.deepcopy(self)
         ref = float(self.runtime.reference_fs or 0)
         k = float(fs) / ref if ref > 0 else 1.0
@@ -154,8 +166,12 @@ class VoltageSettings:
             out.dfof.sigma_baseline = float(self.dfof.sigma_baseline) * k
             out.dfof.n_startup = max(1, int(round(self.dfof.n_startup * k)))
             out.denoiser.scale_min = max(1.0, float(self.denoiser.scale_min) * k)
-            out.denoiser.scale_max = max(out.denoiser.scale_min, float(self.denoiser.scale_max) * k)
-            out.events.distance_samples = max(1, int(round(self.events.distance_samples * k)))
+            out.denoiser.scale_max = max(
+                out.denoiser.scale_min, float(self.denoiser.scale_max) * k
+            )
+            out.events.distance_samples = max(
+                1, int(round(self.events.distance_samples * k))
+            )
             out.runtime.reference_fs = float(fs)
         out.events.bp_high = min(float(self.events.bp_high), 0.95 * float(fs) / 2)
         if out.events.bp_low >= out.events.bp_high:
@@ -187,36 +203,49 @@ class VoltageSettings:
         out = cls(dfof=_section(VoltageDfofSettings, provenance.get("dfof")))
         den = provenance.get("denoiser") or {}
         scales = den.get("freq_scales") or {}
-        clustering, reducer, threshold = den.get("clustering") or {}, den.get("reducer") or {}, den.get("threshold") or {}
-        out.denoiser = _section(VoltageDenoiserSettings, {
-            "thres_type": threshold.get("thres_type"),
-            "soft_levels": threshold.get("soft_levels"),
-            "hard_floor": threshold.get("hard_floor"),
-            "complex_bands": reducer.get("complex_bands"),
-            "slow_upthres": reducer.get("slow_upthres"),
-            "fast_upthres": reducer.get("fast_upthres"),
-            "n_scales": scales.get("num"),
-            "scale_min": scales.get("min"),
-            "scale_max": scales.get("max"),
-            "lp_cutoff_hz": den.get("lp_cutoff"),
-            "fir_window_ms": den.get("fir_window_ms"),
-            "fir_odd_taps": den.get("fir_odd_taps"),
-            "n_components": clustering.get("n_components"),
-            "n_comp_clu": clustering.get("n_comp_clu"),
-            "n_clusters": clustering.get("n_clusters"),
-            "n_subclusters": clustering.get("n_subclusters"),
-        })
+        clustering, reducer, threshold = (
+            den.get("clustering") or {},
+            den.get("reducer") or {},
+            den.get("threshold") or {},
+        )
+        out.denoiser = _section(
+            VoltageDenoiserSettings,
+            {
+                "thres_type": threshold.get("thres_type"),
+                "soft_levels": threshold.get("soft_levels"),
+                "hard_floor": threshold.get("hard_floor"),
+                "complex_bands": reducer.get("complex_bands"),
+                "slow_upthres": reducer.get("slow_upthres"),
+                "fast_upthres": reducer.get("fast_upthres"),
+                "n_scales": scales.get("num"),
+                "scale_min": scales.get("min"),
+                "scale_max": scales.get("max"),
+                "lp_cutoff_hz": den.get("lp_cutoff"),
+                "fir_window_ms": den.get("fir_window_ms"),
+                "fir_odd_taps": den.get("fir_odd_taps"),
+                "n_components": clustering.get("n_components"),
+                "n_comp_clu": clustering.get("n_comp_clu"),
+                "n_clusters": clustering.get("n_clusters"),
+                "n_subclusters": clustering.get("n_subclusters"),
+            },
+        )
         events = provenance.get("events")
         if events is None:
             out.events = VoltageEventSettings(detect=False)
         else:
             bp = events.get("bp") or (2.0, 400.0)
-            out.events = _section(VoltageEventSettings, {
-                "detect": True, "bp_low": bp[0], "bp_high": bp[1],
-                "thres_bp_sd": events.get("thres_bp_sd"), "thres_amp_sd": events.get("thres_amp_sd"),
-                "duration_thres_ms": events.get("duration_thres_ms"),
-                "distance_samples": events.get("distance_samples"),
-            })
+            out.events = _section(
+                VoltageEventSettings,
+                {
+                    "detect": True,
+                    "bp_low": bp[0],
+                    "bp_high": bp[1],
+                    "thres_bp_sd": events.get("thres_bp_sd"),
+                    "thres_amp_sd": events.get("thres_amp_sd"),
+                    "duration_thres_ms": events.get("duration_thres_ms"),
+                    "distance_samples": events.get("distance_samples"),
+                },
+            )
         source = provenance.get("source") or {}
         if "convert" in source:
             out.runtime.convert = bool(source["convert"])

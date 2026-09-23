@@ -16,6 +16,7 @@ preview applies the same median-vs-projection deviation threshold to the
 max-projection. The kernel size and threshold-determination math are
 identical; the input statistic differs.
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -23,11 +24,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from imgui_bundle import imgui, icons_fontawesome_6 as fa
+from imgui_bundle import icons_fontawesome_6 as fa
+from imgui_bundle import imgui
 from scipy.ndimage import median_filter
 
 from mbo_utilities.gui._imgui_helpers import button_width, draw_toolbar_row
-
 
 _DEFAULT_CAMERA_VIEW_MAP = {0: 0, 1: 0, 2: 90, 3: 90}
 _VIEW_COLORS = {0: (1.0, 0.35, 0.35, 1.0), 90: (1.0, 0.95, 0.4, 1.0)}
@@ -42,10 +43,12 @@ _TINT_RGB = (1.0, 0.35, 0.85)
 _SLIDER_W = 220
 _DISPLAY_DRAG_W = 110
 _MAX_FILTER_CACHE = 8
-_TARGET_PROJ_PX = 512       # preview math runs at <= this longest side
+_TARGET_PROJ_PX = 512  # preview math runs at <= this longest side
 
 
-def _downsample_max(proj: np.ndarray, cap: int = _TARGET_PROJ_PX) -> tuple[np.ndarray, int]:
+def _downsample_max(
+    proj: np.ndarray, cap: int = _TARGET_PROJ_PX
+) -> tuple[np.ndarray, int]:
     """Max-pool downsample so the longest side is <= ``cap``.
 
     Max pooling keeps hot/dead pixels (the thing being detected) instead
@@ -83,6 +86,7 @@ def _view_int_from_label(label: str) -> int | None:
         return None
     if label.startswith("VW") and label[2:].isdigit():
         from mbo_utilities.arrays.isoview.array import camera_from_view_label
+
         cam = camera_from_view_label(label)
         return cam if cam is not None else int(label[2:])
     if label.startswith("CM") and label[2:].isdigit():
@@ -99,7 +103,8 @@ def _is_raw(arr: Any) -> bool:
 
 def _tp_label(slot, arr=None) -> str:
     """Display label for a tiled projection slot: the tile's specimen_name
-    grid token (e.g. TL010) when the array can resolve it, else SPM##."""
+    grid token (e.g. TL010) when the array can resolve it, else SPM##.
+    """
     fn = getattr(arr, "tile_label", None)
     if callable(fn):
         try:
@@ -110,7 +115,8 @@ def _tp_label(slot, arr=None) -> str:
 
 
 def _build_projection_index(
-    arr: Any, projections: dict | None,
+    arr: Any,
+    projections: dict | None,
 ) -> dict[int, dict[int, Path]]:
     if not projections:
         return {}
@@ -157,7 +163,8 @@ def _common_timepoints(index: dict[int, dict[int, Path]]) -> list[int]:
 
 
 def _determine_threshold(
-    sorted_array: np.ndarray, max_samples: int = 50000,
+    sorted_array: np.ndarray,
+    max_samples: int = 50000,
 ) -> float:
     """Mirror of :func:`isoview.corrections._determine_threshold`."""
     n = sorted_array.size
@@ -180,7 +187,9 @@ def _determine_threshold(
 
 
 def _detect_dead_pixels(
-    proj: np.ndarray, background: float, kernel: int,
+    proj: np.ndarray,
+    background: float,
+    kernel: int,
 ) -> tuple[np.ndarray, float, float]:
     """Approximate dead-pixel detection on a 2D projection.
 
@@ -215,7 +224,10 @@ def _detect_dead_pixels(
 
 
 def _compose_rgba(
-    proj: np.ndarray, mask: np.ndarray, vmin: float, vmax: float,
+    proj: np.ndarray,
+    mask: np.ndarray,
+    vmin: float,
+    vmax: float,
 ) -> np.ndarray:
     denom = max(1e-6, float(vmax) - float(vmin))
     g = np.clip((proj.astype(np.float32) - float(vmin)) / denom, 0.0, 1.0)
@@ -238,6 +250,7 @@ def _compose_rgba(
 class _GpuRGBA:
     def __init__(self, backend, rgba: np.ndarray):
         import wgpu
+
         self._wgpu = wgpu
         self.backend = backend
         self.h, self.w = int(rgba.shape[0]), int(rgba.shape[1])
@@ -339,6 +352,7 @@ def _get_iso_array(parent: Any) -> Any | None:
     arr = iw.data[0]
     try:
         from mbo_utilities.gui.widgets.pipelines.isoview import _unwrap_array
+
         return _unwrap_array(arr)
     except Exception:
         return arr
@@ -416,7 +430,11 @@ def _get_projection(parent: Any, view: int, tp: int) -> np.ndarray | None:
 
 
 def _get_mask(
-    parent: Any, view: int, tp: int, background: float, kernel: int,
+    parent: Any,
+    view: int,
+    tp: int,
+    background: float,
+    kernel: int,
 ) -> tuple[np.ndarray, float, float] | None:
     work = _get_working(parent, view, tp)
     if work is None:
@@ -504,8 +522,12 @@ def _restore_snapshot(parent: Any) -> None:
 @contextmanager
 def _apply_button_style():
     imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.13, 0.55, 0.13, 1.0))
-    imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0))
-    imgui.push_style_color(imgui.Col_.button_active, imgui.ImVec4(0.10, 0.45, 0.10, 1.0))
+    imgui.push_style_color(
+        imgui.Col_.button_hovered, imgui.ImVec4(0.18, 0.65, 0.18, 1.0)
+    )
+    imgui.push_style_color(
+        imgui.Col_.button_active, imgui.ImVec4(0.10, 0.45, 0.10, 1.0)
+    )
     try:
         yield
     finally:
@@ -546,7 +568,9 @@ def draw_window(parent: Any) -> None:
         | imgui.WindowFlags_.no_saved_settings
     )
     expanded, parent._iso_dp_window_open = imgui.begin(
-        title, p_open=parent._iso_dp_window_open, flags=flags,
+        title,
+        p_open=parent._iso_dp_window_open,
+        flags=flags,
     )
     try:
         if not expanded:
@@ -594,12 +618,22 @@ def _draw_display_controls(parent: Any) -> None:
 
     def _vmin():
         _, parent._iso_dp_vmin = imgui.drag_float(
-            "##iso_dp_vmin", float(parent._iso_dp_vmin), speed, 0.0, 0.0, "%.0f",
+            "##iso_dp_vmin",
+            float(parent._iso_dp_vmin),
+            speed,
+            0.0,
+            0.0,
+            "%.0f",
         )
 
     def _vmax():
         _, parent._iso_dp_vmax = imgui.drag_float(
-            "##iso_dp_vmax", float(parent._iso_dp_vmax), speed, 0.0, 0.0, "%.0f",
+            "##iso_dp_vmax",
+            float(parent._iso_dp_vmax),
+            speed,
+            0.0,
+            0.0,
+            "%.0f",
         )
 
     def _auto():
@@ -631,10 +665,15 @@ def _draw_display_controls(parent: Any) -> None:
 
         def _tp():
             ch, v = imgui.slider_int(
-                "##iso_dp_tp", cur_idx, 0, max(0, len(tps) - 1), value_fmt,
+                "##iso_dp_tp",
+                cur_idx,
+                0,
+                max(0, len(tps) - 1),
+                value_fmt,
             )
             if ch:
                 parent._iso_dp_current_tp = tps[max(0, min(v, len(tps) - 1))]
+
         items.append((label, 220.0, _tp))
 
     draw_toolbar_row(items)
@@ -653,7 +692,8 @@ def _draw_param_controls(parent: Any, iso: Any) -> None:
     defers to slider release.
     """
     imgui.text_colored(
-        imgui.ImVec4(1.0, 0.85, 0.4, 1.0), "Dead-pixel params",
+        imgui.ImVec4(1.0, 0.85, 0.4, 1.0),
+        "Dead-pixel params",
     )
     imgui.spacing()
     dragging = False
@@ -666,7 +706,10 @@ def _draw_param_controls(parent: Any, iso: Any) -> None:
     imgui.set_next_item_width(_SLIDER_W)
     _, iso._correct_median_kernel_size = imgui.slider_int(
         "kernel##iso_dp",
-        int(iso._correct_median_kernel_size), 1, 31, "%d",
+        int(iso._correct_median_kernel_size),
+        1,
+        31,
+        "%d",
     )
     dragging |= imgui.is_item_active()
     imgui.same_line()
@@ -678,7 +721,10 @@ def _draw_param_controls(parent: Any, iso: Any) -> None:
     imgui.set_next_item_width(_SLIDER_W)
     _, iso._correct_background_percentile = imgui.slider_float(
         "background pct##iso_dp",
-        float(iso._correct_background_percentile), 0.0, 50.0, "%.2f",
+        float(iso._correct_background_percentile),
+        0.0,
+        50.0,
+        "%.2f",
     )
     dragging |= imgui.is_item_active()
     imgui.same_line()
@@ -730,8 +776,11 @@ def _draw_view_previews(parent: Any, iso: Any) -> None:
             imgui.end_group()
 
 
-def _draw_one_view(parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bool = False) -> None:
+def _draw_one_view(
+    parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bool = False
+) -> None:
     from mbo_utilities.arrays.isoview.array import camera_view_label
+
     color = _CAMERA_COLORS.get(view, _VIEW_COLORS.get(view, (0.6, 0.8, 1.0, 1.0)))
     label_text = camera_view_label(view)
     imgui.text_colored(imgui.ImVec4(*color), label_text)
@@ -759,10 +808,7 @@ def _draw_one_view(parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bo
         shown is None
         or shown.get("tp") != tp
         or shown.get("enabled") != enabled
-        or (
-            not dragging
-            and (shown.get("bg") != bg or shown.get("kernel") != kernel)
-        )
+        or (not dragging and (shown.get("bg") != bg or shown.get("kernel") != kernel))
     )
     if stale:
         result = _get_mask(parent, view, tp, bg, kernel) if enabled else None
@@ -772,8 +818,13 @@ def _draw_one_view(parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bo
         else:
             mask, t_abs, t_rel = result
         shown = {
-            "tp": tp, "bg": bg, "kernel": kernel, "enabled": enabled,
-            "mask": mask, "t_abs": t_abs, "t_rel": t_rel,
+            "tp": tp,
+            "bg": bg,
+            "kernel": kernel,
+            "enabled": enabled,
+            "mask": mask,
+            "t_abs": t_abs,
+            "t_rel": t_rel,
         }
         parent._iso_dp_shown[view] = shown
 
@@ -782,7 +833,11 @@ def _draw_one_view(parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bo
     flagged_pct = 100.0 * mask.sum() / mask.size if mask.size else 0.0
 
     compose_key = (
-        view, shown["tp"], shown["bg"], shown["kernel"], shown["enabled"],
+        view,
+        shown["tp"],
+        shown["bg"],
+        shown["kernel"],
+        shown["enabled"],
         round(float(parent._iso_dp_vmin), 4),
         round(float(parent._iso_dp_vmax), 4),
     )
@@ -796,8 +851,10 @@ def _draw_one_view(parent: Any, iso: Any, view: int, cell_w: float, raw_mode: bo
 
     if parent._iso_dp_compose_key.get(view) != compose_key:
         rgba = _compose_rgba(
-            proj, mask,
-            float(parent._iso_dp_vmin), float(parent._iso_dp_vmax),
+            proj,
+            mask,
+            float(parent._iso_dp_vmin),
+            float(parent._iso_dp_vmax),
         )
         gpu = parent._iso_dp_gpu.get(view)
         if gpu is None:

@@ -24,7 +24,7 @@ def _expand_squeezed_key(key, kept):
     if Ellipsis in key:
         idx = key.index(Ellipsis)
         n_missing = len(kept) - (len(key) - 1)
-        key = key[:idx] + (slice(None),) * max(n_missing, 0) + key[idx + 1:]
+        key = key[:idx] + (slice(None),) * max(n_missing, 0) + key[idx + 1 :]
     full = [0] * 5
     for i in kept:
         full[i] = slice(None)

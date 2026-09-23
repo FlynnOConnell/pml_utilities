@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-_GB = 1024 ** 3
+_GB = 1024**3
 
 
 def mem_snapshot(proc: Any | None = None) -> dict[str, Any]:
@@ -76,10 +76,7 @@ def mem_snapshot(proc: Any | None = None) -> dict[str, Any]:
 
 def format_mem_line(snap: dict[str, Any]) -> str:
     """One-line human form of a snapshot for the task log."""
-    line = (
-        f"mem {snap['sys_pct']:.1f}% "
-        f"{snap['used_gb']:.1f}/{snap['total_gb']:.1f} GB"
-    )
+    line = f"mem {snap['sys_pct']:.1f}% {snap['used_gb']:.1f}/{snap['total_gb']:.1f} GB"
     if "proc_gb" in snap:
         line += f" | pipeline {snap['proc_gb']:.2f} GB/{snap.get('nproc', 0)} proc"
         top = snap.get("top")
@@ -167,9 +164,7 @@ class MemoryMonitor:
         state = "running" if self.running else "stopped"
         log_s = "every tick" if self.log_s is None else f"{self.log_s:g}s"
         warn = f", warn {self.warn_pct:g}%" if self.warn_pct else ""
-        return (
-            f"MemoryMonitor({state}, tick {self.tick_s:g}s, log {log_s}{warn})"
-        )
+        return f"MemoryMonitor({state}, tick {self.tick_s:g}s, log {log_s}{warn})"
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -177,7 +172,7 @@ class MemoryMonitor:
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def start(self) -> "MemoryMonitor":
+    def start(self) -> MemoryMonitor:
         """Start the daemon sampling thread. No-op when already running."""
         import threading
 
@@ -201,7 +196,7 @@ class MemoryMonitor:
             t.join(timeout=timeout)
         self._thread = None
 
-    def __enter__(self) -> "MemoryMonitor":
+    def __enter__(self) -> MemoryMonitor:
         return self.start()
 
     def __exit__(self, *exc) -> None:
@@ -318,7 +313,7 @@ def _call(fn: Any, s: dict[str, Any]) -> None:
         pass
 
 
-_ACTIVE: "MemoryMonitor | None" = None
+_ACTIVE: MemoryMonitor | None = None
 
 
 def start_memory_monitor(**kwargs: Any) -> MemoryMonitor:
@@ -346,6 +341,6 @@ def stop_memory_monitor() -> None:
         _ACTIVE = None
 
 
-def memory_monitor() -> "MemoryMonitor | None":
+def memory_monitor() -> MemoryMonitor | None:
     """The process-wide monitor, or None when none is running."""
     return _ACTIVE

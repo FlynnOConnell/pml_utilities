@@ -60,7 +60,7 @@ CLASS_COLORS: tuple[tuple[float, float, float], ...] = (
 
 
 def class_color(index: int) -> tuple[float, float, float]:
-    """rgb in 0-1 for a class label index (wraps past the palette end)"""
+    """Rgb in 0-1 for a class label index (wraps past the palette end)"""
     return CLASS_COLORS[index % len(CLASS_COLORS)]
 
 
@@ -175,7 +175,8 @@ class RoiLabelStore(Observable):
     def axis_name(self, role: str) -> str | None:
         """The plane-axis name playing ``role`` (``"z"`` or ``"c"``), or None
         when the volume is not keyed by that axis: ``axis_roles`` first, then
-        the name's own alias (``Zplane``, ``Cam``)."""
+        the name's own alias (``Zplane``, ``Cam``).
+        """
         names = [name for name, _ in self.plane_axes]
         named = self.axis_roles.get(role)
         if named in names:
@@ -189,7 +190,8 @@ class RoiLabelStore(Observable):
 
     def plane_of(self, pos: Mapping[str, int]) -> int:
         """Flat plane for a slider position ``{dim name: index}``; dims the
-        volume is not keyed by are ignored, missing ones sit at 0."""
+        volume is not keyed by are ignored, missing ones sit at 0.
+        """
         if not self.plane_axes:
             return 0
         sizes = [n for _, n in self.plane_axes]
@@ -208,7 +210,8 @@ class RoiLabelStore(Observable):
 
     def plane_label(self, plane: int) -> str:
         """``"3"`` for plain planes, ``"c2·z3"`` when more dims key them
-        (1-based); a worded axis keeps its space, ``"Channel 1 · ROI 3"``."""
+        (1-based); a worded axis keeps its space, ``"Channel 1 · ROI 3"``.
+        """
         pos = self.plane_pos(plane)
         if not pos:
             return "1"
@@ -276,7 +279,8 @@ class RoiLabelStore(Observable):
 
     def snapshot(self) -> RoiLabelStore:
         """Deep copy (volume, records, names, ``next_uid``) that later
-        mutations of either store cannot reach; no handlers come along."""
+        mutations of either store cannot reach; no handlers come along.
+        """
         out = RoiLabelStore(
             self.nz,
             self.ny,
@@ -293,7 +297,8 @@ class RoiLabelStore(Observable):
 
     def add_label_name(self, name: str) -> int:
         """Add a class name to the label set; returns its index (existing
-        names return their current index instead of duplicating)."""
+        names return their current index instead of duplicating).
+        """
         name = str(name).strip()
         if not name:
             raise ValueError("label name must be non-empty")
@@ -316,15 +321,18 @@ class RoiLabelStore(Observable):
 
     def set_color(self, index: int, rgb: tuple[int, int, int] | None) -> None:
         """Give ROI ``index`` an explicit display color; None reverts it to
-        the class / hue color."""
+        the class / hue color.
+        """
         self.rois[index].color = None if rgb is None else tuple(int(v) for v in rgb)
         self._emit("rois", action="color", index=index, uid=self.rois[index].uid)
 
     def set_tint(self, colors: Mapping[int, tuple[int, int, int]] | None) -> None:
         """Display colors keyed by uid that win over every other color while
-        set (a colormap over some per-ROI value); None clears them."""
+        set (a colormap over some per-ROI value); None clears them.
+        """
         self.tint = (
-            {} if not colors
+            {}
+            if not colors
             else {int(u): tuple(int(v) for v in rgb) for u, rgb in colors.items()}
         )
         self._emit("rois", action="tint")
@@ -343,7 +351,7 @@ class RoiLabelStore(Observable):
         return int(self.labels[plane, row, col]) - 1
 
     def class_counts(self) -> list[int]:
-        """number of ROIs per class name, in label-set order"""
+        """Number of ROIs per class name, in label-set order"""
         counts = [0] * len(self.label_names)
         for r in self.rois:
             if 0 <= r.class_index < len(counts):
@@ -359,9 +367,10 @@ class RoiLabelStore(Observable):
         return [r.area for r in self.rois]
 
     def roi_rgb(self, index: int) -> tuple[int, int, int]:
-        """display color of one ROI: its tint while a colormap is on, else
+        """Display color of one ROI: its tint while a colormap is on, else
         its explicit group color when set, else its class color when
-        classified, else its own hue from ``ROI_COLORS`` (uint8 rgb)"""
+        classified, else its own hue from ``ROI_COLORS`` (uint8 rgb)
+        """
         record = self.rois[index]
         tinted = self.tint.get(record.uid)
         if tinted is not None:
@@ -374,7 +383,8 @@ class RoiLabelStore(Observable):
 
     def color_lut(self) -> np.ndarray:
         """(num_rois + 1, 3) uint8 lookup table indexed by label value;
-        row 0 (background) is black"""
+        row 0 (background) is black
+        """
         lut = np.zeros((len(self.rois) + 1, 3), np.uint8)
         for i in range(len(self.rois)):
             lut[i + 1] = self.roi_rgb(i)

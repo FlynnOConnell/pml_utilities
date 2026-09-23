@@ -11,7 +11,7 @@ stage is bypassed entirely (registration); "run" reuses a valid cached output;
 "force" always recomputes.
 """
 
-from dataclasses import dataclass, field, fields, asdict
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
 STAGE_SKIP = 0
@@ -35,7 +35,7 @@ class MasknmfRegistrationSettings:
     max_deviation_rigid: tuple[int, int] = (2, 2)
 
     def strategy_kwargs(self) -> dict:
-        """kwargs for the masknmf motion-corrector constructor."""
+        """Kwargs for the masknmf motion-corrector constructor."""
         if self.strategy == "pwrigid":
             return {
                 "num_blocks": tuple(self.num_blocks),
@@ -167,7 +167,9 @@ class MasknmfSettings:
     def from_dict(cls, d: dict | None) -> "MasknmfSettings":
         d = d or {}
         return cls(
-            registration=_load_section(MasknmfRegistrationSettings, d.get("registration")),
+            registration=_load_section(
+                MasknmfRegistrationSettings, d.get("registration")
+            ),
             compression=_load_section(MasknmfCompressionSettings, d.get("compression")),
             demixing=_load_section(MasknmfDemixingSettings, d.get("demixing")),
             runtime=_load_section(MasknmfRuntimeSettings, d.get("runtime")),

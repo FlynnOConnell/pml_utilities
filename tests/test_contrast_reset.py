@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from mbo_utilities.gui._ndviewer import (
-    MboNDViewer,
     VMINMAX_SAMPLE_COUNTS,
+    MboNDViewer,
     _sample_array,
 )
 
@@ -42,6 +41,7 @@ class CountingArray:
 # ============================================================
 # sampling
 # ============================================================
+
 
 class TestSampleArray:
     def test_two_dimensional_data_is_used_whole(self):
@@ -92,6 +92,7 @@ class TestSampleArray:
 # contrast application
 # ============================================================
 
+
 class FakeGraphic:
     def __init__(self):
         self.vmin, self.vmax = -100.0, 4000.0
@@ -129,9 +130,7 @@ class FakeNDG:
 
     def __init__(self, histogram_widget=True):
         self.graphic = FakeGraphic()
-        self.histogram_widget = (
-            FakeColorbar(self.graphic) if histogram_widget else None
-        )
+        self.histogram_widget = FakeColorbar(self.graphic) if histogram_widget else None
 
     def apply(self, block):
         # _set_contrast only touches the ndg passed in, never self/viewer
@@ -183,6 +182,7 @@ class TestSetContrast:
 # slider-dim derivation (adapter)
 # ============================================================
 
+
 class _ShapeOnly:
     def __init__(self, ndim):
         self.ndim = ndim
@@ -191,7 +191,8 @@ class _ShapeOnly:
 class TestSliderDims:
     """Scrollable-axis counting on the adapter. NDWidget has no hard cap on
     slider dims, so the vendored "six axes refused" ValueError is gone —
-    a 6D array simply gets a fourth slider with a generated name."""
+    a 6D array simply gets a fourth slider with a generated name.
+    """
 
     def test_a_third_axis_is_scrollable(self):
         assert MboNDViewer._n_slider_dims(_ShapeOnly(5), rgb=False) == 3
@@ -218,7 +219,8 @@ class TestSliderDims:
 class TestSliderLabels:
     """The playback bar shows the array's own axis names. On the adapter
     the ReferenceIndex dims ARE the display names, so NDWidgetUI labels
-    sliders directly; these pin the name derivation + resolution rules."""
+    sliders directly; these pin the name derivation + resolution rules.
+    """
 
     @staticmethod
     def _viewer(dim_names, labels=None):
@@ -228,9 +230,7 @@ class TestSliderLabels:
         return v
 
     def test_display_names_used_when_count_matches(self):
-        names = MboNDViewer._make_dim_names(
-            None, 3, ("Timepoint", "Channel", "ROI")
-        )
+        names = MboNDViewer._make_dim_names(None, 3, ("Timepoint", "Channel", "ROI"))
         assert names == ("Timepoint", "Channel", "ROI")
 
     def test_falls_back_to_letters_on_count_mismatch(self):

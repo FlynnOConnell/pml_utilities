@@ -4,7 +4,8 @@ dimension tags for filename generation.
 extensible system for labeling output files with dimension ranges.
 tags follow array dims order and use format: {label}{start}[-{stop}[-{step}]]
 
-examples:
+Examples
+--------
     tp00001-10000_zplane01-14.tif  (TZYX)
     zplane01-14.tif                (ZYX, single timepoint)
     tp00001-10000.tif              (TYX, single plane)
@@ -120,11 +121,16 @@ def parse_tag(token: str) -> DimensionTag | None:
     label, start, stop, step = match.groups()
     key = DIM_ALIASES.get(label.lower())
     if key is None:
-        key = next((k for k, d in TAG_REGISTRY.items() if d.label == label.lower()), None)
+        key = next(
+            (k for k, d in TAG_REGISTRY.items() if d.label == label.lower()), None
+        )
     if key is None or key not in TAG_REGISTRY:
         return None
     return DimensionTag(
-        TAG_REGISTRY[key], int(start), None if stop is None else int(stop), 1 if step is None else int(step),
+        TAG_REGISTRY[key],
+        int(start),
+        None if stop is None else int(stop),
+        1 if step is None else int(step),
     )
 
 
@@ -154,9 +160,10 @@ class DimensionTag:
     step: int = 1  # step size (default 1)
 
     def to_string(self) -> str:
-        """format as filename component.
+        """Format as filename component.
 
-        examples:
+        Examples
+        --------
             zplane01       (single value)
             zplane01-14    (range, step=1)
             zplane01-14-2  (range with step)
@@ -181,10 +188,10 @@ class DimensionTag:
         definition: TagDefinition,
         size: int,
         selection: slice | list | Sequence[int] | None = None,
-    ) -> "DimensionTag":
-        """create from dimension size and optional selection.
+    ) -> DimensionTag:
+        """Create from dimension size and optional selection.
 
-        parameters
+        Parameters
         ----------
         definition : TagDefinition
             tag type definition
@@ -193,7 +200,7 @@ class DimensionTag:
         selection : slice | list | Sequence[int] | None
             optional selection (indices are 1-based)
 
-        returns
+        Returns
         -------
         DimensionTag
             tag with appropriate range
@@ -239,9 +246,9 @@ class OutputFilename:
         self.suffix = suffix
 
     def build(self, ext: str = ".tif") -> str:
-        """build filename string.
+        """Build filename string.
 
-        returns
+        Returns
         -------
         str
             filename like "tp00001-10000_zplane01-14.tif"; ``ext=""`` names a
@@ -265,10 +272,10 @@ class OutputFilename:
         frames: int | list | Sequence[int] | None = None,
         channels: int | list | Sequence[int] | None = None,
         suffix: str = "",
-    ) -> "OutputFilename":
-        """create from array and optional selections.
+    ) -> OutputFilename:
+        """Create from array and optional selections.
 
-        parameters
+        Parameters
         ----------
         arr : array-like
             array with shape and dims
@@ -281,7 +288,7 @@ class OutputFilename:
         suffix : str
             filename suffix (default "" = no suffix)
 
-        returns
+        Returns
         -------
         OutputFilename
             builder with tags derived from array dims
@@ -324,19 +331,19 @@ class OutputFilename:
 
 
 def normalize_dims(dims: tuple[str, ...] | list[str]) -> tuple[str, ...]:
-    """convert descriptive dim names to canonical single-letter form.
+    """Convert descriptive dim names to canonical single-letter form.
 
-    parameters
+    Parameters
     ----------
     dims : tuple[str, ...] | list[str]
         dimension labels like ("timepoints", "z-planes", "Y", "X")
 
-    returns
+    Returns
     -------
     tuple[str, ...]
         canonical form like ("T", "Z", "Y", "X")
 
-    examples
+    Examples
     --------
     >>> normalize_dims(("timepoints", "z-planes", "Y", "X"))
     ('T', 'Z', 'Y', 'X')
@@ -352,14 +359,14 @@ def normalize_dims(dims: tuple[str, ...] | list[str]) -> tuple[str, ...]:
 
 
 def get_ome_axis_type(dim: str) -> str:
-    """get ome-zarr ngff axis type for a dimension.
+    """Get ome-zarr ngff axis type for a dimension.
 
-    parameters
+    Parameters
     ----------
     dim : str
         canonical dimension label (T, C, Z, Y, X, etc.)
 
-    returns
+    Returns
     -------
     str
         "time", "channel", or "space"
@@ -374,14 +381,14 @@ def get_ome_axis_type(dim: str) -> str:
 
 
 def get_ome_axis_unit(dim: str) -> str | None:
-    """get ome-zarr ngff axis unit for a dimension.
+    """Get ome-zarr ngff axis unit for a dimension.
 
-    parameters
+    Parameters
     ----------
     dim : str
         canonical dimension label
 
-    returns
+    Returns
     -------
     str | None
         unit string or None if no unit (e.g., channel)
@@ -395,14 +402,14 @@ def get_ome_axis_unit(dim: str) -> str | None:
 
 
 def dim_to_ome_axis(dim: str) -> dict:
-    """build ome-zarr ngff axis definition from canonical dimension label.
+    """Build ome-zarr ngff axis definition from canonical dimension label.
 
-    parameters
+    Parameters
     ----------
     dim : str
         canonical dimension label (T, C, Z, Y, X, etc.)
 
-    returns
+    Returns
     -------
     dict
         ome-zarr axis definition with name, type, and optional unit
@@ -419,19 +426,19 @@ def dim_to_ome_axis(dim: str) -> dict:
 
 
 def dims_to_ome_axes(dims: tuple[str, ...] | list[str] | str) -> list[dict]:
-    """convert dimension labels to ome-zarr ngff axes list.
+    """Convert dimension labels to ome-zarr ngff axes list.
 
-    parameters
+    Parameters
     ----------
     dims : tuple[str, ...] | list[str] | str
         dimension labels like ("T", "C", "Z", "Y", "X") or "TCZYX"
 
-    returns
+    Returns
     -------
     list[dict]
         list of ome-zarr axis definitions
 
-    examples
+    Examples
     --------
     >>> dims_to_ome_axes(("T", "Z", "Y", "X"))
     [{'name': 't', 'type': 'time', 'unit': 'second'},

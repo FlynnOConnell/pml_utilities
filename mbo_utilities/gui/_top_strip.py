@@ -27,8 +27,8 @@ allows.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from fastplotlib.ui import ImguiWindow
 from imgui_bundle import imgui, imgui_ctx
@@ -111,7 +111,9 @@ class TopStrip(ImguiWindow):
         # the last width the strip widened the window to, so a window the
         # user made narrower afterwards is left alone
         self._fit_tried = 0
-        figure.add_imgui_window(self, location="top", size=self._want_size(), title=None)
+        figure.add_imgui_window(
+            self, location="top", size=self._want_size(), title=None
+        )
 
     # ------------------------------------------------------------------
     # registration
@@ -175,7 +177,8 @@ class TopStrip(ImguiWindow):
     @property
     def shut_size(self) -> int:
         """Height of the strip with the panels shut: the menu row, the tab row
-        and the bar, with no body between them."""
+        and the bar, with no body between them.
+        """
         return strip_height(0)
 
     @property
@@ -222,19 +225,24 @@ class TopStrip(ImguiWindow):
         if self._manual is not None:
             return self._manual
         panel = self._panel(self.active)
-        height = panel.height if panel is not None else max(p.height for p in self.panels)
+        height = (
+            panel.height if panel is not None else max(p.height for p in self.panels)
+        )
         try:
             canvas_height = float(self.figure.canvas.get_logical_size()[1])
         except Exception:
             canvas_height = 0.0
         if canvas_height > 0:
-            room = canvas_height - self._other_edges() - MIN_RENDER_AREA - strip_height(0)
+            room = (
+                canvas_height - self._other_edges() - MIN_RENDER_AREA - strip_height(0)
+            )
             height = min(height, max(room, MIN_PANEL))
         return strip_height(height)
 
     def _other_edges(self) -> float:
         """Canvas height the other edge windows take (the bottom one; the
-        strip is the only top window)."""
+        strip is the only top window).
+        """
         try:
             return float(self.figure._edge_size("bottom"))
         except Exception:
@@ -287,11 +295,10 @@ class TopStrip(ImguiWindow):
 
     def _draw_handle(self) -> None:
         """The grab bar along the bottom edge: drag to resize, double click
-        to shut or reopen the panels."""
+        to shut or reopen the panels.
+        """
         thickness = float(self.handle_height)
-        imgui.set_cursor_pos(
-            imgui.ImVec2(0.0, imgui.get_window_height() - thickness)
-        )
+        imgui.set_cursor_pos(imgui.ImVec2(0.0, imgui.get_window_height() - thickness))
         imgui.invisible_button(
             "##top_resize", imgui.ImVec2(imgui.get_window_width(), thickness)
         )
@@ -322,22 +329,23 @@ class TopStrip(ImguiWindow):
         draw = imgui.get_window_draw_list()
         strong = hovered or active
         line = imgui.get_color_u32(
-            imgui.ImVec4(0.9, 0.9, 0.9, 1.0) if strong
+            imgui.ImVec4(0.9, 0.9, 0.9, 1.0)
+            if strong
             else imgui.ImVec4(0.5, 0.5, 0.5, 0.8)
         )
         draw.add_rect_filled(
-            rect_min, rect_max,
+            rect_min,
+            rect_max,
             imgui.get_color_u32(
-                imgui.ImVec4(0.2, 0.2, 0.2, 0.8) if strong
+                imgui.ImVec4(0.2, 0.2, 0.2, 0.8)
+                if strong
                 else imgui.ImVec4(0.15, 0.15, 0.15, 0.6)
             ),
         )
         mid_y = (rect_min.y + rect_max.y) * 0.5
         center_x = (rect_min.x + rect_max.x) * 0.5
         for i in (-1, 0, 1):
-            draw.add_circle_filled(
-                imgui.ImVec2(center_x + i * 7.0, mid_y), 2, line
-            )
+            draw.add_circle_filled(imgui.ImVec2(center_x + i * 7.0, mid_y), 2, line)
 
     def _set_cursor(self, name: str) -> None:
         try:

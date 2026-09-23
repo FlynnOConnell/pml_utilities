@@ -1,27 +1,27 @@
 import functools
 import math
+import shutil
 import warnings
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-import numpy as np
-
-import shutil
-from pathlib import Path
-from tifffile import TiffWriter, imwrite as tiff_imwrite
 import h5py
+import numpy as np
+from tifffile import TiffWriter
+from tifffile import imwrite as tiff_imwrite
+from tqdm.auto import tqdm
 
 from . import log
 from .file_io import load_npy
 from .metadata.base import normalize_ops_arrays
 from .metadata.io import _build_ome_metadata
 
-from tqdm.auto import tqdm
-
 logger = log.get("writers")
 
 
 # metadata serialization helpers (moved from _parsing.py)
+
 
 def _is_disabled_si_module(value) -> bool:
     """Check if a scanimage module dict has enable=false."""
@@ -57,7 +57,9 @@ def _make_json_serializable(obj, filter_disabled: bool = True):
     if isinstance(obj, dict):
         if filter_disabled:
             obj = _filter_disabled_modules(obj, recursive=True)
-        return {k: _make_json_serializable(v, filter_disabled=False) for k, v in obj.items()}
+        return {
+            k: _make_json_serializable(v, filter_disabled=False) for k, v in obj.items()
+        }
     if isinstance(obj, (list, tuple)):
         return [_make_json_serializable(v, filter_disabled=False) for v in obj]
     if isinstance(obj, np.ndarray):
@@ -76,12 +78,18 @@ def _convert_paths_to_strings(obj, filter_disabled: bool = True):
     if isinstance(obj, dict):
         if filter_disabled:
             obj = _filter_disabled_modules(obj, recursive=True)
-        return {k: _convert_paths_to_strings(v, filter_disabled=False) for k, v in obj.items()}
+        return {
+            k: _convert_paths_to_strings(v, filter_disabled=False)
+            for k, v in obj.items()
+        }
     if isinstance(obj, (list, tuple)):
-        return type(obj)(_convert_paths_to_strings(v, filter_disabled=False) for v in obj)
+        return type(obj)(
+            _convert_paths_to_strings(v, filter_disabled=False) for v in obj
+        )
     if isinstance(obj, np.ndarray):
         return obj
     return obj
+
 
 warnings.filterwarnings("ignore")
 
@@ -330,7 +338,7 @@ def _write_plane(
         if frames_0 is not None:
             sel = frames_0[start:end]
             if sel and sel == list(range(sel[0], sel[-1] + 1)):
-                chunk = data[sel[0]:sel[-1] + 1, c_idx, z_idx, :, :]
+                chunk = data[sel[0] : sel[-1] + 1, c_idx, z_idx, :, :]
             else:
                 chunk = np.stack(
                     [np.asarray(data[fi, c_idx, z_idx, :, :]) for fi in sel]
@@ -670,7 +678,7 @@ def _build_imagej_metadata(metadata: dict, shape: tuple) -> tuple[dict, tuple]:
     tuple[dict, tuple]
         (imagej_metadata, resolution) ready for tifffile.imwrite(imagej=True).
     """
-    from mbo_utilities.metadata import get_voxel_size, get_param
+    from mbo_utilities.metadata import get_param, get_voxel_size
 
     # get voxel size
     vs = get_voxel_size(metadata)
@@ -806,6 +814,7 @@ def _write_tiff(path, data, overwrite=True, metadata=None, imagej=True, **kwargs
             # ops.npy. without this filter, regPC alone can balloon the
             # tag to 500+ MB after JSON expansion.
             import json
+
             from .metadata.base import strip_for_export
 
             json_meta = _make_json_serializable(strip_for_export(metadata))
@@ -862,7 +871,7 @@ def _write_volumetric_tiff(
     """
     Write volumetric TZYX or TCYX data as single ImageJ hyperstack tiff.
 
-    parameters
+    Parameters
     ----------
     data : array-like
         data with shape (T, Z, Y, X), (T, C, Y, X), (T, Y, X), or (Z, Y, X)
@@ -888,8 +897,8 @@ def _write_volumetric_tiff(
         verbose logging
     """
     from mbo_utilities.arrays.features import (
-        OutputFilename,
         ArraySlicing,
+        OutputFilename,
         read_chunk,
     )
     from mbo_utilities.arrays.features._pyramid import (
@@ -941,8 +950,8 @@ def _write_volumetric_tiff(
     target_shape = (n_frames, n_planes, n_channels, Ly, Lx)
 
     # update metadata for imagej using OutputMetadata for reactive values
-    from mbo_utilities.metadata import OutputMetadata
     from mbo_utilities.arrays.features import get_dims
+    from mbo_utilities.metadata import OutputMetadata
 
     # get dims from array
     source_dims = get_dims(data)
@@ -974,8 +983,10 @@ def _write_volumetric_tiff(
     # store filtered metadata as JSON in ImageJ's Info field. strip
     # suite2p-only fields first — regPC/tPC/meanImg/etc. belong in
     # ops.npy, not stamped into every tiff page header.
-    from tifffile import imagej_metadata_tag
     import json
+
+    from tifffile import imagej_metadata_tag
+
     from .metadata.base import strip_for_export
 
     json_meta = _make_json_serializable(strip_for_export(md))
@@ -1116,7 +1127,7 @@ def _write_volumetric_h5(
     one `.h5` with a 4D `(T, Z, Y, X)` dataset under `dataset_name`,
     matching what mbo's H5Array reader expects on the read side.
 
-    parameters
+    Parameters
     ----------
     data : array-like
         Source array. The 5D TCZYX shape is read via `read_chunk`. A singleton
@@ -1145,11 +1156,12 @@ def _write_volumetric_h5(
         Gzip level 0-9 (ignored for lzf/None).
     """
     import h5py
+
     from mbo_utilities.arrays.features import (
-        OutputFilename,
         ArraySlicing,
-        read_chunk,
+        OutputFilename,
         get_dims,
+        read_chunk,
     )
     from mbo_utilities.metadata import OutputMetadata
 
@@ -1274,6 +1286,7 @@ def _write_volumetric_h5(
             )
 
             from .metadata.base import strip_for_export
+
             serializable_md = _make_json_serializable(strip_for_export(md))
             for k, v in serializable_md.items():
                 if v is None:
@@ -1307,9 +1320,7 @@ def _write_volumetric_h5(
             pbar.close()
 
     if debug:
-        logger.info(
-            f"Wrote {filename} ({filename.stat().st_size / 1e9:.2f} GB)"
-        )
+        logger.info(f"Wrote {filename} ({filename.stat().st_size / 1e9:.2f} GB)")
 
     return filename
 
@@ -1338,7 +1349,7 @@ def _write_volumetric_zarr(
     """
     Write volumetric TZYX data as single OME-NGFF zarr.
 
-    parameters
+    Parameters
     ----------
     data : array-like
         data with shape (T, Z, Y, X), (T, C, Y, X), (T, Y, X), or (Z, Y, X)
@@ -1390,7 +1401,7 @@ def _write_volumetric_zarr(
         "mode" (webknossos labels/masks), "mean", "nearest", "gaussian".
     """
     import zarr
-    from zarr.codecs import BytesCodec, GzipCodec, ShardingCodec, Crc32cCodec
+    from zarr.codecs import BytesCodec, Crc32cCodec, GzipCodec, ShardingCodec
 
     def _build_inner_codecs(name: str, level: int, shuffle: str | None = None) -> list:
         # build the codec chain that sits inside a shard (or replaces the
@@ -1405,9 +1416,11 @@ def _write_volumetric_zarr(
             return [BytesCodec(), GzipCodec(level=level)]
         if name == "zstd":
             from zarr.codecs import ZstdCodec
+
             return [BytesCodec(), ZstdCodec(level=level)]
         if name in ("blosc-lz4", "blosc-zstd"):
             from zarr.codecs import BloscCodec
+
             cname = "lz4" if name == "blosc-lz4" else "zstd"
             blosc_kwargs = {
                 "cname": cname,
@@ -1423,10 +1436,10 @@ def _write_volumetric_zarr(
         )
 
     from mbo_utilities.arrays.features import (
-        OutputFilename,
         ArraySlicing,
-        read_chunk,
+        OutputFilename,
         get_dims,
+        read_chunk,
     )
     from mbo_utilities.arrays.features._pyramid import downsample_block
     from mbo_utilities.arrays.isoview.consolidate import _compute_anisotropic_mags
@@ -1515,9 +1528,7 @@ def _write_volumetric_zarr(
 
     if debug:
         logger.info(f"Writing volumetric zarr: {filename}")
-        logger.info(
-            f"  Shape: {target_shape} ({'TCZYX' if output_5d else 'TZYX'})"
-        )
+        logger.info(f"  Shape: {target_shape} ({'TCZYX' if output_5d else 'TZYX'})")
         logger.info(
             f"  Output metadata: dz={out_meta.dz}, fs={out_meta.fs}, contiguous={out_meta.is_contiguous}"
         )
@@ -1684,6 +1695,7 @@ def _write_volumetric_zarr(
     # suite2p-only fields first — those belong in ops.npy, not in the
     # zarr group attrs where every reader has to load them.
     from .metadata.base import strip_for_export
+
     serializable_md = _make_json_serializable(strip_for_export(md))
     for k, v in serializable_md.items():
         # never let a carried source OME block (or the reader-stamped
@@ -1791,9 +1803,7 @@ def _write_volumetric_zarr(
             if sharded:
                 lvl_bytes_per_yx = lvl_Y * lvl_X * itemsize
                 lvl_target_bytes = target_chunk_mb * 1024 * 1024
-                lvl_max_shard_t = max(
-                    1, lvl_target_bytes // max(1, lvl_bytes_per_yx)
-                )
+                lvl_max_shard_t = max(1, lvl_target_bytes // max(1, lvl_bytes_per_yx))
                 lvl_shard_t = min(lvl_shape[0], lvl_max_shard_t)
                 if output_5d:
                     lvl_shard = (lvl_shard_t, 1, 1, lvl_Y, lvl_X)
@@ -1881,7 +1891,7 @@ def _write_zarr(
 
     if filename not in _write_zarr._arrays:
         import zarr
-        from zarr.codecs import BytesCodec, GzipCodec, ShardingCodec, Crc32cCodec
+        from zarr.codecs import BytesCodec, Crc32cCodec, GzipCodec, ShardingCodec
 
         nframes = int(metadata["num_frames"])
         h, w = data.shape[-2:]
@@ -2004,8 +2014,8 @@ def _try_generic_writers(
     metadata: dict | None = None,
     dataset_name: str | None = None,
 ):
-    import shutil
     import gc
+    import shutil
     import time
 
     if metadata is None:

@@ -49,6 +49,7 @@ class BaseViewer(ABC):
         if self.parent is not None and hasattr(self.parent, "logger"):
             return self.parent.logger
         import logging
+
         return logging.getLogger("mbo_utilities.gui")
 
     @abstractmethod
@@ -69,6 +70,7 @@ def get_viewer_class(data_array) -> type[BaseViewer]:
 
     if hasattr(data_array, "stack_type") and data_array.stack_type == "pollen":
         from .pollen_calibration import PollenCalibrationViewer
+
         return PollenCalibrationViewer
 
     return TimeSeriesViewer
@@ -77,5 +79,6 @@ def get_viewer_class(data_array) -> type[BaseViewer]:
 def __getattr__(name: str):
     if name == "TimeSeriesViewer":
         from .time_series import TimeSeriesViewer
+
         return TimeSeriesViewer
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

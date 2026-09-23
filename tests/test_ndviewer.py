@@ -54,6 +54,7 @@ pytestmark = pytest.mark.skipif(
 # helpers
 # ============================================================
 
+
 class LazyStandIn:
     """Array-protocol lazy stand-in: dtype/shape/ndim/__getitem__ only.
 
@@ -174,6 +175,7 @@ def viewer5d(base5d):
 # construction
 # ============================================================
 
+
 class TestConstruction:
     def test_factory_returns_adapter(self, viewer5d):
         from mbo_utilities.gui._ndviewer import MboNDViewer
@@ -226,6 +228,7 @@ class TestConstruction:
 # ============================================================
 # indices semantics
 # ============================================================
+
 
 class TestIndices:
     def test_len_and_value_iteration(self, viewer5d):
@@ -295,6 +298,7 @@ class TestIndices:
 # window funcs / frame_apply routing
 # ============================================================
 
+
 class TestWindowFuncs:
     def test_legacy_dict_routed_with_window_order(self, viewer5d):
         # preview_data's legacy path sets {"t": (func, size)}; funcs for
@@ -362,6 +366,7 @@ class TestWindowFuncs:
 # contrast resets
 # ============================================================
 
+
 class TestContrastResets:
     def test_reset_vmin_vmax_full_sample(self, viewer5d, base5d):
         iw = viewer5d
@@ -399,6 +404,7 @@ class TestContrastResets:
 # ============================================================
 # playback bar adapter (fps seeding, loop, space toggle)
 # ============================================================
+
 
 class TestSlidersUI:
     def test_loop_fans_out_per_dim(self, viewer5d):
@@ -444,7 +450,8 @@ class TestSlidersUI:
     def test_space_toggle_playback(self, viewer5d):
         """The space-bar path: _keyboard.toggle_playback must flip the T
         dim's play state on the NDWidgetUI (it was a silent no-op when it
-        indexed the str-keyed state by int position)."""
+        indexed the str-keyed state by int position).
+        """
         from mbo_utilities.gui._keyboard import toggle_playback
 
         parent = _StubParent(viewer5d)
@@ -463,7 +470,8 @@ class TestSlidersUI:
         """preview_data's space rebind must succeed against the adapter's
         real-figure passthrough: it reaches figure.renderer, tolerates the
         ndwidget branch having no _toggle_right_gui_collapse to remove, and
-        installs its own key_down handler."""
+        installs its own key_down handler.
+        """
         from mbo_utilities.gui._keyboard import rebind_space_to_playback
 
         parent = _StubParent(viewer5d)
@@ -481,7 +489,8 @@ class TestSlidersUI:
 
 class TestTogglePlaybackVendoredShape:
     """toggle_playback against the vendored sliders' state shape (str-keyed
-    defaultdicts) — no figure needed."""
+    defaultdicts) — no figure needed.
+    """
 
     @staticmethod
     def _parent(n_dims=2, prepopulate=False):
@@ -534,6 +543,7 @@ class TestTogglePlaybackVendoredShape:
 # data swaps
 # ============================================================
 
+
 def _make_viewer(data, **kwargs):
     from mbo_utilities.gui._ndviewer import MboNDViewer
 
@@ -553,7 +563,9 @@ class TestSameDimsSwap:
         base = make_base_5d((20, 2, 3, 32, 32), seed=3)
         arr = LazyStandIn(base)
         iw = _make_viewer(
-            arr, slider_dim_names=NAMES, cmap="gnuplot2",
+            arr,
+            slider_dim_names=NAMES,
+            cmap="gnuplot2",
             graphic_kwargs={"vmin": -100, "vmax": 4000},
         )
         try:
@@ -564,9 +576,7 @@ class TestSameDimsSwap:
 
             old_graphic = iw.graphics[0]
             old_executor = iw.ndgraphics[0].slicer._executor
-            arr2 = LazyStandIn(
-                rng.normal(100, 10, size=base.shape).astype(np.float32)
-            )
+            arr2 = LazyStandIn(rng.normal(100, 10, size=base.shape).astype(np.float32))
             iw.data[0] = arr2
 
             assert iw.data[0] is arr2
@@ -595,9 +605,7 @@ class TestDimsChangingSwap:
         arr5 = LazyStandIn(base5)
         iw = _make_viewer(arr5, slider_dim_names=NAMES)
         try:
-            base4 = np.arange(
-                12 * 3 * 24 * 24, dtype=np.float32
-            ).reshape(12, 3, 24, 24)
+            base4 = np.arange(12 * 3 * 24 * 24, dtype=np.float32).reshape(12, 3, 24, 24)
             arr4 = LazyStandIn(base4)
             iw.data[0] = arr4
 
@@ -637,7 +645,8 @@ class TestDimsChangingSwap:
 class TestFailedSwapRollsBack:
     """A replacement array whose reads raise must not leave the viewer
     half-torn-down: the old array is reinstalled and scrubbing keeps
-    working (the failure is still raised to the caller)."""
+    working (the failure is still raised to the caller).
+    """
 
     class _Boom(LazyStandIn):
         def __getitem__(self, key):
@@ -682,7 +691,8 @@ class TestSwapRefreshesSliderDimNames:
 class TestTeardownFetchRace:
     """A queued serial fetch scheduled right before a data swap must not
     KeyError inside the rendercanvas task (whose finally used to re-insert
-    a dead bookkeeping key forever, pinning the torn-down graphic)."""
+    a dead bookkeeping key forever, pinning the torn-down graphic).
+    """
 
     @staticmethod
     @contextlib.contextmanager
@@ -741,7 +751,8 @@ class TestTeardownFetchRace:
 class TestProtocolOnly2D:
     """2D protocol-only arrays (no __array__): ``np.asarray(data)`` yields a
     useless 0-d object array, so the histogram sample must read through the
-    protocol (``data[:]``) — construction used to TypeError."""
+    protocol (``data[:]``) — construction used to TypeError.
+    """
 
     def test_sample_array_reads_through_protocol(self):
         from mbo_utilities.gui._ndviewer import _sample_array
@@ -778,7 +789,8 @@ class TestProtocolOnly2D:
 class TestWindowSpanContract:
     """Odd window size s covers exactly s frames centered on t (the
     vendored contract). Upstream's banker's-rounding identity transform
-    covered s-1 or s+1 depending on the parity of t - s//2."""
+    covered s-1 or s+1 depending on the parity of t - s//2.
+    """
 
     @staticmethod
     def _ramp(n_t=40, side=8):
@@ -859,7 +871,8 @@ class TestOffscreenIndexDelivery:
     StubLoop's no-canvases self-stop can cancel a scheduled fetch task
     before its first step, wedging the serial-fetch bookkeeping so no
     fetch would ever run again — the adapter now renders synchronously
-    for offscreen canvases.)"""
+    for offscreen canvases.)
+    """
 
     def test_scrub_delivers_pixels_without_property_setters(self):
         base = np.zeros((40, 16, 16), dtype=np.float32)
@@ -890,7 +903,8 @@ class TestOffscreenIndexDelivery:
 
 class TestIntegerTextureUpgrade:
     """Window/spatial funcs over integer data must not have their float
-    output truncated into the original integer texture."""
+    output truncated into the original integer texture.
+    """
 
     @staticmethod
     def _alternating_int16(n_t=40, side=8):
@@ -940,7 +954,8 @@ class TestIntegerTextureUpgrade:
 
 class TestIndexBounds:
     """The vendored widget raised on out-of-range and negative indices; the
-    upstream ReferenceIndices silently clamps. The adapter keeps the raise."""
+    upstream ReferenceIndices silently clamps. The adapter keeps the raise.
+    """
 
     def test_out_of_range_raises_naming_dim_and_size(self, viewer5d):
         with pytest.raises(IndexError, match=r"2500.*Timepoint.*40"):
@@ -979,6 +994,7 @@ class TestShowPassthrough:
 # bare-path dim naming + fps seeding
 # ============================================================
 
+
 class _WithLabels(LazyStandIn):
     slider_dim_labels = ("Timepoint", "Channel", "Z-plane")
 
@@ -990,7 +1006,8 @@ class _WithFs(LazyStandIn):
 class TestBareDimNames:
     """With no slider_dim_names the letters must follow mbo's canonical
     axis order — 5D data is (T, C, Z, Y, X), so 'z' must drive axis 2 (the
-    real Z), not the singleton C axis the vendored positional order gave."""
+    real Z), not the singleton C axis the vendored positional order gave.
+    """
 
     def test_bare_5d_letters_are_canonical(self):
         base = np.zeros((6, 1, 5, 16, 16), dtype=np.float32)
@@ -1043,7 +1060,8 @@ class TestBareDimNames:
 class TestFpsSeedingFromData:
     """The bare factory path must seed playback fps from the array's frame
     rate at construction AND when data is swapped in (preview_data's
-    seeding only runs inside the full GUI)."""
+    seeding only runs inside the full GUI).
+    """
 
     def test_construction_seeds_from_fs(self):
         iw = _make_viewer(_WithFs(np.zeros((10, 8, 8), dtype=np.float32)))
@@ -1079,6 +1097,7 @@ class TestFpsSeedingFromData:
 # find_slider_name aliases (arrays/features/_dim_labels.py)
 # ============================================================
 
+
 class TestFindSliderNameAliases:
     def test_mesc_depth_and_cube_labels_resolve_to_z(self):
         from mbo_utilities.arrays.features._dim_labels import find_slider_name
@@ -1097,6 +1116,7 @@ class TestFindSliderNameAliases:
 # ============================================================
 # multi-array (multi-ROI) construction
 # ============================================================
+
 
 class TestMultiArray:
     def test_two_arrays(self, base5d):
@@ -1130,6 +1150,7 @@ class TestMultiArray:
 # lifecycle
 # ============================================================
 
+
 class TestClose:
     def test_close_offscreen_shuts_executors_and_is_idempotent(self, base5d):
         arr = LazyStandIn(base5d[:, 0])  # (T, Z, Y, X)
@@ -1138,4 +1159,3 @@ class TestClose:
         iw.close()  # offscreen: Figure._output is None; must not raise
         assert all(ex._shutdown for ex in executors)
         iw.close()  # idempotent
-

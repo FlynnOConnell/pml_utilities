@@ -24,7 +24,8 @@ OUTLINE_COLOR = (0.1, 0.1, 0.1, 0.8)
 
 def nearest_index(px, py, mouse_x: float, mouse_y: float, radius: float) -> int | None:
     """Index of the point nearest the mouse, within ``radius`` pixels, else
-    None. NaN points are never picked."""
+    None. NaN points are never picked.
+    """
     px = np.asarray(px, dtype=np.float64)
     py = np.asarray(py, dtype=np.float64)
     if px.size == 0:
@@ -48,7 +49,9 @@ class ScatterPlot:
         How close, in pixels, the mouse must be to pick a point.
     """
 
-    def __init__(self, plot_id: str, marker_size: float = 6.0, pick_radius: float = 8.0):
+    def __init__(
+        self, plot_id: str, marker_size: float = 6.0, pick_radius: float = 8.0
+    ):
         self.plot_id = plot_id
         self.marker_size = float(marker_size)
         self.pick_radius = float(pick_radius)
@@ -105,7 +108,11 @@ class ScatterPlot:
         clicked = hovered is not None and imgui.is_mouse_clicked(0)
         if hovered is not None:
             self._ring(x[hovered], y[hovered], HOVER_COLOR, 1.5, "##hover")
-            text = tooltip(hovered) if tooltip else f"{hovered}: {x[hovered]:.3g}, {y[hovered]:.3g}"
+            text = (
+                tooltip(hovered)
+                if tooltip
+                else f"{hovered}: {x[hovered]:.3g}, {y[hovered]:.3g}"
+            )
             imgui.set_tooltip(text)
         if focused is not None and 0 <= focused < n:
             self._ring(x[focused], y[focused], self.focus_color, 2.5, "##focus")
@@ -132,16 +139,30 @@ class ScatterPlot:
         """Open a plot, draw the points, close it; returns the clicked index.
         ``inside`` runs while the plot is still open, after the points (for
         anything that needs implot's plot state, such as a box tool);
-        ``flags`` are extra ``implot.Flags_`` for the plot."""
+        ``flags`` are extra ``implot.Flags_`` for the plot.
+        """
         fit, self._fit = self._fit, False
         with line_plot(
-            self.plot_id, x_label, y_label, height, width, fit=fit, legend=legend, flags=flags,
+            self.plot_id,
+            x_label,
+            y_label,
+            height,
+            width,
+            fit=fit,
+            legend=legend,
+            flags=flags,
         ) as ok:
             if not ok:
                 return None
             picked = self.items(
-                x, y, colors,
-                focused=focused, label=label, legend=legend, tooltip=tooltip, groups=groups,
+                x,
+                y,
+                colors,
+                focused=focused,
+                label=label,
+                legend=legend,
+                tooltip=tooltip,
+                groups=groups,
             )
             if inside is not None:
                 inside()
@@ -163,7 +184,9 @@ class ScatterPlot:
                 packed = packed[idx]
         if packed is not None:
             spec.marker_fill_colors = np.ascontiguousarray(packed, dtype=np.uint32)
-        implot.plot_scatter(label, np.ascontiguousarray(x), np.ascontiguousarray(y), spec)
+        implot.plot_scatter(
+            label, np.ascontiguousarray(x), np.ascontiguousarray(y), spec
+        )
 
     def _pick(self, x, y) -> int | None:
         limits = implot.get_plot_limits()

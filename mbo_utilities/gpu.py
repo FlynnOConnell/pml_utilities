@@ -61,7 +61,9 @@ def _run(cmd: list[str], timeout: int = _SMI_TIMEOUT) -> str | None:
 
 def has_nvidia_smi() -> bool:
     """True if nvidia-smi is callable (an NVIDIA driver is present)."""
-    return _run(["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"]) is not None
+    return (
+        _run(["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"]) is not None
+    )
 
 
 def driver_cuda() -> str | None:
@@ -84,13 +86,15 @@ def gpu_devices() -> list[dict[str, Any]]:
     reports N/A); compute_cap is the card's compute capability, e.g. "6.1".
     Empty list if no NVIDIA GPU / driver.
     """
-    out = _run([
-        "nvidia-smi",
-        "--query-gpu=index,name,memory.total,memory.used,memory.free,"
-        "utilization.gpu,temperature.gpu,driver_model.current,"
-        "driver_model.pending,compute_cap",
-        "--format=csv,noheader,nounits",
-    ])
+    out = _run(
+        [
+            "nvidia-smi",
+            "--query-gpu=index,name,memory.total,memory.used,memory.free,"
+            "utilization.gpu,temperature.gpu,driver_model.current,"
+            "driver_model.pending,compute_cap",
+            "--format=csv,noheader,nounits",
+        ]
+    )
     if not out:
         return []
 
@@ -121,18 +125,20 @@ def gpu_devices() -> list[dict[str, Any]]:
             index = int(idx)
         except ValueError:
             continue
-        devices.append({
-            "index": index,
-            "name": name,
-            "total_mb": _num(total),
-            "used_mb": _num(used),
-            "free_mb": _num(free),
-            "util_pct": _num(util),
-            "temp_c": _num(temp),
-            "driver_model": _dm(parts[7]) if len(parts) > 7 else None,
-            "driver_model_pending": _dm(parts[8]) if len(parts) > 8 else None,
-            "compute_cap": _dm(parts[9]) if len(parts) > 9 else None,
-        })
+        devices.append(
+            {
+                "index": index,
+                "name": name,
+                "total_mb": _num(total),
+                "used_mb": _num(used),
+                "free_mb": _num(free),
+                "util_pct": _num(util),
+                "temp_c": _num(temp),
+                "driver_model": _dm(parts[7]) if len(parts) > 7 else None,
+                "driver_model_pending": _dm(parts[8]) if len(parts) > 8 else None,
+                "compute_cap": _dm(parts[9]) if len(parts) > 9 else None,
+            }
+        )
     return devices
 
 
@@ -140,6 +146,7 @@ def _pid_name(pid: int) -> str:
     """Best-effort process name for a pid."""
     try:
         import psutil
+
         return psutil.Process(pid).name()
     except Exception:
         return "?"
@@ -164,9 +171,9 @@ def _gpu_processes_windows() -> list[dict[str, Any]]:
         "$nm=$n[$p]; if (-not $nm) {$nm='?'}; "
         "'{0};{1};{2}' -f $p,$nm,[int64]$_.CookedValue } }"
     )
-    out = _run([
-        "powershell", "-NoProfile", "-NonInteractive", "-Command", ps
-    ], timeout=15)
+    out = _run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], timeout=15
+    )
     if not out:
         return []
 
@@ -185,8 +192,12 @@ def _gpu_processes_windows() -> list[dict[str, Any]]:
         names[pid] = parts[1]
 
     procs = [
-        {"pid": pid, "name": names.get(pid) or _pid_name(pid),
-         "used_mb": b / (1024 * 1024), "device": None}
+        {
+            "pid": pid,
+            "name": names.get(pid) or _pid_name(pid),
+            "used_mb": b / (1024 * 1024),
+            "device": None,
+        }
         for pid, b in by_pid.items()
     ]
     procs.sort(key=lambda p: p["used_mb"], reverse=True)
@@ -195,11 +206,13 @@ def _gpu_processes_windows() -> list[dict[str, Any]]:
 
 def _gpu_processes_nvsmi() -> list[dict[str, Any]]:
     """Per-process VRAM via nvidia-smi (Linux / datacenter TCC driver)."""
-    out = _run([
-        "nvidia-smi",
-        "--query-compute-apps=pid,process_name,used_memory",
-        "--format=csv,noheader,nounits",
-    ])
+    out = _run(
+        [
+            "nvidia-smi",
+            "--query-compute-apps=pid,process_name,used_memory",
+            "--format=csv,noheader,nounits",
+        ]
+    )
     if not out:
         return []
     procs = []
@@ -219,12 +232,14 @@ def _gpu_processes_nvsmi() -> list[dict[str, Any]]:
             used_mb = float(mem_s)
         except ValueError:
             used_mb = None  # '[N/A]' under unsupported drivers
-        procs.append({
-            "pid": pid,
-            "name": name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
-            "used_mb": used_mb,
-            "device": None,
-        })
+        procs.append(
+            {
+                "pid": pid,
+                "name": name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
+                "used_mb": used_mb,
+                "device": None,
+            }
+        )
     procs.sort(key=lambda p: (p["used_mb"] is None, -(p["used_mb"] or 0)))
     return procs
 
@@ -277,6 +292,7 @@ def render_gpu(live_adapter: Any | None = None) -> dict[str, Any] | None:
         }
     try:
         import fastplotlib as fpl
+
         adapters = fpl.enumerate_adapters()
     except Exception:
         return None
@@ -284,6 +300,7 @@ def render_gpu(live_adapter: Any | None = None) -> dict[str, Any] | None:
         return None
     try:
         from mbo_utilities.preferences import get_gpu_index
+
         idx = get_gpu_index()
     except Exception:
         idx = -1
@@ -293,6 +310,7 @@ def render_gpu(live_adapter: Any | None = None) -> dict[str, Any] | None:
         idx, source = 0, "auto"
         try:
             import wgpu
+
             default_info = wgpu.gpu.request_adapter_sync().info
             infos = [a.info for a in adapters]
             idx = infos.index(default_info)
@@ -318,8 +336,13 @@ def compute_gpu() -> dict[str, Any]:
     dropdown can still override a single run to CPU/MPS.
     """
     if gpu_compute_disabled():
-        return {"backend": "cpu", "enabled": False, "name": "CPU (forced via env)",
-                "index": None, "torch_index": None}
+        return {
+            "backend": "cpu",
+            "enabled": False,
+            "name": "CPU (forced via env)",
+            "index": None,
+            "torch_index": None,
+        }
 
     cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
     phys = 0
@@ -337,8 +360,10 @@ def compute_gpu() -> dict[str, Any]:
     torch_index = 0
     try:
         import sys as _sys
+
         if "torch" in _sys.modules:
             import torch
+
             if torch.cuda.is_available():
                 torch_index = torch.cuda.current_device()
                 name = torch.cuda.get_device_name(torch_index)
@@ -346,10 +371,20 @@ def compute_gpu() -> dict[str, Any]:
         pass
 
     if name is None:
-        return {"backend": "cpu", "enabled": False, "name": "CPU (no CUDA device)",
-                "index": None, "torch_index": None}
-    return {"backend": "cuda", "enabled": True, "name": name,
-            "index": phys, "torch_index": torch_index}
+        return {
+            "backend": "cpu",
+            "enabled": False,
+            "name": "CPU (no CUDA device)",
+            "index": None,
+            "torch_index": None,
+        }
+    return {
+        "backend": "cuda",
+        "enabled": True,
+        "name": name,
+        "index": phys,
+        "torch_index": torch_index,
+    }
 
 
 def gpu_compute_disabled() -> bool:
@@ -358,7 +393,14 @@ def gpu_compute_disabled() -> bool:
     if cvd is not None and cvd.strip() in ("", "-1"):
         return True
     raw = os.environ.get("MBO_GPU")
-    if raw is not None and raw.strip().lower() in ("0", "off", "false", "no", "cpu", "none"):
+    if raw is not None and raw.strip().lower() in (
+        "0",
+        "off",
+        "false",
+        "no",
+        "cpu",
+        "none",
+    ):
         return True
     return False
 
@@ -408,6 +450,7 @@ def apply_persisted_compute_gpu() -> str | None:
         return apply_gpu_policy(raw)
     try:
         from mbo_utilities.preferences import get_compute_gpu
+
         pref = get_compute_gpu().strip()
     except Exception:
         return None
@@ -429,8 +472,9 @@ def format_gpu_report(show_processes: bool = False, top: int = 12) -> str:
     # roles: which GPU renders, which GPU computes
     rg = render_gpu()
     if rg is not None:
-        tag = {"live": "", "preference": " (selected)",
-               "auto": " (wgpu default)"}.get(rg["source"], "")
+        tag = {"live": "", "preference": " (selected)", "auto": " (wgpu default)"}.get(
+            rg["source"], ""
+        )
         lines.append(f"Render GPU  (fastplotlib): {rg['summary']}{tag}")
     cg = compute_gpu()
     if cg["enabled"]:

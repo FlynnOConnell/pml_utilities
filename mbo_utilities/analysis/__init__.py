@@ -32,6 +32,7 @@ def _patch_qt_checkbox():
     """Patch QCheckBox for Qt5/Qt6 compatibility with cellpose."""
     try:
         from qtpy.QtWidgets import QCheckBox
+
         if not hasattr(QCheckBox, "checkStateChanged"):
             QCheckBox.checkStateChanged = QCheckBox.stateChanged
     except ImportError:
@@ -44,6 +45,7 @@ def __getattr__(name: str) -> object:
     if name in _LAZY_IMPORTS:
         module_name, attr_name = _LAZY_IMPORTS[name]
         from importlib import import_module
+
         module = import_module(module_name, package="mbo_utilities.analysis")
         obj = getattr(module, attr_name)
         _loaded[name] = obj

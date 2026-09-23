@@ -22,21 +22,20 @@ from __future__ import annotations
 
 import contextlib
 import math
+from collections.abc import Callable, Sequence
 from itertools import product
 from time import perf_counter
-from typing import Callable, Sequence
 
 import numpy as np
+from fastplotlib.utils import calculate_figure_shape
+from fastplotlib.widgets.nd_widget import NDImage, NDImageSlicer, NDWidget
+from fastplotlib.widgets.nd_widget._async import run_sync
+from fastplotlib.widgets.nd_widget._index import RangeContinuous
+from fastplotlib.widgets.nd_widget._ui import NDWidgetUI
+from imgui_bundle import icons_fontawesome_6 as fa
+from imgui_bundle import imgui
 
 from mbo_utilities.arrays.features._dim_labels import default_dim_letters
-from imgui_bundle import imgui, icons_fontawesome_6 as fa
-
-from fastplotlib.utils import calculate_figure_shape
-from fastplotlib.widgets.nd_widget import NDWidget, NDImage, NDImageSlicer
-from fastplotlib.widgets.nd_widget._index import RangeContinuous
-from fastplotlib.widgets.nd_widget._async import run_sync
-from fastplotlib.widgets.nd_widget._ui import NDWidgetUI
-
 from mbo_utilities.gui import _fpl_config  # noqa: F401
 
 __all__ = ["MboNDViewer", "MboNDImageSlicer", "_sample_array", "sliders_height"]
@@ -131,9 +130,11 @@ def _with_float32_cast(func):
     texture (t-mean(5) displayed truncated ints).
     """
     if func is None:
+
         def _cast(a):
             return np.asarray(a, dtype=np.float32)
     else:
+
         def _cast(a):
             return np.asarray(func(a), dtype=np.float32)
 
@@ -185,9 +186,7 @@ class MboNDImageSlicer(NDImageSlicer):
                 continue
             stop = self.slider_maps[dim](indices[dim] + size / 2)
             start = indexer[dim].start
-            indexer[dim] = slice(
-                start, min(self.shape[dim], max(stop, start + 1)), 1
-            )
+            indexer[dim] = slice(start, min(self.shape[dim], max(stop, start + 1)), 1)
         return indexer
 
     def _recompute_histogram(self):
@@ -218,7 +217,8 @@ class MboNDImageSlicer(NDImageSlicer):
 class _NDDataList(list):
     """list of the ORIGINAL data arrays; ``data[i] = arr`` performs the full
     mbo swap (re-derive dims, rebuild graphic/colorbar, clear funcs, reset
-    indices)."""
+    indices).
+    """
 
     def __init__(self, viewer, items):
         super().__init__(items)
@@ -234,9 +234,10 @@ class _MboIndicesView:
     Name-keyed get/set, iteration yields index VALUES in slider order
     (consumers snapshot positions with ``list(iw.indices)``), ``len`` is the
     slider count. Values are 0-based ints; the reference space (sliders) is
-    1-based."""
+    1-based.
+    """
 
-    def __init__(self, viewer: "MboNDViewer"):
+    def __init__(self, viewer: MboNDViewer):
         self._viewer = viewer
 
     def __getitem__(self, name):
@@ -251,26 +252,23 @@ class _MboIndicesView:
 
     def __iter__(self):
         ri = self._viewer._ndw.indices
-        return iter(
-            [int(round(float(ri[d]))) - 1 for d in self._viewer._dim_names]
-        )
+        return iter([int(round(float(ri[d]))) - 1 for d in self._viewer._dim_names])
 
     def __len__(self):
         return len(self._viewer._dim_names)
 
     def __repr__(self):
         ri = self._viewer._ndw.indices
-        return repr(
-            {d: int(round(float(ri[d]))) - 1 for d in self._viewer._dim_names}
-        )
+        return repr({d: int(round(float(ri[d]))) - 1 for d in self._viewer._dim_names})
 
 
 class _DimStateView:
     """View over one per-dim NDWidgetUI state dict that accepts int
     positions (``_keyboard.toggle_playback`` indexes positionally), dim
-    names, mbo display labels, and positional letters."""
+    names, mbo display labels, and positional letters.
+    """
 
-    def __init__(self, viewer: "MboNDViewer", store: dict):
+    def __init__(self, viewer: MboNDViewer, store: dict):
         self._viewer = viewer
         self._store = store
 
@@ -320,7 +318,7 @@ class _MboSlidersUI:
     detect (and never override) an fps the user typed into the bar.
     """
 
-    def __init__(self, viewer: "MboNDViewer"):
+    def __init__(self, viewer: MboNDViewer):
         self._viewer = viewer
         # dims whose fps the user typed explicitly — seeding never overrides
         self._user_fps: set[str] = set()
@@ -490,9 +488,7 @@ class _MboNDWidgetUI(NDWidgetUI):
             imgui.set_next_item_width(self.width * 0.85)
 
             if isinstance(rr, RangeContinuous):
-                if all(
-                    float(v).is_integer() for v in (rr.start, rr.stop, rr.step)
-                ):
+                if all(float(v).is_integer() for v in (rr.start, rr.stop, rr.step)):
                     changed, new_index = imgui.slider_int(
                         v=int(round(current_index)),
                         v_min=int(rr.start),
@@ -578,9 +574,7 @@ class MboNDViewer:
 
         # display labels are a plain writable attribute; mesc_units
         # re-stamps it after a unit swap
-        self._slider_dim_names = (
-            tuple(slider_dim_names) if slider_dim_names else None
-        )
+        self._slider_dim_names = tuple(slider_dim_names) if slider_dim_names else None
 
         # shared positional slider-dim names (the ReferenceIndices dims)
         counts = [self._n_slider_dims(a, r) for a, r in zip(arrays, self._rgb)]
@@ -594,9 +588,7 @@ class MboNDViewer:
             # slider axis; else _make_dim_names falls back to the canonical
             # per-rank letters (5D data is TCZYX -> 't','c','z')
             requested = self._labels_from_arrays(arrays, counts, n_dims)
-        self._dim_names: list[str] = list(
-            self._make_dim_names(n_dims, requested)
-        )
+        self._dim_names: list[str] = list(self._make_dim_names(n_dims, requested))
 
         # 1-based reference space (sliders show 1..n); _ref_to_index maps to
         # 0-based array indices
@@ -654,7 +646,9 @@ class MboNDViewer:
             gname = None
             if names is not None and i < len(names):
                 gname = str(names[i])
-            ndg = self._add_image(nd_subplot, arr, self._rgb[i], name=gname, graphic_kwargs=gk)
+            ndg = self._add_image(
+                nd_subplot, arr, self._rgb[i], name=gname, graphic_kwargs=gk
+            )
             self._ndgraphics.append(ndg)
 
         # window funcs: legacy dict {"t": (func, size)} or positional
@@ -678,7 +672,7 @@ class MboNDViewer:
         return max(int(arr.ndim) - 2 - (1 if rgb else 0), 0)
 
     def _dim_size(self, j: int) -> int:
-        """max size of positional slider axis ``j`` across arrays that have it"""
+        """Max size of positional slider axis ``j`` across arrays that have it"""
         size = 1
         for arr, rgb in zip(self._arrays, self._rgb):
             if self._n_slider_dims(arr, rgb) > j:
@@ -687,10 +681,11 @@ class MboNDViewer:
 
     @staticmethod
     def _labels_from_arrays(arrays, counts, n_dims: int):
-        """the arrays' own ``slider_dim_labels`` for the bare path, but only
+        """The arrays' own ``slider_dim_labels`` for the bare path, but only
         when they name every slider axis of a widest array — a MescArray
         with singleton axes reports labels for the non-singleton axes only,
-        which cannot be mapped positionally, so None (-> canonical letters)"""
+        which cannot be mapped positionally, so None (-> canonical letters)
+        """
         if n_dims == 0:
             return None
         for arr, cnt in zip(arrays, counts):
@@ -729,10 +724,11 @@ class MboNDViewer:
     def _make_dim_names(
         self, n: int, requested: Sequence[str] | None
     ) -> tuple[str, ...]:
-        """positional slider-dim names: the requested display names when they
+        """Positional slider-dim names: the requested display names when they
         match the slider count, else the canonical per-rank letters (5D data
         is TCZYX -> 't','c','z'; 4D -> 't','z') — deduped and kept clear of
-        the reserved spatial names"""
+        the reserved spatial names
+        """
         if requested is not None and len(requested) == n:
             base = [str(x) for x in requested]
         else:
@@ -747,7 +743,9 @@ class MboNDViewer:
             out.append(name)
         return tuple(out)
 
-    def _add_image(self, nd_subplot, arr, rgb: bool, name: str | None = None, graphic_kwargs=None):
+    def _add_image(
+        self, nd_subplot, arr, rgb: bool, name: str | None = None, graphic_kwargs=None
+    ):
         k = self._n_slider_dims(arr, rgb)
         spatial = (_ROW, _COL) + ((_RGB,) if rgb else ())
         dims = tuple(self._dim_names[:k]) + spatial
@@ -769,7 +767,7 @@ class MboNDViewer:
     # ------------------------------------------------------------------
 
     def _resolve_dim(self, name) -> str:
-        """display name / letter / reference dim -> reference dim name"""
+        """Display name / letter / reference dim -> reference dim name"""
         name = str(name)
         dims = self._dim_names
         if name in dims:
@@ -786,7 +784,7 @@ class MboNDViewer:
         raise KeyError(name)
 
     def _check_index(self, dim: str, value) -> int:
-        """validate an index for a (resolved) reference dim.
+        """Validate an index for a (resolved) reference dim.
 
         The upstream ReferenceIndices silently clamps; the vendored widget
         raised — negative indexing was "not supported" and out-of-range
@@ -795,16 +793,14 @@ class MboNDViewer:
         value = int(value)
         if value < 0:
             raise IndexError(
-                f"negative indexing is not supported (got {value} for dim "
-                f"{dim!r})"
+                f"negative indexing is not supported (got {value} for dim {dim!r})"
             )
         rr = self._ndw.indices.ref_ranges.get(dim)
         if isinstance(rr, RangeContinuous):
             size = int(rr.stop - rr.start)
             if value >= size:
                 raise IndexError(
-                    f"index {value} out of bounds for dim {dim!r} with size "
-                    f"{size}"
+                    f"index {value} out of bounds for dim {dim!r} with size {size}"
                 )
         return value
 
@@ -814,7 +810,7 @@ class MboNDViewer:
 
     @property
     def ndwidget(self) -> NDWidget:
-        """the wrapped NDWidget (escape hatch, not part of the mbo contract)"""
+        """The wrapped NDWidget (escape hatch, not part of the mbo contract)"""
         return self._ndw
 
     @property
@@ -823,8 +819,9 @@ class MboNDViewer:
 
     @property
     def figure(self):
-        """the real ImguiFigure — canvas/renderer/imgui_renderer/subplot
-        access all pass through untouched"""
+        """The real ImguiFigure — canvas/renderer/imgui_renderer/subplot
+        access all pass through untouched
+        """
         return self._ndw.figure
 
     @property
@@ -833,7 +830,7 @@ class MboNDViewer:
 
     @property
     def graphics(self) -> list:
-        """the ImageGraphics, one per managed array"""
+        """The ImageGraphics, one per managed array"""
         return [ndg.graphic for ndg in self._ndgraphics]
 
     @property
@@ -842,7 +839,7 @@ class MboNDViewer:
 
     @property
     def dim_names(self) -> tuple[str, ...]:
-        """resolved reference dim names for the slider axes, in slider order.
+        """Resolved reference dim names for the slider axes, in slider order.
 
         These are the names the wrapped ``NDWidget.indices`` is keyed by —
         display labels when the arrays provide them, else the canonical
@@ -853,8 +850,9 @@ class MboNDViewer:
 
     @property
     def slider_dims(self) -> list[str]:
-        """positional letters, vendored-compatible (``'t' in iw.slider_dims``
-        gates the legacy window-funcs path in preview_data)"""
+        """Positional letters, vendored-compatible (``'t' in iw.slider_dims``
+        gates the legacy window-funcs path in preview_data)
+        """
         return [
             _SLIDER_LETTERS[j] if j < len(_SLIDER_LETTERS) else f"dim{j}"
             for j in range(len(self._dim_names))
@@ -944,9 +942,7 @@ class MboNDViewer:
         if value is None:
             translated = {}
         elif isinstance(value, dict):
-            translated = {
-                self._resolve_dim(k): tuple(v) for k, v in value.items()
-            }
+            translated = {self._resolve_dim(k): tuple(v) for k, v in value.items()}
         elif isinstance(value, (tuple, list)):
             translated = self._fold_positional(value, self._window_sizes_state)
         else:
@@ -1013,7 +1009,8 @@ class MboNDViewer:
     @spatial_func.setter
     def spatial_func(self, value):
         """Extended-protocol spatial funcs: a single callable/None or one per
-        graphic. Same routing as ``frame_apply`` (no histogram recompute)."""
+        graphic. Same routing as ``frame_apply`` (no histogram recompute).
+        """
         self._spatial_func_state = value
         if isinstance(value, (list, tuple)):
             funcs = list(value)
@@ -1024,7 +1021,7 @@ class MboNDViewer:
         self._force_render()
 
     def _route_spatial(self, i: int, func):
-        """record graphic i's USER spatial func and push it to the slicer"""
+        """Record graphic i's USER spatial func and push it to the slicer"""
         self._routed_spatial[i] = func
         self._apply_spatial(i)
 
@@ -1061,14 +1058,14 @@ class MboNDViewer:
         wf = ndg.slicer.window_funcs or {}
         order = ndg.slicer.window_order or ()
         return any(
-            d in order and (wf.get(d) or (None, None))[0] is not None
-            for d in wf
+            d in order and (wf.get(d) or (None, None))[0] is not None for d in wf
         )
 
     def _ensure_float_texture(self, ndg):
-        """recreate ndg's graphic if its texture is integer (float funcs are
+        """Recreate ndg's graphic if its texture is integer (float funcs are
         active), preserving contrast; the texture then stays float until the
-        graphic is next rebuilt (e.g. a data swap)"""
+        graphic is next rebuilt (e.g. a data swap)
+        """
         g = ndg.graphic
         if g is None:
             return
@@ -1121,7 +1118,7 @@ class MboNDViewer:
                 target.vmin = float(vmin)
 
     def _force_render(self):
-        """synchronously refetch + redraw every graphic at the current index"""
+        """Synchronously refetch + redraw every graphic at the current index"""
         for ndg in self._ndgraphics:
             if ndg.data is None or ndg.graphic is None:
                 continue
@@ -1168,7 +1165,8 @@ class MboNDViewer:
     def _set_contrast(self, ndg, block):
         """Rescale one graphic to the value range of ``block`` and redraw its
         colorbar. ``block`` is whatever sample the caller decided represents
-        the data: the current frame, or a subsample of the whole array."""
+        the data: the current frame, or a subsample of the whole array.
+        """
         block = np.asarray(block)
         finite = block[np.isfinite(block)] if block.dtype.kind == "f" else block
         if finite.size == 0:
@@ -1192,13 +1190,15 @@ class MboNDViewer:
 
     def reset_vmin_vmax(self):
         """Reset contrast w.r.t. the full data (bounded ~64-frame scalar-key
-        sample across every scrollable axis, lazy-reader friendly)."""
+        sample across every scrollable axis, lazy-reader friendly).
+        """
         for ndg, arr in zip(self._ndgraphics, self._arrays):
             self._set_contrast(ndg, _sample_array(arr))
 
     def reset_vmin_vmax_frame(self):
         """Reset contrast + histogram w.r.t. the currently displayed frame
-        (post window/spatial funcs)."""
+        (post window/spatial funcs).
+        """
         for ndg in self._ndgraphics:
             g = ndg.graphic
             if g is None:
@@ -1210,8 +1210,9 @@ class MboNDViewer:
     # ------------------------------------------------------------------
 
     def _teardown_ndgraphic(self, ndg):
-        """fully retire one NDGraphic: slicer executor, graphic, colorbar,
-        subplot registration, ReferenceIndices bookkeeping"""
+        """Fully retire one NDGraphic: slicer executor, graphic, colorbar,
+        subplot registration, ReferenceIndices bookkeeping
+        """
         # already-scheduled fetches must not touch the dead graphic
         ndg._set_indices_ = _noop_indices
         ndg.pause = True
@@ -1246,7 +1247,7 @@ class MboNDViewer:
         # else: deferred to _sweep_dead_fetch_state (next swap / close)
 
     def _sweep_dead_fetch_state(self):
-        """drop ReferenceIndices fetch bookkeeping for torn-down graphics.
+        """Drop ReferenceIndices fetch bookkeeping for torn-down graphics.
 
         Keys whose fetch task was still scheduled at teardown time could not
         be removed then (the task itself indexes the queue dict); once the
@@ -1268,9 +1269,10 @@ class MboNDViewer:
                 ri._fetch_request_queue.pop(ndg, None)
 
     def _pop_ref_dim(self, name: str):
-        """remove one dim from the ReferenceIndices + every registered
+        """Remove one dim from the ReferenceIndices + every registered
         NDWidget's slider UI (ReferenceIndices.pop_dim is an empty stub
-        upstream, so the removal is done directly)"""
+        upstream, so the removal is done directly)
+        """
         ri = self._ndw.indices
         ri._ref_ranges.pop(name, None)
         ri._indices.pop(name, None)
@@ -1295,9 +1297,7 @@ class MboNDViewer:
             raise IndexError(i)
         for attr in ("shape", "ndim", "dtype", "__getitem__"):
             if not hasattr(new_array, attr):
-                raise TypeError(
-                    f"replacement data must be array-like with `{attr}`"
-                )
+                raise TypeError(f"replacement data must be array-like with `{attr}`")
 
         # graphics torn down by previous swaps may finally have run their
         # scheduled fetch task; their deferred bookkeeping is dead now
@@ -1326,25 +1326,24 @@ class MboNDViewer:
             # funcs are reset, but scrubbing keeps working
             self._rgb[i] = old_rgb
             with contextlib.suppress(Exception):
-                self._install_array(
-                    i, old_array, nd_subplot, old_ndg.name, old_cmap
-                )
+                self._install_array(i, old_array, nd_subplot, old_ndg.name, old_cmap)
             raise
 
     def _install_array(self, i, new_array, nd_subplot, name, cmap):
-        """swap machinery shared by the forward path and the rollback path:
+        """Swap machinery shared by the forward path and the rollback path:
         reshape the shared dim space for ``new_array`` at data slot ``i``,
-        clear stale func state, and rebuild the graphic + colorbar"""
+        clear stale func state, and rebuild the graphic + colorbar
+        """
         self._arrays[i] = new_array
 
         # ---- reshape the shared index space ----
-        counts = [
-            self._n_slider_dims(a, r) for a, r in zip(self._arrays, self._rgb)
-        ]
+        counts = [self._n_slider_dims(a, r) for a, r in zip(self._arrays, self._rgb)]
         need = max(counts) if counts else 0
         ri = self._ndw.indices
         ndui = self._ndw.ui_sliders
-        fps_snapshot = self._sliders._snapshot_fps() if hasattr(self, "_sliders") else None
+        fps_snapshot = (
+            self._sliders._snapshot_fps() if hasattr(self, "_sliders") else None
+        )
 
         if len(self._arrays) == 1:
             # single-array viewer: rebuild the dim space wholesale so the
@@ -1403,7 +1402,10 @@ class MboNDViewer:
 
         # ---- rebuild the graphic + colorbar for the new array ----
         new_ndg = self._add_image(
-            nd_subplot, new_array, self._rgb[i], name=name,
+            nd_subplot,
+            new_array,
+            self._rgb[i],
+            name=name,
             graphic_kwargs={"cmap": cmap} if cmap is not None else None,
         )
         self._ndgraphics[i] = new_ndg
@@ -1432,7 +1434,8 @@ class MboNDViewer:
     def _derive_swap_names(self, arr, n: int) -> tuple[str, ...]:
         """slider-dim names for a swapped-in array: its own
         ``slider_dim_labels`` when they match the new slider count, else the
-        current names when the count is unchanged, else letters."""
+        current names when the count is unchanged, else letters.
+        """
         labels = getattr(arr, "slider_dim_labels", None)
         if labels:
             labels = tuple(str(x) for x in labels)

@@ -1,6 +1,7 @@
 """The motion plot: a recording's motion correction on a plot that shares a
 trace's time axis, drawn alone, in linked subplots, and as the line-scan
-viewer's ``Traces`` tab. One frame each on a bare imgui context."""
+viewer's ``Traces`` tab. One frame each on a bare imgui context.
+"""
 
 from __future__ import annotations
 
@@ -11,13 +12,16 @@ import pytest
 
 pytest.importorskip("imgui_bundle")
 from imgui_bundle import imgui, implot  # noqa: E402
-
 from mbo_utilities.arrays.features import MotionCorrection  # noqa: E402
 
 
 def _motion(n: int = 20000) -> MotionCorrection:
     t = np.arange(n) / 1000.0
-    return MotionCorrection("RTMC", "um", {"X": (t, np.sin(t)), "Y": (t, np.cos(t)), "Z layer 3": (t, 0.1 * t)})
+    return MotionCorrection(
+        "RTMC",
+        "um",
+        {"X": (t, np.sin(t)), "Y": (t, np.cos(t)), "Z layer 3": (t, 0.1 * t)},
+    )
 
 
 def _frame(body, frames: int = 2) -> None:
@@ -47,7 +51,16 @@ def draw_alone(plot, seen: list) -> None:
 
 def draw_in_frames(plot, seen: list) -> None:
     # a movie's frame axis: 100 frames per second, the cursor at frame 50
-    seen.append(plot.draw("##motion", 200.0, cursor=50.0, duration_s=20.0, x_per_second=100.0, x_label="frame"))
+    seen.append(
+        plot.draw(
+            "##motion",
+            200.0,
+            cursor=50.0,
+            duration_s=20.0,
+            x_per_second=100.0,
+            x_label="frame",
+        )
+    )
 
 
 def draw_linked(plot, ratios, seen: list) -> None:
@@ -66,7 +79,10 @@ def test_the_model_carries_one_trace_per_axis_and_its_extent():
     motion = _motion()
     assert motion and sorted(motion.traces) == ["X", "Y", "Z layer 3"]
     assert motion.duration_s == pytest.approx(19.999)
-    assert not MotionCorrection("suite2p", "px") and MotionCorrection("suite2p", "px").duration_s == 0.0
+    assert (
+        not MotionCorrection("suite2p", "px")
+        and MotionCorrection("suite2p", "px").duration_s == 0.0
+    )
 
 
 def test_the_plot_decimates_and_labels_by_source_and_unit():
@@ -125,7 +141,11 @@ class FakeStrip:
 
 
 def test_line_traces_panel_is_the_traces_tab_with_the_motion_plot_under_the_trace():
-    from mbo_utilities.gui.linescan_viewer import TRACES_MOTION_PANEL_HEIGHT, TRACES_PANEL_HEIGHT, LineTracesPanel
+    from mbo_utilities.gui.linescan_viewer import (
+        TRACES_MOTION_PANEL_HEIGHT,
+        TRACES_PANEL_HEIGHT,
+        LineTracesPanel,
+    )
 
     strip = FakeStrip()
     traces = np.random.default_rng(0).random((2, 5000)).astype(np.float32)

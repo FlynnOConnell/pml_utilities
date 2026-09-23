@@ -18,10 +18,9 @@ import os
 import tempfile
 from pathlib import Path
 
+import mbo_utilities as mbo
 import numpy as np
 import pytest
-
-import mbo_utilities as mbo
 
 NT = 32
 PLANE = 8  # 1-based
@@ -70,15 +69,24 @@ class TestMetadataCarryThrough:
 
     def test_zarr_hop_with_register_z(self, source, work):
         zdir = work / "zarr"
-        mbo.imwrite(source, zdir, ext=".zarr", num_timepoints=NT,
-                    register_z=True, overwrite=True, show_progress=False)
+        mbo.imwrite(
+            source,
+            zdir,
+            ext=".zarr",
+            num_timepoints=NT,
+            register_z=True,
+            overwrite=True,
+            show_progress=False,
+        )
         zpath = next(p for p in zdir.rglob("*.zarr") if (p / "zarr.json").is_file())
         za = mbo.imread(zpath)
         assert za.dims == ("T", "C", "Z", "Y", "X")
         md = za.metadata
         _assert_carry(md, "zarr")
         ps = md.get("plane_shifts")
-        assert ps is not None and len(ps) == za.shape[2], "register_z must populate plane_shifts (one row per z)"
+        assert ps is not None and len(ps) == za.shape[2], (
+            "register_z must populate plane_shifts (one row per z)"
+        )
         work.joinpath("_zpath.txt").write_text(str(zpath))
 
     def test_axial_then_tiff_bakes_and_hides_shifts(self, work):
@@ -109,8 +117,12 @@ class TestMetadataCarryThrough:
             pytest.skip("tiff hop did not run (no ScanImage source)")
         ta = mbo.imread(tdir if len(tps) > 1 else tps[0])
         bdir = work / "bin"
-        mbo.imwrite(ta, bdir, ext=".bin", planes=[PLANE], overwrite=True, show_progress=False)
-        pdir = next(p for p in bdir.iterdir() if p.is_dir() and (p / "data_raw.bin").exists())
+        mbo.imwrite(
+            ta, bdir, ext=".bin", planes=[PLANE], overwrite=True, show_progress=False
+        )
+        pdir = next(
+            p for p in bdir.iterdir() if p.is_dir() and (p / "data_raw.bin").exists()
+        )
         ops = np.load(pdir / "ops.npy", allow_pickle=True).item()
         for k in ("fs", "Lx", "Ly", "nframes"):
             assert ops.get(k), f"ops.npy missing {k}"

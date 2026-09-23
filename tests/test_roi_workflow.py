@@ -1,6 +1,7 @@
 """roi_workflow: ROI selection, registered-plane opening, mask extraction,
 and the register=none -> extract chain. suite2p / masknmf paths are
-exercised only when those packages import."""
+exercised only when those packages import.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +10,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
+from mbo_utilities import roi_workflow as rw
 from mbo_utilities.annotation.ngff import LabelsZarr
 from mbo_utilities.annotation.store import RoiLabelStore
-from mbo_utilities import roi_workflow as rw
 
 
 def _importable(name: str) -> bool:
@@ -49,7 +49,9 @@ def store():
     return s
 
 
-def _write_plane(tmp_path: Path, name: str, plane: int, store: RoiLabelStore, nframes: int = T) -> Path:
+def _write_plane(
+    tmp_path: Path, name: str, plane: int, store: RoiLabelStore, nframes: int = T
+) -> Path:
     """suite2p-shaped plane dir whose ROI pixels carry a known signal."""
     rng = np.random.default_rng(plane)
     mov = rng.integers(90, 110, size=(nframes, LY, LX)).astype(np.int16)
@@ -63,15 +65,25 @@ def _write_plane(tmp_path: Path, name: str, plane: int, store: RoiLabelStore, nf
     d = tmp_path / name
     d.mkdir()
     mov.tofile(d / "data.bin")
-    ops = {"Ly": LY, "Lx": LX, "nframes": nframes, "plane": plane, "fs": 10.0,
-           "meanImg": mov.mean(0), "processing_history": []}
+    ops = {
+        "Ly": LY,
+        "Lx": LX,
+        "nframes": nframes,
+        "plane": plane,
+        "fs": 10.0,
+        "meanImg": mov.mean(0),
+        "processing_history": [],
+    }
     np.save(d / "ops.npy", ops, allow_pickle=True)
     return d
 
 
 @pytest.fixture
 def planes(tmp_path, store):
-    return [_write_plane(tmp_path, "zplane01", 1, store), _write_plane(tmp_path, "zplane02", 2, store)]
+    return [
+        _write_plane(tmp_path, "zplane01", 1, store),
+        _write_plane(tmp_path, "zplane02", 2, store),
+    ]
 
 
 # ---- selection --------------------------------------------------------------
@@ -222,11 +234,16 @@ def test_shift_matches_numpy_on_a_crop():
     # the shifted slice must stay empty, not become a full reverse read
     src = np.arange(10)
     keys = (
-        slice(2, None, -1), slice(None, None, -1), slice(-10, -8, -1),
-        slice(4, 1, -1), slice(1, 4), slice(0, 0), slice(3, 3, -1),
+        slice(2, None, -1),
+        slice(None, None, -1),
+        slice(-10, -8, -1),
+        slice(4, 1, -1),
+        slice(1, 4),
+        slice(0, 0),
+        slice(3, 3, -1),
     )
     for off in (0, 3):
-        crop = src[off:off + 5]
+        crop = src[off : off + 5]
         for key in keys:
             np.testing.assert_array_equal(
                 src[rw._shift(key, off, 5)], crop[key], err_msg=f"{off=} {key=}"
@@ -339,8 +356,12 @@ def test_extract_shape_mismatch(planes):
 
 
 def test_extract_batches_match_single_pass(planes, store):
-    a = np.load(rw.extract_rois(planes[0], store, [0, 1], batch_size=7, tag="b7") / "F.npy")
-    b = np.load(rw.extract_rois(planes[0], store, [0, 1], batch_size=1000, tag="b1k") / "F.npy")
+    a = np.load(
+        rw.extract_rois(planes[0], store, [0, 1], batch_size=7, tag="b7") / "F.npy"
+    )
+    b = np.load(
+        rw.extract_rois(planes[0], store, [0, 1], batch_size=1000, tag="b1k") / "F.npy"
+    )
     np.testing.assert_allclose(a, b, rtol=1e-5)
 
 
@@ -349,8 +370,11 @@ def test_extract_batches_match_single_pass(planes, store):
 
 def _stat_row(y=0, x=0, npix=1):
     return {
-        "ypix": np.full(npix, y, np.int32), "xpix": np.full(npix, x, np.int32),
-        "lam": np.ones(npix, np.float32), "med": (float(y), float(x)), "npix": npix,
+        "ypix": np.full(npix, y, np.int32),
+        "xpix": np.full(npix, x, np.int32),
+        "lam": np.ones(npix, np.float32),
+        "med": (float(y), float(x)),
+        "npix": npix,
     }
 
 
@@ -386,11 +410,19 @@ def test_load_run_dir_demix_mismatch(tmp_path):
     np.save(d / "iscell.npy", np.ones((1, 2), np.float32))
     np.save(d / "norm_traces.npy", np.zeros((1, 5), np.float32))
     np.save(d / "roi_indices.npy", np.array([0, 1]))
-    (d / "rois.json").write_text(json.dumps(
-        [{"index": 0, "uid": 3, "z": 0}, {"index": 1, "uid": 4, "z": 0}]
-    ))
-    np.save(d / "ops.npy", {"Ly": 8, "Lx": 9, "pipeline": "masknmf",
-                            "roi_workflow": {"process": "demix", "plane": 1}}, allow_pickle=True)
+    (d / "rois.json").write_text(
+        json.dumps([{"index": 0, "uid": 3, "z": 0}, {"index": 1, "uid": 4, "z": 0}])
+    )
+    np.save(
+        d / "ops.npy",
+        {
+            "Ly": 8,
+            "Lx": 9,
+            "pipeline": "masknmf",
+            "roi_workflow": {"process": "demix", "plane": 1},
+        },
+        allow_pickle=True,
+    )
     res = rw.load_run_dir(d)
     assert res.kind == "demix" and res.z == 1 and res.shape == (8, 9)
     assert res.uids is None and res.store_indices is None
@@ -405,8 +437,11 @@ def test_load_run_dir_drops_stale_traces(tmp_path):
     np.save(d / "F.npy", np.zeros((3, 5), np.float32))
     np.save(d / "Fneu.npy", np.zeros((2, 5), np.float32))
     np.save(d / "norm_traces.npy", np.zeros((3, 5), np.float32))
-    np.save(d / "ops.npy", {"Ly": 8, "Lx": 9,
-                            "roi_workflow": {"process": "extract", "plane": 0}}, allow_pickle=True)
+    np.save(
+        d / "ops.npy",
+        {"Ly": 8, "Lx": 9, "roi_workflow": {"process": "extract", "plane": 0}},
+        allow_pickle=True,
+    )
     res = rw.load_run_dir(d)
     assert res.F is None and res.norm is None
     assert res.Fneu.shape == (2, 5)
@@ -422,7 +457,9 @@ def test_load_run_dir_suite2p_iscell_filter(tmp_path):
     res = rw.load_run_dir(d)
     assert res.kind == "suite2p" and res.z == 1
     assert len(res.stat) == 2 and res.Fneu is None
-    np.testing.assert_array_equal(res.F, np.arange(15, dtype=np.float32).reshape(3, 5)[[0, 2]])
+    np.testing.assert_array_equal(
+        res.F, np.arange(15, dtype=np.float32).reshape(3, 5)[[0, 2]]
+    )
     assert len(rw.load_run_dir(d, iscell_only=False).stat) == 3
 
 
@@ -437,12 +474,25 @@ def test_load_run_dir_vanilla_plane_names(tmp_path):
 
 
 def test_shift_stat(tmp_path):
-    stat = np.array([
-        {"ypix": np.array([0, 1], np.int32), "xpix": np.array([2, 3], np.int32),
-         "lam": np.ones(2, np.float32), "med": (1.0, 2.0), "npix": 2},
-        {"ypix": np.array([5], np.int32), "xpix": np.array([7], np.int32),
-         "lam": np.ones(1, np.float32), "med": (5.0, 7.0), "npix": 1},
-    ], dtype=object)
+    stat = np.array(
+        [
+            {
+                "ypix": np.array([0, 1], np.int32),
+                "xpix": np.array([2, 3], np.int32),
+                "lam": np.ones(2, np.float32),
+                "med": (1.0, 2.0),
+                "npix": 2,
+            },
+            {
+                "ypix": np.array([5], np.int32),
+                "xpix": np.array([7], np.int32),
+                "lam": np.ones(1, np.float32),
+                "med": (5.0, 7.0),
+                "npix": 1,
+            },
+        ],
+        dtype=object,
+    )
     np.save(tmp_path / "stat.npy", stat)
     out = rw._shift_stat(tmp_path, 5, 7, (10, 12))
     saved = np.load(tmp_path / "stat.npy", allow_pickle=True)
@@ -456,17 +506,39 @@ def test_shift_stat(tmp_path):
 def test_write_discovery_outputs(tmp_path, planes):
     stat = np.array([_stat_row(3, 4, 2), _stat_row(5, 6, 3)], dtype=object)
     F = np.ones((2, T), np.float32)
-    info = {"process": "discover", "engine": "masknmf", "box": [2, 8, 3, 11],
-            "plane": 0, "channel": 0, "seconds": 0.1}
+    info = {
+        "process": "discover",
+        "engine": "masknmf",
+        "box": [2, 8, 3, 11],
+        "plane": 0,
+        "channel": 0,
+        "seconds": 0.1,
+    }
     ops = np.load(planes[0] / "ops.npy", allow_pickle=True).item()
     out = rw._write_discovery_outputs(
-        tmp_path / "rois_f", source=planes[0], ops=ops,
-        stat=stat, F=F, Fneu=np.zeros_like(F), info=info,
+        tmp_path / "rois_f",
+        source=planes[0],
+        ops=ops,
+        stat=stat,
+        F=F,
+        Fneu=np.zeros_like(F),
+        info=info,
     )
     names = {p.name for p in out.iterdir()}
-    assert {"stat.npy", "F.npy", "Fneu.npy", "spks.npy", "iscell.npy", "rois.json", "ops.npy"} <= names
+    assert {
+        "stat.npy",
+        "F.npy",
+        "Fneu.npy",
+        "spks.npy",
+        "iscell.npy",
+        "rois.json",
+        "ops.npy",
+    } <= names
     assert "roi_indices.npy" not in names
-    assert json.loads((out / "rois.json").read_text()) == [{"z": 0, "npix": 2}, {"z": 0, "npix": 3}]
+    assert json.loads((out / "rois.json").read_text()) == [
+        {"z": 0, "npix": 2},
+        {"z": 0, "npix": 3},
+    ]
     assert np.load(out / "iscell.npy").shape == (2, 2)
     assert not np.load(out / "spks.npy").any()
     ops2 = np.load(out / "ops.npy", allow_pickle=True).item()
@@ -482,8 +554,12 @@ def test_run_discover_wiring(tmp_path, planes):
     with pytest.raises(ValueError, match="box"):
         rw.run(tmp_path, register_method="none", process="discover")
     with pytest.raises(ValueError, match="engine"):
-        rw.run(tmp_path, register_method="none", process="discover",
-               process_settings={"box": [0, 10, 0, 10], "engine": "bogus"})
+        rw.run(
+            tmp_path,
+            register_method="none",
+            process="discover",
+            process_settings={"box": [0, 10, 0, 10], "engine": "bogus"},
+        )
 
 
 # ---- the chain with register=none ------------------------------------------
@@ -491,8 +567,12 @@ def test_run_discover_wiring(tmp_path, planes):
 
 def test_run_register_none_extract(tmp_path, planes, store):
     outs = rw.run(
-        tmp_path, register_method="none", process="extract", rois=store,
-        selection={"labels": ["soma"]}, tag="soma",
+        tmp_path,
+        register_method="none",
+        process="extract",
+        rois=store,
+        selection={"labels": ["soma"]},
+        tag="soma",
     )
     assert sorted(outs) == [0, 1]
     assert np.load(outs[0] / "roi_indices.npy").tolist() == [0]
@@ -542,7 +622,13 @@ def test_plane_store_prefers_rois_drawn_on_registered_plane(tmp_path, planes, st
     assert sorted(outs) == [0, 1]
     assert np.load(outs[0] / "roi_indices.npy").tolist() == [0, 1]
     assert np.load(outs[1] / "roi_indices.npy").tolist() == [0]
-    outs = rw.run(tmp_path, register_method="none", rois=store, selection={"planes": [1]}, tag="p1")
+    outs = rw.run(
+        tmp_path,
+        register_method="none",
+        rois=store,
+        selection={"planes": [1]},
+        tag="p1",
+    )
     assert sorted(outs) == [1]
 
 
@@ -563,14 +649,28 @@ def test_cli_roi_run(tmp_path, planes, store):
 
     LabelsZarr(tmp_path / "manual_labels.zarr").save(store)
     r = CliRunner().invoke(
-        main, ["roi-run", str(tmp_path), "--register", "none", "--indices", "1,3", "--tag", "cli"]
+        main,
+        [
+            "roi-run",
+            str(tmp_path),
+            "--register",
+            "none",
+            "--indices",
+            "1,3",
+            "--tag",
+            "cli",
+        ],
     )
     assert r.exit_code == 0, r.output
     assert (tmp_path / "zplane01" / "rois_cli" / "F.npy").exists()
     assert (tmp_path / "zplane02" / "rois_cli" / "F.npy").exists()
-    r = CliRunner().invoke(main, ["roi-run", str(tmp_path), "--register", "none", "--labels", "axon"])
+    r = CliRunner().invoke(
+        main, ["roi-run", str(tmp_path), "--register", "none", "--labels", "axon"]
+    )
     assert r.exit_code != 0 and "unknown ROI labels" in r.output
-    r = CliRunner().invoke(main, ["roi-run", str(tmp_path), "--register", "none", "--process", "none"])
+    r = CliRunner().invoke(
+        main, ["roi-run", str(tmp_path), "--register", "none", "--process", "none"]
+    )
     assert r.exit_code == 0, r.output
     assert "Draw ROIs on the registered movie" in r.output
 
@@ -581,8 +681,18 @@ def test_cli_roi_run(tmp_path, planes, store):
 def test_extract_suite2p_engine_matches_mean(planes, store):
     pytest.importorskip("suite2p")
     pytest.importorskip("lbm_suite2p_python")
-    a = np.load(rw.extract_rois(planes[0], store, [0, 1], engine="mean", neuropil=False, tag="m") / "F.npy")
-    b = np.load(rw.extract_rois(planes[0], store, [0, 1], engine="suite2p", neuropil=False, tag="s") / "F.npy")
+    a = np.load(
+        rw.extract_rois(
+            planes[0], store, [0, 1], engine="mean", neuropil=False, tag="m"
+        )
+        / "F.npy"
+    )
+    b = np.load(
+        rw.extract_rois(
+            planes[0], store, [0, 1], engine="suite2p", neuropil=False, tag="s"
+        )
+        / "F.npy"
+    )
     assert a.shape == b.shape
     # both are (weighted) means over the same pixels; suite2p uses lam weights
     # from masks_to_stat, so allow a small relative difference
@@ -615,7 +725,12 @@ def test_demix_seeded_with_masks(tmp_path, store):
     assert (plane / PMD_FILE).exists()
     # second call reuses the cached PMD (no recompression)
     out2 = rw.demix_rois(plane, store, [0], settings=_MNMF, tag="d2")
-    assert np.load(out2 / "ops.npy", allow_pickle=True).item()["roi_workflow"]["compression_seconds"] == 0.0
+    assert (
+        np.load(out2 / "ops.npy", allow_pickle=True).item()["roi_workflow"][
+            "compression_seconds"
+        ]
+        == 0.0
+    )
 
 
 def test_discover_masknmf(tmp_path, store):
@@ -651,6 +766,7 @@ def test_discover_masknmf(tmp_path, store):
 
 def _toy_pmd(t=24, h=14, w=12, rank=5, seed=0):
     import torch
+
     from masknmf import PMDArray
 
     rng = np.random.default_rng(seed)
@@ -693,11 +809,11 @@ def test_roi_trace_factorized_single_read():
 def test_cached_pmd_crop_reuses_plane_compression(tmp_path, store):
     if not (_importable("masknmf") and _importable("torch")):
         pytest.skip("masknmf/torch not importable")
-    import masknmf
-
     from mbo_utilities import log
     from mbo_utilities.masknmf import MasknmfSettings
     from mbo_utilities.masknmf.params import PMD_FILE
+
+    import masknmf
 
     n = 400
     plane = _write_plane(tmp_path, "zplane01", 1, store, nframes=n)
@@ -734,8 +850,18 @@ def test_discover_suite2p(tmp_path):
     d = tmp_path / "zplane01"
     d.mkdir()
     mov.tofile(d / "data.bin")
-    np.save(d / "ops.npy", {"Ly": LY, "Lx": LX, "nframes": n, "plane": 1,
-                            "fs": 10.0, "processing_history": []}, allow_pickle=True)
+    np.save(
+        d / "ops.npy",
+        {
+            "Ly": LY,
+            "Lx": LX,
+            "nframes": n,
+            "plane": 1,
+            "fs": 10.0,
+            "processing_history": [],
+        },
+        allow_pickle=True,
+    )
     out = rw.discover_rois(d, (4, 44, 2, 38), engine="suite2p", tag="s2p")
     assert out == d / "rois_s2p"
     res = rw.load_run_dir(out)
@@ -759,7 +885,12 @@ def test_plane_movie_resolves_axes_by_name():
 
     class Named:
         def __init__(self, data, dims):
-            self.data, self.dims, self.shape, self.ndim = data, dims, data.shape, data.ndim
+            self.data, self.dims, self.shape, self.ndim = (
+                data,
+                dims,
+                data.shape,
+                data.ndim,
+            )
 
         def __getitem__(self, key):
             return self.data[key]
@@ -795,7 +926,10 @@ def test_plane_movie_window_shifts_t_keys():
 
 
 def test_plane_movie_select_reads_any_frame_selection():
-    from mbo_utilities.arrays.features._slicing import index_window, parse_timepoint_selection
+    from mbo_utilities.arrays.features._slicing import (
+        index_window,
+        parse_timepoint_selection,
+    )
 
     data = np.arange(10 * 4 * 5, dtype=np.float32).reshape(10, 4, 5)
     movie = rw.PlaneMovie(data)
@@ -819,9 +953,16 @@ def test_plane_movie_select_reads_any_frame_selection():
     with pytest.raises(IndexError):
         movie.select([0, 10])
     assert rw._frames_info(picked) == {"frames": None, "tp_indices": [0, 2, 6, 8]}
-    assert rw._frames_info(strided) == {"frames": [0, 9, 2], "tp_indices": [0, 2, 4, 6, 8]}
+    assert rw._frames_info(strided) == {
+        "frames": [0, 9, 2],
+        "tp_indices": [0, 2, 4, 6, 8],
+    }
     assert rw._frames_info(movie) == {"frames": None, "tp_indices": None}
-    assert rw._frames_tuple([2, 5]) == (2, 5, 1) and rw._frames_tuple([2, 9, 2]) == (2, 9, 2)
+    assert rw._frames_tuple([2, 5]) == (2, 5, 1) and rw._frames_tuple([2, 9, 2]) == (
+        2,
+        9,
+        2,
+    )
 
 
 def test_plane_dirs_are_read_through_the_tag_vocabulary(tmp_path):
@@ -831,5 +972,17 @@ def test_plane_dirs_are_read_through_the_tag_vocabulary(tmp_path):
         d = tmp_path / name
         d.mkdir()
         np.save(d / "ops.npy", {"Ly": 4, "Lx": 4}, allow_pickle=True)
-        np.save(d / "stat.npy", np.array([{"ypix": np.array([0]), "xpix": np.array([0]), "lam": np.array([1.0])}], object))
+        np.save(
+            d / "stat.npy",
+            np.array(
+                [
+                    {
+                        "ypix": np.array([0]),
+                        "xpix": np.array([0]),
+                        "lam": np.array([1.0]),
+                    }
+                ],
+                object,
+            ),
+        )
         assert rw.load_run_dir(d).z == z, name

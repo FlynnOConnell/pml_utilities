@@ -12,8 +12,8 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from mbo_utilities.gui.widgets._base import Widget
 from mbo_utilities.gui._imgui_helpers import set_tooltip
+from mbo_utilities.gui.widgets._base import Widget
 
 
 class FrameAveragingWidget(Widget):
@@ -26,7 +26,8 @@ class FrameAveragingWidget(Widget):
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
         """Shown for any array with a time axis (the temporal-binning
-        readout), and for piezo arrays that can average their repeats."""
+        readout), and for piezo arrays that can average their repeats.
+        """
         for arr in parent._get_data_arrays():
             if hasattr(arr, "frames_per_slice") and hasattr(arr, "can_average"):
                 return True
@@ -65,10 +66,12 @@ class FrameAveragingWidget(Widget):
             fs = meta.get("fs")
         if isinstance(fs, (int, float)) and fs:
             imgui.text(f"Rate: {fs * factor:.4g} -> {fs:.4g} Hz")
-            set_tooltip("Downstream code reads the binned rate, so windows stay in seconds.")
+            set_tooltip(
+                "Downstream code reads the binned rate, so windows stay in seconds."
+            )
 
     def draw(self) -> None:
-        """draw frame averaging controls."""
+        """Draw frame averaging controls."""
         parent = self.parent
         self._draw_temporal(parent)
         arrays = parent._get_data_arrays()
@@ -87,9 +90,7 @@ class FrameAveragingWidget(Widget):
 
         imgui.spacing()
         imgui.separator()
-        imgui.text_colored(
-            imgui.ImVec4(0.8, 0.8, 0.2, 1.0), "Piezo Stack Info"
-        )
+        imgui.text_colored(imgui.ImVec4(0.8, 0.8, 0.2, 1.0), "Piezo Stack Info")
         imgui.spacing()
 
         # show volumetric structure info
@@ -119,13 +120,14 @@ class FrameAveragingWidget(Widget):
         if current_avg or log_avg > 1:
             set_tooltip("slider shows averaged z-slices")
         else:
-            set_tooltip(f"slider shows all {num_slices} x {fps} = {current_frame_dim} raw frames")
+            set_tooltip(
+                f"slider shows all {num_slices} x {fps} = {current_frame_dim} raw frames"
+            )
 
         if log_avg > 1:
             # data was pre-averaged at acquisition
             imgui.text_colored(
-                imgui.ImVec4(0.6, 0.8, 0.6, 1.0),
-                f"Pre-averaged (factor: {log_avg})"
+                imgui.ImVec4(0.6, 0.8, 0.6, 1.0), f"Pre-averaged (factor: {log_avg})"
             )
             set_tooltip(
                 "frames were averaged during acquisition before saving. "
@@ -153,13 +155,11 @@ class FrameAveragingWidget(Widget):
 
             if current_avg:
                 imgui.text_colored(
-                    imgui.ImVec4(0.6, 0.8, 0.6, 1.0),
-                    "Averaging enabled"
+                    imgui.ImVec4(0.6, 0.8, 0.6, 1.0), "Averaging enabled"
                 )
         else:
             imgui.text_colored(
-                imgui.ImVec4(0.6, 0.6, 0.6, 1.0),
-                "Single frame per slice"
+                imgui.ImVec4(0.6, 0.6, 0.6, 1.0), "Single frame per slice"
             )
 
         imgui.separator()

@@ -26,9 +26,11 @@ from pathlib import Path
 from typing import Any
 
 from imgui_bundle import (
+    hello_imgui,
     imgui,
     imgui_ctx,
-    hello_imgui,
+)
+from imgui_bundle import (
     icons_fontawesome_6 as fa,
 )
 
@@ -48,8 +50,8 @@ _COL_ACCENT_HOVER = imgui.ImVec4(0.25, 0.55, 0.90, 1.0)
 _COL_ACCENT_ACTIVE = imgui.ImVec4(0.15, 0.45, 0.80, 1.0)
 _COL_VIOLET = imgui.ImVec4(0.42, 0.36, 0.90, 1.0)  # lab4 brand accent
 _COL_CARD = imgui.ImVec4(0.16, 0.16, 0.17, 1.0)
-_COL_TITLE = imgui.ImVec4(1.0, 0.85, 0.4, 1.0)   # orange section header
-_COL_SUB = imgui.ImVec4(0.55, 0.75, 1.0, 1.0)    # blue subsection header
+_COL_TITLE = imgui.ImVec4(1.0, 0.85, 0.4, 1.0)  # orange section header
+_COL_SUB = imgui.ImVec4(0.55, 0.75, 1.0, 1.0)  # blue subsection header
 _COL_DIM = imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
 _COL_OK = imgui.ImVec4(0.4, 1.0, 0.4, 1.0)
 _COL_WARN = imgui.ImVec4(1.0, 0.75, 0.3, 1.0)
@@ -85,11 +87,25 @@ _XFER_PHASES: list[tuple[float, str]] = [
 
 _EXPERIMENTERS = ["loson", "jdoe", "asmith", "mkim", "rpatel"]
 _DEVICES = [
-    "AOD-2P", "Bruker-2P", "Mini2P", "SLM-2P",
-    "BehaviorMate", "DeepLabCut", "SLEAP", "Doric-1P", "LFP",
+    "AOD-2P",
+    "Bruker-2P",
+    "Mini2P",
+    "SLM-2P",
+    "BehaviorMate",
+    "DeepLabCut",
+    "SLEAP",
+    "Doric-1P",
+    "LFP",
 ]
-_INDICATORS = ["GCaMP6f", "GCaMP6s", "GCaMP7f", "GCaMP8f", "GCaMP8m",
-               "GCaMP8s", "jRGECO1a"]
+_INDICATORS = [
+    "GCaMP6f",
+    "GCaMP6s",
+    "GCaMP7f",
+    "GCaMP8f",
+    "GCaMP8m",
+    "GCaMP8s",
+    "jRGECO1a",
+]
 _REGIONS = ["CA1", "CA3", "DG", "V1", "mPFC", "RSC", "S1"]
 
 # extraction engines (label, config key, description).
@@ -117,7 +133,7 @@ def _icon(name: str) -> str:
     return getattr(fa, name, "")
 
 
-def _center_text(text: str, color: "imgui.ImVec4 | None" = None) -> None:
+def _center_text(text: str, color: imgui.ImVec4 | None = None) -> None:
     avail_w = imgui.get_content_region_avail().x
     tw = imgui.calc_text_size(text).x
     if tw >= avail_w:
@@ -146,7 +162,7 @@ def _field_row(label: str, label_w: float = 6.0) -> None:
         imgui.same_line(col_x)
 
 
-def _wrapped(text: str, color: "imgui.ImVec4 | None" = None) -> None:
+def _wrapped(text: str, color: imgui.ImVec4 | None = None) -> None:
     """Text that wraps at the panel's visible right edge instead of clipping.
 
     Explicit wrap pos, not 0.0: in a horizontal-scrollbar child 0.0 resolves
@@ -204,7 +220,7 @@ def _phase_for(frac: float) -> str:
     return _XFER_PHASES[-1][1]
 
 
-def _human_bytes(n: "int | None") -> str:
+def _human_bytes(n: int | None) -> str:
     if not n:
         return ""
     v = float(n)
@@ -231,8 +247,16 @@ _JOB_PHASES: list[tuple[float, str]] = [
 class _Job:
     """One simulated Lab4 compute row dispatched to BioHPC."""
 
-    def __init__(self, jid: int, slurm: int, recording: str, engine: str,
-                 analyses: list[str], target: str, start: float):
+    def __init__(
+        self,
+        jid: int,
+        slurm: int,
+        recording: str,
+        engine: str,
+        analyses: list[str],
+        target: str,
+        start: float,
+    ):
         self.jid = jid
         self.slurm = slurm
         self.recording = recording
@@ -322,8 +346,10 @@ class _BioHpcPanel:
         self.opt_neuropil = True
         self.opt_deconv = False
         self.opt_behaviormate = True
-        self.analyses = {key: (key in ("place_fields", "spatial_info", "tuning"))
-                         for _, key, _ in _ANALYSES}
+        self.analyses = {
+            key: (key in ("place_fields", "spatial_info", "tuning"))
+            for _, key, _ in _ANALYSES
+        }
         self.pf_bins = 100
         self.pf_min_rate = 1.0
         self.compute_target = 0  # 0=biohpc, 1=manual
@@ -380,7 +406,7 @@ class _BioHpcPanel:
             return paths[0].name
         return paths[0].parent.name or "dataset"
 
-    def _array_stats(self) -> "tuple[tuple[int, ...] | None, int | None]":
+    def _array_stats(self) -> tuple[tuple[int, ...] | None, int | None]:
         try:
             arr = self.parent.image_widget.data[0]
             shape = tuple(int(s) for s in arr.shape)
@@ -432,17 +458,19 @@ class _BioHpcPanel:
 
     def _h5_path(self) -> str:
         k = self._datajoint_key()
-        return (f"/work/lab4/data/{k['experimenter']}/{k['subject_id']}/"
-                f"{k['session_date']}/{self._recording_label()}.h5")
+        return (
+            f"/work/lab4/data/{k['experimenter']}/{k['subject_id']}/"
+            f"{k['session_date']}/{self._recording_label()}.h5"
+        )
 
-    def _fs(self) -> "float | None":
+    def _fs(self) -> float | None:
         try:
             v = getattr(self.parent.image_widget.data[0], "fs", None)
             return float(v) if v else None
         except Exception:
             return None
 
-    def _nz(self) -> "int | None":
+    def _nz(self) -> int | None:
         try:
             return int(getattr(self.parent, "nz", 0)) or None
         except Exception:
@@ -499,7 +527,9 @@ class _BioHpcPanel:
 
         imgui.push_style_color(imgui.Col_.child_bg, _COL_CARD)
         imgui.push_style_var(imgui.StyleVar_.child_rounding, 8.0)
-        imgui.push_style_var(imgui.StyleVar_.window_padding, hello_imgui.em_to_vec2(1.0, 0.8))
+        imgui.push_style_var(
+            imgui.StyleVar_.window_padding, hello_imgui.em_to_vec2(1.0, 0.8)
+        )
         child_flags = imgui.ChildFlags_.borders | imgui.ChildFlags_.auto_resize_y
         try:
             with imgui_ctx.begin_child(
@@ -541,9 +571,7 @@ class _BioHpcPanel:
 
         if self.error:
             imgui.dummy(imgui.ImVec2(0, 2))
-            _wrapped(
-                f"{_icon('ICON_FA_CIRCLE_EXCLAMATION')}  {self.error}", _COL_ERR
-            )
+            _wrapped(f"{_icon('ICON_FA_CIRCLE_EXCLAMATION')}  {self.error}", _COL_ERR)
 
         imgui.dummy(hello_imgui.em_to_vec2(0, 0.4))
         ready = bool(self.username.strip()) and bool(self.password)
@@ -565,9 +593,7 @@ class _BioHpcPanel:
 
     def draw_authenticated(self) -> None:
         imgui.spacing()
-        imgui.text_colored(
-            _COL_TITLE, f"{_icon('ICON_FA_FLASK')}  Lab4 Workbench"
-        )
+        imgui.text_colored(_COL_TITLE, f"{_icon('ICON_FA_FLASK')}  Lab4 Workbench")
         signout = f"{_icon('ICON_FA_RIGHT_FROM_BRACKET')}  Sign out"
         style = imgui.get_style()
         so_w = imgui.calc_text_size(signout).x + style.frame_padding.x * 2
@@ -590,21 +616,26 @@ class _BioHpcPanel:
         imgui.spacing()
 
         if imgui.begin_tab_bar("##biohpc_subtabs"):
-            if sub_enabled("biohpc", "transfer") and imgui.begin_tab_item(
-                f"{_icon('ICON_FA_CLOUD_ARROW_UP')} Transfer"
-            )[0]:
+            if (
+                sub_enabled("biohpc", "transfer")
+                and imgui.begin_tab_item(f"{_icon('ICON_FA_CLOUD_ARROW_UP')} Transfer")[
+                    0
+                ]
+            ):
                 imgui.spacing()
                 self._draw_transfer_tab()
                 imgui.end_tab_item()
-            if sub_enabled("biohpc", "metadata") and imgui.begin_tab_item(
-                f"{_icon('ICON_FA_TAGS')} Metadata"
-            )[0]:
+            if (
+                sub_enabled("biohpc", "metadata")
+                and imgui.begin_tab_item(f"{_icon('ICON_FA_TAGS')} Metadata")[0]
+            ):
                 imgui.spacing()
                 self._draw_metadata_tab()
                 imgui.end_tab_item()
-            if sub_enabled("biohpc", "analysis") and imgui.begin_tab_item(
-                f"{_icon('ICON_FA_SLIDERS')} Analysis"
-            )[0]:
+            if (
+                sub_enabled("biohpc", "analysis")
+                and imgui.begin_tab_item(f"{_icon('ICON_FA_SLIDERS')} Analysis")[0]
+            ):
                 imgui.spacing()
                 self._draw_analysis_tab()
                 imgui.end_tab_item()
@@ -743,9 +774,7 @@ class _BioHpcPanel:
             self._draw_progress()
         elif self.xfer_done:
             imgui.spacing()
-            _wrapped(
-                f"{_icon('ICON_FA_CIRCLE_CHECK')}  Transfer complete", _COL_OK
-            )
+            _wrapped(f"{_icon('ICON_FA_CIRCLE_CHECK')}  Transfer complete", _COL_OK)
             imgui.text_colored(_COL_DIM, "Sent to")
             imgui.same_line()
             _wrapped(self.xfer_dest, _COL_PATH)
@@ -833,8 +862,11 @@ class _BioHpcPanel:
         imgui.text_colored(_COL_SUB, "Resolves to")
         imgui.dummy(imgui.ImVec2(0, 2))
         self._kv("Recording", self._recording_label(), _COL_PATH)
-        self._kv("Device", f"{_DEVICES[self.device]}  ·  "
-                 f"{_INDICATORS[self.indicator]}  ·  {_REGIONS[self.region]}")
+        self._kv(
+            "Device",
+            f"{_DEVICES[self.device]}  ·  "
+            f"{_INDICATORS[self.indicator]}  ·  {_REGIONS[self.region]}",
+        )
         imgui.text_colored(_COL_DIM, "Standardized H5")
         imgui.indent(hello_imgui.em_size(0.5))
         _wrapped(self._h5_path(), _COL_PATH)
@@ -871,11 +903,12 @@ class _BioHpcPanel:
                 from mbo_utilities.gui._metadata_editor import (
                     draw_metadata_editor_content,
                 )
+
                 draw_metadata_editor_content(self.parent)
             except Exception as e:
                 _wrapped(f"metadata editor unavailable: {e}", _COL_ERR)
 
-    def _kv(self, label: str, value: str, color: "imgui.ImVec4 | None" = None) -> None:
+    def _kv(self, label: str, value: str, color: imgui.ImVec4 | None = None) -> None:
         imgui.text_colored(_COL_DIM, label)
         imgui.same_line(hello_imgui.em_size(8))
         _wrapped(value, color)
@@ -959,8 +992,11 @@ class _BioHpcPanel:
         imgui.dummy(imgui.ImVec2(0, 2))
         cfg_json = json.dumps(self._processing_config(), indent=2)
         n_lines = cfg_json.count("\n") + 1
-        box_h = min(hello_imgui.em_size(16), hello_imgui.em_size(0.1) +
-                    n_lines * imgui.get_text_line_height_with_spacing())
+        box_h = min(
+            hello_imgui.em_size(16),
+            hello_imgui.em_size(0.1)
+            + n_lines * imgui.get_text_line_height_with_spacing(),
+        )
         imgui.push_style_color(imgui.Col_.frame_bg, imgui.ImVec4(0.10, 0.10, 0.12, 1.0))
         imgui.push_style_color(imgui.Col_.text, _COL_CODE)
         imgui.input_text_multiline(
@@ -1030,8 +1066,9 @@ class _BioHpcPanel:
         )
         with _ghost_style():
             if imgui.small_button("Clear finished"):
-                self.jobs = [j for j in self.jobs
-                             if j.status() not in ("succeeded", "manual")]
+                self.jobs = [
+                    j for j in self.jobs if j.status() not in ("succeeded", "manual")
+                ]
 
         imgui.spacing()
         # stacked cards — never clip on a narrow panel the way a wide table would
@@ -1040,7 +1077,11 @@ class _BioHpcPanel:
 
     def _draw_job_card(self, job: _Job) -> None:
         st = job.status()
-        caret = _icon("ICON_FA_CARET_DOWN") if job.log_open else _icon("ICON_FA_CARET_RIGHT")
+        caret = (
+            _icon("ICON_FA_CARET_DOWN")
+            if job.log_open
+            else _icon("ICON_FA_CARET_RIGHT")
+        )
         if imgui.small_button(f"{caret} #{job.jid}##job{job.jid}"):
             job.log_open = not job.log_open
         set_tooltip(f"slurm {job.slurm}")
@@ -1115,8 +1156,13 @@ def draw_biohpc_popup(parent: Any) -> None:
     from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
     # the panel gates its sub-tabs on these; the window being open means on
-    for key in ("biohpc", "biohpc.transfer", "biohpc.metadata",
-                "biohpc.analysis", "biohpc.jobs"):
+    for key in (
+        "biohpc",
+        "biohpc.transfer",
+        "biohpc.metadata",
+        "biohpc.analysis",
+        "biohpc.jobs",
+    ):
         set_widget_enabled(key, True, persist=False)
     imgui.set_next_window_size(imgui.ImVec2(880, 620), imgui.Cond_.first_use_ever)
     opened, keep = imgui.begin("BioHPC", True)

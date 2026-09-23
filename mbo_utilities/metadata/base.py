@@ -7,16 +7,18 @@ this module contains the core types used across the metadata system:
 - METADATA_PARAMS: central registry of known parameters
 - alias lookup utilities
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple, Any
+from typing import Any, NamedTuple
 
 
 def _logger():
     # lazy: mbo_utilities.log pulls in package init; base.py is imported early
     from mbo_utilities import log
+
     return log.get("metadata")
 
 
@@ -309,7 +311,7 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
     "frames_per_file": MetadataParameter(
         canonical="frames_per_file",
         aliases=(
-            "frames_per_folder",   # suite2p ops.npy
+            "frames_per_folder",  # suite2p ops.npy
             "nframes_per_file",
             "frames_per_tiff",
         ),
@@ -337,8 +339,8 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
     "num_timepoints": MetadataParameter(
         canonical="num_timepoints",
         aliases=(
-            "nframes",        # suite2p ops.npy compatibility
-            "num_frames",     # legacy alias
+            "nframes",  # suite2p ops.npy compatibility
+            "num_frames",  # legacy alias
             "n_frames",
             "frames",
             "T",
@@ -531,63 +533,128 @@ IMAGING_METADATA_KEYS: tuple[str, ...] = (
 # entire metadata blob into memory.
 
 _SUITE2P_REGISTRATION_INTERNALS = (
-    "regPC", "tPC", "regDX",
-    "yblock", "xblock", "NRsm",
+    "regPC",
+    "tPC",
+    "regDX",
+    "yblock",
+    "xblock",
+    "NRsm",
 )
 
 _SUITE2P_SUMMARY_IMAGES = (
-    "meanImg", "meanImgE", "meanImg_chan2", "meanImg_crop",
-    "Vmap", "Vcorr", "Vsplit", "Vmax",
+    "meanImg",
+    "meanImgE",
+    "meanImg_chan2",
+    "meanImg_crop",
+    "Vmap",
+    "Vcorr",
+    "Vsplit",
+    "Vmax",
     "max_proj",
-    "refImg", "refImg1", "refAndMasks",
+    "refImg",
+    "refImg1",
+    "refAndMasks",
 )
 
 _PER_FRAME_VECTORS = (
-    "xoff", "yoff", "corrXY",
-    "xoff1", "yoff1", "corrXY1",
-    "badframes", "badframes0",
-    "ihop", "plane_times",
+    "xoff",
+    "yoff",
+    "corrXY",
+    "xoff1",
+    "yoff1",
+    "corrXY1",
+    "badframes",
+    "badframes0",
+    "ihop",
+    "plane_times",
 )
 
 # plane_shifts / plane_shifts_params are intentionally NOT denylisted:
 # register_z writes them so viewers can align planes at render time
 # (see arrays/_registration.py), so they must survive export.
 _MBO_ADDITIONS = (
-    "processing_history", "_metadata_provenance",
+    "processing_history",
+    "_metadata_provenance",
     "roi_mode",
 )
 
 _SUITE2P_GEOMETRY = (
-    "Ly", "Lx", "nframes", "nplanes", "nchannels",
-    "num_rois", "aspect", "tau",
-    "functional_chan", "align_by_chan",
+    "Ly",
+    "Lx",
+    "nframes",
+    "nplanes",
+    "nchannels",
+    "num_rois",
+    "aspect",
+    "tau",
+    "functional_chan",
+    "align_by_chan",
 )
 
 _SUITE2P_PIPELINE_SETTINGS = (
-    "do_registration", "keep_movie_raw", "two_step_registration",
-    "nimg_init", "multiplane_parallel",
-    "nbinned", "batch_size",
-    "diameter", "cell_diameter", "spatial_scale", "spatscale_pix",
-    "roidetect", "spikedetect", "neuropil_extract",
-    "denoise", "anatomical_only",
-    "sparse_mode", "connected",
-    "threshold_scaling", "max_overlap", "max_iterations",
-    "high_pass", "smooth_sigma", "smooth_sigma_time",
-    "nonrigid", "block_size", "snr_thresh", "maxregshift",
-    "use_builtin_classifier", "classifier_path",
-    "preclassify", "chan2_thres",
-    "lam_percentile", "allow_overlap",
-    "inner_neuropil_radius", "min_neuropil_pixels",
+    "do_registration",
+    "keep_movie_raw",
+    "two_step_registration",
+    "nimg_init",
+    "multiplane_parallel",
+    "nbinned",
+    "batch_size",
+    "diameter",
+    "cell_diameter",
+    "spatial_scale",
+    "spatscale_pix",
+    "roidetect",
+    "spikedetect",
+    "neuropil_extract",
+    "denoise",
+    "anatomical_only",
+    "sparse_mode",
+    "connected",
+    "threshold_scaling",
+    "max_overlap",
+    "max_iterations",
+    "high_pass",
+    "smooth_sigma",
+    "smooth_sigma_time",
+    "nonrigid",
+    "block_size",
+    "snr_thresh",
+    "maxregshift",
+    "use_builtin_classifier",
+    "classifier_path",
+    "preclassify",
+    "chan2_thres",
+    "lam_percentile",
+    "allow_overlap",
+    "inner_neuropil_radius",
+    "min_neuropil_pixels",
     "neucoeff",
-    "soma_crop", "win_baseline", "sig_baseline", "prctile_baseline",
-    "data_path", "save_path", "save_path0", "save_folder",
-    "fast_disk", "ops_path", "input_format",
-    "save_NWB", "save_mat",
-    "first_tiffs", "frames_include",
-    "h5py", "h5py_key",
-    "delete_bin", "combined", "report_time",
-    "do_bidiphase", "bidiphase",
-    "1Preg", "spatial_hp", "pre_smooth", "spatial_taper",
+    "soma_crop",
+    "win_baseline",
+    "sig_baseline",
+    "prctile_baseline",
+    "data_path",
+    "save_path",
+    "save_path0",
+    "save_folder",
+    "fast_disk",
+    "ops_path",
+    "input_format",
+    "save_NWB",
+    "save_mat",
+    "first_tiffs",
+    "frames_include",
+    "h5py",
+    "h5py_key",
+    "delete_bin",
+    "combined",
+    "report_time",
+    "do_bidiphase",
+    "bidiphase",
+    "1Preg",
+    "spatial_hp",
+    "pre_smooth",
+    "spatial_taper",
 )
 
 EXPORT_DENYLIST: frozenset[str] = frozenset(
@@ -605,10 +672,17 @@ EXPORT_DENYLIST: frozenset[str] = frozenset(
 # legitimately carry long arrays must be allowlisted.
 _MAX_EXPORT_ELEMENTS = 8192
 
-_SIZE_GUARD_ALLOW = frozenset({
-    "plane_shifts", "scanphase", "frames_per_file", "roi_groups",
-    "timepoint_selection", "file_paths", "ome",
-})
+_SIZE_GUARD_ALLOW = frozenset(
+    {
+        "plane_shifts",
+        "scanphase",
+        "frames_per_file",
+        "roi_groups",
+        "timepoint_selection",
+        "file_paths",
+        "ome",
+    }
+)
 
 
 def _element_count(value) -> int:
@@ -631,7 +705,7 @@ def _element_count(value) -> int:
 
 
 def strip_for_export(md: dict) -> dict:
-    """drop fields that should not be embedded in tiff/h5/zarr metadata.
+    """Drop fields that should not be embedded in tiff/h5/zarr metadata.
 
     suite2p ops fields (registration internals, summary images, per-frame
     vectors, pipeline settings) and mbo-internal additions are kept only
@@ -650,12 +724,12 @@ def strip_for_export(md: dict) -> dict:
             if n > _MAX_EXPORT_ELEMENTS:
                 _logger().warning(
                     "dropping oversized metadata %r (%d elements) from export",
-                    k, n,
+                    k,
+                    n,
                 )
                 continue
         out[k] = v
     return out
-
 
 
 # ops fields that must reach suite2p as arrays: it and its plotting code
@@ -730,7 +804,8 @@ def repair_ops_file(path) -> bool:
     if not isinstance(ops, dict):
         return False
     bad = [
-        k for k, v in ops.items()
+        k
+        for k, v in ops.items()
         if k in _OPS_ARRAY_KEYS and isinstance(v, (list, tuple))
     ]
     if not bad:
@@ -774,8 +849,16 @@ def repair_ops_tree(path) -> int:
 # provenance that goes stale the moment the output directory is copied to
 # another machine or share (db.npy data_path, ops raw_file, ...).
 PROVENANCE_PATH_KEYS: tuple[str, ...] = (
-    "data_path", "save_path", "save_path0", "fast_disk", "ops_path",
-    "raw_file", "reg_file", "raw_source", "file_paths", "file_list",
+    "data_path",
+    "save_path",
+    "save_path0",
+    "fast_disk",
+    "ops_path",
+    "raw_file",
+    "reg_file",
+    "raw_source",
+    "file_paths",
+    "file_list",
 )
 
 

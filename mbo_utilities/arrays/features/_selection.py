@@ -13,6 +13,7 @@ view/cam/plane/timepoint aliasing in one place.
 - ``to_isoview_kwargs`` emits 0-based ``timepoints`` and camera ints
   (``cameras`` == the C-axis indices the isoview pipeline expects).
 """
+
 from __future__ import annotations
 
 from mbo_utilities.arrays.features._dim_labels import _SLIDER_NAME_ALIASES
@@ -21,7 +22,8 @@ from mbo_utilities.arrays.features._slicing import parse_selection
 
 def _axis_letter(key: str) -> str | None:
     """Resolve any axis label/alias (``view``/``cam``/``plane``/``timepoint``...)
-    to its letter ``"T"``/``"C"``/``"Z"``, or ``None`` if it isn't one."""
+    to its letter ``"T"``/``"C"``/``"Z"``, or ``None`` if it isn't one.
+    """
     k = str(key).lower()
     if k in ("t", "c", "z"):
         return k.upper()
@@ -38,7 +40,9 @@ def axis_sizes(arr) -> dict[str, int]:
     return {"T": t, "C": c, "Z": z}
 
 
-def selection_to_indices(arr, selections, one_based: bool = True) -> dict[str, list[int]]:
+def selection_to_indices(
+    arr, selections, one_based: bool = True
+) -> dict[str, list[int]]:
     """Map ``{axis: selection}`` to ``{"T"|"C"|"Z": [0-based indices]}``.
 
     ``axis`` may be a letter or any alias (``View``/``Cam``/``Channel``,

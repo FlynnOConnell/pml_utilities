@@ -30,7 +30,7 @@ class DimRole(str, Enum):
 
     @classmethod
     def from_dim_name(cls, name: str) -> DimRole:
-        """infer role from dimension name."""
+        """Infer role from dimension name."""
         name_upper = name.upper()
         if name_upper in ("Y", "X"):
             return cls.SPATIAL
@@ -58,7 +58,7 @@ class DimensionSpec:
     """
     specification for a single dimension.
 
-    parameters
+    Parameters
     ----------
     name : str
         canonical dimension name: "T", "Z", "Y", "X", "C", etc.
@@ -71,7 +71,7 @@ class DimensionSpec:
     unit : str | None
         physical unit: "second", "micrometer", None (for channels)
 
-    examples
+    Examples
     --------
     >>> spec = DimensionSpec("Z", DimRole.ITERATABLE, size=28, scale=15.0)
     >>> spec.unit
@@ -111,12 +111,12 @@ class DimensionSpecs:
 
     provides convenient access to dimensions by name or role.
 
-    parameters
+    Parameters
     ----------
     specs : list of DimensionSpec
         ordered dimension specs matching array shape
 
-    examples
+    Examples
     --------
     >>> specs = DimensionSpecs.from_array(arr)
     >>> specs.num_timepoints
@@ -145,7 +145,7 @@ class DimensionSpecs:
     def get(
         self, name: str, default: DimensionSpec | None = None
     ) -> DimensionSpec | None:
-        """get dimension spec by name, or default if not found."""
+        """Get dimension spec by name, or default if not found."""
         try:
             return self[name]
         except KeyError:
@@ -159,9 +159,9 @@ class DimensionSpecs:
         metadata: dict | None = None,
     ) -> DimensionSpecs:
         """
-        create dimension specs from an array.
+        Create dimension specs from an array.
 
-        parameters
+        Parameters
         ----------
         arr : array-like
             array with shape attribute
@@ -171,7 +171,7 @@ class DimensionSpecs:
         metadata : dict, optional
             metadata for scale values (dx, dy, dz, fs, etc.)
 
-        returns
+        Returns
         -------
         DimensionSpecs
         """
@@ -220,46 +220,46 @@ class DimensionSpecs:
 
     @property
     def spatial_dims(self) -> tuple[str, ...]:
-        """names of spatial dimensions."""
+        """Names of spatial dimensions."""
         return tuple(s.name for s in self.specs if s.is_spatial)
 
     @property
     def iteratable_dims(self) -> tuple[str, ...]:
-        """names of iteratable dimensions."""
+        """Names of iteratable dimensions."""
         return tuple(s.name for s in self.specs if s.is_iteratable)
 
     @property
     def batch_dims(self) -> tuple[str, ...]:
-        """names of batch dimensions."""
+        """Names of batch dimensions."""
         return tuple(s.name for s in self.specs if s.is_batch)
 
     @property
     def num_timepoints(self) -> int:
-        """size of T dimension (1 if no T)."""
+        """Size of T dimension (1 if no T)."""
         spec = self.get("T")
         return spec.size if spec else 1
 
     @property
     def num_zplanes(self) -> int:
-        """size of Z dimension (1 if no Z)."""
+        """Size of Z dimension (1 if no Z)."""
         spec = self.get("Z")
         return spec.size if spec else 1
 
     @property
     def num_channels(self) -> int:
-        """size of C dimension (1 if no C)."""
+        """Size of C dimension (1 if no C)."""
         spec = self.get("C")
         return spec.size if spec else 1
 
     @property
     def dx(self) -> float:
-        """pixel size in X."""
+        """Pixel size in X."""
         spec = self.get("X")
         return spec.scale if spec else 1.0
 
     @property
     def dy(self) -> float:
-        """pixel size in Y."""
+        """Pixel size in Y."""
         spec = self.get("Y")
         return spec.scale if spec else 1.0
 
@@ -271,7 +271,7 @@ class DimensionSpecs:
 
     @property
     def fs(self) -> float | None:
-        """frame rate in Hz (None if no T or dt=0)."""
+        """Frame rate in Hz (None if no T or dt=0)."""
         spec = self.get("T")
         if spec and spec.scale > 0:
             return 1.0 / spec.scale
@@ -279,6 +279,6 @@ class DimensionSpecs:
 
     @property
     def finterval(self) -> float | None:
-        """frame interval in seconds (None if no T)."""
+        """Frame interval in seconds (None if no T)."""
         spec = self.get("T")
         return spec.scale if spec else None

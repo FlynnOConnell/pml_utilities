@@ -7,14 +7,14 @@ run on imaging data. each pipeline has config and results views.
 imports are done in a background thread to avoid blocking the GUI.
 """
 
-from typing import Any
+import contextlib
 import threading
 import time
+from typing import Any
 
 from imgui_bundle import imgui
 
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
-import contextlib
 
 # registry of available pipeline classes
 _PIPELINE_CLASSES: list[type[PipelineWidget]] = []
@@ -49,31 +49,44 @@ def _register_pipelines_sync() -> None:
 
         # import pipeline widgets - they register themselves based on availability
         try:
-            from mbo_utilities.gui.widgets.pipelines.suite2p import Suite2pPipelineWidget
+            from mbo_utilities.gui.widgets.pipelines.suite2p import (
+                Suite2pPipelineWidget,
+            )
+
             _PIPELINE_CLASSES.append(Suite2pPipelineWidget)
         except Exception:
             pass
 
         try:
-            from mbo_utilities.gui.widgets.pipelines.isoview import IsoviewPipelineWidget
+            from mbo_utilities.gui.widgets.pipelines.isoview import (
+                IsoviewPipelineWidget,
+            )
+
             _PIPELINE_CLASSES.append(IsoviewPipelineWidget)
         except Exception:
             pass
 
         try:
-            from mbo_utilities.gui.widgets.pipelines.masknmf import MaskNMFPipelineWidget
+            from mbo_utilities.gui.widgets.pipelines.masknmf import (
+                MaskNMFPipelineWidget,
+            )
+
             _PIPELINE_CLASSES.append(MaskNMFPipelineWidget)
         except Exception:
             pass
 
         try:
-            from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
+            from mbo_utilities.gui.widgets.pipelines.voltage import (
+                VoltagePipelineWidget,
+            )
+
             _PIPELINE_CLASSES.append(VoltagePipelineWidget)
         except Exception:
             pass
 
         try:
             from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
+
             _PIPELINE_CLASSES.append(RoiPipelineWidget)
         except Exception:
             pass
@@ -121,9 +134,7 @@ def start_preload(delay_s: float | None = None) -> None:
 
     _REGISTRATION_STARTED = True
     delay = _PRELOAD_DELAY_S if delay_s is None else delay_s
-    thread = threading.Thread(
-        target=_delayed_preload, args=(delay,), daemon=True
-    )
+    thread = threading.Thread(target=_delayed_preload, args=(delay,), daemon=True)
     thread.start()
 
 
@@ -171,9 +182,7 @@ def get_trace_extractors() -> list[type[PipelineWidget]]:
     """
     _register_pipelines()
     return [
-        p
-        for p in _PIPELINE_CLASSES
-        if p.extracts_traces and _is_pipeline_available(p)
+        p for p in _PIPELINE_CLASSES if p.extracts_traces and _is_pipeline_available(p)
     ]
 
 
@@ -370,6 +379,7 @@ def __getattr__(name: str):
     if name in lazy_names:
         if name not in _settings_cache:
             from mbo_utilities.gui.widgets.pipelines import settings
+
             for attr in lazy_names:
                 _settings_cache[attr] = getattr(settings, attr)
         return _settings_cache[name]

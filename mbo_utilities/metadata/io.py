@@ -3,21 +3,22 @@ metadata file I/O - reading/writing metadata from TIFF files.
 
 functions for extracting metadata from ScanImage TIFFs and other file formats.
 """
+
 from __future__ import annotations
 
 import json
 import os
+import struct
 import time
 from pathlib import Path
-import struct
 
 import numpy as np
 import tifffile
-from mbo_utilities import log
-from mbo_utilities.file_io import get_files
-from mbo_utilities.file_io import load_npy
 
-from .params import normalize_resolution, get_param
+from mbo_utilities import log
+from mbo_utilities.file_io import get_files, load_npy
+
+from .params import get_param, normalize_resolution
 
 __all__ = [
     "_build_ome_metadata",
@@ -597,7 +598,10 @@ def get_metadata_single(file: Path):
 
         roi_fov_x_um = round(objective_resolution * size_xy[0])
         roi_fov_y_um = round(objective_resolution * size_xy[1])
-        pixel_resolution = (roi_fov_x_um / num_pixel_xy[0], roi_fov_y_um / num_pixel_xy[1])
+        pixel_resolution = (
+            roi_fov_x_um / num_pixel_xy[0],
+            roi_fov_y_um / num_pixel_xy[1],
+        )
 
         # roi is per-strip dimensions (width, height)
         # fov/fov_um are total tiled field of view (num_rois * per-roi)
@@ -681,7 +685,9 @@ def get_metadata_batch(file_paths: list | tuple):
     frames_per_file = [query_tiff_pages(fp) // nchannels for fp in file_paths]
     logger.debug(
         "counted %d frames across %d files in %.2fs",
-        sum(frames_per_file), len(file_paths), time.perf_counter() - _t0,
+        sum(frames_per_file),
+        len(file_paths),
+        time.perf_counter() - _t0,
     )
 
     total_frames = sum(frames_per_file)
@@ -989,11 +995,11 @@ def clean_scanimage_metadata(meta: dict) -> dict:
     # 5) Add derived ScanImage stack detection fields
     from .scanimage import (
         detect_stack_type,
+        get_frame_rate,
         get_num_color_channels,
         get_num_zplanes,
-        get_z_step_size,
-        get_frame_rate,
         get_roi_info,
+        get_z_step_size,
     )
 
     if result.get("si"):
@@ -1028,6 +1034,7 @@ def clean_scanimage_metadata(meta: dict) -> dict:
 
     # add all standard aliases for backward compatibility
     from .params import normalize_metadata
+
     normalize_metadata(result)
 
     return result
@@ -1169,11 +1176,11 @@ def _build_ome_metadata(
     dict
         Complete OME-NGFF v0.5 metadata attributes
     """
+    from mbo_utilities.arrays.features._dim_labels import infer_dims
     from mbo_utilities.arrays.features._dim_tags import (
         dims_to_ome_axes,
         normalize_dims,
     )
-    from mbo_utilities.arrays.features._dim_labels import infer_dims
 
     # determine dims
     ndim = len(shape)
@@ -1310,7 +1317,9 @@ def _build_ome_metadata(
     if "file_paths" in metadata or "num_files" in metadata:
         custom_meta["source_files"] = {
             "num_files": metadata.get("num_files"),
-            "num_timepoints": metadata.get("num_timepoints", metadata.get("num_frames")),
+            "num_timepoints": metadata.get(
+                "num_timepoints", metadata.get("num_frames")
+            ),
             "frames_per_file": metadata.get("frames_per_file"),
         }
 

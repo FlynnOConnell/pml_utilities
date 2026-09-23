@@ -1,12 +1,12 @@
 """mbo_utilities.annotation's session model: the store's plane geometry,
 the observable events, the trace table and RoiModel's run targets. Pure
-numpy; no canvas."""
+numpy; no canvas.
+"""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from mbo_utilities.annotation import (
     COLUMNS,
     ENGINES,
@@ -131,7 +131,15 @@ class TestStoreEvents:
         store.set_color(0, (1, 2, 3))
         store.delete_roi(0)
         store.clear()
-        assert seen.actions == ["labels", "add", "class", "note", "color", "delete", "clear"]
+        assert seen.actions == [
+            "labels",
+            "add",
+            "class",
+            "note",
+            "color",
+            "delete",
+            "clear",
+        ]
         add = seen.events[1]
         assert add.info["index"] == 0 and add.info["uid"] == 1
         # a refused add (nothing free) emits nothing
@@ -154,7 +162,11 @@ class TestTraceTable:
         table.add_event_handler(seen)
         table.add(RoiTrace(uid=7, z=0, c=0, engine="mean", F=np.ones(4)))
         table.add(RoiTrace(uid=7, z=0, c=1, engine="mean", F=np.zeros(4)))
-        table.add(RoiTrace(uid=7, z=0, c=0, engine="suite2p", F=np.ones(4), source="rois_manual"))
+        table.add(
+            RoiTrace(
+                uid=7, z=0, c=0, engine="suite2p", F=np.ones(4), source="rois_manual"
+            )
+        )
         assert len(table) == 3
         assert [t.c for t in table.for_roi(7)] == [0, 1, 0]
         assert [t.engine for t in table.at(7, c=0)] == ["mean", "suite2p"]
@@ -177,7 +189,11 @@ class TestTraceTable:
         table = RoiTraceTable()
         table.add(RoiTrace(uid=1, F=np.ones(3)))
         table.add(RoiTrace(uid=2, F=np.ones(3)))
-        line = table.add(RoiTrace(uid=0, source="MUnit_3 lines", member=4, F=np.ones(3), label="ROI 4"))
+        line = table.add(
+            RoiTrace(
+                uid=0, source="MUnit_3 lines", member=4, F=np.ones(3), label="ROI 4"
+            )
+        )
         assert line.key == ("member", "MUnit_3 lines", 4)
         assert not line.stands_for_roi
         gone = table.prune([2])
@@ -188,12 +204,31 @@ class TestTraceTable:
 
     def test_records_are_plain_values(self):
         table = RoiTraceTable()
-        table.add(RoiTrace(uid=3, z=1, c=2, engine="masknmf", F=np.ones(5), frames=(0, 5, 1), fs=10.0))
+        table.add(
+            RoiTrace(
+                uid=3,
+                z=1,
+                c=2,
+                engine="masknmf",
+                F=np.ones(5),
+                frames=(0, 5, 1),
+                fs=10.0,
+            )
+        )
         (row,) = table.records()
         assert row == {
-            "uid": 3, "z": 1, "c": 2, "engine": "masknmf", "source": "quick",
-            "member": None, "frames": [0, 5, 1], "frame_average": 1, "fs": 10.0,
-            "label": "", "n_frames": 5, "path": None,
+            "uid": 3,
+            "z": 1,
+            "c": 2,
+            "engine": "masknmf",
+            "source": "quick",
+            "member": None,
+            "frames": [0, 5, 1],
+            "frame_average": 1,
+            "fs": 10.0,
+            "label": "",
+            "n_frames": 5,
+            "path": None,
         }
         assert ENGINES == ("mean", "suite2p", "masknmf")
 
@@ -217,7 +252,9 @@ class TestRoiModel:
         assert model.plane == 0 and (model.z, model.c) == (0, 0)
         assert model.set_view({"t": 3, "c": 1, "z": 2}) is True
         assert model.plane == 5 and (model.z, model.c) == (2, 1)
-        assert model.set_view({"t": 4, "c": 1, "z": 2}) is False  # t is not a plane axis
+        assert (
+            model.set_view({"t": 4, "c": 1, "z": 2}) is False
+        )  # t is not a plane axis
         assert [e.info for e in seen.events] == [{"plane": 5, "previous": 0}]
         assert model.plane_label(5) == "c2·z3"
 
@@ -227,7 +264,10 @@ class TestRoiModel:
         model.add_event_handler(seen)
         cz_store.add_roi(0, disk(16, 16, 8, 8, 3))
         model.traces.add(RoiTrace(uid=1, F=np.ones(2)))
-        assert [(e.type, e.info["action"]) for e in seen.events] == [("rois", "add"), ("traces", "add")]
+        assert [(e.type, e.info["action"]) for e in seen.events] == [
+            ("rois", "add"),
+            ("traces", "add"),
+        ]
 
     def test_swapping_the_store_rewires_the_forwarding(self, cz_store):
         model = RoiModel(cz_store)
@@ -252,7 +292,9 @@ class TestRoiModel:
         ]
         # the same masks read on the other channel keep their planes
         assert model.targets([0], c=0) == [RunTarget(index=0, uid=1, plane=5, z=2, c=0)]
-        assert model.targets([1], z=1, c=1) == [RunTarget(index=1, uid=2, plane=0, z=1, c=1)]
+        assert model.targets([1], z=1, c=1) == [
+            RunTarget(index=1, uid=2, plane=0, z=1, c=1)
+        ]
 
     def test_traced_asks_the_table_by_roi(self, cz_store):
         model = RoiModel(cz_store)
@@ -289,8 +331,8 @@ class TestColorize:
         store = RoiLabelStore(6, 16, 16, min_pixels=1)
         store.plane_axes = (("c", 2), ("z", 3))
         store.add_label_name("soma")
-        store.add_roi(0, disk(16, 16, 4, 4, 2))   # c0 z0
-        store.add_roi(4, disk(16, 16, 8, 8, 3))   # c1 z1
+        store.add_roi(0, disk(16, 16, 4, 4, 2))  # c0 z0
+        store.add_roi(4, disk(16, 16, 8, 8, 3))  # c1 z1
         store.add_roi(5, disk(16, 16, 12, 12, 1))  # c1 z2
         store.set_class(1, 0)
         return store
@@ -343,13 +385,19 @@ class TestColorize:
         flat = model.colorize({1: 3.0, 2: 3.0})
         assert flat[1] == flat[2]
         # one level, one ROI: the colormap's single row is still a row
-        assert model.colorize({1: 0.0}, cmap="tab10", categorical=True) == {1: (31, 119, 180)}
+        assert model.colorize({1: 0.0}, cmap="tab10", categorical=True) == {
+            1: (31, 119, 180)
+        }
         assert model.colorize({2: 5.0}, cmap="viridis") == {2: (68, 1, 84)}
 
     def test_full_image_rows_take_string_members(self):
         table = RoiTraceTable()
-        row = table.add(RoiTrace(uid=0, source=FULL_IMAGE, member="z2c1", z=2, c=1, F=np.ones(3)))
+        row = table.add(
+            RoiTrace(uid=0, source=FULL_IMAGE, member="z2c1", z=2, c=1, F=np.ones(3))
+        )
         assert row.key == ("member", FULL_IMAGE, "z2c1") and not row.stands_for_roi
-        table.add(RoiTrace(uid=0, source=FULL_IMAGE, member="z2c1", z=2, c=1, F=np.zeros(3)))
+        table.add(
+            RoiTrace(uid=0, source=FULL_IMAGE, member="z2c1", z=2, c=1, F=np.zeros(3))
+        )
         assert len(table) == 1 and table.get(row.key).F.sum() == 0
         assert table.prune([]) == [] and len(table) == 1

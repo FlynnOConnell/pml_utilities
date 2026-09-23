@@ -13,10 +13,9 @@ Two consumers:
 - The standalone crop window: reads + writes per-camera bounds as the user
   drags sliders.
 """
+
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +51,7 @@ def _raw_root_for(arr: Any) -> Path | None:
     # where the raw acquisition is still alongside the .corrected/ tree).
     try:
         from mbo_utilities.arrays.isoview.array import _sibling_raw_root
+
         sibling = _sibling_raw_root(arr)
         if sibling is not None:
             return sibling
@@ -71,7 +71,7 @@ def _raw_root_for(arr: Any) -> Path | None:
             idx = n.find(suf)
             if idx < 0:
                 continue
-            rest = n[idx + len(suf):]
+            rest = n[idx + len(suf) :]
             if rest == "" or rest.startswith("_"):
                 return ancestor.parent / n[:idx]
     return None
@@ -133,7 +133,8 @@ def set_tile_camera_bounds(
     shape: tuple[int, int, int],
 ) -> None:
     """Record ``camera``'s crop within spatial ``tile`` (specimen_name grid
-    token, e.g. ``TL100``, else ``SPM##``)."""
+    token, e.g. ``TL100``, else ``SPM##``).
+    """
     k = _key(arr)
     if k is None:
         return
@@ -259,7 +260,8 @@ def summary(arr: Any) -> str:
     if bool(getattr(arr, "is_tiled", False)):
         tile_crops = get_tile_crops(arr)
         cropped = [
-            t for t, cams in tile_crops.items()
+            t
+            for t, cams in tile_crops.items()
             if any(not _is_full_extent(b) for b in cams.values())
         ]
         if not cropped:
@@ -270,6 +272,7 @@ def summary(arr: Any) -> str:
     if not crops:
         return "(none)"
     from mbo_utilities.arrays.isoview.array import camera_view_label
+
     parts: list[str] = []
     for camera in sorted(crops):
         b = crops[camera]

@@ -4,9 +4,9 @@ Pipeline registry for tracking inputs, outputs, and file patterns.
 Each array type and pipeline declares what files it reads/writes
 """
 
-from dataclasses import dataclass, field
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,7 @@ def pipeline(
     category: str = "unknown",
 ):
     """Decorator to register a class as a pipeline with file patterns."""
+
     def decorator(cls):
         info = PipelineInfo(
             name=name,
@@ -113,6 +114,7 @@ def pipeline(
         # attach info to class for introspection
         cls._pipeline_info = info
         return cls
+
     return decorator
 
 
@@ -157,9 +159,7 @@ def load_entry_point_pipelines() -> list[type]:
             logger.exception("Could not load pipeline entry point %r", ep.name)
             continue
         if not isinstance(obj, type):
-            logger.warning(
-                "Pipeline entry point %r is not a class, skipping", ep.name
-            )
+            logger.warning("Pipeline entry point %r is not a class, skipping", ep.name)
             continue
         info = getattr(obj, "info", None)
         if isinstance(info, PipelineInfo):

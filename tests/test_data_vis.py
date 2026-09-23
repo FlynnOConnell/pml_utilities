@@ -12,7 +12,6 @@ import in the process — tests/conftest.py does this for the whole suite.
 
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -78,7 +77,10 @@ class TestFigureKwargsForHere:
         from mbo_utilities.gui import run_gui as rg
 
         monkeypatch.setattr(rg, "in_notebook", lambda: True)
-        assert rg._figure_kwargs_for_here() == {"canvas": "jupyter", "size": (1400, 900)}
+        assert rg._figure_kwargs_for_here() == {
+            "canvas": "jupyter",
+            "size": (1400, 900),
+        }
         assert rg._figure_kwargs_for_here(size=(800, 600))["size"] == (800, 600)
 
     def test_offscreen_env_leaves_the_canvas_to_rendercanvas(self, monkeypatch):
@@ -220,9 +222,11 @@ class TestRunGuiWhereItRuns:
             rg._run_gui_impl(data_in=None)
         assert picked == [], "the desktop picker was never opened"
 
+
 class TestMescInNotebook:
     """No Qt anywhere: a notebook opens the first unit exactly like a
-    terminal does, and switches units through the Image tab's ImGui combo."""
+    terminal does, and switches units through the Image tab's ImGui combo.
+    """
 
     @staticmethod
     def _mesc(tmp_path, monkeypatch, units):
@@ -236,9 +240,7 @@ class TestMescInNotebook:
         return rg, path
 
     def test_one_unit_opens_without_asking(self, tmp_path, monkeypatch):
-        rg, path = self._mesc(
-            tmp_path, monkeypatch, [{"key": "MSession_0/MUnit_0"}]
-        )
+        rg, path = self._mesc(tmp_path, monkeypatch, [{"key": "MSession_0/MUnit_0"}])
         assert rg._resolve_mesc_unit(path, None) == (
             {"unit": "MSession_0/MUnit_0"},
             True,
@@ -256,9 +258,7 @@ class TestMescInNotebook:
         )
 
     def test_explicit_unit_still_bypasses(self, tmp_path, monkeypatch):
-        rg, path = self._mesc(
-            tmp_path, monkeypatch, [{"key": "a"}, {"key": "b"}]
-        )
+        rg, path = self._mesc(tmp_path, monkeypatch, [{"key": "a"}, {"key": "b"}])
         assert rg._resolve_mesc_unit(path, 1) == ({"unit": 1}, True)
 
 
@@ -290,7 +290,9 @@ class TestNativeDialogs:
         monkeypatch.setattr(_files.shutil, "which", lambda name: None)
         assert _files.native_dialogs_available() is False
         monkeypatch.setattr(
-            _files.shutil, "which", lambda name: "/usr/bin/zenity" if name == "zenity" else None
+            _files.shutil,
+            "which",
+            lambda name: "/usr/bin/zenity" if name == "zenity" else None,
         )
         assert _files.native_dialogs_available() is True
 
@@ -314,6 +316,7 @@ class TestPathPrompt:
 
     def test_open_prompt_renders_in_a_frame(self):
         from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
+
         from tests.test_imgui_helpers import _draw_in_edge_window
 
         prompt = PathPrompt("Open file", path="/data/x.tif", hint="a file")
@@ -360,17 +363,24 @@ class TestOpenPrompts:
         start_open_prompt(parent, "file")
         assert not open_prompts(parent)[0].open
 
-    def test_submitted_path_loads_and_a_missing_one_reports(self, tmp_path, monkeypatch):
+    def test_submitted_path_loads_and_a_missing_one_reports(
+        self, tmp_path, monkeypatch
+    ):
         from mbo_utilities.gui import _dialogs
 
         parent = self._parent(tmp_path)
         loaded = []
-        monkeypatch.setattr(_dialogs, "load_new_data", lambda p, path: loaded.append(path))
+        monkeypatch.setattr(
+            _dialogs, "load_new_data", lambda p, path: loaded.append(path)
+        )
         monkeypatch.setattr(_dialogs, "add_recent_file", lambda *a, **k: None)
         monkeypatch.setattr(_dialogs, "set_last_dir", lambda *a, **k: None)
         file_prompt, folder_prompt = _dialogs.open_prompts(parent)
 
-        answers = {"file": (str(tmp_path / "missing.tif"), False), "folder": (None, False)}
+        answers = {
+            "file": (str(tmp_path / "missing.tif"), False),
+            "folder": (None, False),
+        }
         monkeypatch.setattr(
             _dialogs,
             "draw_path_prompt",
@@ -393,12 +403,16 @@ class TestOpenPrompts:
         f = tmp_path / "a.tif"
         f.write_bytes(b"")
         loaded = []
-        monkeypatch.setattr(_dialogs, "load_new_data", lambda p, path: loaded.append(path))
+        monkeypatch.setattr(
+            _dialogs, "load_new_data", lambda p, path: loaded.append(path)
+        )
         _, folder_prompt = _dialogs.open_prompts(parent)
         monkeypatch.setattr(
             _dialogs,
             "draw_path_prompt",
-            lambda prompt: (str(f), False) if prompt is folder_prompt else (None, False),
+            lambda prompt: (str(f), False)
+            if prompt is folder_prompt
+            else (None, False),
         )
         folder_prompt.start()
         _dialogs.check_file_dialogs(parent)

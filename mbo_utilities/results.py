@@ -46,7 +46,7 @@ import json
 import pickle
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -122,8 +122,27 @@ IMAGE_KINDS = {
 }
 MEMBER_KINDS = ("pixel", "line")
 UNIT_KINDS = ("plane", "scan")
-_UNIT_ATTRS = ("kind", "index", "fs", "n_rois", "n_timepoints", "roi_names", "member_kind", "image_shape")
-_ROOT_ATTRS = (RESULTS_ATTR, "pipeline", "created", "tags", "units", "source", "settings", "metadata", "provenance")
+_UNIT_ATTRS = (
+    "kind",
+    "index",
+    "fs",
+    "n_rois",
+    "n_timepoints",
+    "roi_names",
+    "member_kind",
+    "image_shape",
+)
+_ROOT_ATTRS = (
+    RESULTS_ATTR,
+    "pipeline",
+    "created",
+    "tags",
+    "units",
+    "source",
+    "settings",
+    "metadata",
+    "provenance",
+)
 _CHUNK = (256, 8192)
 
 
@@ -204,7 +223,9 @@ def _clean(part: str) -> str:
     return re.sub(r"[^A-Za-z0-9-]+", "_", part).strip("_")
 
 
-def results_name(source, when: datetime | None = None, extra_tags=(), pipeline: str = "") -> str:
+def results_name(
+    source, when: datetime | None = None, extra_tags=(), pipeline: str = ""
+) -> str:
     """``<stem>.<yyyy-mm-dd-HH-MM-SS>.<pipeline>.zarr`` for ``source``.
 
     The stem is the source filename's, so the file sits beside its input
@@ -227,7 +248,8 @@ def results_name(source, when: datetime | None = None, extra_tags=(), pipeline: 
 
 def results_stamp(path) -> datetime | None:
     """When a results file was written, from the timestamp in its name, or
-    None when the name carries none."""
+    None when the name carries none.
+    """
     for part in Path(path).name.split("."):
         try:
             return datetime.strptime(part, RESULTS_STAMP)
@@ -275,7 +297,8 @@ def results_pipeline(path) -> str | None:
 
 def results_summary(path) -> dict | None:
     """``{"pipeline", "units", "n_rois", "created"}`` of a results file from its
-    ``zarr.json`` files alone (no arrays opened), or None when ``path`` is not one."""
+    ``zarr.json`` files alone (no arrays opened), or None when ``path`` is not one.
+    """
     path = Path(path)
     pipeline = results_pipeline(path)
     if pipeline is None:
@@ -286,8 +309,16 @@ def results_summary(path) -> dict | None:
     for name in units:
         meta = path / name / "zarr.json"
         if meta.is_file():
-            n_rois += int((json.loads(meta.read_text()).get("attributes") or {}).get("n_rois") or 0)
-    return {"pipeline": pipeline, "units": units, "n_rois": n_rois, "created": str(attrs.get("created", ""))}
+            n_rois += int(
+                (json.loads(meta.read_text()).get("attributes") or {}).get("n_rois")
+                or 0
+            )
+    return {
+        "pipeline": pipeline,
+        "units": units,
+        "n_rois": n_rois,
+        "created": str(attrs.get("created", "")),
+    }
 
 
 def pipeline_files(path) -> Path:
@@ -383,7 +414,9 @@ def unit_for_source(results: Results, source_unit: str) -> str | None:
             return name
     number = tail.rsplit("_", 1)[-1]
     if number.isdigit():
-        return next((n for n, u in results.units.items() if u.index == int(number)), None)
+        return next(
+            (n for n, u in results.units.items() if u.index == int(number)), None
+        )
     return None
 
 
@@ -418,31 +451,53 @@ def write_results(
         raise ValueError(f"duplicate unit names: {names}")
     for unit in units:
         if unit.kind not in UNIT_KINDS:
-            raise ValueError(f"{unit.name}: kind must be one of {UNIT_KINDS}, got {unit.kind!r}")
+            raise ValueError(
+                f"{unit.name}: kind must be one of {UNIT_KINDS}, got {unit.kind!r}"
+            )
         if unit.member_kind not in MEMBER_KINDS:
-            raise ValueError(f"{unit.name}: member_kind must be one of {MEMBER_KINDS}, got {unit.member_kind!r}")
+            raise ValueError(
+                f"{unit.name}: member_kind must be one of {MEMBER_KINDS}, got {unit.member_kind!r}"
+            )
         k, t = unit.n_rois, unit.n_timepoints
         for kind, arr in unit.traces.items():
             if kind not in TRACE_KINDS:
-                raise ValueError(f"{unit.name}: unknown trace kind {kind!r}; use one of {sorted(TRACE_KINDS)}")
+                raise ValueError(
+                    f"{unit.name}: unknown trace kind {kind!r}; use one of {sorted(TRACE_KINDS)}"
+                )
             if np.shape(arr) != (k, t):
-                raise ValueError(f"{unit.name}: traces/{kind} is {np.shape(arr)}, expected ({k}, {t})")
+                raise ValueError(
+                    f"{unit.name}: traces/{kind} is {np.shape(arr)}, expected ({k}, {t})"
+                )
         for kind, arr in unit.member_traces.items():
             if kind not in TRACE_KINDS:
-                raise ValueError(f"{unit.name}: unknown trace kind {kind!r}; use one of {sorted(TRACE_KINDS)}")
+                raise ValueError(
+                    f"{unit.name}: unknown trace kind {kind!r}; use one of {sorted(TRACE_KINDS)}"
+                )
             if np.ndim(arr) != 2 or np.shape(arr)[1] != t:
-                raise ValueError(f"{unit.name}: members/{kind} is {np.shape(arr)}, expected (n_members, {t})")
+                raise ValueError(
+                    f"{unit.name}: members/{kind} is {np.shape(arr)}, expected (n_members, {t})"
+                )
         if len(unit.members) != k:
-            raise ValueError(f"{unit.name}: {len(unit.members)} member lists for {k} ROIs")
-        if unit.weights is not None and [len(w) for w in unit.weights] != [len(m) for m in unit.members]:
+            raise ValueError(
+                f"{unit.name}: {len(unit.members)} member lists for {k} ROIs"
+            )
+        if unit.weights is not None and [len(w) for w in unit.weights] != [
+            len(m) for m in unit.members
+        ]:
             raise ValueError(f"{unit.name}: weights do not match members")
         if unit.iscell is not None and np.shape(unit.iscell) != (k, 2):
-            raise ValueError(f"{unit.name}: iscell is {np.shape(unit.iscell)}, expected ({k}, 2)")
+            raise ValueError(
+                f"{unit.name}: iscell is {np.shape(unit.iscell)}, expected ({k}, 2)"
+            )
         for kind, arr in unit.images.items():
             if kind not in IMAGE_KINDS:
-                raise ValueError(f"{unit.name}: unknown image kind {kind!r}; use one of {sorted(IMAGE_KINDS)}")
+                raise ValueError(
+                    f"{unit.name}: unknown image kind {kind!r}; use one of {sorted(IMAGE_KINDS)}"
+                )
             if np.ndim(arr) != 2:
-                raise ValueError(f"{unit.name}: images/{kind} must be (Y, X), got {np.shape(arr)}")
+                raise ValueError(
+                    f"{unit.name}: images/{kind} must be (Y, X), got {np.shape(arr)}"
+                )
         unknown = [r for r in unit.events if r not in unit.roi_names]
         if unknown:
             raise ValueError(f"{unit.name}: events for unknown ROIs {unknown}")
@@ -455,8 +510,15 @@ def write_results(
         {
             RESULTS_ATTR: RESULTS_VERSION,
             "pipeline": str(pipeline),
-            "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "tags": [str(t) for t in (tags if tags is not None else (x.to_string() for x in filename_tags(path)))],
+            "created": datetime.now(UTC).isoformat(timespec="seconds"),
+            "tags": [
+                str(t)
+                for t in (
+                    tags
+                    if tags is not None
+                    else (x.to_string() for x in filename_tags(path))
+                )
+            ],
             "units": names,
             "source": _make_json_serializable(dict(source or {})),
             "settings": _make_json_serializable(dict(settings or {})),
@@ -476,34 +538,64 @@ def write_results(
                 "n_timepoints": t,
                 "roi_names": [str(n) for n in unit.roi_names],
                 "member_kind": unit.member_kind,
-                "image_shape": None if unit.image_shape is None else [int(v) for v in unit.image_shape],
+                "image_shape": None
+                if unit.image_shape is None
+                else [int(v) for v in unit.image_shape],
                 **_make_json_serializable(dict(unit.attrs)),
             }
         )
         traces = group.create_group("traces")
         for kind, arr in unit.traces.items():
             data = np.ascontiguousarray(arr, dtype=np.float32)
-            chunks = tuple(max(1, min(n, c)) for n, c in zip(data.shape, _CHUNK, strict=True))
-            traces.create_array(kind, data=data, chunks=chunks, dimension_names=("roi", "t"))
+            chunks = tuple(
+                max(1, min(n, c)) for n, c in zip(data.shape, _CHUNK, strict=True)
+            )
+            traces.create_array(
+                kind, data=data, chunks=chunks, dimension_names=("roi", "t")
+            )
         rois = group.create_group("rois")
         offsets = np.zeros(k + 1, dtype=np.int64)
         offsets[1:] = np.cumsum([len(m) for m in unit.members])
-        member = np.concatenate([np.asarray(m, dtype=np.int64).ravel() for m in unit.members]) if k else np.zeros(0, np.int64)
+        member = (
+            np.concatenate(
+                [np.asarray(m, dtype=np.int64).ravel() for m in unit.members]
+            )
+            if k
+            else np.zeros(0, np.int64)
+        )
         if unit.weights is None:
             weight = np.ones(len(member), dtype=np.float32)
         else:
-            weight = np.concatenate([np.asarray(w, dtype=np.float32).ravel() for w in unit.weights]) if k else np.zeros(0, np.float32)
+            weight = (
+                np.concatenate(
+                    [np.asarray(w, dtype=np.float32).ravel() for w in unit.weights]
+                )
+                if k
+                else np.zeros(0, np.float32)
+            )
         rois.create_array("offsets", data=offsets, chunks=(max(1, k + 1),))
-        rois.create_array("member", data=member, chunks=(max(1, min(len(member), 1 << 20)),))
-        rois.create_array("weight", data=weight, chunks=(max(1, min(len(weight), 1 << 20)),))
-        iscell = np.ones((k, 2), dtype=np.float32) if unit.iscell is None else np.asarray(unit.iscell, dtype=np.float32)
+        rois.create_array(
+            "member", data=member, chunks=(max(1, min(len(member), 1 << 20)),)
+        )
+        rois.create_array(
+            "weight", data=weight, chunks=(max(1, min(len(weight), 1 << 20)),)
+        )
+        iscell = (
+            np.ones((k, 2), dtype=np.float32)
+            if unit.iscell is None
+            else np.asarray(unit.iscell, dtype=np.float32)
+        )
         rois.create_array("iscell", data=iscell, chunks=(max(1, k), 2))
         if unit.member_traces:
             members = group.create_group("members")
             for kind, arr in unit.member_traces.items():
                 data = np.ascontiguousarray(arr, dtype=np.float32)
-                chunks = tuple(max(1, min(n, c)) for n, c in zip(data.shape, _CHUNK, strict=True))
-                members.create_array(kind, data=data, chunks=chunks, dimension_names=("member", "t"))
+                chunks = tuple(
+                    max(1, min(n, c)) for n, c in zip(data.shape, _CHUNK, strict=True)
+                )
+                members.create_array(
+                    kind, data=data, chunks=chunks, dimension_names=("member", "t")
+                )
         events = group.create_group("events")
         frames, roi_index = [], []
         for i, roi in enumerate(unit.roi_names):
@@ -512,13 +604,19 @@ def write_results(
             roi_index.append(np.full(found.size, i, dtype=np.int32))
         frame = np.concatenate(frames) if frames else np.zeros(0, np.int64)
         roi_index = np.concatenate(roi_index) if roi_index else np.zeros(0, np.int32)
-        events.create_array("frame", data=frame, chunks=(max(1, min(frame.size, 1 << 20)),))
-        events.create_array("roi", data=roi_index, chunks=(max(1, min(roi_index.size, 1 << 20)),))
+        events.create_array(
+            "frame", data=frame, chunks=(max(1, min(frame.size, 1 << 20)),)
+        )
+        events.create_array(
+            "roi", data=roi_index, chunks=(max(1, min(roi_index.size, 1 << 20)),)
+        )
         if unit.images:
             images = group.create_group("images")
             for kind, arr in unit.images.items():
                 data = np.ascontiguousarray(arr, dtype=np.float32)
-                images.create_array(kind, data=data, chunks=data.shape, dimension_names=("y", "x"))
+                images.create_array(
+                    kind, data=data, chunks=data.shape, dimension_names=("y", "x")
+                )
     logger.info(f"wrote {len(units)} unit(s) of {pipeline} results to {path}")
     return path
 
@@ -538,9 +636,19 @@ def read_results(path) -> Results:
         offsets = group["rois/offsets"][:]
         member = group["rois/member"][:]
         weight = group["rois/weight"][:]
-        traces = {kind: group["traces"][kind][:] for kind in group["traces"].array_keys()}
-        member_traces = {kind: group["members"][kind][:] for kind in group["members"].array_keys()} if "members" in group else {}
-        images = {kind: group["images"][kind][:] for kind in group["images"].array_keys()} if "images" in group else {}
+        traces = {
+            kind: group["traces"][kind][:] for kind in group["traces"].array_keys()
+        }
+        member_traces = (
+            {kind: group["members"][kind][:] for kind in group["members"].array_keys()}
+            if "members" in group
+            else {}
+        )
+        images = (
+            {kind: group["images"][kind][:] for kind in group["images"].array_keys()}
+            if "images" in group
+            else {}
+        )
         frame = group["events/frame"][:]
         roi_index = group["events/roi"][:]
         roi_names = [str(n) for n in a["roi_names"]]
@@ -555,7 +663,9 @@ def read_results(path) -> Results:
             member_kind=str(a["member_kind"]),
             members=[member[offsets[i] : offsets[i + 1]] for i in range(k)],
             weights=[weight[offsets[i] : offsets[i + 1]] for i in range(k)],
-            image_shape=None if a.get("image_shape") is None else (int(a["image_shape"][0]), int(a["image_shape"][1])),
+            image_shape=None
+            if a.get("image_shape") is None
+            else (int(a["image_shape"][0]), int(a["image_shape"][1])),
             iscell=group["rois/iscell"][:],
             member_traces=member_traces,
             events=events,
@@ -588,16 +698,28 @@ def results_from_suite2p(path) -> tuple[list[ResultUnit], dict]:
     from mbo_utilities.metadata import get_param
 
     path = Path(path)
-    plane_dirs = [path] if (path / "F.npy").is_file() else sorted(p for p in path.iterdir() if p.is_dir() and (p / "F.npy").is_file())
+    plane_dirs = (
+        [path]
+        if (path / "F.npy").is_file()
+        else sorted(p for p in path.iterdir() if p.is_dir() and (p / "F.npy").is_file())
+    )
     if not plane_dirs:
         raise FileNotFoundError(f"no F.npy in {path} or its plane dirs")
     units, root = [], {"pipeline": "suite2p", "settings": {}, "metadata": {}}
     for plane_dir in plane_dirs:
-        ops = np.load(plane_dir / "ops.npy", allow_pickle=True).item() if (plane_dir / "ops.npy").is_file() else {}
+        ops = (
+            np.load(plane_dir / "ops.npy", allow_pickle=True).item()
+            if (plane_dir / "ops.npy").is_file()
+            else {}
+        )
         stat = np.load(plane_dir / "stat.npy", allow_pickle=True)
         F = np.load(plane_dir / "F.npy")
         match = re.search(r"plane(\d+)", plane_dir.name, re.IGNORECASE)
-        index = int(match.group(1)) if match else int(ops.get("plane", len(units) + 1) or len(units) + 1)
+        index = (
+            int(match.group(1))
+            if match
+            else int(ops.get("plane", len(units) + 1) or len(units) + 1)
+        )
         ly, lx = int(ops.get("Ly", 0) or 0), int(ops.get("Lx", 0) or 0)
         if not ly or not lx:
             for key in ("meanImg", "max_proj", "refImg"):
@@ -606,16 +728,30 @@ def results_from_suite2p(path) -> tuple[list[ResultUnit], dict]:
                     break
         members, weights = [], []
         for s in stat:
-            ypix, xpix = np.asarray(s["ypix"], dtype=np.int64).ravel(), np.asarray(s["xpix"], dtype=np.int64).ravel()
+            ypix, xpix = (
+                np.asarray(s["ypix"], dtype=np.int64).ravel(),
+                np.asarray(s["xpix"], dtype=np.int64).ravel(),
+            )
             members.append(ypix * lx + xpix)
-            weights.append(np.asarray(s.get("lam", np.ones(ypix.size)), dtype=np.float32).ravel())
+            weights.append(
+                np.asarray(s.get("lam", np.ones(ypix.size)), dtype=np.float32).ravel()
+            )
         traces = {"raw": F}
-        for file, kind in (("Fneu.npy", "neuropil"), ("spks.npy", "spikes"), ("norm_traces.npy", "dff")):
+        for file, kind in (
+            ("Fneu.npy", "neuropil"),
+            ("spks.npy", "spikes"),
+            ("norm_traces.npy", "dff"),
+        ):
             if (plane_dir / file).is_file():
                 traces[kind] = np.load(plane_dir / file)
         images = {
             kind: np.asarray(ops[key])
-            for key, kind in (("meanImg", "mean"), ("max_proj", "max"), ("Vcorr", "corr"), ("refImg", "ref"))
+            for key, kind in (
+                ("meanImg", "mean"),
+                ("max_proj", "max"),
+                ("Vcorr", "corr"),
+                ("refImg", "ref"),
+            )
             if isinstance(ops.get(key), np.ndarray) and ops[key].ndim == 2
         }
         units.append(
@@ -630,7 +766,9 @@ def results_from_suite2p(path) -> tuple[list[ResultUnit], dict]:
                 members=members,
                 weights=weights,
                 image_shape=(ly, lx) if ly and lx else None,
-                iscell=np.load(plane_dir / "iscell.npy") if (plane_dir / "iscell.npy").is_file() else None,
+                iscell=np.load(plane_dir / "iscell.npy")
+                if (plane_dir / "iscell.npy").is_file()
+                else None,
                 images=images,
                 attrs={"plane_dir": str(plane_dir)},
             )
@@ -657,16 +795,23 @@ def results_from_pf(pf_dir) -> tuple[list[ResultUnit], dict]:
     pf_dir = Path(pf_dir)
     files = pipeline_files(pf_dir)
     traces_pkl = _read_pickle(pf_dir / TRACES_PKL)
-    rates = {str(k): v for k, v in (_read_pickle(pf_dir / "fs_scans.pkl") or {}).items()}
+    rates = {
+        str(k): v for k, v in (_read_pickle(pf_dir / "fs_scans.pkl") or {}).items()
+    }
     rois = _read_pickle(pf_dir / "scanIDs_ROIs.pkl") or {}
     peaks = _read_pickle(pf_dir / "detected_events_peaks.pkl") or {}
     provenance = {}
     if (files / PROVENANCE_FILE).is_file():
         provenance = json.loads((files / PROVENANCE_FILE).read_text())
-    traces = {str(s): {str(d): np.asarray(t) for d, t in v.items()} for s, v in (traces_pkl or {}).items()}
+    traces = {
+        str(s): {str(d): np.asarray(t) for d, t in v.items()}
+        for s, v in (traces_pkl or {}).items()
+    }
     scan_ids = [str(s) for s in rois.get("scanID_spatial", list(traces))]
     first_env = {str(s) for s in rois.get("scanID_1st_env", [])}
-    roi_list = {str(s): [int(r) for r in v] for s, v in (rois.get("roi_list") or {}).items()}
+    roi_list = {
+        str(s): [int(r) for r in v] for s, v in (rois.get("roi_list") or {}).items()
+    }
     source = dict(provenance.get("source") or {})
     source_units = {str(k): str(v) for k, v in (source.get("units") or {}).items()}
     if not source.get("mesc"):
@@ -681,13 +826,19 @@ def results_from_pf(pf_dir) -> tuple[list[ResultUnit], dict]:
         if str(k) not in EXCLUDED_DOMAINS
     }
     traced = list(dict.fromkeys(d for v in traces.values() for d in v))
-    names = [d for d in domains if d in traced] + [d for d in traced if d not in domains]
+    names = [d for d in domains if d in traced] + [
+        d for d in traced if d not in domains
+    ]
     # the run's own record of the rates wins: fs_scans.pkl is the scanner's, pipeline.json the traces'
     declared = {str(k): float(v) for k, v in (provenance.get("fs_hz") or {}).items()}
     units = []
     for scan in scan_ids:
         rows = [d for d in names if d in traces.get(scan, {})]
-        denoised = np.stack([traces[scan][d] for d in rows]) if rows else np.zeros((0, 0), np.float32)
+        denoised = (
+            np.stack([traces[scan][d] for d in rows])
+            if rows
+            else np.zeros((0, 0), np.float32)
+        )
         kinds = {"denoised": denoised}
         if (files / DFOF_H5).is_file():
             with h5py.File(files / DFOF_H5, "r") as f:
@@ -699,7 +850,10 @@ def results_from_pf(pf_dir) -> tuple[list[ResultUnit], dict]:
         if raw_file.is_file():
             member_traces["raw"] = np.load(raw_file)
         rate = declared.get(scan, rates.get(scan))
-        found = {str(d): np.asarray(v, dtype=np.int64) for d, v in (peaks.get(scan) or {}).items()}
+        found = {
+            str(d): np.asarray(v, dtype=np.int64)
+            for d, v in (peaks.get(scan) or {}).items()
+        }
         units.append(
             ResultUnit(
                 name=unit_name("scan", _scan_index(scan, scan_ids)),
@@ -737,7 +891,12 @@ register_pipeline(
         name="voltage",
         description="Spatial JEDI voltage pipeline: AOD ROI traces, dF/F, wavelet denoising, peaks",
         input_patterns=["**/*.mesc"],
-        output_patterns=["**/*.voltage.zarr", f"**/PF/{TRACES_PKL}", f"**/PF/{PROVENANCE_FILE}", "**/PF/test.h5"],
+        output_patterns=[
+            "**/*.voltage.zarr",
+            f"**/PF/{TRACES_PKL}",
+            f"**/PF/{PROVENANCE_FILE}",
+            "**/PF/test.h5",
+        ],
         input_extensions=["mesc"],
         output_extensions=["pkl", "h5", "json", "zarr"],
         marker_files=[TRACES_PKL],
@@ -790,7 +949,9 @@ class ResultsArray(ReductionMixin, LazyArray):
     def can_open(cls, file: Path | str) -> bool:
         return isinstance(file, (str, Path)) and results_dir_of(file) is not None
 
-    def __init__(self, filenames: Path | str, unit: str | None = None, source: bool = True):
+    def __init__(
+        self, filenames: Path | str, unit: str | None = None, source: bool = True
+    ):
         path = results_dir_of(filenames)
         if path is None:
             raise FileNotFoundError(f"no results file or {TRACES_PKL} at {filenames}")
@@ -824,7 +985,9 @@ class ResultsArray(ReductionMixin, LazyArray):
         try:
             self._source = imread(recording, **kwargs)
         except Exception as error:
-            logger.warning(f"{recording.name} does not open ({error}); showing the trace raster")
+            logger.warning(
+                f"{recording.name} does not open ({error}); showing the trace raster"
+            )
 
     @property
     def pipeline(self) -> str:
@@ -853,14 +1016,20 @@ class ResultsArray(ReductionMixin, LazyArray):
             b = self.raster_bin
             width = max(1, -(-max((u.n_timepoints for u in units), default=1) // b))
             rows = max((u.n_rois for u in units), default=1)
-            out = np.full((max(len(units), 1), max(rows, 1), width), np.nan, dtype=np.float32)
+            out = np.full(
+                (max(len(units), 1), max(rows, 1), width), np.nan, dtype=np.float32
+            )
             for i, unit in enumerate(units):
                 kind = next((k for k in RASTER_KINDS if k in unit.traces), None)
                 if kind is None:
                     continue
                 for j, trace in enumerate(unit.traces[kind]):
                     n = len(trace) // b
-                    out[i, j, :n] = np.asarray(trace[: n * b], np.float32).reshape(n, b).mean(axis=1)
+                    out[i, j, :n] = (
+                        np.asarray(trace[: n * b], np.float32)
+                        .reshape(n, b)
+                        .mean(axis=1)
+                    )
                     if n * b < len(trace):
                         out[i, j, n] = trace[n * b :].mean()
             self._raster = out
@@ -918,7 +1087,9 @@ class ResultsArray(ReductionMixin, LazyArray):
                 "results_unit": self.unit,
                 "results_units": list(self.results.units),
                 f"{self.results.pipeline}_settings": dict(self.results.settings),
-                "source_recording": None if self.source_recording is None else str(self.source_recording),
+                "source_recording": None
+                if self.source_recording is None
+                else str(self.source_recording),
                 "source_unit": self.unit_key,
             }
         )
@@ -937,7 +1108,9 @@ class ResultsArray(ReductionMixin, LazyArray):
             raise TypeError(f"metadata must be a dict, got {type(value)}")
         self._metadata = dict(value)
 
-    def trace(self, roi: str, kind: str = "denoised", unit: str | None = None) -> np.ndarray:
+    def trace(
+        self, roi: str, kind: str = "denoised", unit: str | None = None
+    ) -> np.ndarray:
         """One ROI's trace of ``kind`` in ``unit`` (the current unit by default)."""
         found = self.results.units[unit or self.unit]
         return found.traces[kind][found.roi_names.index(str(roi))]

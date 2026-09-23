@@ -28,9 +28,9 @@ will show, so the contract is introspectable and testable.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
 
 import numpy as np
 
@@ -49,8 +49,12 @@ class StatsDimRole(str, Enum):
 # `_SLIDER_NAME_ALIASES`.
 _STAT_LABELS = {"Z": "Zplane", "T": "Timepoint", "C": "Channel"}
 _EXTRA_CANON = {
-    "zslices": "Z", "zslice": "Z", "volumes": "Z",
-    "frames": "T", "frame": "T", "time": "T",
+    "zslices": "Z",
+    "zslice": "Z",
+    "volumes": "Z",
+    "frames": "T",
+    "frame": "T",
+    "time": "T",
 }
 
 SNR_TOOLTIP = (
@@ -90,10 +94,10 @@ class SubsampleBudget:
     path keeps full resolution.
     """
 
-    max_series_points: int = 40   # max sampled points on the x-axis
-    max_per_group: int = 12       # max sampled indices per group (selector) axis
-    spatial_bin: int = 4          # Y/X stride for stored stats / mean-images
-    avg_max_samples: int = 30     # max frames averaged per point over a reduce axis
+    max_series_points: int = 40  # max sampled points on the x-axis
+    max_per_group: int = 12  # max sampled indices per group (selector) axis
+    spatial_bin: int = 4  # Y/X stride for stored stats / mean-images
+    avg_max_samples: int = 30  # max frames averaged per point over a reduce axis
 
 
 DEFAULT_BUDGET = SubsampleBudget()
@@ -129,12 +133,12 @@ def _metric_snr(stack: np.ndarray, mean_img: np.ndarray, has_reduce: bool) -> fl
 class StatsMetric:
     """One summary-stats column: a scalar reduced from a point's pixel stack."""
 
-    key: str               # stored key, e.g. "mean"
-    label: str             # full row label, e.g. "Mean Fluorescence"
-    unit: str              # display unit, e.g. "a.u."
-    reducer: Callable      # (stack, mean_img, has_reduce) -> float
-    short: str = ""        # compact column header, e.g. "Mean" (defaults to label)
-    tooltip: str = ""      # optional hover help (e.g. the SNR formula)
+    key: str  # stored key, e.g. "mean"
+    label: str  # full row label, e.g. "Mean Fluorescence"
+    unit: str  # display unit, e.g. "a.u."
+    reducer: Callable  # (stack, mean_img, has_reduce) -> float
+    short: str = ""  # compact column header, e.g. "Mean" (defaults to label)
+    tooltip: str = ""  # optional hover help (e.g. the SNR formula)
 
     @property
     def header(self) -> str:
@@ -145,8 +149,9 @@ class StatsMetric:
 DEFAULT_METRICS: tuple[StatsMetric, ...] = (
     StatsMetric("mean", "Mean Fluorescence", "a.u.", _metric_mean, short="Mean"),
     StatsMetric("std", "Std. Deviation", "a.u.", _metric_std, short="Std"),
-    StatsMetric("snr", "Signal-to-Noise", "ratio", _metric_snr, short="SNR",
-                tooltip=SNR_TOOLTIP),
+    StatsMetric(
+        "snr", "Signal-to-Noise", "ratio", _metric_snr, short="SNR", tooltip=SNR_TOOLTIP
+    ),
 )
 
 
@@ -154,26 +159,26 @@ DEFAULT_METRICS: tuple[StatsMetric, ...] = (
 class StatsDim:
     """A scrollable dim's resolved place in the summary-stats layout."""
 
-    name: str              # canonical "Z"/"T"/"C"
-    label: str             # display label, e.g. "Zplane"/"Tile"
+    name: str  # canonical "Z"/"T"/"C"
+    label: str  # display label, e.g. "Zplane"/"Tile"
     size: int
-    axis: int              # position in dims / shape
-    candidate: bool        # may be chosen as the SERIES axis
-    role: StatsDimRole     # resolved role given the current series choice
-    indices: list[int]     # sampled 0-based indices (empty for REDUCE)
+    axis: int  # position in dims / shape
+    candidate: bool  # may be chosen as the SERIES axis
+    role: StatsDimRole  # resolved role given the current series choice
+    indices: list[int]  # sampled 0-based indices (empty for REDUCE)
 
 
 @dataclass
 class SummaryStatsSpec:
     """Resolved descriptor the GUI renders. Built by `build_summary_stats_spec`."""
 
-    image_dims: tuple[str, ...]            # ("Y", "X")
-    series: StatsDim | None                # the x-axis dim (None -> single point)
+    image_dims: tuple[str, ...]  # ("Y", "X")
+    series: StatsDim | None  # the x-axis dim (None -> single point)
     series_candidates: tuple[StatsDim, ...]  # all dims that could be the series
-    groups: tuple[StatsDim, ...]           # per-series selectors (follow sliders)
-    reduce: tuple[StatsDim, ...]           # collapsed per point
+    groups: tuple[StatsDim, ...]  # per-series selectors (follow sliders)
+    reduce: tuple[StatsDim, ...]  # collapsed per point
     metrics: tuple[StatsMetric, ...]
-    dims: tuple                            # the dims the spec was built over
+    dims: tuple  # the dims the spec was built over
     shape: tuple
     spatial_bin: int
     budget: SubsampleBudget
@@ -317,9 +322,9 @@ def build_summary_stats_spec(
 # the scalar series in attrs and the binned mean-image stacks in a `means`
 # array. The same payload schema is read back by any reader.
 
-STATS_GROUP_NAME = "mbo_stats"     # child group inside the zarr store
-STATS_SUMMARY_ATTR = "summary"     # scalar payload, on the child group's attrs
-STATS_MEANS_ARRAY = "means"        # binned mean-image stack array
+STATS_GROUP_NAME = "mbo_stats"  # child group inside the zarr store
+STATS_SUMMARY_ATTR = "summary"  # scalar payload, on the child group's attrs
+STATS_MEANS_ARRAY = "means"  # binned mean-image stack array
 STATS_SUMMARY_VERSION = 1
 
 
@@ -348,10 +353,18 @@ def write_stats_store(store_path, payload: dict, means=None) -> None:
         grp.attrs[STATS_SUMMARY_ATTR] = payload
         if means is not None:
             m = np.ascontiguousarray(means, dtype=np.float32)
-            name = f"{grp.path.rstrip('/')}/{STATS_MEANS_ARRAY}" if grp.path else STATS_MEANS_ARRAY
+            name = (
+                f"{grp.path.rstrip('/')}/{STATS_MEANS_ARRAY}"
+                if grp.path
+                else STATS_MEANS_ARRAY
+            )
             arr = zarr.create_array(
-                store=grp.store, name=name, shape=m.shape, dtype=m.dtype,
-                overwrite=True, zarr_format=3,
+                store=grp.store,
+                name=name,
+                shape=m.shape,
+                dtype=m.dtype,
+                overwrite=True,
+                zarr_format=3,
             )
             arr[...] = m
     else:

@@ -22,7 +22,8 @@ __all__ = ["Playhead", "TimeAxis"]
 @dataclass(frozen=True)
 class TimeAxis:
     """Units of one view against the clock: ``per_second`` units per
-    second, with the axis's zero at ``offset`` seconds."""
+    second, with the axis's zero at ``offset`` seconds.
+    """
 
     per_second: float = 1.0
     offset: float = 0.0
@@ -35,7 +36,8 @@ class TimeAxis:
 
     def on(self, other: TimeAxis) -> tuple[float, float]:
         """``(xscale, xstart)`` placing this axis's samples on ``other``:
-        sample ``i`` sits at ``xstart + i * xscale`` there."""
+        sample ``i`` sits at ``xstart + i * xscale`` there.
+        """
         return (
             other.per_second / self.per_second,
             (self.offset - other.offset) * other.per_second,
@@ -45,7 +47,8 @@ class TimeAxis:
     def sampled(cls, fs, frame_average: int = 1, first_frame: int = 0) -> TimeAxis:
         """The axis of samples taken every ``frame_average`` raw frames from
         raw frame ``first_frame``, at ``fs`` raw frames per second (raw
-        frames are the clock when ``fs`` is unknown)."""
+        frames are the clock when ``fs`` is unknown).
+        """
         rate = float(fs) if fs else 1.0
         binning = max(int(frame_average or 1), 1)
         return cls(per_second=rate / binning, offset=float(first_frame) / rate)
@@ -53,7 +56,8 @@ class TimeAxis:
 
 class Playhead(Observable):
     """The time on screen, in seconds; ``seek`` moves it and tells every
-    subscriber who moved it, so a view can ignore its own seeks."""
+    subscriber who moved it, so a view can ignore its own seeks.
+    """
 
     events = ("time",)
 

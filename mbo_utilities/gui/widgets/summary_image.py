@@ -19,11 +19,11 @@ from typing import Any
 import numpy as np
 import wgpu
 from cmap import Colormap
-from imgui_bundle import imgui, hello_imgui, portable_file_dialogs as pfd
+from imgui_bundle import hello_imgui, imgui
+from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.widgets._base import Widget
-
 
 SIDE_PANEL_SECTION_COLOR = imgui.ImVec4(0.8, 0.8, 0.2, 1.0)
 STATUS_OK_COLOR = imgui.ImVec4(0.3, 1.0, 0.3, 1.0)
@@ -70,8 +70,10 @@ _PRIORITY_KEYS = (
 )
 
 from mbo_utilities.gui._colormaps import (
-    DEFAULT_COLORMAPS as _DEFAULT_COLORMAPS,
     DEFAULT_COLORMAP as _DEFAULT_COLORMAP,
+)
+from mbo_utilities.gui._colormaps import (
+    DEFAULT_COLORMAPS as _DEFAULT_COLORMAPS,
 )
 
 _CONTRAST_MODES = ("Full", "Auto", "Manual")
@@ -98,8 +100,7 @@ def _collect_keys(metadata: dict) -> list[str]:
     if not found:
         return []
     extras = sorted(
-        k for k, v in metadata.items()
-        if k not in _PRIORITY_KEYS and _is_image_like(v)
+        k for k, v in metadata.items() if k not in _PRIORITY_KEYS and _is_image_like(v)
     )
     return found + extras
 
@@ -239,7 +240,11 @@ def _load_rois(stat_dir: Path) -> tuple[list[np.ndarray], np.ndarray | None] | N
     if iscell_path.exists():
         try:
             iscell_arr = np.load(iscell_path, allow_pickle=True)
-            iscell = iscell_arr[:, 0].astype(bool) if iscell_arr.ndim == 2 else iscell_arr.astype(bool)
+            iscell = (
+                iscell_arr[:, 0].astype(bool)
+                if iscell_arr.ndim == 2
+                else iscell_arr.astype(bool)
+            )
         except Exception:
             iscell = None
 
@@ -303,7 +308,9 @@ class SummaryImageViewer(Widget):
         self._manual_lo: dict[str, float] = {}
         self._manual_hi: dict[str, float] = {}
         self._hist_cache: dict[str, np.ndarray] = {}
-        self._roi_cache: dict[Path, tuple[list[np.ndarray], np.ndarray | None] | None] = {}
+        self._roi_cache: dict[
+            Path, tuple[list[np.ndarray], np.ndarray | None] | None
+        ] = {}
         self._save_dialog: Any = None
         self._last_save_msg: str = ""
 
@@ -323,7 +330,8 @@ class SummaryImageViewer(Widget):
     def _active_array(self):
         return next(
             (
-                arr for arr in self.parent._get_data_arrays()
+                arr
+                for arr in self.parent._get_data_arrays()
                 if _collect_keys(getattr(arr, "metadata", None) or {})
             ),
             None,
@@ -474,7 +482,9 @@ class SummaryImageViewer(Widget):
 
         imgui.same_line()
         imgui.set_next_item_width(110)
-        ctr_changed, new_ctr = imgui.combo("Contrast", self._contrast_mode, list(_CONTRAST_MODES))
+        ctr_changed, new_ctr = imgui.combo(
+            "Contrast", self._contrast_mode, list(_CONTRAST_MODES)
+        )
         if ctr_changed:
             self._contrast_mode = new_ctr
 
@@ -488,7 +498,9 @@ class SummaryImageViewer(Widget):
         set_tooltip("Save the colormapped image as a PNG (native resolution).")
 
         # row 2: overlays
-        _, self._show_pixel_values = imgui.checkbox("Pixel values", self._show_pixel_values)
+        _, self._show_pixel_values = imgui.checkbox(
+            "Pixel values", self._show_pixel_values
+        )
         set_tooltip(
             f"Draw the numeric value of each pixel on top of it.\n"
             f"Visible only when zoomed past {int(_PIXEL_VALUES_MIN_ZOOM)}x."
@@ -505,7 +517,11 @@ class SummaryImageViewer(Widget):
             set_tooltip("Hide ROIs flagged as not-cell in iscell.npy.")
 
         if self._last_save_msg:
-            color = STATUS_ERROR_COLOR if self._last_save_msg.startswith("Save failed") else STATUS_OK_COLOR
+            color = (
+                STATUS_ERROR_COLOR
+                if self._last_save_msg.startswith("Save failed")
+                else STATUS_OK_COLOR
+            )
             imgui.text_colored(color, self._last_save_msg)
 
         return keys[self._selected]
@@ -535,7 +551,8 @@ class SummaryImageViewer(Widget):
             slider_w = (avail_w - hist_w - 28) * 0.5
 
             imgui.plot_histogram(
-                "##hist", bins,
+                "##hist",
+                bins,
                 graph_size=imgui.ImVec2(hist_w, 22),
             )
             imgui.same_line()
@@ -563,8 +580,12 @@ class SummaryImageViewer(Widget):
         # visible image-pixel rect
         x0_img = max(0, int(np.floor(-self._pan_x / self._zoom)))
         y0_img = max(0, int(np.floor(-self._pan_y / self._zoom)))
-        x1_img = min(gpu.w, int(np.ceil((canvas_size.x - self._pan_x) / self._zoom)) + 1)
-        y1_img = min(gpu.h, int(np.ceil((canvas_size.y - self._pan_y) / self._zoom)) + 1)
+        x1_img = min(
+            gpu.w, int(np.ceil((canvas_size.x - self._pan_x) / self._zoom)) + 1
+        )
+        y1_img = min(
+            gpu.h, int(np.ceil((canvas_size.y - self._pan_y) / self._zoom)) + 1
+        )
         if x1_img <= x0_img or y1_img <= y0_img:
             return
         n = (x1_img - x0_img) * (y1_img - y0_img)
@@ -632,7 +653,9 @@ class SummaryImageViewer(Widget):
         for i, poly in enumerate(polygons):
             if poly.shape[0] < 3:
                 continue
-            cell = True if iscell is None else bool(iscell[i]) if i < len(iscell) else True
+            cell = (
+                True if iscell is None else bool(iscell[i]) if i < len(iscell) else True
+            )
             if self._iscell_only and not cell:
                 continue
             color = cyan if cell else red
@@ -640,7 +663,12 @@ class SummaryImageViewer(Widget):
             for x_img, y_img in poly:
                 sx = canvas_pos.x + self._pan_x + (x_img + ox) * z
                 sy = canvas_pos.y + self._pan_y + (y_img + oy) * z
-                if sx < canvas_pos.x - 8 or sy < canvas_pos.y - 8 or sx > clip_x1 + 8 or sy > clip_y1 + 8:
+                if (
+                    sx < canvas_pos.x - 8
+                    or sy < canvas_pos.y - 8
+                    or sx > clip_x1 + 8
+                    or sy > clip_y1 + 8
+                ):
                     pts.clear()
                     break
                 pts.append(imgui.ImVec2(sx, sy))
@@ -697,6 +725,7 @@ class SummaryImageViewer(Widget):
             lo, hi = self._get_range(key, arr)
             rgba = _to_rgba(arr, cmap, lo, hi)
             import imageio.v3 as iio
+
             target = Path(path)
             if target.suffix.lower() != ".png":
                 target = target.with_suffix(".png")
@@ -719,11 +748,16 @@ class SummaryImageViewer(Widget):
             imgui.end()
             return
 
-        if imgui.is_window_focused(imgui.FocusedFlags_.root_and_child_windows) and not imgui.get_io().want_text_input:
+        if (
+            imgui.is_window_focused(imgui.FocusedFlags_.root_and_child_windows)
+            and not imgui.get_io().want_text_input
+        ):
             from mbo_utilities.gui._keyboard import claim_arrow_keys
 
             claim_arrow_keys()
-            step = int(imgui.is_key_pressed(imgui.Key.right_arrow)) - int(imgui.is_key_pressed(imgui.Key.left_arrow))
+            step = int(imgui.is_key_pressed(imgui.Key.right_arrow)) - int(
+                imgui.is_key_pressed(imgui.Key.left_arrow)
+            )
             if step:
                 self._selected = (self._selected + step) % len(keys)
                 self._reset_view()
@@ -745,7 +779,8 @@ class SummaryImageViewer(Widget):
             "##canvas",
             imgui.ImVec2(0, -28),
             child_flags=0,
-            window_flags=imgui.WindowFlags_.no_scrollbar | imgui.WindowFlags_.no_scroll_with_mouse,
+            window_flags=imgui.WindowFlags_.no_scrollbar
+            | imgui.WindowFlags_.no_scroll_with_mouse,
         )
 
         canvas_pos = imgui.get_cursor_screen_pos()
@@ -770,7 +805,7 @@ class SummaryImageViewer(Widget):
             mx = io.mouse_pos.x - canvas_pos.x
             my = io.mouse_pos.y - canvas_pos.y
             old = self._zoom
-            self._zoom = float(np.clip(old * (1.1 ** io.mouse_wheel), 0.05, 64.0))
+            self._zoom = float(np.clip(old * (1.1**io.mouse_wheel), 0.05, 64.0))
             scale = self._zoom / old
             self._pan_x = mx - (mx - self._pan_x) * scale
             self._pan_y = my - (my - self._pan_y) * scale

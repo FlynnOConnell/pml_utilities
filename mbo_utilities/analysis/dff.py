@@ -1,5 +1,6 @@
 """dF/F over a baseline: the rolling max-min baseline sized in seconds, and
-the static percentile one, both on ``(K, T)`` float arrays."""
+the static percentile one, both on ``(K, T)`` float arrays.
+"""
 
 from __future__ import annotations
 
@@ -34,7 +35,8 @@ def dfof_maxmin(
     F: np.ndarray, fs: float, window_s: float = 5.0, sigma_s: float = 0.05
 ) -> np.ndarray:
     """Rolling max-min baseline dF/F as a fraction, no neuropil term (see
-    :func:`maxmin_baseline`); a baseline at or below zero gives zero there."""
+    :func:`maxmin_baseline`); a baseline at or below zero gives zero there.
+    """
     F = np.asarray(F, np.float32)
     baseline = maxmin_baseline(F, fs, window_s, sigma_s)
     out = np.zeros_like(F)
@@ -44,7 +46,8 @@ def dfof_maxmin(
 
 def dfof_percentile(F: np.ndarray, percentile: float = 20.0) -> np.ndarray:
     """dF/F as a fraction over a static per-row percentile baseline, the way
-    ``lbm_suite2p_python`` plots a suite2p trace; an all-zero row stays zero."""
+    ``lbm_suite2p_python`` plots a suite2p trace; an all-zero row stays zero.
+    """
     F = np.asarray(F, np.float32)
     out = np.zeros_like(F)
     if not F.size:

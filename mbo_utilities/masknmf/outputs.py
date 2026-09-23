@@ -36,7 +36,7 @@ def split_sparse_footprints(
     lam = values[order]
     bounds = np.searchsorted(roi, np.arange(n_rois + 1))
     return [
-        (pix[bounds[k]: bounds[k + 1]], lam[bounds[k]: bounds[k + 1]])
+        (pix[bounds[k] : bounds[k + 1]], lam[bounds[k] : bounds[k + 1]])
         for k in range(n_rois)
     ]
 
@@ -200,10 +200,7 @@ def write_plane_outputs(
     n_calibrated = int((f0 > 0).sum())
 
     stat = np.array(
-        [
-            roi_stat(pix, lam, shape, F[k])
-            for k, (pix, lam) in enumerate(footprints)
-        ],
+        [roi_stat(pix, lam, shape, F[k]) for k, (pix, lam) in enumerate(footprints)],
         dtype=object,
     )
     # masknmf has no accept/reject classifier: everything demixed is accepted

@@ -24,9 +24,9 @@ pytestmark = pytest.mark.skipif(
 
 def _draw_in_edge_window(width: int, body) -> list:
     """Draw ``body`` once inside a ``width`` px right edge window; returns
-    whatever it appended to the shared list."""
+    whatever it appended to the shared list.
+    """
     from fastplotlib.ui import ImguiWindow
-
     from mbo_utilities.gui._ndviewer import MboNDViewer
 
     out: list = []
@@ -49,7 +49,6 @@ def _draw_in_edge_window(width: int, body) -> list:
 class TestFitWidth:
     def test_wide_panel_runs_the_body_wrapped(self):
         from imgui_bundle import imgui
-
         from mbo_utilities.gui._imgui_helpers import fit_width
 
         def body(out):
@@ -59,7 +58,10 @@ class TestFitWidth:
                     # wrapped text advances the cursor by more than one line
                     y0 = imgui.get_cursor_pos_y()
                     imgui.text("word " * 60)
-                    out.append(imgui.get_cursor_pos_y() - y0 > imgui.get_text_line_height() * 1.5)
+                    out.append(
+                        imgui.get_cursor_pos_y() - y0
+                        > imgui.get_text_line_height() * 1.5
+                    )
 
         out = _draw_in_edge_window(300, body)
         assert out[0] is True
@@ -90,7 +92,6 @@ class TestFitWidth:
 class TestFitLabel:
     def test_fits_and_ellipsizes(self):
         from imgui_bundle import imgui
-
         from mbo_utilities.gui._imgui_helpers import fit_label
 
         def body(out):

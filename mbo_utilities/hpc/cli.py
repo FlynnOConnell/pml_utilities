@@ -65,10 +65,22 @@ def hpc():
 
 @hpc.command("init", short_help="Write a commented TOML config next to your data.")
 @click.argument("data_path", required=False, type=click.Path())
-@click.option("-o", "--config", "config_path", type=click.Path(), default=None,
-              help="Config file to write (default: <data_path>/hpc.toml, else ./hpc.toml).")
-@click.option("-O", "--output", "output_root", type=click.Path(), default=None,
-              help="Results root (default: <config dir>/results).")
+@click.option(
+    "-o",
+    "--config",
+    "config_path",
+    type=click.Path(),
+    default=None,
+    help="Config file to write (default: <data_path>/hpc.toml, else ./hpc.toml).",
+)
+@click.option(
+    "-O",
+    "--output",
+    "output_root",
+    type=click.Path(),
+    default=None,
+    help="Results root (default: <config dir>/results).",
+)
 @click.option("--overwrite/--no-overwrite", default=False)
 def hpc_init(data_path, config_path, output_root, overwrite):
     """
@@ -117,8 +129,12 @@ def hpc_init(data_path, config_path, output_root, overwrite):
 
 @hpc.command("run", short_help="Submit the pipeline described by CONFIG_PATH.")
 @click.argument("config_path", type=click.Path(exists=True), default="hpc.toml")
-@click.option("--mode", type=click.Choice(["single", "array", "local"]), default="single",
-              help="single GPU job, SLURM array+aggregate, or inline local run.")
+@click.option(
+    "--mode",
+    type=click.Choice(["single", "array", "local"]),
+    default="single",
+    help="single GPU job, SLURM array+aggregate, or inline local run.",
+)
 @click.option("--dry-run", is_flag=True, help="Print the job layout; submit nothing.")
 @click.option("--local", "force_local", is_flag=True, help="Shortcut for --mode local.")
 @click.option("--input", "input_", default=None, help="Override [io] input.")
@@ -127,17 +143,45 @@ def hpc_init(data_path, config_path, output_root, overwrite):
 @click.option("--partition", default=None, help="Override [slurm] partition.")
 @click.option("--gres", default=None, help="Override [slurm] gres.")
 @click.option("--time", "time_", default=None, help="Override [slurm] time.")
-@click.option("--planes-per-gpu", type=int, default=None, help="Override pack factor F.")
-@click.option("--gpu", type=int, default=None,
-              help="Local-run CUDA device index (nvidia-smi order); -1 = auto. Ignored under SLURM.")
-@click.option("--stream/--no-stream", "stream", default=None,
-              help="Override [pipeline] stream: feed frames through suite2p with no "
-                   "data_raw.bin/data.bin (only reg_outputs.npy persists).")
-@click.option("--stage-input/--no-stage-input", "stage_input", default=None,
-              help="Override [pipeline] stage_input: copy raw to node-local /tmp and "
-                   "stream from there (benchmark vs reading shared storage directly).")
-def hpc_run(config_path, mode, dry_run, force_local, input_, output, name,
-            partition, gres, time_, planes_per_gpu, gpu, stream, stage_input):
+@click.option(
+    "--planes-per-gpu", type=int, default=None, help="Override pack factor F."
+)
+@click.option(
+    "--gpu",
+    type=int,
+    default=None,
+    help="Local-run CUDA device index (nvidia-smi order); -1 = auto. Ignored under SLURM.",
+)
+@click.option(
+    "--stream/--no-stream",
+    "stream",
+    default=None,
+    help="Override [pipeline] stream: feed frames through suite2p with no "
+    "data_raw.bin/data.bin (only reg_outputs.npy persists).",
+)
+@click.option(
+    "--stage-input/--no-stage-input",
+    "stage_input",
+    default=None,
+    help="Override [pipeline] stage_input: copy raw to node-local /tmp and "
+    "stream from there (benchmark vs reading shared storage directly).",
+)
+def hpc_run(
+    config_path,
+    mode,
+    dry_run,
+    force_local,
+    input_,
+    output,
+    name,
+    partition,
+    gres,
+    time_,
+    planes_per_gpu,
+    gpu,
+    stream,
+    stage_input,
+):
     """
     Submit the pipeline described by CONFIG_PATH.
 
@@ -190,7 +234,10 @@ def hpc_run(config_path, mode, dry_run, force_local, input_, output, name,
         raise click.ClickException(str(e))
 
 
-@hpc.command("status", short_help="Show a job's state, an output folder's timings, or your SLURM queue.")
+@hpc.command(
+    "status",
+    short_help="Show a job's state, an output folder's timings, or your SLURM queue.",
+)
 @click.argument("target", required=False)
 def hpc_status(target):
     """
@@ -211,6 +258,7 @@ def hpc_status(target):
     if not target:
         # no target -> the last run you launched (registry), else your queue.
         from mbo_utilities.hpc.history import last_run_target
+
         target = last_run_target()
         if target:
             click.echo(f"(last run: {target})")
@@ -224,7 +272,9 @@ def hpc_status(target):
         failures = sorted(logs.glob("FAILURE_*.log")) if logs.is_dir() else []
         timings = Path(target) / "timings.json"
         if not timings.exists():
-            click.secho(f"No timings.json under {target} (run not finished?)", fg="yellow")
+            click.secho(
+                f"No timings.json under {target} (run not finished?)", fg="yellow"
+            )
             errs = sorted(logs.glob("*.err")) if logs.is_dir() else []
             if errs:
                 click.echo(f"\nLogs in {logs}:")
@@ -241,7 +291,9 @@ def hpc_status(target):
         if totals:
             click.echo(f"{'stage':<12}{'sum':>10}{'mean':>10}{'max':>10}")
             for stage, t in totals.items():
-                click.echo(f"{stage:<12}{t['sum']:>10.1f}{t['mean']:>10.1f}{t['max']:>10.1f}")
+                click.echo(
+                    f"{stage:<12}{t['sum']:>10.1f}{t['mean']:>10.1f}{t['max']:>10.1f}"
+                )
         for k, v in (report.get("wall") or {}).items():
             click.echo(f"wall.{k}: {v:.1f}s")
         return
@@ -253,12 +305,22 @@ def hpc_status(target):
         click.secho("squeue not found (not on a SLURM login node?)", fg="yellow")
 
 
-@hpc.command("watch", short_help="Follow a run's .err/.out logs, from a job id, config, or output dir.")
+@hpc.command(
+    "watch",
+    short_help="Follow a run's .err/.out logs, from a job id, config, or output dir.",
+)
 @click.argument("target", required=False, default=None, type=click.Path())
-@click.option("-o", "--out", "stream_out", is_flag=True,
-              help="Start on stdout (.out); default is stderr (.err).")
+@click.option(
+    "-o",
+    "--out",
+    "stream_out",
+    is_flag=True,
+    help="Start on stdout (.out); default is stderr (.err).",
+)
 @click.option("--no-follow", is_flag=True, help="Print the tail once and exit.")
-@click.option("-n", "--lines", default=40, show_default=True, help="Initial tail lines.")
+@click.option(
+    "-n", "--lines", default=40, show_default=True, help="Initial tail lines."
+)
 def hpc_watch(target, stream_out, no_follow, lines):
     """
     Follow a run's .err/.out logs, from a job id, a config, or an output dir.
@@ -280,19 +342,27 @@ def hpc_watch(target, stream_out, no_follow, lines):
 
     if not target:
         from mbo_utilities.hpc.history import last_run_target
+
         target = last_run_target() or "hpc.toml"
         click.echo(f"(watching last run: {target})")
 
     try:
-        watch(target, stream="out" if stream_out else "err",
-              follow=not no_follow, lines=lines)
+        watch(
+            target,
+            stream="out" if stream_out else "err",
+            follow=not no_follow,
+            lines=lines,
+        )
     except FileNotFoundError as e:
         raise click.ClickException(str(e))
     except KeyboardInterrupt:
         pass
 
 
-@hpc.command("info", short_help="Show cluster partitions (nodes, CPUs, GPUs, memory) matching PATTERN.")
+@hpc.command(
+    "info",
+    short_help="Show cluster partitions (nodes, CPUs, GPUs, memory) matching PATTERN.",
+)
 @click.argument("pattern", required=False, default="hpc")
 def hpc_info(pattern):
     """
@@ -320,10 +390,17 @@ def hpc_info(pattern):
     click.echo(cluster.format_partitions(parts))
 
 
-@hpc.command("check", short_help="Check a config's requested resources against the data and partition.")
+@hpc.command(
+    "check",
+    short_help="Check a config's requested resources against the data and partition.",
+)
 @click.argument("config_path", type=click.Path(exists=True), default="hpc.toml")
-@click.option("--mode", type=click.Choice(["single", "array", "local"]), default="single",
-              help="Mode to check the request against (CPU packing depends on it).")
+@click.option(
+    "--mode",
+    type=click.Choice(["single", "array", "local"]),
+    default="single",
+    help="Mode to check the request against (CPU packing depends on it).",
+)
 def hpc_check(config_path, mode):
     """
     Check a config's requested resources against the data and the partition.
@@ -337,8 +414,8 @@ def hpc_check(config_path, mode):
       mbo hpc check hpc.toml
       mbo hpc check hpc.toml --mode array
     """
-    from mbo_utilities.hpc.config import HpcConfig
     from mbo_utilities.hpc.check import run_check
+    from mbo_utilities.hpc.config import HpcConfig
 
     try:
         cfg = HpcConfig.from_toml(config_path)

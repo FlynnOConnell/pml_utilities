@@ -29,7 +29,6 @@ Activates for any array that is tiled and carries per-tile metadata
 from __future__ import annotations
 
 import os
-import re
 import threading
 from collections import OrderedDict
 from typing import Any
@@ -46,8 +45,8 @@ from mbo_utilities.gui.widgets._base import Widget
 from mbo_utilities.gui.widgets.summary_image import (
     _DEFAULT_COLORMAP,
     _DEFAULT_COLORMAPS,
-    _GpuImage,
     _auto_range,
+    _GpuImage,
     center_popup_on_open,
     draw_section_header,
 )
@@ -116,7 +115,11 @@ def _index_centers(entries: list, idx_pos: int, stage_pos: int, n: int) -> list[
     """
     centers = []
     for i in range(n):
-        vals = [e[stage_pos] for e in entries if e[idx_pos] == i and e[stage_pos] is not None]
+        vals = [
+            e[stage_pos]
+            for e in entries
+            if e[idx_pos] == i and e[stage_pos] is not None
+        ]
         centers.append(sum(vals) / len(vals) if vals else float(i))
     return centers
 
@@ -166,14 +169,14 @@ class TileGridViewer(Widget):
         # cameras are seeded with default orientation (see _seed_camera_defaults).
         self._tile_flips: dict[tuple, set] = {}
         self._tile_rot: dict[tuple, int] = {}
-        self._flip_seeded: set = set()         # cameras whose defaults were applied
+        self._flip_seeded: set = set()  # cameras whose defaults were applied
         self._tile_xyz: dict[int, tuple] = {}  # ti -> (tile_x, tile_y, tile_z)
         # "Rotated" acquisitions mount every camera 90deg on its side, so each
         # tile's content needs a default 90deg rotation to tile upright.
         self._is_rotated: bool = False
         # tile whose rotate/flip menu is open (drawn top-level after the grid
         # child so the popup isn't clipped by the child's scroll rect).
-        self._orient_menu_ti: "int | None" = None
+        self._orient_menu_ti: int | None = None
         self._orient_menu_open: bool = False
 
         # layout per (camera, z-block): {(ri, ci): ti}; ti->spc for labels.
@@ -182,7 +185,7 @@ class TileGridViewer(Widget):
         self._layout: dict[tuple, dict] = {}
         self._tile_spc: dict[int, int] = {}
         self._edit_layout: bool = False
-        self._pick: "tuple | None" = None
+        self._pick: tuple | None = None
 
         self._sig: str | None = None
         self._grid: dict | None = None
@@ -254,9 +257,12 @@ class TileGridViewer(Widget):
         self._tile_xyz = {}
         self._pick = None
         self._view_names = list(getattr(arr, "view_names", []) or [])
-        self._is_rotated = str(
-            (getattr(arr, "metadata", {}) or {}).get("camera_orientation", "")
-        ).strip().lower() == "rotated"
+        self._is_rotated = (
+            str((getattr(arr, "metadata", {}) or {}).get("camera_orientation", ""))
+            .strip()
+            .lower()
+            == "rotated"
+        )
         try:
             self._nplanes = max(1, int(arr.shape[2]))  # Z planes per tile
         except Exception:
@@ -275,11 +281,18 @@ class TileGridViewer(Widget):
             for ti, t in tiles.items()
         }
         for ti, t in tiles.items():
-            entries.append((
-                int(ti), int(t.get("specimen", ti)),
-                t.get("stage_x"), t.get("stage_y"), t.get("stage_z"),
-                t.get("tile_x"), t.get("tile_y"), t.get("tile_z"),
-            ))
+            entries.append(
+                (
+                    int(ti),
+                    int(t.get("specimen", ti)),
+                    t.get("stage_x"),
+                    t.get("stage_y"),
+                    t.get("stage_z"),
+                    t.get("tile_x"),
+                    t.get("tile_y"),
+                    t.get("tile_z"),
+                )
+            )
         if not entries:
             self._grid = None
             return False
@@ -289,8 +302,7 @@ class TileGridViewer(Widget):
         # digit-encoded grid (specimen_name trailing XYZ) is authoritative
         # when present on every tile; else cluster stage coordinates.
         use_digits = all(
-            e[5] is not None and e[6] is not None and e[7] is not None
-            for e in entries
+            e[5] is not None and e[6] is not None and e[7] is not None for e in entries
         )
         # Display axes match the verified BigStitcher layout (STEP 9): BDV-x =
         # -stage_y, BDV-y = +stage_x. So tile_x / stage_x runs top->bottom =
@@ -321,7 +333,10 @@ class TileGridViewer(Widget):
                 placed.setdefault(zi, {})[(ri, ci)] = (ti, spc)
 
         self._grid = {
-            "cols": cols, "rows": rows, "zblocks": zblocks, "placed": placed,
+            "cols": cols,
+            "rows": rows,
+            "zblocks": zblocks,
+            "placed": placed,
             "ntiles": len(entries),
         }
         # Size the source cache to whichever mode's working set is larger, so
@@ -383,7 +398,8 @@ class TileGridViewer(Widget):
         """Single decimated Z-plane for one tile, read on the prefetch thread
         and cached per ``(ti, c, "plane", z)``. Only the requested plane is
         pulled from the lazy array, so scrubbing planes stays cheap even on
-        raw stacks. The slow read runs outside the cache lock."""
+        raw stacks. The slow read runs outside the cache lock.
+        """
         z = int(z)
         key = (ti, c, "plane", z)
         with self._cache_lock:
@@ -452,9 +468,7 @@ class TileGridViewer(Widget):
     def _ensure_prefetch_threads(self) -> None:
         if self._prefetch_stop.is_set():
             return
-        self._prefetch_threads = [
-            t for t in self._prefetch_threads if t.is_alive()
-        ]
+        self._prefetch_threads = [t for t in self._prefetch_threads if t.is_alive()]
         while len(self._prefetch_threads) < _PREFETCH_WORKERS:
             t = threading.Thread(
                 target=self._prefetch_loop,
@@ -515,12 +529,17 @@ class TileGridViewer(Widget):
         """Start/keep the workers fed with the current view. A no-op until the
         view changes (same signature), so it is cheap to call every frame —
         including while the popup is closed, which readies the first z-block
-        before the grid is opened. Opening expands the queue to every z-block."""
+        before the grid is opened. Opening expands the queue to every z-block.
+        """
         self._prefetch_arr = arr
         self._ensure_prefetch_threads()
         sig = (
-            self._sig, self._zblock, self._c_index, self._view_mode,
-            self._plane if self._view_mode == 1 else -1, self._popup_open,
+            self._sig,
+            self._zblock,
+            self._c_index,
+            self._view_mode,
+            self._plane if self._view_mode == 1 else -1,
+            self._popup_open,
         )
         if sig == self._prefetch_sig:
             return
@@ -531,7 +550,7 @@ class TileGridViewer(Widget):
             self._prefetch_pos = 0  # re-prioritise from the new current z-block
         self._prefetch_wake.set()
 
-    def _next_prefetch_job(self) -> "tuple | None":
+    def _next_prefetch_job(self) -> tuple | None:
         """Hand the next queued job to exactly one worker (cursor advance)."""
         with self._prefetch_req_lock:
             if self._prefetch_pos >= len(self._prefetch_req):
@@ -587,8 +606,9 @@ class TileGridViewer(Widget):
         # scrolling Z/plane doesn't flash a bad auto range for one frame.
         return self._range
 
-    def _ensure_gpu(self, key: tuple[int, int], thumb: np.ndarray,
-                    lo: float, hi: float) -> _GpuImage | None:
+    def _ensure_gpu(
+        self, key: tuple[int, int], thumb: np.ndarray, lo: float, hi: float
+    ) -> _GpuImage | None:
         backend = self._backend()
         if backend is None:
             return None
@@ -614,6 +634,7 @@ class TileGridViewer(Widget):
             return None
         try:
             from mbo_utilities.arrays.features import find_slider_name
+
             names = getattr(iw, "_slider_dim_names", None) or ()
             return find_slider_name(names, "t")
         except Exception:
@@ -697,7 +718,8 @@ class TileGridViewer(Widget):
             imgui.text_colored(
                 _WHITE,
                 "orientation: rotated (90deg seeded)"
-                if self._is_rotated else "orientation: normal",
+                if self._is_rotated
+                else "orientation: normal",
             )
         finally:
             imgui.unindent(8)
@@ -731,35 +753,47 @@ class TileGridViewer(Widget):
 
         row1 = [("Mode", 100.0, _mode)]
         if self._view_mode == 1 and self._nplanes > 1:
+
             def _plane():
                 ch, v = imgui.slider_int(
-                    "##tilegrid_plane", self._plane, 0, self._nplanes - 1,
+                    "##tilegrid_plane",
+                    self._plane,
+                    0,
+                    self._nplanes - 1,
                     f"%d / {self._nplanes - 1}",
                 )
                 if ch:
                     self._plane = int(v)
+
             row1.append(("Plane", 260.0, _plane))
         if nz > 1:
             lo, hi = self._zblock_range(self._zblock)
+
             def _zblock():
                 ch, v = imgui.slider_int(
-                    "##tilegrid_zblock", self._zblock, 0, nz - 1,
+                    "##tilegrid_zblock",
+                    self._zblock,
+                    0,
+                    nz - 1,
                     f"%d/{nz - 1}  z {lo:.0f}-{hi:.0f}um",
                 )
                 if ch:
                     self._zblock = int(v)
+
             row1.append(("Z-block", 260.0, _zblock))
         draw_toolbar_row(row1)
 
         # Row 2 — display: channel, colormap, contrast, manual min/max.
         row2 = []
         if len(self._view_names) > 1:
+
             def _view():
                 ch, v = imgui.combo(
                     "##tilegrid_view", self._c_index, list(self._view_names)
                 )
                 if ch:
                     self._c_index = v
+
             row2.append(("View", 140.0, _view))
 
         def _cmap():
@@ -777,6 +811,7 @@ class TileGridViewer(Widget):
         row2.append(("Cmap", 120.0, _cmap))
         row2.append(("Contrast", 100.0, _contrast))
         if self._contrast_mode == _CONTRAST_MANUAL:
+
             def _min():
                 ch, v = imgui.drag_float(
                     "##tilemin", self._manual_lo, 1.0, 0.0, 65535.0, "%.0f"
@@ -821,11 +856,13 @@ class TileGridViewer(Widget):
             if imgui.is_item_hovered():
                 imgui.set_tooltip("restore default tile flips/rotations")
 
-        draw_toolbar_row([
-            (None, button_width("Move tiles") + 20.0, _move),
-            (None, button_width("Reset layout"), _reset_layout),
-            (None, button_width("Reset flips"), _reset_flips),
-        ])
+        draw_toolbar_row(
+            [
+                (None, button_width("Move tiles") + 20.0, _move),
+                (None, button_width("Reset layout"), _reset_layout),
+                (None, button_width("Reset flips"), _reset_flips),
+            ]
+        )
         imgui.text_colored(
             imgui.ImVec4(0.2, 0.9, 1.0, 1.0),
             "right-click a tile to rotate / flip"
@@ -834,7 +871,8 @@ class TileGridViewer(Widget):
 
     def _camera_number(self, c: int):
         """Camera index for view-combo index ``c`` (from its ``VW{angle}``
-        label), or ``None`` for fused pairs / non-camera views."""
+        label), or ``None`` for fused pairs / non-camera views.
+        """
         try:
             name = self._view_names[c]
         except (IndexError, TypeError):
@@ -842,11 +880,13 @@ class TileGridViewer(Widget):
         if str(name).endswith("_fused"):
             return None  # fused pair, not a single camera
         from mbo_utilities.arrays.isoview.array import camera_from_view_label
+
         return camera_from_view_label(name)
 
     def _fused_view(self, c: int):
         """``"VW00"`` / ``"VW90"`` for a fused-pair channel (e.g.
-        ``VW90_VW270_CH00_fused``), else ``None``."""
+        ``VW90_VW270_CH00_fused``), else ``None``.
+        """
         try:
             name = str(self._view_names[c])
         except (IndexError, TypeError):
@@ -863,28 +903,32 @@ class TileGridViewer(Widget):
         """The single (un-fused) opposing-side views are column-mirrored in the
         display — they image the sample from the opposite side. FUSED views
         already combined the opposing pair, so they are NOT mirrored (mirroring a
-        fused view double-flips it vs the export)."""
+        fused view double-flips it vs the export).
+        """
         if self._fused_view(c) is not None:
             return False
         return self._camera_number(c) in (1, 2)
 
     def _camera_default_hflip(self, c: int) -> bool:
         """VW90 cameras (CM02, CM03) default to H-flipping their tile_y==0
-        tiles to make the beads tile (verified); VW00 gets no default flip."""
+        tiles to make the beads tile (verified); VW00 gets no default flip.
+        """
         return self._camera_number(c) in (2, 3)
 
     def _camera_default_rot(self, c: int) -> int:
         """Rotated datasets mount every camera 90deg on its side, so every
         tile's content needs a 90deg (CCW) rotation to tile upright. Verified
         on VW00 by bead overlap cross-correlation; VW90 follows the same mount.
-        0 for Normal datasets."""
+        0 for Normal datasets.
+        """
         return 1 if self._is_rotated else 0
 
     def _seed_camera_defaults(self, c: int) -> None:
         """Apply a camera's default per-tile orientation once: a 90deg rotation
         for Rotated datasets, plus the VW90 H-flips. Seeds into ``_tile_rot`` /
         ``_tile_flips`` so the user can still toggle them; re-applied after
-        "Reset flips" (which clears the seeded marks)."""
+        "Reset flips" (which clears the seeded marks).
+        """
         if c in self._flip_seeded:
             return
         self._flip_seeded.add(c)
@@ -914,7 +958,8 @@ class TileGridViewer(Widget):
     @staticmethod
     def _export_view_label(name) -> str | None:
         """VW label for a channel name, matching the BigStitcher export's
-        per-setup ``VW{angle}`` label (so per-tile orientation keys line up)."""
+        per-setup ``VW{angle}`` label (so per-tile orientation keys line up).
+        """
         s = str(name)
         if "fused" in s:
             return "VW00" if "VW00" in s else ("VW90" if "VW90" in s else None)
@@ -949,7 +994,7 @@ class TileGridViewer(Widget):
             except Exception:
                 pass
         out: dict = {}
-        for (c, ti) in set(self._tile_rot) | set(self._tile_flips):
+        for c, ti in set(self._tile_rot) | set(self._tile_flips):
             rot = self._tile_rot.get((c, ti), 0) % 4
             tf = self._tile_flips.get((c, ti), set())
             fx, fy = "X" in tf, "Y" in tf
@@ -991,7 +1036,8 @@ class TileGridViewer(Widget):
 
     def _swap_cells(self, layout: dict, a: tuple, b: tuple) -> None:
         """Swap the tiles in two cells (move into an empty cell if one side
-        is empty)."""
+        is empty).
+        """
         if a == b:
             return
         ta, tb = layout.get(a), layout.get(b)
@@ -1037,7 +1083,8 @@ class TileGridViewer(Widget):
         # ranges). Per-tile flips/rotation don't change intensity.
         plane_key = self._plane if self._view_mode == 1 else -1
         loaded = [
-            v for k, v in self._thumb_cache.items()
+            v
+            for k, v in self._thumb_cache.items()
             if k[1] == c and k[2] == self._view_mode and k[3] == plane_key
         ]
         lo, hi = self._contrast_range(arr, loaded, (self._view_mode, plane_key))
@@ -1053,7 +1100,9 @@ class TileGridViewer(Widget):
 
         imgui.begin_child("##tilegrid_canvas", imgui.ImVec2(0, 0), child_flags=0)
         draw_list = imgui.get_window_draw_list()
-        imgui.push_style_var(imgui.StyleVar_.item_spacing, imgui.ImVec2(spacing, spacing))
+        imgui.push_style_var(
+            imgui.StyleVar_.item_spacing, imgui.ImVec2(spacing, spacing)
+        )
         try:
             for ri in range(nrows):
                 for ci in range(ncols):
@@ -1118,7 +1167,8 @@ class TileGridViewer(Widget):
                                 self._thumb_cache.popitem(last=False)
                     gpu = (
                         self._ensure_gpu(gkey, thumb, lo, hi)
-                        if thumb is not None else None
+                        if thumb is not None
+                        else None
                     )
                     if gpu is not None:
                         h, w = thumb.shape
@@ -1146,24 +1196,36 @@ class TileGridViewer(Widget):
                             if (ri, ci + 1) in layout:
                                 x = ix + dw * (1.0 - fh)
                                 draw_list.add_line(
-                                    imgui.ImVec2(x, iy), imgui.ImVec2(x, iy + dh),
-                                    seam, 1.0)
+                                    imgui.ImVec2(x, iy),
+                                    imgui.ImVec2(x, iy + dh),
+                                    seam,
+                                    1.0,
+                                )
                             if (ri, ci - 1) in layout:
                                 x = ix + dw * fh
                                 draw_list.add_line(
-                                    imgui.ImVec2(x, iy), imgui.ImVec2(x, iy + dh),
-                                    seam, 1.0)
+                                    imgui.ImVec2(x, iy),
+                                    imgui.ImVec2(x, iy + dh),
+                                    seam,
+                                    1.0,
+                                )
                         if fv is not None:
                             if (ri + 1, ci) in layout:
                                 y = iy + dh * (1.0 - fv)
                                 draw_list.add_line(
-                                    imgui.ImVec2(ix, y), imgui.ImVec2(ix + dw, y),
-                                    seam, 1.0)
+                                    imgui.ImVec2(ix, y),
+                                    imgui.ImVec2(ix + dw, y),
+                                    seam,
+                                    1.0,
+                                )
                             if (ri - 1, ci) in layout:
                                 y = iy + dh * fv
                                 draw_list.add_line(
-                                    imgui.ImVec2(ix, y), imgui.ImVec2(ix + dw, y),
-                                    seam, 1.0)
+                                    imgui.ImVec2(ix, y),
+                                    imgui.ImVec2(ix + dw, y),
+                                    seam,
+                                    1.0,
+                                )
                     else:
                         draw_list.add_rect_filled(pos, cmax, dark)
                     label = self._tile_labels.get(ti, f"SPM{spc:02d}")
@@ -1171,15 +1233,19 @@ class TileGridViewer(Widget):
                         tip = f"{label}  (tile {ti})"
                         tip += (
                             "\nclick: pick / place    right-click: rotate / flip"
-                            if self._edit_layout else "\nright-click: rotate / flip"
+                            if self._edit_layout
+                            else "\nright-click: rotate / flip"
                         )
                         imgui.set_tooltip(tip)
                     is_current = ti == cur_tile
                     cyan = imgui.color_convert_float4_to_u32(
-                        imgui.ImVec4(0.2, 0.9, 1.0, 1.0))
+                        imgui.ImVec4(0.2, 0.9, 1.0, 1.0)
+                    )
                     border = cyan if picked else (yellow if is_current else grey)
                     draw_list.add_rect(
-                        pos, cmax, border,
+                        pos,
+                        cmax,
+                        border,
                         thickness=3.0 if (picked or is_current) else 1.0,
                     )
                     self._draw_cell_label(draw_list, pos, label)
@@ -1187,12 +1253,16 @@ class TileGridViewer(Widget):
                     if rot:
                         marks.append(f"rot {rot * 90}")
                     if tf:
-                        marks.append("flip " + "".join(
-                            m for m, ax in (("H", "X"), ("V", "Y")) if ax in tf
-                        ))
+                        marks.append(
+                            "flip "
+                            + "".join(
+                                m for m, ax in (("H", "X"), ("V", "Y")) if ax in tf
+                            )
+                        )
                     if marks:
                         self._draw_cell_label(
-                            draw_list, imgui.ImVec2(pos.x, pos.y + 15.0),
+                            draw_list,
+                            imgui.ImVec2(pos.x, pos.y + 15.0),
                             "  ".join(marks),
                         )
         finally:
@@ -1207,9 +1277,7 @@ class TileGridViewer(Widget):
         ti = self._orient_menu_ti
         if ti is not None:
             if imgui.begin_popup("tile_orient_menu"):
-                self._draw_tile_orient_menu(
-                    ti, self._tile_labels.get(ti, f"tile {ti}")
-                )
+                self._draw_tile_orient_menu(ti, self._tile_labels.get(ti, f"tile {ti}"))
                 imgui.end_popup()
             else:
                 self._orient_menu_ti = None
@@ -1226,14 +1294,20 @@ class TileGridViewer(Widget):
         Buttons are sized from measured text in a 2-column grid so the popup
         always fits its content (no clipping) and lines up cleanly.
         """
-        imgui.text_disabled(f"Tile {label}  ({self._view_names[self._c_index] if self._c_index < len(self._view_names) else 'view'})")
+        imgui.text_disabled(
+            f"Tile {label}  ({self._view_names[self._c_index] if self._c_index < len(self._view_names) else 'view'})"
+        )
         imgui.separator()
         style = imgui.get_style()
         sp = style.item_spacing.x
-        bw = max(
-            imgui.calc_text_size("Rotate CCW").x,
-            imgui.calc_text_size("Rotate CW").x,
-        ) + style.frame_padding.x * 2.0 + 8.0
+        bw = (
+            max(
+                imgui.calc_text_size("Rotate CCW").x,
+                imgui.calc_text_size("Rotate CW").x,
+            )
+            + style.frame_padding.x * 2.0
+            + 8.0
+        )
 
         # per (camera, tile) so each camera keeps its own orientation
         okey = (self._c_index, ti)
@@ -1259,11 +1333,14 @@ class TileGridViewer(Widget):
         tw = imgui.calc_text_size(txt)
         bg = imgui.color_convert_float4_to_u32(imgui.ImVec4(0, 0, 0, 0.55))
         draw_list.add_rect_filled(
-            pos, imgui.ImVec2(pos.x + tw.x + 4, pos.y + tw.y + 2), bg,
+            pos,
+            imgui.ImVec2(pos.x + tw.x + 4, pos.y + tw.y + 2),
+            bg,
         )
         draw_list.add_text(
             imgui.ImVec2(pos.x + 2, pos.y + 1),
-            imgui.color_convert_float4_to_u32(imgui.ImVec4(*_WHITE)), txt,
+            imgui.color_convert_float4_to_u32(imgui.ImVec4(*_WHITE)),
+            txt,
         )
 
     def _draw_popup(self, arr) -> None:

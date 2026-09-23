@@ -16,7 +16,7 @@ Sections map to TOML tables:
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass, field, fields, asdict
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 # suite2p ops overrides applied to every plane (was DEFAULT_OPS in run_pipeline.py).
@@ -70,22 +70,47 @@ class PipelineConfig:
 
 # [parameters] keys routed to lbm pipeline() top-level kwargs; everything else
 # in [parameters] is treated as a suite2p ops key.
-_PIPELINE_PARAM_KEYS = frozenset({
-    "keep_reg", "keep_raw", "norm_method", "correct_neuropil",
-    "dff_window_size", "dff_percentile", "dff_smooth_window",
-    "cell_filters", "accept_all_cells", "rastermap_kwargs", "save_json",
-    "reader_kwargs", "roi_mode", "planes", "num_zplanes",
-    "timepoints", "num_timepoints",
-    "frames", "frame_indices",  # deprecated aliases of timepoints
-})
+_PIPELINE_PARAM_KEYS = frozenset(
+    {
+        "keep_reg",
+        "keep_raw",
+        "norm_method",
+        "correct_neuropil",
+        "dff_window_size",
+        "dff_percentile",
+        "dff_smooth_window",
+        "cell_filters",
+        "accept_all_cells",
+        "rastermap_kwargs",
+        "save_json",
+        "reader_kwargs",
+        "roi_mode",
+        "planes",
+        "num_zplanes",
+        "timepoints",
+        "num_timepoints",
+        "frames",
+        "frame_indices",  # deprecated aliases of timepoints
+    }
+)
 # routed into writer_kwargs (read-time features: phase correction, binning).
 _WRITER_PARAM_KEYS = frozenset({"fix_phase", "use_fft", "frame_average"})
 # owned by the runner / [pipeline]; rejected if set in [parameters].
-_MANAGED_PARAM_KEYS = frozenset({
-    "save_path", "ops", "workers", "threads_per_worker",
-    "skip_volumetric", "force_reg", "force_detect", "replot", "writer_kwargs",
-    "planes_per_gpu", "node_local",
-})
+_MANAGED_PARAM_KEYS = frozenset(
+    {
+        "save_path",
+        "ops",
+        "workers",
+        "threads_per_worker",
+        "skip_volumetric",
+        "force_reg",
+        "force_detect",
+        "replot",
+        "writer_kwargs",
+        "planes_per_gpu",
+        "node_local",
+    }
+)
 
 # pipeline-behaviour defaults merged into every run (see from_dict).
 DEFAULT_PIPELINE_PARAMS: dict = {
@@ -116,9 +141,16 @@ PARAM_HELP: dict = {
 # DEFAULT_PIPELINE_PARAMS still applies at runtime (from_dict seeds them); they're
 # just not surfaced in the file. Add any by hand to override.
 TEMPLATE_PARAM_KEYS: tuple = (
-    "algorithm", "img", "diameter", "cellprob_threshold", "flow_threshold",
-    "do_registration", "two_step_registration", "do_regmetrics",
-    "keep_reg", "keep_raw",
+    "algorithm",
+    "img",
+    "diameter",
+    "cellprob_threshold",
+    "flow_threshold",
+    "do_registration",
+    "two_step_registration",
+    "do_regmetrics",
+    "keep_reg",
+    "keep_raw",
 )
 
 # subset knobs surfaced as commented hints. "Everything" is the default,
@@ -183,9 +215,9 @@ HELP: dict = {
         "node_local": "compute on the node's fast local disk, copy results back. keep true on a cluster",
         "gpu": "ONLY for --local: GPU index (nvidia-smi order), -1 = auto. ignored under SLURM",
         "stream": "skip data_raw.bin/data.bin; recompute registered frames from saved shifts. "
-                  "saves disk but re-reads raw ~3x (usually SLOWER for raw TIFFs). false = normal",
+        "saves disk but re-reads raw ~3x (usually SLOWER for raw TIFFs). false = normal",
         "stage_input": "stream only: copy raw to node-local /tmp first, then stream (benchmark knob). "
-                       "false = read the input in place",
+        "false = read the input in place",
     },
 }
 
@@ -202,7 +234,7 @@ class HpcConfig:
     )
 
     @classmethod
-    def from_dict(cls, raw: dict) -> "HpcConfig":
+    def from_dict(cls, raw: dict) -> HpcConfig:
         """Merge a parsed TOML mapping over defaults, coercing field types."""
         kw = {}
         for name, klass in _SECTIONS.items():
@@ -228,7 +260,7 @@ class HpcConfig:
         return cfg
 
     @classmethod
-    def from_toml(cls, path) -> "HpcConfig":
+    def from_toml(cls, path) -> HpcConfig:
         return cls.from_dict(tomllib.loads(Path(path).read_text(encoding="utf-8")))
 
     def validate(self) -> None:
@@ -249,8 +281,9 @@ class HpcConfig:
         return split_parameters(self.parameters)[0]
 
     def pipeline_kwargs(self) -> dict:
-        """kwargs forwarded to lbm_suite2p_python.pipeline() routed out of
-        [parameters] (keep_reg, norm_method, writer_kwargs, ...)."""
+        """Kwargs forwarded to lbm_suite2p_python.pipeline() routed out of
+        [parameters] (keep_reg, norm_method, writer_kwargs, ...).
+        """
         return split_parameters(self.parameters)[1]
 
     def to_dict(self) -> dict:
@@ -282,7 +315,9 @@ def _time_to_minutes(t) -> int:
             days = int(d)
         parts = [int(p) for p in s.split(":")]
     except ValueError:
-        raise ValueError(f"[slurm] bad time {t!r}; use HH:MM:SS or D-HH:MM:SS") from None
+        raise ValueError(
+            f"[slurm] bad time {t!r}; use HH:MM:SS or D-HH:MM:SS"
+        ) from None
     if len(parts) == 3:
         h, m, sec = parts
     elif len(parts) == 2:
@@ -304,7 +339,9 @@ def _toml_value(v) -> str:
     if isinstance(v, dict):
         if not v:
             return "{}"
-        return "{" + ", ".join(f"{k} = {_toml_value(val)}" for k, val in v.items()) + "}"
+        return (
+            "{" + ", ".join(f"{k} = {_toml_value(val)}" for k, val in v.items()) + "}"
+        )
     return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 

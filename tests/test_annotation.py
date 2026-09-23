@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from mbo_utilities.annotation import (
     UNLABELED,
     LabelsZarr,

@@ -21,10 +21,9 @@ from pathlib import Path
 # a real window; `setdefault` still lets a caller override explicitly.
 os.environ.setdefault("RENDERCANVAS_FORCE_OFFSCREEN", "1")
 
+import mbo_utilities as mbo
 import numpy as np
 import pytest
-
-import mbo_utilities as mbo
 
 TEST_DATA_ROOT = Path.home() / ".mbo" / "tests" / "lbm" / "mbo_utilities"
 TEST_INPUT_TIFF = TEST_DATA_ROOT / "test_input.tif"
@@ -140,8 +139,8 @@ def reference_tiff(reference_tiff_path, source_data_subset):
         tifffile.imwrite(
             reference_tiff_path,
             subset,
-            photometric='minisblack',
-            metadata={'axes': 'TZYX' if subset.ndim == 4 else 'TYX'},
+            photometric="minisblack",
+            metadata={"axes": "TZYX" if subset.ndim == 4 else "TYX"},
         )
         print(f"  Created: {reference_tiff_path}")
 
@@ -199,7 +198,7 @@ def synthetic_3d_data():
     for i in range(5):
         cy, cx = rng.randint(20, 108, size=2)
         yy, xx = np.ogrid[:128, :128]
-        mask = ((yy - cy)**2 + (xx - cx)**2) < 100
+        mask = ((yy - cy) ** 2 + (xx - cx) ** 2) < 100
 
         # Temporal signal
         for t in range(20):
@@ -227,7 +226,7 @@ def synthetic_4d_data():
         for i in range(3):
             cy, cx = rng.randint(10, 54, size=2)
             yy, xx = np.ogrid[:64, :64]
-            mask = ((yy - cy)**2 + (xx - cx)**2) < 50
+            mask = ((yy - cy) ** 2 + (xx - cx) ** 2) < 50
 
             for t in range(10):
                 # Z-dependent signal
@@ -266,9 +265,9 @@ def compare_arrays(arr1, arr2, rtol=1e-5, atol=0.5):
     Returns dict with comparison results.
     """
     # Materialize if needed
-    if hasattr(arr1, 'compute'):
+    if hasattr(arr1, "compute"):
         arr1 = arr1.compute()
-    if hasattr(arr2, 'compute'):
+    if hasattr(arr2, "compute"):
         arr2 = arr2.compute()
 
     arr1 = np.asarray(arr1)
@@ -353,5 +352,3 @@ def find_output_file(output_dir, ext):
         return None, []
 
     return None, []
-
-

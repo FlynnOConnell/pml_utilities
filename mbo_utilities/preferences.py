@@ -9,6 +9,7 @@ All preferences are stored in ~/.mbo/settings/ as JSON files.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from datetime import datetime
@@ -16,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 from mbo_utilities import log
-import contextlib
 
 logger = log.get("preferences")
 
@@ -183,19 +183,18 @@ def add_recent_file(path: str | Path, file_type: str = "auto") -> None:
     _save_preferences(prefs)
 
 
-
 # keys for different dialog contexts - each dialog type has its own cached path
 _DIR_KEYS = {
     # General file/folder opening
-    "open_file": "last_open_file_dir",      # File > Open File
+    "open_file": "last_open_file_dir",  # File > Open File
     "open_folder": "last_open_folder_dir",  # File > Open Folder
     # Save dialogs
-    "save_as": "last_save_as_dir",          # Save As dialog
+    "save_as": "last_save_as_dir",  # Save As dialog
     # Suite2p pipeline
     "suite2p_output": "last_suite2p_output_dir",  # Run tab > Browse for output
-    "suite2p_chan2": "last_suite2p_chan2_dir",    # Registration > Channel 2 file
-    "suite2p_stat": "last_suite2p_stat_dir",      # Load stat.npy for diagnostics
-    "suite2p_ops": "last_suite2p_ops_dir",        # Load ops.npy for results viewer
+    "suite2p_chan2": "last_suite2p_chan2_dir",  # Registration > Channel 2 file
+    "suite2p_stat": "last_suite2p_stat_dir",  # Load stat.npy for diagnostics
+    "suite2p_ops": "last_suite2p_ops_dir",  # Load ops.npy for results viewer
     "suite2p_diagnostics": "last_suite2p_diagnostics_dir",  # Load plane folder for diagnostics
     # Grid search
     "grid_search": "last_grid_search_dir",  # Grid search results folder
@@ -530,7 +529,8 @@ def set_compute_gpu(value: str) -> None:
 def get_linescan_auto_traces() -> bool:
     """Whether the line-scan viewer computes per-ROI traces on a background
     thread when no saved traces (``F.npy`` or PF) exist. Off on an imaging
-    rig: the viewer only loads saved traces and offers a button to compute."""
+    rig: the viewer only loads saved traces and offers a button to compute.
+    """
     return bool(_get_options().get("linescan_auto_traces", True))
 
 

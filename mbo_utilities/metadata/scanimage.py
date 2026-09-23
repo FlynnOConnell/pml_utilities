@@ -4,6 +4,7 @@ scanimage.py.
 Functions to detect acquisition parameters from ScanImage metadata,
 including stack type, color channels, and timepoints.
 """
+
 from __future__ import annotations
 
 from typing import Literal
@@ -173,7 +174,11 @@ def get_num_zplanes(metadata: dict) -> int:
 
     if stack_type in ("lbm", "pollen"):
         cs = si.get("hChannels", {}).get("channelSave", [])
-        cs_len = len(cs) if isinstance(cs, list) else (1 if isinstance(cs, (int, float)) else 0)
+        cs_len = (
+            len(cs)
+            if isinstance(cs, list)
+            else (1 if isinstance(cs, (int, float)) else 0)
+        )
         per = get_beamlets_per_port(metadata)
         # use VCS only if it covers all saved channels; otherwise fall back
         # to len(channelSave) // num_color_channels for sparse/missing VCS.
@@ -532,7 +537,9 @@ def extract_roi_slices(metadata: dict) -> list[dict]:
         if i == len(heights_from_metadata) - 1:
             height = remaining_height
         else:
-            height = round(metadata_height * total_available_height / total_metadata_height)
+            height = round(
+                metadata_height * total_available_height / total_metadata_height
+            )
             remaining_height -= height
         actual_heights.append(height)
 

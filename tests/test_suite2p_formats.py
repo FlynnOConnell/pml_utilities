@@ -10,10 +10,9 @@ skips if lbm_suite2p_python is absent.
 
 from pathlib import Path
 
+import mbo_utilities as mbo
 import numpy as np
 import pytest
-
-import mbo_utilities as mbo
 
 SUITE2P_FORMATS = [".tiff", ".zarr", ".h5", ".bin"]
 
@@ -75,15 +74,26 @@ class TestSuite2pRun:
 
         plane_dir = next(p.parent for p in output_dir.rglob("data_raw.bin"))
         ops = np.load(plane_dir / "ops.npy", allow_pickle=True).item()
-        ops.update({
-            "do_registration": 1, "roidetect": 0, "do_detection": 0,
-            "nonrigid": False, "two_step_registration": False,
-        })
+        ops.update(
+            {
+                "do_registration": 1,
+                "roidetect": 0,
+                "do_detection": 0,
+                "nonrigid": False,
+                "two_step_registration": False,
+            }
+        )
 
-        result = Path(run_plane(
-            str(plane_dir / "data_raw.bin"), save_path=str(plane_dir), ops=ops,
-            keep_raw=True, keep_reg=True, replot=False,
-        ))
+        result = Path(
+            run_plane(
+                str(plane_dir / "data_raw.bin"),
+                save_path=str(plane_dir),
+                ops=ops,
+                keep_raw=True,
+                keep_reg=True,
+                replot=False,
+            )
+        )
 
         assert result.exists()
         assert (plane_dir / "data.bin").exists()  # registered output

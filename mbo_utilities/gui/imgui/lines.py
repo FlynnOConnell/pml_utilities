@@ -30,7 +30,9 @@ __all__ = [
 def vec4(color, alpha: float | None = None) -> imgui.ImVec4:
     """An rgb(a) tuple in 0..1 as ImVec4, alpha overridden when given."""
     if isinstance(color, imgui.ImVec4):
-        return color if alpha is None else imgui.ImVec4(color.x, color.y, color.z, alpha)
+        return (
+            color if alpha is None else imgui.ImVec4(color.x, color.y, color.z, alpha)
+        )
     r, g, b = (float(v) for v in color[:3])
     a = float(color[3]) if len(color) > 3 else 1.0
     return imgui.ImVec4(r, g, b, a if alpha is None else float(alpha))
@@ -38,7 +40,8 @@ def vec4(color, alpha: float | None = None) -> imgui.ImVec4:
 
 def packed_colors(colors) -> np.ndarray:
     """``(n, 3|4)`` floats in 0..1 as the uint32 array implot takes for
-    per-point colours."""
+    per-point colours.
+    """
     rgba = np.asarray(colors, dtype=np.float64)
     if rgba.ndim == 1:
         rgba = rgba.reshape(1, -1)
@@ -55,7 +58,8 @@ def _f64(values) -> np.ndarray:
 def decimate_minmax(y, n_bins: int = 4000) -> tuple[np.ndarray, np.ndarray]:
     """``(index, value)`` keeping each bin's min and max, so a long trace
     draws with a few thousand points and no peak goes missing. Returns the
-    trace itself when it is short enough."""
+    trace itself when it is short enough.
+    """
     y = np.asarray(y, dtype=np.float64).ravel()
     n = y.size
     if n <= 2 * n_bins:
@@ -95,10 +99,11 @@ PLOT_COLORS = {
 
 @contextmanager
 def plot_style(grid: bool = False):
-    """implot colours for a plot with no box of its own: transparent frame,
+    """Implot colours for a plot with no box of its own: transparent frame,
     background and border, faint ticks and labels, a dim legend, and no grid
     lines unless ``grid``. Wraps ``begin_plot`` or ``begin_subplots``, which
-    is where the frame is drawn."""
+    is where the frame is drawn.
+    """
     # the style stack lives on the context, and pushing onto no context is a
     # segfault, not an error: this runs before the plot that would make one
     if implot.get_current_context() is None:
@@ -131,7 +136,8 @@ def line_plot(
     flags: int = 0,
 ):
     """``begin_plot`` / ``end_plot`` with labelled axes; yields whether the
-    plot is drawn. Shift locks y while scrolling (zoom x only), alt locks x."""
+    plot is drawn. Shift locks y while scrolling (zoom x only), alt locks x.
+    """
     if implot.get_current_context() is None:
         implot.create_context()
     if fit:
@@ -170,10 +176,13 @@ def subplots(
     The plots opened inside fill the cells in order, their plot areas
     aligned across rows; ``SubplotFlags_.link_all_x`` shares one time axis.
     ``ratios`` is an ``implot.SubplotsRowColRatios`` the host keeps, so a
-    dragged splitter stays where it was left."""
+    dragged splitter stays where it was left.
+    """
     if implot.get_current_context() is None:
         implot.create_context()
-    if not implot.begin_subplots(plot_id, int(rows), int(cols), imgui.ImVec2(width, height), flags, ratios):
+    if not implot.begin_subplots(
+        plot_id, int(rows), int(cols), imgui.ImVec2(width, height), flags, ratios
+    ):
         yield False
         return
     try:
@@ -221,9 +230,12 @@ def vlines(label: str, xs, color, weight: float = 1.0, legend: bool = True) -> N
     implot.plot_inf_lines(label, _f64(np.atleast_1d(xs)), spec)
 
 
-def dotted_vline(x: float, color, weight: float = 1.0, dash_px: float = 4.0, gap_px: float = 4.0) -> None:
+def dotted_vline(
+    x: float, color, weight: float = 1.0, dash_px: float = 4.0, gap_px: float = 4.0
+) -> None:
     """A dotted vertical marker (a reference line such as t = 0) across the
-    open plot, drawn on its draw list; implot has no dashed line style."""
+    open plot, drawn on its draw list; implot has no dashed line style.
+    """
     pos, size = implot.get_plot_pos(), implot.get_plot_size()
     px = float(implot.plot_to_pixels(float(x), 0.0).x)
     if not pos.x <= px <= pos.x + size.x:
@@ -234,14 +246,19 @@ def dotted_vline(x: float, color, weight: float = 1.0, dash_px: float = 4.0, gap
     y = pos.y
     bottom = pos.y + size.y
     while y < bottom:
-        draw.add_line(imgui.ImVec2(px, y), imgui.ImVec2(px, min(y + dash_px, bottom)), col, weight)
+        draw.add_line(
+            imgui.ImVec2(px, y), imgui.ImVec2(px, min(y + dash_px, bottom)), col, weight
+        )
         y += dash_px + gap_px
     implot.pop_plot_clip_rect()
 
 
-def drag_hline(line_id: int, y: float, color, weight: float = 1.5, tag: bool = True) -> tuple[float, bool]:
+def drag_hline(
+    line_id: int, y: float, color, weight: float = 1.5, tag: bool = True
+) -> tuple[float, bool]:
     """A horizontal line the user can drag. Returns ``(y, held)``: the
-    line's position this frame and whether the mouse still holds it."""
+    line's position this frame and whether the mouse still holds it.
+    """
     _moved, value, _clicked, _hovered, held = implot.drag_line_y(
         int(line_id), float(y), vec4(color), float(weight), 0, False, False, False
     )
@@ -250,7 +267,9 @@ def drag_hline(line_id: int, y: float, color, weight: float = 1.5, tag: bool = T
     return float(value), bool(held)
 
 
-def drag_vline(line_id: int, x: float, color, weight: float = 1.5, tag: bool = True) -> tuple[float, bool]:
+def drag_vline(
+    line_id: int, x: float, color, weight: float = 1.5, tag: bool = True
+) -> tuple[float, bool]:
     """A vertical line the user can drag. Returns ``(x, held)``."""
     _moved, value, _clicked, _hovered, held = implot.drag_line_x(
         int(line_id), float(x), vec4(color), float(weight), 0, False, False, False

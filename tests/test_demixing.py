@@ -7,13 +7,16 @@ import sys
 
 import h5py
 import numpy as np
-import scipy.sparse
 import pytest
+import scipy.sparse
 
 T, Y, X, R, K = 12, 6, 8, 3, 4
+
+
 def write_demixing(path, fs=None, labels=True, seed=0):
     """A DemixingResults hdf5 in masknmf's layout: sparse_coo factors, a
-    trace matrix c, and a footprint per ROI on a distinct pixel block."""
+    trace matrix c, and a footprint per ROI on a distinct pixel block.
+    """
     rng = np.random.default_rng(seed)
     pixels = Y * X
     with h5py.File(path, "w") as f:
@@ -21,7 +24,9 @@ def write_demixing(path, fs=None, labels=True, seed=0):
         g.create_dataset("shape", data=np.array([T, Y, X]))
         u = g.create_group("u")
         u.attrs["layout"] = "sparse_coo"
-        u.create_dataset("indices", data=np.array([np.arange(pixels), np.arange(pixels) % R]))
+        u.create_dataset(
+            "indices", data=np.array([np.arange(pixels), np.arange(pixels) % R])
+        )
         u.create_dataset("values", data=rng.random(pixels).astype(np.float32))
         u.create_dataset("size", data=np.array([pixels, R]))
         g.create_dataset("v", data=rng.random((R, T)).astype(np.float32))
@@ -31,7 +36,9 @@ def write_demixing(path, fs=None, labels=True, seed=0):
         rows = np.concatenate([np.arange(k * 4, k * 4 + 4) for k in range(K)])
         cols = np.repeat(np.arange(K), 4)
         a.create_dataset("indices", data=np.array([rows, cols]))
-        a.create_dataset("values", data=np.tile([0.25, 0.5, 0.75, 1.0], K).astype(np.float32))
+        a.create_dataset(
+            "values", data=np.tile([0.25, 0.5, 0.75, 1.0], K).astype(np.float32)
+        )
         a.create_dataset("size", data=np.array([pixels, K]))
         c = rng.random((T, K)).astype(np.float32)
         c[:, 1] *= 10  # roi 1 has the largest peak
@@ -45,7 +52,9 @@ def write_demixing(path, fs=None, labels=True, seed=0):
         g.create_dataset("iscell", data=np.array([True, True, False, True]))
         if labels:
             g.create_dataset("class_labels", data=np.array([0, 1, 0, 2]))
-            g.create_dataset("label_names", data=np.array([b"soma", b"edge", b"dendrite"]))
+            g.create_dataset(
+                "label_names", data=np.array([b"soma", b"edge", b"dendrite"])
+            )
         if fs:
             f.attrs["mbo_provenance"] = json.dumps({"fs": fs, "input": "abc"})
     return path
@@ -57,7 +66,9 @@ def run_dir(tmp_path_factory):
     root = tmp_path_factory.mktemp("glu_ca_run")
     write_demixing(root / "calcium_spine_demixing.hdf5", fs=19.66, seed=1)
     write_demixing(root / "glutamate_spine_demixing.hdf5", seed=2)
-    write_demixing(root / "glutamate_global_activity_demixing.hdf5", labels=False, seed=3)
+    write_demixing(
+        root / "glutamate_global_activity_demixing.hdf5", labels=False, seed=3
+    )
     # an unrelated hdf5 in the same folder is not a result
     with h5py.File(root / "pmd_calcium.hdf5", "w") as f:
         f.create_dataset("PMDArray/u", data=np.zeros(3))
@@ -119,7 +130,9 @@ def test_list_demixing_results_names_channels(run_dir):
 
     entries = list_demixing_results(run_dir / "glutamate_spine_demixing.hdf5")
     assert [e["label"] for e in entries] == [
-        "calcium_spine", "glutamate_global_activity", "glutamate_spine",
+        "calcium_spine",
+        "glutamate_global_activity",
+        "glutamate_spine",
     ]
     assert [e["channel"] for e in entries] == ["calcium", "glutamate", "glutamate"]
     assert all(e["shape"] == (T, Y, X) and e["num_rois"] == K for e in entries)
@@ -143,7 +156,12 @@ def test_run_files_finds_the_stage_exports(planes_dir, tmp_path):
     run = tmp_path / "run"
     run.mkdir()
     write_demixing(run / "demixing_results.hdf5", fs=9.6)
-    for name in ("compression.hdf5", "motion_correction.hdf5", "data_raw.bin", "ops.npy"):
+    for name in (
+        "compression.hdf5",
+        "motion_correction.hdf5",
+        "data_raw.bin",
+        "ops.npy",
+    ):
         (run / name).write_bytes(b"")
     files = run_files(run / "demixing_results.hdf5")
     assert files["compression"] == run / "compression.hdf5"
@@ -174,8 +192,12 @@ def test_viewers_need_masknmf(run_dir):
         pytest.skip(f"masknmf not importable: {e}")
     from mbo_utilities.gui.masknmf_vis import KINDS, MasknmfViewers
 
-    viewers = MasknmfViewers(run_dir / "calcium_spine_demixing.hdf5", device="cpu", raw_path="x.tif")
-    assert viewers.timings.shape == (T,) and viewers.timings[1] == pytest.approx(1 / 19.66)
+    viewers = MasknmfViewers(
+        run_dir / "calcium_spine_demixing.hdf5", device="cpu", raw_path="x.tif"
+    )
+    assert viewers.timings.shape == (T,) and viewers.timings[1] == pytest.approx(
+        1 / 19.66
+    )
     assert KINDS == ("demixing", "compression", "classification")
     with pytest.raises(FileNotFoundError):
         viewers.open("compression")
@@ -192,9 +214,13 @@ def test_frames_are_rebuilt_with_numpy_without_torch(run_dir, monkeypatch):
     with h5py.File(path, "r") as f:
         g = f["DemixingResults"]
         ui = g["u/indices"][()]
-        u = scipy.sparse.csr_matrix((g["u/values"][()], (ui[0], ui[1])), shape=tuple(g["u/size"][()]))
+        u = scipy.sparse.csr_matrix(
+            (g["u/values"][()], (ui[0], ui[1])), shape=tuple(g["u/size"][()])
+        )
         ai = g["a/indices"][()]
-        a = scipy.sparse.csr_matrix((g["a/values"][()], (ai[0], ai[1])), shape=tuple(g["a/size"][()]))
+        a = scipy.sparse.csr_matrix(
+            (g["a/values"][()], (ai[0], ai[1])), shape=tuple(g["a/size"][()])
+        )
         v = g["v"][()]
         c = g["c"][()]
     pmd = np.asarray((u @ v).T).reshape(T, Y, X)
@@ -224,9 +250,13 @@ def test_numpy_frames_match_masknmf(run_dir):
     from mbo_utilities.arrays.demixing import DemixingArray
 
     arr = DemixingArray(run_dir / "calcium_spine_demixing.hdf5", device="cpu")
-    res = masknmf.DemixingResults.from_hdf5(run_dir / "calcium_spine_demixing.hdf5", device="cpu")
+    res = masknmf.DemixingResults.from_hdf5(
+        run_dir / "calcium_spine_demixing.hdf5", device="cpu"
+    )
     np.testing.assert_allclose(arr[3, 1, 0], np.asarray(res.ac_array[3]), rtol=1e-5)
     np.testing.assert_allclose(arr[5, 0, 0], np.asarray(res.pmd_array[5]), rtol=1e-5)
-    np.testing.assert_allclose(arr[2, 2, 0], np.asarray(res.residual_array[2]), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(
+        arr[2, 2, 0], np.asarray(res.residual_array[2]), rtol=1e-5, atol=1e-6
+    )
     assert arr._results is None
     arr.close()
