@@ -9,13 +9,8 @@ from typing import Any
 
 from mbo_utilities.pipeline_registry import PipelineInfo
 
-# How a pipeline consumes each non-spatial axis. Read by
-# ``_selection_ui.draw_selection_table`` to decide what to draw per row.
-#
-#   "range"      user picks a start:stop range (the historical behaviour)
-#   "all"        the pipeline needs the whole axis; row is shown disabled
-#   "none"       axis does not apply; row is hidden
-#   "select-one" exactly one index; row draws a single-select
+# how a pipeline consumes each non-spatial axis: a start:stop "range", "all" of
+# it (row disabled), "none" (row hidden) or "select-one" index
 AXIS_MODES = ("range", "all", "none", "select-one")
 
 # Reproduces the pre-existing behaviour for every widget that does not
@@ -87,10 +82,6 @@ class PipelineWidget(ABC):
         Default: returns ``True`` (pipeline works on any data).
         """
         return True
-
-    # ------------------------------------------------------------------
-    # optional: trace extraction from externally supplied masks
-    # ------------------------------------------------------------------
 
     #: whether :meth:`extract_traces` is implemented. The manual-ROI widget
     #: offers "Extract trace" only for pipelines that set this.

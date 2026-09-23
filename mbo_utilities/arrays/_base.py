@@ -524,13 +524,7 @@ def _imwrite_base(
             scalebar=bool(kwargs.pop("scalebar", False)),
         )
 
-    # other formats: use per-plane streaming writer (bin, npy)
-    # use _shape5d() so BinArray (natural rank) and _ChannelView (4D) still
-    # report the correct T/Z/Y/X regardless of their public .shape rank.
-    # build 0-based channel indices to iterate. if the user selected
-    # specific channels, iterate those; otherwise iterate all channels
-    # the array actually has. the old code only wrote channel 0 when
-    # channels_list was None, silently dropping every other channel.
+    # _shape5d(), not .shape: BinArray and _ChannelView report a different rank
     if channels_list is not None:
         channels_0idx = [c - 1 for c in channels_list]
     else:
@@ -567,18 +561,7 @@ def _imwrite_base(
     # get adjusted metadata dict with reactive dz/fs values
     md = out_meta.to_dict()
 
-    # Resolve the effective output timepoint count from three sources, in
-    # priority order:
-    #   1. explicit `frames=[...]` selection (out_meta.num_frames when
-    #      frame_indices were actually passed to OutputMetadata)
-    #   2. `num_frames=N` truncation kwarg (set via imwrite)
-    #   3. source frame count (last-resort fallback)
-    # Then propagate to EVERY timepoint alias so downstream readers see
-    # a consistent dict. Previously only num_timepoints/nframes/num_frames
-    # got updated, leaving T/nt/n_frames/timepoints at whatever
-    # OutputMetadata.to_dict computed (which is 1 when source_shape isn't
-    # passed) — that produced the "num_timepoints=1574 but nframes=700"
-    # inconsistency the user reported.
+    # every timepoint alias follows the selection, else readers disagree on T
     truncated_n = kwargs.get("num_frames")
     has_frame_selection = bool(frame_indices_0)
     if has_frame_selection and out_meta.num_frames is not None:
@@ -590,13 +573,7 @@ def _imwrite_base(
     else:
         effective_nt = int(nframes)
 
-    # Ly/Lx are already carried through by OutputMetadata.to_dict's
-    # setdefault path — either the caller pre-set padded dims (axial
-    # shift case) or to_dict filled in the raw shape as a default. Do
-    # NOT stamp them again here: that was overwriting the padded values
-    # lsp.run_plane puts into metadata for suite2p binary writes, which
-    # caused ops.npy to record the raw spatial shape while the binary
-    # itself was written at the padded shape.
+    # OutputMetadata already carries Ly/Lx; re-stamping them loses lsp's padded dims
     md["num_timepoints"] = effective_nt
     md["nframes"] = effective_nt
     md["num_frames"] = effective_nt
@@ -639,14 +616,7 @@ def _imwrite_base(
                 # "data_raw.bin" into a plane dir it already chose).
                 target = outpath / output_name
             elif ext_clean == "bin":
-                # .bin output is only meaningful as a Suite2p input/output:
-                # per-plane subdir named like `zplane01_tp00001-01574` (same
-                # DimensionTag primitives every other writer uses, in
-                # `zplane_tp` order to match lbm_suite2p_python's layout).
-                # inside: `data_raw.bin` (+ optional `data_chan2.bin` for
-                # channel 2) and a matching `ops.npy` written by
-                # `write_ops`. no tp prefix on the filenames themselves —
-                # suite2p reads `data.bin` / `data_raw.bin` by exact name.
+                # suite2p reads data_raw.bin by exact name, so only the dir carries tags
                 plane_dir = outpath / f"{z_tag.to_string()}_{t_tag.to_string()}"
                 plane_dir.mkdir(parents=True, exist_ok=True)
                 bin_name = "data_chan2.bin" if c_idx > 0 else "data_raw.bin"

@@ -1030,13 +1030,8 @@ def _run_gui_impl(
 
             fpl.loop.run()
             return None
-        # a .mesc holding AOD ROI units (line scans, chessboard or ribbon
-        # patches) opens on the first one with no prompt: the Voltage
-        # pipeline follows the unit on screen and offers the other scans
-        # there, and its Curate button opens the curation window. A PF or
-        # experiment folder opens as a ResultsArray through imread, like a suite2p
-        # folder.
-        # Other .mesc files prompt for their unit once, here.
+        # a .mesc holding AOD ROI units opens on the first one with no prompt; any
+        # other .mesc prompts for its unit once, here
         if _is_mesc(data_in):
             if unit is None:
                 unit = _first_linescan_unit(data_in)
@@ -1506,15 +1501,8 @@ def _launch_napari(data_in, roi=None, unit=None):
                 )
                 dims = probe_dims if probe_dims is not None else get_dims(arr)
 
-                # 5D TCZYX contract:
-                #   - real multi-channel (C > 1) → use napari's channel_axis,
-                #     leave the array 5D, napari splits per channel
-                #   - singleton C (the common case for LBM) → tell the
-                #     wrapper to squeeze C, so napari sees a clean 4D
-                #     (T, Z, Y, X) layer with no stray "channels" slider
-                # We must NOT just drop C from axis_labels while leaving
-                # the underlying array 5D — napari rejects that with
-                # `axis_labels must have length ndim=5`.
+                # squeeze C rather than dropping it from axis_labels: napari rejects
+                # labels shorter than the array's rank
                 channel_axis = None
                 squeeze_c_index = None
                 if "C" in dims:
@@ -1547,13 +1535,7 @@ def _launch_napari(data_in, roi=None, unit=None):
                 except Exception as e:
                     logger.debug(f"Failed to build scale: {e}")
 
-                # If the source didn't supply a dz and we actually have
-                # multiple z-planes, prompt the user. Otherwise napari
-                # silently falls back to dz=1.0 and the 3D view is
-                # squashed in the wrong proportion. The dialog is the
-                # same one the metadata editor would show, so the value
-                # entered here is treated as authoritative for this
-                # session and written into the array's scale tuple.
+                # without a dz napari falls back to 1.0 and squashes the 3D view
                 if (
                     resolved_dz is None
                     and "Z" in dims

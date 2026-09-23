@@ -78,10 +78,6 @@ _TRAIN_GAP_MS = 100.0  # pulses closer than this belong to one train
 _SMOOTH_S = 0.02  # display / peak smoothing window for kHz traces
 
 
-# ---------------------------------------------------------------------------
-# the raw line scan of an experiment folder
-# ---------------------------------------------------------------------------
-
 
 def experiment_linescan_mesc(path) -> Path | None:
     """The raw line-scan ``.mesc`` of an experiment laid out the way the
@@ -118,10 +114,6 @@ def experiment_linescan_mesc(path) -> Path | None:
             return found[0]
     return None
 
-
-# ---------------------------------------------------------------------------
-# stimulus timing
-# ---------------------------------------------------------------------------
 
 
 def stim_events(mesc_path, unit_key: str, fs: float, n_frames: int) -> dict | None:
@@ -192,10 +184,6 @@ def stim_events(mesc_path, unit_key: str, fs: float, n_frames: int) -> dict | No
         "patterns": sorted(patterns),
     }
 
-
-# ---------------------------------------------------------------------------
-# reference Z-stack
-# ---------------------------------------------------------------------------
 
 
 def _fov_fraction(lines_um, vp) -> float:
@@ -357,10 +345,6 @@ def pair_reference_zstack(
     return max(pool, key=lambda c: (c["xy_fraction"], -c["um_per_px"]))
 
 
-# ---------------------------------------------------------------------------
-# stimulus-aligned responses
-# ---------------------------------------------------------------------------
-
 
 def _smooth(x: np.ndarray, fs: float, window_s: float = _SMOOTH_S) -> np.ndarray:
     from scipy.ndimage import uniform_filter1d
@@ -461,10 +445,6 @@ def response_metrics(
         for i in range(K)
     ]
 
-
-# ---------------------------------------------------------------------------
-# figures
-# ---------------------------------------------------------------------------
 
 
 def _agg_plt():

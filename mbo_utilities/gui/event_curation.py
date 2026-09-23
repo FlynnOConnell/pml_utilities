@@ -331,10 +331,6 @@ class EventCurationWidget:
         if data_path:
             self.scan(data_path)
 
-    # ------------------------------------------------------------------
-    # lifecycle
-    # ------------------------------------------------------------------
-
     def close(self) -> None:
         """Take the panels back off the strip."""
         if self._closed:
@@ -345,10 +341,6 @@ class EventCurationWidget:
         self.strip.unregister("curation")
         if self._own_strip:
             self.strip.close()
-
-    # ------------------------------------------------------------------
-    # catalog and sessions
-    # ------------------------------------------------------------------
 
     @property
     def session(self) -> CurationSession | None:
@@ -715,10 +707,6 @@ class EventCurationWidget:
             elif not self._busy:
                 self.status = f"{len(self.loaded())} recordings loaded"
 
-    # ------------------------------------------------------------------
-    # per frame
-    # ------------------------------------------------------------------
-
     def _frame(self) -> None:
         self._drain()
         self._poll_folder_dialog()
@@ -815,10 +803,6 @@ class EventCurationWidget:
         if imgui.is_window_hovered(imgui.HoveredFlags_.root_and_child_windows):
             self._hovered = True
 
-    # ------------------------------------------------------------------
-    # flipping through recordings
-    # ------------------------------------------------------------------
-
     def loadable(self) -> list[Recording]:
         """The recordings a flip can land on: processed ones and traces handed over."""
         return [
@@ -838,10 +822,6 @@ class EventCurationWidget:
             return
         pos = rids.index(self.current)
         self.load(rids[(pos + int(delta)) % len(rids)])
-
-    # ------------------------------------------------------------------
-    # top panel: the dashboard for the focused recording
-    # ------------------------------------------------------------------
 
     def draw_panel(self) -> None:
         """The Curation panel: the notebook's dashboard for one recording.
@@ -1052,10 +1032,8 @@ class EventCurationWidget:
                 legend=False,
             )
 
-    # ------------------------------------------------------------------
     # box mode: Box accept / Box reject draw a rectangle on the trace or
     # the PCA that labels everything inside on Apply
-    # ------------------------------------------------------------------
 
     def set_box_mode(self, mode: str | None) -> None:
         """Enter box mode for ``mode`` ("yes" / "no"); the same mode again
@@ -1465,10 +1443,6 @@ class EventCurationWidget:
             text, value, top, imgui.ImVec2(-(half_w + 6) if left else half_w + 6, 8)
         )
         implot.pop_style_color()
-
-    # ------------------------------------------------------------------
-    # right tab
-    # ------------------------------------------------------------------
 
     def draw_tab(self) -> None:
         """The controls column, two tabs: Decision (with the event, navigation,

@@ -88,10 +88,6 @@ class DataVis:
         self._shown = False
         self._closed = False
 
-    # ------------------------------------------------------------------
-    # lifecycle
-    # ------------------------------------------------------------------
-
     def show(self, **kwargs):
         """Show the figure. Returns the canvas, which a notebook cell displays
         when it is the last expression.
@@ -124,10 +120,6 @@ class DataVis:
     @property
     def closed(self) -> bool:
         return self._closed
-
-    # ------------------------------------------------------------------
-    # what it is made of
-    # ------------------------------------------------------------------
 
     @property
     def iw(self):

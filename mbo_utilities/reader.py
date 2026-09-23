@@ -282,13 +282,8 @@ def _imread_impl(
             logger.debug(f"Dispatch selected {cls.__name__} for {p}")
             return cls(p, **_filter_kwargs(cls, kwargs))
 
-        # Suite2p outputs take priority over isoview ancestor matching.
-        # detect_isoview_kind walks up parents looking for `.corrected` /
-        # `.fused` ancestors, so a suite2p plane folder sitting inside
-        # `<root>.corrected.registered/` would otherwise be returned as
-        # an IsoviewArray over the 5D source. ops.npy / plane subdirs are
-        # unambiguous suite2p markers — if present, the user pointed at
-        # the suite2p folder, not the source tree.
+        # suite2p markers win over isoview: detect_isoview_kind walks ancestors, so a
+        # plane folder under `<root>.corrected/` would otherwise open the source tree
         if p.is_dir():
             if (p / "ops.npy").exists():
                 logger.info(f"Detected Suite2p directory at {p}")

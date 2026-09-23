@@ -29,13 +29,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
-# suite2p loads out-of-process: a daemon at module import either reads a
-# disk cache (~/.mbo/cache/s2p_settings_<version>.json) or spawns a one-
-# shot subprocess that imports suite2p and dumps SETTINGS/DB to that file.
-# This avoids importing suite2p (and its torch/numba/scipy/sklearn chain)
-# in the GUI interpreter, which previously froze the imgui loop 1-3 s on
-# the first Run-tab click and even longer when attempted from a thread.
-# Cache key includes the installed suite2p version so upgrades invalidate.
+# suite2p's schema is read out-of-process into a version-keyed disk cache:
+# importing suite2p in the GUI interpreter freezes the imgui loop for seconds
 _SETTINGS: dict | None = None
 _DB: dict | None = None
 _LOAD_LOCK = threading.Lock()
@@ -352,13 +347,7 @@ _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
 }
 
 
-# fields in mbo's dataclass that have NO upstream equivalent. listed
-# here so callers can quickly tell whether a field is "mbo-only" (in
-# which case there's no schema, no default to compare against).
-# Suite2pDB fields that ARE upstream-defined but live on `Suite2pDB`
-# (not `Suite2pSettings`). Schema lookups check this dict in addition to
-# `_MBO_TO_S2P` so the GUI can apply the same `_hi()` tracking and Reset
-# button to db fields.
+# mbo-only fields: no upstream schema, so no default to compare against
 _MBO_DB_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
     "keep_movie_raw": (("keep_movie_raw",), None),
 }
@@ -369,13 +358,8 @@ MBO_ONLY_FIELDS: set[str] = {
     # time, so it has no direct schema entry. Always rendered with the
     # mbo-only color tint to flag it as not-suite2p-canonical.
     "cellpose_niter",
-    # NOTE: `anatomical_only` and `sparse_mode` were removed in favor of the
-    # `algorithm` selector + the explicit `cellpose_img` string. Legacy ops
-    # files using the old keys are remapped on load by _FLAT_TO_MBO.
-    # NOTE: `spatial_hp_detect` was the legacy upstream key; it was renamed
-    # to `highpass_neuropil` (detection.sparsery_settings.highpass_neuropil)
-    # in suite2p's restructure. Old flat ops.npy still use the legacy name —
-    # see _FLAT_TO_MBO below for the remap.
+    # legacy ops keys (anatomical_only, sparse_mode, spatial_hp_detect) are
+    # remapped on load by _FLAT_TO_MBO
 }
 
 
@@ -535,24 +519,8 @@ def all_mapped_fields() -> list[str]:
     return sorted(set(_MBO_TO_S2P.keys()) | set(_MBO_DB_TO_S2P.keys()))
 
 
-# =============================================================================
-# Loading parameters from ops.npy / settings.npy
-# =============================================================================
-#
-# Two on-disk formats coexist:
-#   1. flat ops.npy   — pre-v1 suite2p (and current LBM-Suite2p-Python output).
-#                       all keys live at the top level; many use legacy spellings
-#                       (`nbinned`, `roidetect`, `chan2_thres`, `neucoeff`, …).
-#   2. structured     — suite2p v1.0.0+ settings.npy (the shape produced by
-#                       `Suite2pSettings.to_dict()`); nested under run/io/
-#                       registration/detection/classification/extraction/
-#                       dcnv_preprocess.
-#
-# `from_ops(d)` auto-detects which format `d` is and returns
-# `{mbo_field: value}` for every mbo field it could resolve. Mbo-only
-# fields (anatomical_only, sparse_mode, cellpose_niter) are loaded when
-# present. Legacy upstream keys (e.g. spatial_hp_detect → highpass_neuropil)
-# are remapped to their modern names by _FLAT_TO_MBO.
+# two on-disk formats coexist: a flat pre-v1 ops.npy and suite2p v1's nested
+# settings.npy. `from_ops(d)` detects which and resolves both to mbo fields.
 
 
 # Flat-key → mbo-field map. Includes legacy spellings (left-side aliases).

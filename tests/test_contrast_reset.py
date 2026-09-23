@@ -38,10 +38,6 @@ class CountingArray:
         return self._raw[key]
 
 
-# ============================================================
-# sampling
-# ============================================================
-
 
 class TestSampleArray:
     def test_two_dimensional_data_is_used_whole(self):
@@ -87,10 +83,6 @@ class TestSampleArray:
             assert len(counts) == n
             assert int(np.prod(counts)) <= 72
 
-
-# ============================================================
-# contrast application
-# ============================================================
 
 
 class FakeGraphic:
@@ -177,10 +169,6 @@ class TestSetContrast:
         ndg.apply(np.array([[1.0, np.inf], [np.nan, 40.0]]))
         assert (ndg.graphic.vmin, ndg.graphic.vmax) == (1.0, 40.0)
 
-
-# ============================================================
-# slider-dim derivation (adapter)
-# ============================================================
 
 
 class _ShapeOnly:
