@@ -1,69 +1,51 @@
-"""The figure's top edge: the menus that list every app, and what is on each slot."""
+"""The menu row at the top of the strip: the menus that list every app, and each slot's."""
 
 from __future__ import annotations
 
 import webbrowser
 from typing import TYPE_CHECKING
 
-from fastplotlib.ui import ImguiWindow
-from imgui_bundle import imgui
+from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities import log
 
 if TYPE_CHECKING:
     from mbo_utilities.gui.app._host import AppHost
 
-HEIGHT = 30
 # the top menus in order; Debug shows only with debug logging on
 MENUS = ("File", "View", "Docs", "Debug")
 DOCS_URL = "https://millerbrainobservatory.github.io/mbo_utilities/"
 
 
-class MenuBar(ImguiWindow):
-    """The host's own controls, drawn as a menu bar on the top edge.
+class MenuBar:
+    """The host's own controls, drawn as the menu row of the top strip.
 
     Each app is listed under its ``menu`` with its shortcut beside it, and
-    ticking it shows or hides the app. ``draw`` is overridden because an
-    imgui menu bar has to be opened in the window itself, and the edge
-    windows fastplotlib draws put their contents in a child. The frame's
-    shortcuts run here too, since this is the one window drawn every frame.
+    ticking it shows or hides the app. The strip calls ``draw`` every
+    frame before its panels, so the frame's shortcuts run here too.
     """
 
     def __init__(self, host: AppHost):
-        super().__init__()
         self.host = host
-        host.figure.add_imgui_window(
-            self,
-            location="top",
-            size=HEIGHT,
-            title=None,
-            window_flags=(
-                imgui.WindowFlags_.no_collapse
-                | imgui.WindowFlags_.no_resize
-                | imgui.WindowFlags_.no_title_bar
-                | imgui.WindowFlags_.no_scrollbar
-                | imgui.WindowFlags_.no_bring_to_front_on_focus
-                | imgui.WindowFlags_.menu_bar
-            ),
-        )
 
     def draw(self) -> None:
-        imgui.set_next_window_size((self.width, self.height))
-        imgui.set_next_window_pos((self.x, self.y))
-        imgui.begin(
-            f"##menu_bar{self._id_counter}", p_open=None, flags=self._window_flags
-        )
-        if imgui.begin_menu_bar():
-            for name in MENUS:
-                if name != "Debug" or log.debug_enabled():
-                    self._menu(name)
-            self._slot_menus()
-            imgui.text(f"   {self.host.status()}")
-            for app in self.host.ordered():
-                if app.available(self.host):
-                    app.draw_menu_bar(self.host)
-            imgui.end_menu_bar()
-        imgui.end()
+        # a menu bar has to be opened in a window of its own; the strip's body is a child
+        with imgui_ctx.begin_child(
+            "##menu",
+            window_flags=imgui.WindowFlags_.menu_bar,
+            child_flags=imgui.ChildFlags_.auto_resize_y
+            | imgui.ChildFlags_.always_auto_resize,
+        ):
+            if imgui.begin_menu_bar():
+                for name in MENUS:
+                    if name != "Debug" or log.debug_enabled():
+                        self._menu(name)
+                self._slot_menus()
+                imgui.text(f"   {self.host.status()}")
+                for app in self.host.ordered():
+                    if app.available(self.host):
+                        app.draw_menu_bar(self.host)
+                imgui.end_menu_bar()
         self.host.keys()
 
     def _menu(self, name: str) -> None:

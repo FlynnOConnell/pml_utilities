@@ -12,6 +12,7 @@ from mbo_utilities import __version__, log
 from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
 from mbo_utilities.gui._metadata_editor import MetadataEdits
 from mbo_utilities.gui._stats import ZStats, compute_zstats, hydrate_zstats
+from mbo_utilities.gui._top_strip import TopStrip
 from mbo_utilities.gui.app._app import DOCKS, App
 from mbo_utilities.gui.app._dock import Dock
 from mbo_utilities.gui.app._keys import pressed
@@ -49,8 +50,9 @@ class AppHost:
     as the viewer's images.
 
     An app reaches the host for four things: what data is open, where its
-    graphics go (the slots, and the ``viewer`` showing the data when there
-    is one), the shared position (the playhead, the channel and the z-plane
+    graphics go (the slots, the ``viewer`` showing the data when there is
+    one, and the top ``strip``, which runs per-frame hooks and shows full
+    width panels as tabs under the menus), the shared position (the playhead, the channel and the z-plane
     on screen), and what is computed or entered once about the open data
     for every app to read (``zstats``, the summary stats of the viewer's
     arrays, and ``metadata_edits``, what the user typed over its metadata).
@@ -101,6 +103,8 @@ class AppHost:
         self.zplane = 0
         self.docks = {edge: Dock(self, edge) for edge in DOCKS}
         self.menu = MenuBar(self)
+        # the top edge: the menu row, then panels apps hang off it as tabs
+        self.strip = TopStrip(figure, draw_menu=self.menu.draw)
         figure.add_animations(self._frame)
         if self.zstats is not None:
             self.compute_stats()
