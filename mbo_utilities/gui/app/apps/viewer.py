@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from functools import partial
 
 import numpy as np
@@ -25,6 +26,22 @@ PROJECTIONS = {"mean": np.mean, "max": np.max, "std": np.std}
 HEADER = imgui.ImVec4(0.8, 0.8, 0.2, 1.0)
 GOOD = imgui.ImVec4(0.6, 0.8, 0.6, 1.0)
 BAD = imgui.ImVec4(1.0, 0.3, 0.3, 1.0)
+
+
+def split_rois(arr) -> tuple[list, list[str] | None]:
+    """The views the viewer shows side by side: one per ROI the array asks to
+    split into (``roi=0`` or a list), else the array alone; with their names.
+    """
+    rois = list(arr.iter_rois()) if hasattr(arr, "iter_rois") else [None]
+    if len(rois) < 2:
+        return [arr], None
+    views = []
+    for roi in rois:
+        view = copy.copy(arr)
+        view.fix_phase = False
+        view.roi = roi
+        views.append(view)
+    return views, [f"ROI {roi}" for roi in rois]
 
 
 def filter_frame(frame, mean=None, sigma: float = 0.0) -> np.ndarray:
@@ -100,7 +117,14 @@ class ViewerApp(App):
         self.projection = "mean"
         self.window = 1
         # the swap clears the viewer's window and spatial funcs
-        host.viewer.data[0] = _squeeze_for_viewer(host.data)
+        views, _ = split_rois(host.data)
+        for i, view in enumerate(views[: len(host.viewer.data)]):
+            host.viewer.data[i] = _squeeze_for_viewer(view)
+        if len(views) != len(host.viewer.data):
+            logger.warning(
+                f"the viewer keeps its {len(host.viewer.data)} subplots; "
+                f"the data opened splits into {len(views)}"
+            )
         self.apply_filters(host)
         self._shown = 0
 
