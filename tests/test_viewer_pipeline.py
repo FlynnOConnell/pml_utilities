@@ -190,6 +190,35 @@ class TestReloadDataConsistency:
         assert wrapped.dims.index("Z") == 1
 
 
+class TestInvertDeflection:
+    """Invert Deflection flips a frame about the mean image, display only."""
+
+    MEAN = np.full((4, 4), 10.0, dtype=np.float32)
+    FRAME = np.arange(16, dtype=np.uint16).reshape(4, 4)
+
+    def test_invert_keeps_the_mean(self):
+        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+
+        func = PreviewDataWidget._make_spatial_func(
+            None, self.MEAN, None, subtract=False, invert=True
+        )
+        assert np.allclose(func(self.FRAME), 2 * self.MEAN - self.FRAME)
+
+    def test_invert_with_mean_subtraction(self):
+        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+
+        func = PreviewDataWidget._make_spatial_func(
+            None, self.MEAN, None, subtract=True, invert=True
+        )
+        assert np.allclose(func(self.FRAME), self.MEAN - self.FRAME)
+
+    def test_subtraction_alone_is_unchanged(self):
+        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+
+        func = PreviewDataWidget._make_spatial_func(None, self.MEAN, None)
+        assert np.allclose(func(self.FRAME), self.FRAME - self.MEAN)
+
+
 class TestPerDataStateReset:
     """`_reset_per_data_state` must clear every dataset-specific flag
     that would otherwise carry across a load_new_data call.
@@ -205,6 +234,7 @@ class TestPerDataStateReset:
     # canonical (field, dirty_value, expected_after_reset) tuples
     RESET_FIELDS = [
         ("_mean_subtraction", True, False),
+        ("_invert_deflection", True, False),
         ("_gaussian_sigma", 5.0, 0.0),
         ("_proj", "max", "mean"),
         ("_window_size", 10, 1),

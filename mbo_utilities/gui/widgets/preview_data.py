@@ -1023,6 +1023,17 @@ class PreviewDataWidget(EdgeWindow):
             self._update_mean_subtraction()
 
     @property
+    def invert_deflection(self) -> bool:
+        """Whether each frame is flipped about the mean image (display only)."""
+        return self._invert_deflection
+
+    @invert_deflection.setter
+    def invert_deflection(self, value: bool):
+        if value != self._invert_deflection:
+            self._invert_deflection = value
+            self._update_mean_subtraction()
+
+    @property
     def auto_contrast_on_z(self) -> bool:
         """Whether to auto-reset contrast when z-plane changes."""
         return self._auto_contrast_on_z
@@ -1196,7 +1207,8 @@ class PreviewDataWidget(EdgeWindow):
                 out = next(iter(slot.values()))
             return out
 
-        any_mean_sub = self._mean_subtraction and any(
+        uses_mean = self._mean_subtraction or self._invert_deflection
+        any_mean_sub = uses_mean and any(
             self._zstats_done[i] and _means_for(i) is not None
             for i in range(self.num_graphics)
         )
@@ -1208,7 +1220,7 @@ class PreviewDataWidget(EdgeWindow):
         spatial_funcs = []
         for i in range(self.num_graphics):
             mean_img = None
-            if self._mean_subtraction and self._zstats_done[i]:
+            if uses_mean and self._zstats_done[i]:
                 means_arr = _means_for(i)
                 if means_arr is not None:
                     # means_arr rows follow the sampled planes, which may be
@@ -1218,7 +1230,11 @@ class PreviewDataWidget(EdgeWindow):
                     pos = self._sampled_mean_pos(i, z_idx, means_arr.shape[0])
                     mean_img = means_arr[pos].astype(np.float32)
 
-            spatial_funcs.append(self._make_spatial_func(mean_img, sigma))
+            spatial_funcs.append(
+                self._make_spatial_func(
+                    mean_img, sigma, self._mean_subtraction, self._invert_deflection
+                )
+            )
 
         self.image_widget.spatial_func = spatial_funcs
 
@@ -1236,8 +1252,17 @@ class PreviewDataWidget(EdgeWindow):
             return min(range(n_rows), key=lambda k: abs(planes[k] - target))
         return max(0, min(int(z_idx), n_rows - 1))
 
-    def _make_spatial_func(self, mean_img: np.ndarray | None, sigma: float | None):
-        """Create a spatial function that applies mean subtraction and/or gaussian blur."""
+    def _make_spatial_func(
+        self,
+        mean_img: np.ndarray | None,
+        sigma: float | None,
+        subtract: bool = True,
+        invert: bool = False,
+    ):
+        """Create a spatial function that applies mean subtraction, inversion
+        about the mean (``2 * mean - frame``, for negative-going indicators)
+        and/or gaussian blur.
+        """
         # precompute kernel size for opencv (6*sigma, rounded to odd)
         ksize = (int(sigma * 6) | 1) if sigma else 0
         # zstats mean-images are spatially binned (strided) to save memory;
@@ -1265,7 +1290,12 @@ class PreviewDataWidget(EdgeWindow):
             if mean_img is not None and result.ndim == 2:
                 # only subtract when frame is 2D (Y, X); skip if 3D since
                 # mean_img is z-specific and can't be applied to a full stack
-                result = result.astype(np.float32) - _fit_mean(result.shape)
+                mean = _fit_mean(result.shape)
+                result = result.astype(np.float32) - mean
+                if invert:
+                    result = -result
+                if not subtract:
+                    result += mean
             if sigma is not None and sigma > 0 and result.ndim == 2:
                 try:
                     import cv2
@@ -1450,7 +1480,7 @@ class PreviewDataWidget(EdgeWindow):
             self._last_c_idx = c_idx
             # rebuild mean-sub (if active) and reset contrast (if auto) are
             # independent concerns — both can apply on the same z change.
-            if self._mean_subtraction:
+            if self._mean_subtraction or self._invert_deflection:
                 self._update_mean_subtraction()
             if self._auto_contrast_on_z and self.image_widget:
                 self.image_widget.reset_vmin_vmax_frame()

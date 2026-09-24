@@ -430,6 +430,7 @@ def _reset_per_data_state(parent: Any) -> None:
     """
     # spatial functions
     parent._mean_subtraction = False
+    parent._invert_deflection = False
     parent._gaussian_sigma = 0.0
     # window functions
     parent._proj = "mean"
