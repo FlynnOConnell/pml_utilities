@@ -168,6 +168,18 @@ def test_the_signal_quality_window_draws(host):
     assert "signal_quality" not in _app._reported
 
 
+def test_the_console_lists_running_stats_and_draws(host):
+    _app._reported.discard("console")
+    host.zstats.running = [True]
+    host.zstats.progress = [0.5]
+    work = host.apps["console"].work(host)
+    assert [item["key"] for item in work] == ["zstats_0"]
+    host.apps["console"].open = True
+    host.figure.canvas.force_draw()
+    host.figure.canvas.force_draw()
+    assert "console" not in _app._reported
+
+
 def test_the_filter_subtracts_the_mean_before_the_blur():
     frame = np.full((4, 4), 3.0, dtype=np.float32)
     mean = np.full((4, 4), 1.0, dtype=np.float32)
