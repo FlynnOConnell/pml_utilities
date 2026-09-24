@@ -20,25 +20,25 @@ __all__ = ["DataVis"]
 
 
 class DataVis:
-    """Preview imaging data of any supported type, with the side widget.
+    """Preview imaging data of any supported type in the app host.
 
     Parameters
     ----------
     data : str, Path, array, or sequence of paths
         Anything ``imread`` opens, or an array already in memory.
     roi : int or tuple of int, optional
-        ROI index(es) for multi-ROI raw files. None shows every ROI.
+        ROI index(es) for multi-ROI raw files. None shows the stitched image,
+        0 every ROI side by side.
     widget : str, default "preview"
-        ``"preview"`` attaches the side widget, ``"manualroi"`` adds the
-        manual ROI tools to it, ``"none"`` shows only the canvas.
+        ``"preview"`` registers every app, ``"manualroi"`` also turns manual
+        ROI labeling on, ``"none"`` shows only the viewer.
     unit : int or str, optional
         Which measurement unit of a ``.mesc`` to open. In a terminal the
         picker asks when this is omitted; in a notebook it is required when
         the file holds more than one.
     size : tuple of int, optional
         Canvas size in pixels. Defaults to the screen's work area for a
-        desktop window and to (1400, 900) in a notebook, where the edge
-        windows need fixed room.
+        desktop window and to (1400, 900) in a notebook.
     figure_kwargs
         Passed on to the figure, e.g. ``canvas="jupyter"``. ``run_gui`` sets
         these itself.
@@ -68,22 +68,27 @@ class DataVis:
         size: tuple[int, int] | None = None,
         **figure_kwargs,
     ):
-        from mbo_utilities.gui.run_gui import (
-            _create_image_widget,
-            _figure_kwargs_for_here,
-            _load_for_viewer,
-        )
+        from mbo_utilities.gui.app import build_host
+        from mbo_utilities.gui.run_gui import _load_for_viewer
+        from mbo_utilities.gui.widgets.style_editor import style_store
 
+        if isinstance(widget, bool) or widget is None:
+            widget = "preview" if widget else "none"
+        if widget not in ("preview", "manualroi", "none"):
+            raise ValueError(
+                f"unknown widget {widget!r}, expected one of: preview, manualroi, none"
+            )
         self._source = data
         self._data_array = _load_for_viewer(data, roi=roi, unit=unit)
-        kwargs = _figure_kwargs_for_here(size=size)
-        kwargs.update(figure_kwargs)
-        self._iw = _create_image_widget(
+        self._host = build_host(
             self._data_array,
-            widget=widget,
-            figure_kwargs_override=kwargs,
-            show=False,
+            apps=[] if widget == "none" else None,
+            size=size,
+            store=None if widget == "none" else style_store(),
+            figure_kwargs=figure_kwargs,
         )
+        if widget == "manualroi":
+            self._host.apps["manual_roi"].open = True
         self._output = None
         self._shown = False
         self._closed = False
@@ -97,42 +102,41 @@ class DataVis:
         if not self._shown:
             # offscreen and desktop canvases return None here; only the
             # notebook canvas is a widget worth handing back
-            self._output = self._iw.show(**kwargs)
+            self._output = self._host.figure.show(**kwargs)
             self._shown = True
-            _after_show(self._iw)
+            _after_show(self._host.viewer)
+            self._host.figure.canvas.set_title(self._host.title())
         return self._output
 
     def close(self) -> None:
-        """Stop the side widget's threads and close the figure."""
+        """Stop the apps' threads, release the files they hold and close the figure."""
         if self._closed:
             return
         self._closed = True
-        gui = self.widget
-        if gui is not None:
-            cleanup = getattr(gui, "cleanup", None)
-            if cleanup is not None:
-                try:
-                    cleanup()
-                except Exception:  # noqa: BLE001 - a dead thread must not block close
-                    pass
-        self._iw.close()
+        self._host.close()
+        self._host.viewer.close()
 
     @property
     def closed(self) -> bool:
         return self._closed
 
     @property
+    def host(self):
+        """The ``AppHost``: the apps, the playhead, the open data."""
+        return self._host
+
+    @property
     def iw(self):
         """The ``MboNDViewer`` underneath: sliders, cmap, window functions."""
-        return self._iw
+        return self._host.viewer
 
     @property
     def image_widget(self):
-        return self._iw
+        return self._host.viewer
 
     @property
     def figure(self):
-        return self._iw.figure
+        return self._host.figure
 
     @property
     def data(self):
@@ -143,19 +147,6 @@ class DataVis:
     def source(self):
         """What the viewer was built from: a path, paths, or an array."""
         return self._source
-
-    @property
-    def widget(self):
-        """The ``PreviewDataWidget`` on the figure, or None with ``widget="none"``."""
-        try:
-            from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
-        except ImportError:
-            return None
-        windows = getattr(self.figure, "imgui_windows", None) or {}
-        for w in windows.values():
-            if isinstance(w, PreviewDataWidget):
-                return w
-        return None
 
     def __repr__(self) -> str:
         src = self._source
