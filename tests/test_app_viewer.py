@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from functools import partial
+import time
 
 import numpy as np
 import pytest
@@ -18,13 +18,22 @@ from mbo_utilities import imread  # noqa: E402
 from mbo_utilities.arrays import NumpyArray, average_frames  # noqa: E402
 from mbo_utilities.arrays.features import find_slider_name  # noqa: E402
 from mbo_utilities.gui.app import _app, build_host  # noqa: E402
-from mbo_utilities.gui.app.apps.viewer import blur  # noqa: E402
+from mbo_utilities.gui.app.apps.viewer import filter_frame  # noqa: E402
 from mbo_utilities.gui.app.demo import movie_data  # noqa: E402
 
 
 def confirm_prompt(prompt):
     """Stands in for draw_path_prompt, submitting the path an open prompt holds."""
     return (prompt.path if prompt.open else None), False
+
+
+def settle(host) -> None:
+    """Draw until the host's summary stats are in, at most ten seconds."""
+    deadline = time.time() + 10
+    while not all(host.zstats.done) and time.time() < deadline:
+        host.figure.canvas.force_draw()
+        time.sleep(0.05)
+    host.figure.canvas.force_draw()
 
 
 def tap(host, key: str) -> None:
@@ -43,15 +52,15 @@ def host():
     host.figure.canvas.force_draw()
     yield host
     host.close()
-    host.apps["viewer"].viewer.close()
+    host.viewer.close()
 
 
 def t_slider(host) -> str:
-    return find_slider_name(host.apps["viewer"].viewer.dim_names, "t")
+    return find_slider_name(host.viewer.dim_names, "t")
 
 
 def test_the_viewer_draws_on_the_figure_and_owns_the_bottom_edge(host):
-    viewer = host.apps["viewer"].viewer
+    viewer = host.viewer
     assert host.figure is viewer.figure
     assert host.slots == []
     assert host.data.shape == (24, 1, 1, 32, 32)
@@ -60,7 +69,7 @@ def test_the_viewer_draws_on_the_figure_and_owns_the_bottom_edge(host):
 
 
 def test_moving_the_t_slider_moves_the_playhead(host):
-    viewer = host.apps["viewer"].viewer
+    viewer = host.viewer
     viewer.indices[t_slider(host)] = 5
     host.figure.canvas.force_draw()
     assert host.frame == 5
@@ -70,7 +79,7 @@ def test_moving_the_t_slider_moves_the_playhead(host):
 def test_seeking_the_playhead_moves_the_t_slider(host):
     host.seek_frame(9)
     host.figure.canvas.force_draw()
-    assert host.apps["viewer"].viewer.current_index[t_slider(host)] == 9
+    assert host.viewer.current_index[t_slider(host)] == 9
 
 
 def test_opening_other_data_swaps_the_viewers_array(host, tmp_path):
@@ -80,7 +89,7 @@ def test_opening_other_data_swaps_the_viewers_array(host, tmp_path):
 
     host.set_data(imread(tmp_path / "short.npy"))
     host.figure.canvas.force_draw()
-    viewer = host.apps["viewer"].viewer
+    viewer = host.viewer
     assert viewer.data[0].shape == (7, 16, 16)
     assert host.frame == 0
     assert viewer.current_index[t_slider(host)] == 0
@@ -108,18 +117,18 @@ def test_a_panel_is_rebuilt_for_the_data_it_shows(host):
 def test_rebinning_keeps_the_blur_and_another_file_drops_it(host):
     app = host.apps["viewer"]
     app.sigma = 1.5
-    app.viewer.spatial_func = partial(blur, sigma=app.sigma)
+    app.apply_filters(host)
 
     host.set_data(average_frames(host.data, 4))
     host.figure.canvas.force_draw()
     assert host.data.shape[0] == 6
     assert app.sigma == 1.5
-    assert app.viewer.spatial_func is not None
+    assert host.viewer.spatial_func is not None
 
     host.set_data(imread(movie_data(nt=8, ny=32, nx=32)))
     host.figure.canvas.force_draw()
     assert app.sigma == 0.0
-    assert app.viewer.spatial_func is None
+    assert host.viewer.spatial_func is None
 
 
 def test_every_section_of_the_panel_draws(host, monkeypatch):
@@ -131,10 +140,44 @@ def test_every_section_of_the_panel_draws(host, monkeypatch):
     assert "viewer" not in _app._reported
 
 
+def test_the_host_computes_summary_stats_for_every_plane(host):
+    settle(host)
+    assert host.zstats.done == [True]
+    assert host.zstats.means[0][()].shape[0] >= 1
+
+
+def test_mean_subtraction_waits_for_the_stats_then_applies(host):
+    settle(host)
+    app = host.apps["viewer"]
+    app.mean_subtraction = True
+    app.apply_filters(host)
+    assert app._subtracting is True
+    assert host.viewer.spatial_func.keywords["mean"].shape == (32, 32)
+
+    host.set_data(imread(movie_data(nt=6, ny=32, nx=32)))
+    assert app.mean_subtraction is False
+    assert host.viewer.spatial_func is None
+
+
+def test_the_signal_quality_window_draws(host):
+    settle(host)
+    _app._reported.discard("signal_quality")
+    host.apps["signal_quality"].open = True
+    host.figure.canvas.force_draw()
+    host.figure.canvas.force_draw()
+    assert "signal_quality" not in _app._reported
+
+
+def test_the_filter_subtracts_the_mean_before_the_blur():
+    frame = np.full((4, 4), 3.0, dtype=np.float32)
+    mean = np.full((4, 4), 1.0, dtype=np.float32)
+    assert np.allclose(filter_frame(frame, mean=mean), 2.0)
+
+
 def test_the_blur_smooths_the_frame():
     frame = np.zeros((9, 9), dtype=np.float32)
     frame[4, 4] = 1.0
-    smoothed = blur(frame, 1.0)
+    smoothed = filter_frame(frame, sigma=1.0)
     assert smoothed[4, 4] < 1.0
     assert smoothed.sum() == pytest.approx(1.0, abs=1e-4)
 
@@ -225,10 +268,10 @@ def test_the_host_remembers_which_apps_were_showing(tmp_path):
     first.apps["viewer"].open = False
     first.figure.canvas.force_draw()
     first.close()
-    first.apps["viewer"].viewer.close()
+    first.viewer.close()
 
     second = build_host(movie_data(nt=4, ny=16, nx=16), size=(600, 400), store=store)
     assert second.apps["log"].open is True
     assert second.apps["viewer"].open is False
     second.close()
-    second.apps["viewer"].viewer.close()
+    second.viewer.close()

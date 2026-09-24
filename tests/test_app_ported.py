@@ -35,7 +35,7 @@ def host():
     host.figure.canvas.force_draw()
     yield host
     host.close()
-    host.apps["viewer"].viewer.close()
+    host.viewer.close()
 
 
 def test_every_ported_app_declares_where_it_is_drawn():
