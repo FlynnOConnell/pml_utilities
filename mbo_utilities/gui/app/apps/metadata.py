@@ -9,7 +9,9 @@ from mbo_utilities.gui.app._app import App
 
 
 class MetadataApp(App):
-    """The metadata inspector over whatever the host has open."""
+    """The metadata inspector over whatever the host has open, with the
+    values typed in Set Metadata over the ones the reader found.
+    """
 
     id = "metadata"
     title = "Metadata"
@@ -22,4 +24,8 @@ class MetadataApp(App):
         return bool(getattr(host.data, "metadata", None))
 
     def draw_canvas(self, host, size: imgui.ImVec2) -> None:
-        draw_metadata_inspector(dict(host.data.metadata), host.data)
+        metadata = dict(host.data.metadata)
+        metadata.update(
+            {k: v for k, v in host.metadata_edits.values.items() if v is not None}
+        )
+        draw_metadata_inspector(metadata, host.data)
