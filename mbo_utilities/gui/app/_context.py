@@ -79,6 +79,9 @@ class WindowContext(Suite2pState):
 
     def close(self) -> None:
         """Release what the pipeline and ROI widgets hold: windows, threads, files."""
+        if self.linescan_traces is not None:
+            self.linescan_traces.close()
+            self.linescan_traces = None
         cleanup_pipelines(self)
         detach_roi_widget(self)
 
