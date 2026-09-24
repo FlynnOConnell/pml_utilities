@@ -86,6 +86,15 @@ class App:
         its window owns the shortcut that opens it too.
         """
 
+    def progress(self, host: AppHost) -> list[dict]:
+        """The running work the console lists for this app: ``key``, ``text``,
+        ``progress`` from 0 to 1 and ``done``.
+        """
+        return []
+
+    def draw_menu_bar(self, host: AppHost) -> None:
+        """Items at the right of the menu bar, drawn every frame, showing or not."""
+
     def on_keys(self, host: AppHost) -> None:
         """Handle this app's keys; runs inside every imgui frame, showing or not."""
 
