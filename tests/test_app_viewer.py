@@ -370,6 +370,14 @@ def test_help_and_keybinds_gain_the_roi_pages_with_labeling_on(host, monkeypatch
     host.figure.canvas.force_draw()
 
 
+def test_a_pipeline_turning_rois_on_gets_the_widget_at_once(host):
+    host.context.sync_manual_roi(True)
+    assert host.context.manual_roi is not None
+    assert host.apps["manual_roi"].open is True
+    host.context.sync_manual_roi(False)
+    assert host.context.manual_roi is None
+
+
 def test_the_filter_subtracts_the_mean_before_the_blur():
     frame = np.full((4, 4), 3.0, dtype=np.float32)
     mean = np.full((4, 4), 1.0, dtype=np.float32)
