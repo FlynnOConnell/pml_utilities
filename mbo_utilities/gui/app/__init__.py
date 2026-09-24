@@ -34,6 +34,7 @@ from mbo_utilities.gui.app._menu import MenuBar
 from mbo_utilities.gui.app._texture import Texture
 from mbo_utilities.gui.app._window import AppWindow
 from mbo_utilities.gui.app.apps import ViewerApp, debug_apps, ported_apps
+from mbo_utilities.gui.app.apps.viewer import split_rois
 from mbo_utilities.gui.app.demo import movie_data
 from mbo_utilities.gui.run_gui import (
     _after_show,
@@ -65,12 +66,15 @@ def build_host(
     """The host on the viewer's figure, every app registered.
 
     ``data`` is anything ``imread`` opens, a synthetic movie when None. It
-    stays lazy: the viewer reads the frames it shows. ``store`` remembers
-    which apps were showing.
+    stays lazy: the viewer reads the frames it shows, one subplot per ROI
+    when the array asks to split them. ``store`` remembers which apps were
+    showing.
     """
     array = imread(movie_data() if data is None else data)
+    views, names = split_rois(array)
     viewer = MboNDViewer(
-        _squeeze_for_viewer(array),
+        [_squeeze_for_viewer(view) for view in views],
+        names=names,
         slider_dim_names=getattr(array, "slider_dim_labels", None)
         or get_slider_dims(array),
         cmap="gnuplot2",
