@@ -31,9 +31,10 @@ pml_utilities/
 │   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # Miller Brain Studio (imgui + fastplotlib)
-│   │   ├── app/              # `mbo app`: the viewer and apps docked or windowed around it (§17.1)
+│   │   ├── app/              # what `mbo` opens: the host, the viewer and one app per feature (§17.1)
 │   │   ├── playhead.py       # one time in seconds shared by every view (§7.6)
-│   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
+│   │   ├── widgets/          # the panels the apps draw (summary images, MESc units, ...)
+│   │   ├── widgets/pipelines # Process tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
 │   ├── analysis/             # scan-phase, linescan, phasecorr math
@@ -62,6 +63,7 @@ pml_utilities/
 | `metadata` | Canonical vocabulary, alias resolution, `OutputMetadata`, ScanImage parsing | Read pixels |
 | `writer` + `_writers` | `imwrite`; emit canonical values under each format's keys; `ops.npy`; provenance | Hand-roll alias fan-out; every emitted key comes from the registry or `OutputMetadata` |
 | `masknmf` `vnoiser` `roi_workflow` `hpc` | Run a pipeline from a settings dataclass; write suite2p-shaped outputs | Import `imgui_bundle`, `fastplotlib`, or `mbo_utilities.gui` |
+| `gui/app` | The host (open data, viewer, playhead, what is computed or typed about the data) and one `App` per feature, placed in a dock tab or a window | Keep an app's state on the host; name a format outside the app that draws it |
 | `gui/widgets/pipelines` | Draw a pipeline's config; spawn its worker task | Compute inline; hold pipeline math |
 | `gui/tasks` + `gui/_worker` | Re-open the source in a subprocess and call the runner | Depend on GUI state; args are JSON |
 | `cli` | Thin click wrappers over `imread`/`imwrite`/runners | Hold logic unreachable from Python |
@@ -814,8 +816,8 @@ the other.
   `TimeAxis.on(other)` gives the `(xscale, xstart)` a row is plotted with, so a
   windowed trace sits where it was recorded. The trace plot and the motion plot
   seek the playhead; the widget's handler moves the viewer's T, whose indices event
-  snaps the playhead to the frame. The ROI widget shares its host's playhead
-  (`PreviewDataWidget.playhead`); the line-scan viewer's `LineScanOverlay` owns one
+  snaps the playhead to the frame. The ROI widget shares the app host's playhead
+  (`AppHost.playhead`); the line-scan viewer's `LineScanOverlay` owns one
   for its Timepoint slider, kymograph selector, trace and motion cursors. A new
   time-bound view subscribes to the playhead; it never reads another view's cursor.
 - **Color by.** `RoiModel.column(name)` gives one number per uid (`plane`, `z`, `c`,
@@ -880,16 +882,13 @@ One logger tree, one console sink per process, one log file per background task.
   reads it back. `mbo --debug` / `mbo view --debug` set it for a run; the GUI
   "Debug logging" toggle (`_options_popup`, `file_dialog`) also persists the
   preference, which `run_gui` applies at launch unless `MBO_DEBUG` is already set.
-- Debug-only UI: a `WidgetEntry(debug_only=True)` is absent from the Widgets menu
-  and off whatever the stored state says while `log.debug_enabled()` is False. The
-  ImGui tab (`gui/widgets/imgui_debug.py`) is the one today: switches for Dear
-  ImGui's metrics/debugger, debug log, ID stack tool, demo and about windows,
-  which `PreviewDataWidget.draw` draws every frame so they survive a tab switch.
-  The style editor is not among them: it is always available at File > Style
-  Editor (§14).
-- The GUI's Debug panel (`gui_logger.GuiLogger`) receives every `mbo.*` record through
-  a `GuiLogHandler` attached in `preview_data._init_logging`; it filters by level and
-  logger, and its master level dropdown calls `set_global_level`.
+- Debug-only UI: the app's Debug menu is listed only while `log.debug_enabled()`:
+  `imgui_debugger`'s variable inspector over the host and Dear ImGui's metrics,
+  debug log, ID stack and demo windows (`gui/app/apps/debug.py`), each drawing its
+  own window. The style editor is not among them: it is always under File (§14).
+- The Log app (`gui/app/apps/log.py`, `gui_logger.GuiLogger`) receives every
+  `mbo.*` record through a `GuiLogHandler` it attaches when built; it filters by
+  level and logger, and its master level dropdown calls `set_global_level`.
 
 | Level | Use |
 |-------|-----|
@@ -1090,17 +1089,14 @@ When they disagree, fix the docs.
   `cache/`, `imgui/`, `hpc/runs/`, `tests/` (test data), `templates/`. Resolve with
   `get_mbo_dirs()`, never hardcode.
 - The imgui style is the user's, not the theme's. `gui/widgets/style_editor.py`
-  holds the one `imgui_debugger.StyleEditor` for the process, opened from File >
-  Style Editor and backed by an `imgui_debugger.ConfigStore` at
-  `get_mbo_dirs()["imgui"]`: `state.json` (the style as last left, plus the
-  panel's own state), `styles/<name>.json` (named presets). It autosaves a
-  second after the last slider moves; `apply_saved_style()` runs in
-  `PreviewDataWidget.__init__` right after `style_imgui_opaque()`, so a saved
-  style wins over the shipped theme. Window geometry stays imgui's, in
-  `imgui/assets/app_settings/preview_settings.ini`. Nothing else writes the
-  style; `imgui_debug.py` deliberately has no style entry.
-- The app host (`gui/app`) keeps its window geometry apart from the preview
-  window's, in `get_mbo_dirs()["imgui"]/app.ini`.
+  holds the `imgui_debugger.ConfigStore` at `get_mbo_dirs()["imgui"]`:
+  `state.json` (the style as last left, plus each panel's own state and which
+  apps were showing), `styles/<name>.json` (named presets). File > Style Editor
+  is `imgui_debugger`'s `StyleEditor` panel over that store; it autosaves a
+  second after the last slider moves, and `apply_saved_style()` runs in
+  `AppHost.__init__` right after `style_imgui_opaque()`, so a saved style wins
+  over the shipped theme. Window geometry stays imgui's, in
+  `get_mbo_dirs()["imgui"]/app.ini`. Nothing else writes the style.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,
   `KEEP_TEST_OUTPUT`, `MBO_PIPELINE_TIFF`; logging and retention variables are
   listed in §8.5.
@@ -1556,37 +1552,29 @@ Four places already have the shape and are the template:
 - `Playhead` (§7.6): one piece of shared state every view subscribes to.
 - `TraceProfile` (§7.6) and the results zarr (§7.5): the pipeline declares what its
   data means, generic views render any pipeline.
-- `gui/app` (`mbo app`), the preview window's replacement in progress. `AppHost`
-  is built on the viewer's figure (an `NDWidget` makes its own) and holds the
-  open `LazyArray`, the `viewer`, the `Playhead` with the channel and z-plane on
-  screen, and what every app reads about the open data: `zstats` (`ZStats`, the
-  summary stats) and `metadata_edits` (`MetadataEdits`). Opening other data says
-  `data_changed` to every app. An `App` draws through `draw_options` /
-  `draw_canvas` into a dock tab or a floating window the host picks, is listed
-  under its `menu` with its `shortcut`, names its keys in `keybinds`, reports
-  running work through `progress` and can draw on the menu bar. The host saves
-  which apps are showing. State the old window kept on itself moves onto one
-  object both windows share (`ZStats`, `MetadataEdits`, `SaveAs` with
-  `SaveSource`), so a port changes the old window's attribute reads, not its
-  behaviour. Ported: the viewer with the Image tab (projection, blur, mean
-  subtraction, frame averaging, scan phase, contrast), Open, Save As, Set
-  Metadata, Metadata, Signal Quality, the Process Console, Options, Help,
-  Keybinds, Summary Images, Projections, Tile Grid, Diagnostics, Log and the
-  imgui tools. Not yet: the Process tab, Manual ROI, MESc, the IsoView tools,
-  BioHPC / Cloud. `HostAsParent` is the shim a ported `Widget` reads; it only
-  shrinks.
+- `gui/app`, what `mbo` and `DataVis` open. `AppHost` is built on the viewer's
+  figure (an `NDWidget` makes its own) and holds the open `LazyArray`, the
+  `viewer`, the top `strip`, the `Playhead` with the channel and z-plane on
+  screen, and what every app reads about the open data: `zstats` (`ZStats`) and
+  `metadata_edits` (`MetadataEdits`). Opening other data (`set_data`) is one
+  event every app hears as `data_changed`. An `App` draws through
+  `draw_options` / `draw_canvas` into a dock tab or a floating window the host
+  picks, is listed under its `menu` with its `shortcut`, names its keys in
+  `keybinds`, reports running work through `progress` and can draw on the menu
+  bar; the host saves which apps are showing. The preview window and its tab
+  bar, menu, popups, key handler and widget discovery are deleted.
 
-Everything else is the opposite shape (counts from 2026-09-19):
+Where it still falls short (2026-09-23):
 
-- The host widget is a grab bag: 215 distinct `parent._x` attributes across `gui`,
-  and `_dialogs._reset_per_data_state` is a hand-kept list of which to clear when
-  the array changes. Every unit swap risks a leak.
+- `WindowContext` (`app/_context.py`) is the preview window's surface, kept for
+  the widgets written against it: the pipelines, the manual ROI widget, the MESc
+  tab, the IsoView editors and the panel widgets read `parent.image_widget`,
+  `parent.fpath`, `parent._custom_metadata` and keep `_s2p_*` state on it. Moving
+  them to plain names deletes it.
 - Widgets sniff formats: the `mesc_units` tab, `tile_grid` and
   `isoview_align_views` decide `is_supported(parent)` by unwrapping the array and
-  checking its class. A new format has to write imgui code in `gui/widgets/` to
+  checking its class. A new format still writes an app in `gui/app/apps` to
   appear anywhere.
-- Discovery is a package scan (`gui/widgets/__init__._discover_widgets`), so no
-  reader and no plugin can contribute a panel, tab or table.
 - Pipelines are hardcoded widget classes (§15) drawing their settings by hand
   (`pipelines/voltage.py` 875 lines, `pipelines/isoview.py` 3303).
 - Tables are written four times (MESc units, ROIs, Traces, runs), each with its own
@@ -1646,9 +1634,10 @@ domain table, its trace profile; its results tab already comes from the results 
 Ordered by what unblocks what. Each stage is shippable alone and lands with a pinned
 test; each one's rules move into §2 and §7 when it lands.
 
-1. **Session.** Move per-dataset state off the host widget; widgets take `session`,
-   not `parent`; `swap_viewer_array` and `_reset_per_data_state` collapse into
-   `session.open`. Pin: open two arrays in sequence, assert nothing leaks.
+1. **Session.** Landed as `AppHost`: per-dataset state is the host's and each
+   app's, and `set_data` is the one open event (`tests/test_app_viewer.py`,
+   `tests/test_app_mesc.py`). Left: the widgets still take the `WindowContext`
+   as `parent` instead of the host.
 2. **Facets.** `units`, `overlays`, `line_positions` on `MescArray`; `views`, `tiles`
    on `IsoviewArray`. The four format widgets become views gated on
    `session.array.units is not None`; `mesc_array_of` goes away. Pin: one test per
