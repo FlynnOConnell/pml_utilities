@@ -9,6 +9,7 @@ from imgui_bundle import imgui, implot
 
 from mbo_utilities import __version__, log
 from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
+from mbo_utilities.gui._metadata_editor import MetadataEdits
 from mbo_utilities.gui._stats import ZStats, compute_zstats, hydrate_zstats
 from mbo_utilities.gui.app._app import DOCKS, App
 from mbo_utilities.gui.app._dock import Dock
@@ -49,9 +50,11 @@ class AppHost:
     An app reaches the host for four things: what data is open, where its
     graphics go (the slots, and the ``viewer`` showing the data when there
     is one), the shared position (the playhead, the channel and the z-plane
-    on screen), and what is computed once about the open data for every app
-    to read (``zstats``, the summary stats of the viewer's arrays). That
-    list is the contract; an app never puts state of its own on the host.
+    on screen), and what is computed or entered once about the open data
+    for every app to read (``zstats``, the summary stats of the viewer's
+    arrays, and ``metadata_edits``, what the user typed over its metadata).
+    That list is the contract; an app never puts state of its own on the
+    host.
 
     With a ``store``, which apps are showing is saved as it changes and put
     back when an app registers, so the app opens the way it was left. An
@@ -78,6 +81,7 @@ class AppHost:
         self.data = data
         self.viewer = viewer
         self.zstats = None if viewer is None else ZStats(viewer)
+        self.metadata_edits = MetadataEdits()
         self.store = store
         self._showing = {} if store is None else dict(store.panel_state(SHOWING))
         self.apps: dict[str, App] = {}
@@ -186,6 +190,7 @@ class AppHost:
         self.data = data
         self.channel = 0
         self.zplane = 0
+        self.metadata_edits = MetadataEdits()
         self.playhead.seek(0.0, source=self)
         # the old stats must not reach an app rebuilding for the new data
         if self.zstats is not None:
