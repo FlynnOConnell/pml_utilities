@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from imgui_debugger import ConfigStore
+
 from mbo_utilities import imread
 from mbo_utilities.arrays.features import get_slider_dims
 from mbo_utilities.gui._ndviewer import MboNDViewer
@@ -38,6 +40,7 @@ from mbo_utilities.gui.run_gui import (
     _figure_kwargs_for_here,
     _squeeze_for_viewer,
 )
+from mbo_utilities.gui.widgets.style_editor import style_store
 
 __all__ = [
     "DOCKS",
@@ -53,12 +56,17 @@ __all__ = [
 
 
 def build_host(
-    data: Any = None, *, apps=None, size: tuple[int, int] = (1400, 900)
+    data: Any = None,
+    *,
+    apps=None,
+    size: tuple[int, int] = (1400, 900),
+    store: ConfigStore | None = None,
 ) -> AppHost:
     """The host on the viewer's figure, every app registered.
 
     ``data`` is anything ``imread`` opens, a synthetic movie when None. It
-    stays lazy: the viewer reads the frames it shows.
+    stays lazy: the viewer reads the frames it shows. ``store`` remembers
+    which apps were showing.
     """
     array = imread(movie_data() if data is None else data)
     viewer = MboNDViewer(
@@ -68,7 +76,7 @@ def build_host(
         cmap="gnuplot2",
         figure_kwargs=_figure_kwargs_for_here(size=size),
     )
-    host = AppHost(viewer.figure, data=array, slots=[])
+    host = AppHost(viewer.figure, data=array, slots=[], store=store)
     host.register(ViewerApp(viewer, array))
     host.register(*(ported_apps() + debug_apps(host) if apps is None else apps))
     return host
@@ -84,7 +92,7 @@ def run_app(
     """
     import fastplotlib as fpl
 
-    host = build_host(path, size=size)
+    host = build_host(path, size=size, store=style_store())
     host.figure.show()
     _after_show(host.apps["viewer"].viewer)
     host.figure.canvas.set_title(host.title())

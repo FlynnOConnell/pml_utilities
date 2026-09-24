@@ -49,6 +49,12 @@ class App:
     # whether this app can be mounted onto a subplot
     scene: ClassVar[bool] = False
 
+    # the top menu that lists this app: File, View, Docs or Debug
+    menu: ClassVar[str] = "View"
+    # the chord that shows or hides this app, written as the menu shows it
+    shortcut: ClassVar[str] = ""
+    # (chord, what it does) for each key on_keys handles, for the keybinds sheet
+    keybinds: ClassVar[tuple[tuple[str, str], ...]] = ()
     # menu and tab order, lower first
     order: ClassVar[int] = 100
     # thickness in pixels this app wants from its dock
@@ -79,6 +85,9 @@ class App:
         Called every frame whatever ``open`` says, because an app that owns
         its window owns the shortcut that opens it too.
         """
+
+    def on_keys(self, host: AppHost) -> None:
+        """Handle this app's keys; runs inside every imgui frame, showing or not."""
 
     def data_changed(self, host: AppHost) -> None:
         """The host opened other data: drop whatever was built on the old."""
