@@ -41,7 +41,9 @@ def host():
 def test_every_ported_app_declares_where_it_is_drawn():
     ported = apps_module.ported_apps()
     assert len({app.id for app in ported}) == len(ported)
-    assert all(app.dock or app.window for app in ported)
+    # an action (curate) and a background job are the only apps with no place
+    placeless = {app.id for app in ported if not (app.dock or app.window)}
+    assert placeless == {"curate", "isoview_projections"}
 
 
 def test_a_panel_widget_follows_its_own_is_supported(host):

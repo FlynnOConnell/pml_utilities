@@ -279,6 +279,7 @@ def test_the_isoview_editors_apply_only_to_isoview_data(host):
     for tool in ("crop", "segment", "deadpixel"):
         assert host.apps[f"isoview_{tool}"].available(host) is False
     assert host.apps["align_views"].available(host) is False
+    assert host.apps["pollen"].available(host) is False
 
 
 def test_the_biohpc_and_cloud_windows_draw(host):
