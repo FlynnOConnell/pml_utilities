@@ -230,6 +230,23 @@ def test_save_as_opens_on_its_key_and_reads_the_display(host, monkeypatch):
     save.open = False
 
 
+def test_the_process_tab_draws_its_pipelines(host):
+    _app._reported.discard("run")
+    run = host.apps["run"]
+    run.open = True
+    # a dock draws only its selected tab, so Process is left the only one
+    host.apps["viewer"].open = False
+    host.figure.canvas.force_draw()
+    host.figure.canvas.force_draw()
+    assert "run" not in _app._reported
+    context = run.context
+    assert context.image_widget is host.viewer
+    assert (context.nz, context.nc, context.frame_average) == (1, 1, 1)
+    host.set_data(average_frames(host.data, 2))
+    assert context.frame_average == 2
+    assert context._s2p_frame_average == 2
+
+
 def test_the_filter_subtracts_the_mean_before_the_blur():
     frame = np.full((4, 4), 3.0, dtype=np.float32)
     mean = np.full((4, 4), 1.0, dtype=np.float32)
