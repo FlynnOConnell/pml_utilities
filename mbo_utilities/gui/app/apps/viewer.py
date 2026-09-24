@@ -14,6 +14,7 @@ from mbo_utilities.arrays import FrameAveragedView, average_frames
 from mbo_utilities.arrays.features import find_slider_name
 from mbo_utilities.gui._colormaps import DEFAULT_COLORMAPS
 from mbo_utilities.gui._imgui_helpers import set_tooltip
+from mbo_utilities.gui._keyboard import arrow_claimed
 from mbo_utilities.gui._stats import current_breakout_key
 from mbo_utilities.gui.app._app import App
 from mbo_utilities.gui.app._keys import pressed
@@ -209,7 +210,8 @@ class ViewerApp(App):
             ("Down", z_name, -1),
             ("Up", z_name, 1),
         ):
-            if name is None:
+            # the ROI widget steps traces with up / down and claims them
+            if name is None or arrow_claimed(f"{key.lower()}_arrow"):
                 continue
             last = data.shape[0 if name == t_name else 2] - 1
             for chord, size in ((key, 1), (f"Shift+{key}", 10)):

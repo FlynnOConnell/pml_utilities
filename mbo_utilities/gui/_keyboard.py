@@ -233,7 +233,7 @@ def claim_arrow_keys(keys: tuple[str, ...] = _ARROW_KEYS):
         _arrow_claims[key] = frame
 
 
-def _arrow_claimed(key: str) -> bool:
+def arrow_claimed(key: str) -> bool:
     return imgui.get_frame_count() - _arrow_claims[key] <= 1
 
 
@@ -266,16 +266,14 @@ def handle_arrow_keys(parent: Any):
     t_max = shape[0] - 1
     current_t = current_indices[0]
 
-    if not _arrow_claimed("left_arrow") and imgui.is_key_pressed(imgui.Key.left_arrow):
+    if not arrow_claimed("left_arrow") and imgui.is_key_pressed(imgui.Key.left_arrow):
         new_t = max(0, current_t - step)
         if new_t != current_t:
             current_indices[0] = new_t
             parent.image_widget.indices = current_indices
             return
 
-    if not _arrow_claimed("right_arrow") and imgui.is_key_pressed(
-        imgui.Key.right_arrow
-    ):
+    if not arrow_claimed("right_arrow") and imgui.is_key_pressed(imgui.Key.right_arrow):
         new_t = min(t_max, current_t + step)
         if new_t != current_t:
             current_indices[0] = new_t
@@ -294,7 +292,7 @@ def handle_arrow_keys(parent: Any):
         z_max = shape[z_pos] - 1
         current_z = current_indices[z_pos]
 
-        if not _arrow_claimed("down_arrow") and imgui.is_key_pressed(
+        if not arrow_claimed("down_arrow") and imgui.is_key_pressed(
             imgui.Key.down_arrow
         ):
             new_z = max(0, current_z - step)
@@ -303,7 +301,7 @@ def handle_arrow_keys(parent: Any):
                 parent.image_widget.indices = current_indices
                 return
 
-        if not _arrow_claimed("up_arrow") and imgui.is_key_pressed(imgui.Key.up_arrow):
+        if not arrow_claimed("up_arrow") and imgui.is_key_pressed(imgui.Key.up_arrow):
             new_z = min(z_max, current_z + step)
             if new_z != current_z:
                 current_indices[z_pos] = new_z
