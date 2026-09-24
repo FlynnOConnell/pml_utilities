@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import numpy as np
 import pytest
+from imgui_bundle import imgui
 
 ui = pytest.importorskip("fastplotlib.ui")
 if not hasattr(ui, "ImguiWindow"):
@@ -11,9 +14,11 @@ if not hasattr(ui, "ImguiWindow"):
 pytest.importorskip("fastplotlib.widgets.nd_widget")
 
 from mbo_utilities import imread  # noqa: E402
-from mbo_utilities.arrays import NumpyArray  # noqa: E402
+from mbo_utilities.arrays import NumpyArray, average_frames  # noqa: E402
 from mbo_utilities.arrays.features import find_slider_name  # noqa: E402
+from mbo_utilities.gui.app import _app  # noqa: E402
 from mbo_utilities.gui.app.apps.open import NOTE  # noqa: E402
+from mbo_utilities.gui.app.apps.viewer import blur  # noqa: E402
 from mbo_utilities.gui.app.demo import movie_data  # noqa: E402
 
 
@@ -91,6 +96,40 @@ def test_a_panel_is_rebuilt_for_the_data_it_shows(host):
     host.set_data(imread(movie_data(nt=5, ny=32, nx=32)))
     assert summaries.widget is None
     assert summaries.available(host) is False
+
+
+def test_rebinning_keeps_the_blur_and_another_file_drops_it(host):
+    app = host.apps["viewer"]
+    app.sigma = 1.5
+    app.viewer.spatial_func = partial(blur, sigma=app.sigma)
+
+    host.set_data(average_frames(host.data, 4))
+    host.figure.canvas.force_draw()
+    assert host.data.shape[0] == 6
+    assert app.sigma == 1.5
+    assert app.viewer.spatial_func is not None
+
+    host.set_data(imread(movie_data(nt=8, ny=32, nx=32)))
+    host.figure.canvas.force_draw()
+    assert app.sigma == 0.0
+    assert app.viewer.spatial_func is None
+
+
+def test_every_section_of_the_panel_draws(host, monkeypatch):
+    monkeypatch.setattr(imgui, "collapsing_header", lambda *args, **kwargs: True)
+    _app._reported.discard("viewer")
+    host.figure.canvas.force_draw()
+    host.set_data(average_frames(host.data, 3))
+    host.figure.canvas.force_draw()
+    assert "viewer" not in _app._reported
+
+
+def test_the_blur_smooths_the_frame():
+    frame = np.zeros((9, 9), dtype=np.float32)
+    frame[4, 4] = 1.0
+    smoothed = blur(frame, 1.0)
+    assert smoothed[4, 4] < 1.0
+    assert smoothed.sum() == pytest.approx(1.0, abs=1e-4)
 
 
 def test_the_debug_panels_are_registered_as_apps(host):
