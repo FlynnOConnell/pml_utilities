@@ -239,7 +239,7 @@ def test_the_process_tab_draws_its_pipelines(host):
     host.figure.canvas.force_draw()
     host.figure.canvas.force_draw()
     assert "run" not in _app._reported
-    context = run.context
+    context = host.context
     assert context.image_widget is host.viewer
     assert (context.nz, context.nc, context.frame_average) == (1, 1, 1)
     host.set_data(average_frames(host.data, 2))

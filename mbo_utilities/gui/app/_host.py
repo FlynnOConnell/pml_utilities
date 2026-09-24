@@ -14,6 +14,7 @@ from mbo_utilities.gui._metadata_editor import MetadataEdits
 from mbo_utilities.gui._stats import ZStats, compute_zstats, hydrate_zstats
 from mbo_utilities.gui._top_strip import TopStrip
 from mbo_utilities.gui.app._app import DOCKS, App
+from mbo_utilities.gui.app._context import WindowContext
 from mbo_utilities.gui.app._dock import Dock
 from mbo_utilities.gui.app._keys import pressed
 from mbo_utilities.gui.app._menu import MenuBar
@@ -49,15 +50,17 @@ class AppHost:
     ``slots`` leaves out the subplots something else already draws on, such
     as the viewer's images.
 
-    An app reaches the host for four things: what data is open, where its
+    An app reaches the host for four things: what data is open; where its
     graphics go (the slots, the ``viewer`` showing the data when there is
     one, and the top ``strip``, which runs per-frame hooks and shows full
-    width panels as tabs under the menus), the shared position (the playhead, the channel and the z-plane
-    on screen), and what is computed or entered once about the open data
-    for every app to read (``zstats``, the summary stats of the viewer's
-    arrays, and ``metadata_edits``, what the user typed over its metadata).
-    That list is the contract; an app never puts state of its own on the
-    host.
+    width panels as tabs under the menus); the shared position (the
+    playhead, the channel and the z-plane on screen); and what is computed
+    or entered once about the open data for every app to read (``zstats``,
+    the summary stats of the viewer's arrays, and ``metadata_edits``, what
+    the user typed over its metadata). That list is the contract; an app
+    never puts state of its own on the host. ``context`` is the one
+    exception, and a temporary one: the preview window's surface, for the
+    widgets still written against it.
 
     With a ``store``, which apps are showing is saved as it changes and put
     back when an app registers, so the app opens the way it was left. An
@@ -101,6 +104,7 @@ class AppHost:
         self.playhead = Playhead()
         self.channel = 0
         self.zplane = 0
+        self.context = None if viewer is None else WindowContext(self)
         self.docks = {edge: Dock(self, edge) for edge in DOCKS}
         self.menu = MenuBar(self)
         # the top edge: the menu row, then panels apps hang off it as tabs
@@ -205,6 +209,8 @@ class AppHost:
         # the old stats must not reach an app rebuilding for the new data
         if self.zstats is not None:
             self.zstats.reset()
+        if self.context is not None:
+            self.context.reset()
         for app in list(self.apps.values()):
             app.data_changed(self)
         if self.zstats is not None:
@@ -238,6 +244,8 @@ class AppHost:
             self.mount(None, slot)
         for app in self.apps.values():
             app.close()
+        if self.context is not None:
+            self.context.close()
 
     def _frame(self, figure) -> None:
         """Run the apps' frame hooks, then let the docks claim their edges.
