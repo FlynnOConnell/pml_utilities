@@ -45,12 +45,10 @@ rows in the table - whose components can be promoted into the drawn store
 (y) or discarded (n). Loaded runs are remembered in a ``roi_runs.json``
 sidecar and restored on relaunch.
 
-Masks draw as thin rings by default (VIEW, or o to cycle): a filled
-footprint hides the very pixels you are judging, and at a handful of pixels
-per cell there is no rim thin enough to help. "circle" rings each ROI
-without covering it, "outline" traces its own border, and "fill" is the old
-shaded footprint. The vector modes are line geometry, so the stroke stays a
-hairline however far in you zoom.
+Masks draw as shaded footprints by default (VIEW, or o to cycle), so a
+freshly drawn ROI is visible at once. "circle" rings each ROI without
+covering it and "outline" traces its own border; these vector modes are
+line geometry, so the stroke stays a hairline however far in you zoom.
 
 With drawing off, clicking selects what is under the cursor - a derived
 component when its overlay shows there, else the drawn ROI - and clicking
@@ -167,7 +165,6 @@ from mbo_utilities.gui.roi_runs import (
     set_color,
 )
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
-from mbo_utilities.gui.widgets.widget_toggles import sub_enabled
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.results import unit_name
 from mbo_utilities.roi_workflow import (
@@ -641,7 +638,7 @@ class ManualRoiWidget:
         # or the filled footprint. The vector modes stroke in screen pixels
         # (line_width), the ring in image pixels (ring_scale over the mask's
         # equal-area radius)
-        self.mask_mode = MASK_MODES[0]
+        self.mask_mode = "fill"
         self.line_width = 1.0
         self.ring_scale = RING_SCALE
 
@@ -3303,21 +3300,19 @@ class ManualRoiWidget:
         self.summary.draw()
 
     def draw_rois(self):
-        """The ROIs tab: the control sections, each gated by its Widgets-menu
-        subwidget toggle and laid out like the Process tab's ROIs pipeline
-        (a ``separator_text`` title over one two-column settings table: dim
+        """The ROIs tab: the control sections, laid out like the Process tab's
+        ROIs pipeline (a ``separator_text`` title over one two-column settings table: dim
         captions in a fixed column, controls in the stretch column, counts
         right-aligned), the status row, then the table (:meth:`draw_tab`).
         Narrower than ``MIN_TAB_WIDTH`` the tab collapses to its placeholder
         line.
         """
-        sections = [("NAVIGATE", self._draw_navigate)]
-        if sub_enabled("manual_roi", "tools"):
-            sections.append(("DRAW", self._draw_draw_tools))
-        if sub_enabled("manual_roi", "overlay"):
-            sections.append(("VIEW", self._draw_view))
-        if sub_enabled("manual_roi", "labels"):
-            sections.append(("LABELS", self._draw_labels))
+        sections = [
+            ("NAVIGATE", self._draw_navigate),
+            ("DRAW", self._draw_draw_tools),
+            ("VIEW", self._draw_view),
+            ("LABELS", self._draw_labels),
+        ]
         with fit_width("ROI tools", min_width=MIN_TAB_WIDTH) as shown:
             if not shown:
                 return

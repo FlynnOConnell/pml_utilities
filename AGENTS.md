@@ -763,7 +763,8 @@ the other.
   tissue with the ROI's own plane lost in it. `ReferenceView` is that set in a
   `SummaryImageViewer` popup (masknmf's full-FOV viewer, `roi_provider(key)`
   returning `(points, rgba, thickness)` polylines: MESc's colours, every ROI
-  solid, the slider's ROI `SELECTED_THICKNESS`); its caption says how many of the
+  dimmed to `ON_ALPHA`, the slider's ROI drawn last, opaque, at
+  `SELECTED_THICKNESS` over a white `HALO_THICKNESS` halo); its caption says how many of the
   unit's ROIs a Z-stack holds when some were scanned outside it. Each
   `ReferenceImage` carries its `unit` and, for a stack, the `slice` its ROIs sit
   on, so the popup's one button (`on_show(unit, slice)`) displays that unit in
@@ -881,13 +882,14 @@ One logger tree, one console sink per process, one log file per background task.
   reads it back. `mbo --debug` / `mbo view --debug` set it for a run; the GUI
   "Debug logging" toggle (`_options_popup`, `file_dialog`) also persists the
   preference, which `run_gui` applies at launch unless `MBO_DEBUG` is already set.
-- Debug-only UI: a `WidgetEntry(debug_only=True)` is absent from the Widgets menu
-  and off whatever the stored state says while `log.debug_enabled()` is False. The
-  ImGui tab (`gui/widgets/imgui_debug.py`) is the one today: switches for Dear
-  ImGui's metrics/debugger, debug log, ID stack tool, demo and about windows,
-  which `PreviewDataWidget.draw` draws every frame so they survive a tab switch.
-  The style editor is not among them: it is always available at File > Style
-  Editor (§14).
+- The Widgets menu (`gui/widgets/widget_toggles.py`) is one checkbox per
+  `WidgetEntry`, no submenus: an entry shows or hides the whole widget, and a
+  widget's `toggle_key` is an entry's key. Below the checkboxes it opens the
+  floating tool windows, always available (no debug gate): Style Editor (§14),
+  ImGui Debugger (`gui/widgets/imgui_debug.py`: `imgui_debugger`'s variable
+  inspector over the preview window, and switches for Dear ImGui's
+  metrics/debugger, debug log, ID stack tool, demo and about windows, drawn from
+  `PreviewDataWidget.draw` every frame), BioHPC and Cloud.
 - The GUI's Debug panel (`gui_logger.GuiLogger`) receives every `mbo.*` record through
   a `GuiLogHandler` attached in `preview_data._init_logging`; it filters by level and
   logger, and its master level dropdown calls `set_global_level`.
@@ -1091,15 +1093,18 @@ When they disagree, fix the docs.
   `cache/`, `imgui/`, `hpc/runs/`, `tests/` (test data), `templates/`. Resolve with
   `get_mbo_dirs()`, never hardcode.
 - The imgui style is the user's, not the theme's. `gui/widgets/style_editor.py`
-  holds the one `imgui_debugger.StyleEditor` for the process, opened from File >
-  Style Editor and backed by an `imgui_debugger.ConfigStore` at
+  holds the one `imgui_debugger.StyleEditor` for the process, opened from
+  Widgets > Style Editor and backed by an `imgui_debugger.ConfigStore` at
   `get_mbo_dirs()["imgui"]`: `state.json` (the style as last left, plus the
   panel's own state), `styles/<name>.json` (named presets). It autosaves a
   second after the last slider moves; `apply_saved_style()` runs in
   `PreviewDataWidget.__init__` right after `style_imgui_opaque()`, so a saved
   style wins over the shipped theme. Window geometry stays imgui's, in
   `imgui/assets/app_settings/preview_settings.ini`. Nothing else writes the
-  style; `imgui_debug.py` deliberately has no style entry.
+  style; `imgui_debug.py` deliberately has no style entry. `imgui_debugger`
+  is a base dependency, pinned to a commit of its GitHub repository in
+  `pyproject.toml` (the PyPI release lags the API used here); bump the pin when
+  it moves.
 - The app host (`gui/app`) keeps its window geometry apart from the preview
   window's, in `get_mbo_dirs()["imgui"]/app.ini`.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,

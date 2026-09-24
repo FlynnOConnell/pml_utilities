@@ -644,14 +644,19 @@ class TestMaskAppearance:
 
 
 class TestMaskModes:
-    """Circle and outline draw the masks as line geometry instead of a
-    filled raster, so the pixels under an ROI stay readable - the point of
-    the modes, and the default the widget opens in.
+    """Fill is the default, so a drawn ROI shows at once; circle and outline
+    draw the masks as line geometry, so the pixels under an ROI stay readable.
     """
 
-    def test_circles_are_the_default_and_leave_the_fill_off(self, widget):
+    def test_fill_is_the_default(self, widget):
         widget.add_roi(square(10, 10, 9))
-        assert widget.mask_mode == "circle"
+        assert widget.mask_mode == "fill"
+        assert widget.overlay.visible and not widget.outline.visible
+        assert widget.overlay.data.value[..., 3].any()
+
+    def test_circles_leave_the_fill_off(self, widget):
+        widget.set_mask_mode("circle")
+        widget.add_roi(square(10, 10, 9))
         assert widget.outline.visible and not widget.overlay.visible
         # thin, and thin on screen: a hairline however far in you zoom
         assert widget.line_width == 1.0
@@ -659,6 +664,7 @@ class TestMaskModes:
         assert widget.outline.size_space == "screen"
 
     def test_the_circle_rings_the_mask_it_stands_in_for(self, widget):
+        widget.set_mask_mode("circle")
         widget.add_roi(square(10, 10, 9))  # pixels 10..19, centre (15, 15)
         widget.select_roi(-1)
         (ring,) = paths(widget.outline)
@@ -671,6 +677,7 @@ class TestMaskModes:
         assert 5.0 < radius[0] < 7.0
 
     def test_the_ring_size_slider_scales_it(self, widget):
+        widget.set_mask_mode("circle")
         widget.add_roi(square(10, 10, 9))
         widget.select_roi(-1)
         before = np.ptp(paths(widget.outline)[0], axis=0)
@@ -681,6 +688,7 @@ class TestMaskModes:
 
     def test_a_tiny_mask_still_gets_a_ring(self, widget):
         """The case the modes exist for: a few pixels per cell."""
+        widget.set_mask_mode("circle")
         widget.add_roi(square(20, 20, 2))  # 3x3, the smallest ROI allowed
         widget.select_roi(-1)
         (ring,) = paths(widget.outline)
@@ -698,6 +706,7 @@ class TestMaskModes:
         assert np.allclose(points.max(axis=0), (20.0, 20.0))
 
     def test_each_roi_keeps_its_own_color(self, widget):
+        widget.set_mask_mode("circle")
         widget.add_roi(square(10, 10, 9))
         widget.add_roi(square(30, 30, 9))
         widget.select_roi(-1)
@@ -712,6 +721,7 @@ class TestMaskModes:
         assert (colors[finite][:, 3] == 1.0).all()
 
     def test_the_selection_gets_a_white_ring_outside_its_own(self, widget):
+        widget.set_mask_mode("circle")
         widget.add_roi(square(10, 10, 9))
         widget.select_roi(0)
         rings = paths(widget.outline)
@@ -734,12 +744,14 @@ class TestMaskModes:
         assert widget.mask_mode == "circle"
 
     def test_deleting_the_last_roi_empties_the_overlay(self, widget):
+        widget.set_mask_mode("circle")
         widget.add_roi(square(10, 10, 9))
         assert widget.outline.visible
         widget.delete_roi(0)
         assert not widget.outline.visible
 
     def test_derived_sets_draw_as_paths_too(self, widget):
+        widget.set_mask_mode("circle")
         widget._add_derived(make_result(widget, [disc(40, 40), disc(52, 52)]))
         assert widget.derived_outline.visible
         assert not widget.derived_overlay.visible
@@ -750,6 +762,7 @@ class TestMaskModes:
         assert not widget.derived_outline.visible
 
     def test_a_rejected_component_draws_dimmer(self, widget):
+        widget.set_mask_mode("circle")
         widget._add_derived(make_result(widget, [disc(40, 40)]))
         opaque = widget.derived_outline.colors.value[0, 3]
         widget.set_accepted(0, 0)
@@ -757,6 +770,7 @@ class TestMaskModes:
         assert widget.derived_outline.colors.value[0, 3] < opaque
 
     def test_the_width_slider_reaches_both_lines(self, widget):
+        widget.set_mask_mode("circle")
         widget.add_roi(square(10, 10, 9))
         widget._add_derived(make_result(widget, [disc(40, 40)]))
         widget.line_width = 2.5

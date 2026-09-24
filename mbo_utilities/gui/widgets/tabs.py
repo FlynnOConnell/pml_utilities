@@ -149,8 +149,7 @@ class RoiTableTabWidget(Widget):
     name = "ROIs"
     tab_label = "ROIs"
     placement = "tab"
-    # hidden when either Manual ROI Labeling or its ROI-table section is off
-    toggle_key = "manual_roi.table"
+    toggle_key = "manual_roi"
     priority = 45
 
     @classmethod
@@ -191,7 +190,7 @@ class TraceTableTabWidget(Widget):
     name = "Traces"
     tab_label = "Traces"
     placement = "tab"
-    toggle_key = "manual_roi.traces"
+    toggle_key = "manual_roi"
     priority = 46
 
     @classmethod

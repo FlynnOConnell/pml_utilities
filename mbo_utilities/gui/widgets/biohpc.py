@@ -35,7 +35,6 @@ from imgui_bundle import (
 )
 
 from mbo_utilities.gui._imgui_helpers import fit_width, set_tooltip
-from mbo_utilities.gui.widgets.widget_toggles import sub_enabled
 
 __all__ = ["draw_biohpc_popup", "draw_biohpc_tab"]
 
@@ -605,26 +604,15 @@ class _BioHpcPanel:
         imgui.spacing()
 
         if imgui.begin_tab_bar("##biohpc_subtabs"):
-            if (
-                sub_enabled("biohpc", "transfer")
-                and imgui.begin_tab_item(f"{_icon('ICON_FA_CLOUD_ARROW_UP')} Transfer")[
-                    0
-                ]
-            ):
+            if imgui.begin_tab_item(f"{_icon('ICON_FA_CLOUD_ARROW_UP')} Transfer")[0]:
                 imgui.spacing()
                 self._draw_transfer_tab()
                 imgui.end_tab_item()
-            if (
-                sub_enabled("biohpc", "metadata")
-                and imgui.begin_tab_item(f"{_icon('ICON_FA_TAGS')} Metadata")[0]
-            ):
+            if imgui.begin_tab_item(f"{_icon('ICON_FA_TAGS')} Metadata")[0]:
                 imgui.spacing()
                 self._draw_metadata_tab()
                 imgui.end_tab_item()
-            if (
-                sub_enabled("biohpc", "analysis")
-                and imgui.begin_tab_item(f"{_icon('ICON_FA_SLIDERS')} Analysis")[0]
-            ):
+            if imgui.begin_tab_item(f"{_icon('ICON_FA_SLIDERS')} Analysis")[0]:
                 imgui.spacing()
                 self._draw_analysis_tab()
                 imgui.end_tab_item()
@@ -632,7 +620,7 @@ class _BioHpcPanel:
             jobs_label = f"{_icon('ICON_FA_LIST_CHECK')} Jobs"
             if njobs:
                 jobs_label += f" ({njobs})"
-            if sub_enabled("biohpc", "jobs") and imgui.begin_tab_item(jobs_label)[0]:
+            if imgui.begin_tab_item(jobs_label)[0]:
                 imgui.spacing()
                 self._draw_jobs_tab()
                 imgui.end_tab_item()
@@ -1126,17 +1114,6 @@ def draw_biohpc_popup(parent: Any) -> None:
     """The BioHPC window, opened from the Widgets menu."""
     if not getattr(parent, "_show_biohpc", False):
         return
-    from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
-    # the panel gates its sub-tabs on these; the window being open means on
-    for key in (
-        "biohpc",
-        "biohpc.transfer",
-        "biohpc.metadata",
-        "biohpc.analysis",
-        "biohpc.jobs",
-    ):
-        set_widget_enabled(key, True, persist=False)
     imgui.set_next_window_size(imgui.ImVec2(880, 620), imgui.Cond_.first_use_ever)
     opened, keep = imgui.begin("BioHPC", True)
     if not keep:

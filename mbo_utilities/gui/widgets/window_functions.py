@@ -19,7 +19,7 @@ class WindowFunctionsWidget(Widget):
 
     name = "Window Functions"
     priority = 10  # show first
-    toggle_key = "preview.window_functions"
+    toggle_key = "preview"
 
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
@@ -122,7 +122,7 @@ class SpatialFunctionsWidget(Widget):
 
     name = "Spatial Functions"
     priority = 11  # show after window functions
-    toggle_key = "preview.spatial_functions"
+    toggle_key = "preview"
 
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
