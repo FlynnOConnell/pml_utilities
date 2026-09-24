@@ -10,6 +10,7 @@ from mbo_utilities.gui.app.apps.help import HelpApp
 from mbo_utilities.gui.app.apps.keybinds import KeybindsApp
 from mbo_utilities.gui.app.apps.log import LogApp
 from mbo_utilities.gui.app.apps.manual_roi import ManualRoiApp
+from mbo_utilities.gui.app.apps.mesc import MescApp
 from mbo_utilities.gui.app.apps.metadata import MetadataApp
 from mbo_utilities.gui.app.apps.open import OpenApp
 from mbo_utilities.gui.app.apps.options import OptionsApp
@@ -31,6 +32,7 @@ __all__ = [
     "KeybindsApp",
     "LogApp",
     "ManualRoiApp",
+    "MescApp",
     "MetadataApp",
     "OpenApp",
     "OptionsApp",
@@ -63,6 +65,7 @@ def ported_apps() -> list[App]:
         SignalQualityApp(),
         RunApp(),
         ManualRoiApp(),
+        MescApp(),
         ConsoleApp(),
         DiagnosticsApp(),
         LogApp(),
