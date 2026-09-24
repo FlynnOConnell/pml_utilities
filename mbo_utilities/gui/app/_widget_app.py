@@ -32,18 +32,18 @@ class WidgetApp(App):
         super().__init__()
         self.widget = None
         # is_supported for the open array; None until asked
-        self._supported: bool | None = None
+        self.supported: bool | None = None
 
     def available(self, host: AppHost) -> bool:
         if host.context is None:
             return False
-        if self._supported is None:
-            self._supported = self.widget_class.is_supported(host.context)
-        return self._supported
+        if self.supported is None:
+            self.supported = self.widget_class.is_supported(host.context)
+        return self.supported
 
     def data_changed(self, host: AppHost) -> None:
         self.close()
-        self._supported = None
+        self.supported = None
 
     def draw_canvas(self, host: AppHost, size: imgui.ImVec2) -> None:
         if self.widget is None:

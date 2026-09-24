@@ -9,6 +9,10 @@ from mbo_utilities.gui.widgets import (
     isoview_deadpixel,
     isoview_segment,
 )
+from mbo_utilities.gui.widgets.pipelines.isoview import (
+    maybe_refresh_raw_projections,
+    maybe_spawn_raw_projections,
+)
 from mbo_utilities.lazy_array import base_array
 
 # (module that draws the editor, the prefix its window state lives under, title)
@@ -54,3 +58,23 @@ class IsoviewToolApp(App):
                 setattr(context, f"{self.prefix}_window_open", False)
         self.module.draw_window(context)
         self.open = self._was_open = getattr(context, f"{self.prefix}_window_open")
+
+
+class IsoviewProjectionsJob(App):
+    """Raw XY projections of an open raw IsoView tree, written in the background.
+
+    The segment and dead-pixel editors preview from them, and the
+    Projections panel appears once the job has written them. Listed in no
+    menu: it has nothing to show, only work to start and watch.
+    """
+
+    id = "isoview_projections"
+    title = "IsoView projections"
+    menu = ""
+
+    def available(self, host) -> bool:
+        return host.context is not None
+
+    def frame(self, host) -> None:
+        maybe_spawn_raw_projections(host.context)
+        maybe_refresh_raw_projections(host.context)
