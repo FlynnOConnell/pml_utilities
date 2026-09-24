@@ -67,8 +67,6 @@ class ProjectionsViewer(Widget):
     """Browse XY/XZ/YZ projections produced for the loaded isoview stack."""
 
     name = "Projections"
-    priority = 65  # right after SummaryImageViewer (60)
-    toggle_key = "preview.projections"
 
     def __init__(self, parent: Any):
         super().__init__(parent)

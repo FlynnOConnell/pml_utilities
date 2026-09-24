@@ -286,8 +286,6 @@ class SummaryImageViewer(Widget):
     """Browse 2D summary images stored in an array's metadata."""
 
     name = "Summary Images"
-    priority = 60
-    toggle_key = "preview.summary_images"
 
     def __init__(self, parent: Any):
         super().__init__(parent)

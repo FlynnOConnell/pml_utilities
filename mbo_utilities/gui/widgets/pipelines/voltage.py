@@ -1302,11 +1302,8 @@ class VoltagePipelineWidget(PipelineWidget):
 
     def _load_traces(self, results: Path) -> None:
         """Switch Manual ROI Labeling on and load a results file into its Traces tab."""
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
         sync = getattr(self.parent, "sync_manual_roi", None)
         if sync is not None:
-            set_widget_enabled("manual_roi", True)
             sync(True)
         widget = getattr(self.parent, "manual_roi", None)
         if widget is None:

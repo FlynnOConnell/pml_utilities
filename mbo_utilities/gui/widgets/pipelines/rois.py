@@ -130,13 +130,10 @@ class RoiPipelineWidget(PipelineWidget):
         return getattr(self.parent, "manual_roi", None)
 
     def _turn_on(self) -> None:
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
         sync = getattr(self.parent, "sync_manual_roi", None)
         if sync is None:
             self._last_status = "Manual ROI Labeling is unavailable for this view."
             return
-        set_widget_enabled("manual_roi", True)
         sync(True)
         if self.roi is None:
             self._last_status = "Manual ROI Labeling could not be built for this view."

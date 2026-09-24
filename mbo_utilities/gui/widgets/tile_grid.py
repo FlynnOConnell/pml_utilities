@@ -143,8 +143,6 @@ class TileGridViewer(Widget):
     """Preview all tiles of a tiled acquisition laid out per z-block."""
 
     name = "Tile Grid"
-    priority = 66  # right after Projections (65)
-    toggle_key = "preview.tile_grid"
 
     def __init__(self, parent: Any):
         super().__init__(parent)

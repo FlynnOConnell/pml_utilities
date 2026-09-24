@@ -8,16 +8,6 @@ from mbo_utilities.gui._cloud import draw_cloud_tab
 from mbo_utilities.gui._imgui_helpers import fit_width
 from mbo_utilities.gui.app._app import App
 from mbo_utilities.gui.widgets.biohpc import draw_biohpc_tab
-from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
-# the BioHPC panel shows a sub-tab only while its entry is on
-BIOHPC_TABS = (
-    "biohpc",
-    "biohpc.transfer",
-    "biohpc.metadata",
-    "biohpc.analysis",
-    "biohpc.jobs",
-)
 
 
 class BiohpcApp(App):
@@ -37,8 +27,6 @@ class BiohpcApp(App):
         return host.context is not None
 
     def draw_canvas(self, host, size: imgui.ImVec2) -> None:
-        for key in BIOHPC_TABS:
-            set_widget_enabled(key, True, persist=False)
         with fit_width():
             draw_biohpc_tab(host.context)
 
