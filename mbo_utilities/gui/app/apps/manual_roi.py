@@ -12,7 +12,9 @@ from mbo_utilities.gui.manual_roi import (
     attach_roi_widget,
     detach_roi_widget,
 )
+from mbo_utilities.gui.roi_runs import run_dir_complete
 from mbo_utilities.lazy_array import base_array
+from mbo_utilities.roi_workflow import labels_path
 
 logger = log.get("gui.app")
 
@@ -36,7 +38,8 @@ class ManualRoiApp(App):
     parks the ROIs and runs on the context. Opening another recording parks
     them under the recording they were drawn on, so switching back (another
     MESc unit and back, or a rebin of the same one) finds them where they
-    were, background runs included.
+    were, background runs included. A recording that already has ROIs saved
+    beside it turns labeling on when it opens.
     """
 
     id = "manual_roi"
@@ -51,12 +54,22 @@ class ManualRoiApp(App):
         # the recording on screen, and the ROI state of every one left for another
         self.recording = None
         self.parked: dict[tuple, tuple] = {}
+        # the recording last checked for ROIs saved beside it
+        self._checked = None
 
     def available(self, host) -> bool:
         return host.context is not None
 
     def frame(self, host) -> None:
         context = host.context
+        recording = base_array(host.data)
+        if recording is not self._checked:
+            self._checked = recording
+            source = recording.source_path
+            tag = str(getattr(recording, "unit_key", None) or "").replace("/", "_")
+            saved = source is not None and labels_path(source, tag)
+            if saved and (saved.exists() or run_dir_complete(saved.parent)):
+                self.open = True
         if self.open and context.manual_roi is None:
             self.recording = base_array(host.data)
             if attach_roi_widget(context) is not None:
