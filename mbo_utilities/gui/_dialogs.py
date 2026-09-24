@@ -486,7 +486,7 @@ def swap_viewer_array(parent: Any, arr, title: str | None = None) -> None:
     parent.shape = display.shape
     _, nc, nz, _, _ = arr.shape
     parent.nc, parent.nz = nc, nz
-    parent._custom_metadata = {}
+    parent._custom_metadata.clear()
     parent._update_window_funcs()
     parent.set_context_info()
 
@@ -668,7 +668,7 @@ def load_new_data(parent: Any, path: str):
         parent._refresh_widgets()
 
         # clear stale metadata overrides from previous file
-        parent._custom_metadata = {}
+        parent._custom_metadata.clear()
 
         # Reinitialize viewer based on new data type (new architecture)
         from mbo_utilities.gui.viewers import TimeSeriesViewer, get_viewer_class
