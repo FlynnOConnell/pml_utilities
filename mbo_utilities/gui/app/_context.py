@@ -51,6 +51,8 @@ class WindowContext(Suite2pState):
         self.manual_roi = None
         self._manual_roi_store = None
         self._manual_roi_runs = None
+        # a line scan's per-line traces while the ROI widget is on
+        self.linescan_traces = None
         # set by a MESc recording's reference view
         self.reference_view = None
         self._force_run_tab = False
@@ -82,6 +84,22 @@ class WindowContext(Suite2pState):
     def sync_manual_roi(self, enabled: bool) -> None:
         """Turn manual ROI labeling on or off, as the ROIs pipeline asks."""
         self.host.apps["manual_roi"].open = enabled
+
+    @property
+    def _show_help_popup(self) -> bool:
+        return self.host.apps["help"].open
+
+    @_show_help_popup.setter
+    def _show_help_popup(self, value: bool) -> None:
+        self.host.apps["help"].open = value
+
+    @property
+    def _help_select_doc(self) -> str | None:
+        return self.host.apps["help"].wanted
+
+    @_help_select_doc.setter
+    def _help_select_doc(self, value: str | None) -> None:
+        self.host.apps["help"].wanted = value
 
     def _get_data_arrays(self) -> list:
         return [self.host.data]
