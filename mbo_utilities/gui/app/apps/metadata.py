@@ -13,6 +13,7 @@ class MetadataApp(App):
 
     id = "metadata"
     title = "Metadata"
+    shortcut = "m"
     window = True
     order = 70
     window_size = (720, 560)
