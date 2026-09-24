@@ -28,6 +28,17 @@ def confirm_prompt(prompt):
     return (prompt.path if prompt.open else None), False
 
 
+class ThreeRois:
+    """An array that asks to be split into its three ROIs, as ``roi=0`` does."""
+
+    def __init__(self):
+        self.roi = 0
+        self.fix_phase = True
+
+    def iter_rois(self):
+        yield from (1, 2, 3) if self.roi == 0 else (self.roi,)
+
+
 def settle(host) -> None:
     """Draw until the host's summary stats are in, at most ten seconds."""
     deadline = time.time() + 10
@@ -289,6 +300,16 @@ def test_the_biohpc_and_cloud_windows_draw(host):
     host.figure.canvas.force_draw()
     host.figure.canvas.force_draw()
     assert not {"biohpc", "cloud"} & _app._reported
+
+
+def test_an_array_split_by_roi_gives_one_view_each():
+    from mbo_utilities.gui.app.apps.viewer import split_rois
+
+    views, names = split_rois(ThreeRois())
+    assert [view.roi for view in views] == [1, 2, 3]
+    assert names == ["ROI 1", "ROI 2", "ROI 3"]
+    assert not any(view.fix_phase for view in views)
+    assert split_rois(imread(movie_data(nt=2, ny=8, nx=8)))[1] is None
 
 
 def test_the_filter_subtracts_the_mean_before_the_blur():
