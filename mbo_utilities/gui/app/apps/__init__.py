@@ -16,6 +16,7 @@ from mbo_utilities.gui.app.apps.panels import (
     SummaryImagesApp,
     TileGridApp,
 )
+from mbo_utilities.gui.app.apps.signal_quality import SignalQualityApp
 from mbo_utilities.gui.app.apps.viewer import ViewerApp
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "OpenApp",
     "OptionsApp",
     "ProjectionsApp",
+    "SignalQualityApp",
     "SummaryImagesApp",
     "TileGridApp",
     "ViewerApp",
@@ -46,6 +48,7 @@ def ported_apps() -> list[App]:
         SummaryImagesApp(),
         TileGridApp(),
         MetadataApp(),
+        SignalQualityApp(),
         DiagnosticsApp(),
         LogApp(),
     ]
