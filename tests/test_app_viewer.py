@@ -28,6 +28,25 @@ def confirm_prompt(prompt):
     return (prompt.path if prompt.open else None), False
 
 
+# what the spies below saw drawn this test
+TAB_LABELS = []
+COLORED_TEXT = []
+REAL_BEGIN_TAB_ITEM = imgui.begin_tab_item
+REAL_TEXT_COLORED = imgui.text_colored
+
+
+def spy_begin_tab_item(label, *args, **kwargs):
+    """Stands in for imgui.begin_tab_item, keeping the label."""
+    TAB_LABELS.append(label)
+    return REAL_BEGIN_TAB_ITEM(label, *args, **kwargs)
+
+
+def spy_text_colored(color, text, *args, **kwargs):
+    """Stands in for imgui.text_colored, keeping the text."""
+    COLORED_TEXT.append(text)
+    return REAL_TEXT_COLORED(color, text, *args, **kwargs)
+
+
 class ThreeRois:
     """An array that asks to be split into its three ROIs, as ``roi=0`` does."""
 
@@ -310,6 +329,45 @@ def test_an_array_split_by_roi_gives_one_view_each():
     assert names == ["ROI 1", "ROI 2", "ROI 3"]
     assert not any(view.fix_phase for view in views)
     assert split_rois(imread(movie_data(nt=2, ny=8, nx=8)))[1] is None
+
+
+def test_saved_rois_beside_the_data_turn_labeling_on(tmp_path):
+    from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
+
+    np.save(tmp_path / "movie.npy", movie_data(nt=4, ny=32, nx=32))
+    store = RoiLabelStore(1, 32, 32)
+    store.add_roi(0, np.pad(np.ones((8, 8), bool), 12))
+    LabelsZarr(tmp_path / "manual_labels.zarr").save(store)
+
+    host = build_host(tmp_path / "movie.npy", size=(600, 400))
+    try:
+        host.figure.show()
+        host.figure.canvas.force_draw()
+        assert host.apps["manual_roi"].open is True
+        assert host.context.manual_roi.counts == [64]
+    finally:
+        host.close()
+        host.viewer.close()
+
+
+def test_help_and_keybinds_gain_the_roi_pages_with_labeling_on(host, monkeypatch):
+    monkeypatch.setattr(imgui, "begin_tab_item", spy_begin_tab_item)
+    monkeypatch.setattr(imgui, "text_colored", spy_text_colored)
+    for app_id in ("help", "keybinds"):
+        host.apps[app_id].open = True
+    TAB_LABELS.clear()
+    host.figure.canvas.force_draw()
+    assert "ROI Labeling" not in TAB_LABELS
+
+    host.apps["manual_roi"].open = True
+    host.figure.canvas.force_draw()
+    TAB_LABELS.clear()
+    COLORED_TEXT.clear()
+    host.figure.canvas.force_draw()
+    assert "ROI Labeling" in TAB_LABELS
+    assert "ROIs" in COLORED_TEXT
+    host.apps["manual_roi"].open = False
+    host.figure.canvas.force_draw()
 
 
 def test_the_filter_subtracts_the_mean_before_the_blur():
