@@ -11,6 +11,7 @@ from mbo_utilities import __version__, log
 from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
 from mbo_utilities.gui.app._app import DOCKS, App
 from mbo_utilities.gui.app._dock import Dock
+from mbo_utilities.gui.app._keys import pressed
 from mbo_utilities.gui.app._menu import MenuBar
 from mbo_utilities.gui.app._window import AppWindow
 from mbo_utilities.gui.playhead import Playhead, TimeAxis
@@ -19,8 +20,12 @@ from mbo_utilities.preferences import get_mbo_dirs
 
 if TYPE_CHECKING:
     from fastplotlib.layouts import ImguiFigure, Subplot
+    from imgui_debugger import ConfigStore
 
 logger = log.get("gui.app")
+
+# the store key holding which apps were showing
+SHOWING = "app_host"
 
 
 class AppHost:
@@ -44,6 +49,10 @@ class AppHost:
     graphics go, and the shared position (the playhead, the channel and the
     z-plane on screen). That list is the contract; an app never puts state
     of its own on the host.
+
+    With a ``store``, which apps are showing is saved as it changes and put
+    back when an app registers, so the app opens the way it was left. An
+    app that owns its window (a prompt, an imgui tool) keeps its own.
     """
 
     def __init__(
@@ -51,6 +60,7 @@ class AppHost:
         figure: ImguiFigure,
         data: Any = None,
         slots: list[Subplot] | None = None,
+        store: ConfigStore | None = None,
     ):
         # the fps overlay's renderer leaves its own context current; use the figure's
         imgui.set_current_context(figure.imgui_renderer.imgui_context)
@@ -62,6 +72,8 @@ class AppHost:
 
         self.figure = figure
         self.data = data
+        self.store = store
+        self._showing = {} if store is None else dict(store.panel_state(SHOWING))
         self.apps: dict[str, App] = {}
         self.windows: dict[str, AppWindow] = {}
         self.slots: list[Subplot] = list(figure) if slots is None else list(slots)
@@ -81,6 +93,8 @@ class AppHost:
             if app.id in self.apps:
                 raise ValueError(f"an app with id {app.id!r} is already registered")
             self.apps[app.id] = app
+            if not app.owns_window:
+                app.open = self._showing.get(app.id, app.open)
             if app.window:
                 window = AppWindow(self, app)
                 self.windows[app.id] = window
@@ -89,6 +103,19 @@ class AppHost:
 
     def ordered(self) -> list[App]:
         return sorted(self.apps.values(), key=lambda app: (app.order, app.title))
+
+    def keys(self) -> None:
+        """The frame's shortcuts: p folds the right dock, an app's chord shows or
+        hides it, then every app handles its own keys.
+        """
+        if pressed("p"):
+            self.docks["right"].collapsed = not self.docks["right"].collapsed
+        for app in self.ordered():
+            if not app.available(self):
+                continue
+            if app.shortcut and pressed(app.shortcut):
+                app.open = not app.open
+            app.on_keys(self)
 
     def time_axis(self) -> TimeAxis:
         """The open data's T axis on the playhead's clock."""
@@ -184,3 +211,10 @@ class AppHost:
                 app.frame(self)
         for dock in self.docks.values():
             dock.sync()
+        if self.store is not None:
+            showing = {
+                app.id: app.open for app in self.apps.values() if not app.owns_window
+            }
+            if showing != self._showing:
+                self._showing = showing
+                self.store.set_panel_state(SHOWING, showing)
