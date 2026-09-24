@@ -93,17 +93,16 @@ class TestFigureKwargsForHere:
 class TestDataVis:
     def test_build_show_close(self):
         from mbo_utilities.gui import DataVis
-        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
 
         vis = DataVis(_array(), size=FIGURE_SIZE)
         try:
-            # the side widget is on before show, the way masknmf builds
-            assert isinstance(vis.widget, PreviewDataWidget)
+            # the apps are registered before show, the way masknmf builds
+            assert {"viewer", "save_as", "run"} <= set(vis.host.apps)
             assert "built" in repr(vis)
             out = vis.show()
             assert vis.show() is out, "show is idempotent"
             assert "shown" in repr(vis)
-            # a frame renders with the widget attached pre-show
+            # a frame renders with the apps registered pre-show
             for _ in range(2):
                 vis.figure.canvas.draw()
             assert vis.iw is vis.image_widget
@@ -119,7 +118,7 @@ class TestDataVis:
 
         vis = DataVis(_array(), widget="none", size=FIGURE_SIZE)
         try:
-            assert vis.widget is None
+            assert list(vis.host.apps) == ["viewer"]
             assert "NumpyArray" in repr(vis)
         finally:
             vis.close()
