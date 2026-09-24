@@ -1557,16 +1557,24 @@ Four places already have the shape and are the template:
 - `TraceProfile` (§7.6) and the results zarr (§7.5): the pipeline declares what its
   data means, generic views render any pipeline.
 - `gui/app` (`mbo app`), the preview window's replacement in progress. `AppHost`
-  is built on the viewer's figure (an `NDWidget` makes its own), holds the open
-  `LazyArray`, the `Playhead` and the channel and z-plane on screen, and says
-  `data_changed` to every app when other data opens. An `App` draws through
-  `draw_options` / `draw_canvas` into a dock tab or a floating window the host
-  picks. Ported: the viewer (`ViewerApp`), Open, Summary Images, Projections,
-  Tile Grid, Metadata, Diagnostics, Log and the imgui tools. Not yet: window and
-  spatial functions, frame averaging, scan phase, Signal Quality, keyboard
-  shortcuts, Save As, Set Metadata, the Process tab, Manual ROI, MESc, IsoView
-  tools, the process console, Help / Keybinds / Options, BioHPC / Cloud.
-  `HostAsParent` is the shim a ported `Widget` reads; it only shrinks.
+  is built on the viewer's figure (an `NDWidget` makes its own) and holds the
+  open `LazyArray`, the `viewer`, the `Playhead` with the channel and z-plane on
+  screen, and what every app reads about the open data: `zstats` (`ZStats`, the
+  summary stats) and `metadata_edits` (`MetadataEdits`). Opening other data says
+  `data_changed` to every app. An `App` draws through `draw_options` /
+  `draw_canvas` into a dock tab or a floating window the host picks, is listed
+  under its `menu` with its `shortcut`, names its keys in `keybinds`, reports
+  running work through `progress` and can draw on the menu bar. The host saves
+  which apps are showing. State the old window kept on itself moves onto one
+  object both windows share (`ZStats`, `MetadataEdits`, `SaveAs` with
+  `SaveSource`), so a port changes the old window's attribute reads, not its
+  behaviour. Ported: the viewer with the Image tab (projection, blur, mean
+  subtraction, frame averaging, scan phase, contrast), Open, Save As, Set
+  Metadata, Metadata, Signal Quality, the Process Console, Options, Help,
+  Keybinds, Summary Images, Projections, Tile Grid, Diagnostics, Log and the
+  imgui tools. Not yet: the Process tab, Manual ROI, MESc, the IsoView tools,
+  BioHPC / Cloud. `HostAsParent` is the shim a ported `Widget` reads; it only
+  shrinks.
 
 Everything else is the opposite shape (counts from 2026-09-19):
 
