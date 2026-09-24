@@ -17,6 +17,7 @@ from mbo_utilities.gui.app.apps.panels import (
     SummaryImagesApp,
     TileGridApp,
 )
+from mbo_utilities.gui.app.apps.run import RunApp
 from mbo_utilities.gui.app.apps.save_as import SaveAsApp
 from mbo_utilities.gui.app.apps.set_metadata import SetMetadataApp
 from mbo_utilities.gui.app.apps.signal_quality import SignalQualityApp
@@ -32,6 +33,7 @@ __all__ = [
     "OpenApp",
     "OptionsApp",
     "ProjectionsApp",
+    "RunApp",
     "SaveAsApp",
     "SetMetadataApp",
     "SignalQualityApp",
@@ -57,6 +59,7 @@ def ported_apps() -> list[App]:
         MetadataApp(),
         SetMetadataApp(),
         SignalQualityApp(),
+        RunApp(),
         ConsoleApp(),
         DiagnosticsApp(),
         LogApp(),
