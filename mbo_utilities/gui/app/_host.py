@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import imgui_bundle
 from imgui_bundle import imgui, implot
 
 from mbo_utilities import __version__, log
@@ -76,11 +77,16 @@ class AppHost:
         style_imgui_opaque()
         apply_saved_style()
         imgui.get_io().set_ini_filename(str(Path(get_mbo_dirs()["imgui"]) / "app.ini"))
+        # the emphasis the pipeline settings and the stats plots draw in
+        roboto = Path(imgui_bundle.__file__).parent / "assets" / "fonts" / "Roboto"
+        self.bold_font = imgui.get_io().fonts.add_font_from_file_ttf(
+            str(roboto / "Roboto-Bold.ttf"), 14, imgui.ImFontConfig()
+        )
 
         self.figure = figure
         self.data = data
         self.viewer = viewer
-        self.zstats = None if viewer is None else ZStats(viewer)
+        self.zstats = None if viewer is None else ZStats(viewer, self.bold_font)
         self.metadata_edits = MetadataEdits()
         self.store = store
         self._showing = {} if store is None else dict(store.panel_state(SHOWING))
