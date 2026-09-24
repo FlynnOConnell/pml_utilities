@@ -7,6 +7,7 @@ each pipeline is self-contained with its own settings dataclass and config ui.
 from abc import ABC, abstractmethod
 from typing import Any
 
+from mbo_utilities.gui._availability import HAS_SUITE2P
 from mbo_utilities.pipeline_registry import PipelineInfo
 
 # how a pipeline consumes each non-spatial axis: a start:stop "range", "all" of
@@ -119,3 +120,64 @@ class PipelineWidget(ABC):
         override in subclasses to release resources like open windows,
         background threads, file handles, etc.
         """
+
+
+class Suite2pState:
+    """The suite2p run settings a window keeps for its Process tab, made on first use.
+
+    Building them imports the suite2p schema, and doing that while the
+    first frame paints freezes the window for seconds, so ``s2p``,
+    ``s2p_db`` and ``s2p_extras`` stay None until read, and None for good
+    when suite2p is not installed.
+    """
+
+    def __init__(self):
+        self._s2p = None
+        self._s2p_db = None
+        self._s2p_extras = None
+        self._s2p_savepath_flash_start = None
+        self._s2p_savepath_flash_count = 0
+        self._s2p_show_savepath_popup = False
+        self._s2p_folder_dialog = None
+
+    @property
+    def s2p(self):
+        """Suite2p processing settings (upstream schema)."""
+        if self._s2p is None and HAS_SUITE2P:
+            from mbo_utilities.gui.widgets.pipelines.settings import Suite2pSettings
+            from mbo_utilities.preferences import get_s2p_torch_device
+
+            self._s2p = Suite2pSettings()
+            # the persisted torch device, unless a dataset's settings.npy overrides it
+            self._s2p.torch_device = get_s2p_torch_device()
+        return self._s2p
+
+    @s2p.setter
+    def s2p(self, value):
+        self._s2p = value
+
+    @property
+    def s2p_db(self):
+        """Suite2p input/output db (paths, plane counts), upstream schema."""
+        if self._s2p_db is None and HAS_SUITE2P:
+            from mbo_utilities.gui.widgets.pipelines.settings import Suite2pDB
+
+            self._s2p_db = Suite2pDB()
+        return self._s2p_db
+
+    @s2p_db.setter
+    def s2p_db(self, value):
+        self._s2p_db = value
+
+    @property
+    def s2p_extras(self):
+        """Mbo-only suite2p helper fields (dff_*, accept_all_cells, etc.)."""
+        if self._s2p_extras is None and HAS_SUITE2P:
+            from mbo_utilities.gui.widgets.pipelines.settings import MboSuite2pExtras
+
+            self._s2p_extras = MboSuite2pExtras()
+        return self._s2p_extras
+
+    @s2p_extras.setter
+    def s2p_extras(self, value):
+        self._s2p_extras = value

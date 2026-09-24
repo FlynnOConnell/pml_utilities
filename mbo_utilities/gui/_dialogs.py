@@ -6,6 +6,7 @@ This module contains file/folder dialog handling and data loading logic.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,68 @@ def _draw_open_prompts(parent: Any) -> None:
         add_recent_file(str(p), file_type=kind)
         set_last_dir(f"open_{kind}", str(p))
         load_new_data(parent, str(p))
+
+
+_PLANE_DIR_RE = re.compile(r"^plane\d+$", re.IGNORECASE)
+
+
+def outdir_from_fpath(fpath) -> str | None:
+    """Default output dir from a loaded fpath: the parent folder when fpath
+    is a file, or the folder itself when fpath IS a directory. Used to
+    seed the Run-tab output field so re-runs land alongside the source
+    data unless the user explicitly browses elsewhere.
+    """
+    if fpath is None:
+        return None
+    if isinstance(fpath, (list, tuple)):
+        if not fpath:
+            return None
+        fpath = fpath[0]
+    try:
+        p = Path(str(fpath))
+    except (TypeError, ValueError):
+        return None
+    if not p.exists():
+        return None
+    return str(p if p.is_dir() else p.parent)
+
+
+def suite2p_output_dir(fpath) -> str | None:
+    """Detect a suite2p output location from a file or directory path.
+
+    Returns the directory suite2p would have written into (the parent of
+    the `plane*/` subdirs), or None if `fpath` doesn't look like a suite2p
+    output. Used to auto-populate the GUI's output-folder field when the
+    user opens an existing data.bin / ops.npy / volumetric results dir.
+
+    Cases handled:
+      - file inside `…/<root>/plane0/` (e.g. data.bin, ops.npy) → `<root>`
+      - directory `…/<root>/plane0/`                            → `<root>`
+      - directory `…/<root>/` containing one or more `plane*/`  → `<root>`
+    """
+    if fpath is None:
+        return None
+    if isinstance(fpath, (list, tuple)):
+        if not fpath:
+            return None
+        fpath = fpath[0]
+    try:
+        p = Path(str(fpath))
+    except (TypeError, ValueError):
+        return None
+    if not p.exists():
+        return None
+
+    parent = p.parent if p.is_file() else p
+    if _PLANE_DIR_RE.match(parent.name):
+        return str(parent.parent)
+    try:
+        for child in parent.iterdir():
+            if child.is_dir() and _PLANE_DIR_RE.match(child.name):
+                return str(parent)
+    except (OSError, PermissionError):
+        pass
+    return None
 
 
 def _resolve_plane_dir(p: Path) -> Path | None:
