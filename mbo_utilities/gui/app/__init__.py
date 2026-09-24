@@ -60,15 +60,18 @@ def build_host(
     data: Any = None,
     *,
     apps=None,
-    size: tuple[int, int] = (1400, 900),
+    size: tuple[int, int] | None = (1400, 900),
     store: ConfigStore | None = None,
+    figure_kwargs: dict | None = None,
 ) -> AppHost:
     """The host on the viewer's figure, every app registered.
 
     ``data`` is anything ``imread`` opens, a synthetic movie when None. It
     stays lazy: the viewer reads the frames it shows, one subplot per ROI
-    when the array asks to split them. ``store`` remembers which apps were
-    showing.
+    when the array asks to split them. ``size`` None sizes the canvas for
+    wherever this runs (the screen, or a notebook cell); ``figure_kwargs``
+    go to the figure, e.g. ``canvas="jupyter"``. ``store`` remembers which
+    apps were showing.
     """
     array = imread(movie_data() if data is None else data)
     views, names = split_rois(array)
@@ -78,7 +81,7 @@ def build_host(
         slider_dim_names=getattr(array, "slider_dim_labels", None)
         or get_slider_dims(array),
         cmap="gnuplot2",
-        figure_kwargs=_figure_kwargs_for_here(size=size),
+        figure_kwargs={**_figure_kwargs_for_here(size=size), **(figure_kwargs or {})},
     )
     host = AppHost(viewer.figure, data=array, slots=[], store=store, viewer=viewer)
     host.register(ViewerApp(array))
