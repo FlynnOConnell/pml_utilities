@@ -247,6 +247,34 @@ def test_the_process_tab_draws_its_pipelines(host):
     assert context._s2p_frame_average == 2
 
 
+def test_showing_rois_turns_labeling_on_and_hiding_parks_them(host):
+    rois = host.apps["manual_roi"]
+    rois.open = True
+    host.figure.canvas.force_draw()
+    widget = host.context.manual_roi
+    assert widget is not None
+    assert host.strip.panels
+
+    rois.open = False
+    host.figure.canvas.force_draw()
+    assert host.context.manual_roi is None
+    assert host.context._manual_roi_store is widget.store
+
+    rois.open = True
+    host.figure.canvas.force_draw()
+    assert host.context.manual_roi.store is widget.store
+
+    host.set_data(average_frames(host.data, 2))
+    host.figure.canvas.force_draw()
+    assert host.context.manual_roi.store is widget.store
+
+    host.set_data(imread(movie_data(nt=8, ny=32, nx=32)))
+    host.figure.canvas.force_draw()
+    assert host.context.manual_roi.store is not widget.store
+    rois.open = False
+    host.figure.canvas.force_draw()
+
+
 def test_the_filter_subtracts_the_mean_before_the_blur():
     frame = np.full((4, 4), 3.0, dtype=np.float32)
     mean = np.full((4, 4), 1.0, dtype=np.float32)
