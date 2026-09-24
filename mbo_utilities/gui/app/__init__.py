@@ -69,7 +69,7 @@ def build_host(
         figure_kwargs=_figure_kwargs_for_here(size=size),
     )
     host = AppHost(viewer.figure, data=array, slots=[])
-    host.register(ViewerApp(viewer))
+    host.register(ViewerApp(viewer, array))
     host.register(*(ported_apps() + debug_apps(host) if apps is None else apps))
     return host
 
