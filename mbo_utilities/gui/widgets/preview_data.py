@@ -60,6 +60,7 @@ from mbo_utilities.gui._options_popup import draw_options_popup
 from mbo_utilities.gui._popups import draw_process_console_popup, draw_tools_popups
 from mbo_utilities.gui._save_as import draw_saveas_popup
 from mbo_utilities.gui._stats import (
+    ZStats,
     compute_zstats,
     draw_stats_section,
     hydrate_zstats,
@@ -304,15 +305,15 @@ class PreviewDataWidget(EdgeWindow):
         # compute_zstats runs its own single background worker, so call it
         # directly (no extra wrapper thread).
         if threading_enabled:
-            hydrated = hydrate_zstats(self)
+            hydrated = hydrate_zstats(self.zstats)
             pending = [i for i in range(self.num_graphics) if not hydrated[i]]
             if pending:
                 self.logger.debug(
                     f"Starting zstats computation for {len(pending)} array(s)..."
                 )
                 for i in pending:
-                    self._zstats_running[i] = True
-                compute_zstats(self, only=pending)
+                    self.zstats.running[i] = True
+                compute_zstats(self.zstats, only=pending)
 
     def _init_logging(self):
         """Initialize logging system."""
@@ -525,7 +526,6 @@ class PreviewDataWidget(EdgeWindow):
 
         # Selection state
         self._selected_pipelines = None
-        self._selected_array = 0
         self._selected_planes = None
         self._planes_str = ""
 
@@ -556,24 +556,8 @@ class PreviewDataWidget(EdgeWindow):
         self._widgets = get_supported_widgets(self)
 
     def _init_zstats(self):
-        """Initialize z-stats tracking state.
-
-        Per-array slots are dicts keyed by the breakout-combo tuple (``()``
-        when the array has no breakout dim); compute_zstats populates one
-        entry per sampled (tile, camera, …) combination. ``_zstats_spec[i]``
-        holds the `SummaryStatsSpec` used to map sliders back to a combo.
-        """
-        self._zstats = [{} for _ in range(self.num_graphics)]
-        self._zstats_means = [{} for _ in range(self.num_graphics)]
-        self._zstats_mean_scalar = [{} for _ in range(self.num_graphics)]
-        self._zstats_spec = [None] * self.num_graphics
-        self._zstats_done = [False] * self.num_graphics
-        self._zstats_running = [False] * self.num_graphics
-        self._zstats_progress = [0.0] * self.num_graphics
-        self._zstats_current_z = [0] * self.num_graphics
-        self._zstats_z_indices = [None] * self.num_graphics
-        # series axis when both zplanes and timepoints exist ("z" or "t")
-        self._stats_axis_pref = "z"
+        """The viewer's summary stats, shared with the app's Signal Quality."""
+        self.zstats = ZStats(self.image_widget, bold_font=self._bold_font)
 
     def _init_saveas_state(self):
         """Initialize save-as dialog state."""
@@ -715,7 +699,7 @@ class PreviewDataWidget(EdgeWindow):
         from mbo_utilities.gui._top_strip import TopPanel
         from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
 
-        want = widget_enabled("signal_quality") and any(self._zstats_done)
+        want = widget_enabled("signal_quality") and any(self.zstats.done)
         if want and not self.top_strip.has("zstats"):
             self.top_strip.register(
                 TopPanel(
@@ -1179,16 +1163,16 @@ class PreviewDataWidget(EdgeWindow):
         sigma = self.gaussian_sigma if self.gaussian_sigma > 0 else None
 
         # Pick the breakout combo matching the current sliders so mean
-        # subtraction matches what the user sees. `_zstats_means[i]` is now
+        # subtraction matches what the user sees. `zstats.means[i]` is now
         # `dict[combo_tuple, (n_slices, Yb, Xb)]`; fall back to the
         # no-breakout slot, then the first computed combo.
         from mbo_utilities.gui._stats import current_breakout_key
 
         def _means_for(i):
-            slot = self._zstats_means[i] if i < len(self._zstats_means) else None
+            slot = self.zstats.means[i] if i < len(self.zstats.means) else None
             if not isinstance(slot, dict) or not slot:
                 return None
-            key = current_breakout_key(self, i)
+            key = current_breakout_key(self.zstats, i)
             out = slot.get(key)
             if out is None:
                 out = slot.get(())
@@ -1197,7 +1181,7 @@ class PreviewDataWidget(EdgeWindow):
             return out
 
         any_mean_sub = self._mean_subtraction and any(
-            self._zstats_done[i] and _means_for(i) is not None
+            self.zstats.done[i] and _means_for(i) is not None
             for i in range(self.num_graphics)
         )
 
@@ -1208,7 +1192,7 @@ class PreviewDataWidget(EdgeWindow):
         spatial_funcs = []
         for i in range(self.num_graphics):
             mean_img = None
-            if self._mean_subtraction and self._zstats_done[i]:
+            if self._mean_subtraction and self.zstats.done[i]:
                 means_arr = _means_for(i)
                 if means_arr is not None:
                     # means_arr rows follow the sampled planes, which may be
@@ -1229,7 +1213,7 @@ class PreviewDataWidget(EdgeWindow):
         planes; map the absolute plane to the nearest sampled plane. Falls
         back to a clamped index when no sampling record is available.
         """
-        idxs = getattr(self, "_zstats_z_indices", None)
+        idxs = self.zstats.z_indices
         if idxs and i < len(idxs) and idxs[i] and len(idxs[i]) == n_rows:
             target = int(z_idx) + 1  # records are 1-based plane numbers
             planes = idxs[i]
@@ -1459,11 +1443,11 @@ class PreviewDataWidget(EdgeWindow):
         """The Signal Quality tab: the metric table (the plot is the top
         strip's ``Signal Quality`` panel, which has the width for it).
         """
-        draw_stats_section(self, plot=False)
+        draw_stats_section(self.zstats, plot=False)
 
     def draw_stats_plot(self):
         """The Signal Quality top panel: the plot, full canvas width."""
-        draw_stats_section(self, table=False)
+        draw_stats_section(self.zstats, table=False)
 
     def draw_preview_section(self):
         """Draw preview section using modular UI widgets."""
@@ -1476,11 +1460,11 @@ class PreviewDataWidget(EdgeWindow):
 
     def compute_zstats(self):
         """Compute z-stats for all graphics."""
-        compute_zstats(self)
+        compute_zstats(self.zstats)
 
     def refresh_zstats(self):
         """Reset and recompute z-stats for all arrays."""
-        refresh_zstats(self)
+        refresh_zstats(self.zstats)
 
     def cleanup(self):
         """Clean up resources when the GUI is closing."""

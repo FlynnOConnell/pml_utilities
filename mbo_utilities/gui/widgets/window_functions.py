@@ -168,7 +168,7 @@ class SpatialFunctionsWidget(Widget):
             parent.gaussian_sigma = max(0.0, new_sigma)
 
         # mean subtraction checkbox
-        zstats_ready = all(parent._zstats_done)
+        zstats_ready = all(parent.zstats.done)
         if not zstats_ready:
             imgui.begin_disabled()
 

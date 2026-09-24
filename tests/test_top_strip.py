@@ -164,9 +164,8 @@ class TestSignalQualitySplit:
             "std": rng.random(n) * 10,
             "snr": rng.random(n) * 5,
         }
-        gui._zstats = [{(): stats}]
-        gui._zstats_done = [True]
-        gui.nz = n
+        gui.zstats.stats = [{(): stats}]
+        gui.zstats.done = [True]
 
     def test_menu_draws_in_the_strip_not_the_right_panel(self, monkeypatch):
         import mbo_utilities.gui.widgets.preview_data as pd
@@ -193,7 +192,7 @@ class TestSignalQualitySplit:
             self._fake_zstats(gui)
             gui._sync_top_panels()
             assert gui.top_strip.has("zstats")
-            gui._zstats_done = [False]
+            gui.zstats.done = [False]
             gui._sync_top_panels()
             assert not gui.top_strip.has("zstats")
         finally:
@@ -398,7 +397,7 @@ class TestMenuRowCluster:
         # waits for it to finish
         iw.figure.canvas.draw()
         deadline = time.time() + 30
-        while any(gui._zstats_running) and time.time() < deadline:
+        while any(gui.zstats.running) and time.time() < deadline:
             time.sleep(0.05)
         pm = get_process_manager()
         for job in pm.get_jobs():

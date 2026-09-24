@@ -609,14 +609,14 @@ def _write_mean_subtract_stack(parent: Any) -> str | None:
     """If mean-subtract is enabled and zstats are computed, write a (C, Z, Y, X)
     npy file and return its path. Returns None if not applicable / unavailable.
 
-    ``_zstats_means[i]`` is a dict keyed by the breakout-combo tuple; this
+    ``zstats.means[i]`` is a dict keyed by the breakout-combo tuple; this
     writer picks the combo currently shown in the stats tab (which follows
     the sliders) so the saved stack matches what the user sees in the GUI.
     """
     if not getattr(parent, "_saveas_video_mean_subtract", False):
         return None
-    means = getattr(parent, "_zstats_means", None)
-    done = getattr(parent, "_zstats_done", None)
+    means = parent.zstats.means
+    done = parent.zstats.done
     if not means or not done:
         return None
     import tempfile
@@ -632,7 +632,7 @@ def _write_mean_subtract_stack(parent: Any) -> str | None:
         slot = means[i]
         if not isinstance(slot, dict) or not slot:
             return None
-        arr = slot.get(current_breakout_key(parent, i))
+        arr = slot.get(current_breakout_key(parent.zstats, i))
         if arr is None:
             arr = slot.get(())
         if arr is None:

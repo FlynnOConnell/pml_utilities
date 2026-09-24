@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 from imgui_bundle import imgui, implot
 
+from mbo_utilities import log
 from mbo_utilities.arrays.features import canonical_axis, find_slider_name
 from mbo_utilities.arrays.features._summary_stats import (
     STATS_SUMMARY_VERSION,
@@ -39,10 +40,46 @@ _ACTIVE_Z_COLOR = (0.13, 0.55, 0.13, 1.00)
 # background compute). Negligible vs the per-point read cost.
 _ZSTATS_YIELD_S = 0.001
 
+logger = log.get("gui.stats")
 
-def _slider_labels(parent: Any) -> dict[str, str]:
+
+class ZStats:
+    """Summary stats of a viewer's arrays: one slot per array, filled in the background.
+
+    Each per-array slot maps a group combo (a sampled tile, camera or
+    channel; ``()`` when there is none) to its stats dict, its binned mean
+    images and their scalar means. ``spec`` holds the ``SummaryStatsSpec``
+    that maps the viewer's sliders back to a combo. The compute thread
+    writes the slots, the GUI only reads them, so nothing here is locked.
+    """
+
+    def __init__(self, viewer, bold_font=None):
+        self.viewer = viewer
+        # the font the plots' axis labels are drawn in, when one was loaded
+        self.bold_font = bold_font
+        # which scrollable axis runs along the table rows: "z" or "t"
+        self.axis_pref = "z"
+        # the graphic whose stats the table shows; one past the last is combined
+        self.selected = 0
+        self.reset()
+
+    def reset(self) -> None:
+        """Empty every slot, one per array the viewer holds now."""
+        n = len(self.viewer.data)
+        self.stats = [{} for _ in range(n)]
+        self.means = [{} for _ in range(n)]
+        self.mean_scalar = [{} for _ in range(n)]
+        self.spec = [None] * n
+        self.done = [False] * n
+        self.running = [False] * n
+        self.progress = [0.0] * n
+        self.current_z = [0] * n
+        self.z_indices = [None] * n
+
+
+def _slider_labels(zs: ZStats) -> dict[str, str]:
     """Live slider labels keyed by canonical axis (for spec display names)."""
-    iw = getattr(parent, "image_widget", None)
+    iw = zs.viewer
     names = tuple(getattr(iw, "_slider_dim_names", None) or ()) if iw else ()
     out: dict[str, str] = {}
     for canon in ("Z", "T", "C"):
@@ -52,7 +89,7 @@ def _slider_labels(parent: Any) -> dict[str, str]:
     return out
 
 
-def _spec_for(parent: Any, arr: Any) -> SummaryStatsSpec:
+def _spec_for(zs: ZStats, arr: Any) -> SummaryStatsSpec:
     """Resolve the array's `SummaryStatsSpec` for the rendered (squeezed) view.
 
     The array owns the classification (`summary_stats_dim_role` /
@@ -72,8 +109,8 @@ def _spec_for(parent: Any, arr: Any) -> SummaryStatsSpec:
         if not arr.average_frames and getattr(arr, "can_average", False):
             arr.average_frames = True
 
-    pref = str(getattr(parent, "_stats_axis_pref", "z")).lower()
-    labels = _slider_labels(parent)
+    pref = zs.axis_pref
+    labels = _slider_labels(zs)
     spec_fn = getattr(arr, "summary_stats_spec", None)
     if callable(spec_fn):
         return spec_fn(dims=dims, shape=shape, series_pref=pref, labels=labels)
@@ -126,7 +163,7 @@ def _read_stat_point(
     return data.astype(np.float32, copy=False)
 
 
-def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
+def compute_zstats_single_array(zs: ZStats, idx: int, arr: Any):
     """Compute summary stats for one array per its `SummaryStatsSpec`.
 
     The array owns the layout (`arr.summary_stats_spec`): the *series* axis
@@ -135,7 +172,7 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
     stored separately so the display can follow the sliders; *reduce* axes are
     collapsed per point. Each (group-combo, series-index) point is read
     subsampled + spatially binned to bound memory, then each metric in
-    ``spec.metrics`` is applied. Storage per array: ``parent._zstats[idx-1]`` /
+    ``spec.metrics`` is applied. Storage per array: ``zs.stats[idx-1]`` /
     ``_zstats_means[idx-1]`` / ``_zstats_mean_scalar[idx-1]`` are dicts keyed
     by the group-combo tuple (``()`` when there is no group), and
     ``_zstats_spec[idx-1]`` holds the spec used to map sliders back to a combo.
@@ -145,17 +182,13 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
     arr.fix_phase = False
     t_total_start = time.perf_counter()
 
-    spec = _spec_for(parent, arr)
-    if not hasattr(parent, "_zstats_spec"):
-        parent._zstats_spec = [None] * max(
-            idx, int(getattr(parent, "num_graphics", idx))
-        )
-    parent._zstats_spec[idx - 1] = spec
-    parent.logger.debug(f"[zstats] start array={idx} {spec.describe()}")
+    spec = _spec_for(zs, arr)
+    zs.spec[idx - 1] = spec
+    logger.debug(f"[zstats] start array={idx} {spec.describe()}")
 
-    parent._zstats[idx - 1] = {}
-    parent._zstats_means[idx - 1] = {}
-    parent._zstats_mean_scalar[idx - 1] = {}
+    zs.stats[idx - 1] = {}
+    zs.means[idx - 1] = {}
+    zs.mean_scalar[idx - 1] = {}
 
     series_indices = spec.series.indices if spec.series else [0]
     n_slices = len(series_indices)
@@ -165,15 +198,11 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
 
     # record the 1-based series numbers actually sampled so the table/plot
     # axes stay truthful when the series axis is subsampled.
-    if not hasattr(parent, "_zstats_z_indices"):
-        parent._zstats_z_indices = [None] * max(
-            idx, int(getattr(parent, "num_graphics", idx))
-        )
-    parent._zstats_z_indices[idx - 1] = [int(s) + 1 for s in series_indices]
+    zs.z_indices[idx - 1] = [int(s) + 1 for s in series_indices]
 
     combos = list(product(*[g.indices for g in spec.groups])) if spec.groups else [()]
     total_steps = max(1, len(combos) * n_slices)
-    parent._zstats_progress[idx - 1] = 0.01
+    zs.progress[idx - 1] = 0.01
 
     total_read_ms = 0.0
     total_compute_ms = 0.0
@@ -195,8 +224,8 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
             means.append(mean_img)
 
             step += 1
-            parent._zstats_progress[idx - 1] = step / total_steps
-            parent._zstats_current_z[idx - 1] = s
+            zs.progress[idx - 1] = step / total_steps
+            zs.current_z[idx - 1] = s
 
             t_after_compute = time.perf_counter()
             total_read_ms += (t_after_read - t_iter_start) * 1000.0
@@ -206,14 +235,14 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
             # cede the GIL between heavy reads so the GUI loop gets a window.
             time.sleep(_ZSTATS_YIELD_S)
 
-        parent._zstats[idx - 1][combo] = stats
+        zs.stats[idx - 1][combo] = stats
         means_stack = np.stack(means)
-        parent._zstats_means[idx - 1][combo] = means_stack
-        parent._zstats_mean_scalar[idx - 1][combo] = means_stack.mean(axis=(1, 2))
+        zs.means[idx - 1][combo] = means_stack
+        zs.mean_scalar[idx - 1][combo] = means_stack.mean(axis=(1, 2))
 
-    parent._zstats_done[idx - 1] = True
-    parent._zstats_running[idx - 1] = False
-    parent.logger.debug(
+    zs.done[idx - 1] = True
+    zs.running[idx - 1] = False
+    logger.debug(
         f"[zstats] done array={idx} "
         f"total={(time.perf_counter() - t_total_start) * 1000:.0f}ms "
         f"reads={total_read_ms:.0f}ms compute={total_compute_ms:.0f}ms "
@@ -223,7 +252,7 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
 
     # Persist the full per-combo stats (+ mean stack) to the backing zarr
     # store so the next open hydrates instead of recomputing.
-    _persist_stats(parent, idx, arr, spec)
+    _persist_stats(zs, idx, arr, spec)
 
 
 def _base_array(arr: Any) -> Any:
@@ -242,13 +271,13 @@ def _base_array(arr: Any) -> Any:
     return cur
 
 
-def _persist_stats(parent: Any, idx: int, arr: Any, spec: SummaryStatsSpec) -> None:
+def _persist_stats(zs: ZStats, idx: int, arr: Any, spec: SummaryStatsSpec) -> None:
     """Write the array's computed stats (+ binned mean stack) to its store."""
     base = _base_array(arr)
     save = getattr(base, "save_summary_stats", None)
     if not callable(save):
         return
-    zstats = parent._zstats[idx - 1]
+    zstats = zs.stats[idx - 1]
     if not zstats:
         return
     combos = list(zstats.keys())
@@ -260,14 +289,14 @@ def _persist_stats(parent: Any, idx: int, arr: Any, spec: SummaryStatsSpec) -> N
             spec.series.name if spec.series else None,
             [m.key for m in spec.metrics],
         ),
-        "series_pref": str(getattr(parent, "_stats_axis_pref", "z")).lower(),
-        "series_indices": [int(s) for s in (parent._zstats_z_indices[idx - 1] or [])],
+        "series_pref": zs.axis_pref,
+        "series_indices": [int(s) for s in (zs.z_indices[idx - 1] or [])],
         "spatial_bin": int(spec.spatial_bin),
         "combos": [[int(v) for v in c] for c in combos],
         "stats": [zstats[c] for c in combos],
     }
     means = None
-    means_map = parent._zstats_means[idx - 1]
+    means_map = zs.means[idx - 1]
     try:
         stacks = [means_map.get(c) for c in combos]
         if stacks and all(s is not None for s in stacks):
@@ -276,15 +305,15 @@ def _persist_stats(parent: Any, idx: int, arr: Any, spec: SummaryStatsSpec) -> N
         means = None
     try:
         if save(payload, means):
-            parent.logger.debug(
+            logger.debug(
                 f"[zstats] persisted array={idx} ({len(combos)} combos)"
             )
     except Exception as e:
-        parent.logger.debug(f"[zstats] persist array={idx} failed: {e}")
+        logger.debug(f"[zstats] persist array={idx} failed: {e}")
 
 
-def _hydrate_one(parent: Any, idx: int, arr: Any) -> bool:
-    """Load cached stats for one array and populate parent state. Returns True
+def _hydrate_one(zs: ZStats, idx: int, arr: Any) -> bool:
+    """Load cached stats for one array and populate its slots. Returns True
     when the cache matched the current dims/shape/series and was applied.
     """
     base = _base_array(arr)
@@ -296,7 +325,7 @@ def _hydrate_one(parent: Any, idx: int, arr: Any) -> bool:
         return False
     payload, means = loaded
 
-    spec = _spec_for(parent, arr)
+    spec = _spec_for(zs, arr)
     sig = stats_signature(
         spec.dims,
         spec.shape,
@@ -311,9 +340,9 @@ def _hydrate_one(parent: Any, idx: int, arr: Any) -> bool:
     if len(combos) != len(stats_list):
         return False
 
-    parent._zstats_spec[idx - 1] = spec
-    parent._zstats[idx - 1] = {c: stats_list[k] for k, c in enumerate(combos)}
-    parent._zstats_z_indices[idx - 1] = [
+    zs.spec[idx - 1] = spec
+    zs.stats[idx - 1] = {c: stats_list[k] for k, c in enumerate(combos)}
+    zs.z_indices[idx - 1] = [
         int(s) for s in payload.get("series_indices", [])
     ]
 
@@ -324,35 +353,35 @@ def _hydrate_one(parent: Any, idx: int, arr: Any) -> bool:
             mimg = np.asarray(means[k], dtype=np.float32)
             mean_map[c] = mimg
             scalar_map[c] = mimg.mean(axis=(1, 2))
-    parent._zstats_means[idx - 1] = mean_map
-    parent._zstats_mean_scalar[idx - 1] = scalar_map
+    zs.means[idx - 1] = mean_map
+    zs.mean_scalar[idx - 1] = scalar_map
 
-    parent._zstats_done[idx - 1] = True
-    parent._zstats_running[idx - 1] = False
-    parent._zstats_progress[idx - 1] = 1.0
-    parent.logger.debug(f"[zstats] hydrated array={idx} from store · {spec.describe()}")
+    zs.done[idx - 1] = True
+    zs.running[idx - 1] = False
+    zs.progress[idx - 1] = 1.0
+    logger.debug(f"[zstats] hydrated array={idx} from store · {spec.describe()}")
     return True
 
 
-def hydrate_zstats(parent: Any) -> list[bool]:
+def hydrate_zstats(zs: ZStats) -> list[bool]:
     """Populate stats from each array's cached store. Returns a per-array
     ``hydrated`` flag list; arrays that returned False must be computed.
     """
-    n = parent.num_graphics
+    n = len(zs.stats)
     out = [False] * n
-    if not parent.image_widget or not parent.image_widget.data:
+    if not zs.viewer or not zs.viewer.data:
         return out
-    for i, arr in enumerate(parent.image_widget.data):
+    for i, arr in enumerate(zs.viewer.data):
         if i >= n:
             break
         try:
-            out[i] = _hydrate_one(parent, i + 1, arr)
+            out[i] = _hydrate_one(zs, i + 1, arr)
         except Exception as e:
-            parent.logger.debug(f"[zstats] hydrate array={i + 1} failed: {e}")
+            logger.debug(f"[zstats] hydrate array={i + 1} failed: {e}")
     return out
 
 
-def compute_zstats(parent: Any, only: list[int] | None = None):
+def compute_zstats(zs: ZStats, only: list[int] | None = None):
     """Compute z-stats for all graphics (or only the given 0-based indices).
 
     Runs in a single background thread that processes arrays sequentially.
@@ -360,87 +389,51 @@ def compute_zstats(parent: Any, only: list[int] | None = None):
     main render/event loop low so the UI stays responsive during compute.
     Non-blocking: returns immediately, safe to call from the main thread.
     """
-    if not parent.image_widget or not parent.image_widget.data:
+    if not zs.viewer or not zs.viewer.data:
         return
 
-    arrays = list(enumerate(parent.image_widget.data, start=1))
+    arrays = list(enumerate(zs.viewer.data, start=1))
 
     def _run():
         for idx, arr in arrays:
             if only is not None and (idx - 1) not in only:
                 continue
             try:
-                compute_zstats_single_array(parent, idx, arr)
+                compute_zstats_single_array(zs, idx, arr)
             except Exception as e:
-                parent._zstats_running[idx - 1] = False
-                parent.logger.debug(f"[zstats] array={idx} failed: {e}")
+                zs.running[idx - 1] = False
+                logger.debug(f"[zstats] array={idx} failed: {e}")
 
     threading.Thread(target=_run, daemon=True).start()
 
 
-def refresh_zstats(parent: Any):
+def refresh_zstats(zs: ZStats):
     """
     Reset and recompute z-stats for all arrays.
 
     This is useful after loading new data or when z-stats need to be
     recalculated (e.g., after changing the number of z-planes).
     """
-    if not parent.image_widget:
+    if not zs.viewer:
         return
 
-    # Use num_graphics which matches len(iw.graphics)
-    n = parent.num_graphics
-
-    # Reset z-stats state. Per-array slots are dicts keyed by the group-combo
-    # tuple (``()`` when there is no group), populated by
-    # `compute_zstats_single_array`; ``_zstats_spec[i]`` holds that array's
-    # `SummaryStatsSpec` so the display can map sliders back to a combo.
-    parent._zstats = [{} for _ in range(n)]
-    parent._zstats_means = [{} for _ in range(n)]
-    parent._zstats_mean_scalar = [{} for _ in range(n)]
-    parent._zstats_spec = [None] * n
-    parent._zstats_done = [False] * n
-    parent._zstats_running = [False] * n
-    parent._zstats_progress = [0.0] * n
-    parent._zstats_current_z = [0] * n
-    parent._zstats_z_indices = [None] * n
-
-    # Reset progress state for each graphic to allow new progress display
+    zs.reset()
+    n = len(zs.stats)
     for i in range(n):
         reset_progress_state(f"zstats_{i}")
-
-    # lowercase both sides: dims labels are not normalized, and a missed Z falls
-    # through to shape[1], which on a 5D TCZYX array is C
-    arr = parent.image_widget.data[0] if parent.image_widget.data else None
-    dims = getattr(arr, "dims", None) if arr is not None else None
-    dims_lower = tuple(d.lower() for d in dims) if dims else None
-    if dims_lower is not None and "z" in dims_lower:
-        z_idx = dims_lower.index("z")
-        parent.nz = parent.shape[z_idx]
-    elif arr is not None and hasattr(arr, "nz"):
-        # lazy arrays carry a canonical Z size (.nz) even when dims
-        # don't expose a "z" label — prefer that over a positional guess.
-        parent.nz = int(arr.nz)
-    elif len(parent.shape) >= 4:
-        parent.nz = parent.shape[1]
-    elif len(parent.shape) == 3:
-        parent.nz = 1
-    else:
-        parent.nz = 1
-
-    parent.logger.debug(f"Refreshing z-stats for {n} arrays, nz={parent.nz}")
+    logger.debug(f"Refreshing z-stats for {n} arrays")
 
     # Mark all as running before starting
     for i in range(n):
-        parent._zstats_running[i] = True
+        zs.running[i] = True
 
     # Recompute z-stats
-    compute_zstats(parent)
+    compute_zstats(zs)
 
 
-def _ref_spec(parent: Any) -> SummaryStatsSpec | None:
+def _ref_spec(zs: ZStats) -> SummaryStatsSpec | None:
     """First populated `SummaryStatsSpec` across graphics (labels / radios)."""
-    specs = getattr(parent, "_zstats_spec", None)
+    specs = zs.spec
     if not specs:
         return None
     for s in specs:
@@ -449,7 +442,7 @@ def _ref_spec(parent: Any) -> SummaryStatsSpec | None:
     return None
 
 
-def current_breakout_key(parent: Any, idx: int) -> tuple:
+def current_breakout_key(zs: ZStats, idx: int) -> tuple:
     """Nearest sampled group combo for graphic ``idx`` from the sliders.
 
     Reads each group axis's current slider position and snaps it to the
@@ -457,11 +450,11 @@ def current_breakout_key(parent: Any, idx: int) -> tuple:
     though only a strided subset of tiles/cameras was computed. Returns
     ``()`` when the array has no group axes.
     """
-    specs = getattr(parent, "_zstats_spec", None)
+    specs = zs.spec
     spec = specs[idx] if specs and idx < len(specs) else None
     if spec is None or not spec.groups:
         return ()
-    iw = getattr(parent, "image_widget", None)
+    iw = zs.viewer
     names = tuple(getattr(iw, "_slider_dim_names", None) or ()) if iw else ()
     key: list[int] = []
     for g in spec.groups:
@@ -476,16 +469,16 @@ def current_breakout_key(parent: Any, idx: int) -> tuple:
     return tuple(key)
 
 
-def _series_for(parent: Any, i: int) -> tuple[dict | None, tuple | None]:
+def _series_for(zs: ZStats, i: int) -> tuple[dict | None, tuple | None]:
     """(stats_dict, combo_key) for graphic ``i`` at the current sliders.
 
     Falls back to the first computed combo if the slider-derived combo is not
     populated yet. Returns ``(None, None)`` when nothing is available.
     """
-    slot = parent._zstats[i] if i < len(parent._zstats) else None
+    slot = zs.stats[i] if i < len(zs.stats) else None
     if not isinstance(slot, dict) or not slot:
         return None, None
-    key = current_breakout_key(parent, i)
+    key = current_breakout_key(zs, i)
     stats = slot.get(key)
     if stats is None:
         key = next(iter(slot))
@@ -502,9 +495,9 @@ def _combo_caption(spec: SummaryStatsSpec | None, key: tuple) -> str:
     return ", ".join(f"{g.label} {int(v) + 1}" for g, v in zip(spec.groups, key))
 
 
-def _draw_axis_pick(parent: Any, spec: SummaryStatsSpec) -> None:
+def _draw_axis_pick(zs: ZStats, spec: SummaryStatsSpec) -> None:
     """Radio to pick which scrollable dim drives the series (e.g. Zplane vs Timepoint)."""
-    pref = str(getattr(parent, "_stats_axis_pref", "z")).lower()
+    pref = zs.axis_pref
     cur = spec.series.name.lower() if spec.series else pref
     imgui.text("Series axis:")
     changed = False
@@ -512,14 +505,14 @@ def _draw_axis_pick(parent: Any, spec: SummaryStatsSpec) -> None:
         imgui.same_line()
         sel = cand.name.lower() == cur
         if imgui.radio_button(cand.label, sel) and not sel:
-            parent._stats_axis_pref = cand.name.lower()
+            zs.axis_pref = cand.name.lower()
             changed = True
     if changed:
-        parent.refresh_zstats()
+        refresh_zstats(zs)
     imgui.separator()
 
 
-def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
+def draw_stats_section(zs: ZStats, *, table: bool = True, plot: bool = True):
     """Draw the summary-stats section.
 
     The two halves are drawn in different places: the table (with the header,
@@ -528,15 +521,15 @@ def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
     canvas's full width. Both read the same state, so the row highlight and
     the accent line still mark the same series position.
     """
-    if not any(parent._zstats_done):
+    if not any(zs.done):
         return
 
-    stats_list = parent._zstats
-    spec = _ref_spec(parent)
+    stats_list = zs.stats
+    spec = _ref_spec(zs)
     n_stat = (
         len(spec.series.indices)
         if spec is not None and spec.series
-        else int(getattr(parent, "nz", 1))
+        else 1
     )
     stat_label = spec.series.label if spec is not None and spec.series else "Z-Plane"
     is_single_zplane = n_stat == 1  # Single bar for 1 series point
@@ -554,21 +547,21 @@ def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
 
         # more than one series candidate -> pick which drives the x-axis
         if spec is not None and spec.both_series:
-            _draw_axis_pick(parent, spec)
+            _draw_axis_pick(zs, spec)
 
     # ROI selector — show a graphic only when it has a populated series.
     array_labels = [
         f"graphic {i + 1}"
         for i in range(len(stats_list))
-        if _series_for(parent, i)[0] is not None
+        if _series_for(zs, i)[0] is not None
     ]
     # Only show "Combined" if there are multiple arrays
     if len(array_labels) > 1:
         array_labels.append("Combined")
 
     # Ensure selected array is within bounds
-    if parent._selected_array >= len(array_labels):
-        parent._selected_array = 0
+    if zs.selected >= len(array_labels):
+        zs.selected = 0
 
     # only draw the selector when there are multiple graphics to choose between
     if table and len(array_labels) > 1:
@@ -576,8 +569,8 @@ def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
         xpos = 0
 
         for i, label in enumerate(array_labels):
-            if imgui.radio_button(label, parent._selected_array == i):
-                parent._selected_array = i
+            if imgui.radio_button(label, zs.selected == i):
+                zs.selected = i
             button_width = (
                 imgui.calc_text_size(label).x + imgui.get_style().frame_padding.x * 4
             )
@@ -594,18 +587,18 @@ def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
     # Caption the displayed group combo (it follows the sliders, snapped to
     # the nearest sampled tile/camera/etc.).
     if table and spec is not None and spec.groups:
-        sel = 0 if parent._selected_array >= len(stats_list) else parent._selected_array
-        _, key = _series_for(parent, sel)
+        sel = 0 if zs.selected >= len(stats_list) else zs.selected
+        _, key = _series_for(zs, sel)
         caption = _combo_caption(spec, key or ())
         if caption:
             imgui.text_disabled(caption)
 
     # Check if "Combined" view is selected (only valid if there are multiple arrays)
     has_combined = len(array_labels) > 1 and array_labels[-1] == "Combined"
-    is_combined = has_combined and parent._selected_array == len(array_labels) - 1
+    is_combined = has_combined and zs.selected == len(array_labels) - 1
 
     _draw_array_stats(
-        parent,
+        zs,
         stats_list,
         spec,
         is_single_zplane,
@@ -616,7 +609,7 @@ def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
     )
 
 
-def _z_axis_values(parent: Any, array_idx: int | None, n: int) -> np.ndarray:
+def _z_axis_values(zs: ZStats, array_idx: int | None, n: int) -> np.ndarray:
     """1-based plane numbers for the n stats points, honoring z-subsampling.
 
     Uses the sampled plane numbers recorded by ``compute_zstats_single_array``
@@ -624,7 +617,7 @@ def _z_axis_values(parent: Any, array_idx: int | None, n: int) -> np.ndarray:
     Falls back to a contiguous 1..n when no record matches (channel-stats
     mode, or a length mismatch).
     """
-    idxs = getattr(parent, "_zstats_z_indices", None)
+    idxs = zs.z_indices
     picked = None
     if idxs:
         if array_idx is not None and 0 <= array_idx < len(idxs) and idxs[array_idx]:
@@ -636,7 +629,7 @@ def _z_axis_values(parent: Any, array_idx: int | None, n: int) -> np.ndarray:
     return np.ascontiguousarray(np.arange(1, n + 1, dtype=np.float64))
 
 
-def _active_stat(parent: Any, spec: SummaryStatsSpec | None) -> int | None:
+def _active_stat(zs: ZStats, spec: SummaryStatsSpec | None) -> int | None:
     """1-based current position along the series axis (from its slider).
 
     For a zplane series it follows the Z slider, for a timepoint series the
@@ -645,7 +638,7 @@ def _active_stat(parent: Any, spec: SummaryStatsSpec | None) -> int | None:
     """
     if spec is None or spec.series is None:
         return None
-    iw = getattr(parent, "image_widget", None)
+    iw = zs.viewer
     if iw is None or getattr(iw, "n_sliders", 0) < 1:
         return None
     names = tuple(getattr(iw, "_slider_dim_names", None) or ())
@@ -658,12 +651,12 @@ def _active_stat(parent: Any, spec: SummaryStatsSpec | None) -> int | None:
         return None
 
 
-def _combined_stats(parent, metrics) -> dict | None:
+def _combined_stats(zs, metrics) -> dict | None:
     """Average each metric series across graphics at their current combos."""
     per = [
         s
-        for i in range(len(parent._zstats))
-        for s in (_series_for(parent, i)[0],)
+        for i in range(len(zs.stats))
+        for s in (_series_for(zs, i)[0],)
         if s is not None
     ]
     if not per:
@@ -679,7 +672,7 @@ def _combined_stats(parent, metrics) -> dict | None:
 
 
 def _draw_array_stats(
-    parent,
+    zs,
     stats_list,
     spec,
     is_single_zplane,
@@ -698,11 +691,11 @@ def _draw_array_stats(
     if is_combined:
         if table:
             imgui.text("Stats for Combined graphics")
-        stats = _combined_stats(parent, metrics)
+        stats = _combined_stats(zs, metrics)
         array_idx = None
     else:
-        array_idx = parent._selected_array
-        stats, _ = _series_for(parent, array_idx)
+        array_idx = zs.selected
+        stats, _ = _series_for(zs, array_idx)
     if not stats or "mean" not in stats:
         return
 
@@ -714,12 +707,12 @@ def _draw_array_stats(
         np.asarray(stats.get("std", np.zeros(n)), dtype=np.float64)[:n]
     )
     # series x positions: real (possibly subsampled) 1-based numbers.
-    z_vals = _z_axis_values(parent, array_idx, n)
+    z_vals = _z_axis_values(zs, array_idx, n)
     mean_vals = np.ascontiguousarray(mean_vals[:n])
 
     # the current series position (1-based) drives the table-row highlight and
     # the in-plot accent line, so the two halves stay in step
-    active_z = _active_stat(parent, spec)
+    active_z = _active_stat(zs, spec)
     if is_single_zplane or is_dual_zplane:
         if table:
             _draw_simple_stats_table(
@@ -730,7 +723,7 @@ def _draw_array_stats(
         if plot:
             if is_combined:
                 _draw_signal_comparison_chart(
-                    parent, mean_vals, is_dual_zplane, stat_label
+                    zs, mean_vals, is_dual_zplane, stat_label
                 )
             else:
                 snr_vals = np.asarray(stats.get("snr", np.zeros(n)), dtype=np.float64)[
@@ -754,7 +747,7 @@ def _draw_array_stats(
         if plot:
             if is_combined:
                 _draw_combined_zplane_plot(
-                    parent, z_vals, stats_list, active_z=active_z, stat_label=stat_label
+                    zs, z_vals, stats_list, active_z=active_z, stat_label=stat_label
                 )
             else:
                 _draw_zplane_signal_plot(
@@ -763,7 +756,7 @@ def _draw_array_stats(
                     std_vals,
                     array_idx,
                     active_z=active_z,
-                    parent=parent,
+                    zs=zs,
                     stat_label=stat_label,
                 )
 
@@ -897,7 +890,7 @@ def _draw_zplane_stats_table(
 
 
 def _draw_signal_comparison_chart(
-    parent, mean_vals, is_dual_zplane, stat_label="Z-Plane"
+    zs, mean_vals, is_dual_zplane, stat_label="Z-Plane"
 ):
     """Draw signal comparison bar chart across graphics at the current combo."""
     short = stat_label[:1].upper() or "Z"
@@ -912,7 +905,7 @@ def _draw_signal_comparison_chart(
 
     if is_dual_zplane:
         # Grouped bar chart for 2 series points
-        per_r = [_series_for(parent, r)[0] for r in range(parent.num_graphics)]
+        per_r = [_series_for(zs, r)[0] for r in range(len(zs.stats))]
         graphic_means_z1 = [
             np.asarray(s["mean"][0], float)
             for s in per_r
@@ -976,7 +969,7 @@ def _draw_signal_comparison_chart(
                 implot.end_plot()
     else:
         # Single series point: simple bar chart
-        per_r = [_series_for(parent, r)[0] for r in range(parent.num_graphics)]
+        per_r = [_series_for(zs, r)[0] for r in range(len(zs.stats))]
         graphic_means = [
             np.asarray(s["mean"][0], float)
             for s in per_r
@@ -1104,7 +1097,7 @@ def _draw_signal_metrics_chart(
 
 
 def _draw_combined_zplane_plot(
-    parent, z_vals, stats_list, *, active_z=None, stat_label="Z-Plane"
+    zs, z_vals, stats_list, *, active_z=None, stat_label="Z-Plane"
 ):
     """Draw combined series signal plot across graphics at the current combo.
 
@@ -1124,7 +1117,7 @@ def _draw_combined_zplane_plot(
     # build per-graphic series at the current breakout combo
     graphic_series = [
         np.asarray(s["mean"], float)
-        for s in (_series_for(parent, r)[0] for r in range(parent.num_graphics))
+        for s in (_series_for(zs, r)[0] for r in range(len(zs.stats)))
         if s and "mean" in s and len(s["mean"]) > 0
     ]
     if not graphic_series:
@@ -1144,7 +1137,7 @@ def _draw_combined_zplane_plot(
     # bold font was loaded — implot doesn't support per-tick font styling,
     # so this is the cleanest way to render the bracketed active label
     # `[N]` in bold along with the rest of the axis.
-    pushed_bold = push_font_safe(getattr(parent, "_bold_font", None))
+    pushed_bold = push_font_safe(zs.bold_font)
     if implot.begin_plot(
         "Z-Plane Plot (Combined)",
         _plot_size(plot_width),
@@ -1244,14 +1237,14 @@ def _draw_zplane_signal_plot(
     array_idx,
     *,
     active_z=None,
-    parent=None,
+    zs=None,
     stat_label="Z-Plane",
 ):
     """Draw the series signal plot with error bars.
 
     Same active-point treatment as the combined plot: accent vertical
     line, bracketed tick label (when <= 32 points), and an inlay
-    annotation tagging the current series point. When `parent` is provided
+    annotation tagging the current series point. When `zs` is provided
     and a bold font is loaded, axis tick labels render in bold so the
     bracketed active label `[N]` reads with extra visual weight.
     """
@@ -1259,9 +1252,7 @@ def _draw_zplane_signal_plot(
     style_seaborn_dark()
     imgui.text(f"{stat_label} Signal: Mean ± Std")
     plot_width = imgui.get_content_region_avail().x
-    pushed_bold = push_font_safe(
-        getattr(parent, "_bold_font", None) if parent is not None else None
-    )
+    pushed_bold = push_font_safe(None if zs is None else zs.bold_font)
     if implot.begin_plot(
         f"Z-Plane Signal {array_idx}",
         _plot_size(plot_width),
