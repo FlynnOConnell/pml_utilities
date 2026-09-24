@@ -401,8 +401,144 @@ def draw_tools_popups(parent: Any):
         imgui.end()
 
 
+def draw_console_body(obj: Any, progress_items: list) -> float | None:
+    """The Process Console's contents, in whatever window the caller opened.
+
+    The System meters, the active tasks in ``progress_items``, in-process
+    jobs and background processes, then a button dismissing finished ones.
+    ``obj`` keeps the meters' throttles and the log boxes' layout between
+    frames. Returns the height the window should grow to so nothing
+    scrolls, or None when it already fits.
+    """
+    # the meters stay above the list, however long it scrolls
+    _draw_system_info_header(obj)
+
+    pm = get_process_manager()
+    pm.cleanup_finished()
+    running = pm.get_running()
+    jobs = pm.get_jobs()
+
+    avail = imgui.get_content_region_avail()
+    # a resize can leave no client area, and begin_child needs a positive size
+    content_height = max(1.0, avail.y - 35)
+
+    # expanded log boxes share the leftover height, from last frame's layout
+    n_boxes = getattr(obj, "_proc_log_count", 0)
+    if n_boxes > 0:
+        log_fill_h = max(
+            _MIN_LOG_BOX_H,
+            (content_height - getattr(obj, "_proc_log_fixed_h", 0.0)) / n_boxes,
+        )
+    else:
+        log_fill_h = _MIN_LOG_BOX_H
+    expanded_boxes = 0
+    sum_box_h = 0.0
+    content_h = 0.0
+
+    # end_child runs even when begin_child clips, or the window stack unwinds wrong
+    if imgui.begin_child(
+        "##ProcessContent", ImVec2(0, content_height), imgui.ChildFlags_.none
+    ):
+        if progress_items:
+            imgui.text_colored(_SYS_TITLE, f"Active Tasks ({len(progress_items)})")
+            imgui.separator()
+            imgui.spacing()
+
+            for item in progress_items:
+                pct = int(item["progress"] * 100)
+                imgui.push_text_wrap_pos(0.0)
+                if item.get("done", False):
+                    imgui.text_colored(
+                        imgui.ImVec4(0.4, 1.0, 0.4, 1.0),
+                        f"[Done] {item['text']}",
+                    )
+                else:
+                    imgui.text(f"{item['text']}")
+                imgui.pop_text_wrap_pos()
+                imgui.progress_bar(item["progress"], ImVec2(-1, 0), f"{pct}%")
+                imgui.spacing()
+
+            if running or jobs:
+                imgui.spacing()
+
+        # in-process jobs run on a gui thread: no pid, log file or kill button
+        if jobs:
+            imgui.text_colored(_SYS_TITLE, f"In-Process Jobs ({len(jobs)})")
+            imgui.separator()
+            imgui.spacing()
+
+            for job in jobs:
+                if job.status == "error":
+                    color = imgui.ImVec4(1.0, 0.4, 0.4, 1.0)
+                    label = f"[Failed] {job.description}"
+                elif job.status == "completed":
+                    color = imgui.ImVec4(0.4, 1.0, 0.4, 1.0)
+                    label = f"[Done] {job.description}"
+                else:
+                    color = imgui.ImVec4(1.0, 0.75, 0.3, 1.0)
+                    label = job.description
+                imgui.push_text_wrap_pos(0.0)
+                imgui.text_colored(color, label)
+                if job.status_message:
+                    imgui.text_disabled(f"    {job.status_message}")
+                imgui.pop_text_wrap_pos()
+                imgui.same_line()
+                imgui.text_disabled(f"({job.elapsed_str()})")
+                if job.is_alive():
+                    imgui.progress_bar(job.progress, ImVec2(-1, 0))
+                imgui.spacing()
+
+            if running:
+                imgui.spacing()
+
+        if running:
+            imgui.text_colored(_SYS_TITLE, f"Background Processes ({len(running)})")
+            imgui.separator()
+            imgui.spacing()
+
+            for i, proc in enumerate(running):
+                if i > 0:
+                    imgui.separator()
+                    imgui.spacing()
+                box_h = _draw_process_entry(pm, proc, log_fill_h)
+                if box_h > 0.0:
+                    expanded_boxes += 1
+                    sum_box_h += box_h
+
+        if not running and not progress_items and not jobs:
+            imgui.spacing()
+            imgui.text_disabled("No active tasks or background processes.")
+
+        # natural height of everything drawn, for next-frame window grow
+        content_h = imgui.get_cursor_pos_y()
+    imgui.end_child()
+
+    # remember the non-box height and box count for next frame's split
+    obj._proc_log_fixed_h = content_h - sum_box_h
+    obj._proc_log_count = expanded_boxes
+
+    imgui.separator()
+    imgui.spacing()
+    finished = [p for p in running if not p.is_alive()]
+    if finished:
+        dismiss_w = 150.0
+        imgui.set_cursor_pos_x((imgui.get_window_width() - dismiss_w) * 0.5)
+        if imgui.button(f"Dismiss finished ({len(finished)})", ImVec2(dismiss_w, 0)):
+            for p in finished:
+                pm._processes.pop(p.pid, None)
+            pm._save()
+
+    # a log box toggled this frame leaves the measured height off by one box
+    win_h = imgui.get_window_height()
+    max_h = max(300.0, imgui.get_main_viewport().work_size.y - 40.0)
+    target_h = min(win_h - content_height + content_h, max_h)
+    if target_h > win_h + 1.0 and expanded_boxes == n_boxes:
+        return target_h
+    return None
+
+
 def draw_process_console_popup(parent: Any):
-    """Draw the Process Console: active tasks, background processes, System.
+    """Draw the Process Console window for the preview widget.
 
     A plain window rather than a modal, so it can be left open (or collapsed
     to just its title bar) beside the viewer without dimming it — the System
@@ -415,14 +551,8 @@ def draw_process_console_popup(parent: Any):
         parent._process_console_open = False
     if not hasattr(parent, "_process_console_size"):
         parent._process_console_size = ImVec2(500, 350)
-    if not hasattr(parent, "_process_console_content_h"):
-        parent._process_console_content_h = 0.0
     if not hasattr(parent, "_process_console_grow_to"):
         parent._process_console_grow_to = None
-    if not hasattr(parent, "_proc_log_fixed_h"):
-        parent._proc_log_fixed_h = 0.0
-    if not hasattr(parent, "_proc_log_count"):
-        parent._proc_log_count = 0
 
     # open request from the menu-bar status button
     if parent._show_process_console:
@@ -438,8 +568,7 @@ def draw_process_console_popup(parent: Any):
     max_h = max(300.0, work.y - 40.0)
 
     if getattr(parent, "_process_console_focus", False):
-        # a second click on the status button raises it instead of doing
-        # nothing when it's already open behind the viewer
+        # a second click on the status button raises it from behind the viewer
         imgui.set_next_window_focus()
         parent._process_console_focus = False
 
@@ -452,8 +581,7 @@ def draw_process_console_popup(parent: Any):
         imgui.Cond_.first_use_ever,
     )
     imgui.set_next_window_size(parent._process_console_size, imgui.Cond_.appearing)
-    # low minimum height on purpose: the window can be shrunk down to just
-    # the System meters and parked next to the viewer.
+    # low minimum: the window can shrink to just the meters beside the viewer
     imgui.set_next_window_size_constraints(
         imgui.ImVec2(340, 120), imgui.ImVec2(max_w, max_h)
     )
@@ -468,186 +596,23 @@ def draw_process_console_popup(parent: Any):
         )
         parent._process_console_grow_to = None
 
-    # a normal window: no dimmed background, collapsible, and the viewer
-    # stays clickable underneath.
     expanded, still_open = imgui.begin(
         "Process Console",
         p_open=True,
         flags=imgui.WindowFlags_.none,
     )
     parent._process_console_open = still_open
-
     try:
         # collapsed -> title bar only; skip the body (and its process polling)
         if expanded and still_open:
-            # save current size for next time
             parent._process_console_size = imgui.get_window_size()
-
-            # System info header — pinned above the scrollable list so it
-            # stays visible regardless of how many processes are queued.
-            _draw_system_info_header(parent)
-
-            pm = get_process_manager()
-            pm.cleanup_finished()
-            running = pm.get_running()
-            jobs = pm.get_jobs()
-
             from mbo_utilities.gui.widgets.progress_bar import (
                 _get_active_progress_items,
             )
 
-            progress_items = _get_active_progress_items(parent)
-
-            # recompute available height AFTER the header so the scroll
-            # area gets exactly what's left, minus footer space.
-            avail = imgui.get_content_region_avail()
-            # clamp positive: while resizing, the popup can momentarily have
-            # near-zero client area, which would give begin_child a degenerate
-            # (negative) size and make it clip to false.
-            content_height = max(
-                1.0, avail.y - 35
-            )  # space for separator + close button
-
-            # split leftover height evenly among expanded log boxes so they
-            # fill the area. uses last frame's non-box height and box count
-            # (stable on resize) against this frame's available height.
-            n_boxes = parent._proc_log_count
-            if n_boxes > 0:
-                log_fill_h = max(
-                    _MIN_LOG_BOX_H,
-                    (content_height - parent._proc_log_fixed_h) / n_boxes,
-                )
-            else:
-                log_fill_h = _MIN_LOG_BOX_H
-            expanded_boxes = 0
-            sum_box_h = 0.0
-
-            # scrollable content area. begin_child needs a matching end_child
-            # even when it returns false (clipped/collapsed during resize) —
-            # otherwise the window stack unwinds wrong and end_popup() asserts.
-            content_open = imgui.begin_child(
-                "##ProcessContent", ImVec2(0, content_height), imgui.ChildFlags_.none
+            parent._process_console_grow_to = draw_console_body(
+                parent, _get_active_progress_items(parent)
             )
-            if content_open:
-                # active tasks section
-                if progress_items:
-                    imgui.text_colored(
-                        _SYS_TITLE, f"Active Tasks ({len(progress_items)})"
-                    )
-                    imgui.separator()
-                    imgui.spacing()
-
-                    for item in progress_items:
-                        pct = int(item["progress"] * 100)
-                        imgui.push_text_wrap_pos(0.0)
-                        if item.get("done", False):
-                            imgui.text_colored(
-                                imgui.ImVec4(0.4, 1.0, 0.4, 1.0),
-                                f"[Done] {item['text']}",
-                            )
-                        else:
-                            imgui.text(f"{item['text']}")
-                        imgui.pop_text_wrap_pos()
-
-                        # progress bar with percentage overlay
-                        imgui.progress_bar(item["progress"], ImVec2(-1, 0), f"{pct}%")
-                        imgui.spacing()
-
-                    if running or jobs:
-                        imgui.spacing()
-
-                # in-process jobs section (ROI traces, etc.). These run on a
-                # thread inside the GUI rather than as a spawned process, so
-                # they have no pid, log file or kill button — just state.
-                if jobs:
-                    imgui.text_colored(_SYS_TITLE, f"In-Process Jobs ({len(jobs)})")
-                    imgui.separator()
-                    imgui.spacing()
-
-                    for job in jobs:
-                        if job.status == "error":
-                            color = imgui.ImVec4(1.0, 0.4, 0.4, 1.0)
-                            label = f"[Failed] {job.description}"
-                        elif job.status == "completed":
-                            color = imgui.ImVec4(0.4, 1.0, 0.4, 1.0)
-                            label = f"[Done] {job.description}"
-                        else:
-                            color = imgui.ImVec4(1.0, 0.75, 0.3, 1.0)
-                            label = job.description
-                        imgui.push_text_wrap_pos(0.0)
-                        imgui.text_colored(color, label)
-                        if job.status_message:
-                            imgui.text_disabled(f"    {job.status_message}")
-                        imgui.pop_text_wrap_pos()
-                        imgui.same_line()
-                        imgui.text_disabled(f"({job.elapsed_str()})")
-                        if job.is_alive():
-                            imgui.progress_bar(job.progress, ImVec2(-1, 0))
-                        imgui.spacing()
-
-                    if running:
-                        imgui.spacing()
-
-                # background processes section
-                if running:
-                    imgui.text_colored(
-                        _SYS_TITLE, f"Background Processes ({len(running)})"
-                    )
-                    imgui.separator()
-                    imgui.spacing()
-
-                    for i, proc in enumerate(running):
-                        if i > 0:
-                            imgui.separator()
-                            imgui.spacing()
-                        box_h = _draw_process_entry(pm, proc, log_fill_h)
-                        if box_h > 0.0:
-                            expanded_boxes += 1
-                            sum_box_h += box_h
-
-                # empty state
-                if not running and not progress_items and not jobs:
-                    imgui.spacing()
-                    imgui.text_disabled("No active tasks or background processes.")
-
-                # natural height of everything drawn, for next-frame window grow
-                parent._process_console_content_h = imgui.get_cursor_pos_y()
-            imgui.end_child()
-
-            # remember the non-box height and box count for next frame's split
-            parent._proc_log_fixed_h = parent._process_console_content_h - sum_box_h
-            parent._proc_log_count = expanded_boxes
-
-            # enlarge window to fit content, bounded by the main window.
-            # skip on frames where a log box was just toggled (box count
-            # changed): the measured height is transiently off by one box.
-            win_h = imgui.get_window_height()
-            target_h = min(
-                win_h - content_height + parent._process_console_content_h, max_h
-            )
-            if target_h > win_h + 1.0 and expanded_boxes == n_boxes:
-                parent._process_console_grow_to = target_h
-
-            # footer actions, centered
-            imgui.separator()
-            imgui.spacing()
-
-            finished = [p for p in running if not p.is_alive()]
-            close_w = 80.0
-            dismiss_w = 150.0
-            spacing = imgui.get_style().item_spacing.x
-            total_w = close_w + (dismiss_w + spacing if finished else 0.0)
-            imgui.set_cursor_pos_x((imgui.get_window_width() - total_w) * 0.5)
-            if imgui.button("Close", ImVec2(close_w, 0)):
-                parent._process_console_open = False
-            if finished:
-                imgui.same_line()
-                if imgui.button(
-                    f"Dismiss finished ({len(finished)})", ImVec2(dismiss_w, 0)
-                ):
-                    for p in finished:
-                        pm._processes.pop(p.pid, None)
-                    pm._save()
     finally:
         imgui.end()
 
@@ -705,7 +670,7 @@ def _draw_process_entry(pm: Any, proc: Any, log_fill_h: float = 0.0) -> float:
         imgui.same_line()
         if imgui.small_button("Copy"):
             try:
-                with open(proc.output_path, encoding="utf-8") as f:
+                with Path(proc.output_path).open(encoding="utf-8") as f:
                     imgui.set_clipboard_text(f.read())
             except Exception:
                 pass
