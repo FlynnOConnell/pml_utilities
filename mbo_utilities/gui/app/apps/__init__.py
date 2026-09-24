@@ -5,9 +5,12 @@ from __future__ import annotations
 from mbo_utilities.gui.app._app import App
 from mbo_utilities.gui.app.apps.debug import debug_apps
 from mbo_utilities.gui.app.apps.diagnostics import DiagnosticsApp
+from mbo_utilities.gui.app.apps.help import HelpApp
+from mbo_utilities.gui.app.apps.keybinds import KeybindsApp
 from mbo_utilities.gui.app.apps.log import LogApp
 from mbo_utilities.gui.app.apps.metadata import MetadataApp
 from mbo_utilities.gui.app.apps.open import OpenApp
+from mbo_utilities.gui.app.apps.options import OptionsApp
 from mbo_utilities.gui.app.apps.panels import (
     ProjectionsApp,
     SummaryImagesApp,
@@ -17,9 +20,12 @@ from mbo_utilities.gui.app.apps.viewer import ViewerApp
 
 __all__ = [
     "DiagnosticsApp",
+    "HelpApp",
+    "KeybindsApp",
     "LogApp",
     "MetadataApp",
     "OpenApp",
+    "OptionsApp",
     "ProjectionsApp",
     "SummaryImagesApp",
     "TileGridApp",
@@ -31,7 +37,11 @@ __all__ = [
 
 def ported_apps() -> list[App]:
     return [
-        OpenApp(),
+        OpenApp("file"),
+        OpenApp("folder"),
+        OptionsApp(),
+        HelpApp(),
+        KeybindsApp(),
         ProjectionsApp(),
         SummaryImagesApp(),
         TileGridApp(),
