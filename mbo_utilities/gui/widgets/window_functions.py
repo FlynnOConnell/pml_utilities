@@ -11,6 +11,7 @@ from imgui_bundle import hello_imgui, imgui
 
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.widgets._base import Widget
+from mbo_utilities.gui.widgets.mesc_units import mesc_array_of
 
 
 class WindowFunctionsWidget(Widget):
@@ -187,3 +188,21 @@ class SpatialFunctionsWidget(Widget):
 
         if mean_sub_changed and zstats_ready:
             parent.mean_subtraction = mean_sub_value
+
+        data = parent.image_widget.data
+        if mesc_array_of(data[0]) is None:
+            return
+        if not zstats_ready:
+            imgui.begin_disabled()
+        invert_changed, invert_value = imgui.checkbox(
+            "Invert Deflection", parent.invert_deflection
+        )
+        if not zstats_ready:
+            imgui.end_disabled()
+        set_tooltip(
+            "Flip each frame about the mean image (2 x mean - frame), so a "
+            "negative-going indicator's spikes show bright. Display only; "
+            "traces and runs read the raw data."
+        )
+        if invert_changed and zstats_ready:
+            parent.invert_deflection = invert_value
