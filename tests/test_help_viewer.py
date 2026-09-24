@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from imgui_bundle import imgui
 from mbo_utilities.gui import _help_viewer
-from mbo_utilities.gui._help_viewer import DOCS, MESC_DOC, _render_markdown, load_doc
+from mbo_utilities.gui._help_viewer import DOCS, MESC_DOC, load_doc, render_markdown
 
 TABLE = """# Title
 
@@ -81,7 +81,7 @@ def render(content):
         imgui.new_frame()
         imgui.set_next_window_size(imgui.ImVec2(850, 650))
         imgui.begin("host")
-        _render_markdown(content)
+        render_markdown(content)
         imgui.end()
         imgui.end_frame()
     finally:

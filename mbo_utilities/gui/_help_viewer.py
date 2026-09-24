@@ -8,6 +8,7 @@ that only happens when using immapp.run() (not fastplotlib).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -129,7 +130,7 @@ def draw_help_popup(parent: Any) -> None:
                 # remembered index can outlive the tab it pointed at
                 _, filename = docs[min(parent._help_selected_doc, len(docs) - 1)]
                 content = load_doc(filename)
-                _render_markdown(content)
+                render_markdown(content)
                 imgui.end_child()
 
             # close button
@@ -142,8 +143,6 @@ def draw_help_popup(parent: Any) -> None:
 
         imgui.end_popup()
 
-
-import re
 
 # colors for the renderer
 _C_NORMAL = imgui.ImVec4(0.85, 0.85, 0.85, 1.0)
@@ -230,7 +229,7 @@ def _render_inline(text: str, base_color: imgui.ImVec4 = _C_NORMAL) -> None:
         first_on_line = False
 
 
-def _render_markdown(content: str) -> None:
+def render_markdown(content: str) -> None:
     """Render markdown content with basic formatting."""
     in_code_block = False
 
