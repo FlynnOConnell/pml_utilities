@@ -17,6 +17,7 @@ pytest.importorskip("fastplotlib.widgets.nd_widget")
 from mbo_utilities import imread  # noqa: E402
 from mbo_utilities.arrays import NumpyArray, average_frames  # noqa: E402
 from mbo_utilities.arrays.features import find_slider_name  # noqa: E402
+from mbo_utilities.gui._save_as import draw_saveas_popup  # noqa: E402
 from mbo_utilities.gui.app import _app, build_host  # noqa: E402
 from mbo_utilities.gui.app.apps.viewer import filter_frame  # noqa: E402
 from mbo_utilities.gui.app.demo import movie_data  # noqa: E402
@@ -34,6 +35,16 @@ def settle(host) -> None:
         host.figure.canvas.force_draw()
         time.sleep(0.05)
     host.figure.canvas.force_draw()
+
+
+# every source record_save_source was handed, newest last
+SAVE_SOURCES = []
+
+
+def record_save_source(save, source):
+    """Stands in for draw_saveas_popup, keeping each source it is handed."""
+    SAVE_SOURCES.append(source)
+    draw_saveas_popup(save, source)
 
 
 def tap(host, key: str) -> None:
@@ -196,6 +207,27 @@ def test_set_metadata_edits_reach_the_viewer_and_go_with_the_data(host):
 
     host.set_data(imread(movie_data(nt=4, ny=16, nx=16)))
     assert host.metadata_edits.values == {}
+
+
+def test_save_as_opens_on_its_key_and_reads_the_display(host, monkeypatch):
+    monkeypatch.setattr(
+        "mbo_utilities.gui.app.apps.save_as.draw_saveas_popup", record_save_source
+    )
+    SAVE_SOURCES.clear()
+    host.viewer.window_funcs = {t_slider(host): (np.max, 5)}
+    app = host.apps["viewer"]
+    app.sigma = 2.0
+    app.apply_filters(host)
+
+    tap(host, "s")
+    host.figure.canvas.force_draw()
+    save = host.apps["save_as"]
+    assert save.open is True
+    assert save.save.modal_open is True
+    source = SAVE_SOURCES[-1]
+    assert (source.projection, source.window, source.sigma) == ("max", 5, 2.0)
+    assert source.source_frames == 24
+    save.open = False
 
 
 def test_the_filter_subtracts_the_mean_before_the_blur():
