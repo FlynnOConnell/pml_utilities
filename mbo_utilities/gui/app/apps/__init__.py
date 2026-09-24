@@ -8,7 +8,7 @@ from mbo_utilities.gui.app.apps.curate import CurateApp
 from mbo_utilities.gui.app.apps.debug import debug_apps
 from mbo_utilities.gui.app.apps.diagnostics import DiagnosticsApp
 from mbo_utilities.gui.app.apps.help import HelpApp
-from mbo_utilities.gui.app.apps.isoview import IsoviewToolApp
+from mbo_utilities.gui.app.apps.isoview import IsoviewProjectionsJob, IsoviewToolApp
 from mbo_utilities.gui.app.apps.keybinds import KeybindsApp
 from mbo_utilities.gui.app.apps.log import LogApp
 from mbo_utilities.gui.app.apps.manual_roi import ManualRoiApp
@@ -22,6 +22,7 @@ from mbo_utilities.gui.app.apps.panels import (
     SummaryImagesApp,
     TileGridApp,
 )
+from mbo_utilities.gui.app.apps.pollen import PollenApp
 from mbo_utilities.gui.app.apps.remote import BiohpcApp, CloudApp
 from mbo_utilities.gui.app.apps.run import RunApp
 from mbo_utilities.gui.app.apps.save_as import SaveAsApp
@@ -37,6 +38,7 @@ __all__ = [
     "CurateApp",
     "DiagnosticsApp",
     "HelpApp",
+    "IsoviewProjectionsJob",
     "IsoviewToolApp",
     "KeybindsApp",
     "LogApp",
@@ -45,6 +47,7 @@ __all__ = [
     "MetadataApp",
     "OpenApp",
     "OptionsApp",
+    "PollenApp",
     "ProjectionsApp",
     "RunApp",
     "SaveAsApp",
@@ -74,6 +77,8 @@ def ported_apps() -> list[App]:
         IsoviewToolApp("crop"),
         IsoviewToolApp("segment"),
         IsoviewToolApp("deadpixel"),
+        IsoviewProjectionsJob(),
+        PollenApp(),
         BiohpcApp(),
         CloudApp(),
         MetadataApp(),
