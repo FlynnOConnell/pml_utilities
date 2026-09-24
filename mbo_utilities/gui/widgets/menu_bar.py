@@ -55,7 +55,7 @@ def draw_menu_bar(parent: Any):
                 if imgui.menu_item("Save as", "s", p_selected=False, enabled=can_save)[
                     0
                 ]:
-                    parent._saveas_popup_open = True
+                    parent.save_as.open_requested = True
                 # the curation window (`mbo curate`) on the open PF folder or
                 # .mesc, in its own process; its module brings hello_imgui
                 from mbo_utilities.gui.curation_viewer import (
@@ -105,7 +105,7 @@ def draw_menu_bar(parent: Any):
                 imgui.end_menu()
             # the strip spans the canvas, so the status and metadata buttons
             # fit on the menu row instead of a second line under it
-            parent._clear_stale_progress()
+            parent.save_as.clear_stale_progress()
             draw_process_status_indicator(parent, in_menu_bar=True)
             imgui.end_menu_bar()
 

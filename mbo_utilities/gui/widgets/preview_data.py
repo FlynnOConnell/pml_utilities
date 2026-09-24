@@ -58,7 +58,8 @@ from mbo_utilities.gui._keyboard import (
 from mbo_utilities.gui._metadata_editor import draw_metadata_popup
 from mbo_utilities.gui._options_popup import draw_options_popup
 from mbo_utilities.gui._popups import draw_process_console_popup, draw_tools_popups
-from mbo_utilities.gui._save_as import draw_saveas_popup
+from mbo_utilities.gui._save_as import SaveAs, SaveSource, draw_saveas_popup
+from mbo_utilities.gui._selection_ui import source_timepoints
 from mbo_utilities.gui._stats import (
     ZStats,
     compute_zstats,
@@ -78,7 +79,6 @@ from mbo_utilities.gui.widgets.style_editor import (
     draw_style_editor_window,
 )
 from mbo_utilities.preferences import get_last_dir, get_mbo_dirs
-from mbo_utilities.reader import MBO_AVAILABLE_FTYPES
 
 if TYPE_CHECKING:
     from mbo_utilities.gui._ndviewer import MboNDViewer
@@ -288,7 +288,8 @@ class PreviewDataWidget(EdgeWindow):
             f"Data type: {type(first_arr).__name__}, is_mbo_scan: {self.is_mbo_scan}"
         )
 
-        # Initialize state
+        # the save as state first: the per-data reset in _init_state writes to it
+        self.save_as = SaveAs()
         self._init_state()
 
         # Initialize z-stats tracking
@@ -515,10 +516,6 @@ class PreviewDataWidget(EdgeWindow):
 
         # Registration state
         self._register_z = False
-        self._register_z_progress = 0.0
-        self._register_z_done = False
-        self._register_z_running = False
-        self._register_z_current_msg = ""
         # axial registration knobs; exposed in the save-as options popup.
         # default search radius matches compute_axial_shifts(max_reg_xy=30).
         self._axial_max_frames = 200
@@ -560,49 +557,13 @@ class PreviewDataWidget(EdgeWindow):
         self.zstats = ZStats(self.image_widget, bold_font=self._bold_font)
 
     def _init_saveas_state(self):
-        """Initialize save-as dialog state."""
-        self._ext = ".tiff"
-        self._ext_idx = MBO_AVAILABLE_FTYPES.index(".tiff")
-        self._overwrite = True
-        self._debug = False
-        self._saveas_chunk_mb = 100
-
-        # Zarr options
-        self._zarr_sharded = True
-        self._zarr_ome = True
-        self._zarr_compression_level = 1
-        self._zarr_pyramid = False
-        self._zarr_pyramid_max_layers = 4
-        self._zarr_pyramid_method = "median"
-
-        # H5 options
-        # dataset name inside the .h5 file. suite2p reads from "mov" by
-        # default and lbm_suite2p_python expects the same; only change this
-        # if you're targeting a downstream tool that wants something else.
-        self._h5_dataset_name = "mov"
-
-        # Save dialog state
-        self._saveas_popup_open = False
-        self._saveas_done = False
-        self._saveas_running = False
-        self._saveas_progress = 0.0
-        self._saveas_current_index = 0
-
-        # Set Metadata popup — driven by File menu and Shift+M shortcut
-        # (see gui/_metadata_editor.draw_metadata_popup).
+        """The output folders runs default to, and the popups' open flags."""
+        # the File menu and Shift+M open Set Metadata
         self._show_metadata_popup = False
-        # Widgets menu: the manual ROI widget while it is on (see
-        # sync_manual_roi / gui/manual_roi.attach_roi_widget)
+        # the manual ROI widget while its Widgets-menu entry is on
         self.manual_roi = None
 
-        # Directories
-        save_as_dir = get_last_dir("save_as")
-        self._saveas_outdir = str(save_as_dir) if save_as_dir else ""
-
-        # Default suite2p output dir = the loaded path's parent (file) or
-        # the folder itself (directory). Most intuitive default — re-runs
-        # land next to the source data. Falls back to the cached last-used
-        # dir only when nothing is loaded yet.
+        # suite2p writes beside the loaded data, else where it last wrote
         _loaded_outdir = _outdir_from_fpath(self.fpath)
         if _loaded_outdir:
             self._s2p_outdir = _loaded_outdir
@@ -610,76 +571,18 @@ class PreviewDataWidget(EdgeWindow):
             s2p_output_dir = get_last_dir("suite2p_output")
             self._s2p_outdir = str(s2p_output_dir) if s2p_output_dir else ""
 
-        # If the loaded data lives inside a suite2p output tree (data.bin
-        # in plane*/, ops.npy / stat.npy / etc.), or is a volumetric root
-        # containing plane*/, point _s2p_outdir at that root so a re-run
-        # lands in the same place. Wins over the parent-folder default.
+        # data inside a suite2p output tree re-runs into that tree
         _derived_s2p_dir = _derive_suite2p_output_dir(self.fpath)
         if _derived_s2p_dir:
             self._s2p_outdir = _derived_s2p_dir
 
-        # Hydrate Suite2pSettings/DB/Extras from a sibling settings.npy /
-        # db.npy / ops.npy when the loaded data is a suite2p output. The
-        # file-menu Open path does this in load_new_data; doing it here
-        # covers the CLI launch (`mbo path/to/data.bin` → fpath comes from
-        # data_array.source_path which is the plane / volume directory).
+        # a suite2p output's settings.npy / db.npy / ops.npy seed the run settings
         try:
             from mbo_utilities.gui._dialogs import _try_hydrate_s2p_from_binary
 
             _try_hydrate_s2p_from_binary(self, self.fpath)
         except Exception as _e:
             self.logger.debug(f"suite2p hydrate (init): {_e}")
-
-        self._saveas_folder_dialog = None
-        self._saveas_total = 0
-
-        # ROI selection
-        self._saveas_selected_roi = set()
-        self._saveas_rois = False
-        self._saveas_selected_roi_mode = "All"
-
-        # Metadata
-        self._saveas_custom_metadata = {}
-        self._saveas_custom_key = ""
-        self._saveas_custom_value = ""
-
-        # Output suffix
-        self._saveas_output_suffix = ""
-
-        # Options
-        self._saveas_background = True
-
-        # Scan-phase correction for save/export (separate from display settings)
-        # defaults to True for save operations
-        self._saveas_fix_phase = True
-        self._saveas_use_fft = True
-
-        # Video export options (active when ext is .mp4)
-        self._saveas_video_fps = 30
-        self._saveas_video_speed_factor = 1.0
-        self._saveas_video_auto = True
-        self._saveas_video_vmin = 0.0
-        self._saveas_video_vmax = 1000.0
-        self._saveas_video_vmin_pct = 1.0
-        self._saveas_video_vmax_pct = 99.5
-        self._saveas_video_temporal_smooth = 0
-        self._saveas_video_temporal_mode_idx = 0  # 0=mean 1=max 2=std
-        self._saveas_video_spatial_smooth = 0.0
-        self._saveas_video_gamma = 1.0
-        from mbo_utilities.gui._colormaps import DEFAULT_COLORMAP, DEFAULT_COLORMAPS
-
-        self._saveas_video_cmaps: list[str] = list(DEFAULT_COLORMAPS)
-        self._saveas_video_cmap_idx: int = self._saveas_video_cmaps.index(
-            DEFAULT_COLORMAP
-        )
-        self._saveas_video_quality_idx = (
-            2  # 0=preview 1=high 2=visually lossless 3=lossless
-        )
-        self._saveas_video_codec_idx = 0  # 0 = libx264
-        self._saveas_video_mean_subtract = False
-        self._saveas_video_time_overlay = False
-        self._saveas_video_scalebar = False
-        self._saveas_video_upscale = 0  # 0 = auto
 
     def _init_top_strip(self):
         """Claim the figure's top edge for the menu row.
@@ -1043,7 +946,7 @@ class PreviewDataWidget(EdgeWindow):
         factor the way their Fix Phase defaults track the data, and each can
         still be changed per run in its own Options.
         """
-        self._saveas_frame_average = factor
+        self.save_as.frame_average = factor
         self._s2p_frame_average = factor
         self._masknmf_frame_average = factor
 
@@ -1281,42 +1184,6 @@ class PreviewDataWidget(EdgeWindow):
         except Exception as e:
             self.logger.exception(f"Error applying window funcs: {e}")
 
-    def gui_progress_callback(self, frac, meta=None):
-        """Handle progress callbacks from save operations."""
-        if isinstance(meta, (int, np.integer)):
-            self._saveas_progress = frac
-            self._saveas_current_index = meta
-            self._saveas_done = frac >= 1.0
-            if frac >= 1.0:
-                self._saveas_running = False
-                self._saveas_complete_time = time.time()
-                self.logger.info("Save complete")
-        elif isinstance(meta, str):
-            self._register_z_progress = frac
-            self._register_z_current_msg = meta
-            self._register_z_done = frac >= 1.0
-            if frac >= 1.0:
-                self._register_z_running = False
-                self._register_z_complete_time = time.time()
-
-    def _clear_stale_progress(self):
-        """Clear completed progress indicators after a delay."""
-        now = time.time()
-        clear_delay = 5.0
-
-        if getattr(self, "_saveas_done", False):
-            complete_time = getattr(self, "_saveas_complete_time", 0)
-            if now - complete_time > clear_delay:
-                self._saveas_done = False
-                self._saveas_progress = 0.0
-
-        if getattr(self, "_register_z_done", False):
-            complete_time = getattr(self, "_register_z_complete_time", 0)
-            if now - complete_time > clear_delay:
-                self._register_z_done = False
-                self._register_z_progress = 0.0
-                self._register_z_current_msg = None
-
     # === Rendering ===
 
     def draw(self):
@@ -1326,7 +1193,23 @@ class PreviewDataWidget(EdgeWindow):
 
         # Draw independent floating windows
         draw_tools_popups(self)
-        draw_saveas_popup(self)
+        draw_saveas_popup(
+            self.save_as,
+            SaveSource(
+                viewer=self.image_widget,
+                fpath=self.fpath[0] if isinstance(self.fpath, list) else self.fpath,
+                planes=self.nz,
+                scanimage=self.is_mbo_scan,
+                frame_average=self._frame_average,
+                source_frames=source_timepoints(self),
+                projection=self._proj,
+                window=self._window_size,
+                sigma=self._gaussian_sigma,
+                mean_subtraction=self._mean_subtraction,
+                zstats=self.zstats,
+                metadata=self._custom_metadata,
+            ),
+        )
         draw_metadata_popup(self)
         draw_process_console_popup(self)
         draw_keybinds_popup(self)
@@ -1370,8 +1253,6 @@ class PreviewDataWidget(EdgeWindow):
 
     def update(self):
         """Main render callback."""
-        import time
-
         t0 = time.perf_counter()
         # `gap` measures wall-clock time since the previous frame entered
         # update(). On a healthy GUI this should hover near the canvas's

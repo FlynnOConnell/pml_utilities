@@ -496,7 +496,9 @@ class VoltagePipelineWidget(PipelineWidget):
             imgui.ImVec2(hello_imgui.em_size(36), 0), imgui.Cond_.first_use_ever
         )
         if imgui.begin_popup("Frames & Channel##voltage_slice"):
-            tp_label, _z_label, c_label = resolve_dim_labels(self.parent)
+            tp_label, _z_label, c_label = resolve_dim_labels(
+                getattr(self.parent, "image_widget", None)
+            )
             draw_selection_table(
                 self,
                 max_frames,

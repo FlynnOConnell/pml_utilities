@@ -439,15 +439,15 @@ def _reset_per_data_state(parent: Any) -> None:
     parent._frame_average = 1
     parent._frame_average_source = None
     # the per-run binning options follow the viewer; a new file starts raw
-    parent._saveas_frame_average = 1
+    parent.save_as.frame_average = 1
     parent._s2p_frame_average = 1
     parent._masknmf_frame_average = 1
     # contrast / z-tracking
     parent._auto_contrast_on_z = False
     parent._last_z_idx = 0
     # save-as dialog selections
-    parent._saveas_selected_roi = set()
-    parent._saveas_rois = False
+    parent.save_as.selected_rois = set()
+    parent.save_as.split_rois = False
 
 
 def swap_viewer_array(parent: Any, arr, title: str | None = None) -> None:

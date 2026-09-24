@@ -1347,7 +1347,9 @@ def _draw_s2p_slicing_popup(self):
             imgui.end_tooltip()
         imgui.dummy(imgui.ImVec2(0, 4))
 
-        tp_label, z_label, c_label = resolve_dim_labels(self)
+        tp_label, z_label, c_label = resolve_dim_labels(
+            getattr(self, "image_widget", None)
+        )
         tp_parsed, *_rest = draw_selection_table(
             self,
             max_frames,
@@ -2036,7 +2038,7 @@ def _draw_section_suite2p_content(self):
     max_frames, num_planes, num_channels = _init_s2p_selection_state(self)
 
     # get output path
-    s2p_path = getattr(self, "_s2p_outdir", "") or getattr(self, "_saveas_outdir", "")
+    s2p_path = getattr(self, "_s2p_outdir", "") or self.save_as.outdir
     has_save_path = bool(s2p_path)
 
     # button-width constants:
@@ -4264,9 +4266,7 @@ def run_process(self):
             input_path = str(self.fpath) if self.fpath else ""
 
             # get output path
-            s2p_path = getattr(self, "_s2p_outdir", "") or getattr(
-                self, "_saveas_outdir", ""
-            )
+            s2p_path = getattr(self, "_s2p_outdir", "") or self.save_as.outdir
 
             # determine roi
             num_rois = (
@@ -4384,9 +4384,7 @@ def run_process(self):
             multi_channel = len(selected_channels) > 1
             has_channels = getattr(self, "_s2p_last_num_channels", 1) > 1
 
-            s2p_path = getattr(self, "_s2p_outdir", "") or getattr(
-                self, "_saveas_outdir", ""
-            )
+            s2p_path = getattr(self, "_s2p_outdir", "") or self.save_as.outdir
 
             # Pre-extract shared state (upstream-shaped dicts for settings/db)
             s2p_settings_dict = self.s2p.to_dict()

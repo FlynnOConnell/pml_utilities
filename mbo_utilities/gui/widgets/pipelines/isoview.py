@@ -3060,7 +3060,7 @@ class IsoviewPipelineWidget(PipelineWidget):
         ("Tile" for tiled trees, "Timepoint" otherwise); the selected
         indices forwarded to the pipeline are unchanged.
         """
-        tp_label, _, _ = resolve_dim_labels(self.parent)
+        tp_label, _, _ = resolve_dim_labels(getattr(self.parent, "image_widget", None))
 
         imgui.text_colored(_SUBSECTION_COLOR, "Data slicing")
         set_tooltip(
@@ -3179,7 +3179,9 @@ class IsoviewPipelineWidget(PipelineWidget):
         ):
             self._iso_selected_cameras = set(cams)
         imgui.spacing()
-        _, _, view_label = resolve_dim_labels(self.parent)
+        _, _, view_label = resolve_dim_labels(
+            getattr(self.parent, "image_widget", None)
+        )
         view_label = view_label if view_label.endswith("s") else f"{view_label}s"
         imgui.text_colored(_SUBSECTION_COLOR, view_label)
         set_tooltip("Process only the checked views.", align="right")
