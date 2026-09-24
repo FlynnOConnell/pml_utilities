@@ -22,7 +22,7 @@ pml_utilities/
 │   ├── arrays/               # one LazyArray subclass per format + read-time views
 │   │   ├── _base.py          # _imwrite_base, ReductionMixin, TiffReaderMixin, DIMS
 │   │   ├── features/         # dims, tags, slicing, selection, roi, phase, frame average, stats
-│   │   ├── tiff.py zarr.py h5.py numpy.py bin.py mesc.py suite2p.py mp4.py
+│   │   ├── tiff.py zarr.py h5.py bruker.py numpy.py bin.py mesc.py suite2p.py mp4.py
 │   │   └── isoview/          # IsoView light-sheet trees (four layouts, one class)
 │   ├── metadata/             # canonical vocabulary, alias resolution, OutputMetadata
 │   ├── pipeline_registry.py  # PipelineInfo + entry-point loading
@@ -140,6 +140,7 @@ Format-specific labels win over the rank guess:
 | Multi-file TIFF | `planeNN` in the filename groups files onto Z; otherwise files concatenate along T; `roiN` yields one array per ROI. |
 | Suite2p dir | `ops.npy` per plane dir; plane dirs stack onto Z; T is derived from the binary's file size, not `ops["nframes"]`. |
 | MESc | `MethodType`: 1 timeseries `(T, C, 1, Y, X)`; 2 z-stack `(1, C, Z, Y, X)`; 6/7 linescan `(T, C, R, n_lines, width)`; 8 chessboard and 9/10 ribbon `(T, C, R, Y, X)`; 11 multicube has real depth on Z. `metadata["mesc_z_axis_meaning"]` says whether Z is `roi_index`, `depth` or `none`. |
+| Bruker HDF5 | the dataset's HDF5 dimension labels (`t z y x c`); `element_size_um` in the stored order of the spatial axes. |
 | H5 | dataset rank per the table; `imaging/data` 5D is `TZYXC` (Mini2P); a 4D dataset with `scan_mode` + `n_channel == shape[-1]` is `TYXC`. |
 | Zarr | array rank per the table; a directory of `.zarr` stores stacks them onto Z. |
 | IsoView | tree layout: TM folders → T, cameras/views → C, volume → Z. |
@@ -184,7 +185,7 @@ never branch on rank.
 3. Every class in the `mbo_utilities.lazy_arrays` entry-point group (plus
    `register_array_class` calls) is asked `can_open(path)` in descending
    `PRIORITY`; ties keep entry-point order. First `True` wins. Priorities today:
-   `IsoviewArray` 90, `ResultsArray` 70, `MescArray` 60, everything else 50.
+   `IsoviewArray` 90, `ResultsArray` 70, `MescArray` 60, `BrukerArray` 60, everything else 50.
 4. Inputs no class claims (file lists, `.bin`, `.klb`, `.mp4`, `reg_tif/`, mixed
    directories) fall through to the legacy chain in `reader._imread_impl`.
 
