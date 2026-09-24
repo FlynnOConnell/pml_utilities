@@ -78,7 +78,12 @@ def test_each_unit_keeps_its_own_rois(host):
     rois.open = True
     host.figure.canvas.force_draw()
     first = host.data.unit_key
-    store = host.context.manual_roi.store
+    widget = host.context.manual_roi
+    store = widget.store
+    tag = first.replace("/", "_")
+    assert widget.tag == tag
+    assert widget._save_target().name == f"manual_labels_{tag}.zarr"
+    assert widget.run_prefix == f"rois_{tag}_"
 
     other = "MUnit_1" if first.endswith("MUnit_0") else "MUnit_0"
     host.apps["mesc"].tab._switch(unit(host, other))
@@ -99,3 +104,33 @@ def test_curate_offers_itself_for_a_mesc_file(host):
     assert curate.available(host) is HAS_VNOISER
     assert curate.target == host.data.source_path
     assert curate.open is False
+
+
+def test_the_reference_buttons_unit_opens_at_its_slice(stack_mesc_path):
+    """The reference popup's display button hands the tab a unit and a slice,
+    applied the frame after, so a Z-stack opens on the tissue the lines were
+    scanned in; a picture carries no slice and opens where it opens.
+    """
+    from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
+    from mbo_utilities.gui.mesc_reference import roi_slider
+
+    stack, scan = list_mesc_units(stack_mesc_path)
+    host = build_host(MescArray(stack_mesc_path, unit=1), size=(900, 600))
+    try:
+        host.figure.show()
+        host.figure.canvas.force_draw()
+        tab = host.apps["mesc"].tab
+        tab._show_reference_unit(stack["key"], 3)
+        assert tab._pending is not None
+        tab._frame()
+        assert tab._pending is None
+        assert host.data.unit_key == stack["key"]
+        assert int(host.viewer.indices[roi_slider(host.viewer.dim_names)]) == 3
+
+        tab._switch(scan)
+        tab._show_reference_unit(stack["key"], None)
+        tab._frame()
+        assert int(host.viewer.indices[roi_slider(host.viewer.dim_names)]) == 0
+    finally:
+        host.close()
+        host.viewer.close()

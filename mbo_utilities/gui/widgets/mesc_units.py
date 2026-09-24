@@ -432,43 +432,10 @@ class MescTabWidget(Widget):
         self.parent.logger.info(f"MESc unit: {arr.unit_key}  shape={arr.shape}")
 
     def _show(self, arr, title: str) -> None:
-        """Swap `arr` into the preview window.
-
-        Each unit is an unrelated recording, so the Manual ROI widget is
-        rebuilt for it: the outgoing unit's ROIs, runs and traces are parked
-        under its key (``detach_roi_widget``) and the incoming unit's, parked
-        earlier or autosaved beside the file under its name, are adopted
-        (``attach_roi_widget``); a line-scan unit's own traces follow the
-        same way.
+        """Open `arr` into the host: the viewer swap, each unit's own ROIs
+        and a line scan's traces all follow from ``set_data``.
         """
-        from mbo_utilities.gui._dialogs import swap_viewer_array
-        from mbo_utilities.gui.linescan_viewer import attach_standard_traces
-        from mbo_utilities.gui.manual_roi import attach_roi_widget, detach_roi_widget
-
-        parent = self.parent
-        path = str(arr.filenames[0])
-        shown = self._mesc.unit_key
-        traces = getattr(parent, "linescan_traces", None)
-        if traces is not None:
-            traces.close()
-            parent.linescan_traces = None
-        roi_on = getattr(parent, "manual_roi", None) is not None
-        if roi_on:
-            detach_roi_widget(parent)
-            self._parked[(path, shown)] = (
-                parent._manual_roi_store,
-                parent._manual_roi_runs,
-            )
-            parent._manual_roi_store, parent._manual_roi_runs = self._parked.get(
-                (path, arr.unit_key), (None, None)
-            )
-        swap_viewer_array(parent, arr, title=title)
-        if roi_on:
-            attach_roi_widget(parent)
-        try:
-            attach_standard_traces(parent)
-        except Exception:
-            parent.logger.warning("line-scan traces tab unavailable", exc_info=True)
+        self.parent.host.set_data(arr)
 
     def _switch(self, info: dict, z: int | None = None) -> None:
         """Open the unit ``info`` describes and show it at slice ``z``; a

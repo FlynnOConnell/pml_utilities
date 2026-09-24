@@ -9,6 +9,7 @@ Usage:
     KEEP_TEST_OUTPUT=1 pytest tests/    # Keep output files for inspection
 """
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -21,6 +22,7 @@ from pathlib import Path
 # a real window; `setdefault` still lets a caller override explicitly.
 os.environ.setdefault("RENDERCANVAS_FORCE_OFFSCREEN", "1")
 
+import h5py
 import mbo_utilities as mbo
 import numpy as np
 import pytest
@@ -352,3 +354,63 @@ def find_output_file(output_dir, ext):
         return None, []
 
     return None, []
+
+
+@pytest.fixture(scope="module")
+def stack_mesc_path(tmp_path_factory):
+    """A Z-stack (11 slices, 2 um apart, FOV corner at z = -50 um) and a line
+    scan with four lines: two on slice 3, one on slice 7, one below the stack.
+    """
+    path = tmp_path_factory.mktemp("mesc_tab") / "stack.mesc"
+    with h5py.File(path, "w") as f:
+        s = f.create_group("MSession_0")
+        z = s.create_group("MUnit_0")
+        z.attrs.update(
+            {
+                "MethodType": 2,
+                "VecChannelsSize": 1,
+                "TStepInMs": 1.0,
+                "MeasurementDatePosix": 0,
+                "Comment": "zstack",
+                "MinZ": -10.0,
+                "MaxZ": 10.0,
+                "ZDim": 11,
+            }
+        )
+        z.attrs["ReferenceViewportJSON"] = json.dumps(
+            {
+                "viewports": [
+                    {
+                        "geomTransTransl": [100.0, 200.0, -50.0],
+                        "width": 40.0,
+                        "height": 32.0,
+                    }
+                ]
+            }
+        )
+        z.create_dataset("Channel_0", data=np.zeros((11, 64, 80), np.uint16))
+        ls = s.create_group("MUnit_1")
+        ls.attrs.update(
+            {
+                "MethodType": 6,
+                "VecChannelsSize": 1,
+                "TStepInMs": 2.0,
+                "MeasurementDatePosix": 1,
+                "Comment": "linescan",
+            }
+        )
+        boxes = [
+            {"lowerLeftFramePix": [2 * i + 1, 1], "upperRightFramePix": [2 * i + 2, 1]}
+            for i in range(4)
+        ]
+        lines = [
+            [[110, 130], [210, 210], [-54, -54]],
+            [[120, 120], [204, 228], [-46, -46]],
+            [[105, 135], [220, 230], [-53.9, -53.9]],
+            [[112, 118], [212, 212], [-70, -70]],
+        ]
+        ls.attrs["CoordinateMapJSON"] = json.dumps(
+            {"maps": [{"measurementROIs": boxes, "driftEndPoints": lines}]}
+        )
+        ls.create_dataset("Channel_0", data=np.zeros((1, 8, 8), np.uint16))
+    return path
