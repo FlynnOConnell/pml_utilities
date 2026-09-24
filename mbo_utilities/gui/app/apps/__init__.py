@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mbo_utilities.gui.app._app import App
 from mbo_utilities.gui.app.apps.console import ConsoleApp
+from mbo_utilities.gui.app.apps.curate import CurateApp
 from mbo_utilities.gui.app.apps.debug import debug_apps
 from mbo_utilities.gui.app.apps.diagnostics import DiagnosticsApp
 from mbo_utilities.gui.app.apps.help import HelpApp
@@ -33,6 +34,7 @@ __all__ = [
     "BiohpcApp",
     "CloudApp",
     "ConsoleApp",
+    "CurateApp",
     "DiagnosticsApp",
     "HelpApp",
     "IsoviewToolApp",
@@ -61,6 +63,7 @@ def ported_apps() -> list[App]:
         OpenApp("file"),
         OpenApp("folder"),
         SaveAsApp(),
+        CurateApp(),
         OptionsApp(),
         HelpApp(),
         KeybindsApp(),
