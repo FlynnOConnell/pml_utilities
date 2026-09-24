@@ -13,6 +13,7 @@ from mbo_utilities.gui._dialogs import (
 )
 from mbo_utilities.gui._save_as import SaveAs
 from mbo_utilities.gui.app.apps.viewer import PROJECTIONS
+from mbo_utilities.gui.manual_roi import detach_roi_widget
 from mbo_utilities.gui.widgets.pipelines import cleanup_pipelines
 from mbo_utilities.gui.widgets.pipelines._base import Suite2pState
 from mbo_utilities.lazy_array import base_array
@@ -74,8 +75,9 @@ class WindowContext(Suite2pState):
             _try_hydrate_s2p_from_binary(self, self.fpath)
 
     def close(self) -> None:
-        """Release what the pipeline widgets hold: windows, threads, files."""
+        """Release what the pipeline and ROI widgets hold: windows, threads, files."""
         cleanup_pipelines(self)
+        detach_roi_widget(self)
 
     def sync_manual_roi(self, enabled: bool) -> None:
         """Turn manual ROI labeling on or off, as the ROIs pipeline asks."""
