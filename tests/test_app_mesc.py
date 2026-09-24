@@ -90,3 +90,12 @@ def test_each_unit_keeps_its_own_rois(host):
     assert host.context.manual_roi.store is store
     rois.open = False
     host.figure.canvas.force_draw()
+
+
+def test_curate_offers_itself_for_a_mesc_file(host):
+    from mbo_utilities.gui._availability import HAS_VNOISER
+
+    curate = host.apps["curate"]
+    assert curate.available(host) is HAS_VNOISER
+    assert curate.target == host.data.source_path
+    assert curate.open is False
