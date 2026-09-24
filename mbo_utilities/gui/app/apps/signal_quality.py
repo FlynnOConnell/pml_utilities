@@ -24,6 +24,20 @@ class SignalQualityApp(App):
     def available(self, host) -> bool:
         return host.zstats is not None
 
+    def progress(self, host) -> list[dict]:
+        return [
+            {
+                "key": f"zstats_{i}",
+                "text": f"Summary stats {i + 1}: {fraction * 100:.0f}%",
+                "progress": max(0.01, fraction),
+                "done": False,
+            }
+            for i, (running, fraction) in enumerate(
+                zip(host.zstats.running, host.zstats.progress)
+            )
+            if running or 0.0 < fraction < 1.0
+        ]
+
     def draw_canvas(self, host, size: imgui.ImVec2) -> None:
         stats = host.zstats
         if any(stats.done):

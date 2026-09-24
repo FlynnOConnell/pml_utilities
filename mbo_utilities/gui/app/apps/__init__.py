@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from mbo_utilities.gui.app._app import App
+from mbo_utilities.gui.app.apps.console import ConsoleApp
 from mbo_utilities.gui.app.apps.debug import debug_apps
 from mbo_utilities.gui.app.apps.diagnostics import DiagnosticsApp
 from mbo_utilities.gui.app.apps.help import HelpApp
@@ -20,6 +21,7 @@ from mbo_utilities.gui.app.apps.signal_quality import SignalQualityApp
 from mbo_utilities.gui.app.apps.viewer import ViewerApp
 
 __all__ = [
+    "ConsoleApp",
     "DiagnosticsApp",
     "HelpApp",
     "KeybindsApp",
@@ -49,6 +51,7 @@ def ported_apps() -> list[App]:
         TileGridApp(),
         MetadataApp(),
         SignalQualityApp(),
+        ConsoleApp(),
         DiagnosticsApp(),
         LogApp(),
     ]
