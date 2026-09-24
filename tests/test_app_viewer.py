@@ -7,6 +7,7 @@ from functools import partial
 import numpy as np
 import pytest
 from imgui_bundle import imgui
+from imgui_debugger import ConfigStore
 
 ui = pytest.importorskip("fastplotlib.ui")
 if not hasattr(ui, "ImguiWindow"):
@@ -16,21 +17,27 @@ pytest.importorskip("fastplotlib.widgets.nd_widget")
 from mbo_utilities import imread  # noqa: E402
 from mbo_utilities.arrays import NumpyArray, average_frames  # noqa: E402
 from mbo_utilities.arrays.features import find_slider_name  # noqa: E402
-from mbo_utilities.gui.app import _app  # noqa: E402
-from mbo_utilities.gui.app.apps.open import NOTE  # noqa: E402
+from mbo_utilities.gui.app import _app, build_host  # noqa: E402
 from mbo_utilities.gui.app.apps.viewer import blur  # noqa: E402
 from mbo_utilities.gui.app.demo import movie_data  # noqa: E402
 
 
-def confirm_path(title, is_open, path, hint, action, browse=None, note="", theme=None):
-    """Stands in for draw_path_popup, confirming the path it is given."""
-    return True, path, True
+def confirm_prompt(prompt):
+    """Stands in for draw_path_prompt, submitting the path an open prompt holds."""
+    return (prompt.path if prompt.open else None), False
+
+
+def tap(host, key: str) -> None:
+    """Press and release one key, a frame each, the way a user would."""
+    io = imgui.get_io()
+    io.add_key_event(getattr(imgui.Key, key), True)
+    host.figure.canvas.force_draw()
+    io.add_key_event(getattr(imgui.Key, key), False)
+    host.figure.canvas.force_draw()
 
 
 @pytest.fixture
 def host():
-    from mbo_utilities.gui.app import build_host
-
     host = build_host(movie_data(nt=24, ny=32, nx=32), size=(900, 600))
     host.figure.show()
     host.figure.canvas.force_draw()
@@ -151,15 +158,77 @@ def test_a_panel_app_opens_the_window_itself(host):
 
 
 def test_a_path_that_does_not_open_keeps_the_prompt_up(host, tmp_path, monkeypatch):
-    monkeypatch.setattr("mbo_utilities.gui.app.apps.open.draw_path_popup", confirm_path)
+    monkeypatch.setattr(
+        "mbo_utilities.gui.app.apps.open.draw_path_prompt", confirm_prompt
+    )
     before = host.data
-    opener = host.apps["open"]
-    opener.path = str(tmp_path / "missing.tif")
+    opener = host.apps["open_file"]
     opener.open = True
+    opener.prompt.path = str(tmp_path / "missing.tif")
     host.figure.canvas.force_draw()
 
     assert opener.open is True
-    assert opener.note != NOTE
-    assert "missing.tif" not in host.title()
+    assert opener.prompt.status.startswith("not found")
     assert host.data is before
     opener.open = False
+
+
+def test_a_file_that_does_not_read_says_why(host, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "mbo_utilities.gui.app.apps.open.draw_path_prompt", confirm_prompt
+    )
+    broken = tmp_path / "broken.tif"
+    broken.write_bytes(b"not a tiff")
+    opener = host.apps["open_file"]
+    opener.open = True
+    opener.prompt.path = str(broken)
+    host.figure.canvas.force_draw()
+
+    assert opener.open is True
+    assert opener.prompt.status
+    assert not opener.prompt.status.startswith("not found")
+    opener.open = False
+
+
+def test_an_apps_shortcut_shows_and_hides_it(host):
+    keybinds = host.apps["keybinds"]
+    assert keybinds.open is False
+    tap(host, "k")
+    assert keybinds.open is True
+    tap(host, "k")
+    assert keybinds.open is False
+
+
+def test_the_arrow_keys_step_the_playhead(host):
+    host.figure.canvas.force_draw()
+    tap(host, "right_arrow")
+    tap(host, "right_arrow")
+    assert host.frame == 2
+    tap(host, "left_arrow")
+    assert host.frame == 1
+
+
+def test_the_help_keybinds_and_options_windows_draw(host):
+    _app._reported.clear()
+    for app_id in ("help", "keybinds", "options"):
+        host.apps[app_id].open = True
+    host.figure.canvas.force_draw()
+    host.figure.canvas.force_draw()
+    assert not {"help", "keybinds", "options"} & _app._reported
+
+
+def test_the_host_remembers_which_apps_were_showing(tmp_path):
+    store = ConfigStore(tmp_path)
+    first = build_host(movie_data(nt=4, ny=16, nx=16), size=(600, 400), store=store)
+    first.figure.show()
+    first.apps["log"].open = True
+    first.apps["viewer"].open = False
+    first.figure.canvas.force_draw()
+    first.close()
+    first.apps["viewer"].viewer.close()
+
+    second = build_host(movie_data(nt=4, ny=16, nx=16), size=(600, 400), store=store)
+    assert second.apps["log"].open is True
+    assert second.apps["viewer"].open is False
+    second.close()
+    second.apps["viewer"].viewer.close()

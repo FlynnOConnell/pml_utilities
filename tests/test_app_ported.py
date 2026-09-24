@@ -11,9 +11,13 @@ if not hasattr(ui, "ImguiWindow"):
 apps_module = pytest.importorskip("mbo_utilities.gui.app.apps")
 
 
-def confirm_path(title, is_open, path, hint, action, browse=None, note="", theme=None):
-    """Stands in for draw_path_popup, confirming the path it is given."""
-    return True, path, True
+def confirm_prompt(prompt):
+    """Stands in for draw_path_prompt, submitting the path an open prompt holds."""
+    return (prompt.path if prompt.open else None), False
+
+
+def forget(*args, **kwargs):
+    """Stands in for the preference writers, so a test leaves no recent files."""
 
 
 @pytest.fixture(scope="module")
@@ -93,10 +97,14 @@ def test_the_open_app_loads_a_file_into_the_host(host, tmp_path, monkeypatch):
     path = tmp_path / "opened.tif"
     tifffile.imwrite(path, movie)
 
-    monkeypatch.setattr("mbo_utilities.gui.app.apps.open.draw_path_popup", confirm_path)
-    opener = host.apps["open"]
-    opener.path = str(path)
+    monkeypatch.setattr(
+        "mbo_utilities.gui.app.apps.open.draw_path_prompt", confirm_prompt
+    )
+    monkeypatch.setattr("mbo_utilities.gui.app.apps.open.add_recent_file", forget)
+    monkeypatch.setattr("mbo_utilities.gui.app.apps.open.set_last_dir", forget)
+    opener = host.apps["open_file"]
     opener.open = True
+    opener.prompt.path = str(path)
     host.figure.canvas.force_draw()
 
     assert opener.open is False
