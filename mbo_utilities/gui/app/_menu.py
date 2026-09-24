@@ -59,6 +59,9 @@ class MenuBar(ImguiWindow):
                     self._menu(name)
             self._slot_menus()
             imgui.text(f"   {self.host.status()}")
+            for app in self.host.ordered():
+                if app.available(self.host):
+                    app.draw_menu_bar(self.host)
             imgui.end_menu_bar()
         imgui.end()
         self.host.keys()
