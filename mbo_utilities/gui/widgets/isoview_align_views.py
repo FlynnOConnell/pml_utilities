@@ -113,7 +113,7 @@ class IsoviewAlignViews(Widget):
 
     name = "Align views"
     priority = 64
-    toggle_key = "preview.align_views"
+    toggle_key = "preview"
 
     def __init__(self, parent: Any):
         super().__init__(parent)

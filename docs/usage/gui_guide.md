@@ -370,8 +370,7 @@ The save dialog includes a metadata editor:
 **Widgets > Manual ROI Labeling** (or `mbo <path> --widget manualroi`) adds the
 **ROIs** and **Traces** tabs to the right bar and the **Traces** panel to the strip
 over the image: the ROIs tab holds the NAVIGATE, DRAW, VIEW and LABELS sections
-(captioned settings rows like the Process tab's, each switched off from the
-Widgets menu) over the ROI table, the Traces tab lists every trace,
+(captioned settings rows like the Process tab's) over the ROI table, the Traces tab lists every trace,
 and the panel plots the selected ones under its controls. Nothing switches tabs or
 panels for you. Arm **Add ROI** (`a`), drag a closed stroke around a cell, release:
 the enclosed pixels become a mask on the exact slice on screen (z-plane, channel,

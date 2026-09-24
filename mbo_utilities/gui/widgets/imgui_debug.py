@@ -1,16 +1,11 @@
-"""Dear ImGui's own debug tools, as a tab.
+"""The ImGui Debugger window, opened from Widgets > ImGui Debugger.
 
-The tab and its windows only exist while debug logging is on (the
-``MBO_DEBUG`` flag: ``mbo --debug``, the file dialog's or the Options
-popup's "Debug logging" checkbox), which is what
-``WidgetEntry(debug_only=True)`` gates.
+One floating window of switches: ``imgui_debugger``'s variable inspector
+over the preview window's own state, and Dear ImGui's metrics/debugger,
+debug log, ID stack tool, demo and about windows. Every window here is a
+floating one, drawn from ``PreviewDataWidget.draw`` every frame.
 
-The tool windows are floating windows of imgui's own, so they are drawn
-from ``PreviewDataWidget.draw`` every frame rather than from the tab body,
-which only runs while the tab is selected.
-
-The style editor is not here: it is File > Style Editor
-(``widgets/style_editor.py``), always available and saved under ``~/.mbo``.
+The style editor is its own Widgets-menu entry (``widgets/style_editor.py``).
 """
 
 from __future__ import annotations
@@ -18,13 +13,15 @@ from __future__ import annotations
 from typing import Any
 
 from imgui_bundle import imgui
+from imgui_debugger import Debugger, DebuggerConfig
 
-from mbo_utilities.gui.widgets._base import Widget
-from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
-
-__all__ = ["ImguiDebugWidget", "draw_imgui_debug_windows"]
-
-TOGGLE_KEY = "imgui_debug"
+__all__ = [
+    "TOOLS",
+    "draw_imgui_debug_menu_item",
+    "draw_imgui_debug_windows",
+    "get_inspector",
+    "open_imgui_debugger",
+]
 
 # key -> (label, what it shows)
 TOOLS: tuple[tuple[str, str, str], ...] = (
@@ -56,41 +53,66 @@ TOOLS: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
-_open: dict[str, bool] = {key: False for key, _, _ in TOOLS}
+_open: dict[str, bool] = {"window": False} | {key: False for key, _, _ in TOOLS}
+_inspector: Debugger | None = None
 
 
-class ImguiDebugWidget(Widget):
-    """The ImGui tab: switches for Dear ImGui's own debug windows."""
+def open_imgui_debugger() -> None:
+    """Show the ImGui Debugger window."""
+    _open["window"] = True
 
-    name = "ImGui Debug"
-    tab_label = "ImGui"
-    placement = "tab"
-    toggle_key = TOGGLE_KEY
-    priority = 200
 
-    @classmethod
-    def is_supported(cls, parent: Any) -> bool:
-        return True
+def draw_imgui_debug_menu_item() -> None:
+    """Draw the Widgets-menu entry that opens the window."""
+    if imgui.menu_item("ImGui Debugger", "", _open["window"], True)[0]:
+        _open["window"] = not _open["window"]
 
-    def draw(self) -> None:
+
+def get_inspector(parent: Any) -> Debugger:
+    """The variable inspector for this process, pointed at ``parent``."""
+    global _inspector
+    if _inspector is None:
+        _inspector = Debugger(
+            DebuggerConfig(
+                title="Inspector",
+                window_id="mbo_inspector",
+                target=parent,
+                visible=False,
+                window_size=(520, 640),
+                show_frame=False,
+            )
+        )
+    return _inspector
+
+
+def _draw_window(parent: Any) -> None:
+    imgui.set_next_window_size(imgui.ImVec2(300, 0), imgui.Cond_.first_use_ever)
+    expanded, _open["window"] = imgui.begin("ImGui Debugger", True)
+    if expanded:
         io = imgui.get_io()
         imgui.text_disabled(
             f"{io.framerate:.0f} FPS   {1000.0 / max(io.framerate, 1e-6):.1f} ms/frame"
         )
         imgui.separator()
         imgui.spacing()
-
+        inspector = get_inspector(parent)
+        changed, value = imgui.checkbox("Inspector", inspector.visible)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "imgui_debugger's variable inspector over the viewer: every "
+                "attribute, live, editable in place."
+            )
+        if changed:
+            inspector.visible = value
         for key, label, help_text in TOOLS:
             changed, value = imgui.checkbox(label, _open[key])
             if imgui.is_item_hovered():
                 imgui.set_tooltip(help_text)
             if changed:
                 _open[key] = value
-
         imgui.spacing()
         imgui.separator()
         imgui.spacing()
-
         if imgui.button("Pick item"):
             imgui.debug_start_item_picker()
         if imgui.is_item_hovered():
@@ -98,13 +120,15 @@ class ImguiDebugWidget(Widget):
                 "Click a widget in the GUI; imgui breaks on it and the "
                 "Metrics window shows which code drew it."
             )
+    imgui.end()
 
 
 def draw_imgui_debug_windows(parent: Any) -> None:
-    """Draw whichever imgui tool windows are switched on. Call once per frame."""
-    if not widget_enabled(TOGGLE_KEY):
-        return
-
+    """Draw the debugger window and whichever tool windows are on. Call once per frame."""
+    if _open["window"]:
+        _draw_window(parent)
+    if _inspector is not None:
+        _inspector.render_window()
     if _open["metrics"]:
         _open["metrics"] = bool(imgui.show_metrics_window(True))
     if _open["debug_log"]:

@@ -68,7 +68,7 @@ def apply_saved_style() -> int:
 
 
 def draw_style_menu_item() -> None:
-    """Draw the File-menu entry that opens the editor."""
+    """Draw the Widgets-menu entry that opens the editor."""
     get_style_editor().menu_item("Style Editor")
 
 

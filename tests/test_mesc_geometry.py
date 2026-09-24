@@ -9,6 +9,7 @@ alone, one scanned below the stack.
 from __future__ import annotations
 
 import json
+import shutil
 
 import h5py
 import numpy as np
@@ -370,6 +371,36 @@ def test_a_scan_recorded_outside_every_stack_is_in_none_of_them(mesc_path, tmp_p
     assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_4")} == {
         "MUnit_1"
     }
+
+
+def test_a_ribbon_outline_is_a_closed_patch(mesc_path, tmp_path):
+    """A ribbon's contour is one long side then the other walked back, many
+    points each; it closes like a four-corner patch, so both short edges draw,
+    and its length runs along the first side.
+    """
+    path = tmp_path / "ribbon.mesc"
+    shutil.copy(mesc_path, path)
+    xs = np.linspace(110, 130, 5)
+    ribbon = [
+        [*xs, *xs[::-1]],
+        [*[210.0] * 5, *[220.0] * 5],
+        [-46.0] * 10,
+    ]
+    with h5py.File(path, "a") as f:
+        unit = f["MSession_0/MUnit_3"]
+        maps = json.loads(unit.attrs["CoordinateMapJSON"])
+        maps["maps"][0]["contours"][0] = ribbon
+        unit.attrs["CoordinateMapJSON"] = json.dumps(maps)
+    (p, _) = roi_placements(
+        roi_outlines_um(path, "MSession_0/MUnit_3"),
+        zstack_depth_info(path, "MSession_0/MUnit_0"),
+    )
+    assert p["length_um"] == 20.0
+    (rec,) = [r for r in image_overlays(path, "MSession_0/MUnit_0") if r["munit"] == "MUnit_3"]
+    assert rec["kind"] == "patch"
+    assert rec["pixels"].shape == (11, 2)
+    assert np.allclose(rec["pixels"][0], rec["pixels"][-1])
+    assert np.allclose(rec["pixels"][-2:], [[20, 40], [20, 20]])
 
 
 def test_overlay_skips_a_unit_whose_outlines_do_not_pair_with_its_rois(mesc_path):

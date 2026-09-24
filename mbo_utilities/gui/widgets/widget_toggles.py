@@ -1,13 +1,13 @@
 """Registry and menu for the "Widgets" menu-bar entry.
 
-Every toggleable piece of UI is one :class:`WidgetEntry` with a list of
-:class:`SubWidget` children. The menu draws a checkbox per entry and per
-child; the draw code for each widget asks :func:`widget_enabled` /
-:func:`sub_enabled` before rendering.
+Every toggleable piece of UI is one :class:`WidgetEntry`, drawn as one
+checkbox; the draw code for each widget asks :func:`widget_enabled` before
+rendering. Below the checkboxes the menu opens the floating tool windows:
+the style editor, the imgui debugger, BioHPC and the cloud runner.
 
-State is flat (``"scan_phase"``, ``"scan_phase.border"``) and persisted in
-preferences, so toggles survive a restart. Anything absent from the stored
-mapping falls back to the registry default.
+State is keyed by entry (``"preview"``) and persisted in preferences, so
+toggles survive a restart. Anything absent from the stored mapping falls
+back to the registry default.
 """
 
 from __future__ import annotations
@@ -18,59 +18,33 @@ from typing import Any
 
 from imgui_bundle import imgui
 
-from mbo_utilities import log
+from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_menu_item
+from mbo_utilities.gui.widgets.style_editor import draw_style_menu_item
 from mbo_utilities.preferences import get_widget_toggles, set_widget_toggles
 
 __all__ = [
-    "SubWidget",
     "WidgetEntry",
     "WIDGET_REGISTRY",
     "draw_widgets_menu",
     "get_entry",
     "reset_widget_toggles",
-    "set_sub_enabled",
     "set_widget_enabled",
-    "sub_enabled",
     "widget_enabled",
 ]
 
 
 @dataclass(frozen=True)
-class SubWidget:
-    """One toggleable section inside a widget."""
-
-    key: str
-    label: str
-    default: bool = True
-    tooltip: str = ""
-    # same contract as WidgetEntry.on_toggle, for a section that owns live
-    # state of its own (an edge window, say) rather than just a block of draw
-    # calls the parent can skip.
-    on_toggle: Callable[[Any, bool], None] | None = field(default=None, compare=False)
-
-
-@dataclass(frozen=True)
 class WidgetEntry:
-    """A widget in the Widgets menu, plus its subwidgets."""
+    """A widget in the Widgets menu: one checkbox."""
 
     key: str
     label: str
-    subwidgets: tuple[SubWidget, ...] = ()
     default: bool = True
     tooltip: str = ""
     # called as on_toggle(parent, enabled) right after the user flips the
-    # widget checkbox; lets a widget build/tear down live state (the ROI
-    # overlay, say) instead of only gating its draw.
+    # checkbox; lets a widget build/tear down live state (the ROI overlay,
+    # say) instead of only gating its draw.
     on_toggle: Callable[[Any, bool], None] | None = field(default=None, compare=False)
-    # a development tool: absent from the menu and off whatever the stored
-    # state says unless debug logging is on (the MBO_DEBUG flag)
-    debug_only: bool = False
-
-    def sub(self, key: str) -> SubWidget | None:
-        for s in self.subwidgets:
-            if s.key == key:
-                return s
-        return None
 
 
 def _toggle_manual_roi(parent: Any, enabled: bool) -> None:
@@ -85,16 +59,6 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         key="preview",
         label="Image",
         tooltip="The Image tab and the control panels stacked inside it.",
-        subwidgets=(
-            SubWidget("window_functions", "Window Functions"),
-            SubWidget("spatial_functions", "Spatial Functions"),
-            SubWidget("scan_phase", "Scan-Phase Correction"),
-            SubWidget("frame_averaging", "Frame Averaging"),
-            SubWidget("summary_images", "Summary Images"),
-            SubWidget("align_views", "Align Views"),
-            SubWidget("projections", "Projections"),
-            SubWidget("tile_grid", "Tile Grid"),
-        ),
     ),
     WidgetEntry(
         key="mesc",
@@ -115,15 +79,6 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         tooltip="Registration / segmentation pipelines.",
     ),
     WidgetEntry(
-        key="imgui_debug",
-        label="ImGui Debug",
-        tooltip="Dear ImGui's own debug windows: the metrics/debugger, the "
-        "debug log, the ID stack tool, the style editor and the demo. "
-        "Only with debug logging on.",
-        default=False,
-        debug_only=True,
-    ),
-    WidgetEntry(
         key="manual_roi",
         label="Manual ROI Labeling",
         tooltip="Freehand ROI drawing and labelling: the ROIs tab holds the "
@@ -132,21 +87,6 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
         "Process tab's ROIs pipeline.",
         default=False,
         on_toggle=_toggle_manual_roi,
-        subwidgets=(
-            SubWidget("tools", "Drawing tools"),
-            SubWidget("overlay", "Overlay controls"),
-            SubWidget("labels", "Label editor"),
-            SubWidget(
-                "table",
-                "ROI table",
-                tooltip="The ROIs tab: the controls over the ROI table.",
-            ),
-            SubWidget(
-                "traces",
-                "Trace table",
-                tooltip="The Traces tab: every collected trace with stats.",
-            ),
-        ),
     ),
 )
 
@@ -179,35 +119,13 @@ def _persist() -> None:
 
 
 def _default(key: str) -> bool:
-    widget_key, _, sub_key = key.partition(".")
-    entry = _BY_KEY.get(widget_key)
-    if entry is None:
-        return True
-    if not sub_key:
-        return entry.default
-    sub = entry.sub(sub_key)
-    return entry.default if sub is None else sub.default
+    entry = _BY_KEY.get(key)
+    return True if entry is None else entry.default
 
 
 def widget_enabled(key: str) -> bool:
-    """Whether ``key`` should be drawn.
-
-    Accepts a widget key (``"preview"``) or a subwidget key
-    (``"preview.scan_phase"``); a subwidget is off whenever its parent
-    widget is, so callers only need this one check.
-    """
-    widget_key, _, sub_key = key.partition(".")
-    entry = _BY_KEY.get(widget_key)
-    if entry is not None and entry.debug_only and not log.debug_enabled():
-        return False
-    if sub_key and not bool(_load().get(widget_key, _default(widget_key))):
-        return False
+    """Whether widget ``key`` should be drawn."""
     return bool(_load().get(key, _default(key)))
-
-
-def sub_enabled(widget_key: str, sub_key: str) -> bool:
-    """Whether subwidget ``sub_key`` of ``widget_key`` should be drawn."""
-    return widget_enabled(f"{widget_key}.{sub_key}")
 
 
 def set_widget_enabled(key: str, value: bool, persist: bool = True) -> None:
@@ -217,17 +135,8 @@ def set_widget_enabled(key: str, value: bool, persist: bool = True) -> None:
         _persist()
 
 
-def set_sub_enabled(
-    widget_key: str, sub_key: str, value: bool, persist: bool = True
-) -> None:
-    """Turn one subwidget on or off."""
-    _load()[f"{widget_key}.{sub_key}"] = bool(value)
-    if persist:
-        _persist()
-
-
 def _fire(parent: Any, on_toggle, key: str, value: bool) -> None:
-    """Run a widget/subwidget toggle callback, logging rather than raising."""
+    """Run a widget toggle callback, logging rather than raising."""
     if parent is None or on_toggle is None:
         return
     try:
@@ -239,21 +148,12 @@ def _fire(parent: Any, on_toggle, key: str, value: bool) -> None:
 
 
 def _apply_all(parent: Any, chosen, persist: bool = True) -> None:
-    """Set every widget and subwidget to ``chosen(entry_or_sub)`` and fire callbacks."""
+    """Set every widget to ``chosen(entry)`` and fire callbacks."""
     state = _load()
     for entry in WIDGET_REGISTRY:
         was_on = widget_enabled(entry.key)
         value = chosen(entry)
         state[entry.key] = value
-        for sub in entry.subwidgets:
-            sub_key = f"{entry.key}.{sub.key}"
-            sub_was_on = widget_enabled(sub_key)
-            sub_value = chosen(sub)
-            state[sub_key] = sub_value
-            # a subwidget is off whenever its parent is, so only fire its
-            # callback once the parent's own state has settled
-            if sub.on_toggle and (sub_was_on != sub_value or was_on != value):
-                _fire(parent, sub.on_toggle, sub_key, sub_value and value)
         if was_on != value:
             _fire(parent, entry.on_toggle, entry.key, value)
     if persist:
@@ -261,26 +161,12 @@ def _apply_all(parent: Any, chosen, persist: bool = True) -> None:
 
 
 def reset_widget_toggles(parent: Any = None, persist: bool = True) -> None:
-    """Restore every widget and subwidget to its registry default."""
-    _apply_all(parent, lambda item: item.default, persist)
+    """Restore every widget to its registry default."""
+    _apply_all(parent, lambda entry: entry.default, persist)
 
 
 def _set_all(parent: Any, value: bool) -> None:
-    _apply_all(parent, lambda item: value)
-
-
-def _apply_toggle(parent: Any, entry: WidgetEntry, value: bool) -> None:
-    """Flip one widget and let it build or tear down whatever it owns."""
-    set_widget_enabled(entry.key, value)
-    _fire(parent, entry.on_toggle, entry.key, value)
-
-
-def _apply_sub_toggle(
-    parent: Any, entry: WidgetEntry, sub: SubWidget, value: bool
-) -> None:
-    """Flip one subwidget and let it build or tear down whatever it owns."""
-    set_sub_enabled(entry.key, sub.key, value)
-    _fire(parent, sub.on_toggle, f"{entry.key}.{sub.key}", value)
+    _apply_all(parent, lambda entry: value)
 
 
 def draw_widgets_menu(parent: Any) -> None:
@@ -289,49 +175,13 @@ def draw_widgets_menu(parent: Any) -> None:
         return
 
     for entry in WIDGET_REGISTRY:
-        if entry.debug_only and not log.debug_enabled():
-            continue
         enabled = widget_enabled(entry.key)
-
-        # a widget with no subwidgets is just a checkbox; only one with
-        # children earns a submenu
-        if not entry.subwidgets:
-            clicked, new_value = imgui.menu_item(entry.label, "", enabled, True)
-            if entry.tooltip and imgui.is_item_hovered():
-                imgui.set_tooltip(entry.tooltip)
-            if clicked and new_value != enabled:
-                _apply_toggle(parent, entry, new_value)
-            continue
-
-        if not imgui.begin_menu(entry.label, True):
-            if entry.tooltip and imgui.is_item_hovered():
-                imgui.set_tooltip(entry.tooltip)
-            continue
-        if entry.tooltip:
-            imgui.text_disabled(entry.tooltip)
-            imgui.separator()
-
-        clicked, new_value = imgui.menu_item(f"Show {entry.label}", "", enabled, True)
+        clicked, new_value = imgui.menu_item(entry.label, "", enabled, True)
+        if entry.tooltip and imgui.is_item_hovered():
+            imgui.set_tooltip(entry.tooltip)
         if clicked and new_value != enabled:
-            _apply_toggle(parent, entry, new_value)
-            enabled = new_value
-
-        if entry.subwidgets:
-            imgui.separator()
-            if not enabled:
-                imgui.begin_disabled()
-            for sub in entry.subwidgets:
-                sub_on = bool(_load().get(f"{entry.key}.{sub.key}", sub.default))
-                sub_clicked, sub_value = imgui.menu_item(sub.label, "", sub_on, True)
-                if sub.tooltip and imgui.is_item_hovered(
-                    imgui.HoveredFlags_.allow_when_disabled
-                ):
-                    imgui.set_tooltip(sub.tooltip)
-                if sub_clicked and sub_value != sub_on:
-                    _apply_sub_toggle(parent, entry, sub, sub_value)
-            if not enabled:
-                imgui.end_disabled()
-        imgui.end_menu()
+            set_widget_enabled(entry.key, new_value)
+            _fire(parent, entry.on_toggle, entry.key, new_value)
 
     imgui.separator()
     if imgui.menu_item("Enable All", "", False, True)[0]:
@@ -342,7 +192,19 @@ def draw_widgets_menu(parent: Any) -> None:
         reset_widget_toggles(parent)
 
     imgui.separator()
-    # windows, not tabs: these open as floating popups over the viewer
+    # windows, not tabs: these open as floating windows over the viewer
+    draw_style_menu_item()
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Sizes, spacing and colours of the running imgui style. "
+            "Saved under ~/.mbo/imgui and applied at the next launch."
+        )
+    draw_imgui_debug_menu_item()
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "The variable inspector over this window's state, and Dear "
+            "ImGui's own metrics, debug log, ID stack tool and demo."
+        )
     if imgui.menu_item("BioHPC...", "", False, True)[0]:
         parent._show_biohpc = True
     if imgui.menu_item("Cloud (GPU)...", "", False, True)[0]:
