@@ -12,6 +12,7 @@ from mbo_utilities.gui._dialogs import (
     suite2p_output_dir,
 )
 from mbo_utilities.gui._save_as import SaveAs
+from mbo_utilities.gui.app._widget_app import WidgetApp
 from mbo_utilities.gui.app.apps.viewer import PROJECTIONS
 from mbo_utilities.gui.manual_roi import detach_roi_widget
 from mbo_utilities.gui.widgets.pipelines import cleanup_pipelines
@@ -80,6 +81,12 @@ class WindowContext(Suite2pState):
         """Release what the pipeline and ROI widgets hold: windows, threads, files."""
         cleanup_pipelines(self)
         detach_roi_widget(self)
+
+    def _refresh_widgets(self) -> None:
+        """Ask the panel widgets again whether they apply, as a finished job asks."""
+        for app in self.host.apps.values():
+            if isinstance(app, WidgetApp):
+                app.supported = None
 
     def sync_manual_roi(self, enabled: bool) -> None:
         """Turn manual ROI labeling on or off, as the ROIs pipeline asks."""
