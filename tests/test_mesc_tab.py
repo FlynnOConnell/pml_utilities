@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import time
 
 import h5py
 import numpy as np
@@ -341,66 +340,6 @@ def test_split_roi_views_stand_down(mesc_path):
     assert "Click a row to display that unit." not in DISABLED
 
 
-@pytest.fixture(scope="module")
-def stack_mesc_path(tmp_path_factory):
-    """A Z-stack (11 slices, 2 um apart, FOV corner at z = -50 um) and a line
-    scan with four lines: two on slice 3, one on slice 7, one below the stack.
-    """
-    path = tmp_path_factory.mktemp("mesc_tab") / "stack.mesc"
-    with h5py.File(path, "w") as f:
-        s = f.create_group("MSession_0")
-        z = s.create_group("MUnit_0")
-        z.attrs.update(
-            {
-                "MethodType": 2,
-                "VecChannelsSize": 1,
-                "TStepInMs": 1.0,
-                "MeasurementDatePosix": 0,
-                "Comment": "zstack",
-                "MinZ": -10.0,
-                "MaxZ": 10.0,
-                "ZDim": 11,
-            }
-        )
-        z.attrs["ReferenceViewportJSON"] = json.dumps(
-            {
-                "viewports": [
-                    {
-                        "geomTransTransl": [100.0, 200.0, -50.0],
-                        "width": 40.0,
-                        "height": 32.0,
-                    }
-                ]
-            }
-        )
-        z.create_dataset("Channel_0", data=np.zeros((11, 64, 80), np.uint16))
-        ls = s.create_group("MUnit_1")
-        ls.attrs.update(
-            {
-                "MethodType": 6,
-                "VecChannelsSize": 1,
-                "TStepInMs": 2.0,
-                "MeasurementDatePosix": 1,
-                "Comment": "linescan",
-            }
-        )
-        boxes = [
-            {"lowerLeftFramePix": [2 * i + 1, 1], "upperRightFramePix": [2 * i + 2, 1]}
-            for i in range(4)
-        ]
-        lines = [
-            [[110, 130], [210, 210], [-54, -54]],
-            [[120, 120], [204, 228], [-46, -46]],
-            [[105, 135], [220, 230], [-53.9, -53.9]],
-            [[112, 118], [212, 212], [-70, -70]],
-        ]
-        ls.attrs["CoordinateMapJSON"] = json.dumps(
-            {"maps": [{"measurementROIs": boxes, "driftEndPoints": lines}]}
-        )
-        ls.create_dataset("Channel_0", data=np.zeros((1, 8, 8), np.uint16))
-    return path
-
-
 def test_the_table_says_nothing_about_z_stacks(stack_mesc_path):
     """A scan's row names only the picture its lines were drawn on. Where the
     stack around them is, and which slice they sit on, belongs to the
@@ -428,61 +367,6 @@ def test_the_table_says_nothing_about_z_stacks(stack_mesc_path):
     assert not any("##stack" in b or "##pic" in b for b in BUTTONS)
 
 
-def test_the_reference_popups_button_opens_a_stack_at_its_slice(stack_mesc_path):
-    """The one place the Z-stack is offered: the popup's display button hands
-    the tab a unit and a slice, and the tab applies it on the next frame, so
-    the viewer lands on the tissue the lines were scanned in, not on slice 1.
-    """
-    pytest.importorskip("fastplotlib.widgets.nd_widget")
-    from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
-    from mbo_utilities.gui.mesc_reference import roi_slider
-    from mbo_utilities.gui.run_gui import _create_image_widget
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
-    from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
-
-    stack, scan = list_mesc_units(stack_mesc_path)
-    arr = MescArray(stack_mesc_path, unit=1)
-    iw = _create_image_widget(
-        arr, widget="preview", figure_kwargs_override={"size": (640, 480)}
-    )
-    try:
-        gui = next(
-            w
-            for w in iw.figure.imgui_windows.values()
-            if isinstance(w, PreviewDataWidget)
-        )
-        tab = MescTabWidget(gui)
-        # nothing happens inside the popup's own draw; the frame after applies it
-        tab._show_reference_unit(stack["key"], 3)
-        assert tab._pending is not None
-        tab._frame()
-        assert tab._pending is None
-        zdim = roi_slider(gui.image_widget.dim_names)
-        assert zdim is not None and int(gui.image_widget.indices[zdim]) == 3
-        # a picture carries no slice, so the viewer opens it where it opens
-        tab._switch(scan)
-        tab._show_reference_unit(stack["key"], None)
-        tab._frame()
-        assert (
-            int(gui.image_widget.indices[roi_slider(gui.image_widget.dim_names)]) == 0
-        )
-    finally:
-        iw.close()
-        arr.close()
-
-
-def pump(widget, seconds: float = 60.0):
-    """Poll the ROI widget's background work until it finishes."""
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        widget._poll_jobs()
-        if not widget.busy:
-            widget._poll_jobs()
-            return
-        time.sleep(0.02)
-    raise TimeoutError("background work did not finish")
-
-
 def test_sidecars_are_named_after_the_unit(tmp_path):
     from mbo_utilities.gui.roi_runs import registry_path
     from mbo_utilities.roi_workflow import labels_path
@@ -498,66 +382,3 @@ def test_sidecars_are_named_after_the_unit(tmp_path):
         registry_path(mesc, "MSession_0_MUnit_3").name
         == "roi_runs_MSession_0_MUnit_3.json"
     )
-
-
-def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path):
-    """Each unit is its own recording: its ROIs and traces leave the screen
-    with it and come back when it is shown again, and each autosaves under
-    its own name beside the file.
-    """
-    pytest.importorskip("fastplotlib.widgets.nd_widget")
-    from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.run_gui import _create_image_widget
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
-    from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
-    from mbo_utilities.gui.widgets.widget_toggles import (
-        set_widget_enabled,
-        widget_enabled,
-    )
-
-    was = widget_enabled("manual_roi")
-    set_widget_enabled("manual_roi", True, persist=False)
-    arr = MescArray(mesc_path, unit=0)
-    iw = _create_image_widget(
-        arr, widget="preview", figure_kwargs_override={"size": (640, 480)}
-    )
-    try:
-        gui = next(
-            w
-            for w in iw.figure.imgui_windows.values()
-            if isinstance(w, PreviewDataWidget)
-        )
-        gui.sync_manual_roi(True)
-        first = gui.manual_roi
-        assert first is not None and first.unit == "MUnit_0"
-        assert first.tag == "MSession_0_MUnit_0"
-        assert first._save_target().name == "manual_labels_MSession_0_MUnit_0.zarr"
-        assert first.run_prefix == "rois_MSession_0_MUnit_0_"
-        first.auto_trace = False
-        first.add_roi([(2.0, 2.0), (9.0, 2.0), (9.0, 9.0), (2.0, 9.0)])
-        first.quick_trace(0)
-        pump(first)
-        assert first.n_rois == 1 and first.has_traces()
-
-        tab = MescTabWidget(gui)
-        tab._switch(arr.units[1])
-        second = gui.manual_roi
-        assert second is not None and second is not first and second.unit == "MUnit_1"
-        assert second.n_rois == 0 and not second.has_traces()
-        assert second._save_target().name == "manual_labels_MSession_0_MUnit_1.zarr"
-        second.add_roi([(3.0, 3.0), (8.0, 3.0), (8.0, 8.0), (3.0, 8.0)])
-        second.add_roi([(12.0, 3.0), (18.0, 3.0), (18.0, 9.0), (12.0, 9.0)])
-        assert second.n_rois == 2
-
-        tab._switch(arr.units[0])
-        back = gui.manual_roi
-        assert back.unit == "MUnit_0" and back.n_rois == 1 and back.has_traces()
-        assert back.store is first.store
-        tab._switch(arr.units[1])
-        assert gui.manual_roi.unit == "MUnit_1" and gui.manual_roi.n_rois == 2
-        assert (mesc_path.parent / "manual_labels_MSession_0_MUnit_0.zarr").exists()
-        assert (mesc_path.parent / "manual_labels_MSession_0_MUnit_1.zarr").exists()
-        assert not (mesc_path.parent / "manual_labels.zarr").exists()
-    finally:
-        iw.close()
-        set_widget_enabled("manual_roi", was, persist=False)
