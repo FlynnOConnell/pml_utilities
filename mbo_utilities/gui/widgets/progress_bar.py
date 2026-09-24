@@ -140,10 +140,11 @@ def _get_active_progress_items(self) -> list[dict]:
     """
     items = []
 
-    saveas_running = getattr(self, "_saveas_running", False)
-    saveas_progress = getattr(self, "_saveas_progress", 0.0)
-    saveas_current = getattr(self, "_saveas_current_index", 0)
-    saveas_done = getattr(self, "_saveas_done", False)
+    save_as = getattr(self, "save_as", None)
+    saveas_running = save_as.running if save_as is not None else False
+    saveas_progress = save_as.progress if save_as is not None else 0.0
+    saveas_current = save_as.current_index if save_as is not None else 0
+    saveas_done = save_as.done if save_as is not None else False
 
     if saveas_running or (0.0 < saveas_progress < 1.0):
         text = (
@@ -204,10 +205,10 @@ def _get_active_progress_items(self) -> list[dict]:
                 }
             )
 
-    register_running = getattr(self, "_register_z_running", False)
-    register_progress = getattr(self, "_register_z_progress", 0.0)
-    register_msg = getattr(self, "_register_z_current_msg", None)
-    register_done = getattr(self, "_register_z_done", False)
+    register_running = save_as.register_running if save_as is not None else False
+    register_progress = save_as.register_progress if save_as is not None else 0.0
+    register_msg = save_as.register_msg if save_as is not None else None
+    register_done = save_as.register_done if save_as is not None else False
 
     if register_running or (0.0 < register_progress < 1.0):
         msg = register_msg if register_msg else "Starting..."

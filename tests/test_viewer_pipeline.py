@@ -212,18 +212,27 @@ class TestPerDataStateReset:
         ("_frame_average_source", object(), None),
         ("_auto_contrast_on_z", True, False),
         ("_last_z_idx", 42, 0),
-        ("_saveas_selected_roi", {1, 2, 3}, set()),
-        ("_saveas_rois", True, False),
+    ]
+    # (field on SaveAs, dirty_value, expected_after_reset)
+    SAVE_AS_FIELDS = [
+        ("frame_average", 10, 1),
+        ("selected_rois", {1, 2, 3}, set()),
+        ("split_rois", True, False),
     ]
 
     def test_resets_every_field(self):
         """All dirty values must be reset to defaults in one call."""
         from mbo_utilities.gui._dialogs import _reset_per_data_state
 
+        from mbo_utilities.gui._save_as import SaveAs
+
         p = type("P", (), {})()
+        p.save_as = SaveAs()
         # set every field to a non-default "dirty" value
         for field, dirty, _ in self.RESET_FIELDS:
             setattr(p, field, dirty)
+        for field, dirty, _ in self.SAVE_AS_FIELDS:
+            setattr(p.save_as, field, dirty)
 
         _reset_per_data_state(p)
 
@@ -233,6 +242,8 @@ class TestPerDataStateReset:
             assert actual == expected, (
                 f"{field}: expected {expected!r} after reset, got {actual!r}"
             )
+        for field, _, expected in self.SAVE_AS_FIELDS:
+            assert getattr(p.save_as, field) == expected, field
 
     def test_idempotent_on_clean_state(self):
         """Reset must be idempotent — calling it on a clean parent
@@ -240,7 +251,10 @@ class TestPerDataStateReset:
         """
         from mbo_utilities.gui._dialogs import _reset_per_data_state
 
+        from mbo_utilities.gui._save_as import SaveAs
+
         p = type("P", (), {})()
+        p.save_as = SaveAs()
         for field, _, expected in self.RESET_FIELDS:
             setattr(p, field, expected)
 

@@ -258,11 +258,11 @@ class TestViewerLock:
         iw, gui = self._gui()
         try:
             gui.frame_average = 10
-            assert gui._saveas_frame_average == 10
+            assert gui.save_as.frame_average == 10
             assert gui._s2p_frame_average == 10
             assert gui._masknmf_frame_average == 10
             gui.frame_average = 1
-            assert gui._saveas_frame_average == 1
+            assert gui.save_as.frame_average == 1
         finally:
             iw.close()
 

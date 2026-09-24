@@ -86,7 +86,7 @@ def draw_frame_average_input(
 _DEFAULT_DIM_LABELS = {"t": "Timepoints", "z": "Z-Planes", "c": "Channels"}
 
 
-def resolve_dim_labels(parent) -> tuple[str, str, str]:
+def resolve_dim_labels(iw) -> tuple[str, str, str]:
     """Display labels for the T / Z / C slicing rows.
 
     Maps each non-spatial axis to the name the viewer's slider already
@@ -96,9 +96,8 @@ def resolve_dim_labels(parent) -> tuple[str, str, str]:
     The slicing only relabels the rows; the indices it returns (and the
     args downstream tasks receive) are unchanged.
 
-    Returns ``(tp_label, z_label, c_label)``.
+    ``iw`` is the viewer, or None. Returns ``(tp_label, z_label, c_label)``.
     """
-    iw = getattr(parent, "image_widget", None)
     # sliders are the array's T, C, Z axes by position; aliases only for a host without dim names
     positional = tuple(getattr(iw, "dim_names", None) or ()) if iw is not None else ()
     roles = {role: name for name, role in slider_roles(positional).items()}

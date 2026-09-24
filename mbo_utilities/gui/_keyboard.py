@@ -46,7 +46,7 @@ def handle_keyboard_shortcuts(parent: Any):
         and imgui.is_key_pressed(imgui.Key.s, False)
     ):
         parent.logger.info("Shortcut: 's' (Save As)")
-        parent._saveas_popup_open = True
+        parent.save_as.open_requested = True
 
     # m: toggle metadata viewer (no modifiers)
     if (

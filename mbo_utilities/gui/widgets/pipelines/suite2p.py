@@ -196,8 +196,8 @@ class Suite2pPipelineWidget(PipelineWidget):
         # sync widget state to parent before drawing
         # ONLY set parent values if parent doesn't already have a value set
         # This prevents overwriting values set by the Browse dialog
-        if self._saveas_outdir and not getattr(self.parent, "_saveas_outdir", ""):
-            self.parent._saveas_outdir = self._saveas_outdir
+        if self._saveas_outdir and not self.parent.save_as.outdir:
+            self.parent.save_as.outdir = self._saveas_outdir
         if self._s2p_outdir and not getattr(self.parent, "_s2p_outdir", ""):
             self.parent._s2p_outdir = self._s2p_outdir
         self.parent._install_error = self._install_error
@@ -215,7 +215,7 @@ class Suite2pPipelineWidget(PipelineWidget):
 
         # sync back from parent - always read latest values
         # use parent value if set, otherwise keep widget value
-        parent_saveas = getattr(self.parent, "_saveas_outdir", "")
+        parent_saveas = self.parent.save_as.outdir
         parent_s2p = getattr(self.parent, "_s2p_outdir", "")
         if parent_saveas:
             self._saveas_outdir = parent_saveas
