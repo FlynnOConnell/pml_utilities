@@ -37,7 +37,6 @@ from mbo_utilities.gui._selection_ui import (
     resolve_dim_labels,
 )
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
-from mbo_utilities.gui.widgets.progress_bar import reset_progress_state
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import MBO_AVAILABLE_FTYPES, imread, widget_reader_kwargs
 from mbo_utilities.writer import imwrite
@@ -1550,14 +1549,12 @@ def _draw_save_button(sa: SaveAs, src: SaveSource):
                         logger.error("Failed to start background process")
                 else:
                     # run in foreground thread (existing behavior)
-                    reset_progress_state("saveas")
                     sa.progress = 0.0
                     sa.done = False
                     sa.running = True
                     logger.info("Starting save operation...")
                     # Also reset register_z progress if enabled
                     if sa.register_z:
-                        reset_progress_state("register_z")
                         sa.register_progress = 0.0
                         sa.register_done = False
                         sa.register_running = True

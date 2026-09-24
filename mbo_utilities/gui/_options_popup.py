@@ -14,10 +14,8 @@ import os
 from typing import Any
 
 from imgui_bundle import hello_imgui, imgui
-from imgui_bundle import icons_fontawesome_6 as fa
 
 from mbo_utilities import log as _mbo_log
-from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.preferences import (
     get_compute_gpu,
     get_debug_logging,
@@ -363,43 +361,3 @@ def draw_options(obj: Any) -> None:
 
     draw_memory_options(obj)
     draw_linescan_options(obj)
-
-
-def draw_options_popup(parent: Any) -> None:
-    """Draw the Options popup. Open with ``parent._show_options_popup = True``."""
-    if not hasattr(parent, "_show_options_popup"):
-        parent._show_options_popup = False
-    if not hasattr(parent, "_options_sizer"):
-        parent._options_sizer = PopupAutoSize("Options##options_popup", anchor="center")
-
-    if parent._show_options_popup:
-        sync_options(parent)
-        parent._options_sizer.before_open()
-        imgui.open_popup("Options##options_popup")
-        parent._show_options_popup = False
-
-    flags = parent._options_sizer.flags(imgui.WindowFlags_.no_saved_settings)
-    opened, visible = imgui.begin_popup_modal(
-        "Options##options_popup",
-        p_open=True,
-        flags=flags,
-    )
-    if not opened:
-        return
-    try:
-        if not visible:
-            imgui.close_current_popup()
-            return
-
-        imgui.text_colored(_COL_ACCENT, f"{fa.ICON_FA_GEARS}  Options")
-        imgui.separator()
-        imgui.dummy(imgui.ImVec2(0, 4))
-        draw_options(parent)
-
-        imgui.dummy(imgui.ImVec2(0, 8))
-        btn_w = hello_imgui.em_size(6)
-        imgui.set_cursor_pos_x((imgui.get_window_width() - btn_w) * 0.5)
-        if imgui.button("Close", imgui.ImVec2(btn_w, 0)):
-            imgui.close_current_popup()
-    finally:
-        imgui.end_popup()

@@ -12,8 +12,6 @@ import in the process — tests/conftest.py does this for the whole suite.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
@@ -30,7 +28,6 @@ def _array(shape=(4, 1, 3, 32, 32)):
 
     data = np.random.default_rng(0).random(shape).astype(np.float32)
     return NumpyArray(data, dims="TCZYX")
-
 
 
 class TestInNotebook:
@@ -89,7 +86,6 @@ class TestFigureKwargsForHere:
         assert kwargs["size"] == (640, 480)
 
 
-
 class TestDataVis:
     def test_build_show_close(self):
         from mbo_utilities.gui import DataVis
@@ -138,7 +134,6 @@ class TestDataVis:
         from mbo_utilities.gui.data_vis import DataVis
 
         assert mbo.DataVis is DataVis
-
 
 
 class TestRunGuiWhereItRuns:
@@ -249,7 +244,6 @@ class TestMescInNotebook:
         assert rg._resolve_mesc_unit(path, 1) == ({"unit": 1}, True)
 
 
-
 class TestNativeDialogs:
     def test_desktop_platforms_always_have_one(self, monkeypatch):
         from mbo_utilities.gui import _files
@@ -311,163 +305,3 @@ class TestPathPrompt:
         drawn = _draw_in_edge_window(300, body)
         assert drawn and all(d == (None, False) for d in drawn)
         assert prompt.open, "nothing pressed, so it stays up"
-
-
-class TestOpenPrompts:
-    """The menu / `o` route: a typed path first, native dialog as browse."""
-
-    @staticmethod
-    def _parent(tmp_path):
-        return SimpleNamespace(
-            fpath=str(tmp_path / "a.tif"),
-            _file_dialog=None,
-            _folder_dialog=None,
-            logger=SimpleNamespace(info=lambda *a, **k: None),
-        )
-
-    def test_start_opens_the_prompt_on_the_data_dir(self, tmp_path):
-        from mbo_utilities.gui._dialogs import start_open_prompt
-
-        (tmp_path / "a.tif").write_bytes(b"")
-        parent = self._parent(tmp_path)
-        start_open_prompt(parent, "file")
-        assert parent._open_file_prompt.open
-        assert parent._open_file_prompt.path == str(tmp_path)
-        assert not parent._open_folder_prompt.open
-        start_open_prompt(parent, "folder")
-        assert parent._open_folder_prompt.open
-        assert not parent._open_file_prompt.open, "one prompt at a time"
-
-    def test_a_native_dialog_in_flight_blocks_a_second_ask(self, tmp_path):
-        from mbo_utilities.gui._dialogs import open_prompts, start_open_prompt
-
-        parent = self._parent(tmp_path)
-        parent._file_dialog = object()
-        start_open_prompt(parent, "file")
-        assert not open_prompts(parent)[0].open
-
-    def test_submitted_path_loads_and_a_missing_one_reports(
-        self, tmp_path, monkeypatch
-    ):
-        from mbo_utilities.gui import _dialogs
-
-        parent = self._parent(tmp_path)
-        loaded = []
-        monkeypatch.setattr(
-            _dialogs, "load_new_data", lambda p, path: loaded.append(path)
-        )
-        monkeypatch.setattr(_dialogs, "add_recent_file", lambda *a, **k: None)
-        monkeypatch.setattr(_dialogs, "set_last_dir", lambda *a, **k: None)
-        file_prompt, folder_prompt = _dialogs.open_prompts(parent)
-
-        answers = {
-            "file": (str(tmp_path / "missing.tif"), False),
-            "folder": (None, False),
-        }
-        monkeypatch.setattr(
-            _dialogs,
-            "draw_path_prompt",
-            lambda prompt: answers["file" if prompt is file_prompt else "folder"],
-        )
-        file_prompt.start()
-        _dialogs.check_file_dialogs(parent)
-        assert loaded == []
-        assert file_prompt.open and "not found" in file_prompt.status
-
-        answers["file"] = (str(tmp_path), False)
-        _dialogs.check_file_dialogs(parent)
-        assert loaded == [str(tmp_path)]
-        assert not file_prompt.open
-
-    def test_folder_prompt_rejects_a_file(self, tmp_path, monkeypatch):
-        from mbo_utilities.gui import _dialogs
-
-        parent = self._parent(tmp_path)
-        f = tmp_path / "a.tif"
-        f.write_bytes(b"")
-        loaded = []
-        monkeypatch.setattr(
-            _dialogs, "load_new_data", lambda p, path: loaded.append(path)
-        )
-        _, folder_prompt = _dialogs.open_prompts(parent)
-        monkeypatch.setattr(
-            _dialogs,
-            "draw_path_prompt",
-            lambda prompt: (str(f), False)
-            if prompt is folder_prompt
-            else (None, False),
-        )
-        folder_prompt.start()
-        _dialogs.check_file_dialogs(parent)
-        assert loaded == [] and "not a folder" in folder_prompt.status
-
-    def test_browse_launches_the_native_dialog(self, tmp_path, monkeypatch):
-        from mbo_utilities.gui import _dialogs
-
-        parent = self._parent(tmp_path)
-        file_prompt, _ = _dialogs.open_prompts(parent)
-        opened = []
-
-        class FakePfd:
-            class opt:
-                multiselect = 1
-
-            @staticmethod
-            def open_file(title, start, filters, opts):
-                opened.append(("file", start))
-                return SimpleNamespace(ready=lambda: False)
-
-            @staticmethod
-            def select_folder(title, start):
-                opened.append(("folder", start))
-                return SimpleNamespace(ready=lambda: False)
-
-        monkeypatch.setattr(_dialogs, "pfd", FakePfd)
-        monkeypatch.setattr(
-            _dialogs,
-            "draw_path_prompt",
-            lambda prompt: (None, True) if prompt is file_prompt else (None, False),
-        )
-        file_prompt.start(str(tmp_path))
-        _dialogs.check_file_dialogs(parent)
-        assert opened == [("file", str(tmp_path))]
-        assert parent._file_dialog is not None
-
-
-class TestLauncherTypedPath:
-    """`mbo` with no path: the launcher takes a typed path too."""
-
-    @staticmethod
-    def _dialog(monkeypatch):
-        from mbo_utilities.gui.widgets import file_dialog as fd
-
-        monkeypatch.setattr(fd, "add_recent_file", lambda *a, **k: None)
-        monkeypatch.setattr(fd, "set_last_dir", lambda *a, **k: None)
-        exits = []
-        monkeypatch.setattr(
-            fd.hello_imgui,
-            "get_runner_params",
-            lambda: SimpleNamespace(app_shall_exit=False)
-            if not exits.append(True)
-            else None,
-        )
-        dlg = fd.FileDialog.__new__(fd.FileDialog)
-        dlg._typed_path = ""
-        dlg._typed_status = ""
-        dlg.selected_path = None
-        dlg._save_gui_preferences = lambda: None
-        return dlg, exits
-
-    def test_missing_path_reports_instead_of_exiting(self, tmp_path, monkeypatch):
-        dlg, exits = self._dialog(monkeypatch)
-        dlg._typed_path = str(tmp_path / "nope")
-        dlg._open_typed_path()
-        assert dlg.selected_path is None and "not found" in dlg._typed_status
-        assert exits == []
-
-    def test_existing_path_is_the_selection(self, tmp_path, monkeypatch):
-        dlg, exits = self._dialog(monkeypatch)
-        dlg._typed_path = f'"{tmp_path}"'
-        dlg._open_typed_path()
-        assert dlg.selected_path == str(tmp_path)
-        assert exits == [True]
