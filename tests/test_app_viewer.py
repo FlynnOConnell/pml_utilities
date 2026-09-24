@@ -275,6 +275,21 @@ def test_showing_rois_turns_labeling_on_and_hiding_parks_them(host):
     host.figure.canvas.force_draw()
 
 
+def test_the_isoview_editors_apply_only_to_isoview_data(host):
+    for tool in ("crop", "segment", "deadpixel"):
+        assert host.apps[f"isoview_{tool}"].available(host) is False
+    assert host.apps["align_views"].available(host) is False
+
+
+def test_the_biohpc_and_cloud_windows_draw(host):
+    _app._reported.difference_update({"biohpc", "cloud"})
+    for app_id in ("biohpc", "cloud"):
+        host.apps[app_id].open = True
+    host.figure.canvas.force_draw()
+    host.figure.canvas.force_draw()
+    assert not {"biohpc", "cloud"} & _app._reported
+
+
 def test_the_filter_subtracts_the_mean_before_the_blur():
     frame = np.full((4, 4), 3.0, dtype=np.float32)
     mean = np.full((4, 4), 1.0, dtype=np.float32)
