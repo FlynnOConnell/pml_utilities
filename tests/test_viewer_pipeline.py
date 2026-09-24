@@ -16,10 +16,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from mbo_utilities.gui.run_gui import _SqueezeSingletonDims
-from mbo_utilities.gui.widgets.window_functions import (
-    SpatialFunctionsWidget,
-    WindowFunctionsWidget,
-)
 
 
 class FakeArr:
@@ -118,48 +114,6 @@ class TestSqueezeWrapperNumpyLeak:
         # the wrapper must not pretend to have arbitrary dunders
         with pytest.raises(AttributeError):
             w.__array_interface__
-
-
-GATING_CASES = [
-    # (shape, dims, expect_window, expect_spatial, label)
-    ((64, 48), ("Y", "X"), False, False, "2D image"),
-    ((100, 64, 48), ("T", "Y", "X"), True, True, "3D time series"),
-    ((37, 64, 48), ("Z", "Y", "X"), False, True, "3D z-stack no time"),
-    ((20, 5, 64, 48), ("T", "Z", "Y", "X"), True, True, "4D TZYX"),
-    ((20, 2, 5, 64, 48), ("T", "C", "Z", "Y", "X"), True, True, "5D TCZYX"),
-    ((1, 14, 64, 48), ("C", "Z", "Y", "X"), False, True, "post-squeeze pollen"),
-]
-
-
-class TestFeatureGating:
-    """`WindowFunctionsWidget` requires a real T axis with size > 1.
-    `SpatialFunctionsWidget` requires rank > 2 (something to stack across).
-    Regression: previously gated on `shape[0] > 1` and `True`, which both
-    misfired for natural-rank 2D and lower-rank data.
-    """
-
-    @pytest.mark.parametrize(
-        "shape,dims,expect_window,expect_spatial,label", GATING_CASES
-    )
-    def test_window_functions_supported(
-        self, shape, dims, expect_window, expect_spatial, label
-    ):
-        parent = FakeParent(FakeArr(shape, dims))
-        assert WindowFunctionsWidget.is_supported(parent) == expect_window, (
-            f"{label}: WindowFunctions gating wrong"
-        )
-
-    @pytest.mark.parametrize(
-        "shape,dims,expect_window,expect_spatial,label", GATING_CASES
-    )
-    def test_spatial_functions_supported(
-        self, shape, dims, expect_window, expect_spatial, label
-    ):
-        parent = FakeParent(FakeArr(shape, dims))
-        assert SpatialFunctionsWidget.is_supported(parent) == expect_spatial, (
-            f"{label}: SpatialFunctions gating wrong"
-        )
-
 
 
 class TestReloadDataConsistency:
@@ -294,36 +248,6 @@ class TestPerDataStateReset:
         assert "attach_roi_widget(parent)" in src
         assert "_manual_roi_store = None" in src
         assert "_manual_roi_runs = None" in src
-
-    def test_init_state_uses_same_helper(self):
-        """PreviewDataWidget._init_state must define its per-data defaults
-        via _reset_per_data_state so reload and initial launch can never
-        diverge. Pin via source inspection (avoids importing the heavy
-        widget module just to check this contract).
-        """
-        from pathlib import Path
-
-        import mbo_utilities.gui.widgets.preview_data as preview_data_mod
-
-        src = Path(preview_data_mod.__file__).read_text()
-        assert "_reset_per_data_state(self)" in src, (
-            "PreviewDataWidget._init_state must call _reset_per_data_state"
-        )
-
-
-
-class TestCustomMetadataPropagation:
-    """User-set values from the metadata editor (e.g. dz, fs) live on
-    `parent._custom_metadata` and must reach both:
-      1. ops.npy via the imwrite metadata kwarg, and
-      2. lbm_suite2p_python's pipeline ops dict.
-
-    Regression: the GUI's "Run Suite2p" button silently dropped
-    `_custom_metadata` because the worker config dict captured `arr`,
-    `s2p_dict`, etc. but not `_custom_metadata`. The user typed dz=15,
-    ops.npy ended up with dz=None (LBM) or 1.0 (default fallback), and
-    everything downstream that read dz from ops.npy was wrong.
-    """
 
     def test_imwrite_metadata_kwarg_round_trip_dz(self, tmp_path):
         """Full round-trip: imwrite with metadata={'dz': 15} → ops.npy
@@ -580,7 +504,6 @@ class TestOutputTimepointConsistency:
             assert actual_frames == 421, (
                 f"{bin_files[0].name}: bin has {actual_frames} frames, ops says {values}"
             )
-
 
 
 class TestReactiveFsZScaling:

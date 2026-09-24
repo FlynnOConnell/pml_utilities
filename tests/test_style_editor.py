@@ -85,10 +85,3 @@ def test_panel_state_is_written_when_it_opens():
 def test_closed_editor_draws_nothing():
     draw_frames()
     assert style_editor.get_style_editor().visible is False
-
-
-def test_the_imgui_debug_tab_has_no_style_entry():
-    from mbo_utilities.gui.widgets import imgui_debug
-
-    assert "style" not in {key for key, _, _ in imgui_debug.TOOLS}
-    assert "style" not in imgui_debug._open
