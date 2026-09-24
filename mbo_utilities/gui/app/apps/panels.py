@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from mbo_utilities.gui.app._widget_app import WidgetApp
+from mbo_utilities.gui.widgets.isoview_align_views import IsoviewAlignViews
 from mbo_utilities.gui.widgets.projections import ProjectionsViewer
 from mbo_utilities.gui.widgets.summary_image import SummaryImageViewer
 from mbo_utilities.gui.widgets.tile_grid import TileGridViewer
@@ -39,3 +40,14 @@ class TileGridApp(WidgetApp):
     order = 42
     size = 330
     widget_class = TileGridViewer
+
+
+class AlignViewsApp(WidgetApp):
+    """Any two IsoView views overlaid in the first view's frame, to align them."""
+
+    id = "align_views"
+    title = "Align Views"
+    dock = "left"
+    order = 43
+    size = 330
+    widget_class = IsoviewAlignViews
