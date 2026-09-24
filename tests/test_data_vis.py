@@ -12,6 +12,8 @@ import in the process — tests/conftest.py does this for the whole suite.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -305,3 +307,42 @@ class TestPathPrompt:
         drawn = _draw_in_edge_window(300, body)
         assert drawn and all(d == (None, False) for d in drawn)
         assert prompt.open, "nothing pressed, so it stays up"
+
+
+class TestLauncherTypedPath:
+    """`mbo` with no path: the launcher takes a typed path too."""
+
+    @staticmethod
+    def _dialog(monkeypatch):
+        from mbo_utilities.gui.widgets import file_dialog as fd
+
+        monkeypatch.setattr(fd, "add_recent_file", lambda *a, **k: None)
+        monkeypatch.setattr(fd, "set_last_dir", lambda *a, **k: None)
+        exits = []
+        monkeypatch.setattr(
+            fd.hello_imgui,
+            "get_runner_params",
+            lambda: SimpleNamespace(app_shall_exit=False)
+            if not exits.append(True)
+            else None,
+        )
+        dlg = fd.FileDialog.__new__(fd.FileDialog)
+        dlg._typed_path = ""
+        dlg._typed_status = ""
+        dlg.selected_path = None
+        dlg._save_gui_preferences = lambda: None
+        return dlg, exits
+
+    def test_missing_path_reports_instead_of_exiting(self, tmp_path, monkeypatch):
+        dlg, exits = self._dialog(monkeypatch)
+        dlg._typed_path = str(tmp_path / "nope")
+        dlg._open_typed_path()
+        assert dlg.selected_path is None and "not found" in dlg._typed_status
+        assert exits == []
+
+    def test_existing_path_is_the_selection(self, tmp_path, monkeypatch):
+        dlg, exits = self._dialog(monkeypatch)
+        dlg._typed_path = f'"{tmp_path}"'
+        dlg._open_typed_path()
+        assert dlg.selected_path == str(tmp_path)
+        assert exits == [True]
