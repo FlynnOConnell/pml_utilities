@@ -146,141 +146,107 @@ def _right_align(width: float) -> None:
         imgui.set_cursor_pos_x(x)
 
 
+def process_status(progress_items: list) -> tuple[str, str, imgui.ImVec4]:
+    """The status button's label, its widest label and its colour.
+
+    Counts spawned processes, in-process jobs and ``progress_items`` (the
+    caller's own running work). The widest label fixes the button's width
+    while a running percentage changes, so the click target stays put.
+    """
+    try:
+        from imgui_bundle import icons_fontawesome as fa
+
+        icon_idle = fa.ICON_FA_CIRCLE
+        icon_running = fa.ICON_FA_SPINNER
+        icon_error = fa.ICON_FA_EXCLAMATION_TRIANGLE
+        icon_check = fa.ICON_FA_CHECK_CIRCLE
+    except (ImportError, AttributeError):
+        icon_idle, icon_running, icon_error, icon_check = (
+            "\uf111",
+            "\uf110",
+            "\uf071",
+            "\uf058",
+        )
+
+    pm = get_process_manager()
+    pm.cleanup_finished()
+    # in-process jobs count the same as spawned ones, so a click shows up somewhere
+    procs = [*pm.get_running(), *pm.get_jobs()]
+    running = [p for p in procs if p.is_alive()]
+    completed = [p for p in procs if not p.is_alive() and p.status == "completed"]
+    errors = [p for p in procs if not p.is_alive() and p.status == "error"]
+    n_running = len(running) + sum(1 for i in progress_items if not i.get("done"))
+
+    if errors:
+        text = f"{icon_error} Error ({len(errors)})"
+        return text, text, imgui.ImVec4(0.8, 0.2, 0.2, 1.0)
+    if n_running:
+        color = imgui.ImVec4(0.85, 0.45, 0.0, 1.0)
+        if progress_items:
+            done = sum(i["progress"] for i in progress_items) / len(progress_items)
+            return (
+                f"{icon_running} Running ({n_running}) {int(done * 100)}%",
+                f"{icon_running} Running ({n_running}) 100%",
+                color,
+            )
+        text = f"{icon_running} Running ({n_running})"
+        return text, text, color
+    green = imgui.ImVec4(0.15, 0.55, 0.15, 1.0)
+    if completed:
+        word = "task" if len(completed) == 1 else "tasks"
+        text = f"{icon_check} Completed {len(completed)} {word}"
+        return text, text, green
+    text = f"{icon_idle} Console: Idle"
+    return text, text, green
+
+
+def draw_status_button(text: str, widest: str, color: imgui.ImVec4) -> bool:
+    """Draw the rounded status button in ``color``; True when it was clicked."""
+    imgui.push_style_var(imgui.StyleVar_.frame_rounding, 5.0)
+    imgui.push_style_color(imgui.Col_.button, color)
+    imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(1, 1, 1, 1))
+    imgui.push_style_color(
+        imgui.Col_.button_hovered,
+        imgui.ImVec4(
+            min(color.x + 0.1, 1.0),
+            min(color.y + 0.1, 1.0),
+            min(color.z + 0.1, 1.0),
+            1.0,
+        ),
+    )
+    imgui.push_style_color(imgui.Col_.button_active, color)
+    width = imgui.calc_text_size(widest).x + imgui.get_style().frame_padding.x * 2.0
+    clicked = imgui.button(f"{text}##process_status", imgui.ImVec2(width, 0.0))
+    imgui.pop_style_color(4)
+    imgui.pop_style_var()
+    if imgui.is_item_hovered():
+        imgui.set_mouse_cursor(imgui.MouseCursor_.hand)
+    return clicked
+
+
 def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
-    """Draw the compact, colour-coded process status button and the Metadata
-    Viewer button beside it.
+    """Draw the process status button and the Metadata / Help / Keybinds
+    buttons beside it, pinned to the row's right edge.
 
     A menu bar already lays its items out in a row, and a ``same_line`` there
     puts the second button back on top of the first, so the caller says which
     it is.
     """
-    # Import icons
-    try:
-        from imgui_bundle import icons_fontawesome as fa
-
-        ICON_IDLE = fa.ICON_FA_CIRCLE
-        ICON_RUNNING = fa.ICON_FA_SPINNER
-        ICON_ERROR = fa.ICON_FA_EXCLAMATION_TRIANGLE
-        ICON_CHECK = fa.ICON_FA_CHECK_CIRCLE
-    except (ImportError, AttributeError):
-        # Fallback to unicode
-        ICON_IDLE = "\uf111"  # circle
-        ICON_RUNNING = "\uf110"  # spinner
-        ICON_ERROR = "\uf071"  # exclamation-triangle
-        ICON_CHECK = "\uf058"  # check-circle
-
-    pm = get_process_manager()
-    pm.cleanup_finished()
-    all_procs = pm.get_running()
-
-    # Get in-app progress items
     from mbo_utilities.gui.widgets.progress_bar import _get_active_progress_items
 
-    progress_items = _get_active_progress_items(parent)
-
-    # in-process jobs (ROI traces, etc.) count the same as spawned ones —
-    # a click has to show up somewhere or the user cannot tell it landed
-    all_procs = [*all_procs, *pm.get_jobs()]
-
-    # categorize processes
-    running_procs = [p for p in all_procs if p.is_alive()]
-    completed_procs = [
-        p for p in all_procs if not p.is_alive() and p.status == "completed"
-    ]
-    error_procs = [p for p in all_procs if not p.is_alive() and p.status == "error"]
-
-    n_running = len(running_procs) + sum(
-        1 for item in progress_items if not item.get("done")
-    )
-    n_completed = len(completed_procs)
-    n_errors = len(error_procs)
-
-    # Determine status color and icon. `status_width_text` (when set) sizes the
-    # button to a fixed worst-case width so a per-frame-changing label (the live
-    # %) doesn't make the click target jitter and drop clicks.
-    status_width_text = None
-    if n_errors > 0:
-        # errors take priority
-        status_color = imgui.ImVec4(0.8, 0.2, 0.2, 1.0)  # Dark Red
-        status_text = f"{ICON_ERROR} Error ({n_errors})"
-    elif n_running > 0:
-        # actively running tasks
-        status_color = imgui.ImVec4(0.85, 0.45, 0.0, 1.0)  # Dark Orange
-
-        # Add percentage if we have progress items
-        if progress_items:
-            avg_progress = sum(item["progress"] for item in progress_items) / len(
-                progress_items
-            )
-            status_text = (
-                f"{ICON_RUNNING} Running ({n_running}) {int(avg_progress * 100)}%"
-            )
-            # widest the % can get -> fixes the button width as it animates
-            status_width_text = f"{ICON_RUNNING} Running ({n_running}) 100%"
-        else:
-            status_text = f"{ICON_RUNNING} Running ({n_running})"
-    elif n_completed > 0:
-        # completed tasks waiting to be acknowledged
-        status_color = imgui.ImVec4(0.15, 0.55, 0.15, 1.0)  # Dark Green
-        task_word = "task" if n_completed == 1 else "tasks"
-        status_text = f"{ICON_CHECK} Completed {n_completed} {task_word}"
-    else:
-        # idle
-        status_color = imgui.ImVec4(0.15, 0.55, 0.15, 1.0)  # Dark Green
-        status_text = f"{ICON_IDLE} Console: Idle"
-
-    # Draw rounded buttons
-    imgui.push_style_var(imgui.StyleVar_.frame_rounding, 5.0)
-
-    # The row's left half belongs to the menus, so this cluster is pinned to
-    # the right edge: its width is known before anything is drawn, so measure
-    # it and jump the cursor there once.
-    _right_align(_status_cluster_width(status_width_text or status_text))
-
-    # 1. Status Button
-    # Use distinct background color based on status
-    imgui.push_style_color(imgui.Col_.button, status_color)
-    imgui.push_style_color(
-        imgui.Col_.text, imgui.ImVec4(1, 1, 1, 1)
-    )  # Always white text
-
-    # Slightly lighter hover color
-    hover_col = imgui.ImVec4(
-        min(status_color.x + 0.1, 1.0),
-        min(status_color.y + 0.1, 1.0),
-        min(status_color.z + 0.1, 1.0),
-        status_color.w,
-    )
-    imgui.push_style_color(imgui.Col_.button_hovered, hover_col)
-    imgui.push_style_color(imgui.Col_.button_active, status_color)
-
-    # fixed width while the label animates so the click target stays put
-    if status_width_text is not None:
-        pad = imgui.get_style().frame_padding.x
-        btn_w = imgui.calc_text_size(status_width_text).x + pad * 2.0
-        clicked = imgui.button(
-            status_text + "##process_status", imgui.ImVec2(btn_w, 0.0)
-        )
-    else:
-        clicked = imgui.button(status_text + "##process_status")
-    if clicked:
-        # the console is a plain window now, so the status button toggles it
+    text, widest, color = process_status(_get_active_progress_items(parent))
+    _right_align(_status_cluster_width(widest))
+    if draw_status_button(text, widest, color):
+        # the console is a plain window, so the status button toggles it
         if getattr(parent, "_process_console_open", False):
             parent._process_console_open = False
         else:
             parent._show_process_console = True
 
-    imgui.pop_style_color(4)  # button, text, hovered, active
-
-    if imgui.is_item_hovered():
-        imgui.set_mouse_cursor(imgui.MouseCursor_.hand)
-
-    # 2. Metadata / help / keybinds buttons, all in the same dark grey with
-    # their hotkeys greyed out beside them. Help and Keybinds are one button
-    # each for the whole app - the ROI tool is a section inside them, not a
-    # second pair of buttons.
+    # metadata, help and keybinds in one dark grey, each with its hotkey greyed beside it
     if not in_menu_bar:
         imgui.same_line()
+    imgui.push_style_var(imgui.StyleVar_.frame_rounding, 5.0)
     imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.2, 0.2, 0.2, 1.0))
     imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.3, 0.3, 0.3, 1.0))
     imgui.push_style_color(
@@ -300,7 +266,7 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
         imgui.text_disabled(hint)
 
     imgui.pop_style_color(4)
-    imgui.pop_style_var()  # frame_rounding
+    imgui.pop_style_var()
 
 
 def _roi_keybinds(parent: Any) -> list[tuple[str, str | None]]:
