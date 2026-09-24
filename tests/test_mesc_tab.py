@@ -269,21 +269,13 @@ def test_unit_row_names_the_companions(linked_mesc_path):
     )
 
 
-def test_tab_appears_first_and_only_for_mesc_data(mesc_path):
-    """The MESc tab is a .mesc file's first tab, ahead of Image, and is
-    supported only for a viewer showing a MescArray.
-    """
+def test_tab_is_supported_only_for_mesc_data(mesc_path):
+    """The MESc tab is supported only for a viewer showing a MescArray."""
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets import get_tab_widgets
     from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
 
     arr = MescArray(mesc_path, unit=0)
     try:
-        names = [
-            type(w).__name__ for w in get_tab_widgets(FakeParent([display_wrap(arr)]))
-        ]
-        assert "MescTabWidget" in names
-        assert names.index("MescTabWidget") < names.index("PreviewTabWidget")
         assert MescTabWidget.is_supported(FakeParent([display_wrap(arr)]))
         assert not MescTabWidget.is_supported(FakeParent([np.zeros((2, 4, 4))]))
         assert not MescTabWidget.is_supported(FakeParent([]))

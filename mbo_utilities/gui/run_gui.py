@@ -546,8 +546,6 @@ def _squeeze_for_viewer(arr):
 
 
 _NOTEBOOK_SIZE = (1400, 900)
-# the PreviewDataWidget on the figure's right edge
-_PREVIEW_WIDTH = 300
 
 
 def screen_box() -> tuple[int, int] | None:
@@ -725,187 +723,29 @@ def _after_show(iw) -> None:
         _clamp_window_to_layout(iw.figure)
 
 
-def _create_image_widget(
-    data_array,
-    widget: bool = True,
-    figure_kwargs_override=None,
-    show: bool = True,
-):
-    """Create fastplotlib ImageWidget with an optional side widget.
+def _create_image_widget(data_array, figure_kwargs_override=None, show: bool = True):
+    """The n-d viewer on ``data_array``, one subplot per ROI it asks to split into.
 
-    `widget` names which one to attach: "preview" (PreviewDataWidget),
-    "manualroi" (manual ROI drawing), or "none". True/False are the legacy
-    spellings of "preview"/"none".
-
-    `figure_kwargs_override` replaces the auto-selected canvas/size dict (used by
-    scripts/capture_docs.py to build an offscreen viewer for headless capture).
-
-    `show=False` builds everything but leaves showing to the caller; that is
-    how ``DataVis`` separates construction from ``show()``.
+    ``figure_kwargs_override`` replaces the canvas and size picked for
+    wherever this runs. ``show=False`` builds without showing.
     """
-    import copy
-
-    import numpy as np
-
-    if isinstance(widget, bool) or widget is None:
-        widget = "preview" if widget else "none"
-    if widget not in ("preview", "manualroi", "none"):
-        raise ValueError(
-            f"unknown widget {widget!r}, expected one of: preview, manualroi, none"
-        )
-
-    # drawing needs the windowing controls to see anything, so the ROI
-    # ui takes the top strip and right-widget tabs alongside the preview
-    # widget, not instead of it. Flip the Widgets-menu toggle on for this session
-    # when asked for, or when this data has annotations or pipeline ROIs
-    # beside it; the widget builds itself from the toggle. Not persisted — the
-    # flag came from the command line or the disk, not the menu.
-    manual_roi = signal_quality = False
-    if widget != "none":
-        from mbo_utilities.gui.manual_roi import labels_path
-        from mbo_utilities.gui.roi_runs import run_dir_complete
-        from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
-
-        src = data_array.source_path
-        manual_roi = (
-            widget == "manualroi"
-            or widget_enabled("manual_roi")
-            or (
-                src is not None
-                and (
-                    labels_path(src).exists()
-                    or run_dir_complete(labels_path(src).parent)
-                )
-            )
-        )
-        signal_quality = widget_enabled("signal_quality")
-
-    # Determine slider dimension names from array's dims property if available
     from mbo_utilities.arrays.features import get_slider_dims
+    from mbo_utilities.gui._ndviewer import MboNDViewer
+    from mbo_utilities.gui.app.apps.viewer import split_rois
 
-    custom_labels = getattr(data_array, "slider_dim_labels", None)
-    if custom_labels:
-        slider_dim_names = tuple(custom_labels)
-    else:
-        slider_dim_names = get_slider_dims(data_array)
-
-    # window_funcs/window_sizes must match slider_dim_names length
-    if slider_dim_names:
-        n_sliders = len(slider_dim_names)
-        # apply mean to first dim (usually t), None for rest
-        window_funcs = (np.mean,) + (None,) * (n_sliders - 1)
-        window_sizes = (1,) + (None,) * (n_sliders - 1)
-    else:
-        window_funcs = None
-        window_sizes = None
-
-    def _is_isoview(arr) -> bool:
-        """IsoviewArray has a `kind` attribute set to raw/corrected/fused."""
-        return getattr(arr, "kind", None) in {"raw", "corrected", "fused", "clusterpt"}
-
-    # Isoview fluorescence sits in the 0..few-hundred-counts range; the
-    # generic (-100, 4000) default washes it out completely.
-    if _is_isoview(data_array):
-        graphic_kwargs = {"vmin": 0, "vmax": 1000}
-    else:
-        graphic_kwargs = {"vmin": -100, "vmax": 4000}
-
-    # Handle multi-ROI data (duck typing: check for roi_mode attribute)
-    if hasattr(data_array, "roi_mode") and hasattr(data_array, "iter_rois"):
-        arrays = []
-        names = []
-        # get name from first filename if available, truncate if too long
-        base_name = None
-        if hasattr(data_array, "filenames") and data_array.filenames:
-            from pathlib import Path
-
-            first_file = Path(data_array.filenames[0])
-            base_name = first_file.stem
-            # for suite2p arrays (data.bin), use parent folder name instead
-            if base_name in ("data", "data_raw"):
-                base_name = first_file.parent.name
-            if len(base_name) > 24:
-                base_name = base_name[:21] + "..."
-        for r in data_array.iter_rois():
-            arr = copy.copy(data_array)
-            arr.fix_phase = False
-            arr.roi = r
-            arrays.append(_squeeze_for_viewer(arr))
-            names.append(f"ROI {r}" if r else (base_name or "Full Image"))
-    else:
-        arrays = [_squeeze_for_viewer(data_array)]
-        names = None
-
-    from mbo_utilities.gui._ndviewer import MboNDViewer, sliders_height
-
-    if figure_kwargs_override is not None:
-        figure_kwargs = figure_kwargs_override
-    else:
-        from fastplotlib.utils import calculate_figure_shape
-
-        from mbo_utilities.gui._top_strip import (
-            MENU_HEIGHT,
-            MENU_MIN_WIDTH,
-            strip_height,
-        )
-        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
-        from mbo_utilities.gui.widgets.preview_data import ZSTATS_PANEL_HEIGHT
-
-        rgb = bool(getattr(arrays[0], "rgb", False))
-        shape = tuple(arrays[0].shape)
-        top, right, min_width = 0, 0, 0.0
-        if widget != "none":
-            top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
-        # the strip is as tall as the tab that will be selected: the Traces
-        # panel registers first, else the Signal Quality plot once its stats
-        # are in; the ROI controls are a right-bar tab and need no width
-        if manual_roi:
-            top = strip_height(PANEL_HEIGHT)
-        elif signal_quality:
-            top = strip_height(ZSTATS_PANEL_HEIGHT)
-        figure_kwargs = _figure_kwargs_for_here(
-            fit=dict(
-                image_hw=shape[-3:-1] if rgb else shape[-2:],
-                grid=calculate_figure_shape(len(arrays)),
-                top=top,
-                bottom=sliders_height(MboNDViewer._n_slider_dims(arrays[0], rgb)),
-                right=right,
-                min_width=min_width,
-            )
-        )
-
+    views, names = split_rois(data_array)
     iw = MboNDViewer(
-        data=arrays,
+        data=[_squeeze_for_viewer(view) for view in views],
         names=names,
-        slider_dim_names=slider_dim_names,
-        window_funcs=window_funcs,
-        window_sizes=window_sizes,
+        slider_dim_names=getattr(data_array, "slider_dim_labels", None)
+        or get_slider_dims(data_array),
         cmap="gnuplot2",
         histogram_widget=True,
-        figure_kwargs=figure_kwargs,
-        graphic_kwargs=graphic_kwargs,
+        figure_kwargs=figure_kwargs_override or _figure_kwargs_for_here(),
     )
-
     if show:
         iw.show()
         _after_show(iw)
-
-    if widget != "none":
-        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
-        if manual_roi:
-            set_widget_enabled("manual_roi", True, persist=False)
-        gui = PreviewDataWidget(
-            iw=iw,
-            fpath=data_array.source_path,
-            size=_PREVIEW_WIDTH,
-        )
-        # the EdgeWindow shim registers itself with the figure during
-        # __init__; add_gui exists only on mbo-fastplotlib
-        add_gui = getattr(iw.figure, "add_gui", None)
-        if add_gui is not None:
-            add_gui(gui)
     return iw
 
 

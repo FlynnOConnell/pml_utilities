@@ -93,7 +93,6 @@ def _add_scan(pf_dir, scan="20"):
     (pf_dir / "scanIDs_ROIs.pkl").write_bytes(pickle.dumps(meta))
 
 
-
 class TestSession:
     def test_load_reads_the_processed_trace_and_finds_the_events(self, data_root):
         session = _loaded(data_root)
@@ -433,7 +432,6 @@ class TestSession:
         assert not np.array_equal(slow.analysis_trace, slow.denoised)
 
 
-
 class TestNearestIndex:
     def test_nearest_within_radius(self):
         from mbo_utilities.gui.imgui.scatter import nearest_index
@@ -732,15 +730,6 @@ class TestViewerIntegration:
     second process, what `mbo curate` runs.
     """
 
-    def test_widgets_menu_has_no_curation_toggle(self):
-        from mbo_utilities.gui.widgets import _WIDGET_CLASSES, _discover_widgets
-        from mbo_utilities.gui.widgets.widget_toggles import WIDGET_REGISTRY, get_entry
-
-        assert get_entry("vnoiser") is None
-        assert "Event Curation" not in [entry.label for entry in WIDGET_REGISTRY]
-        _discover_widgets()
-        assert "Curation" not in [cls.name for cls in _WIDGET_CLASSES]
-
     def test_check_install_lists_vnoiser(self):
         from mbo_utilities.install import HAS_VNOISER, VNOISER_HINT
 
@@ -829,7 +818,6 @@ class TestViewerIntegration:
                 vis.figure.canvas.draw()
         finally:
             vis.close()
-
 
 
 def _raw_unit(munit: int, n_rois: int = 2, samples: int = 4000) -> dict:
@@ -1258,7 +1246,6 @@ class TestMboOpensTheLineScanViewer:
         assert calls[0][1]["zstack_key"] is None
 
 
-
 def _experiment_layout(root, name="expt1"):
     """``<expt>/<expt>/<expt>.mesc`` with ``PF`` and the Z-stack beside it."""
     experiment = root / name
@@ -1335,7 +1322,6 @@ class TestExperimentFolder:
         assert calls[0][0] == str(mesc)
         result = CliRunner().invoke(cli.main, ["linescan", str(tmp_path), "--view"])
         assert result.exit_code != 0 and "no <name>/<name>.mesc" in result.output
-
 
 
 class TestCurationWindow:

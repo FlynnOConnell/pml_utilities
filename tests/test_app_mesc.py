@@ -60,6 +60,8 @@ def test_the_mesc_tab_draws_first_for_a_mesc_file(host):
     assert host.apps["mesc"].available(host)
     assert host.apps["mesc"].tab is not None
     assert "mesc" not in _app._reported
+    right = [app.id for app in host.ordered() if app.dock == "right"]
+    assert right.index("mesc") < right.index("viewer")
 
 
 def test_a_row_opens_its_unit_into_the_host(host):

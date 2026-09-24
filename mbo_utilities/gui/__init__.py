@@ -10,17 +10,14 @@ Architecture
 ------------
 The GUI is organized into these components:
 
-- **Viewers**: Standalone application windows (TimeSeriesViewer, etc.)
-- **Widgets**: Capability-based UI components (widgets/)
+- **App**: the viewer and the apps around it (app/), what ``mbo`` opens
+- **Widgets**: the panels and pipeline settings the apps draw (widgets/)
+- **Viewers**: panels that replace the standard ones for one kind of data
 """
 
 __all__ = [
-    # Viewer architecture (auto-selected based on data type)
     "BaseViewer",
-    "TimeSeriesViewer",
-    # Widgets
     "GridSearchViewer",
-    "PreviewDataWidget",
     # Entry points
     "DataVis",
     "get_default_ini_path",
@@ -32,8 +29,6 @@ __all__ = [
 
 def __getattr__(name):
     """Lazy import heavy GUI modules only when accessed."""
-    # === Legacy exports (backwards compatibility) ===
-
     if name == "run_gui":
         from .run_gui import run_gui
 
@@ -42,11 +37,6 @@ def __getattr__(name):
         from .data_vis import DataVis
 
         return DataVis
-    if name == "PreviewDataWidget":
-        from . import _setup  # triggers setup on import
-        from .widgets.preview_data import PreviewDataWidget
-
-        return PreviewDataWidget
     if name == "GridSearchViewer":
         from .widgets.grid_search import GridSearchViewer
 
@@ -64,15 +54,9 @@ def __getattr__(name):
 
         return get_default_ini_path
 
-    # === New architecture: Viewers ===
-
     if name == "BaseViewer":
         from .viewers import BaseViewer
 
         return BaseViewer
-    if name == "TimeSeriesViewer":
-        from .viewers import TimeSeriesViewer
-
-        return TimeSeriesViewer
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

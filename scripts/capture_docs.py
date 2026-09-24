@@ -71,23 +71,22 @@ def _resolve_data_path(argv) -> Path | None:
 def _build_viewer(data_in: Path, size: tuple[int, int]):
     from mbo_utilities.reader import imread
     from mbo_utilities.arrays import normalize_roi
-    from mbo_utilities.gui.run_gui import _create_image_widget
+    from mbo_utilities.gui.app import build_host
 
-    arr = imread(data_in, roi=normalize_roi(None))
-    iw = _create_image_widget(
-        arr,
-        widget=True,
-        figure_kwargs_override={"canvas": "offscreen", "size": size},
+    host = build_host(
+        imread(data_in, roi=normalize_roi(None)),
+        size=size,
+        figure_kwargs={"canvas": "offscreen"},
     )
-    gui = next((g for g in iw.figure.guis.values() if g is not None), None)
-    return iw, gui
+    host.figure.show()
+    return host
 
 
-def _draw(iw, n: int):
+def _draw(host, n: int):
     """Pump n frames; return the last composited readback."""
     frame = None
     for _ in range(n):
-        frame = iw.figure.canvas.draw()
+        frame = host.figure.canvas.draw()
     return frame
 
 
@@ -96,25 +95,23 @@ def _save(frame, name: str):
     style_image(Image.fromarray(arr), OUTPUT_DIR / name)
 
 
-def _shut(iw):
-    try:
-        iw.figure.canvas.close()
-    except Exception:
-        pass
+def _shut(host):
+    host.close()
+    host.viewer.close()
 
 
 def capture_data_view(data_in: Path):
-    iw, _ = _build_viewer(data_in, (900, 600))
-    _save(_draw(iw, 10), "02_step_data_view.png")
-    _shut(iw)
+    host = _build_viewer(data_in, (900, 600))
+    _save(_draw(host, 10), "02_step_data_view.png")
+    _shut(host)
 
 
 def capture_metadata_editor(data_in: Path):
-    iw, gui = _build_viewer(data_in, (900, 650))
-    _draw(iw, 5)
-    gui._show_metadata_popup = True
-    _save(_draw(iw, 8), "04_configurable_metadata.png")
-    _shut(iw)
+    host = _build_viewer(data_in, (900, 650))
+    _draw(host, 5)
+    host.apps["set_metadata"].open = True
+    _save(_draw(host, 8), "04_configurable_metadata.png")
+    _shut(host)
 
 
 def _capture_save_options(data_in: Path, name: str, ext_idx: int | None = None,
@@ -122,15 +119,16 @@ def _capture_save_options(data_in: Path, name: str, ext_idx: int | None = None,
     """Open Save As -> Options and snapshot it. ext_idx selects the output
     format (0 .tiff, 1 .zarr, 2 .bin, 3 .h5, 4 .mp4), which changes the
     format-specific options shown."""
-    iw, gui = _build_viewer(data_in, size)
-    _draw(iw, 5)
+    host = _build_viewer(data_in, size)
+    save = host.apps["save_as"]
+    _draw(host, 5)
     if ext_idx is not None:
-        gui._ext_idx = ext_idx
-    gui._saveas_popup_open = True
-    _draw(iw, 5)
-    gui._saveas_options_open = True
-    _save(_draw(iw, 8), name)
-    _shut(iw)
+        save.save.ext_idx = ext_idx
+    save.open = True
+    _draw(host, 5)
+    save.save.options_requested = True
+    _save(_draw(host, 8), name)
+    _shut(host)
 
 
 def capture_save_options(data_in: Path):
@@ -145,39 +143,46 @@ def capture_save_options_mp4(data_in: Path):
     _capture_save_options(data_in, "09_save_options_mp4.png", ext_idx=4, size=(1000, 880))
 
 
+def _show_suite2p(host):
+    """Put the Process tab alone in the right dock, on Suite2p."""
+    host.apps["viewer"].open = False
+    host.apps["run"].open = True
+    host.context._selected_pipeline_name = "Suite2p"
+
+
 def capture_suite2p_settings(data_in: Path):
-    iw, gui = _build_viewer(data_in, (640, 820))
-    _draw(iw, 5)
-    gui._force_run_tab = True
-    _save(_draw(iw, 8), "06_suite2p_settings.png")
-    _shut(iw)
+    host = _build_viewer(data_in, (640, 820))
+    _draw(host, 5)
+    _show_suite2p(host)
+    _save(_draw(host, 8), "06_suite2p_settings.png")
+    _shut(host)
 
 
-def _capture_popup(data_in: Path, flag: str, name: str, size: tuple[int, int]):
-    """Set a one-shot popup flag on the side widget, then snapshot it."""
-    iw, gui = _build_viewer(data_in, size)
-    _draw(iw, 5)
-    setattr(gui, flag, True)
-    _save(_draw(iw, 8), name)
-    _shut(iw)
+def _capture_app(data_in: Path, app_id: str, name: str, size: tuple[int, int]):
+    """Open one app's window, then snapshot it."""
+    host = _build_viewer(data_in, size)
+    _draw(host, 5)
+    host.apps[app_id].open = True
+    _save(_draw(host, 8), name)
+    _shut(host)
 
 
 def capture_keybinds(data_in: Path):
-    _capture_popup(data_in, "_show_keybinds_popup", "10_keybinds.png", (900, 700))
+    _capture_app(data_in, "keybinds", "10_keybinds.png", (900, 700))
 
 
 def capture_process_console(data_in: Path):
-    _capture_popup(data_in, "_show_process_console", "11_process_console.png", (1000, 650))
+    _capture_app(data_in, "console", "11_process_console.png", (1000, 650))
 
 
 def capture_options(data_in: Path):
-    _capture_popup(data_in, "_show_options_popup", "12_options.png", (900, 700))
+    _capture_app(data_in, "options", "12_options.png", (900, 700))
 
 
-def _set_s2p_demo_params(gui):
+def _set_s2p_demo_params(context):
     """Set a few Suite2p params to non-default values so the 'modified from
     default' orange tint is visible in the captured settings panel."""
-    s = getattr(gui, "s2p", None)
+    s = context.s2p
     if s is not None:
         s.tau = 0.7
         s.diameter_x = 6.0
@@ -185,43 +190,39 @@ def _set_s2p_demo_params(gui):
 
 
 def capture_suite2p_parameters(data_in: Path):
-    iw, gui = _build_viewer(data_in, (1180, 880))
-    # the offscreen imgui backend never registers the lazily-added bold font
-    # the settings popup uses; fall back to the default font for the capture.
-    gui._bold_font = None
-    _set_s2p_demo_params(gui)
-    _draw(iw, 5)
-    gui._force_run_tab = True
-    _draw(iw, 6)
-    gui._force_pipe_settings = True
-    _save(_draw(iw, 10), "07_suite2p_parameters.png")
-    _shut(iw)
+    host = _build_viewer(data_in, (1180, 880))
+    _set_s2p_demo_params(host.context)
+    _draw(host, 5)
+    _show_suite2p(host)
+    _draw(host, 6)
+    host.context._force_pipe_settings = True
+    _save(_draw(host, 10), "07_suite2p_parameters.png")
+    _shut(host)
 
 
 def capture_suite2p_legend(data_in: Path):
-    iw, gui = _build_viewer(data_in, (1180, 880))
-    gui._bold_font = None
-    _set_s2p_demo_params(gui)
-    _draw(iw, 5)
-    gui._force_run_tab = True
-    _draw(iw, 6)
-    gui._force_pipe_settings = True
-    _draw(iw, 6)
-    gui._force_pipe_legend = True
-    frame = _draw(iw, 8)
+    host = _build_viewer(data_in, (1180, 880))
+    _set_s2p_demo_params(host.context)
+    _draw(host, 5)
+    _show_suite2p(host)
+    _draw(host, 6)
+    host.context._force_pipe_settings = True
+    _draw(host, 6)
+    host.context._force_pipe_legend = True
+    frame = _draw(host, 8)
     # the Legend popup renders at the top-left of the settings modal; crop to
     # it so the small popup is legible as a standalone figure.
     arr = np.asarray(frame)[8:300, 2:412, :3].copy()
     style_image(Image.fromarray(arr), OUTPUT_DIR / "13_suite2p_legend.png")
-    _shut(iw)
+    _shut(host)
 
 
 def capture_save_as_dialog(data_in: Path):
-    iw, gui = _build_viewer(data_in, (1000, 720))
-    _draw(iw, 5)
-    gui._saveas_popup_open = True
-    _save(_draw(iw, 8), "04_save_as_dialog.png")
-    _shut(iw)
+    host = _build_viewer(data_in, (1000, 720))
+    _draw(host, 5)
+    host.apps["save_as"].open = True
+    _save(_draw(host, 8), "04_save_as_dialog.png")
+    _shut(host)
 
 
 # Standalone imgui-window captures ------------------------------------------

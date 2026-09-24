@@ -1,8 +1,7 @@
-"""Viewer classes - standalone GUI applications.
+"""Viewers that replace the standard panels for one kind of data.
 
-A Viewer is a complete GUI window embedded inside PreviewDataWidget.
-It owns the tab bar and delegates the actual rendering to the parent
-widget's draw methods.
+The pollen calibration viewer is the one: the app's pollen panel builds it
+on the viewer and draws it.
 """
 
 from __future__ import annotations
@@ -13,11 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from fastplotlib.widgets import ImageWidget
 
-__all__ = [
-    "BaseViewer",
-    "TimeSeriesViewer",
-    "get_viewer_class",
-]
+__all__ = ["BaseViewer"]
 
 
 class BaseViewer(ABC):
@@ -62,23 +57,3 @@ class BaseViewer(ABC):
 
     def cleanup(self) -> None:
         """Clean up resources when the viewer closes. Override as needed."""
-
-
-def get_viewer_class(data_array) -> type[BaseViewer]:
-    """Select the appropriate viewer class based on data type."""
-    from .time_series import TimeSeriesViewer
-
-    if hasattr(data_array, "stack_type") and data_array.stack_type == "pollen":
-        from .pollen_calibration import PollenCalibrationViewer
-
-        return PollenCalibrationViewer
-
-    return TimeSeriesViewer
-
-
-def __getattr__(name: str):
-    if name == "TimeSeriesViewer":
-        from .time_series import TimeSeriesViewer
-
-        return TimeSeriesViewer
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
