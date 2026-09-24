@@ -870,3 +870,61 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
     assert widget._first_env == {"MSession_0/MUnit_3": True}
     assert widget.settings.runtime.reference_fs == 1000.0
     assert widget._outdir == str(tmp_path)
+
+
+def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
+    """The Scans table ticks only the unit on screen, even over a previous
+    run's scans, and moves the tick when another unit of the file is shown.
+    """
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    import h5py
+    from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
+
+    mesc = tmp_path / "session1.mesc"
+    with h5py.File(mesc, "w") as f:
+        session = f.create_group("MSession_0")
+        for n in (3, 5):
+            unit = session.create_group(f"MUnit_{n}")
+            unit.attrs.update(
+                {
+                    "MethodType": 6,
+                    "VecChannelsSize": 1,
+                    "TStepInMs": 1.0,
+                    "MeasurementDatePosix": 0,
+                    "CoordinateMapJSON": json.dumps(
+                        {
+                            "maps": [
+                                {
+                                    "measurementROIs": [
+                                        {
+                                            "lowerLeftFramePix": [2 * i + 1, 1],
+                                            "upperRightFramePix": [2 * i + 2, 1],
+                                        }
+                                        for i in range(4)
+                                    ]
+                                }
+                            ]
+                        }
+                    ),
+                }
+            )
+            unit.create_dataset("Channel_0", data=np.zeros((1, 20, 8), np.uint16))
+    (tmp_path / DOMAINS_FILE).write_text(
+        json.dumps({"scans": ["3", "5"], "first_env": ["3"], "domains": {"a": [0]}})
+    )
+
+    shown = SimpleNamespace(unit_key="MSession_0/MUnit_5")
+    parent = SimpleNamespace(fpath=mesc, image_widget=SimpleNamespace(data=[shown]))
+    widget = VoltagePipelineWidget(parent)
+    widget._ensure_state()
+    assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}
+    assert widget._first_env == {"MSession_0/MUnit_5": True}
+    assert widget._domain_rows == [["a", "0"]]
+
+    parent.image_widget.data = [SimpleNamespace(unit_key="MSession_0/MUnit_3")]
+    widget._ensure_state()
+    assert widget._scans == {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": False}
+    assert widget._first_env == {"MSession_0/MUnit_3": True}
+    assert widget._domain_rows == [["a", "0"]]

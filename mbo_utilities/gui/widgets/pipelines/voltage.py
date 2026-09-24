@@ -157,6 +157,7 @@ class VoltagePipelineWidget(PipelineWidget):
         self._settings_sizer: PopupAutoSize | None = None
         self._show_slice_popup = False
         self._last_fpath = None
+        self._last_unit = None
         self._units: list[dict] = []
         self._scans: dict[str, bool] = {}
         self._first_env: dict[str, bool] = {}
@@ -207,15 +208,22 @@ class VoltagePipelineWidget(PipelineWidget):
         from mbo_utilities.vnoiser.pipeline import read_domains
 
         fpath = getattr(self.parent, "fpath", None)
+        shown = getattr(self._array(), "unit_key", None)
         if fpath == self._last_fpath:
+            # another unit of the same file on screen: the selection follows it
+            if shown != self._last_unit and any(u["key"] == shown for u in self._units):
+                self._last_unit = shown
+                self._scans = {u["key"]: u["key"] == shown for u in self._units}
+                self._first_env = {shown: True}
+                self._seed_slicing()
             return
         self._last_fpath = fpath
+        self._last_unit = shown
         self._units, self._scans, self._first_env, self._domain_rows = [], {}, {}, []
         self._domain_error, self._domains_path = "", ""
         mesc = self._mesc_path()
         if mesc is None:
             return
-        shown = getattr(self._array(), "unit_key", None)
         try:
             self._units = [
                 u for u in list_mesc_units(mesc) if u.get("kind") in ROI_LAYOUTS
@@ -228,15 +236,9 @@ class VoltagePipelineWidget(PipelineWidget):
         for u in self._units:
             self._scans[u["key"]] = u["key"] == shown or not on_screen
         if self._units:
-            self._first_env[self._units[0]["key"]] = True
-        max_frames, n_lines, _ = self._dims()
-        self._voltage_tp_selection = f"1:{max_frames}"
-        self._voltage_tp_parsed = None
-        self._voltage_tp_error = ""
-        self._voltage_z_selection = f"1:{n_lines}"
-        self._voltage_z_error = ""
-        self._voltage_c_selection = "1"
-        self._voltage_c_error = ""
+            self._first_env[shown if on_screen else self._units[0]["key"]] = True
+        self._seed_slicing()
+        _, n_lines, _ = self._dims()
         arr = self._array()
         run = arr.path if isinstance(arr, ResultsArray) else voltage_run_for_mesc(mesc)
         domains, scan_ids, first_env = {}, [], []
@@ -284,11 +286,23 @@ class VoltagePipelineWidget(PipelineWidget):
         self._domain_rows = [
             [name, ",".join(str(r) for r in rois)] for name, rois in domains.items()
         ]
-        if scan_ids:
+        # a previous run's scans only when no unit of the file is on screen
+        if scan_ids and not on_screen:
             for u in self._units:
                 munit = u["key"].rsplit("_", 1)[-1]
                 self._scans[u["key"]] = munit in scan_ids
                 self._first_env[u["key"]] = munit in first_env
+
+    def _seed_slicing(self) -> None:
+        """Every frame, every ROI, the first channel of the ticked scans."""
+        max_frames, n_lines, _ = self._dims()
+        self._voltage_tp_selection = f"1:{max_frames}"
+        self._voltage_tp_parsed = None
+        self._voltage_tp_error = ""
+        self._voltage_z_selection = f"1:{n_lines}"
+        self._voltage_z_error = ""
+        self._voltage_c_selection = "1"
+        self._voltage_c_error = ""
 
     def _domains(self) -> dict[str, list[int]]:
         """The domain table as ``{name: lines}``; sets ``_domain_error`` and returns {} when invalid."""
@@ -521,33 +535,63 @@ class VoltagePipelineWidget(PipelineWidget):
     def _draw_scans_block(self) -> None:
         imgui.text_colored(_SUBSECTION_COLOR, "Scans")
         set_tooltip(
-            "Each ticked unit becomes one scan of the PF folder, keyed by its MUnit number. "
-            "env marks the first scan of each environment (scanID_1st_env)."
+            "The recordings (MUnits) in this file with lines or patches drawn. "
+            "Ticked ones are processed together with the same domains; the one "
+            "on screen is ticked by default."
         )
         if not self._units:
             imgui.text_disabled("No units with AOD ROIs in this file.")
             return
-        for u in self._units:
-            key = u["key"]
-            munit = key.rsplit("/", 1)[-1]
-            seconds = u.get("duration_s")
-            label = (
-                f"{munit} ({u['nrois']} ROIs, {seconds:.0f} s)"
-                if seconds
-                else f"{munit} ({u['nrois']} ROIs)"
-            )
-            _, self._scans[key] = imgui.checkbox(
-                f"{label}##voltage_scan_{key}", self._scans.get(key, False)
-            )
+        shown = getattr(self._array(), "unit_key", None)
+        flags = (
+            imgui.TableFlags_.row_bg
+            | imgui.TableFlags_.borders_inner_h
+            | imgui.TableFlags_.sizing_fixed_fit
+        )
+        if imgui.begin_table("##voltage_scans", 4, flags):
+            imgui.table_setup_column("Unit", imgui.TableColumnFlags_.width_stretch)
+            imgui.table_setup_column("ROIs")
+            imgui.table_setup_column("Length")
+            imgui.table_setup_column("New environment")
+            imgui.table_headers_row()
             if imgui.is_item_hovered():
-                imgui.set_tooltip(key)
-            if self._scans[key]:
-                imgui.same_line()
-                _, self._first_env[key] = imgui.checkbox(
-                    f"env##voltage_env_{key}", self._first_env.get(key, False)
+                imgui.set_tooltip(
+                    "New environment: tick when this scan is the first one recorded "
+                    "after the animal was moved to a different environment (another "
+                    "arena or track). The pipeline "
+                    "does not use it; it is written to the output (scanID_1st_env) "
+                    "so later analysis can group scans by environment."
+                )
+            for u in self._units:
+                key = u["key"]
+                munit = key.rsplit("/", 1)[-1]
+                imgui.table_next_row()
+                imgui.table_set_column_index(0)
+                label = f"{munit} (on screen)" if key == shown else munit
+                _, self._scans[key] = imgui.checkbox(
+                    f"{label}##voltage_scan_{key}", self._scans.get(key, False)
                 )
                 if imgui.is_item_hovered():
-                    imgui.set_tooltip("First scan of an environment.")
+                    imgui.set_tooltip(key)
+                imgui.table_set_column_index(1)
+                imgui.text(str(u["nrois"]))
+                imgui.table_set_column_index(2)
+                seconds = u.get("duration_s")
+                imgui.text(f"{seconds:.0f} s" if seconds else "-")
+                imgui.table_set_column_index(3)
+                if not self._scans[key]:
+                    imgui.begin_disabled()
+                _, self._first_env[key] = imgui.checkbox(
+                    f"##voltage_env_{key}", self._first_env.get(key, False)
+                )
+                if not self._scans[key]:
+                    imgui.end_disabled()
+            imgui.end_table()
+        if imgui.small_button("On screen only##voltage_scans_shown"):
+            self._scans = {u["key"]: u["key"] == shown for u in self._units}
+        imgui.same_line()
+        if imgui.small_button("All##voltage_scans_all"):
+            self._scans = {u["key"]: True for u in self._units}
 
     def _draw_domains_block(self) -> None:
         imgui.text_colored(_SUBSECTION_COLOR, "Domains")
@@ -619,7 +663,7 @@ class VoltagePipelineWidget(PipelineWidget):
             self._save_domains_file()
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                f"Save the table, scans and env flags to {DOMAINS_FILE} beside the file."
+                f"Save the domains, ticked scans and new-environment ticks to {DOMAINS_FILE} beside the file."
             )
         domains = self._domains()
         if self._domain_error:
