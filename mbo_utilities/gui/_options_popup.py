@@ -284,32 +284,96 @@ def draw_linescan_options(parent: Any, tooltip=None) -> None:
         set_linescan_auto_traces(value)
 
 
-def draw_options_popup(parent: Any) -> None:
-    """Draw the Options popup. Open with ``parent._show_options_popup = True``.
+def sync_options(obj: Any) -> None:
+    """Re-read every option from the preferences into ``obj``'s widget state.
 
-    Persists every change to ``~/.mbo/settings/preferences.json`` immediately.
+    Called when options are shown so a change made from the CLI or another
+    window isn't shadowed by a stale snapshot; nvidia-smi is a subprocess,
+    so the compute devices are listed here, not per frame.
     """
+    obj._options_gpu_idx = get_gpu_index()
+    obj._options_debug = get_debug_logging()
+    obj._options_linescan_auto = get_linescan_auto_traces()
+    obj._options_compute_devices = compute_gpu_devices()
+    sync_memory_options(obj)
+
+
+def draw_options(obj: Any) -> None:
+    """The options themselves, in whatever window the caller opened.
+
+    ``obj`` holds the widget state ``sync_options`` read; every change is
+    persisted to ``~/.mbo/settings/preferences.json`` immediately.
+    """
+    _ensure_gpu_list(obj)
+    _refresh_gpu_panel(obj)
+
+    imgui.text_colored(_COL_DIM, "GPU adapter (render)")
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Pick which GPU to render with. 'auto' lets wgpu choose "
+            "(usually the DiscreteGPU). Takes effect on next launch."
+        )
+    imgui.set_next_item_width(hello_imgui.em_size(20))
+    ui_idx = obj._options_gpu_idx + 1  # 0 == "auto"
+    changed, new_ui_idx = imgui.combo("##gpu_adapter", ui_idx, obj._options_gpu_labels)
+    if changed:
+        obj._options_gpu_idx = new_ui_idx - 1
+        set_gpu_index(obj._options_gpu_idx)
+        _refresh_gpu_panel(obj)
+
+    # what fastplotlib actually renders with right now
+    rg = getattr(obj, "_options_render_gpu", None)
+    if rg:
+        note = {"live": "", "preference": "  (selected)", "auto": "  (auto)"}.get(
+            rg.get("source"), ""
+        )
+        imgui.text_colored(_COL_DIM, f"  using: {rg['summary']}{note}")
+
+    imgui.dummy(imgui.ImVec2(0, 8))
+
+    # Compute GPU: governs suite2p + cellpose (CUDA_VISIBLE_DEVICES).
+    imgui.text_colored(_COL_DIM, "Compute GPU (suite2p / cellpose)")
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Which GPU suite2p and cellpose run on. 'auto' uses all "
+            "visible GPUs, 'cpu' forces CPU. Applies to newly started "
+            "jobs; the suite2p Torch Device can still override per run."
+        )
+    values, labels = compute_gpu_options(obj._options_compute_devices)
+    sel = compute_gpu_current_index(values)
+    imgui.set_next_item_width(hello_imgui.em_size(20))
+    changed, new_sel = imgui.combo("##compute_gpu", sel, labels)
+    if changed and 0 <= new_sel < len(values):
+        apply_compute_gpu(values[new_sel])
+
+    imgui.dummy(imgui.ImVec2(0, 4))
+    imgui.separator()
+    imgui.dummy(imgui.ImVec2(0, 4))
+
+    changed, new_debug = imgui.checkbox("Debug logging", obj._options_debug)
+    if imgui.is_item_hovered():
+        imgui.set_tooltip(
+            "Verbose console logs (per-read timings, zarr chunk shapes, "
+            "ms timings). Same effect as launching with MBO_DEBUG=1."
+        )
+    if changed:
+        obj._options_debug = new_debug
+        set_debug_logging(new_debug)
+        _mbo_log.set_debug(new_debug)
+
+    draw_memory_options(obj)
+    draw_linescan_options(obj)
+
+
+def draw_options_popup(parent: Any) -> None:
+    """Draw the Options popup. Open with ``parent._show_options_popup = True``."""
     if not hasattr(parent, "_show_options_popup"):
         parent._show_options_popup = False
     if not hasattr(parent, "_options_sizer"):
         parent._options_sizer = PopupAutoSize("Options##options_popup", anchor="center")
-    if not hasattr(parent, "_options_gpu_idx"):
-        parent._options_gpu_idx = get_gpu_index()
-    if not hasattr(parent, "_options_debug"):
-        parent._options_debug = get_debug_logging()
-    if not hasattr(parent, "_options_compute_devices"):
-        parent._options_compute_devices = []
 
     if parent._show_options_popup:
-        # re-sync from prefs each open so changes from the CLI or another
-        # window aren't shadowed by a stale snapshot.
-        parent._options_gpu_idx = get_gpu_index()
-        parent._options_debug = get_debug_logging()
-        parent._options_linescan_auto = get_linescan_auto_traces()
-        sync_memory_options(parent)
-        # nvidia-smi is a subprocess; refresh the compute-device list once per
-        # open, not per frame.
-        parent._options_compute_devices = compute_gpu_devices()
+        sync_options(parent)
         parent._options_sizer.before_open()
         imgui.open_popup("Options##options_popup")
         parent._show_options_popup = False
@@ -327,72 +391,10 @@ def draw_options_popup(parent: Any) -> None:
             imgui.close_current_popup()
             return
 
-        _ensure_gpu_list(parent)
-        _refresh_gpu_panel(parent)
-
         imgui.text_colored(_COL_ACCENT, f"{fa.ICON_FA_GEARS}  Options")
         imgui.separator()
         imgui.dummy(imgui.ImVec2(0, 4))
-
-        imgui.text_colored(_COL_DIM, "GPU adapter (render)")
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Pick which GPU to render with. 'auto' lets wgpu choose "
-                "(usually the DiscreteGPU). Takes effect on next launch."
-            )
-        imgui.set_next_item_width(hello_imgui.em_size(20))
-        ui_idx = parent._options_gpu_idx + 1  # 0 == "auto"
-        changed, new_ui_idx = imgui.combo(
-            "##gpu_adapter", ui_idx, parent._options_gpu_labels
-        )
-        if changed:
-            parent._options_gpu_idx = new_ui_idx - 1
-            set_gpu_index(parent._options_gpu_idx)
-            _refresh_gpu_panel(parent)
-
-        # what fastplotlib actually renders with right now
-        rg = getattr(parent, "_options_render_gpu", None)
-        if rg:
-            note = {"live": "", "preference": "  (selected)", "auto": "  (auto)"}.get(
-                rg.get("source"), ""
-            )
-            imgui.text_colored(_COL_DIM, f"  using: {rg['summary']}{note}")
-
-        imgui.dummy(imgui.ImVec2(0, 8))
-
-        # Compute GPU: governs suite2p + cellpose (CUDA_VISIBLE_DEVICES).
-        imgui.text_colored(_COL_DIM, "Compute GPU (suite2p / cellpose)")
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Which GPU suite2p and cellpose run on. 'auto' uses all "
-                "visible GPUs, 'cpu' forces CPU. Applies to newly started "
-                "jobs; the suite2p Torch Device can still override per run."
-            )
-        devices = getattr(parent, "_options_compute_devices", []) or []
-        values, labels = compute_gpu_options(devices)
-        sel = compute_gpu_current_index(values)
-        imgui.set_next_item_width(hello_imgui.em_size(20))
-        changed, new_sel = imgui.combo("##compute_gpu", sel, labels)
-        if changed and 0 <= new_sel < len(values):
-            apply_compute_gpu(values[new_sel])
-
-        imgui.dummy(imgui.ImVec2(0, 4))
-        imgui.separator()
-        imgui.dummy(imgui.ImVec2(0, 4))
-
-        changed, new_debug = imgui.checkbox("Debug logging", parent._options_debug)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Verbose console logs (per-read timings, zarr chunk shapes, "
-                "ms timings). Same effect as launching with MBO_DEBUG=1."
-            )
-        if changed:
-            parent._options_debug = new_debug
-            set_debug_logging(new_debug)
-            _mbo_log.set_debug(new_debug)
-
-        draw_memory_options(parent)
-        draw_linescan_options(parent)
+        draw_options(parent)
 
         imgui.dummy(imgui.ImVec2(0, 8))
         btn_w = hello_imgui.em_size(6)
