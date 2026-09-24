@@ -14,6 +14,7 @@ from mbo_utilities.arrays.features import find_slider_name
 from mbo_utilities.gui._colormaps import DEFAULT_COLORMAPS
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.app._app import App
+from mbo_utilities.gui.app._keys import pressed
 from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 from mbo_utilities.lazy_array import base_array
 
@@ -52,6 +53,16 @@ class ViewerApp(App):
     order = 1
     size = 300
     start_open = True
+    keybinds = (
+        ("Left / Right", "Previous / next frame"),
+        ("Up / Down", "Next / previous z-plane"),
+        ("Shift+arrows", "Step 10 at a time"),
+        ("Space", "Play / pause"),
+        ("v", "Fit the contrast to the frame"),
+        ("Shift+V", "Refit on channel or plane change"),
+        ("c", "Fix scan phase"),
+        ("Shift+C", "Sub-pixel scan phase"),
+    )
 
     def __init__(self, viewer, data):
         super().__init__()
@@ -101,6 +112,44 @@ class ViewerApp(App):
             self._plane = (host.channel, host.zplane)
             if self.auto_contrast:
                 self.viewer.reset_vmin_vmax_frame()
+
+    def on_keys(self, host) -> None:
+        names = self.viewer.dim_names
+        t_name = find_slider_name(names, "t")
+        z_name = find_slider_name(names, "z")
+        data = host.data
+        source = data.source if isinstance(data, FrameAveragedView) else data
+        if pressed("v"):
+            self.viewer.reset_vmin_vmax_frame()
+        if pressed("Shift+V"):
+            self.auto_contrast = not self.auto_contrast
+        if hasattr(source, "phase_correction"):
+            if pressed("c"):
+                source.fix_phase = not source.fix_phase
+                self.viewer.indices = self.viewer.current_index
+            if pressed("Shift+C") and source.fix_phase:
+                source.use_fft = not source.use_fft
+                self.viewer.indices = self.viewer.current_index
+        if t_name is not None and pressed("Space"):
+            sliders = self.viewer._sliders_ui
+            sliders._playing[t_name] = not sliders._playing[t_name]
+            sliders._last_frame_time[t_name] = 0
+        # a panel under the mouse keeps the arrows for its own sliders
+        if imgui.get_io().want_capture_mouse:
+            return
+        for key, name, step in (
+            ("Left", t_name, -1),
+            ("Right", t_name, 1),
+            ("Down", z_name, -1),
+            ("Up", z_name, 1),
+        ):
+            if name is None:
+                continue
+            last = data.shape[0 if name == t_name else 2] - 1
+            for chord, size in ((key, 1), (f"Shift+{key}", 10)):
+                if pressed(chord, repeat=True):
+                    at = self.viewer.current_index[name] + step * size
+                    self.viewer.indices[name] = min(max(at, 0), last)
 
     def draw_options(self, host) -> None:
         data = host.data
