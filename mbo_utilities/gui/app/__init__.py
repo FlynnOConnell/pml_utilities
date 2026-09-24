@@ -76,8 +76,8 @@ def build_host(
         cmap="gnuplot2",
         figure_kwargs=_figure_kwargs_for_here(size=size),
     )
-    host = AppHost(viewer.figure, data=array, slots=[], store=store)
-    host.register(ViewerApp(viewer, array))
+    host = AppHost(viewer.figure, data=array, slots=[], store=store, viewer=viewer)
+    host.register(ViewerApp(array))
     host.register(*(ported_apps() + debug_apps(host) if apps is None else apps))
     return host
 
@@ -94,7 +94,7 @@ def run_app(
 
     host = build_host(path, size=size, store=style_store())
     host.figure.show()
-    _after_show(host.apps["viewer"].viewer)
+    _after_show(host.viewer)
     host.figure.canvas.set_title(host.title())
     if frames > 0:
         for _ in range(frames):
