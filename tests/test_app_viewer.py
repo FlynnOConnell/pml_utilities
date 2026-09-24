@@ -180,6 +180,24 @@ def test_the_console_lists_running_stats_and_draws(host):
     assert "console" not in _app._reported
 
 
+def test_set_metadata_edits_reach_the_viewer_and_go_with_the_data(host):
+    from mbo_utilities.gui._metadata_editor import _apply_set
+
+    _app._reported.difference_update({"set_metadata", "metadata"})
+    edits = host.metadata_edits
+    edits.inputs["dz"] = "2.5"
+    _apply_set(edits, host.data, "dz", float)
+    assert edits.values["dz"] == 2.5
+    for app_id in ("set_metadata", "metadata"):
+        host.apps[app_id].open = True
+    host.figure.canvas.force_draw()
+    host.figure.canvas.force_draw()
+    assert not {"set_metadata", "metadata"} & _app._reported
+
+    host.set_data(imread(movie_data(nt=4, ny=16, nx=16)))
+    assert host.metadata_edits.values == {}
+
+
 def test_the_filter_subtracts_the_mean_before_the_blur():
     frame = np.full((4, 4), 3.0, dtype=np.float32)
     mean = np.full((4, 4), 1.0, dtype=np.float32)
