@@ -9,6 +9,7 @@ from imgui_bundle import imgui, implot
 
 from mbo_utilities import __version__, log
 from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
+from mbo_utilities.gui._stats import ZStats, compute_zstats, hydrate_zstats
 from mbo_utilities.gui.app._app import DOCKS, App
 from mbo_utilities.gui.app._dock import Dock
 from mbo_utilities.gui.app._keys import pressed
@@ -45,10 +46,12 @@ class AppHost:
     ``slots`` leaves out the subplots something else already draws on, such
     as the viewer's images.
 
-    An app reaches the host for three things: what data is open, where its
-    graphics go, and the shared position (the playhead, the channel and the
-    z-plane on screen). That list is the contract; an app never puts state
-    of its own on the host.
+    An app reaches the host for four things: what data is open, where its
+    graphics go (the slots, and the ``viewer`` showing the data when there
+    is one), the shared position (the playhead, the channel and the z-plane
+    on screen), and what is computed once about the open data for every app
+    to read (``zstats``, the summary stats of the viewer's arrays). That
+    list is the contract; an app never puts state of its own on the host.
 
     With a ``store``, which apps are showing is saved as it changes and put
     back when an app registers, so the app opens the way it was left. An
@@ -61,6 +64,7 @@ class AppHost:
         data: Any = None,
         slots: list[Subplot] | None = None,
         store: ConfigStore | None = None,
+        viewer=None,
     ):
         # the fps overlay's renderer leaves its own context current; use the figure's
         imgui.set_current_context(figure.imgui_renderer.imgui_context)
@@ -72,6 +76,8 @@ class AppHost:
 
         self.figure = figure
         self.data = data
+        self.viewer = viewer
+        self.zstats = None if viewer is None else ZStats(viewer)
         self.store = store
         self._showing = {} if store is None else dict(store.panel_state(SHOWING))
         self.apps: dict[str, App] = {}
@@ -86,6 +92,8 @@ class AppHost:
         self.docks = {edge: Dock(self, edge) for edge in DOCKS}
         self.menu = MenuBar(self)
         figure.add_animations(self._frame)
+        if self.zstats is not None:
+            self.compute_stats()
 
     def register(self, *apps: App) -> None:
         """Add apps to the host, in the order they should be listed."""
@@ -103,6 +111,18 @@ class AppHost:
 
     def ordered(self) -> list[App]:
         return sorted(self.apps.values(), key=lambda app: (app.order, app.title))
+
+    def compute_stats(self) -> None:
+        """The open data's summary stats: cached ones where the store has them,
+        the rest computed on a background thread.
+        """
+        self.zstats.reset()
+        hydrated = hydrate_zstats(self.zstats)
+        pending = [i for i, done in enumerate(hydrated) if not done]
+        for i in pending:
+            self.zstats.running[i] = True
+        if pending:
+            compute_zstats(self.zstats, only=pending)
 
     def keys(self) -> None:
         """The frame's shortcuts: p folds the right dock, an app's chord shows or
@@ -167,8 +187,13 @@ class AppHost:
         self.channel = 0
         self.zplane = 0
         self.playhead.seek(0.0, source=self)
+        # the old stats must not reach an app rebuilding for the new data
+        if self.zstats is not None:
+            self.zstats.reset()
         for app in list(self.apps.values()):
             app.data_changed(self)
+        if self.zstats is not None:
+            self.compute_stats()
         for slot, app_id in list(self.stage.items()):
             if app_id is None:
                 continue
