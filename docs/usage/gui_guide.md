@@ -115,15 +115,10 @@ window is masknmf's, with nothing added:
 
 - **Demixing**: `SingleSessionDemixingVis`, the PMD movie, signals, background,
   residual and colourful signals, with masknmf's ROI and signal curation tools.
-- **Compression**: `CompressionVis`, motion-corrected vs compressed movies and
-  the lag-1 autocorrelation diagnostics. Needs `compression.hdf5` beside the
-  result and the raw movie: the pipeline's `data_raw.bin` + `ops.npy` when
-  they are there, otherwise a native file dialog asks for a single-plane movie
-  before the viewer opens.
 - **Classification**: `ClassificationVis`, accept / reject and class labels
   one ROI at a time; labels save to `<file>.labels.hdf5` beside the result.
 
-`mbo view run/demixing_results.hdf5 --vis compression` skips the prompt. Torch and masknmf must be installed; the device follows the
+`mbo view run/demixing_results.hdf5 --vis classification` skips the prompt. Torch and masknmf must be installed; the device follows the
 compute-GPU policy (`MBO_GPU`, `CUDA_VISIBLE_DEVICES`, File > Options).
 
 ### Pollen Calibration Viewer

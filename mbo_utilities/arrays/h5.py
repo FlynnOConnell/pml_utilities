@@ -63,6 +63,33 @@ def _iter_h5_datasets(f) -> list[dict]:
     return found
 
 
+def _index_5d_into_labeled(data, key, raw_dims: tuple[str, ...]) -> np.ndarray:
+    """Index a dataset whose axes are labeled ``raw_dims`` with a 5D TCZYX key.
+
+    Maps the key onto the labeled raw axes, reads, permutes the kept axes back
+    to TCZYX, then drops the axes that were integer-indexed so the result keeps
+    numpy 5D semantics.
+    """
+    key = _normalize_key(key, 5)
+    if len(key) > 5:
+        raise IndexError(
+            f"too many indices for array: array is 5-dimensional, "
+            f"but {len(key)} were indexed"
+        )
+    key = key + (slice(None),) * (5 - len(key))
+    key_by_dim = dict(zip(DIMS, key))
+    raw_key = tuple(key_by_dim.get(d, slice(None)) for d in raw_dims)
+    out = np.asarray(data[raw_key])
+    kept = tuple(
+        d for d in raw_dims if not isinstance(key_by_dim[d], (int, np.integer))
+    )
+    out = _canonicalize_to_5d(out, kept)
+    for axis in reversed(range(5)):
+        if isinstance(key[axis], (int, np.integer)):
+            out = np.squeeze(out, axis=axis)
+    return out
+
+
 def list_h5_datasets(path: Path | str) -> list[dict]:
     """Describe every dataset in an HDF5 file.
 
@@ -284,32 +311,7 @@ class H5Array(ReductionMixin, Shape5DMixin):
         return out
 
     def _getitem_permuted(self, key):
-        """Index a non-canonically-ordered dataset with a 5D TCZYX key.
-
-        Maps the canonical key onto the labeled raw axes, reads, permutes the
-        kept axes back to TCZYX, then drops the canonical axes that were
-        integer-indexed so the result keeps numpy 5D semantics.
-        """
-        key = _normalize_key(key, 5)
-        if len(key) > 5:
-            raise IndexError(
-                f"too many indices for array: array is 5-dimensional, "
-                f"but {len(key)} were indexed"
-            )
-        key = key + (slice(None),) * (5 - len(key))
-        key_by_dim = dict(zip(DIMS, key))
-        raw_key = tuple(key_by_dim.get(d, slice(None)) for d in self._raw_dims)
-        out = np.asarray(self._d[raw_key])
-        kept = tuple(
-            d
-            for d in self._raw_dims
-            if not isinstance(key_by_dim[d], (int, np.integer))
-        )
-        out = _canonicalize_to_5d(out, kept)
-        for axis in reversed(range(5)):
-            if isinstance(key[axis], (int, np.integer)):
-                out = np.squeeze(out, axis=axis)
-        return out
+        return _index_5d_into_labeled(self._d, key, self._raw_dims)
 
     def __array__(self, dtype=None, copy=None):
         # representative (Y, X) frame for fast preview (no accidental full load)

@@ -173,9 +173,8 @@ def _cbar(fig, im, ax, label=None):
 
 
 def _sparse_footprints(results):
-    """(pixel_idx, roi_idx, lam) arrays from the demixed spatial matrix ``a``."""
-    a = results.a
-    coo = a.coalesce() if hasattr(a, "coalesce") else a
+    """(pixel_idx, roi_idx, lam) arrays from the demixed spatial matrix."""
+    coo = results.spatial_demixed.coalesce()
     idx = _np(coo.indices())
     val = _np(coo.values())
     return idx[0].astype(np.int64), idx[1].astype(np.int64), val.astype(np.float64)
@@ -315,10 +314,8 @@ def plot_footprint_coverage(
 
 def _roi_averages(results):
     """(pmd, fluctuating background, residual) ROI-average traces, each (K, T)."""
-    if getattr(results, "pmd_roi_averages", None) is None:
-        results._set_roi_averages()
     return (
-        _np(results.pmd_roi_averages),
+        _np(results.compression_array_roi_averages),
         _np(results.fluctuating_background_roi_averages),
         _np(results.residual_roi_averages),
     )
@@ -345,7 +342,7 @@ def plot_roi_signal_decomposition(
     """
     plt = _agg_plt()
     pmd_avg, bkgd_avg, resid_avg = _roi_averages(results)
-    c = _np(results.c)  # (T, K)
+    c = _np(results.temporal_demixed)  # (T, K)
     pix, roi, lam = _sparse_footprints(results)
     n_rois = c.shape[1]
 
@@ -450,14 +447,14 @@ def _calibrated_dff(results, pmd):
     from mbo_utilities.masknmf import outputs as _outputs
 
     pix, roi, lam = _sparse_footprints(results)
-    c = _np(results.c)  # (T, K)
+    c = _np(results.temporal_demixed)  # (T, K)
     n_rois = c.shape[1]
     footprints = _outputs.split_sparse_footprints(np.stack([pix, roi]), lam, n_rois)
     gain, f0 = _outputs.roi_calibration(
         footprints,
-        var_img=_np(pmd.var_img),
-        mean_img=_np(pmd.mean_img),
-        baseline=_np(getattr(results, "b", None)),
+        var_img=_np(pmd.noise_variance_image),
+        mean_img=_np(pmd.mean_image),
+        baseline=_np(results.static_baseline),
     )
     _, dff = _outputs.calibrated_traces(c, gain, f0)
     return dff, dff.max(axis=1), gain, f0
@@ -652,8 +649,8 @@ def plot_pmd_diagnostics(
     plt = _agg_plt()
 
     panels = []
-    mean_img = getattr(pmd, "mean_img", None)
-    var_img = getattr(pmd, "var_img", None)
+    mean_img = pmd.mean_image
+    var_img = pmd.noise_variance_image
     if mean_img is not None:
         panels.append(("mean image (movie units)", _np(mean_img), "gray"))
     if var_img is not None:
@@ -681,14 +678,12 @@ def plot_pmd_diagnostics(
         ax.set_title(title, color=_FIG_FG, fontsize=10)
         ax.axis("off")
         _cbar(fig, im, ax)
-    rank = getattr(pmd, "pmd_rank", None)
-    if rank is not None:
-        fig.suptitle(
-            f"PMD basis — total rank {int(rank)}",
-            color=_FIG_FG,
-            fontsize=12,
-            fontweight="bold",
-        )
+    fig.suptitle(
+        f"PMD basis — total rank {pmd.compression_rank}",
+        color=_FIG_FG,
+        fontsize=12,
+        fontweight="bold",
+    )
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     _save(fig, Path(plane_dir) / save_name)
 

@@ -749,12 +749,12 @@ def test_discover_masknmf(tmp_path, store):
 def _toy_pmd(t=24, h=14, w=12, rank=5, seed=0):
     import torch
 
-    from masknmf import PMDArray
+    from masknmf import CompressionArray
 
     rng = np.random.default_rng(seed)
     u = rng.random((h * w, rank)).astype(np.float32)
     u[rng.random((h * w, rank)) > 0.4] = 0.0
-    return PMDArray.from_tensors(
+    return CompressionArray.from_tensors(
         (t, h, w),
         torch.from_numpy(u).to_sparse_coo(),
         torch.from_numpy(rng.standard_normal((rank, t)).astype(np.float32)),
@@ -809,7 +809,7 @@ def test_cached_pmd_crop_reuses_plane_compression(tmp_path, store):
     pmd, key = got
     assert tuple(pmd.shape) == (n, 36, 34)
     assert key.startswith("pmd_crop:")
-    full = masknmf.PMDArray.from_hdf5(str(plane / PMD_FILE))
+    full = masknmf.CompressionArray.from_hdf5(str(plane / PMD_FILE))
     np.testing.assert_allclose(pmd[:5], full[:5, 4:40, 2:36], rtol=1e-4, atol=1e-4)
     # a full-frame view or changed settings falls back to compression
     assert rw._cached_pmd_crop(plane, rw.as_movie(plane), s.compression, logger) is None

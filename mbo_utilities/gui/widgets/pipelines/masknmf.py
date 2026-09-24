@@ -676,7 +676,12 @@ class MaskNMFPipelineWidget(PipelineWidget):
             "traces look clipped/flat at the extremes.",
         )
         if reg.strategy == "pwrigid":
-            self._f_int2(reg, "num_blocks", "Blocks")
+            self._f_int2(
+                reg,
+                "minimum_patch_sizes",
+                "Patch size",
+                tooltip="Smallest (y, x) patch in px a local shift is estimated in.",
+            )
             self._f_int2(reg, "overlaps", "Overlaps", lo=0)
             self._f_int2(reg, "max_deviation_rigid", "Max deviation", lo=0)
 

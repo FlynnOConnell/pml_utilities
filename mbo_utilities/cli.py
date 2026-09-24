@@ -370,7 +370,7 @@ def main(
 )
 @click.option(
     "--vis",
-    type=click.Choice(["demixing", "compression", "classification"]),
+    type=click.Choice(["demixing", "classification"]),
     default=None,
     help="For a masknmf demixing result: which of masknmf's viewers to open. "
     "Omitted: a prompt in the terminal, or the demixing viewer when there is none.",
@@ -380,8 +380,8 @@ def main(
     "raw_path",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
-    help="For a masknmf demixing result: the raw movie, shown as a panel in the demixing viewer and as the "
-    "reference in the compression viewer. Omitted: data_raw.bin or a lone .tif beside the result, if any.",
+    help="For a masknmf demixing result: the raw movie, shown as a panel in the demixing viewer. "
+    "Omitted: data_raw.bin beside the result, if any.",
 )
 @click.option(
     "--motion-correction",
@@ -424,7 +424,7 @@ def view(
       mbo view /data --widget manualroi  Open with the ROIs widget on (draw + label by hand)
       mbo view /data/scan.mesc --unit 2   Open one MESc measurement unit
       mbo view /data/scan.mesc --unit MUnit_35   A line-scan unit opens the line-scan viewer
-      mbo view run/demixing_results.hdf5 --vis compression   masknmf's compression viewer
+      mbo view run/demixing_results.hdf5 --vis classification   masknmf's classification viewer
       mbo view --list-gpus           Show available GPU adapters
       mbo view /data/raw --gpu 0     Force GPU index 0
     """
@@ -475,7 +475,7 @@ def view(
             if sys.stdin.isatty():
                 vis = click.prompt(
                     "masknmf viewer",
-                    type=click.Choice(["demixing", "compression", "classification"]),
+                    type=click.Choice(["demixing", "classification"]),
                     default="demixing",
                     show_choices=True,
                 )

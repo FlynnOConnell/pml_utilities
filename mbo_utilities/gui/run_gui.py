@@ -1651,11 +1651,10 @@ def run_gui(
     Open a GUI to preview data of any supported type.
 
     A masknmf demixing result opens in masknmf's own viewer instead:
-    ``vis`` picks ``demixing`` (default), ``compression`` or
-    ``classification`` before launch; the viewer window is masknmf's as is.
-    ``raw_path`` and ``motion_correction_path`` give the demixing viewer its
-    raw panel and shift traces (and the compression viewer its raw movie);
-    omitted, the files beside the result are used when present.
+    ``vis`` picks ``demixing`` (default) or ``classification`` before launch;
+    the viewer window is masknmf's as is. ``raw_path`` and
+    ``motion_correction_path`` give the demixing viewer its raw panel and
+    shift traces; omitted, the files beside the result are used when present.
 
     The one-call form of ``DataVis``: it builds the viewer, picks the canvas
     and size for wherever it is running, and shows it. In a terminal or

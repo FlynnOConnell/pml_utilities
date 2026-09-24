@@ -40,7 +40,7 @@ def test_strategy_kwargs_by_strategy():
     s = MasknmfSettings()
     assert set(s.registration.strategy_kwargs()) == {"max_shifts"}
     s.registration.strategy = "pwrigid"
-    assert "num_blocks" in s.registration.strategy_kwargs()
+    assert "minimum_patch_sizes" in s.registration.strategy_kwargs()
     assert "max_rigid_shifts" in s.registration.strategy_kwargs()
 
 
