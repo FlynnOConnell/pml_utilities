@@ -453,6 +453,16 @@ def test_the_arrow_keys_step_the_playhead(host):
     assert host.frame == 1
 
 
+def test_space_plays_and_pauses_the_t_slider(host):
+    playing = host.viewer._sliders_ui._playing
+    host.figure.canvas.force_draw()
+    assert not playing[t_slider(host)]
+    tap(host, "space")
+    assert playing[t_slider(host)]
+    tap(host, "space")
+    assert not playing[t_slider(host)]
+
+
 def test_the_help_keybinds_and_options_windows_draw(host):
     _app._reported.clear()
     for app_id in ("help", "keybinds", "options"):
