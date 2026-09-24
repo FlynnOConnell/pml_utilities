@@ -1,24 +1,32 @@
-"""The figure's top edge: which apps are showing and what is on each slot."""
+"""The figure's top edge: the menus that list every app, and what is on each slot."""
 
 from __future__ import annotations
 
+import webbrowser
 from typing import TYPE_CHECKING
 
 from fastplotlib.ui import ImguiWindow
 from imgui_bundle import imgui
 
+from mbo_utilities import log
+
 if TYPE_CHECKING:
     from mbo_utilities.gui.app._host import AppHost
 
 HEIGHT = 30
+# the top menus in order; Debug shows only with debug logging on
+MENUS = ("File", "View", "Docs", "Debug")
+DOCS_URL = "https://millerbrainobservatory.github.io/mbo_utilities/"
 
 
 class MenuBar(ImguiWindow):
     """The host's own controls, drawn as a menu bar on the top edge.
 
-    ``draw`` is overridden because an imgui menu bar has to be opened in the
-    window itself, and the edge windows fastplotlib draws put their contents
-    in a child.
+    Each app is listed under its ``menu`` with its shortcut beside it, and
+    ticking it shows or hides the app. ``draw`` is overridden because an
+    imgui menu bar has to be opened in the window itself, and the edge
+    windows fastplotlib draws put their contents in a child. The frame's
+    shortcuts run here too, since this is the one window drawn every frame.
     """
 
     def __init__(self, host: AppHost):
@@ -46,29 +54,32 @@ class MenuBar(ImguiWindow):
             f"##menu_bar{self._id_counter}", p_open=None, flags=self._window_flags
         )
         if imgui.begin_menu_bar():
-            self._apps_menu()
+            for name in MENUS:
+                if name != "Debug" or log.debug_enabled():
+                    self._menu(name)
             self._slot_menus()
             imgui.text(f"   {self.host.status()}")
             imgui.end_menu_bar()
         imgui.end()
+        self.host.keys()
 
-    def _apps_menu(self) -> None:
-        if not imgui.begin_menu("Apps"):
+    def _menu(self, name: str) -> None:
+        if not imgui.begin_menu(name):
             return
         for app in self.host.ordered():
-            where = " ".join(
-                w
-                for w in (
-                    app.dock,
-                    "window" if app.window else "",
-                    "scene" if app.scene else "",
-                )
-                if w
-            )
+            if app.menu != name:
+                continue
             if imgui.menu_item(
-                app.title, where, p_selected=app.open, enabled=app.available(self.host)
+                app.title,
+                app.shortcut,
+                p_selected=app.open,
+                enabled=app.available(self.host),
             )[0]:
                 app.open = not app.open
+        if name == "Docs":
+            imgui.separator()
+            if imgui.menu_item("Online docs", "", p_selected=False)[0]:
+                webbrowser.open(DOCS_URL)
         imgui.end_menu()
 
     def _slot_menus(self) -> None:
