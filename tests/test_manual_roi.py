@@ -2914,21 +2914,6 @@ class TestHelpAndKeysAreAppWide:
         # the keys are the Keybinds popup's job, not the guide's
         assert "### Keys" not in doc
 
-    def test_the_help_viewer_lists_the_roi_tab_only_with_the_widget(self):
-        from mbo_utilities.gui import _help_viewer
-
-        class _Parent:
-            manual_roi = None
-
-        parent = _Parent()
-        assert [name for name, _ in _help_viewer.docs_for(parent)] == [
-            name for name, _ in _help_viewer.DOCS
-        ]
-        parent.manual_roi = object()
-        docs = _help_viewer.docs_for(parent)
-        assert docs[-1] == ("ROI Labeling", _help_viewer.ROI_DOC)
-        assert _help_viewer.load_doc(_help_viewer.ROI_DOC).startswith("## ROI")
-
 
 class TestAdoptingRunsStartedElsewhere:
     """A pipeline run launched from the Process tab writes its plane dirs

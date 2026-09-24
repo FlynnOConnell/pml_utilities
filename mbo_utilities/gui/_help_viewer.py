@@ -10,11 +10,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
 
-from imgui_bundle import ImVec2, imgui
-
-from mbo_utilities.gui._imgui_helpers import PopupAutoSize
+from imgui_bundle import imgui
 
 # cached doc content
 _doc_cache: dict[str, str] = {}
@@ -30,21 +27,6 @@ DOCS = [
 ROI_DOC = "::roi::"
 # what a .mesc holds; the MESc tab's (?) opens it
 MESC_DOC = "mesc.md"
-
-
-def docs_for(parent: Any) -> list[tuple[str, str]]:
-    """The doc tabs to show: the shipped ones, the MESc page while a
-    ``.mesc`` unit is on screen, plus the ROI tool's guide as a section when
-    that widget is on. One Help button for the whole app.
-    """
-    docs = list(DOCS)
-    data = getattr(getattr(parent, "image_widget", None), "data", None) or []
-    md = getattr(data[0], "metadata", None) if len(data) else None
-    if isinstance(md, dict) and "mesc_unit" in md:
-        docs.append(("MESc files", MESC_DOC))
-    if getattr(parent, "manual_roi", None) is not None:
-        docs.append(("ROI Labeling", ROI_DOC))
-    return docs
 
 
 def get_docs_dir() -> Path:
@@ -65,83 +47,6 @@ def load_doc(filename: str) -> str:
         else:
             _doc_cache[filename] = f"*Document not found: {filename}*"
     return _doc_cache[filename]
-
-
-def draw_help_popup(parent: Any) -> None:
-    """Draw help viewer popup with markdown rendering."""
-    if not hasattr(parent, "_show_help_popup"):
-        parent._show_help_popup = False
-    if not hasattr(parent, "_help_selected_doc"):
-        parent._help_selected_doc = 0
-
-    if not hasattr(parent, "_help_sizer"):
-        parent._help_sizer = PopupAutoSize("Help##HelpViewer", auto_resize=False)
-
-    if parent._show_help_popup:
-        parent._help_sizer.before_open()
-        imgui.open_popup("Help##HelpViewer")
-        parent._show_help_popup = False
-
-    # default size on first use; top anchor comes from _help_sizer.
-    io = imgui.get_io()
-    screen_w, screen_h = io.display_size.x, io.display_size.y
-    win_w, win_h = min(650, screen_w * 0.7), min(550, screen_h * 0.7)
-    imgui.set_next_window_size(ImVec2(win_w, win_h), imgui.Cond_.first_use_ever)
-    imgui.set_next_window_size_constraints(ImVec2(400, 300), ImVec2(1200, 900))
-
-    opened, visible = imgui.begin_popup_modal(
-        "Help##HelpViewer",
-        p_open=True,
-        flags=imgui.WindowFlags_.none,
-    )
-
-    if opened:
-        if not visible:
-            imgui.close_current_popup()
-        else:
-            # doc selector tabs
-            docs = docs_for(parent)
-            # a widget's (?) asks for its page by file name, for one frame
-            wanted = getattr(parent, "_help_select_doc", None)
-            if imgui.begin_tab_bar("##HelpTabs"):
-                for i, (name, filename) in enumerate(docs):
-                    flags = (
-                        imgui.TabItemFlags_.set_selected
-                        if filename == wanted
-                        else imgui.TabItemFlags_.none
-                    )
-                    if imgui.begin_tab_item(name, None, flags)[0]:
-                        parent._help_selected_doc = i
-                        imgui.end_tab_item()
-                imgui.end_tab_bar()
-            parent._help_select_doc = None
-
-            imgui.separator()
-            imgui.spacing()
-
-            # content area
-            avail = imgui.get_content_region_avail()
-            content_height = avail.y - 35  # space for close button
-
-            if imgui.begin_child(
-                "##HelpContent", ImVec2(0, content_height), imgui.ChildFlags_.borders
-            ):
-                # the ROI tab comes and goes with its widget, so the
-                # remembered index can outlive the tab it pointed at
-                _, filename = docs[min(parent._help_selected_doc, len(docs) - 1)]
-                content = load_doc(filename)
-                render_markdown(content)
-                imgui.end_child()
-
-            # close button
-            imgui.separator()
-            imgui.spacing()
-            btn_width = 80
-            imgui.set_cursor_pos_x((imgui.get_window_width() - btn_width) * 0.5)
-            if imgui.button("Close", ImVec2(btn_width, 0)):
-                imgui.close_current_popup()
-
-        imgui.end_popup()
 
 
 # colors for the renderer

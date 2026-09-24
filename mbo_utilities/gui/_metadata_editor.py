@@ -12,7 +12,6 @@ from typing import Any
 
 from imgui_bundle import hello_imgui, imgui
 
-from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.metadata import get_filename_suggestions, parse_filename_metadata
 
 _COL_SET = imgui.ImVec4(0.5, 0.8, 0.5, 1.0)
@@ -37,13 +36,6 @@ class MetadataEdits:
         self.inputs: dict[str, str] = {}
         self.key = ""
         self.value = ""
-
-
-def edits_for(parent: Any) -> MetadataEdits:
-    """The preview widget's edits, over its ``_custom_metadata`` dict."""
-    if not hasattr(parent, "_metadata_edits"):
-        parent._metadata_edits = MetadataEdits(parent._custom_metadata)
-    return parent._metadata_edits
 
 
 def _field_tooltip(field: dict) -> str:
@@ -449,68 +441,3 @@ def _draw_editor_narrow(
     imgui.same_line()
     if imgui.button("Set##custom_add") and edits.key.strip():
         _apply_custom_add(edits)
-
-
-def draw_metadata_popup(parent: Any) -> None:
-    """Standalone "Set Metadata" popup.
-
-    Driven by `parent._show_metadata_popup` (set True from the File menu
-    or the Shift+M keybind). Draws every frame; opens the modal once when
-    the flag flips on, then resets the flag. The modal stays open until
-    the user closes it via the X button, the Close button, or Escape.
-    """
-    if not hasattr(parent, "_show_metadata_popup"):
-        parent._show_metadata_popup = False
-    if not hasattr(parent, "_metadata_sizer"):
-        parent._metadata_sizer = PopupAutoSize(
-            "Set Metadata##MetadataPopup", auto_resize=False
-        )
-
-    if parent._show_metadata_popup:
-        parent._metadata_sizer.before_open()
-        imgui.open_popup("Set Metadata##MetadataPopup")
-        parent._show_metadata_popup = False
-
-    # default size; top anchor comes from _metadata_sizer.
-    io = imgui.get_io()
-    screen_w, screen_h = io.display_size.x, io.display_size.y
-    win_w = min(560, screen_w * 0.7)
-    win_h = min(620, screen_h * 0.85)
-    imgui.set_next_window_size(imgui.ImVec2(win_w, win_h), imgui.Cond_.first_use_ever)
-    imgui.set_next_window_size_constraints(
-        imgui.ImVec2(420, 360), imgui.ImVec2(screen_w, screen_h)
-    )
-
-    opened, visible = imgui.begin_popup_modal(
-        "Set Metadata##MetadataPopup",
-        p_open=True,
-        flags=imgui.WindowFlags_.no_saved_settings,
-    )
-    if not opened:
-        return
-    try:
-        if not visible:
-            imgui.close_current_popup()
-            return
-        imgui.dummy(imgui.ImVec2(0, 4))
-        # scrollable content area so the close button stays anchored at
-        # the bottom no matter how many fields the editor renders.
-        avail = imgui.get_content_region_avail()
-        content_h = max(0.0, avail.y - 36.0)
-        if imgui.begin_child(
-            "##MetadataContent",
-            imgui.ImVec2(0, content_h),
-            imgui.ChildFlags_.borders,
-        ):
-            draw_metadata_editor_content(
-                edits_for(parent), parent.image_widget.data[0], parent.fpath
-            )
-        imgui.end_child()
-
-        imgui.spacing()
-        btn_w = 80
-        imgui.set_cursor_pos_x((imgui.get_window_width() - btn_w) * 0.5)
-        if imgui.button("Close", imgui.ImVec2(btn_w, 0)):
-            imgui.close_current_popup()
-    finally:
-        imgui.end_popup()

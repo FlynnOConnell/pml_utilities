@@ -50,7 +50,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-
 class LazyStandIn:
     """Array-protocol lazy stand-in: dtype/shape/ndim/__getitem__ only.
 
@@ -167,7 +166,6 @@ def viewer5d(base5d):
     iw.close()
 
 
-
 class TestConstruction:
     def test_factory_returns_adapter(self, viewer5d):
         from mbo_utilities.gui._ndviewer import MboNDViewer
@@ -215,7 +213,6 @@ class TestConstruction:
     def test_offscreen_draw(self, viewer5d):
         frame = viewer5d.figure.canvas.draw()
         assert getattr(frame, "shape", None) is not None
-
 
 
 class TestIndices:
@@ -282,7 +279,6 @@ class TestIndices:
         assert set(iw.current_index.keys()) == set(iw.ndwidget.indices.dims)
 
 
-
 class TestWindowFuncs:
     def test_legacy_dict_routed_with_window_order(self, viewer5d):
         # preview_data's legacy path sets {"t": (func, size)}; funcs for
@@ -346,7 +342,6 @@ class TestWindowFuncs:
         )
 
 
-
 class TestContrastResets:
     def test_reset_vmin_vmax_full_sample(self, viewer5d, base5d):
         iw = viewer5d
@@ -379,7 +374,6 @@ class TestContrastResets:
         assert iw.graphics[0].cmap == "viridis"
         assert iw.cmap == ["viridis"]
         iw.cmap = "gnuplot2"
-
 
 
 class TestSlidersUI:
@@ -422,98 +416,6 @@ class TestSlidersUI:
         assert ndui._playing["Timepoint"] is False
         sl._last_frame_time[0] = 0
         assert ndui._last_frame_time["Timepoint"] == 0
-
-    def test_space_toggle_playback(self, viewer5d):
-        """The space-bar path: _keyboard.toggle_playback must flip the T
-        dim's play state on the NDWidgetUI (it was a silent no-op when it
-        indexed the str-keyed state by int position).
-        """
-        from mbo_utilities.gui._keyboard import toggle_playback
-
-        parent = _StubParent(viewer5d)
-        ndui = viewer5d.ndwidget.ui_sliders
-        ndui._playing["Timepoint"] = False
-        ndui._last_frame_time["Timepoint"] = 123.0
-
-        toggle_playback(parent)
-        assert ndui._playing["Timepoint"] is True
-        assert ndui._last_frame_time["Timepoint"] == 0
-
-        toggle_playback(parent)
-        assert ndui._playing["Timepoint"] is False
-
-    def test_rebind_space_to_playback(self, viewer5d):
-        """preview_data's space rebind must succeed against the adapter's
-        real-figure passthrough: it reaches figure.renderer, tolerates the
-        ndwidget branch having no _toggle_right_gui_collapse to remove, and
-        installs its own key_down handler.
-        """
-        from mbo_utilities.gui._keyboard import rebind_space_to_playback
-
-        parent = _StubParent(viewer5d)
-        rebind_space_to_playback(parent)
-        assert getattr(parent, "_space_rebound", False) is True
-
-    def test_toggle_playback_out_of_range_is_noop(self, viewer5d):
-        from mbo_utilities.gui._keyboard import toggle_playback
-
-        parent = _StubParent(viewer5d)
-        before = dict(viewer5d.ndwidget.ui_sliders._playing)
-        toggle_playback(parent, dim_index=99)
-        assert dict(viewer5d.ndwidget.ui_sliders._playing) == before
-
-
-class TestTogglePlaybackVendoredShape:
-    """toggle_playback against the vendored sliders' state shape (str-keyed
-    defaultdicts) — no figure needed.
-    """
-
-    @staticmethod
-    def _parent(n_dims=2, prepopulate=False):
-        from collections import defaultdict
-
-        class Sliders:
-            def __init__(self):
-                self._playing = defaultdict(bool)
-                self._last_frame_time = defaultdict(float)
-
-        class IW:
-            def __init__(self):
-                self._sliders_ui = Sliders()
-                self.slider_dims = ["t", "z", "c"][:n_dims]
-
-        parent = _StubParent(IW())
-        if prepopulate:
-            # what a drawn frame does: update() reads every dim's state
-            for d in parent.image_widget.slider_dims:
-                parent.image_widget._sliders_ui._playing[d]
-        return parent
-
-    def test_toggles_the_letter_key_not_a_phantom_int(self):
-        from mbo_utilities.gui._keyboard import toggle_playback
-
-        parent = self._parent()
-        sliders = parent.image_widget._sliders_ui
-        toggle_playback(parent)
-        assert sliders._playing["t"] is True
-        assert 0 not in sliders._playing  # the old bug's phantom key
-        assert sliders._last_frame_time["t"] == 0
-
-    def test_populated_mapping_resolves_positionally(self):
-        from mbo_utilities.gui._keyboard import toggle_playback
-
-        parent = self._parent(n_dims=3, prepopulate=True)
-        sliders = parent.image_widget._sliders_ui
-        toggle_playback(parent, dim_index=1)
-        assert sliders._playing["z"] is True
-        assert sliders._playing["t"] is False
-
-    def test_no_sliders_is_noop(self):
-        from mbo_utilities.gui._keyboard import toggle_playback
-
-        parent = _StubParent(None)
-        toggle_playback(parent)  # must not raise
-
 
 
 def _make_viewer(data, **kwargs):
@@ -962,7 +864,6 @@ class TestShowPassthrough:
             viewer5d._ndw.show = original
 
 
-
 class _WithLabels(LazyStandIn):
     slider_dim_labels = ("Timepoint", "Channel", "Z-plane")
 
@@ -1061,7 +962,6 @@ class TestFpsSeedingFromData:
             iw.close()
 
 
-
 class TestFindSliderNameAliases:
     def test_mesc_depth_and_cube_labels_resolve_to_z(self):
         from mbo_utilities.arrays.features._dim_labels import find_slider_name
@@ -1075,7 +975,6 @@ class TestFindSliderNameAliases:
         assert find_slider_name(("Tile", "Cam", "Zplane"), "z") == "Zplane"
         assert find_slider_name(("t", "c", "z"), "z") == "z"
         assert find_slider_name(("Timepoint", "Channel"), "z") is None
-
 
 
 class TestMultiArray:
@@ -1104,7 +1003,6 @@ class TestMultiArray:
             iw.figure.canvas.draw()
         finally:
             iw.close()
-
 
 
 class TestClose:

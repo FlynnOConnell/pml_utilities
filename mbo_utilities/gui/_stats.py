@@ -28,7 +28,6 @@ from mbo_utilities.gui._imgui_helpers import (
     set_tooltip,
     style_seaborn_dark,
 )
-from mbo_utilities.gui.widgets.progress_bar import reset_progress_state
 
 # accent color for the currently-active z-plane in tables and plots.
 # matches the idle "Run" button green so the highlight is consistent with
@@ -305,9 +304,7 @@ def _persist_stats(zs: ZStats, idx: int, arr: Any, spec: SummaryStatsSpec) -> No
         means = None
     try:
         if save(payload, means):
-            logger.debug(
-                f"[zstats] persisted array={idx} ({len(combos)} combos)"
-            )
+            logger.debug(f"[zstats] persisted array={idx} ({len(combos)} combos)")
     except Exception as e:
         logger.debug(f"[zstats] persist array={idx} failed: {e}")
 
@@ -342,9 +339,7 @@ def _hydrate_one(zs: ZStats, idx: int, arr: Any) -> bool:
 
     zs.spec[idx - 1] = spec
     zs.stats[idx - 1] = {c: stats_list[k] for k, c in enumerate(combos)}
-    zs.z_indices[idx - 1] = [
-        int(s) for s in payload.get("series_indices", [])
-    ]
+    zs.z_indices[idx - 1] = [int(s) for s in payload.get("series_indices", [])]
 
     mean_map: dict = {}
     scalar_map: dict = {}
@@ -419,8 +414,6 @@ def refresh_zstats(zs: ZStats):
 
     zs.reset()
     n = len(zs.stats)
-    for i in range(n):
-        reset_progress_state(f"zstats_{i}")
     logger.debug(f"Refreshing z-stats for {n} arrays")
 
     # Mark all as running before starting
@@ -526,11 +519,7 @@ def draw_stats_section(zs: ZStats, *, table: bool = True, plot: bool = True):
 
     stats_list = zs.stats
     spec = _ref_spec(zs)
-    n_stat = (
-        len(spec.series.indices)
-        if spec is not None and spec.series
-        else 1
-    )
+    n_stat = len(spec.series.indices) if spec is not None and spec.series else 1
     stat_label = spec.series.label if spec is not None and spec.series else "Z-Plane"
     is_single_zplane = n_stat == 1  # Single bar for 1 series point
     is_dual_zplane = n_stat == 2  # Grouped bars for 2 series points
@@ -722,9 +711,7 @@ def _draw_array_stats(
             _draw_half_separator()
         if plot:
             if is_combined:
-                _draw_signal_comparison_chart(
-                    zs, mean_vals, is_dual_zplane, stat_label
-                )
+                _draw_signal_comparison_chart(zs, mean_vals, is_dual_zplane, stat_label)
             else:
                 snr_vals = np.asarray(stats.get("snr", np.zeros(n)), dtype=np.float64)[
                     :n
@@ -889,9 +876,7 @@ def _draw_zplane_stats_table(
         imgui.end_table()
 
 
-def _draw_signal_comparison_chart(
-    zs, mean_vals, is_dual_zplane, stat_label="Z-Plane"
-):
+def _draw_signal_comparison_chart(zs, mean_vals, is_dual_zplane, stat_label="Z-Plane"):
     """Draw signal comparison bar chart across graphics at the current combo."""
     short = stat_label[:1].upper() or "Z"
     imgui.text("Signal Quality Comparison")

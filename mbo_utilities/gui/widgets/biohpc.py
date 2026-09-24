@@ -883,11 +883,10 @@ class _BioHpcPanel:
             try:
                 from mbo_utilities.gui._metadata_editor import (
                     draw_metadata_editor_content,
-                    edits_for,
                 )
 
                 draw_metadata_editor_content(
-                    edits_for(self.parent),
+                    self.parent.metadata_edits,
                     self.parent.image_widget.data[0],
                     self.parent.fpath,
                 )

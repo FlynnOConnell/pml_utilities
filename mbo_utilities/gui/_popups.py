@@ -13,15 +13,12 @@ from typing import Any
 
 from imgui_bundle import ImVec2, imgui
 
-from mbo_utilities.gui._imgui_helpers import begin_popup_size
-from mbo_utilities.gui._metadata import draw_metadata_inspector
 from mbo_utilities.gui._options_popup import (
     _ensure_gpu_list,
     apply_compute_gpu,
     compute_gpu_current_index,
     compute_gpu_options,
 )
-from mbo_utilities.gui.panels.debug_log import draw_scope
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.preferences import (
     get_gpu_index,
@@ -352,55 +349,6 @@ def _draw_system_info_header(parent: Any) -> None:
     imgui.spacing()
 
 
-def draw_tools_popups(parent: Any):
-    """Draw independent popup windows (Scope, Debug, Metadata)."""
-    if parent.show_scope_window:
-        size = begin_popup_size()
-        imgui.set_next_window_size(size, imgui.Cond_.first_use_ever)
-        _, parent.show_scope_window = imgui.begin(
-            "Scope Inspector",
-            parent.show_scope_window,
-        )
-        draw_scope()
-        imgui.end()
-
-    if parent.show_metadata_viewer:
-        # use absolute screen positioning so window is visible even when widget collapsed
-        io = imgui.get_io()
-        screen_w, screen_h = io.display_size.x, io.display_size.y
-        win_w, win_h = min(600, screen_w * 0.5), min(500, screen_h * 0.6)
-        # center on screen
-        imgui.set_next_window_pos(
-            ImVec2((screen_w - win_w) / 2, (screen_h - win_h) / 2),
-            imgui.Cond_.first_use_ever,
-        )
-        imgui.set_next_window_size(ImVec2(win_w, win_h), imgui.Cond_.first_use_ever)
-        _, parent.show_metadata_viewer = imgui.begin(
-            "Metadata Viewer",
-            parent.show_metadata_viewer,
-        )
-        if parent.image_widget and parent.image_widget.data:
-            data_arr = parent.image_widget.data[0]
-            # Check if data has metadata (numpy arrays don't)
-            if hasattr(data_arr, "metadata"):
-                # user-set values from the metadata editor (e.g. isoview fs)
-                # live on parent._custom_metadata and don't persist into the
-                # array's computed metadata — merge them so the viewer reflects
-                # what the user entered.
-                metadata = dict(data_arr.metadata or {})
-                custom = getattr(parent, "_custom_metadata", None) or {}
-                metadata.update({k: v for k, v in custom.items() if v is not None})
-                draw_metadata_inspector(metadata, data_array=data_arr)
-            else:
-                imgui.text("No metadata available")
-                imgui.text(f"Data type: {type(data_arr).__name__}")
-                if hasattr(data_arr, "shape"):
-                    imgui.text(f"Shape: {data_arr.shape}")
-        else:
-            imgui.text("No data loaded")
-        imgui.end()
-
-
 def draw_console_body(obj: Any, progress_items: list) -> float | None:
     """The Process Console's contents, in whatever window the caller opened.
 
@@ -535,86 +483,6 @@ def draw_console_body(obj: Any, progress_items: list) -> float | None:
     if target_h > win_h + 1.0 and expanded_boxes == n_boxes:
         return target_h
     return None
-
-
-def draw_process_console_popup(parent: Any):
-    """Draw the Process Console window for the preview widget.
-
-    A plain window rather than a modal, so it can be left open (or collapsed
-    to just its title bar) beside the viewer without dimming it — the System
-    meters are worth watching while a job runs. Position, size and collapsed
-    state persist through imgui's ini.
-    """
-    if not hasattr(parent, "_show_process_console"):
-        parent._show_process_console = False
-    if not hasattr(parent, "_process_console_open"):
-        parent._process_console_open = False
-    if not hasattr(parent, "_process_console_size"):
-        parent._process_console_size = ImVec2(500, 350)
-    if not hasattr(parent, "_process_console_grow_to"):
-        parent._process_console_grow_to = None
-
-    # open request from the menu-bar status button
-    if parent._show_process_console:
-        parent._process_console_open = True
-        parent._process_console_focus = True
-        parent._show_process_console = False
-    if not parent._process_console_open:
-        return
-
-    viewport = imgui.get_main_viewport()
-    work = viewport.work_size
-    max_w = max(400.0, work.x - 40.0)
-    max_h = max(300.0, work.y - 40.0)
-
-    if getattr(parent, "_process_console_focus", False):
-        # a second click on the status button raises it from behind the viewer
-        imgui.set_next_window_focus()
-        parent._process_console_focus = False
-
-    imgui.set_next_window_pos(
-        ImVec2(
-            viewport.work_pos.x
-            + max(0.0, (work.x - parent._process_console_size.x) * 0.5),
-            viewport.work_pos.y + 40.0,
-        ),
-        imgui.Cond_.first_use_ever,
-    )
-    imgui.set_next_window_size(parent._process_console_size, imgui.Cond_.appearing)
-    # low minimum: the window can shrink to just the meters beside the viewer
-    imgui.set_next_window_size_constraints(
-        imgui.ImVec2(340, 120), imgui.ImVec2(max_w, max_h)
-    )
-
-    # grow to fit content (requested last frame); width preserved, height bounded
-    if parent._process_console_grow_to is not None:
-        imgui.set_next_window_size(
-            imgui.ImVec2(
-                parent._process_console_size.x, parent._process_console_grow_to
-            ),
-            imgui.Cond_.always,
-        )
-        parent._process_console_grow_to = None
-
-    expanded, still_open = imgui.begin(
-        "Process Console",
-        p_open=True,
-        flags=imgui.WindowFlags_.none,
-    )
-    parent._process_console_open = still_open
-    try:
-        # collapsed -> title bar only; skip the body (and its process polling)
-        if expanded and still_open:
-            parent._process_console_size = imgui.get_window_size()
-            from mbo_utilities.gui.widgets.progress_bar import (
-                _get_active_progress_items,
-            )
-
-            parent._process_console_grow_to = draw_console_body(
-                parent, _get_active_progress_items(parent)
-            )
-    finally:
-        imgui.end()
 
 
 def _draw_process_entry(pm: Any, proc: Any, log_fill_h: float = 0.0) -> float:

@@ -136,6 +136,10 @@ class WindowContext(Suite2pState):
         return None if source is None else str(source)
 
     @property
+    def metadata_edits(self):
+        return self.host.metadata_edits
+
+    @property
     def _custom_metadata(self) -> dict:
         return self.host.metadata_edits.values
 
