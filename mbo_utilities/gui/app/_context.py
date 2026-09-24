@@ -92,8 +92,12 @@ class WindowContext(Suite2pState):
                 app.supported = None
 
     def sync_manual_roi(self, enabled: bool) -> None:
-        """Turn manual ROI labeling on or off, as the ROIs pipeline asks."""
-        self.host.apps["manual_roi"].open = enabled
+        """Turn manual ROI labeling on or off now, as a pipeline asks before it
+        reads ``manual_roi`` back.
+        """
+        app = self.host.apps["manual_roi"]
+        app.open = enabled
+        app.frame(self.host)
 
     @property
     def _show_help_popup(self) -> bool:
