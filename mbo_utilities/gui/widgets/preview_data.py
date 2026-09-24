@@ -46,8 +46,11 @@ from scipy.ndimage import gaussian_filter
 from mbo_utilities import log
 from mbo_utilities.arrays import ScanImageArray
 from mbo_utilities.arrays.features import PhaseCorrectionFeature
-from mbo_utilities.gui._availability import HAS_SUITE2P
-from mbo_utilities.gui._dialogs import check_file_dialogs
+from mbo_utilities.gui._dialogs import (
+    check_file_dialogs,
+    outdir_from_fpath,
+    suite2p_output_dir,
+)
 from mbo_utilities.gui._edge_window import EdgeWindow
 from mbo_utilities.gui._help_viewer import draw_help_popup
 from mbo_utilities.gui._imgui_helpers import fit_width, push_font_safe
@@ -73,6 +76,7 @@ from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_windows
 
 # Import modular components
 from mbo_utilities.gui.widgets.menu_bar import draw_keybinds_popup, draw_menu_bar
+from mbo_utilities.gui.widgets.pipelines._base import Suite2pState
 from mbo_utilities.gui.widgets.progress_bar import start_output_capture
 from mbo_utilities.gui.widgets.style_editor import (
     apply_saved_style,
@@ -84,70 +88,6 @@ if TYPE_CHECKING:
     from mbo_utilities.gui._ndviewer import MboNDViewer
 
 __all__ = ["PreviewDataWidget"]
-
-
-import re as _re
-
-_PLANE_DIR_RE = _re.compile(r"^plane\d+$", _re.IGNORECASE)
-
-
-def _outdir_from_fpath(fpath) -> str | None:
-    """Default output dir from a loaded fpath: the parent folder when fpath
-    is a file, or the folder itself when fpath IS a directory. Used to
-    seed the Run-tab output field so re-runs land alongside the source
-    data unless the user explicitly browses elsewhere.
-    """
-    if fpath is None:
-        return None
-    if isinstance(fpath, (list, tuple)):
-        if not fpath:
-            return None
-        fpath = fpath[0]
-    try:
-        p = Path(str(fpath))
-    except (TypeError, ValueError):
-        return None
-    if not p.exists():
-        return None
-    return str(p if p.is_dir() else p.parent)
-
-
-def _derive_suite2p_output_dir(fpath) -> str | None:
-    """Detect a suite2p output location from a file or directory path.
-
-    Returns the directory suite2p would have written into (the parent of
-    the `plane*/` subdirs), or None if `fpath` doesn't look like a suite2p
-    output. Used to auto-populate the GUI's output-folder field when the
-    user opens an existing data.bin / ops.npy / volumetric results dir.
-
-    Cases handled:
-      - file inside `…/<root>/plane0/` (e.g. data.bin, ops.npy) → `<root>`
-      - directory `…/<root>/plane0/`                            → `<root>`
-      - directory `…/<root>/` containing one or more `plane*/`  → `<root>`
-    """
-    if fpath is None:
-        return None
-    if isinstance(fpath, (list, tuple)):
-        if not fpath:
-            return None
-        fpath = fpath[0]
-    try:
-        p = Path(str(fpath))
-    except (TypeError, ValueError):
-        return None
-    if not p.exists():
-        return None
-
-    parent = p.parent if p.is_file() else p
-    if _PLANE_DIR_RE.match(parent.name):
-        return str(parent.parent)
-    try:
-        for child in parent.iterdir():
-            if child.is_dir() and _PLANE_DIR_RE.match(child.name):
-                return str(parent)
-    except (OSError, PermissionError):
-        pass
-    return None
 
 
 def _base_5d(arr):
@@ -171,7 +111,7 @@ def _base_5d(arr):
 ZSTATS_PANEL_HEIGHT = 260
 
 
-class PreviewDataWidget(EdgeWindow):
+class PreviewDataWidget(EdgeWindow, Suite2pState):
     """
     Main GUI widget for data preview and processing.
 
@@ -249,8 +189,7 @@ class PreviewDataWidget(EdgeWindow):
         # Initialize logging
         self._init_logging()
 
-        # Initialize Suite2p settings
-        self._init_suite2p()
+        Suite2pState.__init__(self)
 
         # Initialize ImPlot context
         if implot.get_current_context() is None:
@@ -339,64 +278,6 @@ class PreviewDataWidget(EdgeWindow):
         self.logger = log.get("gui")
         self.logger.debug("Logger initialized.")
         start_output_capture()
-
-    def _init_suite2p(self):
-        """Initialize Suite2p settings (lazy)."""
-        # pipelines register lazily: preloading suite2p here contends for the GIL
-        # during fastplotlib's first paint and freezes the window for seconds
-
-        # defer dataclass creation until actually needed. all three are
-        # lazy-initialized by matching properties below.
-        self._s2p = None
-        self._s2p_db = None
-        self._s2p_extras = None
-        self._s2p_savepath_flash_start = None
-        self._s2p_savepath_flash_count = 0
-        self._s2p_show_savepath_popup = False
-        self._s2p_folder_dialog = None
-
-    @property
-    def s2p(self):
-        """Suite2p processing settings (upstream schema)."""
-        if self._s2p is None and HAS_SUITE2P:
-            from mbo_utilities.gui.widgets.pipelines.settings import Suite2pSettings
-            from mbo_utilities.preferences import get_s2p_torch_device
-
-            self._s2p = Suite2pSettings()
-            # apply the persisted torch device as the sticky default (a loaded
-            # dataset's settings.npy still overrides via _try_hydrate_s2p).
-            self._s2p.torch_device = get_s2p_torch_device()
-        return self._s2p
-
-    @s2p.setter
-    def s2p(self, value):
-        self._s2p = value
-
-    @property
-    def s2p_db(self):
-        """Suite2p input/output db (paths, plane counts) — upstream schema."""
-        if self._s2p_db is None and HAS_SUITE2P:
-            from mbo_utilities.gui.widgets.pipelines.settings import Suite2pDB
-
-            self._s2p_db = Suite2pDB()
-        return self._s2p_db
-
-    @s2p_db.setter
-    def s2p_db(self, value):
-        self._s2p_db = value
-
-    @property
-    def s2p_extras(self):
-        """Mbo-only suite2p helper fields (dff_*, accept_all_cells, etc.)."""
-        if self._s2p_extras is None and HAS_SUITE2P:
-            from mbo_utilities.gui.widgets.pipelines.settings import MboSuite2pExtras
-
-            self._s2p_extras = MboSuite2pExtras()
-        return self._s2p_extras
-
-    @s2p_extras.setter
-    def s2p_extras(self, value):
-        self._s2p_extras = value
 
     def _init_fonts(self):
         """Initialize ImGui fonts."""
@@ -564,7 +445,7 @@ class PreviewDataWidget(EdgeWindow):
         self.manual_roi = None
 
         # suite2p writes beside the loaded data, else where it last wrote
-        _loaded_outdir = _outdir_from_fpath(self.fpath)
+        _loaded_outdir = outdir_from_fpath(self.fpath)
         if _loaded_outdir:
             self._s2p_outdir = _loaded_outdir
         else:
@@ -572,7 +453,7 @@ class PreviewDataWidget(EdgeWindow):
             self._s2p_outdir = str(s2p_output_dir) if s2p_output_dir else ""
 
         # data inside a suite2p output tree re-runs into that tree
-        _derived_s2p_dir = _derive_suite2p_output_dir(self.fpath)
+        _derived_s2p_dir = suite2p_output_dir(self.fpath)
         if _derived_s2p_dir:
             self._s2p_outdir = _derived_s2p_dir
 
