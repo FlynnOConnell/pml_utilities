@@ -25,9 +25,10 @@ class PanelApp(App):
     owns_window = True
     window = True
 
-    def __init__(self, panel: Panel, order: int = 100, store=None):
+    def __init__(self, panel: Panel, order: int = 100, store=None, menu: str = "Debug"):
         self.panel = panel
         self.store = store
+        self.menu = menu
         self.id = f"panel_{type(panel).__name__}"
         self.title = panel.title
         self.order = order
