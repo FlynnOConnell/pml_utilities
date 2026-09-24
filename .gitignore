@@ -193,3 +193,4 @@ dev/
 mbo_utilities/assets/notebooks/
 docs/_tmpbuild
 
+/lightning_logs/version_0
