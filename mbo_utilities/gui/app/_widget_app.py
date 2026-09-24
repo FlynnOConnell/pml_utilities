@@ -15,34 +15,15 @@ if TYPE_CHECKING:
 logger = log.get("gui.app")
 
 
-class HostAsParent:
-    """The host wearing the attribute names a ported widget still reads.
-
-    Every name here is a line of the migration: a widget that reads one has
-    not been converted to take the host. The list is meant to shrink, and
-    nothing may be added to it.
-    """
-
-    def __init__(self, host: AppHost):
-        self.host = host
-        self.logger = logger
-
-    @property
-    def _figure(self):
-        return self.host.figure
-
-    def _get_data_arrays(self) -> list:
-        return [] if self.host.data is None else [self.host.data]
-
-
 class WidgetApp(App):
     """An app that draws an existing ``Widget``.
 
     A widget already owns its state and answers whether it applies to the
     data, which is most of what an app is. What it does not have is a place
     to be drawn that is not the preview window's control column, so the
-    host gives it one and asks its ``is_supported`` once per array. The
-    widget is built on the array it was asked about and dropped with it.
+    host gives it one and asks its ``is_supported`` once per array, handing
+    it the host's ``context`` as its parent. The widget is built on the
+    array it was asked about and dropped with it.
     """
 
     widget_class: ClassVar[Any] = None
@@ -50,15 +31,14 @@ class WidgetApp(App):
     def __init__(self):
         super().__init__()
         self.widget = None
-        self.parent = None
         # is_supported for the open array; None until asked
         self._supported: bool | None = None
 
     def available(self, host: AppHost) -> bool:
-        if self.parent is None:
-            self.parent = HostAsParent(host)
+        if host.context is None:
+            return False
         if self._supported is None:
-            self._supported = self.widget_class.is_supported(self.parent)
+            self._supported = self.widget_class.is_supported(host.context)
         return self._supported
 
     def data_changed(self, host: AppHost) -> None:
@@ -67,7 +47,7 @@ class WidgetApp(App):
 
     def draw_canvas(self, host: AppHost, size: imgui.ImVec2) -> None:
         if self.widget is None:
-            self.widget = self.widget_class(self.parent)
+            self.widget = self.widget_class(host.context)
         self.widget.draw()
 
     def close(self) -> None:
