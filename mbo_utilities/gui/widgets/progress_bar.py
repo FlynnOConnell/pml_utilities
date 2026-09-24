@@ -170,8 +170,9 @@ def _get_active_progress_items(self) -> list[dict]:
         )
 
     num_graphics = getattr(self, "num_graphics", 1)
-    zstats_running = getattr(self, "_zstats_running", [])
-    zstats_progress = getattr(self, "_zstats_progress", [])
+    zstats = getattr(self, "zstats", None)
+    zstats_running = zstats.running if zstats is not None else []
+    zstats_progress = zstats.progress if zstats is not None else []
 
     for i in range(num_graphics):
         running = (

@@ -69,7 +69,7 @@ class SignalQualityTabWidget(Widget):
         return True
 
     def tab_disabled(self) -> str | None:
-        if all(self.parent._zstats_done):
+        if all(self.parent.zstats.done):
             return None
         return ""
 
