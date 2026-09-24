@@ -82,13 +82,13 @@ def build_host(
     return host
 
 
-def run_app(
-    path=None, *, frames: int = 0, size: tuple[int, int] = (1400, 900)
-) -> AppHost:
-    """Open the app host on ``path``, else on a synthetic movie.
+def run_app(path=None, *, frames: int = 0, size: tuple[int, int] = (1400, 900)) -> None:
+    """Open the app host on ``path``, else on a synthetic movie, until its window closes.
 
     ``frames`` draws that many frames and returns instead of running the
-    event loop, for a smoke test on an offscreen canvas.
+    event loop, for a smoke test on an offscreen canvas. Either way the
+    host and its viewer are closed before returning: a reader's open files
+    and background reads otherwise keep the interpreter from exiting.
     """
     import fastplotlib as fpl
 
@@ -99,6 +99,7 @@ def run_app(
     if frames > 0:
         for _ in range(frames):
             host.figure.canvas.force_draw()
-        return host
-    fpl.loop.run()
-    return host
+    else:
+        fpl.loop.run()
+    host.close()
+    host.viewer.close()
