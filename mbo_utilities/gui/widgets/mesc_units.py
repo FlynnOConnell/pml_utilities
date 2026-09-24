@@ -415,7 +415,24 @@ class MescTabWidget(Widget):
 
     def _install(self, arr, z: int | None = None) -> None:
         """Show `arr` in the viewer at slice ``z``, re-deriving every
-        per-dataset display state.
+        per-dataset display state through ``_show``.
+        """
+        path = str(arr.filenames[0])
+        unit = arr.unit_key.rsplit("/", 1)[-1]
+        self._show(arr, f"{Path(path).stem[:16]} · {unit}")
+
+        # a Z-stack opened from a scan's row lands on the slice its ROIs sit
+        # on; the swap reset the sliders, so this follows it
+        iw = self.parent.image_widget
+        zdim = roi_slider(iw.dim_names) if z is not None else None
+        if zdim is not None:
+            iw.indices[zdim] = int(z)
+        if self._reference is not None and self._reference.is_open:
+            self.open_reference()
+        self.parent.logger.info(f"MESc unit: {arr.unit_key}  shape={arr.shape}")
+
+    def _show(self, arr, title: str) -> None:
+        """Swap `arr` into the preview window.
 
         Each unit is an unrelated recording, so the Manual ROI widget is
         rebuilt for it: the outgoing unit's ROIs, runs and traces are parked
@@ -445,25 +462,13 @@ class MescTabWidget(Widget):
             parent._manual_roi_store, parent._manual_roi_runs = self._parked.get(
                 (path, arr.unit_key), (None, None)
             )
-
-        unit = arr.unit_key.rsplit("/", 1)[-1]
-        swap_viewer_array(parent, arr, title=f"{Path(path).stem[:16]} · {unit}")
-
-        # a Z-stack opened from a scan's row lands on the slice its ROIs sit
-        # on; the swap reset the sliders, so this follows it
-        zdim = roi_slider(parent.image_widget.dim_names) if z is not None else None
-        if zdim is not None:
-            parent.image_widget.indices[zdim] = int(z)
-
+        swap_viewer_array(parent, arr, title=title)
         if roi_on:
             attach_roi_widget(parent)
         try:
             attach_standard_traces(parent)
         except Exception:
             parent.logger.warning("line-scan traces tab unavailable", exc_info=True)
-        if self._reference is not None and self._reference.is_open:
-            self.open_reference()
-        parent.logger.info(f"MESc unit: {arr.unit_key}  shape={arr.shape}")
 
     def _switch(self, info: dict, z: int | None = None) -> None:
         """Open the unit ``info`` describes and show it at slice ``z``; a
