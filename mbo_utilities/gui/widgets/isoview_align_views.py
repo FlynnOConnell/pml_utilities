@@ -112,8 +112,6 @@ class IsoviewAlignViews(Widget):
     """Overlay any reference + target view in the VW00 frame to align them."""
 
     name = "Align views"
-    priority = 64
-    toggle_key = "preview.align_views"
 
     def __init__(self, parent: Any):
         super().__init__(parent)

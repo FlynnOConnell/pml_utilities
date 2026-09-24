@@ -785,7 +785,6 @@ class TestImguiWindows:
 
     def test_rois_tab_draws_the_sections_and_popups(self, widget):
         from imgui_bundle import imgui
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
         for i in range(4):
             widget.add_roi(square(2 + 12 * i, 2, 9))
@@ -809,7 +808,6 @@ class TestImguiWindows:
             seen.append(label)
             return real_header(label, *args, **kwargs)
 
-        set_widget_enabled("manual_roi", True, persist=False)
         imgui.begin_child = spy
         imgui.separator_text = spy_header
         try:
@@ -817,7 +815,6 @@ class TestImguiWindows:
         finally:
             imgui.begin_child = real
             imgui.separator_text = real_header
-            set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
         assert {"NAVIGATE", "DRAW", "VIEW", "LABELS"} <= set(seen)
         assert "##process" not in seen, "running ROIs is the Process tab's business now"
@@ -2662,7 +2659,6 @@ class TestPipelineParams:
         pipeline.
         """
         from imgui_bundle import imgui
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
         def _draw():
             seen = []
@@ -2672,13 +2668,11 @@ class TestPipelineParams:
                 seen.append(label)
                 return real_button(label, *args, **kwargs)
 
-            set_widget_enabled("manual_roi", True, persist=False)
             imgui.button = button_spy
             try:
                 errors = draw_frames(widget, 3)
             finally:
                 imgui.button = real_button
-                set_widget_enabled("manual_roi", False, persist=False)
             assert not errors, errors[0]
             return seen
 
@@ -2699,7 +2693,6 @@ class TestPipelineParams:
 
     def test_the_draw_card_has_the_auto_trace_switch(self, widget):
         from imgui_bundle import imgui
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
         seen = []
         real = imgui.checkbox
@@ -2708,13 +2701,11 @@ class TestPipelineParams:
             seen.append(label)
             return real(label, *args, **kwargs)
 
-        set_widget_enabled("manual_roi", True, persist=False)
         imgui.checkbox = spy
         try:
             errors = draw_frames(widget, 2)
         finally:
             imgui.checkbox = real
-            set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
         assert "trace on draw" in seen
 
@@ -3108,7 +3099,6 @@ class TestLabelButtons:
     @staticmethod
     def _draw(widget):
         from imgui_bundle import imgui
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
         seen, small = [], []
         real_button, real_small = imgui.button, imgui.small_button
@@ -3123,13 +3113,11 @@ class TestLabelButtons:
             )
             return real_small(label, *args, **kwargs)
 
-        set_widget_enabled("manual_roi", True, persist=False)
         imgui.button, imgui.small_button = button_spy, small_spy
         try:
             errors = draw_frames(widget, 3)
         finally:
             imgui.button, imgui.small_button = real_button, real_small
-            set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
         return seen, small
 
@@ -3491,7 +3479,6 @@ class TestColorBy:
 
     def test_the_view_card_draws_the_combos(self, widget):
         from imgui_bundle import imgui
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
         seen = []
         real = imgui.combo
@@ -3500,13 +3487,11 @@ class TestColorBy:
             seen.append(label)
             return real(label, *args, **kwargs)
 
-        set_widget_enabled("manual_roi", True, persist=False)
         imgui.combo = spy
         try:
             errors = draw_frames(widget, 2)
         finally:
             imgui.combo = real
-            set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
         assert "##color_by" in seen and "##color_cmap" in seen
 

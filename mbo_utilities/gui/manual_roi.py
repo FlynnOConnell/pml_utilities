@@ -167,7 +167,6 @@ from mbo_utilities.gui.roi_runs import (
     set_color,
 )
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
-from mbo_utilities.gui.widgets.widget_toggles import sub_enabled
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.results import unit_name
 from mbo_utilities.roi_workflow import (
@@ -3303,21 +3302,19 @@ class ManualRoiWidget:
         self.summary.draw()
 
     def draw_rois(self):
-        """The ROIs tab: the control sections, each gated by its Widgets-menu
-        subwidget toggle and laid out like the Process tab's ROIs pipeline
+        """The ROIs tab: the control sections, laid out like the Process tab's ROIs pipeline
         (a ``separator_text`` title over one two-column settings table: dim
         captions in a fixed column, controls in the stretch column, counts
         right-aligned), the status row, then the table (:meth:`draw_tab`).
         Narrower than ``MIN_TAB_WIDTH`` the tab collapses to its placeholder
         line.
         """
-        sections = [("NAVIGATE", self._draw_navigate)]
-        if sub_enabled("manual_roi", "tools"):
-            sections.append(("DRAW", self._draw_draw_tools))
-        if sub_enabled("manual_roi", "overlay"):
-            sections.append(("VIEW", self._draw_view))
-        if sub_enabled("manual_roi", "labels"):
-            sections.append(("LABELS", self._draw_labels))
+        sections = [
+            ("NAVIGATE", self._draw_navigate),
+            ("DRAW", self._draw_draw_tools),
+            ("VIEW", self._draw_view),
+            ("LABELS", self._draw_labels),
+        ]
         with fit_width("ROI tools", min_width=MIN_TAB_WIDTH) as shown:
             if not shown:
                 return

@@ -329,10 +329,6 @@ class MescTabWidget(Widget):
     """
 
     name = "MESc"
-    tab_label = "MESc"
-    placement = "tab"
-    toggle_key = "mesc"
-    priority = 5
 
     def __init__(self, parent: Any):
         super().__init__(parent)
