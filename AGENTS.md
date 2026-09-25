@@ -31,9 +31,9 @@ pml_utilities/
 │   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # Miller Brain Studio (imgui + fastplotlib)
-│   │   ├── app/              # what `mbo` opens: the host, the viewer and one app per feature (§17.1)
+│   │   ├── app/              # what `mbo` opens: the host, and in apps/ one App per feature (§17.1)
 │   │   ├── playhead.py       # one time in seconds shared by every view (§7.6)
-│   │   ├── widgets/          # the panels the apps draw (summary images, MESc units, ...)
+│   │   ├── widgets/          # the pipeline widgets and IsoView editors the apps draw
 │   │   ├── widgets/pipelines # Process tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
@@ -63,7 +63,7 @@ pml_utilities/
 | `metadata` | Canonical vocabulary, alias resolution, `OutputMetadata`, ScanImage parsing | Read pixels |
 | `writer` + `_writers` | `imwrite`; emit canonical values under each format's keys; `ops.npy`; provenance | Hand-roll alias fan-out; every emitted key comes from the registry or `OutputMetadata` |
 | `masknmf` `vnoiser` `roi_workflow` `hpc` | Run a pipeline from a settings dataclass; write suite2p-shaped outputs | Import `imgui_bundle`, `fastplotlib`, or `mbo_utilities.gui` |
-| `gui/app` | The host (open data, viewer, playhead, what is computed or typed about the data) and one `App` per feature, placed in a dock tab or a window | Keep an app's state on the host; name a format outside the app that draws it |
+| `gui/app` | The host (open data, viewer, playhead, what is computed or typed about the data) and one `App` per feature (`apps/`, or a package's `mbo_utilities.apps` entry point), placed in a dock tab or a window | Keep an app's state on the host; read anything but the host's contract; name a format outside the app that draws it |
 | `gui/widgets/pipelines` | Draw a pipeline's config; spawn its worker task | Compute inline; hold pipeline math |
 | `gui/tasks` + `gui/_worker` | Re-open the source in a subprocess and call the runner | Depend on GUI state; args are JSON |
 | `cli` | Thin click wrappers over `imread`/`imwrite`/runners | Hold logic unreachable from Python |
@@ -838,7 +838,7 @@ the other.
   slice at their own depth, peaking exactly at zero offset.
 - **The MESc table.** One row per recording: a scan's picture
   (`background_unit`) and RTMC reference unit (`rtmc_unit`) fold into its row
-  (`mesc_units.companions`). The `picture` cell is **one** button, naming the
+  (`apps.mesc.companions`). The `picture` cell is **one** button, naming the
   picture behind an `IMAGE_ICON`, and it opens the reference image; there is no
   second button and no popup, and the table has no Z-stack column, because
   everything about where a scan sits belongs next to the lines drawn on it.
@@ -914,7 +914,7 @@ the other.
   recording: the widget's `unit_key` (`manual_roi.unit_key`, the base array's)
   names the sidecars `manual_labels_<tag>.zarr`, `roi_runs_<tag>.json` and
   `rois_<tag>_<run>/` (`labels_path(fpath, tag)`, `registry_path`, `run_prefix`,
-  tag `MSession_0_MUnit_3`), and a unit switch (`MescTabWidget._install`) parks
+  tag `MSession_0_MUnit_3`), and a unit switch (`MescApp._install`) parks
   the outgoing widget's store and runs under its unit and rebuilds the widget for
   the incoming one, so the ROIs, runs and traces on screen are the shown
   recording's.
@@ -1630,22 +1630,38 @@ Four places already have the shape and are the template:
   bar; the host saves which apps are showing. The preview window and its tab
   bar, menu, popups, key handler and widget discovery are deleted.
 
-Where it still falls short (2026-09-23):
+  An app is one class: its state on the instance, `available(host)` for
+  whether the open data gives it anything, `draw_options` / `draw_canvas` to
+  draw, `data_changed` to start over and `close` to let go; `host` is set when
+  it is registered, for the helpers its draw methods call. Adding one is a
+  module in `gui/app/apps` listed in `apps.ported_apps()`, or, from another
+  package, an entry point under `mbo_utilities.apps` naming an `App` subclass
+  or a function returning apps (`apps.plugin_apps`, `tests/test_app_plugins.py`).
+  The Process tab (`apps/run.py`) is the model of an app over old widgets: it
+  keeps the pipeline widgets it built and the one selected, and `show(name)`
+  brings the tab up on a pipeline (`App.focus`), which the ROI widget uses.
+
+Where it still falls short (2026-09-25):
 
 - `WindowContext` (`app/_context.py`) is the preview window's surface, kept for
-  the widgets written against it: the pipelines, the manual ROI widget, the MESc
-  tab, the IsoView editors and the panel widgets read `parent.image_widget`,
-  `parent.fpath`, `parent._custom_metadata` and keep `_s2p_*` state on it. Moving
-  them to plain names deletes it.
-- Widgets sniff formats: the `mesc_units` tab, `tile_grid` and
-  `isoview_align_views` decide `is_supported(parent)` by unwrapping the array and
-  checking its class. A new format still writes an app in `gui/app/apps` to
-  appear anywhere.
+  the widgets written against it: the pipelines, the manual ROI widget, the
+  IsoView editors, BioHPC and the line-scan traces read `parent.image_widget`,
+  `parent.fpath`, `parent._custom_metadata` and keep the `_s2p_*` state on it.
+  The panels (projections, summary images, tile grid, align views), the MESc,
+  pollen, Run, BioHPC and Cloud apps read the host. Moving the rest to plain
+  names deletes it.
+- The IsoView editors (`widgets/isoview_crop.py`, `isoview_segment.py`,
+  `isoview_deadpixel.py`, 850 to 950 lines each, no tests) keep some 300
+  `_iso_*` reads and writes of their own state on the context; the biggest
+  remaining consumer, and the next to move onto its app.
+- Apps sniff formats: the MESc app, the tile grid and align views decide
+  `available(host)` by unwrapping the array and checking its class. A new
+  format still writes an app in `gui/app/apps` to appear anywhere.
 - Pipelines are hardcoded widget classes (§15) drawing their settings by hand
-  (`pipelines/voltage.py` 875 lines, `pipelines/isoview.py` 3303).
+  (`pipelines/voltage.py` 1329 lines, `pipelines/isoview.py` 3412).
 - Tables are written four times (MESc units, ROIs, Traces, runs), each with its own
   sort, hide and action code.
-- Two side apps rebuild the viewer: `linescan_viewer.py` (1729 lines) and the
+- Two side apps rebuild the viewer: `linescan_viewer.py` (2118 lines) and the
   curation dashboard.
 
 ### 17.2 Target shape
@@ -1702,15 +1718,16 @@ test; each one's rules move into §2 and §7 when it lands.
 
 1. **Session.** Landed as `AppHost`: per-dataset state is the host's and each
    app's, and `set_data` is the one open event (`tests/test_app_viewer.py`,
-   `tests/test_app_mesc.py`). Left: the widgets still take the `WindowContext`
-   as `parent` instead of the host.
+   `tests/test_app_mesc.py`). Left: the pipeline widgets, the ROI widget, the
+   IsoView editors and BioHPC still take the `WindowContext` as `parent`.
 2. **Facets.** `units`, `overlays`, `line_positions` on `MescArray`; `views`, `tiles`
    on `IsoviewArray`. The four format widgets become views gated on
    `session.array.units is not None`; `mesc_array_of` goes away. Pin: one test per
    facet on the synthetic files `tests/test_mesc_geometry.py` builds.
 3. **Table and Panel vocabulary.** `Table` model and one `TableView`; port the MESc
-   table first, then runs, ROIs, Traces. Discovery moves from the package scan to
-   registries: built-ins, readers' `contributions`, pipelines' infos. Pin: a Table
+   table first, then runs, ROIs, Traces. Discovery is a registry (`ported_apps`
+   and the `mbo_utilities.apps` entry-point group); readers' `contributions` and
+   pipelines' infos still join it. Pin: a Table
    model test plus one bare-context draw test (the `tests/test_mesc_tab.py` pattern).
 4. **Declarative pipelines.** Entry points as the only registration (§15).
    `PipelineInfo` carries `settings`, `trace_profile`, `axes_consumed`, `applies_to`;
@@ -1719,7 +1736,7 @@ test; each one's rules move into §2 and §7 when it lands.
    only through an entry point shows up with a runnable form.
 5. **Fold the side apps.** The line-scan viewer's snapshot, stack and reference
    panels and the curation dashboard become contributions on the standard viewer,
-   bound to the session's playhead; `viewers.get_viewer_class` (pollen) becomes one too.
+   bound to the session's playhead; the pollen viewer becomes one too.
 
 Rules to add to §2 when stage 1 lands: a `gui` module never names a format, it asks
 the session for a facet; state lives on the session, never on the host widget; a
@@ -1732,7 +1749,7 @@ class or a small tree (viewer, annotation, runs); how a contribution declares it
 imgui-only escape hatch; what a `Form` does with nested dataclasses and tri-state
 stage toggles; how the side apps' own sliders map onto the session's indices.
 
-Two cautions. Do not start in `manual_roi.py` (4390 lines) or `pipelines/isoview.py`;
+Two cautions. Do not start in `manual_roi.py` (4880 lines) or `pipelines/isoview.py`;
 stages 1 to 3 shrink them by subtraction. Keep the control vocabulary small: choice
 and table cover every format need seen so far, forms cover most pipeline settings,
 and anything else stays hand-written imgui behind a contribution rather than a new
