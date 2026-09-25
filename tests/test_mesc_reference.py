@@ -199,7 +199,7 @@ def test_trace_rows_on_a_line_scan_know_their_line(mesc_path):
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui.manual_roi import ManualRoiWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.app.apps.mesc import display_wrap
 
     arr = MescArray(mesc_path, unit=1)
     iw = MboNDViewer(
@@ -286,7 +286,7 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         ReferenceView,
         roi_slider,
     )
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.app.apps.mesc import display_wrap
 
     arr = MescArray(mesc_path, unit=1)
     iw = MboNDViewer(
@@ -298,7 +298,7 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
     strip = TopStrip(iw.figure)
     host = ViewerHost(iw)
     SHOWN.clear()
-    view = ReferenceView(host, on_show=record_show)
+    view = ReferenceView(iw, on_show=record_show)
     errors = []
 
     def guarded(*_args):

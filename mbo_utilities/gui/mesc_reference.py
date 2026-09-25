@@ -169,16 +169,16 @@ class ReferenceView:
     """
 
     def __init__(
-        self, parent, on_show: Callable[[str, int | None], None] | None = None
+        self, image_widget, on_show: Callable[[str, int | None], None] | None = None
     ):
-        self.parent = parent
+        self.image_widget = image_widget
         self.on_show = on_show
         self.images: dict[str, ReferenceImage] = {}
         self.unit = ""
         self.n_rois = 0
         self._built: tuple | None = None
         self.viewer = SummaryImageViewer(
-            parent.image_widget.figure,
+            image_widget.figure,
             title="Reference image",
             window_id="mesc_reference",
             roi_provider=self.contours,
@@ -195,7 +195,7 @@ class ReferenceView:
         """Show the popup for ``mesc``, on the picture its ROIs were drawn on;
         False when no image of the file carries them.
         """
-        iw = self.parent.image_widget
+        iw = self.image_widget
         cdim = find_slider_name(iw.dim_names, "c")
         c = int(iw.indices[cdim]) if cdim is not None else 0
         built = (str(mesc.filenames[0]), mesc.unit_key, c)
@@ -235,7 +235,7 @@ class ReferenceView:
         im = self.images.get(key)
         if im is None:
             return []
-        roi = current_roi(self.parent.image_widget)
+        roi = current_roi(self.image_widget)
         out, selected = [], []
         for r in im.records:
             rgb = (r["color"] or CLASS_COLORS[r["roi"] % len(CLASS_COLORS)])[:3]
@@ -276,7 +276,7 @@ class ReferenceView:
                 best, best_d = r, d
         if best is None:
             return None
-        iw = self.parent.image_widget
+        iw = self.image_widget
         zdim = roi_slider(iw.dim_names)
         if zdim is not None:
             iw.indices[zdim] = int(best["roi"])
@@ -303,7 +303,7 @@ class ReferenceView:
                 + ("" if im.slice is None else " The Z-plane slider opens there."),
                 show_mark=False,
             )
-        roi = current_roi(self.parent.image_widget)
+        roi = current_roi(self.image_widget)
         n = len(im.records)
         what = "patches" if im.records[0]["kind"] == "patch" else "lines"
         drawn = f"{n} {what}" if n == self.n_rois else f"{n} of {self.n_rois} {what}"

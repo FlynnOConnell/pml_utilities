@@ -49,7 +49,7 @@ def viewer(tmp_path):
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui.manual_roi import ManualRoiWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.app.apps.mesc import display_wrap
 
     arr = MescArray(
         write_mesc(tmp_path / "scan.mesc", munits=(35,), frames=40), unit="MUnit_35"
@@ -204,7 +204,7 @@ def patch_viewer(tmp_path):
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui.manual_roi import ManualRoiWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.app.apps.mesc import display_wrap
 
     arr = MescArray(write_chessboard_mesc(tmp_path / "chess.mesc"), unit="MUnit_9")
     iw = MboNDViewer(
