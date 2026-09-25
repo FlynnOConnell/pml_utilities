@@ -119,6 +119,7 @@ class AppHost:
             if app.id in self.apps:
                 raise ValueError(f"an app with id {app.id!r} is already registered")
             self.apps[app.id] = app
+            app.host = self
             if not app.owns_window:
                 app.open = self._showing.get(app.id, app.open)
             if app.window:

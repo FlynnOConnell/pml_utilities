@@ -26,7 +26,7 @@ from mbo_utilities.arrays.isoview.array import (
 )
 from mbo_utilities.gui import _isoview_orient_state as orient_state
 from mbo_utilities.gui._imgui_helpers import draw_toolbar_row
-from mbo_utilities.gui.widgets._base import Widget
+from mbo_utilities.gui.app._app import App
 from mbo_utilities.gui.widgets._orient import (
     apply_plan,
     compose_R,
@@ -35,7 +35,7 @@ from mbo_utilities.gui.widgets._orient import (
     orient_2d_plan,
     orientation_ops,
 )
-from mbo_utilities.gui.widgets.summary_image import (
+from mbo_utilities.gui.app.apps.summary_images import (
     _auto_range,
     _GpuImage,
     center_popup_on_open,
@@ -108,13 +108,23 @@ def _seed_for_view(cam: int, rotated: bool = False) -> dict:
     }
 
 
-class IsoviewAlignViews(Widget):
+class AlignViewsApp(App):
     """Overlay any reference + target view in the VW00 frame to align them."""
 
-    name = "Align views"
+    id = "align_views"
+    title = "Align Views"
+    dock = "left"
+    order = 43
+    size = 330
 
-    def __init__(self, parent: Any):
-        super().__init__(parent)
+    def __init__(self):
+        super().__init__()
+        self._reset()
+
+    def _reset(self) -> None:
+        """Start over for the open data."""
+        # whether the open data has two views to align; None until asked
+        self._supported: bool | None = None
         self._popup_open = False
         self._axis_idx = 0
         self._tile = 0
@@ -131,9 +141,14 @@ class IsoviewAlignViews(Widget):
         self._rgba_cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
         self._gpu_cache: OrderedDict[tuple, _GpuImage] = OrderedDict()
 
-    @classmethod
-    def is_supported(cls, parent: Any) -> bool:
-        return cls._find(parent) is not None
+    def available(self, host) -> bool:
+        if self._supported is None:
+            self._supported = self._active_array() is not None
+        return self._supported
+
+    def data_changed(self, host) -> None:
+        self.close()
+        self._reset()
 
     @staticmethod
     def _views(arr) -> list[dict]:
@@ -172,26 +187,19 @@ class IsoviewAlignViews(Widget):
         out.sort(key=lambda v: v["cam"])
         return out
 
-    @classmethod
-    def _find(cls, parent: Any):
-        for raw in parent._get_data_arrays():
-            arr = _unwrap(raw)
-            if str(getattr(arr, "kind", "") or "").lower() not in (
-                "raw",
-                "corrected",
-                "fused",
-            ):
-                continue
-            if len(cls._views(arr)) >= 2:
-                return arr
-        return None
-
     def _active_array(self):
-        return self._find(self.parent)
+        arr = _unwrap(self.host.data)
+        if str(getattr(arr, "kind", "") or "").lower() not in (
+            "raw",
+            "corrected",
+            "fused",
+        ):
+            return None
+        return arr if len(self._views(arr)) >= 2 else None
 
     def _backend(self):
         try:
-            return self.parent._figure.imgui_renderer.backend
+            return self.host.figure.imgui_renderer.backend
         except AttributeError:
             return None
 
@@ -376,7 +384,7 @@ class IsoviewAlignViews(Widget):
             self._gpu_cache.move_to_end(key)
         return gpu
 
-    def draw(self) -> None:
+    def draw_canvas(self, host, size: imgui.ImVec2) -> None:
         arr = self._active_array()
         if arr is None or not self._ensure(arr):
             return
@@ -515,5 +523,5 @@ class IsoviewAlignViews(Widget):
             imgui.end_child()
         imgui.end()
 
-    def cleanup(self) -> None:
+    def close(self) -> None:
         self._reset_caches()

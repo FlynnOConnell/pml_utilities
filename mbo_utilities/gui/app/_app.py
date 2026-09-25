@@ -32,7 +32,9 @@ class App:
     host grants it, so the same app can own part of the scene as well.
 
     Every attribute an app needs lives on the instance. The host holds the
-    ``open`` flag and the shared position, and nothing else about the app.
+    ``open`` flag and the shared position, and nothing else about the app;
+    ``host`` is set when the app is registered, for the helpers its draw
+    methods call.
     """
 
     id: ClassVar[str] = ""
@@ -65,6 +67,7 @@ class App:
     def __init__(self):
         self.open = self.start_open
         self.mounted: Subplot | None = None
+        self.host: AppHost | None = None
 
     def available(self, host: AppHost) -> bool:
         """Whether this app can do anything with what the host has open."""

@@ -301,7 +301,7 @@ def _get_or_upload(parent: Any, view: int, timepoint: int) -> Any | None:
     backend = _get_backend(parent)
     if backend is None:
         return None
-    from mbo_utilities.gui.widgets.summary_image import _GpuImage
+    from mbo_utilities.gui.app.apps.summary_images import _GpuImage
 
     try:
         gpu = _GpuImage(

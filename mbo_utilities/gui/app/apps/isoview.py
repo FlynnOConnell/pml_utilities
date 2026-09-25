@@ -77,4 +77,8 @@ class IsoviewProjectionsJob(App):
 
     def frame(self, host) -> None:
         maybe_spawn_raw_projections(host.context)
-        maybe_refresh_raw_projections(host.context)
+        if maybe_refresh_raw_projections(host.context):
+            # the panels that read projection files rebuild to see the new ones
+            for name in ("projections", "align_views"):
+                if name in host.apps:
+                    host.apps[name].data_changed(host)

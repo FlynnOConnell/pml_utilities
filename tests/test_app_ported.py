@@ -46,7 +46,7 @@ def test_every_ported_app_declares_where_it_is_drawn():
     assert placeless == {"curate", "isoview_projections"}
 
 
-def test_a_panel_widget_follows_its_own_is_supported(host):
+def test_a_panel_is_available_for_the_data_it_reads(host):
     assert host.apps["summary_images"].available(host) is True
     assert host.apps["projections"].available(host) is False
     assert host.apps["tile_grid"].available(host) is False
@@ -56,7 +56,7 @@ def test_an_available_panel_claims_the_edge_it_asked_for(host):
     host.apps["summary_images"].open = True
     host.figure.canvas.force_draw()
     assert host.figure.imgui_windows["left"] is host.docks["left"]
-    assert host.apps["summary_images"].widget is not None
+    assert host.apps["summary_images"]._cmap_synced_with_fpl is True
 
     host.apps["summary_images"].open = False
     host.figure.canvas.force_draw()

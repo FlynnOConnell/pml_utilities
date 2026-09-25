@@ -1,5 +1,5 @@
 """
-SummaryImageViewer - browse 2D summary images stored in ops.npy.
+The Summary Images app: browse 2D summary images stored in ops.npy.
 
 Activates whenever a loaded array's metadata contains image-like 2D
 ndarrays (typical case: BinArray that auto-loaded a sibling ops.npy).
@@ -23,7 +23,7 @@ from imgui_bundle import hello_imgui, imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities.gui._imgui_helpers import set_tooltip
-from mbo_utilities.gui.widgets._base import Widget
+from mbo_utilities.gui.app._app import App
 
 SIDE_PANEL_SECTION_COLOR = imgui.ImVec4(0.8, 0.8, 0.2, 1.0)
 STATUS_OK_COLOR = imgui.ImVec4(0.3, 1.0, 0.3, 1.0)
@@ -282,13 +282,23 @@ def _load_rois(stat_dir: Path) -> tuple[list[np.ndarray], np.ndarray | None] | N
     return polygons, iscell
 
 
-class SummaryImageViewer(Widget):
+class SummaryImagesApp(App):
     """Browse 2D summary images stored in an array's metadata."""
 
-    name = "Summary Images"
+    id = "summary_images"
+    title = "Summary Images"
+    dock = "left"
+    order = 41
+    size = 330
 
-    def __init__(self, parent: Any):
-        super().__init__(parent)
+    def __init__(self):
+        super().__init__()
+        self._reset()
+
+    def _reset(self) -> None:
+        """Start over for the open data."""
+        # whether the open data carries summary images; None until asked
+        self._supported: bool | None = None
         self._selected: int = 0
         self._popup_open: bool = False
         self._cmaps: list[str] = list(_DEFAULT_COLORMAPS)
@@ -312,44 +322,40 @@ class SummaryImageViewer(Widget):
         self._save_dialog: Any = None
         self._last_save_msg: str = ""
 
-    @classmethod
-    def is_supported(cls, parent: Any) -> bool:
-        return any(
-            _collect_keys(getattr(arr, "metadata", None) or {})
-            for arr in parent._get_data_arrays()
-        )
+    def available(self, host) -> bool:
+        if self._supported is None:
+            self._supported = self._active_array() is not None
+        return self._supported
+
+    def data_changed(self, host) -> None:
+        self.close()
+        self._reset()
 
     def _backend(self):
         try:
-            return self.parent._figure.imgui_renderer.backend
+            return self.host.figure.imgui_renderer.backend
         except AttributeError:
             return None
 
     def _active_array(self):
-        return next(
-            (
-                arr
-                for arr in self.parent._get_data_arrays()
-                if _collect_keys(getattr(arr, "metadata", None) or {})
-            ),
-            None,
-        )
+        arr = self.host.data
+        return arr if _collect_keys(getattr(arr, "metadata", None) or {}) else None
 
     def _active_metadata(self) -> dict:
         arr = self._active_array()
         return (getattr(arr, "metadata", None) or {}) if arr is not None else {}
 
     def _sync_cmap_with_fpl(self) -> None:
-        """Adopt the parent ImageWidget's colormap as our default once.
+        """Adopt the viewer's colormap as our default once.
 
-        Done on first draw rather than __init__ so the parent's image_widget
-        is reliably attached. If fpl is using a colormap we don't carry by
+        Done on first draw rather than __init__ so the viewer is reliably
+        attached. If fpl is using a colormap we don't carry by
         default (any cmap string), prepend it so the user's choice stays
         available in the selector.
         """
         if self._cmap_synced_with_fpl:
             return
-        iw = getattr(self.parent, "image_widget", None)
+        iw = self.host.viewer
         if iw is None:
             return
         try:
@@ -431,7 +437,7 @@ class SummaryImageViewer(Widget):
             self._roi_cache[data_dir] = _load_rois(data_dir)
         return self._roi_cache[data_dir]
 
-    def draw(self) -> None:
+    def draw_canvas(self, host, size: imgui.ImVec2) -> None:
         md = self._active_metadata()
         keys = _collect_keys(md)
         if not keys:
@@ -845,7 +851,7 @@ class SummaryImageViewer(Widget):
 
         imgui.end()
 
-    def cleanup(self) -> None:
+    def close(self) -> None:
         for gpu in self._gpu.values():
             gpu.destroy()
         self._gpu.clear()
