@@ -2779,8 +2779,9 @@ class ManualRoiWidget:
     def _pipeline_summary(self, kind: str) -> tuple[str, str]:
         """``(label, tooltip)`` for what a run of ``kind`` would use."""
         if kind == "masknmf":
-            instances = getattr(self.host, "_pipeline_instances", None) or {}
-            settings = getattr(instances.get("MaskNMF"), "settings", None)
+            run = getattr(self.host, "run", None)
+            built = run.pipelines.get("MaskNMF") if run is not None else None
+            settings = getattr(built, "settings", None)
             if settings is None:
                 return "masknmf: defaults", (
                     "The Process tab has not built masknmf yet, so this runs on "
@@ -2834,10 +2835,7 @@ class ManualRoiWidget:
         if self.host is None:
             self.status = "no Process tab to open"
             return
-        self.host._selected_pipeline_name = (
-            "MaskNMF" if kind == "masknmf" else "Suite2p"
-        )
-        self.host._force_run_tab = True
+        self.host.run.show("MaskNMF" if kind == "masknmf" else "Suite2p")
         self.status = f"{kind} parameters are in the Process tab"
 
     @property

@@ -14,7 +14,6 @@ from mbo_utilities.gui._dialogs import (
 from mbo_utilities.gui._save_as import SaveAs
 from mbo_utilities.gui.app.apps.viewer import PROJECTIONS
 from mbo_utilities.gui.manual_roi import detach_roi_widget
-from mbo_utilities.gui.widgets.pipelines import cleanup_pipelines
 from mbo_utilities.gui.widgets.pipelines._base import Suite2pState
 from mbo_utilities.preferences import get_last_dir
 
@@ -30,8 +29,7 @@ class WindowContext(Suite2pState):
     The pipeline widgets, the manual ROI widget and the panel widgets were
     written against the preview window, so they read the open data through
     its attribute names (``image_widget``, ``fpath``, ``_custom_metadata``,
-    ``nz``, ...) and keep state on it (the ``_s2p_*`` fields, the axial
-    registration settings, the Run tab's pipeline instances, the parked ROI
+    ``nz``, ...) and keep state on it (the ``_s2p_*`` fields, the parked ROI
     store). This class is that surface in one place: every window value is
     read off the host when asked, and the widget state starts where the
     preview window started it and starts over with each dataset. When the
@@ -52,7 +50,6 @@ class WindowContext(Suite2pState):
         self._manual_roi_runs = None
         # a line scan's per-line traces while the ROI widget is on
         self.linescan_traces = None
-        self._force_run_tab = False
         self._selected_planes = None
         self.reset()
 
@@ -63,8 +60,6 @@ class WindowContext(Suite2pState):
             get_last_dir("suite2p_output") or ""
         )
         self._s2p_outdir = suite2p_output_dir(self.fpath) or self._s2p_outdir
-        # applies_to is asked again for the new array
-        self._pipeline_applies_cache = None
         if self.fpath:
             _try_hydrate_s2p_from_binary(self, self.fpath)
 
@@ -73,7 +68,6 @@ class WindowContext(Suite2pState):
         if self.linescan_traces is not None:
             self.linescan_traces.close()
             self.linescan_traces = None
-        cleanup_pipelines(self)
         detach_roi_widget(self)
 
     def sync_manual_roi(self, enabled: bool) -> None:
@@ -91,6 +85,11 @@ class WindowContext(Suite2pState):
         if app is None or not app.available(self.host):
             return None
         return app.open_reference
+
+    @property
+    def run(self):
+        """The Process tab: the pipeline widgets it built and the one selected."""
+        return self.host.apps["run"]
 
     @property
     def image_widget(self):

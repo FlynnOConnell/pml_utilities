@@ -2638,16 +2638,29 @@ class _StubSettings:
         return dict(self._payload)
 
 
+class _StubRun:
+    """The Process tab: the pipelines it built, and the one it is asked to show."""
+
+    def __init__(self, pipelines):
+        self.pipelines = pipelines
+        self.selected = None
+        self.focus = False
+
+    def show(self, name):
+        self.selected = name
+        self.focus = True
+
+
 class _StubHost:
-    """The PreviewDataWidget bits the ROI card reads for pipeline params."""
+    """The host bits the ROI card reads for pipeline params."""
 
     frame_average = 1
 
     def __init__(self, s2p=None, masknmf=None):
         if s2p is not None:
             self.s2p = s2p
-        if masknmf is not None:
-            self._pipeline_instances = {"MaskNMF": _StubSettings({}, settings=masknmf)}
+        built = {} if masknmf is None else {"MaskNMF": _StubSettings({}, settings=masknmf)}
+        self.run = _StubRun(built)
 
 
 class TestPipelineParams:
@@ -2681,13 +2694,13 @@ class TestPipelineParams:
     def test_params_button_jumps_to_the_run_tab(self, widget):
         widget.host = _StubHost()
         widget.open_pipeline_params("masknmf")
-        assert widget.host._selected_pipeline_name == "MaskNMF"
-        assert widget.host._force_run_tab is True
+        assert widget.host.run.selected == "MaskNMF"
+        assert widget.host.run.focus is True
 
-        widget.host._force_run_tab = False
+        widget.host.run.focus = False
         widget.open_pipeline_params("suite2p")
-        assert widget.host._selected_pipeline_name == "Suite2p"
-        assert widget.host._force_run_tab is True
+        assert widget.host.run.selected == "Suite2p"
+        assert widget.host.run.focus is True
 
     def test_summary_says_defaults_until_the_run_tab_builds_it(self, widget):
         label, detail = widget._pipeline_summary("masknmf")

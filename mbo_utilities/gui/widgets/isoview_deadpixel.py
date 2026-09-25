@@ -359,8 +359,7 @@ def _get_iso_array(parent: Any) -> Any | None:
 
 
 def _get_iso_widget(parent: Any) -> Any | None:
-    instances = getattr(parent, "_pipeline_instances", None) or {}
-    return instances.get("Isoview")
+    return parent.run.pipelines.get("Isoview")
 
 
 def _get_backend(parent: Any) -> Any | None:

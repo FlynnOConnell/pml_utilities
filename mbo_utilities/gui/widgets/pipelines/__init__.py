@@ -7,12 +7,8 @@ run on imaging data. each pipeline has config and results views.
 imports are done in a background thread to avoid blocking the GUI.
 """
 
-import contextlib
 import threading
 import time
-from typing import Any
-
-from imgui_bundle import imgui
 
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 
@@ -182,23 +178,13 @@ def get_trace_extractors() -> list[type[PipelineWidget]]:
     """
     _register_pipelines()
     return [
-        p for p in _PIPELINE_CLASSES if p.extracts_traces and _is_pipeline_available(p)
+        p for p in _PIPELINE_CLASSES if p.extracts_traces and pipeline_installed(p)
     ]
 
 
-def _active_array(parent: Any) -> Any:
-    """Return the currently-loaded array (or ``None``).
-
-    Used to filter pipelines via :meth:`PipelineWidget.applies_to`.
-    """
-    iw = getattr(parent, "image_widget", None)
-    if iw is None or not iw.data:
-        return None
-    return iw.data[0]
-
-
-def _is_pipeline_available(cls: type) -> bool:
-    """Resolve ``is_available`` whether it's a class attr or a property.
+def pipeline_installed(cls: type) -> bool:
+    """Whether ``cls``'s dependencies are installed: its ``is_available``,
+    a class attr or a property.
 
     Suite2p declares ``is_available`` as a ``@property`` (instance-bound),
     so reading it off the class returns the descriptor (truthy) and not
@@ -220,147 +206,6 @@ def _is_pipeline_available(cls: type) -> bool:
     cls._is_available_cached = result  # type: ignore[attr-defined]
     return result
 
-
-def draw_run_tab(parent: Any) -> None:
-    """Draw the run tab content.
-
-    Renders a pipeline selector at the top (when more than one
-    applicable pipeline is available), then the selected widget's
-    config UI. Pipelines are filtered by ``is_available`` (deps
-    installed) AND ``applies_to(active_array)`` (data type matches).
-    """
-    _register_pipelines()
-
-    # Persist selection by pipeline NAME, not list index — the list of
-    # applicable pipelines changes between datasets, and an int index
-    # silently shifts to a different pipeline when the list shrinks.
-    if not hasattr(parent, "_selected_pipeline_name"):
-        parent._selected_pipeline_name = None
-    if not hasattr(parent, "_pipeline_instances"):
-        parent._pipeline_instances = {}
-
-    arr = _active_array(parent)
-    # applies_to can open the source file; evaluate once per array, not per frame
-    cache = getattr(parent, "_pipeline_applies_cache", None)
-    if cache is None or cache[0] is not arr:
-        applies_by_cls = {}
-        for cls in _PIPELINE_CLASSES:
-            try:
-                applies_by_cls[cls] = bool(cls.applies_to(arr))
-            except Exception:
-                applies_by_cls[cls] = False
-        cache = (arr, applies_by_cls)
-        parent._pipeline_applies_cache = cache
-    applies_by_cls = cache[1]
-
-    if not _PIPELINE_CLASSES:
-        imgui.text_colored(
-            imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
-            "No pipelines registered.",
-        )
-        imgui.text("Install a pipeline package:")
-        imgui.text_colored(
-            imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
-            "uv pip install mbo_utilities",
-        )
-        return
-
-    # partition: applicable to current data (and installed) vs. not.
-    applicable: list[type[PipelineWidget]] = []
-    not_applicable: list[type[PipelineWidget]] = []
-    not_installed: list[type[PipelineWidget]] = []
-    for cls in _PIPELINE_CLASSES:
-        installed = _is_pipeline_available(cls)
-        applies = applies_by_cls.get(cls, False)
-        if installed and applies:
-            applicable.append(cls)
-        elif not installed:
-            not_installed.append(cls)
-        else:
-            not_applicable.append(cls)
-
-    # Isoview before Suite2p in the selector when both apply (Suite2p
-    # applies to any array, so it would otherwise lead by registration
-    # order). Stable: only Isoview is hoisted; the rest keep their order.
-    applicable.sort(key=lambda c: 0 if c.name == "Isoview" else 1)
-
-    # selector lists EVERY registered pipeline — runnable ones first,
-    # then installed-but-not-applicable, then not-installed. Selecting a
-    # non-runnable entry explains why instead of drawing a config UI.
-    entries: list[tuple[type[PipelineWidget], str, str]] = []
-    for cls in applicable:
-        entries.append((cls, cls.name, "ok"))
-    for cls in not_applicable:
-        entries.append((cls, f"{cls.name} (not applicable)", "na"))
-    for cls in not_installed:
-        entries.append((cls, f"{cls.name} (not installed)", "missing"))
-
-    if not entries:
-        imgui.text_colored(
-            imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
-            "No pipelines registered.",
-        )
-        return
-
-    # Resolve persisted name → index each frame so a user's choice
-    # survives switching between datasets where the runnable set changes.
-    idx = 0
-    for i, (cls, _label, _state) in enumerate(entries):
-        if cls.name == parent._selected_pipeline_name:
-            idx = i
-            break
-    if len(entries) > 1:
-        labels = [e[1] for e in entries]
-        imgui.set_next_item_width(220)
-        changed, new_idx = imgui.combo("Pipeline##run_tab", idx, labels)
-        if changed:
-            idx = new_idx
-        imgui.separator()
-    pipeline_cls, _label, state = entries[idx]
-    parent._selected_pipeline_name = pipeline_cls.name
-
-    if state == "missing":
-        imgui.text(f"{pipeline_cls.name} is not installed.")
-        imgui.text_colored(
-            imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
-            pipeline_cls.install_command,
-        )
-        return
-    if state == "na":
-        imgui.text_colored(
-            imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
-            f"{pipeline_cls.name} does not apply to the loaded data.",
-        )
-        return
-
-    pipeline_key = pipeline_cls.name
-    if pipeline_key not in parent._pipeline_instances:
-        parent._pipeline_instances[pipeline_key] = pipeline_cls(parent)
-    pipeline = parent._pipeline_instances[pipeline_key]
-
-    try:
-        pipeline.draw()
-    except Exception as e:
-        imgui.text_colored(
-            imgui.ImVec4(1.0, 0.3, 0.3, 1.0),
-            f"Error: {e}",
-        )
-
-
-def cleanup_pipelines(parent: Any) -> None:
-    """Clean up all pipeline instances when gui is closing.
-
-    calls cleanup() on each pipeline to release resources like
-    open windows, background threads, etc.
-    """
-    if not hasattr(parent, "_pipeline_instances"):
-        return
-
-    for pipeline in parent._pipeline_instances.values():
-        with contextlib.suppress(Exception):
-            pipeline.cleanup()
-
-    parent._pipeline_instances.clear()
 
 
 # lazy imports for settings - use __getattr__ for module-level lazy loading
@@ -392,13 +237,12 @@ __all__ = [
     "Suite2pDB",
     "MboSuite2pExtras",
     "any_pipeline_available",
-    "cleanup_pipelines",
-    "draw_run_tab",
     "draw_section_suite2p",
     "draw_suite2p_settings_panel",
     "get_available_pipelines",
     "get_pipeline_names",
     "get_trace_extractors",
     "is_ready",
+    "pipeline_installed",
     "start_preload",
 ]

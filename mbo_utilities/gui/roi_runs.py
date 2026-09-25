@@ -819,8 +819,9 @@ def masknmf_settings(host) -> dict | None:
     """The masknmf settings the Run tab is holding, or None when it has not
     built that pipeline yet.
     """
-    instances = getattr(host, "_pipeline_instances", None) or {}
-    settings = getattr(instances.get("MaskNMF"), "settings", None)
+    run = getattr(host, "run", None)
+    built = run.pipelines.get("MaskNMF") if run is not None else None
+    settings = getattr(built, "settings", None)
     if settings is None:
         return None
     try:
