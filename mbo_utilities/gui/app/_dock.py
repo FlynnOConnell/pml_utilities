@@ -56,13 +56,18 @@ class Dock(ImguiWindow):
         if not apps:
             return
         if len(apps) == 1:
+            apps[0].focus = False
             self._body(apps[0])
             return
         if imgui.begin_tab_bar(f"##dock_{self.edge}"):
             for app in apps:
-                if imgui.begin_tab_item(
-                    f"{app.title}###{app.id}", None, imgui.TabItemFlags_.none
-                )[0]:
+                flags = (
+                    imgui.TabItemFlags_.set_selected
+                    if app.focus
+                    else imgui.TabItemFlags_.none
+                )
+                app.focus = False
+                if imgui.begin_tab_item(f"{app.title}###{app.id}", None, flags)[0]:
                     self._body(app)
                     imgui.end_tab_item()
             imgui.end_tab_bar()

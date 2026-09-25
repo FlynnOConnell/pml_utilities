@@ -647,16 +647,23 @@ class _Settings:
         return dict(self._payload)
 
 
+class _Run:
+    """The Process tab's built pipelines."""
+
+    def __init__(self, pipelines):
+        self.pipelines = pipelines
+
+
 class _Host:
-    """Stand-in for the PreviewDataWidget that owns the Process tab's settings."""
+    """Stand-in for the host that owns the Process tab's settings."""
 
     def __init__(self, s2p=None, s2p_db=None, masknmf=None):
         if s2p is not None:
             self.s2p = s2p
         if s2p_db is not None:
             self.s2p_db = s2p_db
-        if masknmf is not None:
-            self._pipeline_instances = {"MaskNMF": _Settings({}, settings=masknmf)}
+        built = {} if masknmf is None else {"MaskNMF": _Settings({}, settings=masknmf)}
+        self.run = _Run(built)
 
 
 def test_full_plane_args_uses_the_run_tabs_suite2p_settings(tmp_path):

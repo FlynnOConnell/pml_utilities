@@ -68,6 +68,8 @@ class App:
         self.open = self.start_open
         self.mounted: Subplot | None = None
         self.host: AppHost | None = None
+        # select this app's tab on the next frame; the dock clears it
+        self.focus = False
 
     def available(self, host: AppHost) -> bool:
         """Whether this app can do anything with what the host has open."""
