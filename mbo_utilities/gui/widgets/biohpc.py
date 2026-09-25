@@ -36,7 +36,7 @@ from imgui_bundle import (
 
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 
-__all__ = ["draw_biohpc_tab"]
+__all__ = ["BioHpcPanel"]
 
 # demo credentials for the proof of concept. real auth never belongs in
 # source — this gate only unlocks a local, simulated workflow.
@@ -303,8 +303,12 @@ class _Job:
         return lines
 
 
-class _BioHpcPanel:
-    """Per-parent controller: login, transfer, metadata, analysis, jobs."""
+class BioHpcPanel:
+    """The BioHPC workbench: login, transfer, metadata, analysis, jobs.
+
+    Built on the host's context and kept by the BioHPC app, so its session
+    survives the window closing.
+    """
 
     def __init__(self, parent: Any):
         self.parent = parent
@@ -1096,19 +1100,9 @@ class _BioHpcPanel:
         }.get(status, (_COL_DIM, "ICON_FA_CIRCLE"))
         imgui.text_colored(color, f"{_icon(glyph)}  {status}")
 
-
-def _panel(parent: Any) -> _BioHpcPanel:
-    panel = getattr(parent, "_biohpc_panel", None)
-    if panel is None:
-        panel = _BioHpcPanel(parent)
-        parent._biohpc_panel = panel
-    return panel
-
-
-def draw_biohpc_tab(parent: Any) -> None:
-    """Render the BioHPC login gate, or the Lab4 workbench once signed in."""
-    panel = _panel(parent)
-    if panel.authenticated:
-        panel.draw_authenticated()
-    else:
-        panel.draw_login()
+    def draw(self) -> None:
+        """The login gate, or the Lab4 workbench once signed in."""
+        if self.authenticated:
+            self.draw_authenticated()
+        else:
+            self.draw_login()
