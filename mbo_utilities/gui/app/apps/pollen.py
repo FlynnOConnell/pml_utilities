@@ -28,7 +28,7 @@ class PollenApp(App):
 
     def available(self, host) -> bool:
         return (
-            host.context is not None
+            host.data is not None
             and getattr(base_array(host.data), "stack_type", None) == "pollen"
         )
 
@@ -37,9 +37,7 @@ class PollenApp(App):
 
     def draw_canvas(self, host, size: imgui.ImVec2) -> None:
         if self.viewer is None:
-            self.viewer = PollenCalibrationViewer(
-                host.viewer, host.context.fpath, parent=host.context
-            )
+            self.viewer = PollenCalibrationViewer(host.viewer, host.data.source_path)
         self.viewer.draw()
 
     def close(self) -> None:

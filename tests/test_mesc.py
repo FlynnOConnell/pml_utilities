@@ -805,7 +805,7 @@ class TestViewerFit:
 
     @pytest.mark.parametrize("unit", [0, 2, 3, 4, 5, 6])
     def test_every_unit_reports_one_label_per_scrollable_axis(self, mesc_path, unit):
-        from mbo_utilities.gui.widgets.mesc_units import display_wrap
+        from mbo_utilities.gui.app.apps.mesc import display_wrap
 
         arr = MescArray(mesc_path, unit=unit)
         assert arr.roi is None
@@ -824,7 +824,7 @@ class TestViewerFit:
         )
 
     def test_mesc_array_is_found_through_the_display_wrappers(self, mesc_path):
-        from mbo_utilities.gui.widgets.mesc_units import display_wrap, mesc_array_of
+        from mbo_utilities.gui.app.apps.mesc import display_wrap, mesc_array_of
 
         arr = MescArray(mesc_path, unit=1)
         assert mesc_array_of(display_wrap(arr)) is arr

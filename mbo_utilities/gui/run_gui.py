@@ -910,7 +910,7 @@ def _resolve_mesc_unit(data_in, unit):
     Every ``.mesc`` opens straight to its first measurement unit, no prompt.
     A file with more than one MUnit (unrelated scans the operator ran back
     to back) is switched between from the MESc tab
-    (``mbo_utilities.gui.widgets.mesc_units.MescTabWidget``), an ImGui
+    (``mbo_utilities.gui.app.apps.mesc.MescApp``), an ImGui
     widget like the rest of the viewer — no Qt involved anywhere in this
     path. An explicit ``unit`` is the deliberate bypass.
 

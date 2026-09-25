@@ -16,7 +16,6 @@ The GUI is organized into these components:
 """
 
 __all__ = [
-    "BaseViewer",
     "GridSearchViewer",
     # Entry points
     "DataVis",
@@ -53,10 +52,5 @@ def __getattr__(name):
         from ._setup import get_default_ini_path
 
         return get_default_ini_path
-
-    if name == "BaseViewer":
-        from .viewers import BaseViewer
-
-        return BaseViewer
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

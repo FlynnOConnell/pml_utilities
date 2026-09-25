@@ -274,7 +274,7 @@ def test_the_process_tab_draws_its_pipelines(host):
     assert (context.nz, context.nc, context.frame_average) == (1, 1, 1)
     host.set_data(average_frames(host.data, 2))
     assert context.frame_average == 2
-    assert context._s2p_frame_average == 2
+    assert context._masknmf_frame_average == 2
 
 
 def test_showing_rois_turns_labeling_on_and_hiding_parks_them(host):

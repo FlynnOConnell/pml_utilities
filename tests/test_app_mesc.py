@@ -50,7 +50,7 @@ def host(mesc_path):
 
 
 def unit(host, key: str) -> dict:
-    tab = host.apps["mesc"].tab
+    tab = host.apps["mesc"]
     return next(u for u in tab._mesc.units if u["key"].endswith(key))
 
 
@@ -58,7 +58,7 @@ def test_the_mesc_tab_draws_first_for_a_mesc_file(host):
     _app._reported.discard("mesc")
     host.figure.canvas.force_draw()
     assert host.apps["mesc"].available(host)
-    assert host.apps["mesc"].tab is not None
+    assert host.apps["mesc"]._hooked
     assert "mesc" not in _app._reported
     right = [app.id for app in host.ordered() if app.dock == "right"]
     assert right.index("mesc") < right.index("viewer")
@@ -68,7 +68,7 @@ def test_a_row_opens_its_unit_into_the_host(host):
     host.figure.canvas.force_draw()
     before = host.data.unit_key
     target = "MUnit_1" if before.endswith("MUnit_0") else "MUnit_0"
-    host.apps["mesc"].tab._switch(unit(host, target))
+    host.apps["mesc"]._switch(unit(host, target))
     host.figure.canvas.force_draw()
     assert host.data.unit_key.endswith(target)
     assert host.viewer.data[0].shape[0] == host.data.shape[0]
@@ -88,11 +88,11 @@ def test_each_unit_keeps_its_own_rois(host):
     assert widget.run_prefix == f"rois_{tag}_"
 
     other = "MUnit_1" if first.endswith("MUnit_0") else "MUnit_0"
-    host.apps["mesc"].tab._switch(unit(host, other))
+    host.apps["mesc"]._switch(unit(host, other))
     host.figure.canvas.force_draw()
     assert host.context.manual_roi.store is not store
 
-    host.apps["mesc"].tab._switch(unit(host, first.rsplit("/", 1)[-1]))
+    host.apps["mesc"]._switch(unit(host, first.rsplit("/", 1)[-1]))
     host.figure.canvas.force_draw()
     assert host.context.manual_roi.store is store
     rois.open = False
@@ -121,17 +121,17 @@ def test_the_reference_buttons_unit_opens_at_its_slice(stack_mesc_path):
     try:
         host.figure.show()
         host.figure.canvas.force_draw()
-        tab = host.apps["mesc"].tab
+        tab = host.apps["mesc"]
         tab._show_reference_unit(stack["key"], 3)
         assert tab._pending is not None
-        tab._frame()
+        tab._strip_hook()
         assert tab._pending is None
         assert host.data.unit_key == stack["key"]
         assert int(host.viewer.indices[roi_slider(host.viewer.dim_names)]) == 3
 
         tab._switch(scan)
         tab._show_reference_unit(stack["key"], None)
-        tab._frame()
+        tab._strip_hook()
         assert int(host.viewer.indices[roi_slider(host.viewer.dim_names)]) == 0
     finally:
         host.close()

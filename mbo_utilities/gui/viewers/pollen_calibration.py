@@ -17,6 +17,7 @@ import numpy as np
 from imgui_bundle import imgui, implot
 from scipy.ndimage import uniform_filter1d
 
+from mbo_utilities import log
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.metadata import get_param
 from mbo_utilities.metadata.scanimage import (
@@ -24,12 +25,12 @@ from mbo_utilities.metadata.scanimage import (
     get_z_step_size,
 )
 
-from . import BaseViewer
-
 if TYPE_CHECKING:
     from fastplotlib.widgets import ImageWidget
 
 __all__ = ["PollenCalibrationViewer"]
+
+logger = log.get("gui.viewers.pollen")
 
 
 def get_cavity_indices(metadata: dict, nc: int) -> dict:
@@ -76,7 +77,7 @@ def get_cavity_indices(metadata: dict, nc: int) -> dict:
     return result
 
 
-class PollenCalibrationViewer(BaseViewer):
+class PollenCalibrationViewer:
     """
     Viewer for pollen calibration data (ZCYX).
 
@@ -123,14 +124,9 @@ class PollenCalibrationViewer(BaseViewer):
         29,
     ]
 
-    def __init__(
-        self,
-        image_widget: ImageWidget,
-        fpath: str | list[str],
-        parent=None,
-        **kwargs,
-    ):
-        super().__init__(image_widget, fpath, parent=parent, **kwargs)
+    def __init__(self, image_widget: ImageWidget, fpath: str | list[str]):
+        self.image_widget = image_widget
+        self.fpath = fpath
 
         # Pollen-specific state
         self._z_step_um = 1.0
@@ -185,18 +181,7 @@ class PollenCalibrationViewer(BaseViewer):
     @property
     def data(self):
         """Access the loaded data arrays."""
-        if self.parent is not None:
-            return self.parent.image_widget.data if self.parent.image_widget else None
         return self.image_widget.data if self.image_widget else None
-
-    @property
-    def logger(self):
-        """Access the GUI logger."""
-        if self.parent is not None:
-            return self.parent.logger
-        import logging
-
-        return logging.getLogger("mbo_utilities")
 
     def _init_from_data(self):
         """Initialize calibration parameters from loaded data."""
@@ -239,7 +224,7 @@ class PollenCalibrationViewer(BaseViewer):
                 zoom = get_param(metadata, "zoom_factor", default=1.0)
                 nx = arr.shape[-1]
                 self._pixel_size_um = 600.0 / zoom / nx
-                self.logger.warning(
+                logger.warning(
                     "pixel_resolution not in metadata, using default FOV=600um"
                 )
 
@@ -265,10 +250,10 @@ class PollenCalibrationViewer(BaseViewer):
 
     def _get_fpath(self):
         """Get the file path."""
-        parent_fpath = self.parent.fpath if self.parent is not None else self.fpath
-        if isinstance(parent_fpath, (list, tuple)):
-            parent_fpath = parent_fpath[0] if parent_fpath else None
-        return Path(parent_fpath) if parent_fpath else None
+        fpath = self.fpath
+        if isinstance(fpath, (list, tuple)):
+            fpath = fpath[0] if fpath else None
+        return Path(fpath) if fpath else None
 
     @property
     def num_beamlets(self) -> int:
@@ -437,9 +422,9 @@ class PollenCalibrationViewer(BaseViewer):
         if summary:
             self._loaded_external = summary
             self._loaded_external["h5_path"] = path
-            self.logger.info(f"Loaded calibration from: {path}")
+            logger.info(f"Loaded calibration from: {path}")
         else:
-            self.logger.error(f"Failed to load calibration from: {path}")
+            logger.error(f"Failed to load calibration from: {path}")
 
     def _draw_manual_button(self):
         """Draw manual calibration button."""
@@ -520,7 +505,7 @@ class PollenCalibrationViewer(BaseViewer):
         """Start interactive manual calibration."""
         arr = self._get_array()
         if arr is None:
-            self.logger.error("No data for manual calibration")
+            logger.error("No data for manual calibration")
             return
 
         self._manual_mode = True
@@ -533,16 +518,16 @@ class PollenCalibrationViewer(BaseViewer):
         self._original_metadata = getattr(arr, "metadata", {})
 
         # Load volume into memory for click analysis
-        self.logger.info("Loading volume for manual calibration...")
+        logger.info("Loading volume for manual calibration...")
         self._vol = np.asarray(arr[:]).astype(np.float32)
         self._vol -= self._vol.mean()
 
         # For ZCYX data: shape is (Z, C, Y, X)
         # Z = piezo positions (typically many, e.g. 224)
         # C = beamlet channels (typically fewer, e.g. 14)
-        self.logger.info(f"Volume shape: {self._vol.shape} (Z, C, Y, X)")
+        logger.info(f"Volume shape: {self._vol.shape} (Z, C, Y, X)")
         nz, nc, _ny, _nx = self._vol.shape
-        self.logger.info(f"Z-planes: {nz}, Channels: {nc}")
+        logger.info(f"Z-planes: {nz}, Channels: {nc}")
 
         # Store channel count for UI
         self._num_channels = nc
@@ -550,7 +535,7 @@ class PollenCalibrationViewer(BaseViewer):
         # Compute max projections over Z for each channel -> (C, Y, X)
         # This creates a 3D array we can navigate by channel
         self._max_projections = self._vol.max(axis=0)
-        self.logger.info(f"Max projections shape: {self._max_projections.shape}")
+        logger.info(f"Max projections shape: {self._max_projections.shape}")
 
         # Replace viewer data with max projections
         # Note: This replaces with numpy array - metadata viewer handles this gracefully
@@ -566,7 +551,7 @@ class PollenCalibrationViewer(BaseViewer):
         # Add click handler to the figure
         self._setup_click_handler()
 
-        self.logger.info("Manual calibration started. Click on pollen beads.")
+        logger.info("Manual calibration started. Click on pollen beads.")
 
     def _setup_click_handler(self):
         """Set up click event handler on the image with drag detection."""
@@ -605,15 +590,15 @@ class PollenCalibrationViewer(BaseViewer):
                         x, y = world_pos[0], world_pos[1]
                         self._handle_click(x, y)
                 except Exception as e:
-                    self.logger.exception(f"Click mapping error: {e}")
+                    logger.exception(f"Click mapping error: {e}")
 
             subplot.renderer.add_event_handler(on_pointer_down, "pointer_down")
             subplot.renderer.add_event_handler(on_click, "click")
             self._click_handler = on_click
-            self.logger.info("Click handler registered with drag detection")
+            logger.info("Click handler registered with drag detection")
 
         except Exception as e:
-            self.logger.exception(f"Failed to set up click handler: {e}")
+            logger.exception(f"Failed to set up click handler: {e}")
 
     def _handle_click(self, x, y):
         """Handle a click event during manual calibration."""
@@ -625,7 +610,7 @@ class PollenCalibrationViewer(BaseViewer):
 
         # Don't process clicks if we're already past the last beamlet
         if current >= nc:
-            self.logger.info("All beamlets already marked. Click 'Finish'.")
+            logger.info("All beamlets already marked. Click 'Finish'.")
             return
 
         channel = (
@@ -636,7 +621,7 @@ class PollenCalibrationViewer(BaseViewer):
         x = max(0, min(nx - 1, x))
         y = max(0, min(ny - 1, y))
 
-        self.logger.info(f"Beamlet {current + 1}: clicked at ({x:.1f}, {y:.1f})")
+        logger.info(f"Beamlet {current + 1}: clicked at ({x:.1f}, {y:.1f})")
 
         # Find best z at this position
         ix, iy = round(x), round(y)
@@ -664,7 +649,7 @@ class PollenCalibrationViewer(BaseViewer):
             self._show_beamlet(self._manual_channel_idx)
         else:
             # We just marked the last one - auto-finish
-            self.logger.info("All beamlets marked! Starting calibration...")
+            logger.info("All beamlets marked! Starting calibration...")
             self._finish_manual_calibration()
 
     def _show_beamlet(self, idx):
@@ -676,7 +661,7 @@ class PollenCalibrationViewer(BaseViewer):
         channel = self._beam_order[idx] if idx < len(self._beam_order) else idx
 
         if channel >= nc:
-            self.logger.error(f"Channel {channel} out of range ({nc} channels)")
+            logger.error(f"Channel {channel} out of range ({nc} channels)")
             return
 
         # Navigate to this channel using ImageWidget indices
@@ -686,7 +671,7 @@ class PollenCalibrationViewer(BaseViewer):
                 self.image_widget.indices = [channel]
 
         except Exception as e:
-            self.logger.exception(f"Failed to update display: {e}")
+            logger.exception(f"Failed to update display: {e}")
 
     def _manual_prev(self):
         """Go to previous beamlet."""
@@ -734,7 +719,7 @@ class PollenCalibrationViewer(BaseViewer):
             self._manual_positions.append((x, y))
             self._manual_z_indices.append(best_z)
 
-        self.logger.info(f"Beamlet {current + 1}: skipped (using center)")
+        logger.info(f"Beamlet {current + 1}: skipped (using center)")
         self._manual_next()
 
     def _cancel_manual_mode(self):
@@ -752,7 +737,7 @@ class PollenCalibrationViewer(BaseViewer):
         # Clear stored references after restore
         self._original_metadata = None
         self._original_data_array = None
-        self.logger.info("Manual calibration cancelled")
+        logger.info("Manual calibration cancelled")
 
     def _restore_original_view(self):
         """Restore the original full data view."""
@@ -777,9 +762,9 @@ class PollenCalibrationViewer(BaseViewer):
                 self.image_widget.indices = [0] * self.image_widget.n_sliders
 
             self.image_widget.figure[0, 0].auto_scale()
-            self.logger.info("Restored original data view")
+            logger.info("Restored original data view")
         except Exception as e:
-            self.logger.exception(f"Failed to restore view: {e}")
+            logger.exception(f"Failed to restore view: {e}")
 
     def _finish_manual_calibration(self):
         """Complete manual calibration and run analysis."""
@@ -789,11 +774,11 @@ class PollenCalibrationViewer(BaseViewer):
         z_indices = self._manual_z_indices
 
         if len(positions) < self.num_beamlets:
-            self.logger.warning(
+            logger.warning(
                 f"Only {len(positions)} positions marked, expected {self.num_beamlets}"
             )
 
-        self.logger.info(
+        logger.info(
             f"Running calibration with {len(positions)} marked positions..."
         )
 
@@ -902,12 +887,12 @@ class PollenCalibrationViewer(BaseViewer):
                 "h5_file": str(fpath.with_name(fpath.stem + "_pollen.h5")),
                 "mode": "manual",
             }
-            self.logger.info(
+            logger.info(
                 f"Manual calibration complete! Results saved to {fpath.parent}"
             )
 
         except Exception as e:
-            self.logger.exception(f"Calibration failed: {e}")
+            logger.exception(f"Calibration failed: {e}")
             self._error = str(e)
         finally:
             self._processing = False
@@ -926,7 +911,7 @@ class PollenCalibrationViewer(BaseViewer):
             self._load_h5_file(str(self._existing_h5_files[0]))
             self._done = True
             self._status = "Loaded previous results"
-            self.logger.info(
+            logger.info(
                 "Found previous calibration results, skipping auto calibration"
             )
             return
@@ -960,7 +945,7 @@ class PollenCalibrationViewer(BaseViewer):
             self._status = "Detecting beads..."
             self._progress = 0.2
             positions, z_indices = self._detect_beads(vol)
-            self.logger.info(f"Detected {len(positions)} bead positions")
+            logger.info(f"Detected {len(positions)} bead positions")
 
             self._status = "Running calibration..."
             self._progress = 0.4
@@ -1023,12 +1008,12 @@ class PollenCalibrationViewer(BaseViewer):
                 "h5_file": str(fpath.with_name(fpath.stem + "_pollen.h5")),
                 "mode": "auto",
             }
-            self.logger.info(
+            logger.info(
                 f"Auto calibration complete! Results saved to {fpath.parent}"
             )
 
         except Exception as e:
-            self.logger.exception(f"Auto calibration failed: {e}")
+            logger.exception(f"Auto calibration failed: {e}")
             self._error = str(e)
         finally:
             self._processing = False
@@ -1221,7 +1206,7 @@ class PollenCalibrationViewer(BaseViewer):
             else:
                 subprocess.run(["xdg-open", str(path)], check=False)
         except Exception as e:
-            self.logger.exception(f"Failed to open image: {e}")
+            logger.exception(f"Failed to open image: {e}")
 
     def _open_output_folder(self, mode: str = "auto"):
         """Open the output folder in file explorer."""
@@ -1251,7 +1236,7 @@ class PollenCalibrationViewer(BaseViewer):
             else:
                 subprocess.run(["xdg-open", folder_path], check=False)
         except Exception as e:
-            self.logger.exception(f"Failed to open folder: {e}")
+            logger.exception(f"Failed to open folder: {e}")
 
     def _open_all_graphs(self, mode: str = "auto"):
         """Show figures popup with implot graphs."""
@@ -1468,22 +1453,6 @@ class PollenCalibrationViewer(BaseViewer):
                         self._open_output_folder_path(str(h5_path.parent))
 
         imgui.end()
-
-    def on_data_loaded(self) -> None:
-        """Reinitialize when new data is loaded."""
-        self._init_from_data()
-        self._done = False
-        self._error = None
-        self._results_auto = None
-        self._results_manual = None
-        self._manual_mode = False
-        self._saved_images = []
-        self._show_figures_popup = False
-        self._calibration_data_auto = None
-        self._calibration_data_manual = None
-
-        if self._initialized and not self._processing:
-            self._start_auto_calibration()
 
     def cleanup(self) -> None:
         """Clean up resources when viewer closes."""

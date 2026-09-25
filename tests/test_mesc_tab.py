@@ -65,9 +65,22 @@ class FakeImageWidget:
         self.indices = dict.fromkeys(self.dim_names, z)
 
 
-class FakeParent:
-    def __init__(self, data, dim_names=(), z=0):
-        self.image_widget = FakeImageWidget(data, dim_names, z)
+class FakeHost:
+    """What the MESc app reads off the host: the open array, the viewer showing it."""
+
+    def __init__(self, arr, data, dim_names=(), z=0):
+        self.data = arr
+        self.viewer = FakeImageWidget(data, dim_names, z)
+        self.apps = {}
+
+
+def mesc_app(arr, data, dim_names=(), z=0):
+    """A MescApp on a fake host open on ``arr``, the viewer showing ``data``."""
+    from mbo_utilities.gui.app.apps.mesc import MescApp
+
+    app = MescApp()
+    app.host = FakeHost(arr, data, dim_names, z)
+    return app
 
 
 def draw_frames(widget, n=2):
@@ -83,7 +96,7 @@ def draw_frames(widget, n=2):
             imgui.new_frame()
             imgui.set_next_window_size(imgui.ImVec2(2300, 600))
             imgui.begin("host")
-            widget.draw()
+            widget.draw_canvas(widget.host, imgui.ImVec2(0, 0))
             imgui.end()
             imgui.end_frame()
     finally:
@@ -92,7 +105,7 @@ def draw_frames(widget, n=2):
 
 def test_unit_row_reports_shape_rate_and_comment(mesc_path):
     from mbo_utilities.arrays.mesc import list_mesc_units
-    from mbo_utilities.gui.widgets.mesc_units import UNIT_COLUMNS, unit_row
+    from mbo_utilities.gui.app.apps.mesc import UNIT_COLUMNS, unit_row
 
     first, second = list_mesc_units(mesc_path)
     cells, keys = unit_row(first)
@@ -181,14 +194,13 @@ def test_companions_fold_into_the_scans_row(linked_mesc_path):
     gives the companions rows again.
     """
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import (
+    from mbo_utilities.gui.app.apps.mesc import (
         IMAGE_ICON,
-        MescTabWidget,
         display_wrap,
     )
 
     arr = MescArray(linked_mesc_path, unit=0)
-    widget = MescTabWidget(FakeParent([display_wrap(arr)]))
+    widget = mesc_app(arr, [display_wrap(arr)])
     BUTTONS.clear()
     ROWS.clear()
     imgui.small_button = spy_small_button
@@ -218,7 +230,7 @@ def test_companions_fold_into_the_scans_row(linked_mesc_path):
 
 def test_unit_row_names_the_companions(linked_mesc_path):
     from mbo_utilities.arrays.mesc import list_mesc_units
-    from mbo_utilities.gui.widgets.mesc_units import (
+    from mbo_utilities.gui.app.apps.mesc import (
         PICTURE_COLUMN,
         RTMC_COLUMN,
         companions,
@@ -269,17 +281,18 @@ def test_unit_row_names_the_companions(linked_mesc_path):
     )
 
 
-def test_tab_is_supported_only_for_mesc_data(mesc_path):
-    """The MESc tab is supported only for a viewer showing a MescArray."""
+def test_the_app_is_available_only_for_mesc_data(mesc_path):
+    """The MESc app is available only while the host has a MescArray open."""
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+    from mbo_utilities.gui.app.apps.mesc import display_wrap
 
     arr = MescArray(mesc_path, unit=0)
     try:
-        assert MescTabWidget.is_supported(FakeParent([display_wrap(arr)]))
-        assert not MescTabWidget.is_supported(FakeParent([np.zeros((2, 4, 4))]))
-        assert not MescTabWidget.is_supported(FakeParent([]))
-        assert not MescTabWidget.is_supported(FakeParent(None))
+        app = mesc_app(arr, [display_wrap(arr)])
+        assert app.available(app.host)
+        plain = np.zeros((2, 4, 4))
+        assert not mesc_app(plain, [plain]).available(app.host)
+        assert not mesc_app(None, []).available(app.host)
     finally:
         arr.close()
 
@@ -289,10 +302,10 @@ def test_table_draws_every_unit_and_highlights_the_open_one(mesc_path):
     selected, the comment in the last column.
     """
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+    from mbo_utilities.gui.app.apps.mesc import display_wrap
 
     arr = MescArray(mesc_path, unit=1)
-    widget = MescTabWidget(FakeParent([display_wrap(arr)]))
+    widget = mesc_app(arr, [display_wrap(arr)])
     ROWS.clear()
     TEXTS.clear()
     DISABLED.clear()
@@ -317,10 +330,10 @@ def test_split_roi_views_stand_down(mesc_path):
     all but one, so the tab says so instead of offering to switch.
     """
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+    from mbo_utilities.gui.app.apps.mesc import display_wrap
 
     arr = MescArray(mesc_path, unit=0)
-    widget = MescTabWidget(FakeParent([display_wrap(arr), display_wrap(arr)]))
+    widget = mesc_app(arr, [display_wrap(arr), display_wrap(arr)])
     DISABLED.clear()
     imgui.text_disabled = spy_text_disabled
     try:
@@ -338,16 +351,14 @@ def test_the_table_says_nothing_about_z_stacks(stack_mesc_path):
     reference image, next to the lines themselves.
     """
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import (
+    from mbo_utilities.gui.app.apps.mesc import (
         UNIT_COLUMNS,
-        MescTabWidget,
         display_wrap,
     )
 
     assert "Z-stack" not in [name for name, _hidden in UNIT_COLUMNS]
     arr = MescArray(stack_mesc_path, unit=1)
-    parent = FakeParent([display_wrap(arr)], arr.slider_dim_labels)
-    widget = MescTabWidget(parent)
+    widget = mesc_app(arr, [display_wrap(arr)], arr.slider_dim_labels)
     BUTTONS.clear()
     imgui.small_button = spy_small_button
     try:
