@@ -13,6 +13,7 @@ import numpy as np
 from imgui_bundle import imgui, implot
 
 __all__ = [
+    "X_AXIS_HIDDEN",
     "decimate_minmax",
     "drag_hline",
     "drag_vline",
@@ -25,6 +26,13 @@ __all__ = [
     "vec4",
     "vlines",
 ]
+
+# an upper row of stacked plots: the bottom row's x axis is the one they share
+X_AXIS_HIDDEN = (
+    implot.AxisFlags_.no_label
+    | implot.AxisFlags_.no_tick_labels
+    | implot.AxisFlags_.no_tick_marks
+)
 
 
 def vec4(color, alpha: float | None = None) -> imgui.ImVec4:
@@ -134,9 +142,12 @@ def line_plot(
     fit: bool = False,
     legend: bool = True,
     flags: int = 0,
+    x_flags: int = 0,
 ):
     """``begin_plot`` / ``end_plot`` with labelled axes; yields whether the
     plot is drawn. Shift locks y while scrolling (zoom x only), alt locks x.
+    ``x_flags`` are added to the x axis's (``X_AXIS_HIDDEN`` for a row over
+    another plot's axis).
     """
     if implot.get_current_context() is None:
         implot.create_context()
@@ -154,7 +165,7 @@ def line_plot(
         implot.setup_axes(
             x_label,
             y_label,
-            locked if io.key_alt else none,
+            (locked if io.key_alt else none) | x_flags,
             locked if io.key_shift else none,
         )
         yield True

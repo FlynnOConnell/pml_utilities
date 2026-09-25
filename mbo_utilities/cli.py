@@ -2374,6 +2374,7 @@ def voltage(
         settings.events.duration_thres_ms = dur
     if as_pkl:
         settings.runtime.output_format = "pkl"
+    as_zarr = settings.runtime.output_format == "zarr"
     chosen = list(units) or [f"MUnit_{s}" for s in spec["scan_ids"]] or None
     # the runner narrates every step through the mbo logger; give its console lines a clock
     logger = log.get()
