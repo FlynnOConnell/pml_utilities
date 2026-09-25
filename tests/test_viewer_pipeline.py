@@ -144,6 +144,30 @@ class TestReloadDataConsistency:
         assert wrapped.dims.index("Z") == 1
 
 
+class TestInvertDeflection:
+    """Invert deflection flips a frame about the mean image, display only."""
+
+    MEAN = np.full((4, 4), 10.0, dtype=np.float32)
+    FRAME = np.arange(16, dtype=np.uint16).reshape(4, 4)
+
+    def test_invert_keeps_the_mean(self):
+        from mbo_utilities.gui.app.apps.viewer import filter_frame
+
+        out = filter_frame(self.FRAME, self.MEAN, subtract=False, invert=True)
+        assert np.allclose(out, 2 * self.MEAN - self.FRAME)
+
+    def test_invert_with_mean_subtraction(self):
+        from mbo_utilities.gui.app.apps.viewer import filter_frame
+
+        out = filter_frame(self.FRAME, self.MEAN, invert=True)
+        assert np.allclose(out, self.MEAN - self.FRAME)
+
+    def test_subtraction_alone_is_unchanged(self):
+        from mbo_utilities.gui.app.apps.viewer import filter_frame
+
+        assert np.allclose(filter_frame(self.FRAME, self.MEAN), self.FRAME - self.MEAN)
+
+
 class TestCustomMetadata:
     """Metadata typed over an array reaches the files written and every run
     started from it.
