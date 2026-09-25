@@ -33,7 +33,12 @@ from mbo_utilities.gui.app._host import AppHost
 from mbo_utilities.gui.app._menu import MenuBar
 from mbo_utilities.gui.app._texture import Texture
 from mbo_utilities.gui.app._window import AppWindow
-from mbo_utilities.gui.app.apps import ViewerApp, debug_apps, ported_apps
+from mbo_utilities.gui.app.apps import (
+    ViewerApp,
+    debug_apps,
+    plugin_apps,
+    ported_apps,
+)
 from mbo_utilities.gui.app.apps.viewer import split_rois
 from mbo_utilities.gui.app.demo import movie_data
 from mbo_utilities.gui.run_gui import (
@@ -64,7 +69,8 @@ def build_host(
     store: ConfigStore | None = None,
     figure_kwargs: dict | None = None,
 ) -> AppHost:
-    """The host on the viewer's figure, every app registered.
+    """The host on the viewer's figure, every app registered: the built-in
+    set, the ones installed packages add, and the imgui tools.
 
     ``data`` is anything ``imread`` opens, a synthetic movie when None. It
     stays lazy: the viewer reads the frames it shows, one subplot per ROI
@@ -85,7 +91,13 @@ def build_host(
     )
     host = AppHost(viewer.figure, data=array, slots=[], store=store, viewer=viewer)
     host.register(ViewerApp(array))
-    host.register(*(ported_apps() + debug_apps(host) if apps is None else apps))
+    host.register(
+        *(
+            ported_apps() + plugin_apps() + debug_apps(host)
+            if apps is None
+            else apps
+        )
+    )
     return host
 
 
