@@ -1,7 +1,15 @@
-"""Apps ported from the preview window, drawn by the host instead of it."""
+"""The apps the host registers: the built-in set, and any a package adds.
+
+A built-in is listed in ``ported_apps``. A package adds one by declaring an
+entry point under ``mbo_utilities.apps`` that names an ``App`` subclass, or
+a function returning a list of them; ``plugin_apps`` loads the group.
+"""
 
 from __future__ import annotations
 
+from importlib.metadata import entry_points
+
+from mbo_utilities import log
 from mbo_utilities.gui.app._app import App
 from mbo_utilities.gui.app.apps.console import ConsoleApp
 from mbo_utilities.gui.app.apps.curate import CurateApp
@@ -27,6 +35,10 @@ from mbo_utilities.gui.app.apps.save_as import SaveAsApp
 from mbo_utilities.gui.app.apps.set_metadata import SetMetadataApp
 from mbo_utilities.gui.app.apps.signal_quality import SignalQualityApp
 from mbo_utilities.gui.app.apps.viewer import ViewerApp
+
+logger = log.get("gui.app")
+
+ENTRY_POINT_GROUP = "mbo_utilities.apps"
 
 __all__ = [
     "AlignViewsApp",
@@ -55,6 +67,7 @@ __all__ = [
     "TileGridApp",
     "ViewerApp",
     "debug_apps",
+    "plugin_apps",
     "ported_apps",
 ]
 
@@ -89,3 +102,20 @@ def ported_apps() -> list[App]:
         DiagnosticsApp(),
         LogApp(),
     ]
+
+
+def plugin_apps() -> list[App]:
+    """The apps installed packages register under ``mbo_utilities.apps``.
+
+    An entry point that fails to load or build is logged and skipped: a
+    broken plugin never takes the host down.
+    """
+    apps = []
+    for ep in entry_points(group=ENTRY_POINT_GROUP):
+        try:
+            made = ep.load()()
+        except Exception:
+            logger.exception(f"app entry point {ep.name!r} could not be loaded")
+            continue
+        apps.extend(made if isinstance(made, list) else [made])
+    return apps
