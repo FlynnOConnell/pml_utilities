@@ -23,6 +23,7 @@ import numpy as np
 from imgui_bundle import hello_imgui, imgui, imgui_ctx
 from imgui_bundle import portable_file_dialogs as pfd
 
+from mbo_utilities.arrays.features._dim_labels import slider_roles
 from mbo_utilities.arrays.mesc import ROI_LAYOUTS
 from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._imgui_helpers import (
@@ -121,6 +122,7 @@ class VoltagePipelineWidget(PipelineWidget):
     # frames are a window; Z is the unit's ROI index (mesc_z_axis_meaning "roi_index"), so the
     # Z range picks which ROIs are read and cuts the domains down to them; one channel is averaged
     axes_consumed = {"T": "range", "Z": "range", "C": "select-one"}
+    seeds_from_view = True
 
     @classmethod
     def applies_to(cls, arr: Any) -> bool:
@@ -303,6 +305,27 @@ class VoltagePipelineWidget(PipelineWidget):
         self._voltage_z_error = ""
         self._voltage_c_selection = "1"
         self._voltage_c_error = ""
+
+    def seed_from_view(self) -> None:
+        """Tick only the recording on screen and select the ROI and channel
+        its sliders are on, over every frame. A unit without lines or
+        patches on screen (a picture) leaves the scans as seeded.
+        """
+        self._ensure_state()
+        shown = getattr(self._array(), "unit_key", None)
+        if not any(u["key"] == shown for u in self._units):
+            self._seed_slicing()
+            return
+        self._scans = {u["key"]: u["key"] == shown for u in self._units}
+        self._seed_slicing()
+        iw = getattr(self.parent, "image_widget", None)
+        names = tuple(getattr(iw, "dim_names", None) or ())
+        # the sliders are the array's T, C, Z axes by position; Z is the ROI index here
+        roles = {role: name for name, role in slider_roles(names).items()}
+        if roles.get("z") is not None:
+            self._voltage_z_selection = str(int(iw.indices[roles["z"]]) + 1)
+        if roles.get("c") is not None:
+            self._voltage_c_selection = str(int(iw.indices[roles["c"]]) + 1)
 
     def _domains(self) -> dict[str, list[int]]:
         """The domain table as ``{name: lines}``; sets ``_domain_error`` and returns {} when invalid."""

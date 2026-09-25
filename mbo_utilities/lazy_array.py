@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from mbo_utilities.arrays.features import MotionCorrection
+    from mbo_utilities.behavior import Behavior
 
 # canonical dims by reported rank (OME-NGFF 0.5: time -> channel -> space)
 _DEFAULT_DIMS_BY_NDIM: dict[int, tuple[str, ...]] = {
@@ -292,6 +293,21 @@ class LazyArray:
         today; a registration's per-frame offsets take the same shape.
         """
         return None
+
+    @property
+    def behavior(self) -> Behavior | None:
+        """What the animal did during this recording (``behavior.Behavior``:
+        signals, events and epochs on the recording's clock), or None when
+        nothing is attached. A behavior log is a file of its own, so
+        ``behavior.behavior_for(arr)`` finds the one recorded with this file,
+        reads it on first use and sets this; a reader whose format carries
+        behavior overrides it.
+        """
+        return getattr(self, "_behavior", None)
+
+    @behavior.setter
+    def behavior(self, value: Behavior | None) -> None:
+        self._behavior = value
 
     @property
     def source_path(self) -> Path | None:

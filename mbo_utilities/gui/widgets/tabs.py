@@ -19,11 +19,13 @@ Tab order is ``priority``; the viewer draws them in that order.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities.gui.widgets._base import Widget
+from mbo_utilities.gui.widgets.pipelines import draw_pipeline_windows
 
 __all__ = [
     "PreviewTabWidget",
@@ -92,10 +94,21 @@ class RunTabWidget(Widget):
     def __init__(self, parent: Any):
         super().__init__(parent)
         self._has_pipeline: bool | None = None
+        # pipelines popped out as floating windows draw from the strip's
+        # frame hook, so they stay up whatever tab is selected
+        self._draw_windows = partial(draw_pipeline_windows, parent)
+        strip = getattr(parent, "top_strip", None)
+        if strip is not None:
+            strip.add_hook(self._draw_windows)
 
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
         return True
+
+    def cleanup(self) -> None:
+        strip = getattr(self.parent, "top_strip", None)
+        if strip is not None:
+            strip.remove_hook(self._draw_windows)
 
     def _pipeline_available(self) -> bool:
         if self._has_pipeline is None:

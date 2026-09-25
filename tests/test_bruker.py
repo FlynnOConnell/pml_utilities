@@ -60,6 +60,28 @@ class TestDispatch:
         path.write_bytes(b"not hdf5")
         assert not BrukerArray.can_open(path)
 
+    def test_a_folder_of_recordings_opens_the_first_as_bruker(self, bruker_h5, caplog):
+        """A folder of Bruker files is one recording per file: the first by
+        name opens through the Bruker reader, not the plain H5 one that would
+        guess the axes of a (t, z, y, x, c) dataset as T, C, Z, Y, X.
+        """
+        path, data = bruker_h5
+        second = path.with_name("u005a04_20260916_FamDay2_FOV1-002.h5")
+        with h5py.File(path, "r") as src, h5py.File(second, "w") as dst:
+            src.copy("imaging", dst)
+        arr = imread(path.parent)
+        assert isinstance(arr, BrukerArray)
+        assert arr.filenames == [path]
+        assert arr.shape == (12, 1, 1, 16, 20)
+        assert "holds 2 recordings" in caplog.text
+        assert second.name in caplog.text
+        # a list opens the first listed, whatever the names say
+        caplog.clear()
+        arr = imread([second, path])
+        assert isinstance(arr, BrukerArray) and arr.filenames == [second]
+        assert path.name in caplog.text
+        assert isinstance(imread([path]), BrukerArray)
+
 
 class TestShape:
     def test_labels_decide_axes(self, bruker_h5):

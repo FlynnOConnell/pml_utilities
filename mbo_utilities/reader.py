@@ -235,6 +235,33 @@ def imread(
     return arr
 
 
+def _open_first_recording(files, where, kwargs):
+    """Of ``files``, in the order given, the ones a format-specific class
+    (``PRIORITY`` above 50) claims are whole recordings each (a Bruker h5, a
+    MESc): the first opens through its class and the rest are logged by name;
+    None when no file is one. A suffix reader would guess such a file's axes,
+    and several never concatenate: they are separate sessions the user picks
+    by file.
+    """
+    recordings = [
+        (f, cls)
+        for f in files
+        if f.is_file()
+        for cls in [_dispatch(f)]
+        if cls is not None and cls.PRIORITY > 50
+    ]
+    if not recordings:
+        return None
+    first, cls = recordings[0]
+    if len(recordings) > 1:
+        logger.info(
+            f"{where} holds {len(recordings)} recordings; opening {first.name} with "
+            f"{cls.__name__}. Open a file to see another: "
+            f"{', '.join(f.name for f, _ in recordings[1:])}"
+        )
+    return cls(first, **_filter_kwargs(cls, kwargs))
+
+
 def _imread_impl(
     inputs: str | Path | np.ndarray | Sequence[str | Path],
     **kwargs,
@@ -369,6 +396,12 @@ def _imread_impl(
                     )
                     return TiffArray(p)
 
+                # a folder of whole recordings (a Bruker h5, a MESc each): the
+                # first by name opens through its own class
+                opened = _open_first_recording(sorted(p.iterdir()), p, kwargs)
+                if opened is not None:
+                    return opened
+
                 paths = [Path(f) for f in p.glob("*") if f.is_file()]
                 logger.debug(f"Found {len(paths)} files in {p}")
         else:
@@ -389,6 +422,10 @@ def _imread_impl(
             )
 
         paths = [Path(p) for p in inputs]
+        # a list of whole recordings: the first listed opens through its own class
+        opened = _open_first_recording(paths, "the list", kwargs)
+        if opened is not None:
+            return opened
     else:
         raise TypeError(f"Unsupported input type: {type(inputs)}")
 

@@ -2795,6 +2795,61 @@ class TestTracePlotView:
         self._fits(widget)
         assert widget._traces_panel.height == MOTION_PANEL_HEIGHT
 
+    def test_a_recordings_behavior_stacks_under_the_trace(self, widget):
+        from mbo_utilities.arrays.features import MotionCorrection
+        from mbo_utilities.behavior import Behavior, BehaviorSignal
+        from mbo_utilities.gui.imgui.behavior import BehaviorPlot
+        from mbo_utilities.gui.imgui.motion import MotionPlot
+        from mbo_utilities.gui.manual_roi import (
+            BEHAVIOR_PLOT_HEIGHT,
+            MOTION_PANEL_HEIGHT,
+            PANEL_HEIGHT,
+        )
+
+        # a movie with no log: the facet finds none, the panel keeps its height
+        assert not widget.behavior
+        rows = self._two_traces(widget)
+        widget.select_trace(rows[0])
+        self._fits(widget)
+        assert widget._traces_panel.height == PANEL_HEIGHT
+
+        t = np.arange(600) / 100.0
+        widget.behavior = BehaviorPlot(
+            Behavior(
+                "BehaviorMate 0.1.5",
+                signals={
+                    "position": BehaviorSignal(t, (t * 500) % 3000, "mm"),
+                    "speed": BehaviorSignal(t, np.full_like(t, 500.0), "mm/s"),
+                },
+                events={"lick": np.array([1.0, 2.5]), "reward": np.array([3.0])},
+                epochs={"reward": np.array([[2.8, 3.4]])},
+            )
+        )
+        widget._fs_read, widget._fs_value = True, 10.0
+        # trace and behavior in linked subplots, in every unit
+        for unit in ("frames", "seconds", "ms"):
+            widget.x_unit = unit
+            widget._force_fit = True
+            assert self._fits(widget) >= 1
+            assert widget._traces_panel.height == PANEL_HEIGHT + BEHAVIOR_PLOT_HEIGHT
+        # all three stacked: each plot under the trace adds its own height
+        widget.motion = MotionPlot(MotionCorrection("RTMC", "um", {"X": (t, t)}))
+        self._fits(widget)
+        assert (
+            widget._traces_panel.height
+            == MOTION_PANEL_HEIGHT + BEHAVIOR_PLOT_HEIGHT
+        )
+        assert widget._stack == ("behavior", "motion", "trace")
+        # the behavior plot alone, then nothing
+        widget.show_trace, widget.show_motion = False, False
+        self._fits(widget)
+        assert widget._stack == ("behavior",)
+        assert widget._traces_panel.height == PANEL_HEIGHT + BEHAVIOR_PLOT_HEIGHT
+        widget.show_behavior = False
+        self._fits(widget)
+        assert widget._stack == ()
+        assert widget._traces_panel.height == PANEL_HEIGHT
+
 
 class _StubSettings:
     def __init__(self, payload, **attrs):

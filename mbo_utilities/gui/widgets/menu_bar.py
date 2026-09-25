@@ -14,6 +14,11 @@ from imgui_bundle import imgui, imgui_ctx
 from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._dialogs import start_open_prompt
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
+from mbo_utilities.gui.widgets.pipelines import (
+    open_pipeline,
+    quick_pipelines,
+    shown_name,
+)
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.gui.widgets.widget_toggles import draw_widgets_menu
 from mbo_utilities.install import VNOISER_HINT
@@ -83,6 +88,41 @@ def draw_menu_bar(parent: Any):
                     parent._show_options_popup = True
                 imgui.end_menu()
             draw_widgets_menu(parent)
+            if imgui.begin_menu("Process", True):
+                # one entry per pipeline that can set itself to what is on
+                # screen, then the Process tab's selection popped out
+                shown = shown_name(parent)
+                quick = quick_pipelines(parent)
+                for cls in quick:
+                    if imgui.menu_item(
+                        f"{cls.name} on {shown}",
+                        "Shift+P" if cls is quick[0] else "",
+                        p_selected=False,
+                        enabled=True,
+                    )[0]:
+                        open_pipeline(parent, cls.name, "window", seed=True)
+                    if imgui.is_item_hovered():
+                        imgui.set_tooltip(
+                            f"Open the {cls.name} pipeline in its own window, set to "
+                            "this recording and the ROI and channel on screen."
+                        )
+                if quick:
+                    imgui.separator()
+                selected = getattr(parent, "_selected_pipeline_name", None)
+                if imgui.menu_item(
+                    f"Pop out {selected}" if selected else "Pop out",
+                    "",
+                    p_selected=False,
+                    enabled=bool(selected),
+                )[0]:
+                    open_pipeline(parent, selected, "window")
+                if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+                    imgui.set_tooltip(
+                        "The pipeline selected in the Process tab, in a floating window."
+                        if selected
+                        else "Select a pipeline in the Process tab first."
+                    )
+                imgui.end_menu()
             if imgui.begin_menu("Docs", True):
                 if imgui.menu_item("Help", "h", p_selected=False, enabled=True)[0]:
                     parent._show_help_popup = True
@@ -356,6 +396,7 @@ def draw_keybinds_popup(parent: Any):
             ("Shift + O", "Open folder"),
             ("Shift + M", "Set metadata"),
             ("s", "Save as"),
+            ("Shift + P", "Pipeline for the shown recording, in a window"),
             ("", ""),
             ("View", None),
             ("m", "Toggle metadata viewer"),

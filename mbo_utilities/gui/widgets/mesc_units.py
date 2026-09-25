@@ -37,6 +37,11 @@ from mbo_utilities import log
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.mesc_reference import ReferenceView, roi_slider
 from mbo_utilities.gui.widgets._base import Widget
+from mbo_utilities.gui.widgets.pipelines import (
+    open_pipeline,
+    quick_pipelines,
+    shown_name,
+)
 
 logger = log.get("gui.mesc_units")
 
@@ -523,6 +528,19 @@ class MescTabWidget(Widget):
                 "column reads. Every column header and most cells carry their own tip.",
                 show_mark=False,
             )
+            # every pipeline that can set itself to the unit on screen gets a
+            # button here; the pipeline decides, the tab names none
+            unit_name = shown_name(self.parent)
+            for cls in quick_pipelines(self.parent):
+                imgui.same_line(0, 12)
+                if imgui.small_button(f"{cls.name} on {unit_name}##quick_{cls.name}"):
+                    open_pipeline(self.parent, cls.name, "window", seed=True)
+                set_tooltip(
+                    f"Open the {cls.name} pipeline in its own window, the same "
+                    "configuration as the Process tab's, set to this recording and "
+                    "the ROI and channel the sliders are on.",
+                    show_mark=False,
+                )
             imgui.same_line(0, 12)
             if split:
                 imgui.text_disabled("Split ROIs: reopen without --roi to switch units.")

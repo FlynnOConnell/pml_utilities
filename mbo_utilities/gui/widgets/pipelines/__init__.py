@@ -10,11 +10,13 @@ imports are done in a background thread to avoid blocking the GUI.
 import contextlib
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
-from imgui_bundle import imgui
+from imgui_bundle import hello_imgui, imgui, imgui_ctx
 
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
+from mbo_utilities.lazy_array import base_array
 
 # registry of available pipeline classes
 _PIPELINE_CLASSES: list[type[PipelineWidget]] = []
@@ -197,6 +199,20 @@ def _active_array(parent: Any) -> Any:
     return iw.data[0]
 
 
+def shown_name(parent: Any) -> str:
+    """What the array on screen is called on a button: its recording
+    (``MUnit_3`` of a .mesc), else its file's name, else "".
+    """
+    arr = _active_array(parent)
+    key = getattr(base_array(arr), "unit_key", None) if arr is not None else None
+    if key:
+        return str(key).rsplit("/", 1)[-1]
+    fpath = getattr(parent, "fpath", None)
+    if isinstance(fpath, (list, tuple)):
+        fpath = fpath[0] if fpath else None
+    return Path(str(fpath)).name if fpath else ""
+
+
 def _is_pipeline_available(cls: type) -> bool:
     """Resolve ``is_available`` whether it's a class attr or a property.
 
@@ -221,6 +237,122 @@ def _is_pipeline_available(cls: type) -> bool:
     return result
 
 
+def _applies_by_class(parent: Any) -> dict[type[PipelineWidget], bool]:
+    """``applies_to`` of every registered class for the array on screen,
+    evaluated once per array: it can open the source file.
+    """
+    arr = _active_array(parent)
+    cache = getattr(parent, "_pipeline_applies_cache", None)
+    if cache is None or cache[0] is not arr:
+        applies_by_cls = {}
+        for cls in _PIPELINE_CLASSES:
+            try:
+                applies_by_cls[cls] = bool(cls.applies_to(arr))
+            except Exception:
+                applies_by_cls[cls] = False
+        cache = (arr, applies_by_cls)
+        parent._pipeline_applies_cache = cache
+    return cache[1]
+
+
+def quick_pipelines(parent: Any) -> list[type[PipelineWidget]]:
+    """Installed pipelines that apply to the array on screen and seed
+    themselves from the view (``seeds_from_view``). Empty until the
+    background registration is done, so a tab drawing them never blocks.
+    """
+    if not _REGISTRATION_COMPLETE:
+        return []
+    applies = _applies_by_class(parent)
+    return [
+        cls
+        for cls in _PIPELINE_CLASSES
+        if cls.seeds_from_view
+        and applies.get(cls, False)
+        and _is_pipeline_available(cls)
+    ]
+
+
+def pipeline_instance(parent: Any, cls: type[PipelineWidget]) -> PipelineWidget:
+    """The one widget of ``cls`` for this host, built on first use."""
+    if not hasattr(parent, "_pipeline_instances"):
+        parent._pipeline_instances = {}
+    if cls.name not in parent._pipeline_instances:
+        parent._pipeline_instances[cls.name] = cls(parent)
+    return parent._pipeline_instances[cls.name]
+
+
+def open_pipeline(
+    parent: Any, name: str, where: str = "window", seed: bool = False
+) -> PipelineWidget | None:
+    """Show the pipeline called ``name``: in a floating window
+    (``where="window"``, drawn by :func:`draw_pipeline_windows`) or in the
+    Process tab (``"tab"``, selecting it there). It is the same widget either
+    way. ``seed`` first sets its selection to what the viewer shows
+    (:meth:`PipelineWidget.seed_from_view`). None when no registered
+    pipeline has that name.
+    """
+    _register_pipelines()
+    cls = next((c for c in _PIPELINE_CLASSES if c.name == name), None)
+    if cls is None:
+        return None
+    pipeline = pipeline_instance(parent, cls)
+    if seed:
+        pipeline.seed_from_view()
+    if where == "tab":
+        parent._selected_pipeline_name = name
+        parent._force_run_tab = True
+        return pipeline
+    if not hasattr(parent, "_pipeline_windows"):
+        parent._pipeline_windows = []
+    if name not in parent._pipeline_windows:
+        parent._pipeline_windows.append(name)
+    parent._pipeline_window_focus = name
+    return pipeline
+
+
+def draw_pipeline_windows(parent: Any) -> None:
+    """Draw every pipeline opened as a floating window (:func:`open_pipeline`):
+    the widget the Process tab draws, under an imgui id of its own so both can
+    show at once. Runs from the top strip's frame hook, so the windows stay up
+    whatever tab is selected; closing one takes it off the list.
+    """
+    names = list(getattr(parent, "_pipeline_windows", None) or [])
+    if not names:
+        return
+    focus = getattr(parent, "_pipeline_window_focus", None)
+    parent._pipeline_window_focus = None
+    viewport = imgui.get_main_viewport()
+    for name in names:
+        pipeline = parent._pipeline_instances.get(name)
+        if pipeline is None:
+            parent._pipeline_windows.remove(name)
+            continue
+        # a fixed first size: the widget sizes its columns from the window,
+        # so an auto-resizing window would never settle
+        imgui.set_next_window_size(
+            imgui.ImVec2(
+                min(hello_imgui.em_size(52), viewport.size.x * 0.9),
+                min(hello_imgui.em_size(44), viewport.size.y * 0.9),
+            ),
+            imgui.Cond_.first_use_ever,
+        )
+        imgui.set_next_window_pos(
+            viewport.get_center(), imgui.Cond_.first_use_ever, imgui.ImVec2(0.5, 0.5)
+        )
+        if name == focus:
+            imgui.set_next_window_focus()
+        expanded, keep = imgui.begin(f"{name}###pipeline_window_{name}", True)
+        if expanded:
+            with imgui_ctx.push_id("window"):
+                try:
+                    pipeline.draw()
+                except Exception as e:
+                    imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), f"Error: {e}")
+        imgui.end()
+        if not keep:
+            parent._pipeline_windows.remove(name)
+
+
 def draw_run_tab(parent: Any) -> None:
     """Draw the run tab content.
 
@@ -239,19 +371,7 @@ def draw_run_tab(parent: Any) -> None:
     if not hasattr(parent, "_pipeline_instances"):
         parent._pipeline_instances = {}
 
-    arr = _active_array(parent)
-    # applies_to can open the source file; evaluate once per array, not per frame
-    cache = getattr(parent, "_pipeline_applies_cache", None)
-    if cache is None or cache[0] is not arr:
-        applies_by_cls = {}
-        for cls in _PIPELINE_CLASSES:
-            try:
-                applies_by_cls[cls] = bool(cls.applies_to(arr))
-            except Exception:
-                applies_by_cls[cls] = False
-        cache = (arr, applies_by_cls)
-        parent._pipeline_applies_cache = cache
-    applies_by_cls = cache[1]
+    applies_by_cls = _applies_by_class(parent)
 
     if not _PIPELINE_CLASSES:
         imgui.text_colored(
@@ -315,9 +435,19 @@ def draw_run_tab(parent: Any) -> None:
         changed, new_idx = imgui.combo("Pipeline##run_tab", idx, labels)
         if changed:
             idx = new_idx
-        imgui.separator()
     pipeline_cls, _label, state = entries[idx]
     parent._selected_pipeline_name = pipeline_cls.name
+    if state == "ok":
+        if len(entries) > 1:
+            imgui.same_line()
+        if imgui.small_button("Pop out##run_tab_window"):
+            open_pipeline(parent, pipeline_cls.name, "window")
+        imgui.set_item_tooltip(
+            "Open this pipeline in a floating window: the same configuration, "
+            "kept up while you use the other tabs."
+        )
+    if len(entries) > 1 or state == "ok":
+        imgui.separator()
 
     if state == "missing":
         imgui.text(f"{pipeline_cls.name} is not installed.")
@@ -333,10 +463,7 @@ def draw_run_tab(parent: Any) -> None:
         )
         return
 
-    pipeline_key = pipeline_cls.name
-    if pipeline_key not in parent._pipeline_instances:
-        parent._pipeline_instances[pipeline_key] = pipeline_cls(parent)
-    pipeline = parent._pipeline_instances[pipeline_key]
+    pipeline = pipeline_instance(parent, pipeline_cls)
 
     try:
         pipeline.draw()
@@ -393,6 +520,7 @@ __all__ = [
     "MboSuite2pExtras",
     "any_pipeline_available",
     "cleanup_pipelines",
+    "draw_pipeline_windows",
     "draw_run_tab",
     "draw_section_suite2p",
     "draw_suite2p_settings_panel",
@@ -400,5 +528,9 @@ __all__ = [
     "get_pipeline_names",
     "get_trace_extractors",
     "is_ready",
+    "open_pipeline",
+    "pipeline_instance",
+    "quick_pipelines",
+    "shown_name",
     "start_preload",
 ]

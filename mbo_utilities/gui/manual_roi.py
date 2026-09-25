@@ -110,6 +110,7 @@ from mbo_utilities.arrays.features._dim_tags import (
 )
 from mbo_utilities.arrays.features._selection import to_lsp_kwargs
 from mbo_utilities.arrays.features._slicing import index_window
+from mbo_utilities.behavior import behavior_for
 from mbo_utilities.gui import roi_runs
 from mbo_utilities.gui._imgui_helpers import (
     fit_width,
@@ -140,6 +141,7 @@ from mbo_utilities.gui.imgui import (
     draw_range_filter,
     draw_roi_table,
 )
+from mbo_utilities.gui.imgui.behavior import BehaviorPlot
 from mbo_utilities.gui.imgui.lines import plot_style, subplots
 from mbo_utilities.gui.imgui.motion import MotionPlot
 from mbo_utilities.gui.playhead import Playhead, TimeAxis
@@ -200,6 +202,8 @@ __all__ = [
 PANEL_HEIGHT = 226
 MOTION_PANEL_HEIGHT = 340
 TRACE_SHARE = 0.6
+# what the behavior plot adds: signals over a raster strip need more than a shift trace
+BEHAVIOR_PLOT_HEIGHT = 200
 
 # how often to look for finished pipeline runs started outside this widget;
 # the check reads one sidecar per tracked process, so not every frame
@@ -737,15 +741,20 @@ class ManualRoiWidget:
         self._force_fit = False
         # None until picked: seconds whenever the data has a rate
         self._x_unit: str | None = None
-        # the Traces tab shows the trace plot, and the motion plot under it
-        # in linked subplots when the recording went through motion
-        # correction (MC); the splitter's share is kept between frames
+        # the Traces tab shows the trace plot, and under it in linked
+        # subplots the motion plot when the recording went through motion
+        # correction (MC) and the behavior plot when it has a behavior log;
+        # the splitters' shares are kept between frames
         self.show_trace = True
         self.show_motion = True
-        self._motion_linked = False
+        self.show_behavior = True
+        self._stack: tuple[str, ...] = ()
+        # rows over the trace, which is the bottom row and carries the x axis
         self._motion_ratios = implot.SubplotsRowColRatios(
-            row_ratios=[TRACE_SHARE, 1.0 - TRACE_SHARE]
+            row_ratios=[1.0 - TRACE_SHARE, TRACE_SHARE]
         )
+        self._behavior_ratios = implot.SubplotsRowColRatios(row_ratios=[0.5, 0.5])
+        self._stack_ratios = implot.SubplotsRowColRatios(row_ratios=[0.35, 0.25, 0.4])
         # drawn on the tab in place of "no traces" while a host computes them
         self.pending_traces = None
         self._fs_value: float | None = None
@@ -798,12 +807,14 @@ class ManualRoiWidget:
 
     def _bind_recording(self) -> None:
         """The recording's facets for the Traces tab: its motion correction,
-        and where each of its scanned lines sits (an AOD unit's
-        ``line_positions``, by ROI index; empty for anything else).
+        its behavior log (found beside it on first use) and where each of
+        its scanned lines sits (an AOD unit's ``line_positions``, by ROI
+        index; empty for anything else).
         """
         data = getattr(self.iw, "data", None)
         arr = base_array(data[0]) if data else None
         self.motion = MotionPlot(getattr(arr, "motion_correction", None))
+        self.behavior = BehaviorPlot(behavior_for(arr) if arr is not None else None)
         self.line_positions = list(getattr(arr, "line_positions", None) or [])
 
     def _line_position(self, trace: RoiTrace) -> dict:
@@ -4287,13 +4298,15 @@ class ManualRoiWidget:
         """The Traces panel: the trace-table selection (else the shown ROI)
         as pannable, zoomable lines, the cursor bound to the viewer's t, and
         under it, on the same time axis, the motion correction the recording
-        went through (``MC``) when it has one.
+        went through (``MC``) and its behavior log (``Behavior``) when it has
+        them.
         """
         target = self._plot_lines()
         motion = self.motion if self.motion else None
+        behavior = self.behavior if self.behavior else None
         _changed, self.show_trace = imgui.checkbox("Trace", self.show_trace)
         set_tooltip(
-            "The selected traces; off gives the motion plot the whole panel.",
+            "The selected traces; off gives the plots under it the whole panel.",
             show_mark=False,
         )
         imgui.same_line(0, 12)
@@ -4313,6 +4326,26 @@ class ManualRoiWidget:
             imgui.end_disabled()
             if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
                 imgui.set_tooltip("This recording carries no motion correction.")
+        imgui.same_line(0, 12)
+        if behavior is not None:
+            _changed, self.show_behavior = imgui.checkbox(
+                "Behavior", self.show_behavior
+            )
+            set_tooltip(
+                f"{behavior.source}: what the animal did during the recording "
+                f"({', '.join([*behavior.signals, *behavior.events, *behavior.epochs])}), "
+                "drawn under the trace on the same time axis.",
+                show_mark=False,
+            )
+        else:
+            imgui.begin_disabled()
+            imgui.checkbox("Behavior", False)
+            imgui.end_disabled()
+            if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+                imgui.set_tooltip(
+                    "No behavior log was found for this recording: a file named "
+                    "after its subject and day, beside it or in a behavior folder."
+                )
         rows = [] if target is None else self._plotted_rows(target[1])
         # the pipelines behind the plotted rows decide what the panel offers
         if self.neuropil_offered(rows):
@@ -4412,37 +4445,65 @@ class ManualRoiWidget:
             )
         show_trace = self.show_trace and target is not None
         show_motion = motion is not None and self.show_motion
-        self._traces_panel.height = MOTION_PANEL_HEIGHT if show_motion else PANEL_HEIGHT
-        linked = show_trace and show_motion
-        if linked != self._motion_linked:
-            # in or out of the subplots both plots are new to implot
-            self._motion_linked = linked
+        show_behavior = behavior is not None and self.show_behavior
+        # top to bottom; the bottom row carries the one x axis they all share
+        panels = tuple(
+            name
+            for name, on in (
+                ("behavior", show_behavior),
+                ("motion", show_motion),
+                ("trace", show_trace),
+            )
+            if on
+        )
+        # every plot under the trace adds its own height to the panel
+        self._traces_panel.height = (
+            PANEL_HEIGHT
+            + (MOTION_PANEL_HEIGHT - PANEL_HEIGHT) * int(show_motion)
+            + BEHAVIOR_PLOT_HEIGHT * int(show_behavior)
+        )
+        if panels != self._stack:
+            # in or out of the subplots every plot is new to implot
+            self._stack = panels
             self._trace_fit = True
             if motion is not None:
                 motion.refit()
-        if not show_trace and not show_motion:
+            if behavior is not None:
+                behavior.refit()
+        if not panels:
             return
+        lines = None if target is None else target[1]
         height = max(imgui.get_content_region_avail().y - 4, 60.0)
-        # one scope over both plots: they stack in the same panel, so a frame
-        # around either would be a box around half of it
+        # one scope over every plot: they stack in the same panel, so a frame
+        # around one would be a box around part of it
         with plot_style():
-            if linked:
-                link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
+            if len(panels) == 1:
+                self._draw_plot(panels[0], lines, motion, behavior, height, True)
+                return
+            link = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
+            if len(panels) == 3:
+                ratios = self._stack_ratios
+            elif "behavior" in panels:
+                ratios = self._behavior_ratios
+            else:
+                ratios = self._motion_ratios
+            # the rows above the bottom one have no x axis of their own and
+            # sit tight against it, so the rows read as one plot
+            pad = implot.get_style().plot_padding
+            implot.push_style_var(
+                implot.StyleVar_.plot_padding, imgui.ImVec2(pad.x, 2.0)
+            )
+            try:
                 with subplots(
-                    "##roi_trace_sub",
-                    2,
-                    1,
-                    height,
-                    flags=link,
-                    ratios=self._motion_ratios,
+                    "##roi_trace_sub", len(panels), 1, height, flags=link, ratios=ratios
                 ) as ok:
                     if ok:
-                        self._draw_trace_plot(lines, -1.0)
-                        self._draw_motion_plot(motion, -1.0)
-            elif show_trace:
-                self._draw_trace_plot(lines, height)
-            else:
-                self._draw_motion_plot(motion, height)
+                        for name in panels:
+                            self._draw_plot(
+                                name, lines, motion, behavior, -1.0, name == panels[-1]
+                            )
+            finally:
+                implot.pop_style_var()
 
     def _draw_dff_settings(self, rows) -> None:
         """The popup editing the panel's dF/F baseline; it starts from the
@@ -4487,7 +4548,22 @@ class ManualRoiWidget:
             self._redisplay()
         imgui.end_popup()
 
-    def _draw_motion_plot(self, motion: MotionPlot, height: float) -> None:
+    def _draw_plot(
+        self, name: str, lines, motion, behavior, height: float, x_axis: bool
+    ) -> None:
+        """One of the stacked plots by name; inside subplots ``height`` is
+        the cell's and only the bottom row draws its x axis.
+        """
+        if name == "trace":
+            self._draw_trace_plot(lines, height)
+        elif name == "motion":
+            self._draw_motion_plot(motion, height, x_axis)
+        else:
+            self._draw_behavior_plot(behavior, height, x_axis)
+
+    def _draw_motion_plot(
+        self, motion: MotionPlot, height: float, x_axis: bool = True
+    ) -> None:
         """The motion plot in the trace plot's x units with the playhead on
         it; dragging the playhead scrubs the movie.
         """
@@ -4499,9 +4575,29 @@ class ManualRoiWidget:
             cursor_id=1,
             x_per_second=plot.per_second,
             x_label=X_AXIS_LABELS[self.x_unit],
+            x_axis=x_axis,
         )
         if held and moved is not None:
             self.playhead.seek(plot.seconds(moved), source="motion_plot")
+
+    def _draw_behavior_plot(
+        self, behavior: BehaviorPlot, height: float, x_axis: bool = True
+    ) -> None:
+        """The behavior plot in the trace plot's x units with the playhead on
+        it; dragging the playhead scrubs the movie.
+        """
+        plot = self.plot_axis()
+        moved, held = behavior.draw(
+            "##roi_behavior_plot",
+            height,
+            cursor=plot.units(self.playhead.time),
+            cursor_id=2,
+            x_per_second=plot.per_second,
+            x_label=X_AXIS_LABELS[self.x_unit],
+            x_axis=x_axis,
+        )
+        if held and moved is not None:
+            self.playhead.seek(plot.seconds(moved), source="behavior_plot")
 
     def _draw_trace_plot(self, lines, height: float) -> None:
         """The trace plot; inside subplots ``height`` is the cell's."""
@@ -4535,6 +4631,9 @@ class ManualRoiWidget:
             )
             ctrl = io.key_ctrl
             plot = self.plot_axis()
+            # the behavior's epochs (a reward zone) as bands behind the traces
+            if self.behavior and self.show_behavior:
+                self.behavior.shade_into(plot.per_second)
             for label, tkey in lines:
                 y, yneu = self._display(tkey)
                 if y is None:

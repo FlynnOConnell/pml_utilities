@@ -12,6 +12,7 @@ from typing import Any
 from imgui_bundle import imgui
 
 from mbo_utilities.gui._dialogs import start_open_prompt
+from mbo_utilities.gui.widgets.pipelines import open_pipeline, quick_pipelines
 
 
 def handle_keyboard_shortcuts(parent: Any):
@@ -72,6 +73,17 @@ def handle_keyboard_shortcuts(parent: Any):
         )
     ):
         toggle_side_panel(parent)
+
+    # Shift+P: the pipeline for the recording on screen in its own window, set
+    # to it; without one, the Process tab's selected pipeline popped out
+    if not io.key_ctrl and io.key_shift and imgui.is_key_pressed(imgui.Key.p, False):
+        quick = quick_pipelines(parent)
+        name = (
+            quick[0].name if quick else getattr(parent, "_selected_pipeline_name", None)
+        )
+        if name:
+            parent.logger.info(f"Shortcut: 'Shift+P' ({name} window)")
+            open_pipeline(parent, name, "window", seed=bool(quick))
 
     # space is handled via the renderer-level handler installed by
     # rebind_space_to_playback; fpl's ImguiFigure registers its own

@@ -113,6 +113,17 @@ class PipelineWidget(ABC):
         """
         return None
 
+    #: whether :meth:`seed_from_view` is implemented. A surface showing a
+    #: recording (the MESc tab) offers "open set to what is on screen" only
+    #: for pipelines that set this.
+    seeds_from_view: bool = False
+
+    def seed_from_view(self) -> None:
+        """Set the selection to what the viewer shows: the recording on
+        screen and the slice its sliders are on. Everything else stays as
+        seeded (a previous run's domains and settings).
+        """
+
     def cleanup(self) -> None:
         """Clean up resources when widget is destroyed.
 

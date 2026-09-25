@@ -17,6 +17,7 @@ from imgui_bundle import implot
 
 from mbo_utilities.arrays.features import MotionCorrection
 from mbo_utilities.gui.imgui.lines import (
+    X_AXIS_HIDDEN,
     decimate_minmax,
     drag_vline,
     line,
@@ -82,10 +83,12 @@ class MotionPlot:
         duration_s: float | None = None,
         x_per_second: float = 1.0,
         x_label: str = "time (s)",
+        x_axis: bool = True,
     ) -> tuple[float | None, bool]:
         """The traces on one plot; inside subplots ``height`` is the cell's.
         The x axis is time in the host's units, ``x_per_second`` of them per
-        second (frames of a movie, ms). The first draw fits y and shows the
+        second (frames of a movie, ms); ``x_axis`` False hides it, for a row
+        stacked over another plot's. The first draw fits y and shows the
         whole recording (``duration_s``, the traces' own extent without),
         which is also as far as the x axis can pan. ``cursor`` marks a time
         in x units; with ``cursor_id`` it is draggable, and the moved time
@@ -97,7 +100,12 @@ class MotionPlot:
         if fit:
             implot.set_next_axis_to_fit(implot.ImAxis_.y1)
         with line_plot(
-            plot_id, x_label, self.y_label, height=height, legend=True
+            plot_id,
+            x_label if x_axis else "",
+            self.y_label,
+            height=height,
+            legend=True,
+            x_flags=0 if x_axis else X_AXIS_HIDDEN,
         ) as ok:
             if not ok:
                 return cursor, False
