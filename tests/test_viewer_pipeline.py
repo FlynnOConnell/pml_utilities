@@ -118,7 +118,7 @@ class TestSqueezeWrapperNumpyLeak:
 
 class TestReloadDataConsistency:
     """`load_new_data` (file-dialog reload) must produce the same view as
-    the initial launch path in `_create_image_widget`. Both must apply
+    the initial launch path in `build_host`. Both must apply
     the singleton-dim squeeze; otherwise the same file gives different
     shapes depending on whether you opened it via the CLI or the dialog.
 
