@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from importlib.metadata import entry_points
 
-from mbo_utilities import log
+from mbo_utilities import log as mbo_log
 from mbo_utilities.gui.app._app import App
 from mbo_utilities.gui.app.apps.console import ConsoleApp
 from mbo_utilities.gui.app.apps.curate import CurateApp
@@ -36,7 +36,7 @@ from mbo_utilities.gui.app.apps.set_metadata import SetMetadataApp
 from mbo_utilities.gui.app.apps.signal_quality import SignalQualityApp
 from mbo_utilities.gui.app.apps.viewer import ViewerApp
 
-logger = log.get("gui.app")
+logger = mbo_log.get("gui.app")
 
 ENTRY_POINT_GROUP = "mbo_utilities.apps"
 
