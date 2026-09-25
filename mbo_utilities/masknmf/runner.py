@@ -333,7 +333,7 @@ def _stage_compression(
     upstream_key,
     upstream_computed,
 ):
-    """Returns (PMDArray, seconds, prov_key)."""
+    """Returns (CompressionArray, seconds, prov_key)."""
     pmd_path = plane_dir / PMD_FILE
     cached = pmd_path.exists()
     action = stage_action(cfg.do_compression, cached)
@@ -355,7 +355,7 @@ def _stage_compression(
 
     if action == "skip":
         logger.info(f"masknmf: reusing {PMD_FILE} (compression skipped)")
-        return masknmf.PMDArray.from_hdf5(str(pmd_path)), 0.0, key
+        return masknmf.CompressionArray.from_hdf5(str(pmd_path)), 0.0, key
 
     if action == "reuse" and upstream_computed:
         logger.info("masknmf: registration recomputed; recomputing compression")
@@ -369,7 +369,7 @@ def _stage_compression(
             action = "compute"
     if action == "reuse":
         try:
-            pmd = masknmf.PMDArray.from_hdf5(str(pmd_path))
+            pmd = masknmf.CompressionArray.from_hdf5(str(pmd_path))
             logger.info(f"masknmf: reusing {PMD_FILE}")
             return pmd, 0.0, key
         except Exception as e:
@@ -393,7 +393,7 @@ def _stage_compression(
     pmd = strat.compress(moco)
     _export_atomic(pmd, pmd_path, prov)
     # reload so demixing always consumes the exact persisted decomposition
-    return masknmf.PMDArray.from_hdf5(str(pmd_path)), time.time() - t0, key
+    return masknmf.CompressionArray.from_hdf5(str(pmd_path)), time.time() - t0, key
 
 
 def _spline_detrender(
@@ -520,11 +520,11 @@ def _stage_demixing(
             torch.cuda.empty_cache()
 
     logger.info(f"masknmf: spatial highpass (sigma={cfg.filter_sigma})")
-    filtered = masknmf.demixing.filters.spatial_filter_pmd(
+    filtered = masknmf.demixing.filters.spatial_filter_compressed_array(
         pmd,
         batch_size=runtime.frame_batch_size,
         filter_sigma=cfg.filter_sigma,
-        device=device,
+        target_device=device,
     )
     _empty_cache()
 
@@ -549,8 +549,8 @@ def _stage_demixing(
             "lower mad_correlation_threshold or inspect the data"
         )
 
-    a_init = filtered_results.ac_array.export_a()
-    c_init = filtered_results.ac_array.export_c()
+    a_init = filtered_results.signals_array.export_spatial_demixed()
+    c_init = filtered_results.signals_array.export_temporal_demixed()
 
     demixer = masknmf.SignalDemixer(
         pmd, device=device, frame_batch_size=runtime.frame_batch_size
@@ -622,26 +622,12 @@ def _movie_stats(moco) -> tuple[np.ndarray, np.ndarray]:
 
 def _extract_footprints(results):
     """(indices (2,nnz), values, baseline) numpy from DemixingResults."""
-    ac = results.ac_array
-    sparse = None
-    for obj, attr in ((results, "a"), (ac, "a"), (ac, "_a")):
-        t = getattr(obj, attr, None)
-        if t is not None and hasattr(t, "coalesce"):
-            sparse = t
-            break
-    if sparse is not None:
-        coo = sparse.coalesce()
-        indices = _to_np(coo.indices())
-        values = _to_np(coo.values())
-    else:
-        dense = ac.export_a()  # (H, W, K)
-        h, w, k = dense.shape
-        flat = dense.reshape(h * w, k)
-        pix, roi = np.nonzero(flat)
-        indices = np.stack([pix, roi])
-        values = flat[pix, roi]
-    baseline = getattr(results, "b", None)
-    return indices, values, _to_np(baseline) if baseline is not None else None
+    coo = results.spatial_demixed.coalesce()
+    return (
+        _to_np(coo.indices()),
+        _to_np(coo.values()),
+        _to_np(results.static_baseline),
+    )
 
 
 def run_plane(
@@ -749,14 +735,14 @@ def run_plane(
             _history_entry(
                 "masknmf_compression",
                 timing["compression"],
-                rank=int(getattr(pmd, "pmd_rank", 0) or 0),
+                rank=pmd.compression_rank if pmd is not None else 0,
             )
         )
     else:
         history.append(
             _history_entry(
                 "masknmf_compression",
-                rank=int(getattr(pmd, "pmd_rank", 0) or 0),
+                rank=pmd.compression_rank if pmd is not None else 0,
                 reused=True,
             )
         )
@@ -798,7 +784,7 @@ def run_plane(
     n_rois = 0
     if results is not None:
         indices, values, baseline = _extract_footprints(results)
-        c = np.asarray(results.ac_array.export_c(), dtype=np.float32)
+        c = np.asarray(results.signals_array.export_temporal_demixed(), dtype=np.float32)
         # PMD standardisation images calibrate c back to movie units; without
         # them F.npy stays in noise-SD units and dF/F cannot be formed.
         info = _outputs.write_plane_outputs(
@@ -808,10 +794,8 @@ def run_plane(
             c=c,
             shape=raw.shape[1:],
             baseline=baseline,
-            var_img=_to_np(getattr(pmd, "var_img", None)) if pmd is not None else None,
-            mean_img=_to_np(getattr(pmd, "mean_img", None))
-            if pmd is not None
-            else None,
+            var_img=_to_np(pmd.noise_variance_image) if pmd is not None else None,
+            mean_img=_to_np(pmd.mean_image) if pmd is not None else None,
         )
         n_rois = info["n_rois"]
         logger.info(f"masknmf: plane {plane} -> {n_rois} ROIs")
@@ -851,7 +835,7 @@ def run_plane(
             "total_plane_runtime": timing["total_plane_runtime"],
         },
         "n_rois": n_rois,
-        "pmd_rank": int(getattr(pmd, "pmd_rank", 0) or 0),
+        "pmd_rank": pmd.compression_rank if pmd is not None else 0,
         "pipeline": "masknmf",
         "masknmf": settings.to_dict(),
         "processing_history": history,

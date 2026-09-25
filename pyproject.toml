@@ -40,7 +40,7 @@ dependencies = [
 	"uvicorn>=0.30",
 	"websockets>=13",
 	"imgui-bundle>=1.92.801,<1.92.900",
-	"imgui_debugger>=0.2,<0.3",
+	"imgui_debugger @ git+https://github.com/FlynnOConnell/imgui_debugger@ad9986a59b19428c4fa42f0b64891f8e03bac592",
 	"wgpu>=0.28.1",
 	"submitit>=1.5.0",
 	"imagecodecs>=2026.6.6",
@@ -60,6 +60,7 @@ tiff = "mbo_utilities.arrays.tiff:TiffArray"
 zarr = "mbo_utilities.arrays.zarr:ZarrArray"
 suite2p = "mbo_utilities.arrays.suite2p:Suite2pArray"
 h5 = "mbo_utilities.arrays.h5:H5Array"
+bruker = "mbo_utilities.arrays.bruker:BrukerArray"
 mesc = "mbo_utilities.arrays.mesc:MescArray"
 results = "mbo_utilities.results:ResultsArray"
 demixing = "mbo_utilities.arrays.demixing:DemixingArray"
@@ -111,10 +112,6 @@ docs = [
     "pygfx>=0.14.0",
 ]
 all = ["pml_utilities[napari,notebooks]"]
-
-[tool.uv.sources]
-# imgui_debugger is not on PyPI yet; resolve it from the sibling checkout
-imgui_debugger = { path = "../imgui_debugger", editable = true }
 
 [tool.uv]
 default-groups = ["dev", "suite2p", "napari", "notebooks", "docs"]

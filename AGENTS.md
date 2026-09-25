@@ -22,7 +22,7 @@ pml_utilities/
 │   ├── arrays/               # one LazyArray subclass per format + read-time views
 │   │   ├── _base.py          # _imwrite_base, ReductionMixin, TiffReaderMixin, DIMS
 │   │   ├── features/         # dims, tags, slicing, selection, roi, phase, frame average, stats
-│   │   ├── tiff.py zarr.py h5.py numpy.py bin.py mesc.py suite2p.py mp4.py
+│   │   ├── tiff.py zarr.py h5.py bruker.py numpy.py bin.py mesc.py suite2p.py mp4.py
 │   │   └── isoview/          # IsoView light-sheet trees (four layouts, one class)
 │   ├── metadata/             # canonical vocabulary, alias resolution, OutputMetadata
 │   ├── pipeline_registry.py  # PipelineInfo + entry-point loading
@@ -142,6 +142,7 @@ Format-specific labels win over the rank guess:
 | Multi-file TIFF | `planeNN` in the filename groups files onto Z; otherwise files concatenate along T; `roiN` yields one array per ROI. |
 | Suite2p dir | `ops.npy` per plane dir; plane dirs stack onto Z; T is derived from the binary's file size, not `ops["nframes"]`. |
 | MESc | `MethodType`: 1 timeseries `(T, C, 1, Y, X)`; 2 z-stack `(1, C, Z, Y, X)`; 6/7 linescan `(T, C, R, n_lines, width)`; 8 chessboard and 9/10 ribbon `(T, C, R, Y, X)`; 11 multicube has real depth on Z. `metadata["mesc_z_axis_meaning"]` says whether Z is `roi_index`, `depth` or `none`. |
+| Bruker HDF5 | the dataset's HDF5 dimension labels (`t z y x c`); `element_size_um` in the stored order of the spatial axes. |
 | H5 | dataset rank per the table; `imaging/data` 5D is `TZYXC` (Mini2P); a 4D dataset with `scan_mode` + `n_channel == shape[-1]` is `TYXC`. |
 | Zarr | array rank per the table; a directory of `.zarr` stores stacks them onto Z. |
 | IsoView | tree layout: TM folders → T, cameras/views → C, volume → Z. |
@@ -186,9 +187,16 @@ never branch on rank.
 3. Every class in the `mbo_utilities.lazy_arrays` entry-point group (plus
    `register_array_class` calls) is asked `can_open(path)` in descending
    `PRIORITY`; ties keep entry-point order. First `True` wins. Priorities today:
-   `IsoviewArray` 90, `ResultsArray` 70, `MescArray` 60, everything else 50.
+   `IsoviewArray` 90, `ResultsArray` 70, `MescArray` 60, `BrukerArray` 60, everything else 50.
 4. Inputs no class claims (file lists, `.bin`, `.klb`, `.mp4`, `reg_tif/`, mixed
    directories) fall through to the legacy chain in `reader._imread_impl`.
+5. A directory or list of files a class above 50 claims (a Bruker h5, a MESc:
+   whole recordings each) opens one through that class, the first by name for a
+   directory and the first listed for a list, and logs the rest
+   (`reader._open_first_recording`); it never reaches a suffix reader that would
+   guess the axes, and never concatenates them. A directory or list of
+   suffix-level files (TIFF, plain h5) still concatenates through the legacy
+   chain.
 
 `can_open` must be cheap (suffix, header, sidecar presence) and never raise. Add a
 class by listing it in `pyproject.toml` under `[project.entry-points."mbo_utilities.lazy_arrays"]`.
@@ -258,15 +266,57 @@ applied as `arr.motion_correction`, a `features.MotionCorrection` or `None`
 - `MescArray.motion_correction` is the `total` RTMC curves (`rtmc_motion`); the
   `intercycle` increments stay on `arr.rtmc`. A unit that armed RTMC without it
   ever moving reports `None`.
-- One GUI consumer: `gui/imgui/motion.MotionPlot`, drawn under the trace in
-  linked subplots by the Traces tab (`manual_roi.draw_traces`), the line-scan
-  viewer's `LineTracesPanel` and the curation dashboard, behind one `MC`
+- One GUI consumer: `gui/imgui/motion.MotionPlot`, drawn in linked subplots
+  with the trace by the Traces tab (over it, §7.6 the stack,
+  `manual_roi.draw_traces`), the line-scan viewer's `LineTracesPanel` and the
+  curation dashboard (under it), behind one `MC`
   checkbox. The plot never clamps its x axis to the traces on disk: a pipeline
   run on a frame window leaves shorter traces than the recording.
 - Adding a source means overriding `motion_correction` on the reader; nothing in
   `gui` names a source.
 
 Pinned by `tests/test_motion_plot.py`, `tests/test_mesc.py`.
+
+### 5.9 Behavior
+
+What the animal did during a recording is `arr.behavior`, a
+`behavior.Behavior` or `None`, on the recording's clock like §5.8. Its three
+parts are the ones NWB and Neo use, under plain names:
+
+| Field | Meaning | NWB / Neo |
+|-------|---------|-----------|
+| `signals` | `{name: BehaviorSignal(t, values, unit)}`: continuous measurements sampled in time (`position` in mm, `speed` in mm/s) | `TimeSeries` / `AnalogSignal` |
+| `events` | `{name: t}`: instants (`lick`, `reward`, `lap`) | events / `Event` |
+| `epochs` | `{name: (n, 2)}`: start and stop of intervals (a reward zone, a trial) | `TimeIntervals` / `Epoch` |
+| `sync`, `offset_s` | the imaging sync pulses on the logger's own clock, and the logger time the recording started at (`sync[0]`, else 0); every other time is already shifted by it | |
+| `source`, `subject`, `start`, `path`, `info` | the logger and version, the animal, the wall-clock start, the file, the logger's settings verbatim | |
+
+- A behavior log is a file of its own, so no reader deposits it. `LazyArray.behavior`
+  is a settable facet; `behavior.behavior_for(arr)` fills it on first use with
+  `find_behavior(arr.source_path)`: a file a reader knows (`READERS`, by suffix),
+  beside the recording, one folder up or in a sibling folder named `behavior*`,
+  named after the same subject and day as the recording (the first two `_` words,
+  `u005a04_20260915`). The answer, found or not, is kept on the array.
+- One reader today: `behavior/tdml.py` for BehaviorMate's newline-delimited JSON.
+  The treadmill position wraps at `track_length` (the animal keeps running, so the
+  speed unwraps it) and is zeroed after each lap's inter-trial interval (it does
+  not, so a jump above `MAX_SPEED_MM_S` is NaN in the speed). The reward valves are
+  every valve but `sync_pin`; each context id is one epoch kind. A new logger is a
+  function in `READERS`, nothing else.
+- One GUI consumer: `gui/imgui/behavior.BehaviorPlot`, drawn over the trace by the
+  Traces tab in the same linked subplots as `MotionPlot`, behind a `Behavior`
+  checkbox. Three layers: epochs as translucent bands over the full height, the
+  first signal on the left axis and the second on the right over the upper part,
+  and the events as a raster strip along the bottom (`LANE_SHARE`): one lane per
+  kind, a tick per event, the kind's name at the left edge. Bands and lanes sit on
+  a third, hidden axis locked to lane units, so zooming the signals never moves
+  them; every layer is a legend entry. Never draw events as full-height lines: a
+  few thousand licks bury everything. `shade_into` puts the same bands behind
+  another plot on the time axis; the trace plot calls it, so a reward zone shows
+  behind the traces. It seeks the playhead like the motion plot.
+
+Pinned by `tests/test_behavior.py`, `tests/test_manual_roi.py`
+(`TestTracePlotView::test_a_recordings_behavior_stacks_under_the_trace`).
 
 ## 6. Metadata: the canonical vocabulary
 
@@ -764,7 +814,8 @@ the other.
   tissue with the ROI's own plane lost in it. `ReferenceView` is that set in a
   `SummaryImageViewer` popup (masknmf's full-FOV viewer, `roi_provider(key)`
   returning `(points, rgba, thickness)` polylines: MESc's colours, every ROI
-  solid, the slider's ROI `SELECTED_THICKNESS`); its caption says how many of the
+  dimmed to `ON_ALPHA`, the slider's ROI drawn last, opaque, at
+  `SELECTED_THICKNESS` over a white `HALO_THICKNESS` halo); its caption says how many of the
   unit's ROIs a Z-stack holds when some were scanned outside it. Each
   `ReferenceImage` carries its `unit` and, for a stack, the `slice` its ROIs sit
   on, so the popup's one button (`on_show(unit, slice)`) displays that unit in
@@ -807,6 +858,18 @@ the other.
   of that z-plane and channel (`run_full_plane`, whose worker args carry `channel`
   1-based and `tp_indices` for a frame window). No store mask is involved, so it
   never claims pixels.
+- **The stack.** The Traces panel stacks up to three plots in linked subplots,
+  each behind its own checkbox, top to bottom: the recording's behavior
+  (`Behavior`, §5.9), its motion correction (`MC`, §5.8), then the traces. The
+  bottom row carries the one x axis they share; every row above it hides its
+  own (`lines.X_AXIS_HIDDEN`, the plot's `x_axis=False`) and the plot padding
+  is cut to 2 px inside the subplots, so the rows sit tight and read as one
+  plot. `draw_traces` builds the stack from what the recording has and what is
+  ticked, refits every plot when the stack changes (they are new plots to
+  implot) and grows the panel by each plot's own height
+  (`MOTION_PANEL_HEIGHT - PANEL_HEIGHT`, `BEHAVIOR_PLOT_HEIGHT`); `_draw_plot`
+  draws one by name. A new facet with a time axis is another row in that
+  stack, above the traces, not a panel of its own.
 - **Playhead.** `gui/playhead.Playhead` is the one time on screen, in seconds on the
   recording's clock (raw frames when `fs` is unknown); it emits `time` with its
   `source`. Every view keeps a `TimeAxis` (`per_second`, `offset`) and converts
@@ -1097,6 +1160,9 @@ When they disagree, fix the docs.
   `AppHost.__init__` right after `style_imgui_opaque()`, so a saved style wins
   over the shipped theme. Window geometry stays imgui's, in
   `get_mbo_dirs()["imgui"]/app.ini`. Nothing else writes the style.
+  `imgui_debugger` is a base dependency, pinned to a commit of its GitHub
+  repository in `pyproject.toml` (the PyPI release lags the API used here);
+  bump the pin when it moves.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,
   `KEEP_TEST_OUTPUT`, `MBO_PIPELINE_TIFF`; logging and retention variables are
   listed in §8.5.

@@ -22,8 +22,11 @@ directly with h5py:
   unit's ROI axis. ``z0 == z1`` on every real ROI checked. This is the
   segment the AOD actually scanned, ``ROI width x pixelSize`` long; the
   protocol's ``guideLine`` is the shorter hand-drawn guide it was fitted to.
-  A chessboard or ribbon unit's ``["contours"]`` instead: the four corners
-  of each patch, ``[[x0..x3], [y0..y3], [z0..z3]]``, one z per patch.
+  A chessboard, ribbon or multicube unit's ``["contours"]`` instead: the
+  closed outline of each patch, one z per patch. A chessboard or multicube
+  patch is its four corners, ``[[x0..x3], [y0..y3], [z0..z3]]``; a ribbon
+  (MethodType 9) is one long side then the other walked back, 50-150
+  points, with the short edges implied by the closing jumps.
 - A Z-stack unit's ``ReferenceViewportJSON["viewports"][0]``: the FOV's
   physical placement (``geomTransTransl``, ``width``, ``height``), XY corner
   and the stack's own Z origin, in the same micron frame as the endpoints.
@@ -81,6 +84,20 @@ def _outlines_of(unit) -> list[np.ndarray] | None:
     return [np.asarray(seg, dtype=float) for seg in outlines]
 
 
+def _is_patch(seg) -> bool:
+    """A closed outline: a chessboard or multicube patch's four corners, or a
+    ribbon's two long sides (one forward, one back); a line has 2 or 3 points.
+    """
+    return seg.shape[1] >= 4
+
+
+def _far_end(seg) -> int:
+    """Index of the point a length is measured to: a line's last point, the
+    end of a patch's first side (corner 1 of 4, a ribbon's first long side).
+    """
+    return seg.shape[1] // 2 - 1 if _is_patch(seg) else -1
+
+
 def _viewport_of(unit) -> dict | None:
     """:func:`viewport_geometry` of an open unit group."""
     raw = unit.attrs.get("ReferenceViewportJSON")
@@ -102,8 +119,8 @@ def _viewport_of(unit) -> dict | None:
 def roi_outlines_um(mesc_path, unit_key: str) -> list[np.ndarray] | None:
     """One ``(3, N)`` ``[xs, ys, zs]`` array per ROI, in microns: the ends of
     a line scan's line (``driftEndPoints``, N = 2, or 3 with the midpoint) or
-    the corners of a chessboard or ribbon patch (``contours``, N = 4, in
-    drawing order), in the order of the unit's ROI axis.
+    the closed outline of a patch (``contours``: N = 4 corners, or a ribbon's
+    two long sides, in drawing order), in the order of the unit's ROI axis.
 
     ``None`` if this unit has no ``CoordinateMapJSON`` or neither key inside
     it (present on real AOD units, not guaranteed on others).
@@ -212,8 +229,7 @@ def roi_placements(
         z_um = float(seg[2].mean()) - depth["transl_z"]
         raw_idx = int(np.round((z_um - depth["min_z"]) / step)) if step else 0
         idx = int(np.clip(raw_idx, 0, zdim - 1))
-        # a patch is its four corners; a line runs start -> (midpoint) -> end
-        end = 1 if seg.shape[1] == 4 else -1
+        end = _far_end(seg)
         dxy = seg[:2, end] - seg[:2, 0]
         length = float(np.hypot(*dxy))
         n = None if sample_counts is None else int(sample_counts[i])
@@ -310,7 +326,8 @@ def image_overlays(
         unit       the multi-ROI unit's key, ``MSession_0/MUnit_19``
         munit      its ``MUnit_19``
         roi        0-based index on that unit's ROI axis
-        kind       ``"line"`` (open polyline) or ``"patch"`` (closed, 5 points)
+        kind       ``"line"`` (open polyline) or ``"patch"`` (closed, first
+                   point repeated at the end)
         pixels     ``(N, 2)`` ``[col, row]`` on the image
         color      ``(r, g, b)`` the MESc GUI drew it in (``ROIJSON``), or None
         z_um       absolute depth
@@ -381,7 +398,7 @@ def image_overlays(
                     and placements[i]["in_range"]
                 ):
                     continue
-                kind = "patch" if seg.shape[1] == 4 else "line"
+                kind = "patch" if _is_patch(seg) else "line"
                 xy = seg[:2].T
                 if kind == "patch":
                     xy = np.vstack([xy, xy[:1]])
@@ -465,7 +482,7 @@ def line_positions(
     out = []
     for i, seg in enumerate(outlines):
         seg = np.asarray(seg, dtype=float)
-        end = 1 if seg.shape[1] == 4 else -1
+        end = _far_end(seg)
         length = float(np.hypot(*(seg[:2, end] - seg[:2, 0])))
         n = (
             None

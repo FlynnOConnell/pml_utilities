@@ -279,6 +279,8 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui._top_strip import TopStrip
     from mbo_utilities.gui.mesc_reference import (
+        HALO_THICKNESS,
+        ON_ALPHA,
         ON_THICKNESS,
         SELECTED_THICKNESS,
         ReferenceView,
@@ -315,19 +317,23 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
             iw.figure.canvas.draw()
         assert not errors, errors[0]
         lines = view.contours("MUnit_4 picture")
+        # the others dimmed, the selected one last over a white halo
         assert [t for _p, _c, t in lines] == [
+            ON_THICKNESS,
+            ON_THICKNESS,
+            ON_THICKNESS,
+            HALO_THICKNESS,
             SELECTED_THICKNESS,
-            ON_THICKNESS,
-            ON_THICKNESS,
-            ON_THICKNESS,
         ]
-        assert [c[3] for _p, c, _t in lines] == [1.0, 1.0, 1.0, 1.0]
+        assert [c[3] for _p, c, _t in lines] == [ON_ALPHA, ON_ALPHA, ON_ALPHA, 1.0, 1.0]
+        assert lines[3][1] == (1.0, 1.0, 1.0, 1.0)
         assert all(p.shape == (2, 2) for p, _c, _t in lines)
         # the stack draws the three lines scanned inside it, not the fourth
         assert [t for _p, _c, t in view.contours("MUnit_0 slices 4-8")] == [
+            ON_THICKNESS,
+            ON_THICKNESS,
+            HALO_THICKNESS,
             SELECTED_THICKNESS,
-            ON_THICKNESS,
-            ON_THICKNESS,
         ]
         # clicking a line in the popup selects its ROI: the slider (found by
         # position on a line scan) moves and the highlight follows
@@ -336,12 +342,15 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         near = pts[0] + 0.25 * (pts[1] - pts[0])
         assert view.pick("MUnit_4 picture", float(near[1]), float(near[0])) == 2
         assert int(iw.indices[roi_slider(iw.dim_names)]) == 2
-        assert [t for _p, _c, t in view.contours("MUnit_4 picture")] == [
+        shown = view.contours("MUnit_4 picture")
+        assert [t for _p, _c, t in shown] == [
             ON_THICKNESS,
             ON_THICKNESS,
+            ON_THICKNESS,
+            HALO_THICKNESS,
             SELECTED_THICKNESS,
-            ON_THICKNESS,
         ]
+        assert np.array_equal(shown[-1][0], pts[:, ::-1])
         assert view.pick("MUnit_4 picture", -40.0, -40.0) is None
         assert view.pick("nowhere", 0.0, 0.0) is None
         assert view.contours("nowhere") == []

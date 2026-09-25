@@ -56,6 +56,7 @@ the 5D array underneath for writers and the viewer.
 | ↳ Standard/ImageJ | `TiffArray` | `(T, C, Z, Y, X)` | All TIFFs including ImageJ hyperstacks |
 | **`.bin`** | `BinArray` | as-passed, e.g. `(T, Y, X)` | Suite2p binary (requires shape) |
 | **`.h5`** | `H5Array` | `(T, C, Z, Y, X)` | HDF5 datasets |
+| ↳ `imaging_system = bruker` dataset | `BrukerArray` | `(T, C, Z, Y, X)` | Bruker HDF5 export; axes from its dimension labels |
 | ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
 | **`.zarr`** | `ZarrArray` | `(T, C, Z, Y, X)` | Zarr v3 / OME-Zarr |
@@ -75,6 +76,7 @@ imread(path)
 ├── np.ndarray ───────────────────────────► NumpyArray (in-memory)
 ├── .npy ─────────────────────────────────► NumpyArray (mmap)
 ├── .h5 / .hdf5
+│   ├── imaging_system = bruker ──────────► BrukerArray
 │   ├── DemixingResults group ────────────► DemixingArray (masknmf)
 │   └── else ─────────────────────────────► H5Array
 ├── .mesc ─────────────────────────────────► MescArray (one MUnit)
@@ -239,6 +241,21 @@ print(arr.nz)     # 1               — TCZYX sizes are still available
 # read/write via memmap
 arr[0] = new_frame
 arr.close()
+```
+
+(brukerarray)=
+### BrukerArray
+
+A Bruker recording exported to HDF5: a dataset with the attribute
+`imaging_system = "bruker"`. Its HDF5 dimension labels (`t z y x c` in the
+files seen so far) decide the axes, whatever the rank. `element_size_um` gives
+the pixel size of the spatial axes in their stored order (`dz` only when there
+is more than one plane) and `frame_period` gives `fs`.
+
+```python
+arr = mbo.imread("/path/to/u005a04_20260915_FamfDay1_FOV1-002.h5")
+arr.shape             # (29803, 1, 1, 512, 512)
+arr.dx, arr.fs        # 1.102, 30.02
 ```
 
 (h5array)=

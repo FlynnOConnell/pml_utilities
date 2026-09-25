@@ -106,6 +106,7 @@ if TYPE_CHECKING:
         with_axial_shifts as with_axial_shifts,
     )
     from mbo_utilities.arrays.bin import BinArray as BinArray
+    from mbo_utilities.arrays.bruker import BrukerArray as BrukerArray
     from mbo_utilities.arrays.h5 import (
         H5Array as H5Array,
     )
@@ -161,6 +162,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # array classes
     "Suite2pArray": (".suite2p", "Suite2pArray"),
     "H5Array": (".h5", "H5Array"),
+    "BrukerArray": (".bruker", "BrukerArray"),
     "list_h5_datasets": (".h5", "list_h5_datasets"),
     "MescArray": (".mesc", "MescArray"),
     "list_mesc_units": (".mesc", "list_mesc_units"),
@@ -242,6 +244,7 @@ __all__ = [
     "CHUNKS_3D",
     "CHUNKS_4D",
     "BinArray",
+    "BrukerArray",
     "DemixingArray",
     "LBMPiezoArray",
     "H5Array",

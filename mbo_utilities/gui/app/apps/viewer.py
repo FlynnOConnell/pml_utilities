@@ -10,7 +10,7 @@ from imgui_bundle import hello_imgui, imgui
 from scipy.ndimage import gaussian_filter
 
 from mbo_utilities import log
-from mbo_utilities.arrays import FrameAveragedView, average_frames
+from mbo_utilities.arrays import FrameAveragedView, MescArray, average_frames
 from mbo_utilities.arrays.features import find_slider_name
 from mbo_utilities.gui._colormaps import DEFAULT_COLORMAPS
 from mbo_utilities.gui._imgui_helpers import set_tooltip
@@ -45,11 +45,20 @@ def split_rois(arr) -> tuple[list, list[str] | None]:
     return views, [f"ROI {roi}" for roi in rois]
 
 
-def filter_frame(frame, mean=None, sigma: float = 0.0) -> np.ndarray:
-    """One displayed frame less its plane's mean image, then a gaussian of ``sigma`` px."""
+def filter_frame(
+    frame, mean=None, sigma: float = 0.0, subtract: bool = True, invert: bool = False
+) -> np.ndarray:
+    """One displayed frame less its plane's mean image (``subtract``), flipped
+    about it for a negative-going indicator (``invert``, ``2 * mean - frame``),
+    then a gaussian of ``sigma`` px.
+    """
     out = np.asarray(frame, dtype=np.float32)
     if mean is not None and out.shape == mean.shape:
         out = out - mean
+        if invert:
+            out = -out
+        if not subtract:
+            out = out + mean
     if sigma > 0:
         out = gaussian_filter(out, sigma)
     return out
@@ -98,6 +107,7 @@ class ViewerApp(App):
         self.window = 1
         self.sigma = 0.0
         self.mean_subtraction = False
+        self.invert_deflection = False
         self.auto_contrast = False
         # whether the filter on the viewer subtracts a mean image yet
         self._subtracting = False
@@ -113,6 +123,7 @@ class ViewerApp(App):
         if recording is not self.recording:
             self.sigma = 0.0
             self.mean_subtraction = False
+            self.invert_deflection = False
             self.auto_contrast = False
         self.recording = recording
         self.projection = "mean"
@@ -130,10 +141,11 @@ class ViewerApp(App):
         self._shown = 0
 
     def apply_filters(self, host) -> None:
-        """Put the blur and the plane's mean subtraction on the viewer, or neither."""
+        """Put the blur and the plane's mean subtraction or inversion on the viewer, or neither."""
         mean = None
         stats = host.zstats
-        if self.mean_subtraction and stats is not None and all(stats.done):
+        uses_mean = self.mean_subtraction or self.invert_deflection
+        if uses_mean and stats is not None and all(stats.done):
             slot = stats.means[0]
             stack = slot.get(current_breakout_key(stats, 0))
             if stack is None:
@@ -152,7 +164,13 @@ class ViewerApp(App):
                 mean = np.ascontiguousarray(mean, dtype=np.float32)
         self._subtracting = mean is not None
         host.viewer.spatial_func = (
-            partial(filter_frame, mean=mean, sigma=self.sigma)
+            partial(
+                filter_frame,
+                mean=mean,
+                sigma=self.sigma,
+                subtract=self.mean_subtraction,
+                invert=self.invert_deflection,
+            )
             if mean is not None or self.sigma > 0
             else None
         )
@@ -173,11 +191,15 @@ class ViewerApp(App):
         host.zplane = index[z_name] if z_name else 0
         if (host.channel, host.zplane) != self._plane:
             self._plane = (host.channel, host.zplane)
-            if self.mean_subtraction:
+            if self.mean_subtraction or self.invert_deflection:
                 self.apply_filters(host)
             if self.auto_contrast:
                 host.viewer.reset_vmin_vmax_frame()
-        elif self.mean_subtraction and not self._subtracting and all(host.zstats.done):
+        elif (
+            (self.mean_subtraction or self.invert_deflection)
+            and not self._subtracting
+            and all(host.zstats.done)
+        ):
             self.apply_filters(host)
 
     def on_keys(self, host) -> None:
@@ -299,7 +321,21 @@ class ViewerApp(App):
                 if ready
                 else "Waits for the summary stats, which hold the mean images."
             )
-            if changed or sub_changed:
+            inv_changed = False
+            if isinstance(self.recording, MescArray):
+                imgui.begin_disabled(not ready)
+                inv_changed, self.invert_deflection = imgui.checkbox(
+                    "Invert deflection", self.invert_deflection
+                )
+                imgui.end_disabled()
+                set_tooltip(
+                    "Flip each frame about its plane's mean image (2 x mean - frame), "
+                    "so a negative-going indicator's spikes show bright. Display "
+                    "only; traces and runs read the raw data."
+                    if ready
+                    else "Waits for the summary stats, which hold the mean images."
+                )
+            if changed or sub_changed or inv_changed:
                 self.sigma = max(0.0, sigma)
                 self.apply_filters(host)
 
