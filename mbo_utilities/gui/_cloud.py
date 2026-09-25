@@ -34,16 +34,9 @@ def _dir_for(fpath) -> str:
     return str(path)
 
 
-def draw_cloud_tab(parent, fpath=None) -> None:
-    """Draw the cloud panel for ``parent``, creating it on first use.
-
-    Parameters
-    ----------
-    parent : object
-        Widget that owns the tab; the panel is cached on it so its sign-in and
-        run state survive across frames.
-    fpath : str | list, optional
-        Dataset currently loaded, used to pre-fill the upload folder.
+def draw_cloud_tab(state: dict, fpath=None) -> None:
+    """Draw the cloud panel, keeping its sign-in and run state in ``state``
+    between frames; ``fpath`` is the open dataset, pre-filling the upload folder.
     """
     try:
         from imgui_cloud.gui import draw_cloud_tab as draw_panel
@@ -56,8 +49,4 @@ def draw_cloud_tab(parent, fpath=None) -> None:
             imgui.set_clipboard_text(_INSTALL_HINT)
         return
 
-    state = getattr(parent, "_cloud_panel_state", None)
-    if state is None:
-        state = {}
-        parent._cloud_panel_state = state
     draw_panel(state, dir_input=_dir_for(fpath))

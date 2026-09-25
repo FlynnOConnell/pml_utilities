@@ -43,7 +43,7 @@ def test_missing_package_explains_itself_instead_of_raising(monkeypatch):
     )
     monkeypatch.setattr(_cloud.imgui, "button", lambda label: False)
 
-    _cloud.draw_cloud_tab(object(), "/data/raw")
+    _cloud.draw_cloud_tab({}, "/data/raw")
     assert any("not installed" in line for line in drawn)
     assert any("imgui_cloud" in line for line in drawn)
 
@@ -52,9 +52,6 @@ def test_the_panel_is_created_once_and_reused(monkeypatch):
     from mbo_utilities.gui import _cloud
 
     calls = []
-
-    class FakeParent:
-        pass
 
     def fake_draw_panel(state, dir_input=""):
         calls.append((id(state), dir_input))
@@ -65,8 +62,8 @@ def test_the_panel_is_created_once_and_reused(monkeypatch):
         "imgui_cloud.gui",
         type("M", (), {"draw_cloud_tab": staticmethod(fake_draw_panel)}),
     )
-    parent = FakeParent()
-    _cloud.draw_cloud_tab(parent, "/data/raw")
-    _cloud.draw_cloud_tab(parent, "/data/raw")
+    state = {}
+    _cloud.draw_cloud_tab(state, "/data/raw")
+    _cloud.draw_cloud_tab(state, "/data/raw")
     assert len(calls) == 2
     assert calls[0][0] == calls[1][0], "the panel state must survive between frames"
