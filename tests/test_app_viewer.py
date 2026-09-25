@@ -148,10 +148,10 @@ def test_a_panel_is_rebuilt_for_the_data_it_shows(host):
     summaries.open = True
     host.figure.canvas.force_draw()
     assert summaries.available(host) is True
-    assert summaries.widget is not None
+    assert summaries._cmap_synced_with_fpl is True
 
     host.set_data(imread(movie_data(nt=5, ny=32, nx=32)))
-    assert summaries.widget is None
+    assert summaries._cmap_synced_with_fpl is False
     assert summaries.available(host) is False
 
 

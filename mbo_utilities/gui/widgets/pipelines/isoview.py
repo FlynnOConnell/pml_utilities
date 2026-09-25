@@ -285,28 +285,26 @@ def maybe_spawn_raw_projections(parent: Any) -> None:
             parent.logger.info(f"raw projections worker spawned PID {pid}")
 
 
-def maybe_refresh_raw_projections(parent: Any) -> None:
-    """Rebuild the preview widget list once a background raw-projections
-    worker finishes, so the Projections widget appears without reloading.
-
-    The widget list is built only on dataset load; a worker that writes
-    projections afterwards leaves :class:`ProjectionsViewer` excluded
-    until something refreshes. Runs once per raw dir.
+def maybe_refresh_raw_projections(parent: Any) -> bool:
+    """Whether a background raw-projections worker finished since last asked,
+    so the panels reading projection files can rebuild without reloading.
+    Answers once per raw dir.
     """
     spawned = getattr(parent, "_iso_raw_proj_spawned", None)
     if not spawned:
-        return
+        return False
     refreshed = getattr(parent, "_iso_raw_proj_refreshed", None)
     if refreshed is None:
         refreshed = parent._iso_raw_proj_refreshed = set()
     pending = spawned - refreshed
     if not pending:
-        return
+        return False
 
     from mbo_utilities.gui.widgets.process_manager import get_process_manager
 
     pm = get_process_manager()
     procs = pm.get_all()
+    done = False
     for raw_dir in list(pending):
         alive = any(
             p.task_type == "isoview_raw_projections"
@@ -317,8 +315,8 @@ def maybe_refresh_raw_projections(parent: Any) -> None:
         if alive:
             continue
         refreshed.add(raw_dir)
-        if hasattr(parent, "_refresh_widgets"):
-            parent._refresh_widgets()
+        done = True
+    return done
 
 
 def _available_modes(arr: Any) -> list[str]:

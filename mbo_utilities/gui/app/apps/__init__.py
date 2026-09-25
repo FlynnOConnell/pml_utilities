@@ -16,12 +16,10 @@ from mbo_utilities.gui.app.apps.mesc import MescApp
 from mbo_utilities.gui.app.apps.metadata import MetadataApp
 from mbo_utilities.gui.app.apps.open import OpenApp
 from mbo_utilities.gui.app.apps.options import OptionsApp
-from mbo_utilities.gui.app.apps.panels import (
-    AlignViewsApp,
-    ProjectionsApp,
-    SummaryImagesApp,
-    TileGridApp,
-)
+from mbo_utilities.gui.app.apps.align_views import AlignViewsApp
+from mbo_utilities.gui.app.apps.projections import ProjectionsApp
+from mbo_utilities.gui.app.apps.summary_images import SummaryImagesApp
+from mbo_utilities.gui.app.apps.tile_grid import TileGridApp
 from mbo_utilities.gui.app.apps.pollen import PollenApp
 from mbo_utilities.gui.app.apps.remote import BiohpcApp, CloudApp
 from mbo_utilities.gui.app.apps.run import RunApp

@@ -26,8 +26,8 @@ from mbo_utilities.gui._imgui_helpers import (
     draw_toolbar_row,
     set_tooltip,
 )
-from mbo_utilities.gui.widgets._base import Widget
-from mbo_utilities.gui.widgets.summary_image import (
+from mbo_utilities.gui.app._app import App
+from mbo_utilities.gui.app.apps.summary_images import (
     _CONTRAST_AUTO,
     _CONTRAST_MANUAL,
     _CONTRAST_MODES,
@@ -63,13 +63,23 @@ def _timepoints_for_axis(group: dict, axis: str) -> list[int]:
     return sorted({t for (a, v, t) in group["files"] if a == axis})
 
 
-class ProjectionsViewer(Widget):
+class ProjectionsApp(App):
     """Browse XY/XZ/YZ projections produced for the loaded isoview stack."""
 
-    name = "Projections"
+    id = "projections"
+    title = "Projections"
+    dock = "left"
+    order = 40
+    size = 330
 
-    def __init__(self, parent: Any):
-        super().__init__(parent)
+    def __init__(self):
+        super().__init__()
+        self._reset()
+
+    def _reset(self) -> None:
+        """Start over for the open data."""
+        # whether the open data has projections; None until asked
+        self._supported: bool | None = None
         self._popup_open: bool = False
         self._needs_fit: bool = True
         self._zoom: float = 1.0
@@ -104,33 +114,30 @@ class ProjectionsViewer(Widget):
         self._pending_save_key: tuple | None = None
         self._last_save_msg: str = ""
 
-    @classmethod
-    def is_supported(cls, parent: Any) -> bool:
-        for arr in parent._get_data_arrays():
-            proj = getattr(arr, "projections", None)
-            if callable(proj):
-                try:
-                    if proj():
-                        return True
-                except Exception:
-                    continue
-        return False
+    def available(self, host) -> bool:
+        if self._supported is None:
+            self._supported = self._active_array() is not None
+        return self._supported
+
+    def data_changed(self, host) -> None:
+        self.close()
+        self._reset()
 
     def _backend(self):
         try:
-            return self.parent._figure.imgui_renderer.backend
+            return self.host.figure.imgui_renderer.backend
         except AttributeError:
             return None
 
     def _active_array(self):
-        for arr in self.parent._get_data_arrays():
-            proj = getattr(arr, "projections", None)
-            if callable(proj):
-                try:
-                    if proj():
-                        return arr
-                except Exception:
-                    continue
+        arr = self.host.data
+        proj = getattr(arr, "projections", None)
+        if callable(proj):
+            try:
+                if proj():
+                    return arr
+            except Exception:
+                return None
         return None
 
     def _ensure_projections(self) -> bool:
@@ -193,7 +200,7 @@ class ProjectionsViewer(Widget):
     def _sync_cmap_with_fpl(self) -> None:
         if self._cmap_synced_with_fpl:
             return
-        iw = getattr(self.parent, "image_widget", None)
+        iw = self.host.viewer
         if iw is None:
             return
         try:
@@ -362,7 +369,7 @@ class ProjectionsViewer(Widget):
                 f"no {self._axis} projections",
             )
 
-    def draw(self) -> None:
+    def draw_canvas(self, host, size: imgui.ImVec2) -> None:
         if not self._ensure_projections():
             return
 
@@ -689,7 +696,7 @@ class ProjectionsViewer(Widget):
 
         imgui.end()
 
-    def cleanup(self) -> None:
+    def close(self) -> None:
         for gpu in self._gpu_cache.values():
             gpu.destroy()
         self._gpu_cache.clear()

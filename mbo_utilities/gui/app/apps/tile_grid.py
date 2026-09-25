@@ -41,8 +41,8 @@ from mbo_utilities.gui._imgui_helpers import (
     draw_toolbar_row,
     selected_button_style,
 )
-from mbo_utilities.gui.widgets._base import Widget
-from mbo_utilities.gui.widgets.summary_image import (
+from mbo_utilities.gui.app._app import App
+from mbo_utilities.gui.app.apps.summary_images import (
     _DEFAULT_COLORMAP,
     _DEFAULT_COLORMAPS,
     _auto_range,
@@ -139,13 +139,23 @@ def _unwrap(arr):
         arr = inner
 
 
-class TileGridViewer(Widget):
+class TileGridApp(App):
     """Preview all tiles of a tiled acquisition laid out per z-block."""
 
-    name = "Tile Grid"
+    id = "tile_grid"
+    title = "Tile Grid"
+    dock = "left"
+    order = 42
+    size = 330
 
-    def __init__(self, parent: Any):
-        super().__init__(parent)
+    def __init__(self):
+        super().__init__()
+        self._reset()
+
+    def _reset(self) -> None:
+        """Start over for the open data."""
+        # whether the open data is a tiled acquisition; None until asked
+        self._supported: bool | None = None
         self._popup_open: bool = False
         self._zblock: int = 0
         self._c_index: int = 0
@@ -213,26 +223,26 @@ class TileGridViewer(Widget):
         self._prefetch_sig: tuple | None = None
         self._prefetch_arr: Any = None
 
-    @classmethod
-    def is_supported(cls, parent: Any) -> bool:
-        return cls._find(parent) is not None
+    def available(self, host) -> bool:
+        if self._supported is None:
+            self._supported = self._active_array() is not None
+        return self._supported
 
-    @staticmethod
-    def _find(parent: Any):
-        for raw in parent._get_data_arrays():
-            arr = _unwrap(raw)
-            if bool(getattr(arr, "is_tiled", False)) and getattr(
-                arr, "tile_metadata", None
-            ):
-                return arr
-        return None
+    def data_changed(self, host) -> None:
+        self.close()
+        self._reset()
 
     def _active_array(self):
-        return self._find(self.parent)
+        arr = _unwrap(self.host.data)
+        if bool(getattr(arr, "is_tiled", False)) and getattr(
+            arr, "tile_metadata", None
+        ):
+            return arr
+        return None
 
     def _backend(self):
         try:
-            return self.parent._figure.imgui_renderer.backend
+            return self.host.figure.imgui_renderer.backend
         except AttributeError:
             return None
 
@@ -622,7 +632,7 @@ class TileGridViewer(Widget):
         return gpu
 
     def _tile_slider_name(self) -> str | None:
-        iw = getattr(self.parent, "image_widget", None)
+        iw = self.host.viewer
         if iw is None:
             return None
         try:
@@ -634,7 +644,7 @@ class TileGridViewer(Widget):
             return None
 
     def _current_tile(self) -> int | None:
-        iw = getattr(self.parent, "image_widget", None)
+        iw = self.host.viewer
         name = self._tile_slider_name()
         if iw is None or name is None:
             return None
@@ -644,7 +654,7 @@ class TileGridViewer(Widget):
             return None
 
     def _jump_to_tile(self, ti: int) -> None:
-        iw = getattr(self.parent, "image_widget", None)
+        iw = self.host.viewer
         name = self._tile_slider_name()
         if iw is None or name is None:
             return
@@ -663,7 +673,7 @@ class TileGridViewer(Widget):
         return ``False`` when our window is open and imgui is capturing the
         mouse. Installed once; harmless when our window is closed.
         """
-        fig = getattr(self.parent, "_figure", None)
+        fig = self.host.figure
         rcm = getattr(fig, "_right_click_menu", None)
         if rcm is None or getattr(rcm, "_mbo_guarded", False):
             return
@@ -681,7 +691,7 @@ class TileGridViewer(Widget):
         rcm.get_subplot = _guarded_get_subplot
         rcm._mbo_guarded = True
 
-    def draw(self) -> None:
+    def draw_canvas(self, host, size: imgui.ImVec2) -> None:
         arr = self._active_array()
         if arr is None or not self._ensure_grid(arr):
             return
@@ -1351,7 +1361,7 @@ class TileGridViewer(Widget):
         self._draw_grid(arr)
         imgui.end()
 
-    def cleanup(self) -> None:
+    def close(self) -> None:
         self._prefetch_stop.set()
         self._prefetch_wake.set()
         for t in self._prefetch_threads:
