@@ -158,97 +158,6 @@ class SplashScreen:
             self.root = None
 
 
-def _get_version() -> str:
-    """Get the current mbo_utilities version."""
-    try:
-        import mbo_utilities
-
-        return getattr(mbo_utilities, "__version__", "unknown")
-    except ImportError:
-        return "unknown"
-
-
-def _check_for_upgrade() -> tuple[str, str | None]:
-    """Check pypi for newer version of mbo_utilities (cached for 1 hour).
-
-    returns (current_version, latest_version) or (current_version, None) if check fails.
-    """
-    import json
-    import urllib.request
-
-    current = _get_version()
-
-    # check cache first (1 hour expiry)
-    try:
-        from mbo_utilities.env_cache import get_cached_pypi_version, update_pypi_cache
-
-        cached = get_cached_pypi_version(max_age_hours=1)
-        if cached:
-            return current, cached
-    except Exception:
-        pass
-
-    # fetch from pypi
-    try:
-        url = "https://pypi.org/pypi/mbo-utilities/json"
-        with urllib.request.urlopen(url, timeout=5) as response:
-            data = json.loads(response.read().decode())
-            latest = data["info"]["version"]
-            # update cache
-            try:
-                update_pypi_cache(latest)
-            except Exception:
-                pass
-            return current, latest
-    except Exception:
-        return current, None
-
-
-def _print_upgrade_status():
-    """Print upgrade status to console."""
-    current, latest = _check_for_upgrade()
-
-    click.echo(f"Current version: {current}")
-
-    if latest is None:
-        click.secho(
-            "Could not check for updates (network error or package not on PyPI)",
-            fg="yellow",
-        )
-        return
-
-    click.echo(f"Latest version:  {latest}")
-
-    if current == "unknown":
-        click.secho("Could not determine current version", fg="yellow")
-    elif current == latest:
-        click.secho("You are running the latest version!", fg="green")
-    else:
-        # simple version comparison (works for semver)
-        try:
-            from packaging.version import parse
-
-            if parse(current) < parse(latest):
-                click.secho("\nUpgrade available! Run:", fg="cyan")
-                click.secho(
-                    "  uv pip install --upgrade mbo-utilities", fg="cyan", bold=True
-                )
-                click.echo("  or")
-                click.secho(
-                    "  pip install --upgrade mbo-utilities", fg="cyan", bold=True
-                )
-            else:
-                click.secho(
-                    "You are running a newer version than PyPI (dev build)", fg="green"
-                )
-        except ImportError:
-            # no packaging module, do string comparison
-            if current != latest:
-                click.secho("\nDifferent version on PyPI. To upgrade:", fg="cyan")
-                click.secho(
-                    "  uv pip install --upgrade mbo-utilities", fg="cyan", bold=True
-                )
-
 
 def _check_installation():
     """Verify that mbo_utilities and key dependencies are properly installed."""
@@ -722,31 +631,6 @@ def _after_show(iw) -> None:
         )
         _clamp_window_to_layout(iw.figure)
 
-
-def _create_image_widget(data_array, figure_kwargs_override=None, show: bool = True):
-    """The n-d viewer on ``data_array``, one subplot per ROI it asks to split into.
-
-    ``figure_kwargs_override`` replaces the canvas and size picked for
-    wherever this runs. ``show=False`` builds without showing.
-    """
-    from mbo_utilities.arrays.features import get_slider_dims
-    from mbo_utilities.gui._ndviewer import MboNDViewer
-    from mbo_utilities.gui.app.apps.viewer import split_rois
-
-    views, names = split_rois(data_array)
-    iw = MboNDViewer(
-        data=[_squeeze_for_viewer(view) for view in views],
-        names=names,
-        slider_dim_names=getattr(data_array, "slider_dim_labels", None)
-        or get_slider_dims(data_array),
-        cmap="gnuplot2",
-        histogram_widget=True,
-        figure_kwargs=figure_kwargs_override or _figure_kwargs_for_here(),
-    )
-    if show:
-        iw.show()
-        _after_show(iw)
-    return iw
 
 
 def _is_jupyter() -> bool:
