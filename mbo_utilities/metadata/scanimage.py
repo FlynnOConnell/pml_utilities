@@ -436,33 +436,32 @@ def get_roi_info(metadata: dict) -> dict:
 
 
 def get_frame_rate(metadata: dict) -> float | None:
-    """
-    Get frame/volume rate from ScanImage metadata.
+    """Sampling rate of the T axis in Hz; the volume rate for a piezo stack.
 
-    Parameters
-    ----------
-    metadata : dict
-        Metadata dict containing 'si' key.
-
-    Returns
-    -------
-    float or None
-        Frame rate in Hz, or None if not available.
+    A piezo volume spans ``numFramesPerVolumeWithFlyback`` scanner frames, averaging
+    included, since ``logAverageFactor`` only thins what is saved, not what is scanned.
     """
     si = metadata.get("si", {})
     roi_mgr = si.get("hRoiManager", {})
 
-    # scanFrameRate is the most reliable source
     fs = roi_mgr.get("scanFrameRate")
-    if fs is not None:
-        return round(float(fs), 2)
+    if fs is None:
+        period = roi_mgr.get("scanFramePeriod")
+        if period is None or period <= 0:
+            return None
+        fs = 1.0 / float(period)
+    fs = float(fs)
 
-    # fallback to computing from scanFramePeriod
-    period = roi_mgr.get("scanFramePeriod")
-    if period is not None and period > 0:
-        return round(1.0 / float(period), 2)
+    if detect_stack_type(metadata) == "piezo":
+        stack_mgr = si.get("hStackManager", {})
+        per_volume = stack_mgr.get("numFramesPerVolumeWithFlyback") or stack_mgr.get(
+            "numFramesPerVolume"
+        )
+        if not per_volume:
+            per_volume = (get_num_slices(metadata) or 1) * get_frames_per_slice(metadata)
+        return fs / per_volume
 
-    return None
+    return fs
 
 
 def extract_roi_slices(metadata: dict) -> list[dict]:

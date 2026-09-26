@@ -113,6 +113,37 @@ class TestStridedSubset:
         assert np.array_equal(back[:, 0], expected)
 
 
+class TestTimepointSelection:
+    """A string selection and a first-N truncation write exactly those frames to .bin."""
+
+    def test_string_selection(self, output_dir):
+        data = np.arange(20 * 8 * 8, dtype=np.int16).reshape(20, 8, 8)
+        mbo.imwrite(data, output_dir, ext=".bin", timepoints="3:7")
+
+        plane_dir = output_dir / "zplane01_tp00003-00007"
+        raw = np.fromfile(plane_dir / "data_raw.bin", dtype=np.int16)
+        assert np.array_equal(raw.reshape(5, 8, 8), data[2:7])
+        ops = np.load(plane_dir / "ops.npy", allow_pickle=True).item()
+        assert ops["nframes"] == 5
+
+    def test_num_timepoints_names_the_frames_written(self, output_dir):
+        data = np.arange(20 * 8 * 8, dtype=np.int16).reshape(20, 8, 8)
+        mbo.imwrite(data, output_dir, ext=".bin", num_timepoints=5)
+
+        assert [p.name for p in output_dir.iterdir()] == ["zplane01_tp00001-00005"]
+        raw = np.fromfile(output_dir / "zplane01_tp00001-00005" / "data_raw.bin", dtype=np.int16)
+        assert np.array_equal(raw.reshape(5, 8, 8), data[:5])
+
+    def test_num_timepoints_past_the_end_is_clamped(self, output_dir):
+        data = np.arange(20 * 8 * 8, dtype=np.int16).reshape(20, 8, 8)
+        mbo.imwrite(data, output_dir, ext=".bin", num_timepoints=50)
+
+        plane_dir = output_dir / "zplane01_tp00001-00020"
+        assert (plane_dir / "data_raw.bin").stat().st_size == data.nbytes
+        ops = np.load(plane_dir / "ops.npy", allow_pickle=True).item()
+        assert ops["nframes"] == 20
+
+
 class TestCrossFormat:
     """A -> B conversion preserves single-plane data."""
 

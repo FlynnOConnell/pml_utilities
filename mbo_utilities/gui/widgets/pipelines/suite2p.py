@@ -611,15 +611,6 @@ class Suite2pPipelineWidget(PipelineWidget):
         Should be called when the parent GUI is closing to ensure
         proper cleanup of Qt windows and other resources.
         """
-        # Close suite2p window if open
-        if self._suite2p_window is not None:
-            try:
-                self._suite2p_window.close()
-            except (RuntimeError, AttributeError):
-                pass  # Window already deleted
-            self._suite2p_window = None
-            self._last_suite2p_ichosen = None
-
         # Clear file dialogs (they are async and may be pending)
         self._file_dialog = None
         self._grid_search_dialog = None

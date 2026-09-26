@@ -1186,9 +1186,6 @@ ones. Remove an entry when its fix lands.
   (`arrays/zarr.py:294-311`). `H5Array` never reads the `dims` attr the writer stamps
   (`arrays/h5.py:212-233` vs `_writers.py:1285`). Both work only because the rank
   guess happens to match the writer's rank rule.
-- `PiezoArray` reports T = volumes but `fs` = ScanImage `scanFrameRate`
-  (`arrays/tiff.py:1795`); `num_timepoints / fs` is not the duration. Target:
-  `fs = scanFrameRate / frames_per_volume`.
 - `LBMPiezoArray` lays out T = piezo positions, C = 1, Z = beamlets
   (`arrays/tiff.py:2174-2176`); `docs/file_formats.md` says C = beamlets,
   Z = piezo positions. Fix the doc or the layout, and say which axis is a calibration
@@ -1204,12 +1201,16 @@ ones. Remove an entry when its fix lands.
 
 **Metadata**
 
-- Readers stamp aliases instead of canonical keys: `TiffArray` writes `num_frames`,
-  `num_planes` (`arrays/tiff.py:704-710,731-738,777-784,827-833`); `Suite2pArray` volumes
+- Readers stamp aliases instead of canonical keys: `Suite2pArray` volumes
   write `nplanes`/`num_planes` (`arrays/suite2p.py:762-763`); `_metadata_from_ops`
   writes `num_planes`, `frame_rate` (`metadata/io.py:53-74`); `imwrite` writes
   `num_frames`/`nframes` for a truncation (`writer.py:334-336`).
 - `ScanImageArray.metadata` mutates `_metadata` on every read (`arrays/tiff.py:1221-1246`).
+- `get_voxel_size` takes `hStackManager.stackZStepSize` whenever the stack is not LBM
+  and defaults `dz` to 1.0 (`metadata/params.py:466-513`), and `DimensionSpecs` scales
+  Z by 1.0 when `dz` is absent (`arrays/features/_dim_spec.py:200`), so a single-plane
+  ScanImage file reports the disabled stack's step and every source without a z-step
+  (a MESc AOD unit) reports `arr.dz == 1.0` instead of `None`.
 - IsoView deposits the camera rate as `fps` (`arrays/isoview/array.py:506`), which
   is an `fs` alias (`metadata/base.py:224`), so `arr.fs` resolves to the camera rate
   even though the reader intends `fs` to stay unset (`arrays/isoview/array.py:2454-2457`).
@@ -1217,8 +1218,6 @@ ones. Remove an entry when its fix lands.
   `isoview_camera_fps`.
 - `_extract_tiff_scale` resolves `finterval` → `fs` and `XResolution` → `dx` itself
   (`arrays/isoview/array.py:915-935`) instead of depositing the ImageJ keys.
-- ScanImage ingest rounds `fs` and `pixel_resolution` to two decimals
-  (`metadata/scanimage.py:453,458`, `metadata/io.py:613`).
 - Registry labels say "Frame Rate" / "Frame Interval" (`metadata/base.py:231-232,262-263`).
   Target: "Sampling rate" / "Sampling interval" per §6.1.
 - `pixel_size_um` is registered under both `dx` and `dy` (`metadata/base.py:166,186`);
@@ -1280,8 +1279,7 @@ When a family reaches zero, move its rule into `select`.
 - Selected, not autofixable: `PTH` 43, `D301` 15, `ERA001` 9 (all false positives
   on prose that reads like code), `E402`/`E721`/`E741` 10, `D200` 5, `UP` 4,
   `F403`/`F405` star imports 4, `D404` 2.
-- Two real defects ruff finds and nobody has fixed: `cli.py:2405` uses an undefined
-  `as_zarr`, and `arrays/zarr.py:31` rebinds `logger`.
+- A real defect ruff finds and nobody has fixed: `arrays/zarr.py:31` rebinds `logger`.
 - Ignored until swept: `D205` 671, `E501` 521, `D400` 35.
 - Not yet selected: `PLC0415` 1688 function-local imports (most are the sanctioned
   heavy packages; needs per-import `noqa` before enabling), `G004` 441 f-strings in

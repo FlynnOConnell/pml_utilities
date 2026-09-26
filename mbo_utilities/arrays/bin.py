@@ -216,6 +216,7 @@ class BinArray(ReductionMixin, Shape5DMixin):
             and frames is None
             and planes is None
             and channels is None
+            and kwargs.get("num_frames") is None
         ):
             md = dict(self.metadata) if self.metadata else {}
             md["Ly"] = self.Ly

@@ -541,6 +541,78 @@ class TestFrameRate:
 
         assert get_frame_rate({}) is None
 
+    def test_frame_rate_keeps_full_precision(self):
+        from mbo_utilities.metadata import get_frame_rate
+
+        meta = {"si": {"hRoiManager": {"scanFrameRate": 429.92512}}}
+        assert get_frame_rate(meta) == 429.92512
+
+    def test_piezo_rate_is_the_volume_rate(self):
+        from mbo_utilities.metadata import get_frame_rate
+
+        meta = {
+            "si": {
+                "hRoiManager": {"scanFrameRate": 30.0},
+                "hStackManager": {
+                    "enable": True,
+                    "numSlices": 5,
+                    "framesPerSlice": 2,
+                    "numFramesPerVolume": 10,
+                    "numFramesPerVolumeWithFlyback": 12,
+                },
+            }
+        }
+        assert get_frame_rate(meta) == 2.5
+
+    def test_piezo_rate_without_frame_counts(self):
+        from mbo_utilities.metadata import get_frame_rate
+
+        meta = {
+            "si": {
+                "hRoiManager": {"scanFrameRate": 30.0},
+                "hStackManager": {"enable": True, "numSlices": 5, "framesPerSlice": 3},
+            }
+        }
+        assert get_frame_rate(meta) == 2.0
+
+
+class TestScanImageIngest:
+    def test_single_plane_keeps_no_stack_step(self):
+        from mbo_utilities.metadata import clean_scanimage_metadata
+
+        raw_meta = {
+            "si": {
+                "SI.hChannels.channelSave": 1,
+                "SI.hStackManager.enable": False,
+                "SI.hStackManager.stackZStepSize": 0.5,
+                "SI.hRoiManager.scanFrameRate": 429.92512,
+            }
+        }
+        result = clean_scanimage_metadata(raw_meta)
+
+        assert result["stack_type"] == "single_plane"
+        assert "dz" not in result
+        assert result["fs"] == 429.92512
+        assert "frame_rate" not in result
+        assert "num_planes" not in result
+
+    def test_piezo_keeps_its_stack_step(self):
+        from mbo_utilities.metadata import clean_scanimage_metadata
+
+        raw_meta = {
+            "si": {
+                "SI.hChannels.channelSave": 1,
+                "SI.hStackManager.enable": True,
+                "SI.hStackManager.numSlices": 4,
+                "SI.hStackManager.stackZStepSize": 2.5,
+                "SI.hRoiManager.scanFrameRate": 20.0,
+            }
+        }
+        result = clean_scanimage_metadata(raw_meta)
+
+        assert result["dz"] == 2.5
+        assert result["fs"] == 5.0
+
 
 class TestColorChannelsUnified:
     """Test that color channel detection works for both LBM and non-LBM."""

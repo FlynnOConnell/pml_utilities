@@ -13,6 +13,7 @@ pytest.importorskip("fastplotlib.widgets.nd_widget")
 
 from mbo_utilities import imread  # noqa: E402
 from mbo_utilities.gui.app import _app, build_host  # noqa: E402
+from mbo_utilities.lazy_array import base_array  # noqa: E402
 
 
 @pytest.fixture
@@ -136,3 +137,16 @@ def test_the_reference_buttons_unit_opens_at_its_slice(stack_mesc_path):
     finally:
         host.close()
         host.viewer.close()
+
+
+def test_suite2p_data_options_reach_the_phase_correction(host):
+    context = host.context
+    source = base_array(host.data)
+    assert context.has_raster_scan_support
+    assert not context.is_mbo_scan
+    context.border = 5
+    context.max_offset = 7
+    assert (source.border, source.max_offset) == (5, 7)
+    assert (context.border, context.max_offset) == (5, 7)
+    assert len(context.current_offset) == 1
+    assert context._register_z is False

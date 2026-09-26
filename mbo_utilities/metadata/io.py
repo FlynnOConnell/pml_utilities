@@ -568,7 +568,6 @@ def get_metadata_single(file: Path):
         zoom_factor = si.get("SI.hRoiManager.scanZoomFactor")
         uniform_sampling = si.get("SI.hScan2D.uniformSampling", "NA")
         objective_resolution = si.get("SI.objectiveResolution", 1.0)
-        frame_rate = si.get("SI.hRoiManager.scanFrameRate")
 
         fly_to_time = float(si.get("SI.hScan2D.flytoTimePerScanfield", 0))
         line_period = float(si.get("SI.hRoiManager.linePeriod", 1))
@@ -596,8 +595,8 @@ def get_metadata_single(file: Path):
         size_xy = sizes[0]
         num_pixel_xy = num_pixel_xys[0]
 
-        roi_fov_x_um = round(objective_resolution * size_xy[0])
-        roi_fov_y_um = round(objective_resolution * size_xy[1])
+        roi_fov_x_um = objective_resolution * size_xy[0]
+        roi_fov_y_um = objective_resolution * size_xy[1]
         pixel_resolution = (
             roi_fov_x_um / num_pixel_xy[0],
             roi_fov_y_um / num_pixel_xy[1],
@@ -613,8 +612,7 @@ def get_metadata_single(file: Path):
             "roi": (roi_width, roi_height),
             "fov": (num_rois * roi_width, roi_height),
             "fov_um": (num_rois * roi_fov_x_um, roi_fov_y_um),
-            "frame_rate": frame_rate,
-            "pixel_resolution": np.round(pixel_resolution, 2),
+            "pixel_resolution": pixel_resolution,
             "ndim": len(shape),
             "dtype": "int16",
             "size": np.prod(shape),
@@ -1009,19 +1007,14 @@ def clean_scanimage_metadata(meta: dict) -> dict:
         result["piezo_stack"] = stack_type == "piezo"
         result["num_color_channels"] = get_num_color_channels(result)
 
-        # set num_planes from stack detection if not already present
         if "num_zplanes" not in result and "num_planes" not in result:
-            num_z = get_num_zplanes(result)
-            result["num_zplanes"] = num_z
-            result["num_planes"] = num_z  # alias for ScanImageArray
+            result["num_zplanes"] = get_num_zplanes(result)
 
-        # add dz if available from ScanImage (but NOT for LBM - user must supply)
-        if stack_type != "lbm":
+        if stack_type in ("piezo", "pollen"):
             dz = get_z_step_size(result)
             if dz is not None:
                 result["dz"] = dz
 
-        # add frame rate if available
         fs = get_frame_rate(result)
         if fs is not None:
             result["fs"] = fs
@@ -1031,11 +1024,6 @@ def clean_scanimage_metadata(meta: dict) -> dict:
         for k, v in roi_info.items():
             if v is not None and k not in result:
                 result[k] = v
-
-    # add all standard aliases for backward compatibility
-    from .params import normalize_metadata
-
-    normalize_metadata(result)
 
     return result
 

@@ -42,7 +42,7 @@ def z_hyperstack(tmp_path, frames):
 def test_plain_stack_reads_as_time(plain_stack, frames):
     arr = imread(plain_stack)
     assert arr._shape5d() == (12, 1, 1, 8, 9)
-    assert arr.metadata["num_frames"] == 12
+    assert arr.metadata["num_timepoints"] == 12
     np.testing.assert_array_equal(np.asarray(arr[3, 0, 0]), frames[3])
 
 

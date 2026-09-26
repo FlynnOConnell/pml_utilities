@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from mbo_utilities import log
-from mbo_utilities.arrays import FrameAveragedView
+from mbo_utilities.arrays import FrameAveragedView, ScanImageArray, TiffArray
 from mbo_utilities.gui._dialogs import (
     _try_hydrate_s2p_from_binary,
     outdir_from_fpath,
@@ -15,6 +15,7 @@ from mbo_utilities.gui._save_as import SaveAs
 from mbo_utilities.gui.app.apps.viewer import PROJECTIONS
 from mbo_utilities.gui.manual_roi import detach_roi_widget
 from mbo_utilities.gui.widgets.pipelines._base import Suite2pState
+from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import get_last_dir
 
 if TYPE_CHECKING:
@@ -55,7 +56,11 @@ class WindowContext(Suite2pState):
 
     def reset(self) -> None:
         """Start the per-dataset widget state over for the host's open data."""
+        self._s2p_frame_average = self.frame_average
         self._masknmf_frame_average = self.frame_average
+        self._register_z = False
+        self._axial_max_frames = 200
+        self._axial_max_reg_xy = 30
         self._s2p_outdir = outdir_from_fpath(self.fpath) or str(
             get_last_dir("suite2p_output") or ""
         )
@@ -143,3 +148,38 @@ class WindowContext(Suite2pState):
         funcs = self.host.viewer.window_funcs or {}
         func = next(iter(funcs.values()), (None, 1))[0]
         return {v: k for k, v in PROJECTIONS.items()}.get(func, "mean")
+
+    @property
+    def _source(self):
+        data = self.host.data
+        return data.source if isinstance(data, FrameAveragedView) else data
+
+    @property
+    def is_mbo_scan(self) -> bool:
+        return isinstance(base_array(self.host.data), (ScanImageArray, TiffArray))
+
+    @property
+    def has_raster_scan_support(self) -> bool:
+        return hasattr(self._source, "phase_correction")
+
+    @property
+    def border(self) -> int:
+        return self._source.border
+
+    @border.setter
+    def border(self, value: int) -> None:
+        self._source.border = value
+
+    @property
+    def max_offset(self) -> int:
+        return self._source.max_offset
+
+    @max_offset.setter
+    def max_offset(self, value: int) -> None:
+        self._source.max_offset = value
+
+    @property
+    def current_offset(self) -> list[float]:
+        host = self.host
+        offset = self._source.get_offset_at(host.frame, host.channel, host.zplane)
+        return [float(offset or 0.0)]
