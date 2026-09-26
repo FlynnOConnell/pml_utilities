@@ -811,9 +811,8 @@ class TestViewerIntegration:
         vis = DataVis(ResultsArray(pf_dir), size=FIGURE_SIZE)
         vis.show()
         try:
-            parent = vis.widget
-            assert not hasattr(parent, "event_curation")
-            assert not parent.top_strip.has("curation")
+            assert not hasattr(vis.host.context, "event_curation")
+            assert not vis.host.strip.has("curation")
             for _ in range(2):
                 vis.figure.canvas.draw()
         finally:

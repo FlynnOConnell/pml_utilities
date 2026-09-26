@@ -376,27 +376,26 @@ def _imwrite_base(
     if num_channels is None:
         num_channels = getattr(arr, "nc", 1)
 
-    def _norm_sel(val):
-        """Normalize a selection kwarg to list[int] or None (=all)."""
-        if val is None:
-            return None
-        if isinstance(val, (int, np.integer)):
-            return [int(val)]
-        return [int(v) for v in val if v is not None]
+    from mbo_utilities.arrays.features._slicing import parse_selection
 
-    planes_list = _norm_sel(planes)
-    frames_list = _norm_sel(frames)
-    channels_list = _norm_sel(channels)
+    total_t, _, total_z = (int(s) for s in arr._shape5d()[:3])
+    planes_list, frames_list, channels_list = (
+        None if sel is None else [i + 1 for i in parse_selection(sel, size)]
+        for sel, size in (
+            (planes, total_z),
+            (frames, total_t),
+            (channels, int(num_channels)),
+        )
+    )
 
-    # num_frames=N truncates to the first N timepoints. the per-plane (.bin/
-    # .npy) path reads it from kwargs, but the volumetric writers only honor an
-    # explicit `frames` list — so synthesize one when num_frames is given and
-    # no explicit frame selection was made.
-    if ext_clean in ("tiff", "tif", "zarr", "h5", "hdf5") and frames_list is None:
-        _num_frames = kwargs.get("num_frames")
-        if _num_frames is not None:
-            total_T = int(arr._shape5d()[0])
-            frames_list = list(range(1, min(int(_num_frames), total_T) + 1))
+    num_frames = kwargs.pop("num_frames", None)
+    if num_frames is not None and frames_list is None:
+        if int(num_frames) > total_t:
+            logger.warning(
+                f"num_timepoints={int(num_frames)} exceeds the array's "
+                f"{total_t} timepoints; writing {total_t}"
+            )
+        frames_list = list(range(1, min(int(num_frames), total_t) + 1))
 
     # tiff: use volumetric writer
     if ext_clean in ("tiff", "tif"):
@@ -562,13 +561,7 @@ def _imwrite_base(
     md = out_meta.to_dict()
 
     # every timepoint alias follows the selection, else readers disagree on T
-    truncated_n = kwargs.get("num_frames")
-    has_frame_selection = bool(frame_indices_0)
-    if has_frame_selection and out_meta.num_frames is not None:
-        effective_nt = int(out_meta.num_frames)
-    elif truncated_n is not None and int(truncated_n) > 0:
-        effective_nt = int(truncated_n)
-    elif out_meta.num_frames is not None:
+    if out_meta.num_frames is not None:
         effective_nt = int(out_meta.num_frames)
     else:
         effective_nt = int(nframes)

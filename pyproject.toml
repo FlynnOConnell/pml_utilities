@@ -35,7 +35,7 @@ dependencies = [
 	"pygfx>=0.15.2",
 	"llvmlite>=0.43.0",
 	"numba>=0.60.0",
-	"fastplotlib",
+	"fastplotlib==0.7.0",
 	"rendercanvas>=2.7.2",
 	"uvicorn>=0.30",
 	"websockets>=13",

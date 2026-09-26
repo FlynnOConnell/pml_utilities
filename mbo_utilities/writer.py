@@ -331,10 +331,6 @@ def imwrite(
     # store roi_mode in metadata as string
     file_metadata["roi_mode"] = roi_mode.value
 
-    if num_frames is not None:
-        file_metadata["num_frames"] = int(num_frames)
-        file_metadata["nframes"] = int(num_frames)
-
     if hasattr(lazy_array, "metadata"):
         with contextlib.suppress(AttributeError):
             lazy_array.metadata = file_metadata
@@ -453,7 +449,7 @@ def imwrite(
     processing_extra = {
         "input_format": type(lazy_array).__name__,
         "output_format": ext,
-        "num_frames": file_metadata.get("num_frames") or file_metadata.get("nframes"),
+        "num_frames": num_frames,
         "shape": list(lazy_array.shape) if hasattr(lazy_array, "shape") else None,
     }
 

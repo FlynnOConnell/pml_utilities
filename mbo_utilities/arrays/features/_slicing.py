@@ -133,7 +133,8 @@ def parse_selection(
         else:
             raise ValueError(f"invalid selection string format: {selection}")
 
-    if isinstance(selection, int):
+    if isinstance(selection, (int, np.integer)):
+        selection = int(selection)
         idx = selection - 1 if one_based else selection
         if idx < 0:
             idx = dim_size + idx + (1 if one_based else 0)

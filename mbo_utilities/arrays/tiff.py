@@ -714,9 +714,8 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
             {
                 "shape": self.shape,
                 "dtype": str(self._dtype),
-                "nframes": self._nframes,
-                "num_frames": self._nframes,
-                "num_planes": self._nz,
+                "num_timepoints": self._nframes,
+                "num_zplanes": self._nz,
                 "file_paths": [str(p) for p in self.filenames],
             }
         )
@@ -741,8 +740,7 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
             {
                 "shape": self.shape,
                 "dtype": str(self._dtype),
-                "nframes": self._nframes,
-                "num_frames": self._nframes,
+                "num_timepoints": self._nframes,
                 "file_paths": [str(p) for p in files],
                 "num_files": len(files),
             }
@@ -789,9 +787,8 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
             {
                 "shape": self.shape,
                 "dtype": str(self._dtype),
-                "nframes": self._nframes,
-                "num_frames": self._nframes,
-                "num_planes": self._nz,
+                "num_timepoints": self._nframes,
+                "num_zplanes": self._nz,
                 "num_color_channels": self._nc,
                 "file_path": str(path),
             }
@@ -839,9 +836,8 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
             {
                 "shape": self.shape,
                 "dtype": str(self._dtype),
-                "nframes": self._nframes,
-                "num_frames": self._nframes,
-                "num_planes": self._nz,
+                "num_timepoints": self._nframes,
+                "num_zplanes": self._nz,
                 "plane_files": [str(p) for p in plane_files],
             }
         )
