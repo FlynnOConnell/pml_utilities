@@ -1063,7 +1063,8 @@ class PreviewDataWidget(EdgeWindow):
         entry = self._mean_images.get(i)
         if entry is not None and entry[0] is base and entry[1] == _mean_key(base):
             return entry[2]
-        if i in self._mean_jobs:
+        running = self._mean_jobs.get(i)
+        if running is not None and running[0] is base:
             return None
         job = [base, 0.0]
         self._mean_jobs[i] = job
@@ -1086,6 +1087,10 @@ class PreviewDataWidget(EdgeWindow):
         except Exception:
             self.logger.exception("mean image failed")
             mean = None
+        # a job for data opened since supersedes this one
+        running = self._mean_jobs.get(i)
+        if running is not None and running is not job:
+            return
         self._mean_images[i] = (base, key, mean)
         self._mean_jobs.pop(i, None)
         self._mean_ready = True
