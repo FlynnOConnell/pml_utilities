@@ -14,8 +14,8 @@ CMAPS = ("gray", "viridis", "magma", "plasma")
 class ImageViewerApp(App):
     """A pan and zoom view of one frame, on the gpu but outside the scene.
 
-    The frame it shows is the host's cursor, so scrubbing the movie moves
-    this view too without either app knowing about the other.
+    The frame it shows is the host's playhead, channel and z-plane, so
+    scrubbing anywhere moves this view too without it knowing who scrubbed.
     """
 
     id = "image_viewer"
@@ -57,7 +57,7 @@ class ImageViewerApp(App):
         imgui.set_next_item_width(-imgui.FLT_MIN)
         _, self.zoom = imgui.slider_float("##zoom", self.zoom, 0.0, 8.0, "zoom %.2f")
         if not self.auto:
-            frame = host.data[host.index]
+            frame = host.data[host.frame, host.channel, host.zplane]
             span = float(frame.max() - frame.min()) or 1.0
             imgui.set_next_item_width(-imgui.FLT_MIN)
             _, self.lo = imgui.slider_float(
@@ -73,7 +73,7 @@ class ImageViewerApp(App):
             )
 
     def draw_canvas(self, host, size: imgui.ImVec2) -> None:
-        frame = np.asarray(host.data[host.index])
+        frame = np.asarray(host.data[host.frame, host.channel, host.zplane])
         if self.auto:
             self.lo, self.hi = (
                 float(np.nanpercentile(frame, 1.0)),

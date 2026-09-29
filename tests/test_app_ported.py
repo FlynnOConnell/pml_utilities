@@ -16,20 +16,14 @@ def confirm_path(title, is_open, path, hint, action, browse=None, note="", theme
     return True, path, True
 
 
-class Summaries:
-    """An array-shaped object carrying a summary image, as suite2p output does."""
-
-    def __init__(self, image: np.ndarray):
-        self.metadata = {"meanImg": image}
-        self.shape = image.shape
-
-
 @pytest.fixture(scope="module")
 def host():
+    from mbo_utilities.arrays import NumpyArray
     from mbo_utilities.gui.app import build_host
 
+    image = np.linspace(0, 1, 32 * 32, dtype=np.float32).reshape(32, 32)
     host = build_host(
-        Summaries(np.linspace(0, 1, 32 * 32).reshape(32, 32)),
+        NumpyArray(image, metadata={"meanImg": image}),
         apps=apps_module.ported_apps(),
         size=(900, 600),
     )
@@ -37,6 +31,7 @@ def host():
     host.figure.canvas.force_draw()
     yield host
     host.close()
+    host.apps["viewer"].viewer.close()
 
 
 def test_every_ported_app_declares_where_it_is_drawn():
@@ -105,5 +100,5 @@ def test_the_open_app_loads_a_file_into_the_host(host, tmp_path, monkeypatch):
     host.figure.canvas.force_draw()
 
     assert opener.open is False
-    assert host.data.shape == movie.shape
-    assert host.index == 0
+    assert host.data.shape == (6, 1, 1, 8, 8)
+    assert host.frame == 0

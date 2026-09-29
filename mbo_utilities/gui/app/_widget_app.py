@@ -41,7 +41,8 @@ class WidgetApp(App):
     A widget already owns its state and answers whether it applies to the
     data, which is most of what an app is. What it does not have is a place
     to be drawn that is not the preview window's control column, so the
-    host gives it one and asks its ``is_supported`` once per array.
+    host gives it one and asks its ``is_supported`` once per array. The
+    widget is built on the array it was asked about and dropped with it.
     """
 
     widget_class: ClassVar[Any] = None
@@ -50,16 +51,19 @@ class WidgetApp(App):
         super().__init__()
         self.widget = None
         self.parent = None
-        self._checked: Any = object()
-        self._supported = False
+        # is_supported for the open array; None until asked
+        self._supported: bool | None = None
 
     def available(self, host: AppHost) -> bool:
         if self.parent is None:
             self.parent = HostAsParent(host)
-        if self._checked is not host.data:
-            self._checked = host.data
+        if self._supported is None:
             self._supported = self.widget_class.is_supported(self.parent)
         return self._supported
+
+    def data_changed(self, host: AppHost) -> None:
+        self.close()
+        self._supported = None
 
     def draw_canvas(self, host: AppHost, size: imgui.ImVec2) -> None:
         if self.widget is None:

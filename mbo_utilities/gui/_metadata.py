@@ -66,15 +66,9 @@ def _matches_filter_shallow(key: str, value, filter_text: str) -> bool:
     return False
 
 
-# recursion bounds for the search filter: huge attr dicts (multi-MB
-# scanimage/ops blobs) made an unbounded walk cost hundreds of ms per
-# imgui frame. results are memoized per (key, id(value), depth) for the
-# lifetime of one filter string. Each entry also stores the value itself:
-# holding the reference keeps live entries' ids from being recycled, and
-# the `is` check on lookup rejects entries whose object died and whose id
-# was reused by a different value (metadata dicts are rebuilt per frame).
-# depth is in the key because the walk is depth-bounded — a False cached
-# at max depth must not answer a near-root query for the same object.
+# the memo holds each value, not just its id: metadata dicts are rebuilt every
+# frame and a recycled id would answer for a different object. depth is in the
+# key because a False cached at max depth must not answer a near-root query.
 _MATCH_MAX_ITEMS = 64
 _MATCH_MAX_DEPTH = 6
 _MATCH_CACHE_MAX = 4096

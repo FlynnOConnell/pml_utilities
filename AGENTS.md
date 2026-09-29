@@ -22,7 +22,7 @@ pml_utilities/
 │   ├── arrays/               # one LazyArray subclass per format + read-time views
 │   │   ├── _base.py          # _imwrite_base, ReductionMixin, TiffReaderMixin, DIMS
 │   │   ├── features/         # dims, tags, slicing, selection, roi, phase, frame average, stats
-│   │   ├── tiff.py zarr.py h5.py numpy.py bin.py mesc.py suite2p.py mp4.py
+│   │   ├── tiff.py zarr.py h5.py bruker.py numpy.py bin.py mesc.py suite2p.py mp4.py
 │   │   └── isoview/          # IsoView light-sheet trees (four layouts, one class)
 │   ├── metadata/             # canonical vocabulary, alias resolution, OutputMetadata
 │   ├── pipeline_registry.py  # PipelineInfo + entry-point loading
@@ -31,6 +31,7 @@ pml_utilities/
 │   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # Miller Brain Studio (imgui + fastplotlib)
+│   │   ├── app/              # `mbo app`: the viewer and apps docked or windowed around it (§17.1)
 │   │   ├── playhead.py       # one time in seconds shared by every view (§7.6)
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
@@ -139,6 +140,7 @@ Format-specific labels win over the rank guess:
 | Multi-file TIFF | `planeNN` in the filename groups files onto Z; otherwise files concatenate along T; `roiN` yields one array per ROI. |
 | Suite2p dir | `ops.npy` per plane dir; plane dirs stack onto Z; T is derived from the binary's file size, not `ops["nframes"]`. |
 | MESc | `MethodType`: 1 timeseries `(T, C, 1, Y, X)`; 2 z-stack `(1, C, Z, Y, X)`; 6/7 linescan `(T, C, R, n_lines, width)`; 8 chessboard and 9/10 ribbon `(T, C, R, Y, X)`; 11 multicube has real depth on Z. `metadata["mesc_z_axis_meaning"]` says whether Z is `roi_index`, `depth` or `none`. |
+| Bruker HDF5 | the dataset's HDF5 dimension labels (`t z y x c`); `element_size_um` in the stored order of the spatial axes. |
 | H5 | dataset rank per the table; `imaging/data` 5D is `TZYXC` (Mini2P); a 4D dataset with `scan_mode` + `n_channel == shape[-1]` is `TYXC`. |
 | Zarr | array rank per the table; a directory of `.zarr` stores stacks them onto Z. |
 | IsoView | tree layout: TM folders → T, cameras/views → C, volume → Z. |
@@ -154,6 +156,11 @@ Pinned by `tests/test_numpy_dims.py`, `tests/test_imagej_stack.py`.
   Use `arr[:]` or chunked reads for the data.
 - Reductions (`mean`, `max`, `min`, `std`, `var`, `sum`) match numpy and stream in
   chunks above 100M elements (`ReductionMixin`).
+- `arrays._base.temporal_mean(arr)` is the per-pixel mean over T as
+  `(C, Z, Y, X)` float32; a reader that can do better defines its own
+  `temporal_mean` (`MescArray` reads each raw channel once). The viewer's Mean
+  Subtraction and Invert Deflection use it, never the Signal Quality samples,
+  which are strided and binned.
 - `arr.vmin` / `arr.vmax` are the display range of the representative frame.
 
 ### 5.4 Views and sanctioned exceptions
@@ -183,9 +190,16 @@ never branch on rank.
 3. Every class in the `mbo_utilities.lazy_arrays` entry-point group (plus
    `register_array_class` calls) is asked `can_open(path)` in descending
    `PRIORITY`; ties keep entry-point order. First `True` wins. Priorities today:
-   `IsoviewArray` 90, `ResultsArray` 70, `MescArray` 60, everything else 50.
+   `IsoviewArray` 90, `ResultsArray` 70, `MescArray` 60, `BrukerArray` 60, everything else 50.
 4. Inputs no class claims (file lists, `.bin`, `.klb`, `.mp4`, `reg_tif/`, mixed
    directories) fall through to the legacy chain in `reader._imread_impl`.
+5. A directory or list of files a class above 50 claims (a Bruker h5, a MESc:
+   whole recordings each) opens one through that class, the first by name for a
+   directory and the first listed for a list, and logs the rest
+   (`reader._open_first_recording`); it never reaches a suffix reader that would
+   guess the axes, and never concatenates them. A directory or list of
+   suffix-level files (TIFF, plain h5) still concatenates through the legacy
+   chain.
 
 `can_open` must be cheap (suffix, header, sidecar presence) and never raise. Add a
 class by listing it in `pyproject.toml` under `[project.entry-points."mbo_utilities.lazy_arrays"]`.
@@ -255,15 +269,57 @@ applied as `arr.motion_correction`, a `features.MotionCorrection` or `None`
 - `MescArray.motion_correction` is the `total` RTMC curves (`rtmc_motion`); the
   `intercycle` increments stay on `arr.rtmc`. A unit that armed RTMC without it
   ever moving reports `None`.
-- One GUI consumer: `gui/imgui/motion.MotionPlot`, drawn under the trace in
-  linked subplots by the Traces tab (`manual_roi.draw_traces`), the line-scan
-  viewer's `LineTracesPanel` and the curation dashboard, behind one `MC`
+- One GUI consumer: `gui/imgui/motion.MotionPlot`, drawn in linked subplots
+  with the trace by the Traces tab (over it, §7.6 the stack,
+  `manual_roi.draw_traces`), the line-scan viewer's `LineTracesPanel` and the
+  curation dashboard (under it), behind one `MC`
   checkbox. The plot never clamps its x axis to the traces on disk: a pipeline
   run on a frame window leaves shorter traces than the recording.
 - Adding a source means overriding `motion_correction` on the reader; nothing in
   `gui` names a source.
 
 Pinned by `tests/test_motion_plot.py`, `tests/test_mesc.py`.
+
+### 5.9 Behavior
+
+What the animal did during a recording is `arr.behavior`, a
+`behavior.Behavior` or `None`, on the recording's clock like §5.8. Its three
+parts are the ones NWB and Neo use, under plain names:
+
+| Field | Meaning | NWB / Neo |
+|-------|---------|-----------|
+| `signals` | `{name: BehaviorSignal(t, values, unit)}`: continuous measurements sampled in time (`position` in mm, `speed` in mm/s) | `TimeSeries` / `AnalogSignal` |
+| `events` | `{name: t}`: instants (`lick`, `reward`, `lap`) | events / `Event` |
+| `epochs` | `{name: (n, 2)}`: start and stop of intervals (a reward zone, a trial) | `TimeIntervals` / `Epoch` |
+| `sync`, `offset_s` | the imaging sync pulses on the logger's own clock, and the logger time the recording started at (`sync[0]`, else 0); every other time is already shifted by it | |
+| `source`, `subject`, `start`, `path`, `info` | the logger and version, the animal, the wall-clock start, the file, the logger's settings verbatim | |
+
+- A behavior log is a file of its own, so no reader deposits it. `LazyArray.behavior`
+  is a settable facet; `behavior.behavior_for(arr)` fills it on first use with
+  `find_behavior(arr.source_path)`: a file a reader knows (`READERS`, by suffix),
+  beside the recording, one folder up or in a sibling folder named `behavior*`,
+  named after the same subject and day as the recording (the first two `_` words,
+  `u005a04_20260915`). The answer, found or not, is kept on the array.
+- One reader today: `behavior/tdml.py` for BehaviorMate's newline-delimited JSON.
+  The treadmill position wraps at `track_length` (the animal keeps running, so the
+  speed unwraps it) and is zeroed after each lap's inter-trial interval (it does
+  not, so a jump above `MAX_SPEED_MM_S` is NaN in the speed). The reward valves are
+  every valve but `sync_pin`; each context id is one epoch kind. A new logger is a
+  function in `READERS`, nothing else.
+- One GUI consumer: `gui/imgui/behavior.BehaviorPlot`, drawn over the trace by the
+  Traces tab in the same linked subplots as `MotionPlot`, behind a `Behavior`
+  checkbox. Three layers: epochs as translucent bands over the full height, the
+  first signal on the left axis and the second on the right over the upper part,
+  and the events as a raster strip along the bottom (`LANE_SHARE`): one lane per
+  kind, a tick per event, the kind's name at the left edge. Bands and lanes sit on
+  a third, hidden axis locked to lane units, so zooming the signals never moves
+  them; every layer is a legend entry. Never draw events as full-height lines: a
+  few thousand licks bury everything. `shade_into` puts the same bands behind
+  another plot on the time axis; the trace plot calls it, so a reward zone shows
+  behind the traces. It seeks the playhead like the motion plot.
+
+Pinned by `tests/test_behavior.py`, `tests/test_manual_roi.py`
+(`TestTracePlotView::test_a_recordings_behavior_stacks_under_the_trace`).
 
 ## 6. Metadata: the canonical vocabulary
 
@@ -498,6 +554,18 @@ pipelines use the same path; nothing is hardcoded by name.
   pipeline's info lives on its widget.
 - `extracts_traces = True` + `extract_traces(movie, labels)` opts the pipeline into
   the manual-ROI "Extract trace" action.
+- A pipeline's widget is one object per host (`pipelines.pipeline_instance`),
+  drawn wherever it is opened: the Process tab, or a floating window through
+  `open_pipeline(host, name, "window")`, which the tab's **Pop out** button, the
+  Process menu and `Shift+P` call. `draw_pipeline_windows` draws the popped-out ones from
+  the top strip's frame hook (registered by `RunTabWidget`) under a `push_id`, so
+  the tab and the window can show the same widget in one frame. A widget
+  therefore never opens a window of its own and never assumes which one it is in.
+- `seeds_from_view = True` + `seed_from_view()` sets the widget's selection to
+  what the viewer shows (the recording on screen, the slice its sliders are on);
+  `open_pipeline(..., seed=True)` calls it first, and `quick_pipelines(host)`
+  lists the pipelines that apply and set it, which is how the MESc tab header
+  offers "Voltage on MUnit_3" without naming a pipeline.
 
 ### 7.3 Input contract
 
@@ -684,6 +752,12 @@ the other.
   neuropil checkbox only when a plotted row's profile offers it, a dF/F settings
   popup only when a shown dF/F is computed here, labels the y axis from the rows
   (joined when they differ) and opens in seconds whenever the data has a rate.
+  The viewer's Mean Subtraction and Invert Deflection reach the rows through
+  `display_trace(..., subtract, invert)` (`deflect`, about the row's own mean
+  over T, which is the mask mean of the transformed image): a `raw` row and
+  its neuropil are shown `F - m`, `2m - F` or `m - F`, a dF/F computed here is
+  taken of the inverted raw trace, and a pipeline's own kinds keep the sign
+  it wrote.
   The plot has no box of its own: `imgui/lines.plot_style` makes implot's frame,
   plot background and border transparent, its grid lines invisible (by colour,
   so one scope covers the subplots too) and its ticks and legend dim, so the
@@ -761,7 +835,8 @@ the other.
   tissue with the ROI's own plane lost in it. `ReferenceView` is that set in a
   `SummaryImageViewer` popup (masknmf's full-FOV viewer, `roi_provider(key)`
   returning `(points, rgba, thickness)` polylines: MESc's colours, every ROI
-  solid, the slider's ROI `SELECTED_THICKNESS`); its caption says how many of the
+  dimmed to `ON_ALPHA`, the slider's ROI drawn last, opaque, at
+  `SELECTED_THICKNESS` over a white `HALO_THICKNESS` halo); its caption says how many of the
   unit's ROIs a Z-stack holds when some were scanned outside it. Each
   `ReferenceImage` carries its `unit` and, for a stack, the `slice` its ROIs sit
   on, so the popup's one button (`on_show(unit, slice)`) displays that unit in
@@ -796,7 +871,9 @@ the other.
   `_install(arr, z)` sets the viewer's `roi_slider` index after the swap, so a
   Z-stack opens on the tissue the ROIs were scanned in. Every header carries its
   meaning (`COLUMN_HELP`) and `?` opens `assets/docs/mesc.md`, the plain-words
-  page on what a `.mesc` holds.
+  page on what a `.mesc` holds. The header line, not a row, carries one button
+  per `quick_pipelines` entry (`Voltage on MUnit_3`): it opens that pipeline in
+  a floating window seeded from the unit and sliders on screen (§7.2).
 - **Full image.** The ROIs pipeline's `full image` target is the whole frame as
   one mask at the run coordinates: with `mean` a `FULL_IMAGE` row of the trace
   table (`ManualRoiWidget.trace_full`, keyed `("member", "full image", "z<z>c<c>")`
@@ -804,6 +881,18 @@ the other.
   of that z-plane and channel (`run_full_plane`, whose worker args carry `channel`
   1-based and `tp_indices` for a frame window). No store mask is involved, so it
   never claims pixels.
+- **The stack.** The Traces panel stacks up to three plots in linked subplots,
+  each behind its own checkbox, top to bottom: the recording's behavior
+  (`Behavior`, §5.9), its motion correction (`MC`, §5.8), then the traces. The
+  bottom row carries the one x axis they share; every row above it hides its
+  own (`lines.X_AXIS_HIDDEN`, the plot's `x_axis=False`) and the plot padding
+  is cut to 2 px inside the subplots, so the rows sit tight and read as one
+  plot. `draw_traces` builds the stack from what the recording has and what is
+  ticked, refits every plot when the stack changes (they are new plots to
+  implot) and grows the panel by each plot's own height
+  (`MOTION_PANEL_HEIGHT - PANEL_HEIGHT`, `BEHAVIOR_PLOT_HEIGHT`); `_draw_plot`
+  draws one by name. A new facet with a time axis is another row in that
+  stack, above the traces, not a panel of its own.
 - **Playhead.** `gui/playhead.Playhead` is the one time on screen, in seconds on the
   recording's clock (raw frames when `fs` is unknown); it emits `time` with its
   `source`. Every view keeps a `TimeAxis` (`per_second`, `offset`) and converts
@@ -879,13 +968,14 @@ One logger tree, one console sink per process, one log file per background task.
   reads it back. `mbo --debug` / `mbo view --debug` set it for a run; the GUI
   "Debug logging" toggle (`_options_popup`, `file_dialog`) also persists the
   preference, which `run_gui` applies at launch unless `MBO_DEBUG` is already set.
-- Debug-only UI: a `WidgetEntry(debug_only=True)` is absent from the Widgets menu
-  and off whatever the stored state says while `log.debug_enabled()` is False. The
-  ImGui tab (`gui/widgets/imgui_debug.py`) is the one today: switches for Dear
-  ImGui's metrics/debugger, debug log, ID stack tool, demo and about windows,
-  which `PreviewDataWidget.draw` draws every frame so they survive a tab switch.
-  The style editor is not among them: it is always available at File > Style
-  Editor (§14).
+- The Widgets menu (`gui/widgets/widget_toggles.py`) is one checkbox per
+  `WidgetEntry`, no submenus: an entry shows or hides the whole widget, and a
+  widget's `toggle_key` is an entry's key. Below the checkboxes it opens the
+  floating tool windows, always available (no debug gate): Style Editor (§14),
+  ImGui Debugger (`gui/widgets/imgui_debug.py`: `imgui_debugger`'s variable
+  inspector over the preview window, and switches for Dear ImGui's
+  metrics/debugger, debug log, ID stack tool, demo and about windows, drawn from
+  `PreviewDataWidget.draw` every frame), BioHPC and Cloud.
 - The GUI's Debug panel (`gui_logger.GuiLogger`) receives every `mbo.*` record through
   a `GuiLogHandler` attached in `preview_data._init_logging`; it filters by level and
   logger, and its master level dropdown calls `set_global_level`.
@@ -1089,15 +1179,20 @@ When they disagree, fix the docs.
   `cache/`, `imgui/`, `hpc/runs/`, `tests/` (test data), `templates/`. Resolve with
   `get_mbo_dirs()`, never hardcode.
 - The imgui style is the user's, not the theme's. `gui/widgets/style_editor.py`
-  holds the one `imgui_debugger.StyleEditor` for the process, opened from File >
-  Style Editor and backed by an `imgui_debugger.ConfigStore` at
+  holds the one `imgui_debugger.StyleEditor` for the process, opened from
+  Widgets > Style Editor and backed by an `imgui_debugger.ConfigStore` at
   `get_mbo_dirs()["imgui"]`: `state.json` (the style as last left, plus the
   panel's own state), `styles/<name>.json` (named presets). It autosaves a
   second after the last slider moves; `apply_saved_style()` runs in
   `PreviewDataWidget.__init__` right after `style_imgui_opaque()`, so a saved
   style wins over the shipped theme. Window geometry stays imgui's, in
   `imgui/assets/app_settings/preview_settings.ini`. Nothing else writes the
-  style; `imgui_debug.py` deliberately has no style entry.
+  style; `imgui_debug.py` deliberately has no style entry. `imgui_debugger`
+  is a base dependency, pinned to a commit of its GitHub repository in
+  `pyproject.toml` (the PyPI release lags the API used here); bump the pin when
+  it moves.
+- The app host (`gui/app`) keeps its window geometry apart from the preview
+  window's, in `get_mbo_dirs()["imgui"]/app.ini`.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,
   `KEEP_TEST_OUTPUT`, `MBO_PIPELINE_TIFF`; logging and retention variables are
   listed in §8.5.
@@ -1208,21 +1303,23 @@ ones. Remove an entry when its fix lands.
 
 **Style**
 
-Counts from `ruff check` on the `voltage-pipeline` branch (2026-09-15), before the
-first `format.yml` run on `main`. The workflow autofixes what it can; the rest is
-fix-on-touch. When a family reaches zero, move its rule into `select`.
+Counts from `ruff check` on `manual-roi-model` (2026-09-23), after the banner and
+dead-code sweep. The workflow autofixes what it can; the rest is fix-on-touch.
+When a family reaches zero, move its rule into `select`.
 
-- Selected, not autofixable: `PTH` 39, `ERA001` 44, `F841` 11, `F403`/`F405` star
-  imports 4, `D301` 14, `D200` 5, `D404` 2, `UP` 13, `E402`/`E702`/`E721`/`E741` 17.
-- Ignored until swept: `E501` 1827 (recount after the first format run; the rest are
-  long strings and comments), `D205` 505, `D400` 37.
-- Not yet selected: `T20` 111 `print` calls in library code, `BLE001` 414 blind
-  excepts, `S110` 117 `try`/`except`/`pass`, `B` 76, `SIM` 125, `N` 281, `G004` 424
-  f-strings in log calls, `PLC0415` 1475 function-local imports (most are the
-  sanctioned heavy packages; needs per-import `noqa` before enabling).
-- Not ruff-checkable: 195 banner comments and 251 section-header comments in 22
-  files, 19 `logging.getLogger` calls, 73 nested `def`s in the library and 60 in
-  tests.
+- Selected, not autofixable: `PTH` 43, `D301` 15, `ERA001` 9 (all false positives
+  on prose that reads like code), `E402`/`E721`/`E741` 10, `D200` 5, `UP` 4,
+  `F403`/`F405` star imports 4, `D404` 2.
+- Two real defects ruff finds and nobody has fixed: `cli.py:2405` uses an undefined
+  `as_zarr`, and `arrays/zarr.py:31` rebinds `logger`.
+- Ignored until swept: `D205` 671, `E501` 521, `D400` 35.
+- Not yet selected: `PLC0415` 1688 function-local imports (most are the sanctioned
+  heavy packages; needs per-import `noqa` before enabling), `G004` 441 f-strings in
+  log calls, `BLE001` 414 blind excepts, `N` 350, `T20` 181 `print` calls, `SIM`
+  131, `S110` 126 `try`/`except`/`pass`, `B` 82.
+- Not ruff-checkable: 0 banner or section-header comments (swept 2026-09-23; do not
+  add more), 34 `logging.getLogger` calls, 172 nested `def`s in the library and 96
+  in tests.
 
 ## 16. Imgui spacing
 
@@ -1551,6 +1648,17 @@ Four places already have the shape and are the template:
 - `Playhead` (§7.6): one piece of shared state every view subscribes to.
 - `TraceProfile` (§7.6) and the results zarr (§7.5): the pipeline declares what its
   data means, generic views render any pipeline.
+- `gui/app` (`mbo app`), the preview window's replacement in progress. `AppHost`
+  is built on the viewer's figure (an `NDWidget` makes its own), holds the open
+  `LazyArray`, the `Playhead` and the channel and z-plane on screen, and says
+  `data_changed` to every app when other data opens. An `App` draws through
+  `draw_options` / `draw_canvas` into a dock tab or a floating window the host
+  picks. Ported: the viewer (`ViewerApp`), Open, Summary Images, Projections,
+  Tile Grid, Metadata, Diagnostics, Log and the imgui tools. Not yet: window and
+  spatial functions, frame averaging, scan phase, Signal Quality, keyboard
+  shortcuts, Save As, Set Metadata, the Process tab, Manual ROI, MESc, IsoView
+  tools, the process console, Help / Keybinds / Options, BioHPC / Cloud.
+  `HostAsParent` is the shim a ported `Widget` reads; it only shrinks.
 
 Everything else is the opposite shape (counts from 2026-09-19):
 

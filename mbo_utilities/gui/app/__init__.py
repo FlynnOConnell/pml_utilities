@@ -6,29 +6,38 @@ an edge dock, a floating window, or both -- and grants an app a subplot when it
 wants to put graphics in the scene. Nothing is placed by the app, so the same
 app can be moved anywhere on the canvas without touching its code.
 
-``mbo app`` opens the host with three sets. The synthetic ones cover the
-surfaces: a movie and its traces as pygfx graphics on two subplots, and an
-image viewer that puts its own texture in a window. The ported ones are the
-preview window's panels drawn here instead -- Open, projections, summary
-images, the tile grid, the metadata inspector, suite2p diagnostics and the
-log -- and they show themselves only when the open data gives them something
-to draw. The third set is ``imgui_debugger``: the variable inspector pointed
-at the host, the style editor, and imgui's own metrics, debug log, id stack
-and demo windows, which draw their own windows through ``owns_window``.
+``mbo app`` opens the host on the viewer: fastplotlib's n-d viewer over the
+open array, with a slider for every T, C and Z it has, and the playhead as
+the one time every app follows. The ported apps are the preview window's
+panels drawn here instead -- Open, projections, summary images, the tile
+grid, the metadata inspector, suite2p diagnostics and the log -- and they
+show themselves only when the open data gives them something to draw. The
+``imgui_debugger`` set is the variable inspector pointed at the host, the
+style editor, and imgui's own metrics, debug log, id stack and demo
+windows, which draw their own windows through ``owns_window``. The demo
+apps in ``app.demo`` exercise the subplot slots on a plain figure.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
-
+from mbo_utilities import imread
+from mbo_utilities.arrays.features import get_slider_dims
+from mbo_utilities.gui._ndviewer import MboNDViewer
 from mbo_utilities.gui.app._app import DOCKS, App
 from mbo_utilities.gui.app._dock import Dock
 from mbo_utilities.gui.app._host import AppHost
 from mbo_utilities.gui.app._menu import MenuBar
 from mbo_utilities.gui.app._texture import Texture
 from mbo_utilities.gui.app._window import AppWindow
+from mbo_utilities.gui.app.apps import ViewerApp, debug_apps, ported_apps
+from mbo_utilities.gui.app.demo import movie_data
+from mbo_utilities.gui.run_gui import (
+    _after_show,
+    _figure_kwargs_for_here,
+    _squeeze_for_viewer,
+)
 
 __all__ = [
     "DOCKS",
@@ -46,50 +55,39 @@ __all__ = [
 def build_host(
     data: Any = None, *, apps=None, size: tuple[int, int] = (1400, 900)
 ) -> AppHost:
-    """The host: two subplots, every app registered, the movie and traces mounted."""
-    import fastplotlib as fpl
+    """The host on the viewer's figure, every app registered.
 
-    if data is None:
-        from mbo_utilities.gui.app.demo import movie_data
-
-        data = movie_data()
-    figure = fpl.Figure(shape=(1, 2), names=[["scene", "traces"]], size=size)
-    host = AppHost(figure, data=data)
-    if apps is None:
-        from mbo_utilities.gui.app.apps import debug_apps, ported_apps
-        from mbo_utilities.gui.app.demo import demo_apps
-
-        apps = demo_apps() + ported_apps() + debug_apps(host)
-    host.register(*apps)
-    if "movie" in host.apps:
-        host.mount("movie", 0)
-    if "traces" in host.apps:
-        host.mount("traces", 1)
+    ``data`` is anything ``imread`` opens, a synthetic movie when None. It
+    stays lazy: the viewer reads the frames it shows.
+    """
+    array = imread(movie_data() if data is None else data)
+    viewer = MboNDViewer(
+        _squeeze_for_viewer(array),
+        slider_dim_names=getattr(array, "slider_dim_labels", None)
+        or get_slider_dims(array),
+        cmap="gnuplot2",
+        figure_kwargs=_figure_kwargs_for_here(size=size),
+    )
+    host = AppHost(viewer.figure, data=array, slots=[])
+    host.register(ViewerApp(viewer))
+    host.register(*(ported_apps() + debug_apps(host) if apps is None else apps))
     return host
 
 
 def run_app(
-    path=None, *, nt: int = 500, frames: int = 0, size: tuple[int, int] = (1400, 900)
+    path=None, *, frames: int = 0, size: tuple[int, int] = (1400, 900)
 ) -> AppHost:
-    """Open the app host, on ``path`` when given, else on a synthetic movie.
-
-    ``path`` is read as ``(T, Y, X)`` from the first z-plane and colour
-    channel, at most ``nt`` timepoints, and held in memory: the demo apps
-    reduce over the whole movie when they mount.
+    """Open the app host on ``path``, else on a synthetic movie.
 
     ``frames`` draws that many frames and returns instead of running the
     event loop, for a smoke test on an offscreen canvas.
     """
     import fastplotlib as fpl
 
-    data = None
-    if path is not None:
-        from mbo_utilities import imread
-
-        array = imread(path)
-        data = np.asarray(array[: min(nt, array.shape[0]), 0, 0], dtype=np.float32)
-    host = build_host(data, size=size)
+    host = build_host(path, size=size)
     host.figure.show()
+    _after_show(host.apps["viewer"].viewer)
+    host.figure.canvas.set_title(host.title())
     if frames > 0:
         for _ in range(frames):
             host.figure.canvas.force_draw()

@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 
     from mbo_utilities.gui.app._host import AppHost
 
-# edges an app can ask for a panel on; the top edge belongs to the menu bar
-DOCKS = ("left", "right", "bottom")
+# edges an app can ask for a panel on; the menu bar has the top, the viewer's sliders the bottom
+DOCKS = ("left", "right")
 
 logger = log.get("gui.app")
 
@@ -32,7 +32,7 @@ class App:
     host grants it, so the same app can own part of the scene as well.
 
     Every attribute an app needs lives on the instance. The host holds the
-    ``open`` flag and the shared cursor, and nothing else about the app.
+    ``open`` flag and the shared position, and nothing else about the app.
     """
 
     id: ClassVar[str] = ""
@@ -79,6 +79,9 @@ class App:
         Called every frame whatever ``open`` says, because an app that owns
         its window owns the shortcut that opens it too.
         """
+
+    def data_changed(self, host: AppHost) -> None:
+        """The host opened other data: drop whatever was built on the old."""
 
     def mount(self, host: AppHost, subplot: Subplot) -> None:
         """Add this app's graphics to ``subplot``."""

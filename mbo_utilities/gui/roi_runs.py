@@ -794,13 +794,8 @@ def full_plane_args(
     # into "regenerate figures only".
     detect = 1 if s2p is None else int(bool(getattr(s2p, "do_detection", 1)))
     args["ops"] = {"roidetect": detect}
-    # This button means "detect now", so the run has to say that twice.
-    # roidetect alone is not enough: lsp skips detection whenever the plane
-    # dir already holds a stat.npy, and the staging step copies one in from
-    # the source dir - which for a re-analysed plane is another pipeline's
-    # run ("Registration and detection already complete, skipping suite2p").
-    # force_detect is the only way past that; force_reg stays the tri-state,
-    # because re-registering is expensive and rarely what this button means.
+    # roidetect alone is not enough: lsp skips detection when the plane dir already
+    # holds a stat.npy, which staging copies in. force_reg stays the tri-state.
     args["s2p_settings"] = {
         "force_reg": s2p is not None and int(getattr(s2p, "do_registration", 1)) == 2,
         "force_detect": bool(detect),

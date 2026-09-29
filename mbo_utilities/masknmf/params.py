@@ -30,7 +30,7 @@ class MasknmfRegistrationSettings:
     strategy: str = "rigid"  # "rigid" | "pwrigid"
     max_shifts: tuple[int, int] = (15, 15)
     # pwrigid only
-    num_blocks: tuple[int, int] = (15, 15)
+    minimum_patch_sizes: tuple[int, int] = (50, 50)
     overlaps: tuple[int, int] = (5, 5)
     max_deviation_rigid: tuple[int, int] = (2, 2)
 
@@ -38,7 +38,7 @@ class MasknmfRegistrationSettings:
         """Kwargs for the masknmf motion-corrector constructor."""
         if self.strategy == "pwrigid":
             return {
-                "num_blocks": tuple(self.num_blocks),
+                "minimum_patch_sizes": tuple(self.minimum_patch_sizes),
                 "overlaps": tuple(self.overlaps),
                 "max_rigid_shifts": tuple(self.max_shifts),
                 "max_deviation_rigid": tuple(self.max_deviation_rigid),

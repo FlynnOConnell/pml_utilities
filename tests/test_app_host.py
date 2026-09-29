@@ -1,4 +1,4 @@
-"""The app host: docks that claim an edge, and apps that swap on the subplots."""
+"""The app host on a plain figure: docks that claim an edge, apps that swap on the subplots."""
 
 from __future__ import annotations
 
@@ -14,10 +14,9 @@ from mbo_utilities.gui.app import App  # noqa: E402
 
 @pytest.fixture(scope="module")
 def host():
-    from mbo_utilities.gui.app import build_host
-    from mbo_utilities.gui.app.demo import movie_data
+    from mbo_utilities.gui.app.demo import demo_host, movie_data
 
-    host = build_host(movie_data(nt=24, ny=32, nx=32), size=(900, 600))
+    host = demo_host(movie_data(nt=24, ny=32, nx=32), size=(900, 600))
     host.figure.show()
     host.figure.canvas.force_draw()
     yield host
@@ -59,7 +58,7 @@ def test_a_frame_hook_runs_while_the_app_is_closed(host):
     host.mount("movie", 0)
     movie = host.apps["movie"]
     movie.open = False
-    host.index = 3
+    host.seek_frame(3)
     host.figure.canvas.force_draw()
     assert movie.player.t == 3
     assert movie._shown == 3
@@ -71,20 +70,23 @@ def test_a_window_app_owns_its_texture(host):
     host.figure.canvas.force_draw()
     host.figure.canvas.force_draw()
     assert viewer.texture.ref is not None
-    assert (viewer.texture.height, viewer.texture.width) == host.data.shape[1:]
+    assert (viewer.texture.height, viewer.texture.width) == host.data.shape[3:]
     viewer.close()
     assert viewer.texture is None
 
 
 def test_opening_other_data_rebuilds_what_is_mounted(host):
+    from mbo_utilities import imread
+
     host.mount("traces", 1)
     host.figure.canvas.force_draw()
     before = np.asarray(host.apps["traces"].traces[0]).copy()
 
-    host.set_data(host.data[:12] * 2.0)
+    host.seek_frame(5)
+    host.set_data(imread(np.asarray(host.data[:12, 0, 0]) * 2.0))
     host.figure.canvas.force_draw()
     after = np.asarray(host.apps["traces"].traces[0])
-    assert host.index == 0
+    assert host.frame == 0
     assert after.shape == (12,)
     assert not np.array_equal(before[:12], after)
 
@@ -99,24 +101,6 @@ def test_the_trace_offset_restacks_the_lines(host):
     host.figure.canvas.force_draw()
     tops = [float(np.asarray(line.data[:, 1]).mean()) for line in traces.lines]
     assert tops == pytest.approx([0.0, 3.0, 6.0, 9.0], abs=1e-4)
-
-
-def test_the_debug_panels_are_registered_as_apps(host):
-    ids = {app.id for app in host.apps.values()}
-    assert {"panel_Debugger", "panel_MetricsPanel", "panel_DemoPanel"} <= ids
-    assert host.apps["panel_Debugger"].panel.config.target is host
-
-
-def test_a_panel_app_opens_the_window_itself(host):
-    metrics = host.apps["panel_MetricsPanel"]
-    metrics.open = True
-    assert metrics.panel.visible is True
-    host.figure.canvas.force_draw()
-    host.figure.canvas.force_draw()
-    assert metrics.open is True
-    metrics.open = False
-    host.figure.canvas.force_draw()
-    assert metrics.panel.visible is False
 
 
 class Exploding(App):

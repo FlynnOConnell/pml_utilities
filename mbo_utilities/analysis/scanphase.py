@@ -448,8 +448,6 @@ class ScanPhaseAnalyzer:
         """Spatial offset heatmaps across the FOV, with/without FFT."""
         from matplotlib.colors import TwoSlopeNorm
 
-        colors = MBO_DARK_THEME
-
         valid = self.results.grid_valid
         ps = self.results.patch_size
         disp_fft = np.where(valid, self.results.grid_offsets_fft, np.nan)

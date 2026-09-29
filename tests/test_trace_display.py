@@ -12,6 +12,7 @@ from mbo_utilities.annotation.display import (
     DffSettings,
     TraceProfile,
     available_kinds,
+    deflect,
     display_trace,
     displayed_kind,
     neuropil_overlay,
@@ -143,3 +144,79 @@ def test_dff_math():
         pct[0], (F - np.percentile(F, 20)) / np.percentile(F, 20), rtol=1e-5
     )
     assert np.all(pct[1] == 0)
+
+
+DEFLECTIONS = {
+    (True, False): lambda y, m: y - m,
+    (False, True): lambda y, m: 2 * m - y,
+    (True, True): lambda y, m: m - y,
+}
+
+
+def test_deflect_is_the_viewers_pixel_transform_about_the_rows_mean():
+    m = F.mean()
+    for (subtract, invert), expected in DEFLECTIONS.items():
+        np.testing.assert_allclose(deflect(F, subtract, invert), expected(F, m))
+    np.testing.assert_array_equal(deflect(F), F)
+    assert F[2] == 30.0  # never written in place
+
+
+def test_a_mask_trace_deflected_is_the_mask_mean_of_the_deflected_movie():
+    rng = np.random.default_rng(0)
+    movie = rng.integers(0, 4000, (50, 8, 8)).astype(np.float64)
+    weights = rng.random((8, 8))
+    weights /= weights.sum()
+    trace = np.einsum("tyx,yx->t", movie, weights)
+    mean_img = movie.mean(axis=0)
+    for (subtract, invert), expected in DEFLECTIONS.items():
+        image = expected(movie, mean_img)
+        np.testing.assert_allclose(
+            deflect(trace, subtract, invert),
+            np.einsum("tyx,yx->t", image, weights),
+            rtol=1e-4,
+        )
+
+
+def test_raw_rows_and_their_neuropil_follow_the_deflection():
+    trace = RoiTrace(uid=1, engine="mean", F=F, Fneu=FNEU)
+    corrected = F - 0.7 * FNEU
+    for (subtract, invert), expected in DEFLECTIONS.items():
+        np.testing.assert_allclose(
+            display_trace(trace, "raw", None, True, subtract, invert),
+            expected(corrected, corrected.mean()),
+            rtol=1e-6,
+        )
+        np.testing.assert_allclose(
+            neuropil_overlay(trace, "raw", None, subtract, invert),
+            expected(FNEU, FNEU.mean()),
+        )
+    assert y_label(trace, "raw", True, True) == "mean - F (a.u.)"
+    assert y_label(trace, "raw", False, True) == "2 mean - F (a.u.)"
+
+
+def test_a_dff_computed_here_is_taken_of_the_inverted_raw_trace():
+    trace = RoiTrace(uid=1, engine="mean", F=F)
+    settings = DffSettings(method="percentile")
+    flipped = 2 * F.mean() - F
+    expected = dfof_percentile(flipped[None, :], settings.percentile)[0] * 100
+    for subtract in (False, True):
+        np.testing.assert_allclose(
+            display_trace(trace, "dff", settings, True, subtract, True),
+            expected,
+            rtol=1e-5,
+        )
+    # a dF/F is relative to its baseline already; subtraction leaves it be
+    np.testing.assert_allclose(
+        display_trace(trace, "dff", settings, True, True, False),
+        display_trace(trace, "dff", settings),
+    )
+    assert y_label(trace, "dff", False, True) == "dF/F (%), inverted"
+
+
+def test_a_pipelines_own_kinds_keep_the_sign_it_wrote():
+    norm = np.array([0.0, 5.0, -3.0, 1.0], np.float32)
+    trace = RoiTrace(uid=1, engine="suite2p", F=F, norm=norm)
+    np.testing.assert_array_equal(
+        display_trace(trace, "dff", None, True, True, True), norm
+    )
+    assert y_label(trace, "dff", True, True) == DISPLAY_KINDS["dff"]

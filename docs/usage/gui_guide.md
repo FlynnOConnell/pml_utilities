@@ -115,15 +115,10 @@ window is masknmf's, with nothing added:
 
 - **Demixing**: `SingleSessionDemixingVis`, the PMD movie, signals, background,
   residual and colourful signals, with masknmf's ROI and signal curation tools.
-- **Compression**: `CompressionVis`, motion-corrected vs compressed movies and
-  the lag-1 autocorrelation diagnostics. Needs `compression.hdf5` beside the
-  result and the raw movie: the pipeline's `data_raw.bin` + `ops.npy` when
-  they are there, otherwise a native file dialog asks for a single-plane movie
-  before the viewer opens.
 - **Classification**: `ClassificationVis`, accept / reject and class labels
   one ROI at a time; labels save to `<file>.labels.hdf5` beside the result.
 
-`mbo view run/demixing_results.hdf5 --vis compression` skips the prompt. Torch and masknmf must be installed; the device follows the
+`mbo view run/demixing_results.hdf5 --vis classification` skips the prompt. Torch and masknmf must be installed; the device follows the
 compute-GPU policy (`MBO_GPU`, `CUDA_VISIBLE_DEVICES`, File > Options).
 
 ### Pollen Calibration Viewer
@@ -375,8 +370,7 @@ The save dialog includes a metadata editor:
 **Widgets > Manual ROI Labeling** (or `mbo <path> --widget manualroi`) adds the
 **ROIs** and **Traces** tabs to the right bar and the **Traces** panel to the strip
 over the image: the ROIs tab holds the NAVIGATE, DRAW, VIEW and LABELS sections
-(captioned settings rows like the Process tab's, each switched off from the
-Widgets menu) over the ROI table, the Traces tab lists every trace,
+(captioned settings rows like the Process tab's) over the ROI table, the Traces tab lists every trace,
 and the panel plots the selected ones under its controls. Nothing switches tabs or
 panels for you. Arm **Add ROI** (`a`), drag a closed stroke around a cell, release:
 the enclosed pixels become a mask on the exact slice on screen (z-plane, channel,

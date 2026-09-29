@@ -178,13 +178,8 @@ def _start_watchdog(
             except Exception:
                 pass
 
-            # Liveness fallback: the worker's stdout/stderr and logger are
-            # all redirected to log_file. Long pipeline tasks (correct_stack,
-            # multi_fuse) run a single blocking call that emits per-step log
-            # lines but never moves the progress number. An advancing log
-            # mtime means the task is still working, so only a process that
-            # is both progress-frozen and log-silent for the full window is
-            # treated as hung.
+            # a blocking task logs without moving progress, so only a process that is
+            # both progress-frozen and log-silent counts as hung
             try:
                 if log_file:
                     m = os.path.getmtime(log_file)

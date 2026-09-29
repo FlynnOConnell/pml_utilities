@@ -200,6 +200,8 @@ _DIR_KEYS = {
     "grid_search": "last_grid_search_dir",  # Grid search results folder
     # MaskNMF pipeline
     "masknmf_outdir": "last_masknmf_outdir_dir",  # Run tab > Browse for output
+    # Voltage pipeline
+    "voltage_outdir": "last_voltage_outdir_dir",  # Run tab > Browse for output
     # vnoiser event curation data path
     "vnoiser": "last_vnoiser_dir",
 }

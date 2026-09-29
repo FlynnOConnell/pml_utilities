@@ -35,7 +35,6 @@ from imgui_bundle import (
 )
 
 from mbo_utilities.gui._imgui_helpers import fit_width, set_tooltip
-from mbo_utilities.gui.widgets.widget_toggles import sub_enabled
 
 __all__ = ["draw_biohpc_popup", "draw_biohpc_tab"]
 
@@ -80,7 +79,6 @@ _XFER_PHASES: list[tuple[float, str]] = [
     (1.00, "Verifying..."),
 ]
 
-# ---- Lab4 domain fixtures ------------------------------------------------
 # Values a scientist picks from instead of typing free-form. These mirror the
 # Lab4 DataJoint pipeline (Experimenter -> Subject -> Session -> Recording ->
 # Params -> Extract -> [engine] -> Dfof) and its core/analysis library.
@@ -230,8 +228,6 @@ def _human_bytes(n: int | None) -> str:
         v /= 1024.0
     return f"{v:.1f} PB"
 
-
-# ---- simulated Lab4 job (SLURM row on biohpc) ----------------------------
 
 _JOB_SECONDS = 7.0
 _JOB_PHASES: list[tuple[float, str]] = [
@@ -512,10 +508,6 @@ class _BioHpcPanel:
             cfg["extract"]["num_planes"] = nz
         return cfg
 
-    # ==================================================================
-    # draw: login
-    # ==================================================================
-
     def draw_login(self) -> None:
         imgui.dummy(hello_imgui.em_to_vec2(0, 0.4))
 
@@ -587,10 +579,6 @@ class _BioHpcPanel:
         imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))
         _center_text(f"Demo login:  {_DEMO_USER}  /  {_DEMO_PASS}", _COL_DIM)
 
-    # ==================================================================
-    # draw: authenticated shell + sub-tabs
-    # ==================================================================
-
     def draw_authenticated(self) -> None:
         imgui.spacing()
         imgui.text_colored(_COL_TITLE, f"{_icon('ICON_FA_FLASK')}  Lab4 Workbench")
@@ -616,26 +604,15 @@ class _BioHpcPanel:
         imgui.spacing()
 
         if imgui.begin_tab_bar("##biohpc_subtabs"):
-            if (
-                sub_enabled("biohpc", "transfer")
-                and imgui.begin_tab_item(f"{_icon('ICON_FA_CLOUD_ARROW_UP')} Transfer")[
-                    0
-                ]
-            ):
+            if imgui.begin_tab_item(f"{_icon('ICON_FA_CLOUD_ARROW_UP')} Transfer")[0]:
                 imgui.spacing()
                 self._draw_transfer_tab()
                 imgui.end_tab_item()
-            if (
-                sub_enabled("biohpc", "metadata")
-                and imgui.begin_tab_item(f"{_icon('ICON_FA_TAGS')} Metadata")[0]
-            ):
+            if imgui.begin_tab_item(f"{_icon('ICON_FA_TAGS')} Metadata")[0]:
                 imgui.spacing()
                 self._draw_metadata_tab()
                 imgui.end_tab_item()
-            if (
-                sub_enabled("biohpc", "analysis")
-                and imgui.begin_tab_item(f"{_icon('ICON_FA_SLIDERS')} Analysis")[0]
-            ):
+            if imgui.begin_tab_item(f"{_icon('ICON_FA_SLIDERS')} Analysis")[0]:
                 imgui.spacing()
                 self._draw_analysis_tab()
                 imgui.end_tab_item()
@@ -643,15 +620,11 @@ class _BioHpcPanel:
             jobs_label = f"{_icon('ICON_FA_LIST_CHECK')} Jobs"
             if njobs:
                 jobs_label += f" ({njobs})"
-            if sub_enabled("biohpc", "jobs") and imgui.begin_tab_item(jobs_label)[0]:
+            if imgui.begin_tab_item(jobs_label)[0]:
                 imgui.spacing()
                 self._draw_jobs_tab()
                 imgui.end_tab_item()
             imgui.end_tab_bar()
-
-    # ==================================================================
-    # sub-tab: Transfer
-    # ==================================================================
 
     def _draw_transfer_tab(self) -> None:
         paths = self._source_paths()
@@ -804,10 +777,6 @@ class _BioHpcPanel:
         name = self._dataset_name(self._source_paths())
         self._log(f"biohpc: simulated upload {name} -> {dest}")
 
-    # ==================================================================
-    # sub-tab: Metadata (Lab4 recording identity + array metadata)
-    # ==================================================================
-
     def _draw_metadata_tab(self) -> None:
         imgui.text_colored(_COL_SUB, "Recording identity")
         _wrapped("The Lab4 DataJoint key this data registers under.", _COL_DIM)
@@ -912,10 +881,6 @@ class _BioHpcPanel:
         imgui.text_colored(_COL_DIM, label)
         imgui.same_line(hello_imgui.em_size(8))
         _wrapped(value, color)
-
-    # ==================================================================
-    # sub-tab: Analysis (choose engine + analyses, config, dispatch)
-    # ==================================================================
 
     def _draw_analysis_tab(self) -> None:
         imgui.text_colored(_COL_SUB, "Extraction engine")
@@ -1048,10 +1013,6 @@ class _BioHpcPanel:
             f"[{job.engine}] target={target} slurm={job.slurm}"
         )
 
-    # ==================================================================
-    # sub-tab: Jobs (simulated SLURM queue)
-    # ==================================================================
-
     def _draw_jobs_tab(self) -> None:
         if not self.jobs:
             _wrapped("No jobs yet.", _COL_DIM)
@@ -1153,17 +1114,6 @@ def draw_biohpc_popup(parent: Any) -> None:
     """The BioHPC window, opened from the Widgets menu."""
     if not getattr(parent, "_show_biohpc", False):
         return
-    from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
-    # the panel gates its sub-tabs on these; the window being open means on
-    for key in (
-        "biohpc",
-        "biohpc.transfer",
-        "biohpc.metadata",
-        "biohpc.analysis",
-        "biohpc.jobs",
-    ):
-        set_widget_enabled(key, True, persist=False)
     imgui.set_next_window_size(imgui.ImVec2(880, 620), imgui.Cond_.first_use_ever)
     opened, keep = imgui.begin("BioHPC", True)
     if not keep:

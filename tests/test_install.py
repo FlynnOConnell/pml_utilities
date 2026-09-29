@@ -15,10 +15,6 @@ import pytest
 from mbo_utilities import install
 from mbo_utilities.install import FeatureStatus, Status
 
-# ----------------------------------------------------------------------
-# picking a wheel
-# ----------------------------------------------------------------------
-
 
 class TestRecommendedTorchTag:
     @pytest.mark.parametrize(
@@ -76,10 +72,6 @@ class TestArchSupported:
         assert install._arch_supported([], (6, 1))
 
 
-# ----------------------------------------------------------------------
-# driver
-# ----------------------------------------------------------------------
-
 
 class TestDriverCuda:
     def test_parses_the_banner(self, monkeypatch):
@@ -109,10 +101,6 @@ class TestDriverCuda:
             "WDDM",
         )
 
-
-# ----------------------------------------------------------------------
-# pytorch against this machine
-# ----------------------------------------------------------------------
 
 
 def _fake_torch(
@@ -260,10 +248,6 @@ class TestCheckPkg:
         assert (feat.status, feat.version) == (Status.OK, "1.2.3")
 
 
-# ----------------------------------------------------------------------
-# the whole report
-# ----------------------------------------------------------------------
-
 
 def _fake_status():
     from mbo_utilities.install import CudaInfo, InstallStatus
@@ -384,10 +368,6 @@ class TestCacheRoundTrip:
         assert not env_cache.is_cache_valid({**base, "schema": 1})
         assert env_cache.is_cache_valid({**base, "schema": env_cache._CACHE_SCHEMA})
 
-
-# ----------------------------------------------------------------------
-# launcher table
-# ----------------------------------------------------------------------
 
 
 class TestLauncherRows:

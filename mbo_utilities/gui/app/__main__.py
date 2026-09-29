@@ -5,9 +5,8 @@ from __future__ import annotations
 import argparse
 import os
 
-parser = argparse.ArgumentParser(description="the mbo app host and its demo apps")
+parser = argparse.ArgumentParser(description="the mbo app host")
 parser.add_argument("path", nargs="?", default=None)
-parser.add_argument("--nt", type=int, default=500, help="timepoints to read from path")
 parser.add_argument(
     "--frames", type=int, default=0, help="draw N frames offscreen and exit"
 )
@@ -18,4 +17,4 @@ if args.frames > 0:
 
 from mbo_utilities.gui.app import run_app  # noqa: E402
 
-run_app(args.path, nt=args.nt, frames=args.frames)
+run_app(args.path, frames=args.frames)

@@ -26,6 +26,7 @@ __all__ = [
     "TRACE_PROFILES",
     "TraceProfile",
     "available_kinds",
+    "deflect",
     "display_trace",
     "displayed_kind",
     "neuropil_overlay",
@@ -150,6 +151,23 @@ def displayed_kind(trace, kind: str | None = None) -> str | None:
     return default if default in kinds else kinds[0]
 
 
+def deflect(y: np.ndarray, subtract: bool = False, invert: bool = False) -> np.ndarray:
+    """``y`` transformed about its own mean over time ``m`` the way the viewer
+    transforms each pixel: ``y - m`` (subtract), ``2m - y`` (invert) or
+    ``m - y`` (both). Always a new float32 array.
+    """
+    out = np.array(y, dtype=np.float32)
+    if not (subtract or invert) or out.size == 0:
+        return out
+    m = np.float32(np.nanmean(out))
+    out -= m
+    if invert:
+        np.negative(out, out=out)
+    if not subtract:
+        out += m
+    return out
+
+
 def _corrected_raw(trace, neuropil: bool) -> np.ndarray:
     profile = trace_profile(trace.engine)
     f = np.asarray(trace.F, np.float32)
@@ -158,11 +176,21 @@ def _corrected_raw(trace, neuropil: bool) -> np.ndarray:
     return f
 
 
+def _dff_from(f: np.ndarray, trace, settings: DffSettings) -> np.ndarray:
+    if settings.method == "maxmin" and trace.fs:
+        dff = dfof_maxmin(f[None, :], trace.fs, settings.window_s, settings.sigma_s)
+    else:
+        dff = dfof_percentile(f[None, :], settings.percentile)
+    return (dff[0] * 100.0).astype(np.float32)
+
+
 def display_trace(
     trace,
     kind: str | None = None,
     settings: DffSettings | None = None,
     neuropil: bool = True,
+    subtract: bool = False,
+    invert: bool = False,
 ) -> np.ndarray | None:
     """The row's trace as the panel plots it, in the kind
     :func:`displayed_kind` picks, or None when the row carries nothing.
@@ -172,33 +200,39 @@ def display_trace(
     (scaled to percent), else one computed from the corrected raw trace with
     ``settings`` (the profile's own when None). Every other kind is the
     array the row carries under that name.
+
+    ``subtract`` and ``invert`` are the viewer's Mean Subtraction and Invert
+    Deflection, applied with :func:`deflect` to what was measured from the
+    pixels: the ``raw`` trace, and the raw trace a ``dff`` is computed from
+    here (invert only; a dF/F is already relative to its baseline). A
+    pipeline's own kinds are shown as it wrote them, sign included.
     """
     shown = displayed_kind(trace, kind)
     if shown is None:
         return None
     profile = trace_profile(trace.engine)
     if shown == "raw":
-        return _corrected_raw(trace, neuropil)
+        return deflect(_corrected_raw(trace, neuropil), subtract, invert)
     if shown != "dff":
         return np.asarray(trace.array(shown), np.float32)
     if trace.norm is not None:
         norm = np.asarray(trace.norm, np.float32)
         return norm if profile.dff_percent else norm * 100.0
-    f = _corrected_raw(trace, neuropil)[None, :]
-    settings = settings or profile.dff
-    if settings.method == "maxmin" and trace.fs:
-        dff = dfof_maxmin(f, trace.fs, settings.window_s, settings.sigma_s)
-    else:
-        dff = dfof_percentile(f, settings.percentile)
-    return (dff[0] * 100.0).astype(np.float32)
+    f = deflect(_corrected_raw(trace, neuropil), invert=invert)
+    return _dff_from(f, trace, settings or profile.dff)
 
 
 def neuropil_overlay(
-    trace, kind: str | None = None, settings: DffSettings | None = None
+    trace,
+    kind: str | None = None,
+    settings: DffSettings | None = None,
+    subtract: bool = False,
+    invert: bool = False,
 ) -> np.ndarray | None:
     """The neuropil trace drawn under a ``raw`` or ``dff`` row on the same
     scale (raw counts, or percent over its own baseline), for a profile that
-    offers the correction; None otherwise.
+    offers the correction; None otherwise. ``subtract`` / ``invert`` as in
+    :func:`display_trace`.
     """
     profile = trace_profile(trace.engine)
     if not profile.neuropil or trace.Fneu is None:
@@ -206,22 +240,28 @@ def neuropil_overlay(
     shown = displayed_kind(trace, kind)
     fneu = np.asarray(trace.Fneu, np.float32)
     if shown == "raw":
-        return fneu
+        return deflect(fneu, subtract, invert)
     if shown != "dff":
         return None
-    settings = settings or profile.dff
-    if settings.method == "maxmin" and trace.fs:
-        dff = dfof_maxmin(fneu[None, :], trace.fs, settings.window_s, settings.sigma_s)
-    else:
-        dff = dfof_percentile(fneu[None, :], settings.percentile)
-    return (dff[0] * 100.0).astype(np.float32)
+    return _dff_from(deflect(fneu, invert=invert), trace, settings or profile.dff)
 
 
-def y_label(trace, kind: str | None = None) -> str:
+def y_label(
+    trace, kind: str | None = None, subtract: bool = False, invert: bool = False
+) -> str:
     """The y axis label of what :func:`display_trace` shows for the row."""
     shown = displayed_kind(trace, kind)
     if shown is None:
         return ""
     if shown == "raw":
-        return trace_profile(trace.engine).raw_label
+        label = trace_profile(trace.engine).raw_label
+        if subtract and invert:
+            return f"mean - {label}"
+        if subtract:
+            return f"{label} - mean"
+        if invert:
+            return f"2 mean - {label}"
+        return label
+    if shown == "dff" and invert and trace.norm is None:
+        return f"{DISPLAY_KINDS['dff']}, inverted"
     return DISPLAY_KINDS[shown]

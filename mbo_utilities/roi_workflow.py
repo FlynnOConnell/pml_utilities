@@ -472,7 +472,7 @@ def roi_trace(
         Plane and channel passed to :func:`as_movie`.
     batch : int, optional
         Frames per read on a raw movie, so a long recording never lands in
-        RAM at once. A masknmf factorized array (``PMDArray``, ``ACArray``,
+        RAM at once. A masknmf factorized array (``CompressionArray``, ``SignalsArray``,
         ``ResidualArray``, ...) reconstructs only the bounding box, so it is
         read in a single call regardless of ``batch``.
     weights : np.ndarray, optional
@@ -1497,7 +1497,7 @@ def extract_rois(
 
 
 def pmd_crop(pmd, y0: int, y1: int, x0: int, x1: int):
-    """Spatially crop a ``masknmf.PMDArray`` without recompressing.
+    """Spatially crop a ``masknmf.CompressionArray`` without recompressing.
 
     Row-selects the sparse spatial basis (and the local projector / trend
     basis when present) and crops the mean / variance images, so the result
@@ -1506,35 +1506,35 @@ def pmd_crop(pmd, y0: int, y1: int, x0: int, x1: int):
 
     Parameters
     ----------
-    pmd : masknmf.PMDArray
+    pmd : masknmf.CompressionArray
         Parent decomposition of shape ``(T, H, W)``.
     y0, y1, x0, x1 : int
         Crop bounds, ``0 <= y0 < y1 <= H`` and ``0 <= x0 < x1 <= W``.
 
     Returns
     -------
-    masknmf.PMDArray
+    masknmf.CompressionArray
         Decomposition of shape ``(T, y1 - y0, x1 - x0)`` sharing the
         parent's temporal basis, device, and rescale / trend settings.
     """
     import torch
 
-    from masknmf import PMDArray
+    from masknmf import CompressionArray
 
     nt, h, w = pmd.shape
     y0, y1, x0, x1 = int(y0), int(y1), int(x0), int(x1)
     if not (0 <= y0 < y1 <= h and 0 <= x0 < x1 <= w):
         raise IndexError(f"crop ({y0}:{y1}, {x0}:{x1}) outside {h}x{w}")
     idx = torch.arange(h * w, device=pmd.device).reshape(h, w)[y0:y1, x0:x1].reshape(-1)
-    proj = pmd.u_local_projector
+    proj = pmd.spatial_compressed_local_projector
     trend = pmd.spatial_trend_basis
-    return PMDArray.from_tensors(
+    return CompressionArray.from_tensors(
         (nt, y1 - y0, x1 - x0),
-        torch.index_select(pmd.u, 0, idx),
-        pmd.v,
-        pmd.mean_img[y0:y1, x0:x1],
-        pmd.var_img[y0:y1, x0:x1],
-        u_local_projector=torch.index_select(proj, 0, idx)
+        torch.index_select(pmd.spatial_compressed, 0, idx),
+        pmd.temporal_compressed,
+        pmd.mean_image[y0:y1, x0:x1],
+        pmd.noise_variance_image[y0:y1, x0:x1],
+        spatial_compressed_local_projector=torch.index_select(proj, 0, idx)
         if proj is not None
         else None,
         spatial_trend_basis=trend[idx] if trend is not None else None,
@@ -1548,7 +1548,7 @@ def pmd_crop(pmd, y0: int, y1: int, x0: int, x1: int):
 def _cached_pmd_crop(
     source, movie: PlaneMovie, cfg, logger
 ) -> tuple[object, str] | None:
-    """Cropped ``PMDArray`` built from the source plane's cached compression.
+    """Cropped ``CompressionArray`` built from the source plane's cached compression.
 
     Parameters
     ----------
@@ -1565,7 +1565,7 @@ def _cached_pmd_crop(
 
     Returns
     -------
-    tuple of (masknmf.PMDArray, str) or None
+    tuple of (masknmf.CompressionArray, str) or None
         The cropped decomposition and its provenance key, or None when there
         is no usable cache (no plane dir, no file, stale settings, a shape
         mismatch, or ``movie`` is not a crop).
@@ -1591,7 +1591,7 @@ def _cached_pmd_crop(
     import masknmf
 
     try:
-        pmd = masknmf.PMDArray.from_hdf5(str(pmd_path))
+        pmd = masknmf.CompressionArray.from_hdf5(str(pmd_path))
     except Exception as e:
         logger.warning(
             f"roi_workflow: cached {pmd_path.name} unusable ({e}); recompressing crop"
@@ -1750,7 +1750,7 @@ def demix_rois(
     }
     _runner._export_atomic(results, out_dir / _runner.DEMIX_FILE, info)
     coo_idx, values, baseline = _runner._extract_footprints(results)
-    cc = np.asarray(results.ac_array.export_c(), dtype=np.float32)
+    cc = np.asarray(results.signals_array.export_temporal_demixed(), dtype=np.float32)
     counts = _outputs.write_plane_outputs(
         out_dir,
         indices=coo_idx,
@@ -1758,8 +1758,8 @@ def demix_rois(
         c=cc,
         shape=(ly, lx),
         baseline=baseline,
-        var_img=_runner._to_np(getattr(pmd, "var_img", None)),
-        mean_img=_runner._to_np(getattr(pmd, "mean_img", None)),
+        var_img=_runner._to_np(pmd.noise_variance_image),
+        mean_img=_runner._to_np(pmd.mean_image),
     )
     info["seconds"] = round(time.time() - t0, 3)
     info["compression_seconds"] = round(comp_seconds, 3)
@@ -1961,7 +1961,7 @@ def discover_rois(
         )
         _runner._export_atomic(results, out_dir / _runner.DEMIX_FILE, info)
         coo_idx, values, baseline = _runner._extract_footprints(results)
-        cc = np.asarray(results.ac_array.export_c(), dtype=np.float32)
+        cc = np.asarray(results.signals_array.export_temporal_demixed(), dtype=np.float32)
         counts = _outputs.write_plane_outputs(
             out_dir,
             indices=coo_idx,
@@ -1969,8 +1969,8 @@ def discover_rois(
             c=cc,
             shape=(h, w),
             baseline=baseline,
-            var_img=_runner._to_np(getattr(pmd, "var_img", None)),
-            mean_img=_runner._to_np(getattr(pmd, "mean_img", None)),
+            var_img=_runner._to_np(pmd.noise_variance_image),
+            mean_img=_runner._to_np(pmd.mean_image),
         )
         stat = _shift_stat(out_dir, y0, x0, (ly, lx))
         F = np.load(out_dir / "F.npy")
