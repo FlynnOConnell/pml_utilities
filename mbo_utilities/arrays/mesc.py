@@ -163,6 +163,8 @@ SYNC_EDGE_DEFAULT = "falling"
 _GREEN_LP = 1
 _RED_LP = 2
 
+_MEAN_BLOCK_BYTES = 64 * 1024 * 1024
+
 # lab4.convert stamps acquisition times in US Eastern standard offset. Kept
 # explicit (and echoed in metadata as `start_time_tz`) rather than implied.
 _ACQ_TZ = timezone(timedelta(hours=-5))
@@ -938,6 +940,66 @@ def _take_axis0(dataset, indices) -> np.ndarray:
     return block[inverse]
 
 
+def _report(progress_callback, span, frac) -> None:
+    if progress_callback is not None:
+        progress_callback(span[0] + span[1] * min(1.0, frac))
+
+
+def _sum_axis0(dataset, src, progress_callback, span, per_frame=1) -> np.ndarray:
+    """Sum of ``dataset`` over timepoints ``src`` as ``(per_frame, Y, X)`` float64.
+
+    Timepoint ``t`` is raw frames ``t * per_frame`` to ``t * per_frame +
+    per_frame - 1`` (a multicube volume's slices). Each raw page is read once.
+    """
+    page = dataset.shape[1:]
+    page_bytes = int(np.prod(page)) * dataset.dtype.itemsize
+    step = max(1, _MEAN_BLOCK_BYTES // (per_frame * page_bytes))
+    acc = np.zeros((per_frame, *page), dtype=np.float64)
+    offsets = np.arange(per_frame)
+    for i in range(0, src.size, step):
+        t = src[i : i + step]
+        raw = (t[:, None] * per_frame + offsets).ravel()
+        block = _take_axis0(dataset, raw).reshape(t.size, per_frame, *page)
+        acc += block.sum(axis=0, dtype=np.float64)
+        _report(progress_callback, span, (i + t.size) / src.size)
+    return acc
+
+
+def _packed_mean(dataset, rois, src, progress_callback, span) -> list[np.ndarray]:
+    """Mean ``(n_lines, width)`` of each ROI of a packed page over timepoints ``src``.
+
+    Every ROI is a column band of the same raw rows, with timepoint ``f`` at
+    rows ``f * n_lines`` onward; the rows are read once, full width, and each
+    band is split off in memory.
+    """
+    page_rows, page_cols = dataset.shape[1], dataset.shape[2]
+    bands, sums, selected = [], [], []
+    for roi in rois:
+        col0, col1 = min(roi["col0"], page_cols), min(roi["col1"], page_cols)
+        mask = np.zeros(page_rows // roi["n_lines"], dtype=bool)
+        mask[src[src < mask.size]] = True
+        bands.append((roi["n_lines"], col0, col1))
+        sums.append(np.zeros((roi["n_lines"], col1 - col0), dtype=np.float64))
+        selected.append(mask)
+    lo = min(int(src.min()) * n for n, _, _ in bands)
+    hi = min(page_rows, max((int(src.max()) + 1) * n for n, _, _ in bands))
+    step = max(1, _MEAN_BLOCK_BYTES // (page_cols * dataset.dtype.itemsize))
+    for r0 in range(lo, hi, step):
+        r1 = min(r0 + step, hi)
+        block = dataset[0, r0:r1, :]
+        for (n, col0, col1), acc, mask in zip(bands, sums, selected):
+            for line in range(n):
+                first = r0 + (line - r0) % n
+                frames = np.arange(first, r1, n) // n
+                keep = frames < mask.size
+                keep[keep] = mask[frames[keep]]
+                if keep.any():
+                    rows = block[first - r0 :: n, col0:col1][keep]
+                    acc[line] += rows.sum(axis=0, dtype=np.float64)
+        _report(progress_callback, span, (r1 - lo) / (hi - lo))
+    return [acc / src.size for acc in sums]
+
+
 class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMixin):
     """
     Lazy reader for one measurement unit of a Femtonics ``.mesc`` file.
@@ -1106,6 +1168,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             self.roi = roi
 
         self._offset_cache: dict[tuple[int, int, int], float] = {}
+        self._layout_mean: np.ndarray | None = None
         self.phase_correction = PhaseCorrectionFeature(
             enabled=fix_phase,
             method=phasecorr_method,
@@ -1598,6 +1661,80 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         for t in frames:
             self._offset_cache[(int(t), int(c), int(z))] = float(offset)
         return corrected
+
+    def temporal_mean(self, progress_callback=None) -> np.ndarray:
+        """Per-pixel mean over T as ``(C, Z, Y, X)`` float32.
+
+        Reads each raw channel once, whatever the ROI count: the mean commutes
+        with the ROI crop, padding and Y flip, so those run on the mean page.
+        The layout mean is cached; the ROI selection and scan-phase correction
+        are applied to it on every call.
+        """
+        if self._layout_mean is None:
+            self._layout_mean = self._compute_layout_mean(progress_callback)
+        out = self._layout_mean[:, self._z_indices(slice(None))]
+        if self.fix_phase:
+            out = out.copy()
+            shift = self.phase_correction.effective_shift
+            for c in range(out.shape[0]):
+                for z in range(out.shape[1]):
+                    block = out[c, z][None]
+                    if shift is not None:
+                        out[c, z] = _apply_offset(block, shift, use_fft=self.use_fft)[0]
+                    else:
+                        out[c, z] = bidir_phasecorr(
+                            block,
+                            method=self.phasecorr_method,
+                            max_offset=self.max_offset,
+                            border=self.border,
+                            use_fft=self.use_fft,
+                        )[0][0]
+        return out
+
+    def _compute_layout_mean(self, progress_callback=None) -> np.ndarray:
+        """Mean of every layout ROI/plane, ``(C, layout.nz, ny, nx)`` float32."""
+        layout = self._layout
+        out = np.zeros((layout.nc, layout.nz, layout.ny, layout.nx), dtype=np.float32)
+        if self._nt == 0:
+            return out
+        for c in range(layout.nc):
+            dataset = self._channels[min(c, len(self._channels) - 1)]
+            src = self._source_frames(c, range(self._nt))
+            span = (c / layout.nc, 1 / layout.nc)
+            if layout.kind == "zstack":
+                planes = [np.asarray(dataset[z], dtype=np.float64) for z in range(layout.nz)]
+            elif layout.kind == "packed":
+                planes = _packed_mean(dataset, layout.rois, src, progress_callback, span)
+            elif layout.kind == "multicube":
+                sums = _sum_axis0(
+                    dataset, src, progress_callback, span, per_frame=layout.slices
+                )
+                planes = []
+                for z in range(layout.nz):
+                    cube, s = divmod(z, layout.slices)
+                    plane = sums[s] / src.size
+                    if layout.rois:
+                        box = layout.rois[cube]
+                        plane = plane[box["row0"] : box["row1"], box["col0"] : box["col1"]]
+                    planes.append(plane)
+            else:
+                page = _sum_axis0(dataset, src, progress_callback, span)[0] / src.size
+                if layout.kind == "frames":
+                    planes = [page]
+                else:
+                    planes = [
+                        page[r["row0"] : r["row1"], r["col0"] : r["col1"]]
+                        for r in layout.rois
+                    ]
+            for z, plane in enumerate(planes):
+                h = min(plane.shape[0], layout.ny)
+                w = min(plane.shape[1], layout.nx)
+                out[c, z, :h, :w] = plane[:h, :w]
+        if layout.flip_y:
+            out = np.ascontiguousarray(out[:, :, ::-1, :])
+        if progress_callback is not None:
+            progress_callback(1.0)
+        return out
 
     def get_offset_at(self, t: int, c: int = 0, z: int = 0) -> float | None:
         """Cached scan-phase offset for one (t, c, z) cell, or None."""

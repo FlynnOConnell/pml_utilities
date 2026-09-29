@@ -3986,3 +3986,56 @@ class TestSliderRoles:
             uid=cwidget.store.rois[0].uid, z=1, c=1, F=np.ones(4, np.float32)
         )
         assert cwidget._trace_label(other) == "mean z2 c2"
+
+
+class _DeflectingHost(_StubHost):
+    """A host with the viewer's Mean Subtraction / Invert Deflection."""
+
+    mean_subtraction = False
+    invert_deflection = False
+
+
+class TestTraceDeflection:
+    """The Traces panel follows the viewer's Mean Subtraction and Invert
+    Deflection, so the plot reads like the image.
+    """
+
+    def test_raw_rows_follow_the_hosts_switches(self, widget):
+        widget.host = _DeflectingHost()
+        widget.kind = "raw"
+        widget.correct_neuropil = False
+        widget.add_roi(square(10, 10, 9))
+        widget.quick_trace(0)
+        pump(widget)
+        (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
+        f = np.asarray(trace.F, np.float64)
+        np.testing.assert_allclose(widget._display(trace.key)[0], f, rtol=1e-6)
+
+        widget.host.invert_deflection = True
+        np.testing.assert_allclose(
+            widget._display(trace.key)[0], 2 * f.mean() - f, rtol=1e-5
+        )
+        widget.host.mean_subtraction = True
+        np.testing.assert_allclose(
+            widget._display(trace.key)[0], f.mean() - f, rtol=1e-4, atol=1e-5
+        )
+        assert widget.plot_y_label([trace]).startswith("mean - ")
+        widget.host.invert_deflection = False
+        np.testing.assert_allclose(
+            widget._display(trace.key)[0], f - f.mean(), rtol=1e-4, atol=1e-5
+        )
+
+    def test_a_switch_refits_the_plot(self, widget):
+        widget.host = _DeflectingHost()
+        widget.add_roi(square(10, 10, 9))
+        widget.quick_trace(0)
+        pump(widget)
+        (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
+        widget._display(trace.key)
+        widget._trace_fit = False
+        widget.host.invert_deflection = True
+        widget._display(trace.key)
+        assert widget._trace_fit
+
+    def test_no_host_shows_the_rows_as_measured(self, widget):
+        assert widget.deflection() == (False, False)
