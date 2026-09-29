@@ -11,7 +11,7 @@ import numpy as np
 from numpy.exceptions import AxisError
 
 from mbo_utilities import log
-from mbo_utilities.lazy_array import LazyArray
+from mbo_utilities.lazy_array import DIMS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -32,20 +32,6 @@ def get_dtype(dtype):
         return np.dtype(str(dtype))
 
 
-# canonical 5D dimension order (OME-NGFF 0.5)
-DIMS = ("T", "C", "Z", "Y", "X")
-
-
-class Shape5DMixin(LazyArray):
-    """Backwards-compatible alias for the 5D accessors, now on `LazyArray`.
-
-    The accessors (`_shape5d`, `nt`/`nc`/`nz`/`ny`/`nx`,
-    `source_path`) were folded into `LazyArray` in v4. This subclass is
-    retained so existing `class FooArray(..., Shape5DMixin)` declarations
-    keep working and become `LazyArray` instances; it is removed once every
-    array class inherits `LazyArray` directly.
-    """
-
 
 def _normalize_key(key, ndim):
     """Normalize an indexing key: wrap in tuple, expand Ellipsis, strip trailing Ellipsis."""
@@ -58,9 +44,8 @@ def _normalize_key(key, ndim):
     return key
 
 
-# axes of canonical 5D TCZYX that a natural-rank array of the given ndim
-# does NOT have (front-padded as singletons by _shape5d). used to map a
-# 5D index onto the underlying lower-rank array.
+# the TCZYX axes a stored array of the given ndim lacks (reported as size 1);
+# used to map a 5D key onto the stored array
 _SKIP_BY_RAW_NDIM = {
     5: (),
     4: (1,),  # C
@@ -71,7 +56,7 @@ _SKIP_BY_RAW_NDIM = {
 
 
 def _index_5d_into_raw(data, key, raw_ndim):
-    """Index a natural-rank `data` with a 5D TCZYX `key`.
+    """Index `data`, stored with `raw_ndim` axes, with a 5D TCZYX `key`.
 
     The array presents singleton T/C/Z axes that `data` lacks; those axes
     are dropped from the key before indexing, then re-inserted (size 1) on
@@ -364,7 +349,7 @@ def _imwrite_base(
 
     md = _sanitize_metadata(md)
 
-    num_planes = arr._shape5d()[2]
+    num_planes = arr.shape[2]
     # The C axis: prefer num_views (IsoView cameras — its num_color_channels
     # now counts wavelengths, not the C axis), then num_color_channels
     # (ScanImage), then the always-5D `.nc` accessor (TiffArray and other
@@ -395,7 +380,7 @@ def _imwrite_base(
     if ext_clean in ("tiff", "tif", "zarr", "h5", "hdf5") and frames_list is None:
         _num_frames = kwargs.get("num_frames")
         if _num_frames is not None:
-            total_T = int(arr._shape5d()[0])
+            total_T = int(arr.shape[0])
             frames_list = list(range(1, min(int(_num_frames), total_T) + 1))
 
     # tiff: use volumetric writer
@@ -524,13 +509,12 @@ def _imwrite_base(
             scalebar=bool(kwargs.pop("scalebar", False)),
         )
 
-    # _shape5d(), not .shape: BinArray and _ChannelView report a different rank
     if channels_list is not None:
         channels_0idx = [c - 1 for c in channels_list]
     else:
         channels_0idx = list(range(num_channels))
 
-    s5 = arr._shape5d()
+    s5 = arr.shape
     nframes = s5[0]  # T
     Ly, Lx = s5[3], s5[4]
 
@@ -675,7 +659,7 @@ def temporal_mean(arr, progress_callback=None) -> np.ndarray:
     own = getattr(arr, "temporal_mean", None)
     if own is not None:
         return own(progress_callback=progress_callback)
-    nt, nc, nz, ny, nx = arr._shape5d() if hasattr(arr, "_shape5d") else arr.shape
+    nt, nc, nz, ny, nx = arr.shape
     frame_bytes = nc * nz * ny * nx * np.dtype(arr.dtype).itemsize
     step = max(1, (64 * 1024 * 1024) // max(1, frame_bytes))
     acc = np.zeros((nc, nz, ny, nx), dtype=np.float64)

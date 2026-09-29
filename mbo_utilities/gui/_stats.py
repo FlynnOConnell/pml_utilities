@@ -227,15 +227,15 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
 
 
 def _base_array(arr: Any) -> Any:
-    """Unwrap GUI view wrappers (Squeezed/Axial/Phasecorr) to the disk array.
+    """Unwrap read-time views (axial shift, phase correction, selection) to
+    the disk array.
 
-    These wrappers hold the source on ``_base`` (SqueezedView) or ``_source``
-    (AxialShiftView / PhaseCorrectedView) and do not forward underscore
+    These views hold the source on ``_source`` and do not forward underscore
     attributes, so reach the innermost array to call its persistence hooks.
     """
     cur = arr
     for _ in range(8):
-        nxt = getattr(cur, "_base", None) or getattr(cur, "_source", None)
+        nxt = getattr(cur, "_source", None)
         if nxt is None or nxt is cur:
             break
         cur = nxt

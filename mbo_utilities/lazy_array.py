@@ -1,15 +1,8 @@
 """
-v4 pluggable LazyArray base class and imread dispatch registry.
+LazyArray base class and imread dispatch registry.
 
-Dependency-light by design: imports only the standard library so it can be
-imported early (e.g. for ``isinstance(obj, LazyArray)`` checks in downstream
-packages such as lbm_suite2p_python) without pulling in numpy/tifffile/zarr.
-
-Phase 1 of the v4 rollout: this base carries the always-5D size accessors
-(folded in from the former ``Shape5DMixin``) plus the registration and
-dispatch plumbing. Per-class ``.shape``/``.ndim`` are locked to 5D and
-``imread()`` is switched to ``_dispatch()`` in later phases; nothing here
-changes existing behavior yet.
+Imports only the standard library so ``isinstance(obj, LazyArray)`` is cheap
+for downstream packages such as lbm_suite2p_python.
 """
 
 from __future__ import annotations
@@ -22,64 +15,53 @@ if TYPE_CHECKING:
     from mbo_utilities.arrays.features import MotionCorrection
     from mbo_utilities.behavior import Behavior
 
-# canonical dims by reported rank (OME-NGFF 0.5: time -> channel -> space)
-_DEFAULT_DIMS_BY_NDIM: dict[int, tuple[str, ...]] = {
-    2: ("Y", "X"),
-    3: ("T", "Y", "X"),
-    4: ("T", "Z", "Y", "X"),
-    5: ("T", "C", "Z", "Y", "X"),
-}
+DIMS = ("T", "C", "Z", "Y", "X")
 
 
 class LazyArray:
-    """Base class for every array ``imread()`` can return.
+    """Base class for every array ``imread()`` returns.
 
-    Subclasses implement ``_shape5d()`` returning a 5-tuple (T, C, Z, Y, X)
-    with singletons for unused dims, plus ``__getitem__``, ``dtype``,
-    ``metadata`` and ``can_open()``. This base provides the named 5D size
-    accessors and the registry hooks used by ``imread()`` dispatch.
+    Every instance is 5D ``(T, C, Z, Y, X)``, size-1 axes kept. Subclasses
+    implement ``shape``, ``__getitem__``, ``dtype`` and ``can_open()`` and set
+    ``self._metadata``; this base adds the per-axis sizes and the registry
+    hooks ``imread()`` dispatches through.
     """
 
     PRIORITY: ClassVar[int] = 50
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
-        """Return the 5D TCZYX shape. subclasses must implement this."""
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
+        """``(T, C, Z, Y, X)``. subclasses must implement this."""
         raise NotImplementedError
 
     @property
-    def shape(self) -> tuple[int, int, int, int, int]:
-        """Shape as 5D TCZYX. subclasses may override (e.g. squeezed views)."""
-        return self._shape5d()
-
-    @property
     def ndim(self) -> int:
-        """Always 5 for a canonical LazyArray."""
         return 5
 
     @property
     def nt(self) -> int:
         """Number of timepoints."""
-        return self._shape5d()[0]
+        return self.shape[0]
 
     @property
     def nc(self) -> int:
         """Number of channels."""
-        return self._shape5d()[1]
+        return self.shape[1]
 
     @property
     def nz(self) -> int:
         """Number of z-planes."""
-        return self._shape5d()[2]
+        return self.shape[2]
 
     @property
     def ny(self) -> int:
         """Spatial height."""
-        return self._shape5d()[3]
+        return self.shape[3]
 
     @property
     def nx(self) -> int:
         """Spatial width."""
-        return self._shape5d()[4]
+        return self.shape[4]
 
     _metadata: dict | None = None
     _declared_dims: tuple[str, ...] | None = None
@@ -87,10 +69,10 @@ class LazyArray:
 
     @property
     def dims(self) -> tuple[str, ...]:
-        """Dimension labels; declared order if set, else canonical by rank."""
+        """Dimension labels; the declared order if set, else ``DIMS``."""
         if self._declared_dims is not None:
             return self._declared_dims
-        return _DEFAULT_DIMS_BY_NDIM.get(self.ndim, ("T", "C", "Z", "Y", "X"))
+        return DIMS
 
     @dims.setter
     def dims(self, value) -> None:
@@ -342,11 +324,14 @@ class LazyArray:
         """Return True if this class can open `path`. default: no."""
         return False
 
-    def squeeze(self):
-        """Return a view with size-1 T/C/Z axes dropped (opt-in ergonomics)."""
-        from mbo_utilities.squeeze import SqueezedView
+    def isel(self, **indexers):
+        """Select 0-based ``T``, ``C`` or ``Z`` indices, like
+        ``xarray.DataArray.isel``, except no axis is dropped:
+        ``arr.isel(C=1).shape[1] == 1``. Returns a lazy ``SelectionView``.
+        """
+        from mbo_utilities.arrays._selection_view import SelectionView
 
-        return SqueezedView(self)
+        return SelectionView(self, indexers)
 
 
 _ENTRY_POINT_GROUP = "mbo_utilities.lazy_arrays"
@@ -409,18 +394,19 @@ def _dispatch(path) -> type[LazyArray] | None:
 def base_array(arr):
     """The array ``imread`` returned under the viewer's display wrappers and
     read-time views (timing proxy, squeezed singletons, frame averaging,
-    scan-phase correction, axial shifts), for ``isinstance`` checks.
+    selection, scan-phase correction, axial shifts), for ``isinstance`` checks.
     """
     from mbo_utilities.arrays._average_view import FrameAveragedView
     from mbo_utilities.arrays._phasecorr_view import PhaseCorrectedView
     from mbo_utilities.arrays._registration import AxialShiftView
-    from mbo_utilities.squeeze import SqueezedView
+    from mbo_utilities.arrays._selection_view import SelectionView
 
     while True:
-        if isinstance(arr, (FrameAveragedView, PhaseCorrectedView, AxialShiftView)):
+        if isinstance(
+            arr,
+            (FrameAveragedView, PhaseCorrectedView, AxialShiftView, SelectionView),
+        ):
             arr = arr._source
-        elif isinstance(arr, SqueezedView):
-            arr = arr.base
         elif type(arr).__name__ in ("_ScrubTimingProxy", "_SqueezeSingletonDims"):
             arr = arr._arr
         else:

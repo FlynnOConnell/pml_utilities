@@ -303,21 +303,14 @@ def _block_mean_yx(a: np.ndarray, f: int) -> np.ndarray:
 def _stream_plane_mean(
     arr, max_frames: int, chunk_frames: int, downsample: int = 1
 ) -> np.ndarray:
-    """Stream a (nz, ny, nx) time-mean image from a lazy array without
-    materializing the full 4d movie in memory.
+    """Stream a (nz, ny, nx) time-mean image of channel 0 from a 5D lazy
+    array without reading the whole movie into memory.
 
-    supports both 5d arrays (T, C, Z, Y, X) and 4d (T, Z, Y, X). ``downsample``
-    block-means the (Y, X) plane by that integer factor before accumulating, so
-    a large-FOV stack never allocates a full-resolution float volume.
+    ``downsample`` block-means the (Y, X) plane by that integer factor before
+    accumulating, so a large-FOV stack never allocates a full-resolution float
+    volume.
     """
-    if hasattr(arr, "_shape5d"):
-        T, C, Z, Y, X = tuple(arr._shape5d())
-        use_5d = True
-    elif getattr(arr, "ndim", None) == 4:
-        T, Z, Y, X = arr.shape
-        use_5d = False
-    else:
-        raise ValueError(f"unsupported array shape {getattr(arr, 'shape', None)}")
+    T, C, Z, Y, X = tuple(arr.shape)
 
     f = max(1, int(downsample))
     yd, xd = (Y // f), (X // f)
@@ -329,10 +322,7 @@ def _stream_plane_mean(
     count = 0
     for start in range(0, n_sub, chunk_frames):
         idx = frame_idx[start : start + chunk_frames]
-        batch = np.asarray(arr[idx])
-        if use_5d and batch.ndim == 5:
-            # collapse C axis (take first color channel if multiple)
-            batch = batch[:, 0]
+        batch = np.asarray(arr[idx, 0])
         if f > 1:
             batch = _block_mean_yx(batch, f)
         im3d_sum += batch.sum(axis=0, dtype=np.float64)
@@ -399,10 +389,7 @@ def compute_axial_shifts(
     """
     resolved_gpu = _auto_resolve_gpu() if use_gpu is None else bool(use_gpu)
 
-    if hasattr(arr, "_shape5d"):
-        _, _, Z, Y, X = tuple(arr._shape5d())
-    else:
-        Z, Y, X = tuple(arr.shape)[-3:]
+    _, _, Z, Y, X = tuple(arr.shape)
     f = _auto_downsample(Z, Y, X) if downsample is None else max(1, int(downsample))
 
     im3d = _stream_plane_mean(
@@ -461,19 +448,14 @@ def _validated_tczyx_shape(source) -> tuple[int, int, int, int, int]:
     """Return the source's 5D (T, C, Z, Y, X) shape, validating it is a
     genuine TCZYX layout so per-plane shifts apply to the Z axis.
 
-    Prefers ``_shape5d()`` (the always-5D contract), else ``shape``. When the
-    source exposes 5D ``dims``, they must equal ``("T","C","Z","Y","X")`` so
-    ``shape``'s Z entry and the ``"Z"`` dim agree; a 4D-presenting wrapper
-    (dims length != 5) is left to the shape-only path.
+    When the source has ``dims``, they must equal ``("T","C","Z","Y","X")``
+    so ``shape``'s Z entry and the ``"Z"`` dim agree.
     """
-    if hasattr(source, "_shape5d"):
-        shape5d = tuple(source._shape5d())
-    else:
-        shape5d = tuple(getattr(source, "shape", ()))
+    shape5d = tuple(getattr(source, "shape", ()))
     if len(shape5d) != 5:
         raise ValueError(f"axial shifts need a 5D TCZYX source; got shape {shape5d!r}")
     dims = getattr(source, "dims", None)
-    if dims is not None and len(dims) == 5 and tuple(dims) != _TCZYX:
+    if dims is not None and tuple(dims) != _TCZYX:
         raise ValueError(
             f"axial shifts assume TCZYX (Z at axis 2); source dims are "
             f"{tuple(dims)}. shape and the 'Z' dim must agree."
@@ -623,14 +605,11 @@ class AxialShiftView:
     def dims(self) -> tuple[str, ...]:
         return _TCZYX
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         if self.enabled:
             return (self._T, self._C, self._Z, self._H, self._W)
         return (self._T, self._C, self._Z, self._Y, self._X)
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        return self._shape5d()
 
     @property
     def ndim(self) -> int:

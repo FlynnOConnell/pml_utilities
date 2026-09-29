@@ -190,9 +190,8 @@ def _write_raw_bin(
         kwargs["timepoints"] = [i + 1 for i in frame_indices]
     if channel is not None:
         kwargs["channels"] = [int(channel)]
-    # single-z sources (incl. natural-rank 3D readers) take the planeless
-    # fast path; a planes= selection would force 5D indexing onto them
-    nz = int(arr._shape5d()[2]) if hasattr(arr, "_shape5d") else 1
+    # single-z sources take the planeless fast path
+    nz = int(arr.shape[2])
     if nz > 1:
         kwargs["planes"] = int(plane)
     imwrite(
@@ -893,7 +892,7 @@ def run_volume(
 
     arr = input_data if hasattr(input_data, "shape") else imread(input_data)
     if planes is None:
-        nz = int(arr._shape5d()[2]) if hasattr(arr, "_shape5d") else 1
+        nz = int(arr.shape[2])
         planes = list(range(1, nz + 1))
 
     ops_files: list[Path] = []

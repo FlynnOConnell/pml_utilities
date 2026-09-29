@@ -189,7 +189,8 @@ class DemixingArray(ReductionMixin, LazyArray):
     def can_open(cls, path: Path | str) -> bool:
         return has_demixing_results(path)
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         t, y, x = self._shape3
         return (t, len(VIEWS), 1, y, x)
 
@@ -319,7 +320,7 @@ class DemixingArray(ReductionMixin, LazyArray):
         key = _normalize_key(key, 5)
         key = key + (slice(None),) * (5 - len(key))
         t_key, c_key, z_key, y_key, x_key = key
-        nt, nc, _, ny, nx = self._shape5d()
+        nt, nc, _, ny, nx = self.shape
         ts = np.atleast_1d(np.arange(nt)[t_key]).tolist()
         cs = np.atleast_1d(np.arange(nc)[c_key]).tolist()
         stack = np.stack(

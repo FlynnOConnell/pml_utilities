@@ -17,25 +17,22 @@ from mbo_utilities.arrays import (
     TiffArray,
     ZarrArray,
 )
-from mbo_utilities.arrays._base import Shape5DMixin
+from mbo_utilities.lazy_array import LazyArray
 
 
-class TestShape5DProtocol:
-    """verify the Shape5DMixin interface."""
+class TestLazyArrayShape:
+    """a LazyArray subclass must implement shape."""
 
     def test_dims_constant(self):
         assert DIMS == ("T", "C", "Z", "Y", "X")
 
-    def test_mixin_requires_implementation(self):
-        class Incomplete(Shape5DMixin):
-            pass
-
+    def test_shape_requires_implementation(self):
         with pytest.raises(NotImplementedError):
-            Incomplete().shape
+            LazyArray().shape
 
 
-class TestNumpyArrayShape5D:
-    """NumpyArray shape5d for various input ndims."""
+class TestNumpyArrayShape:
+    """NumpyArray shape for each input ndim."""
 
     def test_3d_tyx(self, synthetic_3d_data):
         arr = NumpyArray(synthetic_3d_data)
@@ -70,32 +67,30 @@ class TestNumpyArrayShape5D:
         assert s5 == (1, 1, 1, 64, 64)
 
 
-class TestBinArrayShape5D:
-    """BinArray is always 3D (T, Y, X)."""
+class TestBinArrayShape:
+    """BinArray is (T, 1, 1, Y, X) over its (T, Y, X) file."""
 
-    def test_shape5d(self, synthetic_3d_data):
+    def test_shape(self, synthetic_3d_data):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "test.bin"
             shape = synthetic_3d_data.shape
             arr = BinArray(path, shape=shape, dtype=synthetic_3d_data.dtype)
             arr._file[:] = synthetic_3d_data
 
-            # BinArray keeps its natural (T, Y, X) shape; _shape5d() pads to 5D.
-            assert arr.shape == shape
-            s5 = arr._shape5d()
-            assert len(s5) == 5
-            assert s5 == (shape[0], 1, 1, shape[1], shape[2])
+            assert arr.shape == (shape[0], 1, 1, shape[1], shape[2])
+            assert arr.ndim == 5
+            assert np.array_equal(arr[:, 0, 0], synthetic_3d_data)
             assert arr.nt == shape[0]
             assert arr.nc == 1
             assert arr.nz == 1
             arr.close()
 
 
-class TestTiffArrayShape5D:
-    """TiffArray shape5d for single-file and volume data."""
+class TestTiffArrayShape:
+    """TiffArray shape for single-file and volume data."""
 
     def test_single_file_3d(self, synthetic_3d_data):
-        """Single tiff file: shape is (T, 1, Y, X), shape5d adds C=1."""
+        """Single tiff file: (T, 1, 1, Y, X)."""
         import tifffile
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -113,7 +108,7 @@ class TestTiffArrayShape5D:
             assert s5[4] == 128
 
     def test_volume_dir(self, synthetic_4d_data):
-        """Volume dir with plane files: shape5d includes Z."""
+        """Volume dir with plane files: planes go on Z."""
         import tifffile
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -135,10 +130,10 @@ class TestTiffArrayShape5D:
             assert arr.nz == 3
 
 
-class TestZarrArrayShape5D:
-    """ZarrArray is always 4D TZYX, shape5d inserts C=1."""
+class TestZarrArrayShape:
+    """A 4D TZYX zarr reads as (T, 1, Z, Y, X)."""
 
-    def test_shape5d(self, synthetic_4d_data):
+    def test_shape(self, synthetic_4d_data):
         import zarr
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -158,10 +153,10 @@ class TestZarrArrayShape5D:
             assert arr.nc == 1
 
 
-class TestShape5DConsistency:
+class TestShapeConsistency:
     """cross-array consistency checks."""
 
-    def test_shape5d_length_always_5(self, synthetic_3d_data, synthetic_4d_data):
+    def test_shape_length_always_5(self, synthetic_3d_data, synthetic_4d_data):
         """All array types return exactly 5 elements."""
         arr3 = NumpyArray(synthetic_3d_data)
         arr4 = NumpyArray(synthetic_4d_data)
@@ -175,8 +170,8 @@ class TestShape5DConsistency:
         assert arr.ny == synthetic_3d_data.shape[-2]
         assert arr.nx == synthetic_3d_data.shape[-1]
 
-    def test_named_accessors_match_shape5d(self, synthetic_4d_data):
-        """nt/nc/nz/ny/nx match shape5d tuple elements."""
+    def test_named_accessors_match_shape(self, synthetic_4d_data):
+        """nt/nc/nz/ny/nx match shape."""
         arr = NumpyArray(synthetic_4d_data)
         s5 = arr.shape
         assert arr.nt == s5[0]

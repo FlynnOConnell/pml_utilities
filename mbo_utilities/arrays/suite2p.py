@@ -19,12 +19,11 @@ import numpy as np
 from mbo_utilities import log
 from mbo_utilities.arrays._base import (
     ReductionMixin,
-    Shape5DMixin,
     _imwrite_base,
     _normalize_key,
 )
 from mbo_utilities.file_io import load_npy
-from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.lazy_array import LazyArray, register_array_class
 from mbo_utilities.metadata import get_param, normalize_ops_arrays
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
@@ -495,7 +494,7 @@ class _Suite2pReconstructReader:
             self._frame_map = None
             self._plane_index = (
                 int(self.metadata.get("plane", 1)) - 1
-                if self._raw._shape5d()[2] > 1
+                if self._raw.shape[2] > 1
                 else 0
             )
             self._channel_index = 0
@@ -591,7 +590,7 @@ class _Suite2pReconstructReader:
                 pass
 
 
-class Suite2pArray(ReductionMixin, Shape5DMixin):
+class Suite2pArray(ReductionMixin, LazyArray):
     """
     Lazy array reader for Suite2p binary output files.
 
@@ -819,7 +818,8 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         """Number of Z-planes."""
         return len(self._planes)
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         return (self._nframes, 1, self._nz, self._ly, self._lx)
 
     @property

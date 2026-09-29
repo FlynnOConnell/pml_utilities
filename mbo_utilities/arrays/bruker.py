@@ -95,7 +95,7 @@ class BrukerArray(ReductionMixin, LazyArray):
         md.update(
             {k: _plain(v) for k, v in self._d.attrs.items() if k != "DIMENSION_LABELS"}
         )
-        nt, nc, nz, ny, nx = self._shape5d()
+        nt, nc, nz, ny, nx = self.shape
         spatial = [d for d in self._raw_dims if d in "ZYX"]
         sizes = md.get("element_size_um")
         if isinstance(sizes, list) and len(sizes) == len(spatial):
@@ -138,7 +138,8 @@ class BrukerArray(ReductionMixin, LazyArray):
         except OSError:
             return False
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         sizes = dict(zip(self._raw_dims, self._d.shape))
         return tuple(sizes.get(d, 1) for d in DIMS)
 

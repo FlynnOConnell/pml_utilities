@@ -114,7 +114,8 @@ class FrameAveragedView(LazyArray):
     def dims(self) -> tuple[str, ...]:
         return _TCZYX
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         # read through every call: the writers change the source's ROI
         # selection (and so its Y/X) while holding this view
         t, c, z, y, x = _validated_tczyx_shape(self._source)
@@ -122,7 +123,7 @@ class FrameAveragedView(LazyArray):
 
     @property
     def _T(self) -> int:
-        return self._shape5d()[0]
+        return self.shape[0]
 
     def __len__(self) -> int:
         return self._T

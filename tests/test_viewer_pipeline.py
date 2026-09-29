@@ -367,11 +367,9 @@ class TestCustomMetadataPropagation:
                 f"{ops_file}: expected dz=15.0, got {ops.get('dz')}"
             )
 
-    def test_natural_rank_tiff_bin_write(self, tmp_path):
-        """Volumetric TiffArray (T, 1, Z, Y, X) writes one bin per plane.
-
-        `_imwrite_base` uses `arr._shape5d()[2]` (== `arr.shape[2]` now that
-        arrays are always 5D) to pick the real Z size when iterating planes.
+    def test_volumetric_tiff_bin_write(self, tmp_path):
+        """Volumetric TiffArray (T, 1, Z, Y, X) writes one bin per plane;
+        `_imwrite_base` takes the Z size from `arr.shape[2]`.
         """
         import numpy as np
         import tifffile

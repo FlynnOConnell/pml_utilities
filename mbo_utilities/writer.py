@@ -347,11 +347,7 @@ def imwrite(
     axial_downsample = None if _axial_ds is None else int(_axial_ds)
 
     if register_z:
-        total_planes = (
-            int(lazy_array._shape5d()[2])
-            if hasattr(lazy_array, "_shape5d")
-            else get_param(file_metadata, "nplanes")
-        )
+        total_planes = int(lazy_array.shape[2])
 
         if validate_axial_shifts(file_metadata, total_planes):
             logger.info("using plane_shifts already present in metadata.")

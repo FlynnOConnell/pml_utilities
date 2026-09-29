@@ -13,7 +13,6 @@ from mbo_utilities.arrays._base import (
     CHUNKS_3D,
     CHUNKS_4D,
     DIMS,
-    Shape5DMixin,
     _imwrite_base,
     _normalize_planes,
     _sanitize_suffix,

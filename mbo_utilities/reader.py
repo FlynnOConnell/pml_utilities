@@ -166,11 +166,9 @@ def imread(
         - A numpy array (will be wrapped as NumpyArray for full imwrite support)
         - An existing lazy array (passed through unchanged)
     channel : int, optional
-        Zero-based color-channel index. When given, the returned array
-        is wrapped as a 4D TZYX view of that single channel — useful for
-        feeding multi-channel sources into pipelines that expect TZYX
-        input. Subprocess workers can re-create the same view by passing
-        ``reader_kwargs={"channel": N}`` to ``imread``.
+        Zero-based color-channel index. The returned array is
+        ``arr.isel(C=channel)``: still 5D, with ``C == 1``. Subprocess
+        workers re-create it by passing ``reader_kwargs={"channel": N}``.
     frame_average : int, optional
         Average every N consecutive timepoints into one (temporal binning).
         The returned array is a ``FrameAveragedView`` with ``T // N`` frames
@@ -204,15 +202,14 @@ def imread(
     >>> arr = imread(data)  # Returns NumpyArray
     >>> imwrite(arr, "output", ext=".zarr")  # Full write support
     """
-    # Pull single-channel wrapping out so every return path benefits.
-    # Stored as ``channel`` (zero-based) — picklable through reader_kwargs
-    # so subprocess workers can re-create the wrap after their own imread.
+    if "squeeze" in kwargs:
+        raise TypeError(
+            "imread() no longer takes squeeze; arrays are always 5D. "
+            "Index with integers (arr[:, 0, 0]) or np.squeeze(arr[:])."
+        )
+    # channel and frame_average are read-time views; both round-trip through
+    # reader_kwargs so a worker re-opening the path gets the same array
     channel = kwargs.pop("channel", None)
-    squeeze = kwargs.pop("squeeze", False)
-    # temporal binning is a read-time view too, and like ``channel`` it
-    # round-trips through reader_kwargs so a worker re-opening the path gets
-    # the binned array the user was looking at. Wrapped before the channel
-    # view so that view keeps its 4D surface on top.
     frame_average = kwargs.pop("frame_average", None)
     arr = _imread_impl(inputs, **kwargs)
     if frame_average is not None and int(frame_average) > 1:
@@ -220,18 +217,9 @@ def imread(
 
         arr = average_frames(arr, int(frame_average))
     if channel is not None:
-        from mbo_utilities.arrays._channel_view import _ChannelView
+        from mbo_utilities.arrays._selection_view import SelectionView
 
-        if not hasattr(arr, "shape") or len(arr.shape) < 5:
-            logger.debug(
-                "imread(channel=%r): underlying array is %dD, returning unwrapped",
-                channel,
-                getattr(arr, "ndim", "?"),
-            )
-        else:
-            arr = _ChannelView(arr, int(channel))
-    if squeeze and hasattr(arr, "squeeze"):
-        arr = arr.squeeze()
+        arr = SelectionView(arr, {"C": int(channel)})
     return arr
 
 
@@ -273,13 +261,6 @@ def _imread_impl(
         # NumpyArray logs the resolved dims + 5D shape on construction
         # (see _apply_dim_order), so no extra hint is needed here.
         return NumpyArray(inputs, **_filter_kwargs(NumpyArray, kwargs))
-    # A SqueezedView is a display lens over a canonical 5D array; normalize
-    # back to that base so imread()/pipeline() operate on the real 5D array
-    # (the view drops axes the writer/pipeline rely on).
-    from mbo_utilities.squeeze import SqueezedView
-
-    if isinstance(inputs, SqueezedView):
-        return inputs.base
     # Pass through already-loaded lazy arrays (has _imwrite method)
     if hasattr(inputs, "_imwrite") and hasattr(inputs, "shape"):
         return inputs

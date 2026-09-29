@@ -186,7 +186,7 @@ class TestPassthrough:
 
     def test_the_frame_count_never_leaks_from_the_source(self, source):
         view = average_frames(source, 4)
-        # nt/num_frames/len come off _shape5d, not the wrapped reader
+        # nt/num_frames/len come off the view's shape, not the wrapped reader
         assert view.nt == 5 and len(view) == 5
         assert view.shape[0] == 5 and source.shape[0] == 22
 

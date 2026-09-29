@@ -643,11 +643,11 @@ def test_reads_only_the_requested_frames(mesc_path, monkeypatch):
         assert key != slice(None)
 
 
-def test_squeeze_and_dims_follow_the_canonical_contract(mesc_path):
+def test_shape_and_dims_are_5d(mesc_path):
     arr = MescArray(mesc_path, unit=4)
     assert arr.dims == ("T", "C", "Z", "Y", "X")
     assert arr.ndim == 5
-    assert arr.squeeze().shape == (7, 16, 18)
+    assert arr.shape == (7, 1, 1, 16, 18)
     assert (arr.nt, arr.nc, arr.nz, arr.ny, arr.nx) == (7, 1, 1, 16, 18)
 
 

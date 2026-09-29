@@ -70,7 +70,6 @@ from mbo_utilities import log
 from mbo_utilities.analysis.phasecorr import _apply_offset, bidir_phasecorr
 from mbo_utilities.arrays._base import (
     ReductionMixin,
-    Shape5DMixin,
     _imwrite_base,
     _normalize_key,
 )
@@ -81,7 +80,7 @@ from mbo_utilities.arrays.features import (
     RoiFeatureMixin,
 )
 from mbo_utilities.arrays.features._slicing import listify_index
-from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.lazy_array import LazyArray, register_array_class
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 if TYPE_CHECKING:
@@ -1000,7 +999,7 @@ def _packed_mean(dataset, rois, src, progress_callback, span) -> list[np.ndarray
     return [acc / src.size for acc in sums]
 
 
-class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMixin):
+class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, LazyArray):
     """
     Lazy reader for one measurement unit of a Femtonics ``.mesc`` file.
 
@@ -1401,7 +1400,8 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
 
     # -- shape / dtype ---------------------------------------------------
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         layout = self._layout
         nz = layout.nz
         if isinstance(self.roi, (int, np.integer)) and self.roi > 0:
@@ -1409,13 +1409,9 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         return (self._nt, layout.nc, nz, layout.ny, layout.nx)
 
     @property
-    def shape(self) -> tuple[int, int, int, int, int]:
-        return self._shape5d()
-
-    @property
     def num_planes(self) -> int:
         """Size of the Z axis (ROI count or depth -- see ``mesc_z_axis_meaning``)."""
-        return self._shape5d()[2]
+        return self.shape[2]
 
     @property
     def num_color_channels(self) -> int:
@@ -1444,7 +1440,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         them. Getting that wrong desynchronises fastplotlib's slider count
         from the arrays it is handed.
         """
-        nt, nc, nz, _, _ = self._shape5d()
+        nt, nc, nz, _, _ = self.shape
         if self.roi is not None:
             nz = 1  # every rendered subplot carries a single ROI
         z_label = {
@@ -1512,7 +1508,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         # dimension counts follow the current ROI selection, not the file's
         # full extent — a single-ROI view really is one plane deep, and the
         # writer reads these keys rather than re-deriving them from shape.
-        nt, nc, nz, ny, nx = self._shape5d()
+        nt, nc, nz, ny, nx = self.shape
         md.update(
             {
                 "num_timepoints": nt,
@@ -1751,7 +1747,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
 
     def _z_indices(self, z_key) -> list[int]:
         """Requested Z positions mapped onto layout ROI/plane indices."""
-        selected = listify_index(z_key, self._shape5d()[2])
+        selected = listify_index(z_key, self.shape[2])
         roi = self.roi
         if isinstance(roi, (int, np.integer)) and roi > 0:
             # a single-ROI view exposes one Z slot, backed by ROI `roi`
@@ -1759,7 +1755,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         return [int(z) for z in selected]
 
     def __getitem__(self, key):
-        nt, nc, _nz, ny, nx = self._shape5d()
+        nt, nc, _nz, ny, nx = self.shape
         key = _normalize_key(key, 5)
         key = tuple(
             slice(k.start, k.stop, k.step) if isinstance(k, range) else k for k in key

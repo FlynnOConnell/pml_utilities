@@ -1,9 +1,8 @@
 """
-5D-shape tests for TiffArray (v4).
+5D-shape tests for TiffArray.
 
-Every array `imread()` returns is always 5D TCZYX (`ndim == 5`), with
-singleton T/C/Z axes kept, not squeezed. User-facing squeezing is opt-in
-(`arr.squeeze()` / `imread(squeeze=True)`).
+Every array `imread()` returns is 5D TCZYX (`ndim == 5`), size-1 T/C/Z axes
+kept.
 
 These tests pin that behavior:
 

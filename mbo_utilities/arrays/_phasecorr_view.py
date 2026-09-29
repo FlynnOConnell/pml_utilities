@@ -90,12 +90,9 @@ class PhaseCorrectedView(PhaseCorrectionMixin):
     def dims(self) -> tuple[str, ...]:
         return _TCZYX
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
-        return (self._T, self._C, self._Z, self._Y, self._X)
-
     @property
-    def shape(self) -> tuple[int, ...]:
-        return self._shape5d()
+    def shape(self) -> tuple[int, int, int, int, int]:
+        return (self._T, self._C, self._Z, self._Y, self._X)
 
     @property
     def ndim(self) -> int:

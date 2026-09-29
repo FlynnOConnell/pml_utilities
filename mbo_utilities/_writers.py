@@ -191,8 +191,9 @@ def _close_specific_bin_writer(filepath):
     if hasattr(_write_bin, "_writers"):
         key = str(Path(filepath))
         if key in _write_bin._writers:
-            _write_bin._writers[key].close()
-            _write_bin._writers.pop(key, None)
+            writer = _write_bin._writers.pop(key)
+            writer.flush()
+            writer._mmap.close()
             _write_bin._offsets.pop(key, None)
 
 
@@ -423,7 +424,7 @@ def _scanphase_zarr_attrs(data, frames, planes, channels):
     get_off = getattr(data, "get_offset_at", None)
     if get_off is None or not getattr(data, "fix_phase", False):
         return None
-    s5 = data._shape5d()
+    s5 = data.shape
     T, C, Z = int(s5[0]), int(s5[1]), int(s5[2])
     fr0 = [f - 1 for f in frames] if frames else list(range(T))
     z0 = [p - 1 for p in planes] if planes else list(range(Z))
@@ -478,9 +479,6 @@ def _get_file_writer(ext, overwrite):
 
 
 def _write_bin(path, data, *, overwrite: bool = False, metadata=None, **kwargs):
-    # import here to avoid circular import
-    from .arrays.bin import BinArray
-
     if metadata is None:
         metadata = {}
 
@@ -521,10 +519,11 @@ def _write_bin(path, data, *, overwrite: bool = False, metadata=None, **kwargs):
         metadata["Lx"] = Lx
         metadata["shape"] = (nframes, Ly, Lx)
 
-        _write_bin._writers[key] = BinArray(
-            filename=key,
-            shape=(nframes, Ly, Lx),
+        _write_bin._writers[key] = np.memmap(
+            key,
+            mode="r+" if fname.exists() else "w+",
             dtype=np.int16,
+            shape=(nframes, Ly, Lx),
         )
         _write_bin._offsets[key] = 0
         first_write = True
@@ -532,6 +531,9 @@ def _write_bin(path, data, *, overwrite: bool = False, metadata=None, **kwargs):
     bf = _write_bin._writers[key]
     off = _write_bin._offsets[key]
 
+    data = np.asarray(data)
+    if data.dtype != np.int16:
+        data = np.clip(data, None, np.iinfo(np.int16).max - 1).astype(np.int16)
     bf[off : off + data.shape[0]] = data
     bf.flush()
     _write_bin._offsets[key] = off + data.shape[0]

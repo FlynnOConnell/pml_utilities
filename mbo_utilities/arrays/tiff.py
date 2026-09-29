@@ -19,7 +19,6 @@ from mbo_utilities import log
 from mbo_utilities.analysis.phasecorr import _apply_offset, bidir_phasecorr
 from mbo_utilities.arrays._base import (
     ReductionMixin,
-    Shape5DMixin,
     TiffReaderMixin,
     _normalize_key,
 )
@@ -30,7 +29,7 @@ from mbo_utilities.arrays.features import (
 )
 from mbo_utilities.arrays.features._slicing import index_length, listify_index
 from mbo_utilities.file_io import expand_paths
-from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.lazy_array import LazyArray, register_array_class
 from mbo_utilities.metadata import extract_roi_slices, get_metadata, get_param
 from mbo_utilities.metadata.scanimage import (
     StackType,
@@ -549,7 +548,7 @@ class _SingleTiffPlaneReader:
             tf.close()
 
 
-class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
+class TiffArray(TiffReaderMixin, ReductionMixin, LazyArray):
     """
     Lazy TIFF array reader with auto-detection of single file vs volume.
 
@@ -857,7 +856,8 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
         """True if this array represents multi-plane data."""
         return self._is_volumetric
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         return (self._nframes, self._nc, self._nz, self._ly, self._lx)
 
     @property
@@ -981,7 +981,7 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
 
 
 class ScanImageArray(
-    TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMixin
+    TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, LazyArray
 ):
     """
     Base class for raw ScanImage TIFF readers with phase correction support.
@@ -1582,9 +1582,6 @@ class ScanImageArray(
 
     @property
     def shape(self) -> tuple[int, int, int, int, int]:
-        return self._shape5d()
-
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
         if self.roi is not None and not isinstance(self.roi, (list, tuple)):
             if self.roi > 0:
                 roi = self._rois[self.roi - 1]
@@ -1919,7 +1916,8 @@ class PiezoArray(ScanImageArray):
             value = False
         self._average_frames = value
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         # piezo: T=num_volumes, C=1, Z=frames_dim, Y, X
         # frames_dim collapses to num_slices when averaged (or pre-averaged),
         # otherwise num_slices * frames_per_slice to expose raw frames

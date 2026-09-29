@@ -376,9 +376,7 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
     try:
         _src_arr = imread(input_path, **(args.get("reader_kwargs") or {}))
         src_meta = dict(getattr(_src_arr, "metadata", {}) or {})
-        src_shape = (
-            tuple(_src_arr._shape5d()) if hasattr(_src_arr, "_shape5d") else None
-        )
+        src_shape = tuple(_src_arr.shape)
     except Exception as e:
         logger.warning(
             f"task_suite2p: could not load source metadata for reactive "
@@ -509,7 +507,7 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
         num_planes_reg = None
         if _src_arr_for_reg is not None:
             try:
-                num_planes_reg = int(_src_arr_for_reg._shape5d()[2])
+                num_planes_reg = int(_src_arr_for_reg.shape[2])
             except Exception as e:
                 logger.warning(
                     f"task_suite2p: cannot probe num_planes: {e}. "
@@ -762,7 +760,7 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
     # source metadata -> ops, with fs/dz reactively scaled on stride selections
     metadata = dict(getattr(src_arr, "metadata", {}) or {})
     metadata.update(custom_metadata)
-    src_shape = tuple(src_arr._shape5d()) if hasattr(src_arr, "_shape5d") else None
+    src_shape = tuple(src_arr.shape)
     if src_shape is not None and (
         tp_indices is not None or selected_planes_0based is not None
     ):

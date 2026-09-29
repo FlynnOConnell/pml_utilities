@@ -555,7 +555,7 @@ def load_new_data(parent: Any, path: str):
             )
 
             _md = getattr(raw_data, "metadata", None)
-            _nz = int(raw_data._shape5d()[2]) if hasattr(raw_data, "_shape5d") else None
+            _nz = int(raw_data.shape[2])
             if validate_axial_shifts(_md, _nz):
                 raw_data = with_axial_shifts(raw_data)
                 parent.logger.info(f"axial alignment applied ({_nz} planes)")

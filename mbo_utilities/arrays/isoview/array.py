@@ -31,8 +31,8 @@ from pathlib import Path
 
 import numpy as np
 
-from mbo_utilities.arrays._base import ReductionMixin, Shape5DMixin
-from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.arrays._base import ReductionMixin
+from mbo_utilities.lazy_array import LazyArray, register_array_class
 from mbo_utilities.log import get as _get_logger
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
@@ -1982,7 +1982,7 @@ def detect_isoview_kind(path: str | Path) -> str | None:
     return None
 
 
-class IsoviewArray(ReductionMixin, Shape5DMixin):
+class IsoviewArray(ReductionMixin, LazyArray):
     """Lazy ``(T, C, Z, Y, X)`` reader for any isoview output tree.
 
     One class, four kinds (``"corrected"``, ``"fused"``, ``"raw"``,
@@ -2316,9 +2316,6 @@ class IsoviewArray(ReductionMixin, Shape5DMixin):
             self._ny,
             self._nx,
         )
-
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
-        return self.shape
 
     @property
     def is_tiled(self) -> bool:

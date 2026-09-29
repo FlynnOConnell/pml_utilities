@@ -1113,12 +1113,11 @@ def _ops_for(source, movie: PlaneMovie) -> dict:
         from mbo_utilities.metadata import OutputMetadata, get_param
 
         fs = get_param(dict(meta), "fs")
-        shape5d = getattr(movie.arr, "_shape5d", None)
-        if movie.t_indices is not None and shape5d is not None:
+        if movie.t_indices is not None and getattr(movie.arr, "ndim", 0) == 5:
             # a strided selection changes the rate; the writers' layer says by how much
             scaled = OutputMetadata(
                 source=dict(meta),
-                source_shape=tuple(shape5d()),
+                source_shape=tuple(movie.arr.shape),
                 source_dims=("T", "C", "Z", "Y", "X"),
                 selections={"T": movie.t_indices},
             ).to_dict(include_aliases=False)

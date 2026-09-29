@@ -15,13 +15,12 @@ from mbo_utilities import log
 from mbo_utilities.arrays._base import (
     DIMS,
     ReductionMixin,
-    Shape5DMixin,
     _imwrite_base,
     _index_5d_into_raw,
     _normalize_key,
 )
 from mbo_utilities.arrays.numpy import _canonicalize_to_5d
-from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.lazy_array import LazyArray, register_array_class
 from mbo_utilities.metadata import get_param
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
@@ -30,8 +29,8 @@ logger = log.get("arrays.h5")
 # dataset names probed (in order) when the caller doesn't pick one
 _PREFERRED_KEYS = ("mov", "data", "scan_corrections", "imaging/data", "raw")
 
-# positional dim labels for a natural-rank dataset; reproduces the classic
-# front-padded singleton mapping onto canonical 5D TCZYX
+# positional dim labels for an unlabeled dataset of each ndim; the missing
+# leading axes are size 1 in TCZYX
 _DEFAULT_RAW_DIMS = {
     1: ("X",),
     2: ("Y", "X"),
@@ -137,7 +136,7 @@ _H5_INFO = PipelineInfo(
 register_pipeline(_H5_INFO)
 
 
-class H5Array(ReductionMixin, Shape5DMixin):
+class H5Array(ReductionMixin, LazyArray):
     """
     Lazy array reader for HDF5 datasets.
 
@@ -268,7 +267,8 @@ class H5Array(ReductionMixin, Shape5DMixin):
             return False  # pollen calibration output, not source data
         return p.is_file() and p.suffix.lower() in (".h5", ".hdf5", ".hdf")
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         sizes = dict(zip(self._raw_dims, self._raw_shape))
         return tuple(sizes.get(d, 1) for d in DIMS)
 
@@ -295,7 +295,7 @@ class H5Array(ReductionMixin, Shape5DMixin):
         if self.dataset_name == "scan_corrections" and len(self._d.shape) == 1:
             return int(self._d.shape[0])
 
-        return self._shape5d()[2]
+        return self.shape[2]
 
     def __len__(self) -> int:
         return self.shape[0]

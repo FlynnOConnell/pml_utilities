@@ -15,13 +15,12 @@ import numpy as np
 from mbo_utilities import log
 from mbo_utilities.arrays._base import (
     ReductionMixin,
-    Shape5DMixin,
     _imwrite_base,
     _normalize_key,
 )
 from mbo_utilities.arrays.suite2p import _add_suite2p_labels
 from mbo_utilities.file_io import HAS_ZARR, logger
-from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.lazy_array import LazyArray, register_array_class
 from mbo_utilities.metadata import _build_ome_metadata, get_param, get_voxel_size
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
@@ -69,7 +68,7 @@ def _ome_time_scale_attr(md: dict) -> float | None:
         return None
 
 
-class ZarrArray(ReductionMixin, Shape5DMixin):
+class ZarrArray(ReductionMixin, LazyArray):
     """
     Reader for Zarr stores (including OME-Zarr).
 
@@ -347,7 +346,8 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
             data = data.astype(dtype)
         return data
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         # 5D source zarr: TCZYX is the natural layout, return as-is. This
         # supports the multi-channel OME-Zarrs produced by isoview_to_ome_zarr
         # and any other (T, C, Z, Y, X) NGFF stores.

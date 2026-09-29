@@ -4281,7 +4281,7 @@ def run_process(self):
             c_step = getattr(self, "_s2p_c_step", 1)
             selected_channels = list(range(c_start, c_stop + 1, c_step))
             multi_channel = len(selected_channels) > 1
-            # always pass channel for multi-channel source data (5D needs _ChannelView)
+            # always pass channel for multi-channel source data
             has_channels = getattr(self, "_s2p_last_num_channels", 1) > 1
 
             plane_list = sorted(selected_planes)
@@ -4626,9 +4626,7 @@ def _run_plane_worker_thread(config):
     if selected_planes_0based is not None:
         selections["Z"] = list(selected_planes_0based)
 
-    # source shape/dims must be the uniform 5D TCZYX, so use _shape5d()
-    # (arr.shape is the natural rank for BinArray / a 4D _ChannelView).
-    source_shape = tuple(arr._shape5d()) if hasattr(arr, "_shape5d") else None
+    source_shape = tuple(arr.shape)
     source_dims = ("T", "C", "Z", "Y", "X")
 
     # Log raw source values BEFORE scaling — critical diagnostic when

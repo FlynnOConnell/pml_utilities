@@ -7,15 +7,15 @@ This module provides BinArray for reading and writing Suite2p-format binary file
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from mbo_utilities import log
 from mbo_utilities._writers import _convert_paths_to_strings
-from mbo_utilities.arrays._base import ReductionMixin, Shape5DMixin, _imwrite_base
+from mbo_utilities.arrays._base import ReductionMixin, _imwrite_base
 from mbo_utilities.file_io import load_npy
+from mbo_utilities.lazy_array import LazyArray
 from mbo_utilities.metadata.base import normalize_ops_arrays
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
@@ -39,139 +39,94 @@ _BIN_INFO = PipelineInfo(
 register_pipeline(_BIN_INFO)
 
 
-@dataclass
-class BinArray(ReductionMixin, Shape5DMixin):
-    """
-    Read/write raw binary files (Suite2p format) without requiring ops.npy.
+class BinArray(ReductionMixin, LazyArray):
+    """A suite2p binary file (``data_raw.bin``, ``data.bin``) as
+    ``(T, 1, 1, Y, X)``.
 
-    This class provides a lightweight interface for working with raw binary
-    files (.bin) directly, without needing the full Suite2p context that
-    Suite2pArray provides. Useful for workflows that manipulate individual
-    binary files (e.g., data_raw.bin vs data.bin).
-
-    Parameters
-    ----------
-    filename : str or Path
-        Path to the binary file
-    shape : tuple, optional
-        Shape of the data as (nframes, Ly, Lx). If None and file exists,
-        will try to infer from adjacent ops.npy file.
-    dtype : np.dtype, default=np.int16
-        Data type of the binary file
-    metadata : dict, optional
-        Additional metadata to store with the array
+    The file is a flat ``(nframes, Ly, Lx)`` int16 memmap; its shape comes
+    from ``shape`` or the ``ops.npy`` beside it. Indexing and assignment take
+    5D keys.
 
     Examples
     --------
-    >>> # Read existing binary with known shape
     >>> arr = BinArray("data_raw.bin", shape=(1000, 512, 512))
-    >>> frame = arr[0]
-
-    >>> # Create new binary file
-    >>> arr = BinArray("output.bin", shape=(100, 256, 256))
-    >>> arr[0] = my_data
+    >>> arr.shape
+    (1000, 1, 1, 512, 512)
+    >>> arr[0, 0, 0].shape
+    (512, 512)
     """
 
-    filename: str | Path
-    shape: tuple = None
-    dtype: np.dtype = field(default=np.int16)
-    _metadata: dict = field(default_factory=dict)
-    _file: np.ndarray = field(init=False, repr=False)
-
-    def __post_init__(self):
-        self.filename = Path(self.filename)
-        self.dtype = np.dtype(self.dtype)
-
-        # If file exists and shape not provided, try to infer from ops.npy
-        if self.filename.exists() and self.shape is None:
+    def __init__(
+        self,
+        filename: str | Path,
+        shape: tuple[int, int, int] | None = None,
+        dtype=np.int16,
+        metadata: dict | None = None,
+    ):
+        self.filename = Path(filename)
+        self.dtype = np.dtype(dtype)
+        self._metadata = dict(metadata or {})
+        if shape is None and self.filename.exists():
             ops_file = self.filename.parent / "ops.npy"
             if ops_file.exists():
-                try:
-                    ops = load_npy(ops_file).item()
-                    Ly = ops.get("Ly")
-                    Lx = ops.get("Lx")
-                    nframes = ops.get("nframes", ops.get("n_frames"))
-                    if all(x is not None for x in [Ly, Lx, nframes]):
-                        self.shape = (nframes, Ly, Lx)
-                        # Optionally copy metadata from ops
-                        self._metadata.update(ops)
-                        logger.debug(f"Inferred shape from ops.npy: {self.shape}")
-                except Exception as e:
-                    logger.warning(f"Could not read ops.npy: {e}")
-
-            if self.shape is None:
-                raise ValueError(
-                    f"Cannot infer shape for {self.filename}. "
-                    "Provide shape=(nframes, Ly, Lx) or ensure ops.npy exists."
-                )
-
-        # Creating new file
-        if not self.filename.exists():
-            if self.shape is None:
-                raise ValueError(
-                    "Must provide shape=(nframes, Ly, Lx) when creating new file"
-                )
-            mode = "w+"
-        else:
-            mode = "r+"
-
+                ops = load_npy(ops_file).item()
+                ly, lx = ops.get("Ly"), ops.get("Lx")
+                nframes = ops.get("nframes", ops.get("n_frames"))
+                if None not in (ly, lx, nframes):
+                    shape = (int(nframes), int(ly), int(lx))
+                    self._metadata.update(ops)
+        if shape is None:
+            raise ValueError(
+                f"Cannot infer shape for {self.filename}. "
+                "Provide shape=(nframes, Ly, Lx) or ensure ops.npy exists."
+            )
+        mode = "r+" if self.filename.exists() else "w+"
         self._file = np.memmap(
-            self.filename, mode=mode, dtype=self.dtype, shape=self.shape
+            self.filename, mode=mode, dtype=self.dtype, shape=tuple(shape)
         )
         self.filenames = [self.filename]
 
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
+        t, y, x = self._file.shape
+        return (t, 1, 1, y, x)
+
+    @property
+    def file(self) -> np.memmap:
+        """The ``(nframes, Ly, Lx)`` memmap, as suite2p's ``BinaryFile`` has it."""
+        return self._file
+
     def __getitem__(self, key):
-        return self._file[key]
+        return self._file.reshape(self.shape)[key]
 
     def __setitem__(self, key, value):
-        """Allow assignment to the memmap."""
-        if np.asarray(value).dtype != self.dtype:
-            max_val = (
-                np.iinfo(self.dtype).max - 1
-                if np.issubdtype(self.dtype, np.integer)
-                else None
-            )
-            if max_val:
-                self._file[key] = np.clip(value, None, max_val).astype(self.dtype)
-            else:
-                self._file[key] = value.astype(self.dtype)
-        else:
-            self._file[key] = value
+        """Write into the memmap, clipping to int16 when ``value`` is wider."""
+        value = np.asarray(value)
+        if value.dtype != self.dtype and np.issubdtype(self.dtype, np.integer):
+            value = np.clip(value, None, np.iinfo(self.dtype).max - 1)
+        self._file.reshape(self.shape)[key] = value.astype(self.dtype)
 
     def __len__(self):
-        return self.shape[0]
+        return self.nt
 
     def __array__(self, dtype=None, copy=None):
-        # return single frame for fast histogram/preview (prevents accidental full load)
+        # one frame, so a histogram or preview never loads the whole file
         data = self._file[0]
         if dtype is not None:
             data = data.astype(dtype)
         return data
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
-        s = self.shape  # always (T, Y, X)
-        return (s[0], 1, 1, s[1], s[2])
-
-    @property
-    def ndim(self):
-        return len(self.shape)
-
     @property
     def nframes(self):
-        return self.shape[0]
+        return self.nt
 
     @property
     def Ly(self):
-        return self.shape[1]
+        return self.ny
 
     @property
     def Lx(self):
-        return self.shape[2]
-
-    @property
-    def file(self):
-        """Alias for _file, for backwards compatibility with BinaryFile API."""
-        return self._file
+        return self.nx
 
     def flush(self):
         """Flush the memmap to disk."""
@@ -230,7 +185,7 @@ class BinArray(ReductionMixin, Shape5DMixin):
             if not outfile.exists() or overwrite:
                 logger.info(f"Writing binary to {outfile}")
                 new_file = np.memmap(
-                    outfile, mode="w+", dtype=self.dtype, shape=self.shape
+                    outfile, mode="w+", dtype=self.dtype, shape=self._file.shape
                 )
                 new_file[:] = self._file[:]
                 new_file.flush()

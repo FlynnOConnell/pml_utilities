@@ -110,7 +110,8 @@ class TestBinArray:
 
         arr = BinArray(bin_path, shape=expected_data.shape, dtype=np.int16)
 
-        assert arr.shape == expected_data.shape
+        t, y, x = expected_data.shape
+        assert arr.shape == (t, 1, 1, y, x)
         assert arr.dtype == np.int16
 
     def test_instantiation_infers_from_ops(self, bin_file):
@@ -119,7 +120,8 @@ class TestBinArray:
 
         arr = BinArray(bin_path)
 
-        assert arr.shape == expected_data.shape
+        t, y, x = expected_data.shape
+        assert arr.shape == (t, 1, 1, y, x)
 
     def test_indexing(self, bin_file):
         """Test indexing BinArray."""
@@ -127,8 +129,8 @@ class TestBinArray:
 
         arr = BinArray(bin_path)
 
-        frame = arr[0]
-        assert np.array_equal(frame, expected_data[0])
+        assert np.array_equal(arr[0, 0, 0], expected_data[0])
+        assert np.array_equal(arr[2:5, 0, 0], expected_data[2:5])
 
     def test_setitem(self, tmp_path, synthetic_3d_data):
         """Test writing to BinArray."""
@@ -137,11 +139,10 @@ class TestBinArray:
         arr = BinArray(bin_path, shape=synthetic_3d_data.shape, dtype=np.int16)
 
         # Write data
-        arr[0] = synthetic_3d_data[0]
+        arr[0, 0, 0] = synthetic_3d_data[0]
         arr.flush()
 
-        # Read back
-        assert np.array_equal(arr[0], synthetic_3d_data[0])
+        assert np.array_equal(arr[0, 0, 0], synthetic_3d_data[0])
 
     def test_context_manager(self, bin_file):
         """Test BinArray as context manager."""

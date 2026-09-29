@@ -452,7 +452,7 @@ class _ScrubTimingProxy:
 
         self._wrapped = arr
         # peel every wrapper layer (_SqueezeSingletonDims, AxialShiftView,
-        # _ChannelView, ...) so isinstance checks downstream see the real
+        # SelectionView, ...) so isinstance checks downstream see the real
         # reader. No reader class defines `_arr`, so this terminates there.
         inner = arr
         while hasattr(inner, "_arr"):
@@ -1226,7 +1226,7 @@ def _wrap_for_viewer(data_array, logger):
         )
 
         _md = getattr(data_array, "metadata", None)
-        _nz = int(data_array._shape5d()[2]) if hasattr(data_array, "_shape5d") else None
+        _nz = int(data_array.shape[2])
         if validate_axial_shifts(_md, _nz):
             try:
                 data_array = with_axial_shifts(data_array)
@@ -1246,8 +1246,7 @@ def _wrap_for_viewer(data_array, logger):
         if not hasattr(data_array, "phase_correction"):
             from mbo_utilities.arrays import with_phasecorr
 
-            _s5 = data_array._shape5d() if hasattr(data_array, "_shape5d") else None
-            if _s5 and int(_s5[0]) > 1:
+            if int(data_array.shape[0]) > 1:
                 data_array = with_phasecorr(data_array)
                 logger.debug("scan-phase correction available (disabled)")
     except Exception as e:

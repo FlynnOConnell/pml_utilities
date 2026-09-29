@@ -1035,9 +1035,10 @@ class ResultsArray(ReductionMixin, LazyArray):
             self._raster = out
         return self._raster
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         if self._source is not None:
-            return self._source._shape5d()
+            return self._source.shape
         units, rois, width = self.raster.shape
         return (1, 1, units, rois, width)
 

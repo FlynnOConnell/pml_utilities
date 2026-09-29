@@ -15,7 +15,8 @@ import numpy as np
 from tqdm import tqdm
 
 from mbo_utilities import log
-from mbo_utilities.arrays._base import ReductionMixin, Shape5DMixin, _imwrite_base
+from mbo_utilities.arrays._base import ReductionMixin, _imwrite_base, _normalize_key
+from mbo_utilities.lazy_array import LazyArray
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 logger = log.get("arrays.mp4")
@@ -456,9 +457,7 @@ def to_video(
     elif scalebar:
         logger.info(f"Scalebar enabled with pixel_size_um={pixel_size_um}")
 
-    # read frames lazily from the source array (no upfront full-load). branch
-    # the per-frame accessor on natural rank so zarr/tiff/bin arrays stream one
-    # frame per read instead of materializing the whole stack.
+    # read one frame at a time; plain ndarrays may be 3D or 4D, so branch on ndim
     if not hasattr(data, "shape"):
         data = np.asarray(data)
     shape = tuple(data.shape)
@@ -664,12 +663,12 @@ def to_video(
     return output_path
 
 
-class MP4Array(ReductionMixin, Shape5DMixin):
+class MP4Array(ReductionMixin, LazyArray):
     """
     Lazy reader for .mp4 video files.
 
     Frames are read on demand via imageio and collapsed to grayscale, so the
-    array presents as (T, Y, X) uint8. Encoding lives in the module-level
+    array is ``(T, 1, 1, Y, X)`` uint8. Encoding lives in the module-level
     `to_video` (single file) and `MP4Array.write_video` (per z/channel).
 
     Parameters
@@ -683,8 +682,8 @@ class MP4Array(ReductionMixin, Shape5DMixin):
     --------
     >>> arr = MP4Array("movie.mp4")
     >>> arr.shape
-    (300, 512, 512)
-    >>> frame = arr[0]
+    (300, 1, 1, 512, 512)
+    >>> frame = arr[0, 0, 0]
     """
 
     def __init__(self, filenames: Path | str, metadata: dict | None = None):
@@ -722,17 +721,9 @@ class MP4Array(ReductionMixin, Shape5DMixin):
         return Path(path).suffix.lower() == ".mp4"
 
     @property
-    def shape(self) -> tuple[int, int, int]:
-        # MP4Array stays 3D (T, Y, X); it is not part of the 5D dispatch set.
-        return self._raw_shape
-
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
-        s = self._raw_shape  # always (T, Y, X)
-        return (s[0], 1, 1, s[1], s[2])
-
-    @property
-    def ndim(self) -> int:
-        return len(self._raw_shape)
+    def shape(self) -> tuple[int, int, int, int, int]:
+        t, y, x = self._raw_shape
+        return (t, 1, 1, y, x)
 
     @property
     def dtype(self):
@@ -744,7 +735,7 @@ class MP4Array(ReductionMixin, Shape5DMixin):
         return self
 
     def __len__(self) -> int:
-        return self.shape[0]
+        return self.nt
 
     def _read_gray(self, i: int) -> np.ndarray:
         frame = np.asarray(self._reader.get_data(int(i)))
@@ -753,34 +744,30 @@ class MP4Array(ReductionMixin, Shape5DMixin):
         return frame.astype(self._dtype)
 
     def __getitem__(self, key):
-        if not isinstance(key, tuple):
-            key = (key,)
+        key = _normalize_key(key, 5)
+        if len(key) > 5:
+            raise IndexError(f"too many indices for 5D array: {len(key)}")
+        key = key + (slice(None),) * (5 - len(key))
+        t_key, rest = key[0], key[1:]
 
-        t_key = key[0] if len(key) > 0 else slice(None)
-        rest = key[1:]
-
-        n = self.shape[0]
+        n, ly, lx = self._raw_shape
         if isinstance(t_key, (int, np.integer)):
             t_list = [int(t_key) if t_key >= 0 else n + int(t_key)]
-            squeeze_t = True
+            t_key = 0
         elif isinstance(t_key, slice):
             t_list = list(range(*t_key.indices(n)))
-            squeeze_t = False
+            t_key = slice(None)
         elif isinstance(t_key, (list, tuple, np.ndarray)):
             t_list = [int(t) if t >= 0 else n + int(t) for t in t_key]
-            squeeze_t = False
+            t_key = slice(None)
         else:
             raise TypeError(f"unsupported time index {t_key!r}")
 
         if t_list:
             data = np.stack([self._read_gray(t) for t in t_list])
         else:
-            data = np.empty((0, *self.shape[1:]), dtype=self._dtype)
-
-        if rest:
-            data = data[(slice(None),) + rest]
-        if squeeze_t:
-            data = data[0]
+            data = np.empty((0, ly, lx), dtype=self._dtype)
+        data = data.reshape(len(t_list), 1, 1, ly, lx)[(t_key, *rest)]
         if self._target_dtype is not None:
             data = data.astype(self._target_dtype)
         return data
@@ -877,7 +864,7 @@ class MP4Array(ReductionMixin, Shape5DMixin):
         outpath.mkdir(parents=True, exist_ok=True)
         ext_clean = ext.lower().lstrip(".")
 
-        s5 = arr._shape5d()
+        s5 = arr.shape
         num_planes = s5[2]
         # C axis = num_views for IsoView (cameras), else num_color_channels
         num_channels = getattr(arr, "num_views", None) or getattr(

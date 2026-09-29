@@ -1,8 +1,6 @@
-"""LazyArray base contract: dims/metadata/dimension_specs come from the base.
-
-Pins the consolidated contract so a new array class needs only `_shape5d`,
-`__getitem__`, `dtype`, `can_open`, plus `self._metadata`. Natural-rank
-classes opt out via `ndim`/`shape`. BinArray (suite2p input) stays 3D.
+"""LazyArray base: a subclass implements only `shape`, `__getitem__`,
+`dtype` and `can_open` and sets `self._metadata`; dims, metadata and
+dimension_specs come from the base.
 """
 
 from __future__ import annotations
@@ -18,7 +16,8 @@ class _Minimal(LazyArray):
         self._s = shape
         self._metadata = metadata or {}
 
-    def _shape5d(self):
+    @property
+    def shape(self):
         return self._s
 
     @property
@@ -29,14 +28,14 @@ class _Minimal(LazyArray):
         return np.zeros(self._s, dtype="uint16")[key]
 
 
-class TestBaseContract:
+class TestLazyArrayBase:
     def test_shape_ndim_from_base(self):
         arr = _Minimal((4, 2, 3, 8, 8))
         assert arr.shape == (4, 2, 3, 8, 8)
         assert arr.ndim == 5
         assert (arr.nt, arr.nc, arr.nz, arr.ny, arr.nx) == arr.shape
 
-    def test_dims_default_canonical(self):
+    def test_dims_default_tczyx(self):
         assert _Minimal((4, 2, 3, 8, 8)).dims == ("T", "C", "Z", "Y", "X")
 
     def test_metadata_default_dict(self):
@@ -46,7 +45,7 @@ class TestBaseContract:
         assert arr.metadata["foo"] == 1
 
     def test_metadata_stores_dims_plainly(self):
-        # base keeps `dims` as plain metadata; reported dims come from rank.
+        # base keeps `dims` as plain metadata; reported dims are always TCZYX
         arr = _Minimal((4, 2, 3, 8, 8))
         arr.metadata = {"dims": ("T", "C", "Z", "Y", "X"), "foo": 1}
         assert arr.metadata["foo"] == 1
@@ -59,7 +58,7 @@ class TestBaseContract:
         arr = _Minimal((4, 1, 3, 8, 8))
         arr.metadata = {"dims": ("T", "Z", "Y", "X")}
         assert arr.metadata["dims"] == ("T", "Z", "Y", "X")
-        assert arr.dims == ("T", "C", "Z", "Y", "X")  # still rank-derived
+        assert arr.dims == ("T", "C", "Z", "Y", "X")
 
     def test_explicit_dims_setter(self):
         arr = _Minimal((4, 2, 3, 8, 8))
@@ -81,19 +80,3 @@ class TestBaseContract:
         assert arr.dim_index("Z") == 2
         assert arr.has_dim("C")
         assert not arr.has_dim("R")
-
-
-class TestBinArrayStays3D:
-    """suite2p input reader must stay natural 3D (T, Y, X)."""
-
-    def test_bin_array_is_3d(self, tmp_path):
-        from mbo_utilities.arrays.bin import BinArray
-
-        data = np.zeros((5, 8, 8), dtype=np.int16)
-        path = tmp_path / "data_raw.bin"
-        data.tofile(path)
-        arr = BinArray(str(path), shape=(5, 8, 8), dtype=np.int16)
-        assert arr.ndim == 3
-        assert arr.shape == (5, 8, 8)
-        # internal 5D accessor still pads for the writers
-        assert arr._shape5d() == (5, 1, 1, 8, 8)

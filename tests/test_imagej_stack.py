@@ -41,7 +41,7 @@ def z_hyperstack(tmp_path, frames):
 
 def test_plain_stack_reads_as_time(plain_stack, frames):
     arr = imread(plain_stack)
-    assert arr._shape5d() == (12, 1, 1, 8, 9)
+    assert arr.shape == (12, 1, 1, 8, 9)
     assert arr.metadata["num_frames"] == 12
     np.testing.assert_array_equal(np.asarray(arr[3, 0, 0]), frames[3])
 
@@ -54,15 +54,15 @@ def test_plain_stack_can_be_binned(plain_stack):
 
 def test_labelled_z_hyperstack_stays_on_z(z_hyperstack):
     arr = imread(z_hyperstack)
-    assert arr._shape5d() == (1, 1, 12, 8, 9)
+    assert arr.shape == (1, 1, 12, 8, 9)
 
 
 def test_dims_override_roundtrips(plain_stack, z_hyperstack):
     as_z = imread(plain_stack, dims="ZYX")
-    assert as_z._shape5d() == (1, 1, 12, 8, 9)
+    assert as_z.shape == (1, 1, 12, 8, 9)
     assert source_reader_kwargs(as_z) == {"dims": "ZYX"}
     as_t = imread(z_hyperstack, dims="TYX")
-    assert as_t._shape5d() == (12, 1, 1, 8, 9)
+    assert as_t.shape == (12, 1, 1, 8, 9)
     again = imread(z_hyperstack, **source_reader_kwargs(as_t))
-    assert again._shape5d() == as_t._shape5d()
+    assert again.shape == as_t.shape
     assert source_reader_kwargs(imread(plain_stack)) == {}

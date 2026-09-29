@@ -29,7 +29,7 @@ the identical `IsoviewArray(kind="corrected")`.
 
 ## Class: `IsoviewArray`
 
-Lazy 5D reader. Built on top of `Shape5DMixin`.
+Lazy 5D reader, a `LazyArray` subclass.
 
 ### Construction
 

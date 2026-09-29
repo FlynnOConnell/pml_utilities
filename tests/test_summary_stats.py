@@ -136,7 +136,8 @@ class _MiniArray(LazyArray):
     def __init__(self, shape):
         self._shp = tuple(shape)
 
-    def _shape5d(self):
+    @property
+    def shape(self):
         return self._shp
 
     def __getitem__(self, key):

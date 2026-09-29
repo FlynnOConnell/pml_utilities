@@ -25,10 +25,7 @@ def source_timepoints(widget) -> int:
             source = widget.image_widget.data[0]
         except (IndexError, AttributeError, TypeError):
             return 1
-    if hasattr(source, "_shape5d"):
-        shape = tuple(source._shape5d())
-    else:
-        shape = tuple(getattr(source, "shape", None) or ())
+    shape = tuple(getattr(source, "shape", None) or ())
     if len(shape) < 3:
         return 1
     return int(shape[0])

@@ -95,13 +95,14 @@ class MasknmfViewers:
         if self.raw_path is None:
             return None
         from mbo_utilities.reader import imread
+        from mbo_utilities.roi_workflow import PlaneMovie
 
-        raw = imread(self.raw_path).squeeze()
-        if raw.ndim != 3:
+        raw = imread(self.raw_path)
+        if raw.nc * raw.nz != 1:
             raise ValueError(
                 f"{self.raw_path.name} is not a single-plane movie: shape {raw.shape}"
             )
-        return raw
+        return PlaneMovie(raw)
 
     def open(self, kind: str):
         """Show masknmf's ``kind`` viewer, building it on first use."""

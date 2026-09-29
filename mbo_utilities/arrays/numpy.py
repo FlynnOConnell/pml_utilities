@@ -17,12 +17,11 @@ from mbo_utilities import log
 from mbo_utilities.arrays._base import (
     DIMS,
     ReductionMixin,
-    Shape5DMixin,
     _imwrite_base,
     _index_5d_into_raw,
 )
 from mbo_utilities.arrays.features._dim_labels import DEFAULT_DIMS
-from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.lazy_array import LazyArray, register_array_class
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 logger = log.get("arrays.numpy")
@@ -82,7 +81,7 @@ def _normalize_declared(value: str | Sequence[str]) -> tuple[str, ...]:
     return tuple(str(c).upper() for c in value)
 
 
-class NumpyArray(ReductionMixin, Shape5DMixin):
+class NumpyArray(ReductionMixin, LazyArray):
     """
     Lazy array wrapper for NumPy arrays and .npy files.
 
@@ -207,7 +206,8 @@ class NumpyArray(ReductionMixin, Shape5DMixin):
             return False  # PMD demixer arrays are not supported (legacy raises)
         return p.is_file()
 
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
+    @property
+    def shape(self) -> tuple[int, int, int, int, int]:
         s = self._raw_shape
         if len(s) == 5:
             return s
@@ -271,7 +271,7 @@ class NumpyArray(ReductionMixin, Shape5DMixin):
             "dims %s -> %s  shape %s%s",
             "".join(self._declared_dims) if self._declared_dims else "?",
             "".join(DIMS),
-            self._shape5d(),
+            self.shape,
             suffix,
         )
 

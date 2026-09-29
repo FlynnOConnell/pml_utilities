@@ -124,10 +124,10 @@ class TestImreadWrapping:
         arr = mbo.imread(np.zeros((4, 8, 8), dtype=np.uint16), dims="TYX")
         assert mbo.imread(arr) is arr
 
-    def test_channel_selection_returns_4d_view(self):
+    def test_channel_selection_keeps_c(self):
         data = np.arange(4 * 2 * 1 * 8 * 8, dtype=np.uint16).reshape(4, 2, 1, 8, 8)
         view = mbo.imread(data, dims="TCZYX", channel=1)  # 0-based channel
 
-        assert view.ndim == 4
-        assert view.shape == (4, 1, 8, 8)
-        assert np.array_equal(np.asarray(view[:]), data[:, 1])
+        assert view.ndim == 5
+        assert view.shape == (4, 1, 1, 8, 8)
+        assert np.array_equal(np.asarray(view[:]), data[:, 1:2])
