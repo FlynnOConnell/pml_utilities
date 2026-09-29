@@ -238,7 +238,7 @@ it shows accurate numbers regardless of which software wrote the file.
 A new reader participates in the whole layer for free by following the
 `LazyArray` contract:
 
-1. Implement `can_open`, `_shape5d`, `__getitem__`, `dtype`.
+1. Implement `can_open`, `shape`, `__getitem__`, `dtype`.
 2. Set `self._metadata` to the source's raw keys (do not pre-normalize).
 
 That's it — `arr.dx`, `arr.fs`, `arr.num_zplanes`, `dimension_specs`, the

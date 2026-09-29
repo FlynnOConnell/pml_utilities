@@ -40,3 +40,10 @@ smaller internal tweaks are left out.
 - `MP4Array` unifies reading and writing mp4s; `to_video` now streams frame by frame.
 - GPU toggle via the `MBO_GPU` environment variable, the `mbo gpu` CLI command, or the Options panel. Warns if you select Cellpose without a GPU build of PyTorch.
 - Python 3.13 is now supported.
+
+## Unreleased
+
+- Every array is 5D, with no exceptions: `BinArray` and `MP4Array` report `(T, 1, 1, Y, X)`, and `imread(path, channel=n)` keeps `C == 1` instead of returning a 4D view.
+- `arr.isel(T=, C=, Z=)` selects 0-based indices lazily, like xarray's `isel`, without dropping axes.
+- `arr.squeeze()` and `imread(squeeze=True)` are removed; index with integers (`arr[:, 0, 0]`) or use `np.squeeze(arr[:])`.
+- Subclasses implement `shape` directly; `_shape5d()` and `Shape5DMixin` are gone.

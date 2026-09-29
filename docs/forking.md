@@ -27,8 +27,9 @@ class MyFormatArray(LazyArray):
         from pathlib import Path
         return Path(path).suffix.lower() == ".myfmt"
 
-    def _shape5d(self):
-        return (self.nt, self.nc, self.nz, self.ny, self.nx)  # TCZYX
+    @property
+    def shape(self):
+        return self._shape  # (T, C, Z, Y, X), size-1 axes kept
 
     def __getitem__(self, key):
         # key is whatever the caller passed; normalize to 5D and read only
@@ -44,7 +45,7 @@ class MyFormatArray(LazyArray):
         return {}
 ```
 
-`shape`, `ndim` (== 5), `nt/nc/nz/ny/nx`, `squeeze()`, and the registry hooks
+`ndim` (== 5), `nt/nc/nz/ny/nx`, `isel()`, and the registry hooks
 come from `LazyArray`. Everything else (reductions, frame rate, voxel size,
 ROIs, phase correction) is opt-in via the mixins in `mbo_utilities.arrays` and
 `mbo_utilities.arrays.features` — none are required.

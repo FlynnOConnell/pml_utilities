@@ -37,12 +37,10 @@ order is fixed:
 A typical LBM volumetric scan (1574 frames, 14 z-planes, 550×448) reports
 `shape == (1574, 1, 14, 550, 448)` — one channel, fourteen z-planes.
 
-Size-1 axes are kept, not dropped. To drop them for inspection or display,
-use `arr.squeeze()` or `imread(path, squeeze=True)` — a view that still holds
-the 5D array underneath for writers and the viewer.
-
-`BinArray` is the one exception: it reports the rank you pass in
-(see [BinArray](#binarray)).
+Size-1 axes are kept, not dropped, for every array type. To drop them, index
+with integers (`arr[:, 0, 0]` is `(T, Y, X)`) or use `np.squeeze(arr[:])`. To
+keep only some channels, planes or timepoints lazily, use
+`arr.isel(C=1)` (0-based, axes kept: `C == 1`).
 
 ## Quick Reference
 
@@ -54,7 +52,7 @@ the 5D array underneath for writers and the viewer.
 | | `LBMPiezoArray` | `(T, C, Z, Y, X)` | LBM + piezo (pollen calibration) |
 | | `SinglePlaneArray` | `(T, C, Z, Y, X)` (Z=1) | Single-plane time series |
 | ↳ Standard/ImageJ | `TiffArray` | `(T, C, Z, Y, X)` | All TIFFs including ImageJ hyperstacks |
-| **`.bin`** | `BinArray` | as-passed, e.g. `(T, Y, X)` | Suite2p binary (requires shape) |
+| **`.bin`** | `BinArray` | `(T, 1, 1, Y, X)` | Suite2p binary (shape from `ops.npy` or `shape=`) |
 | **`.h5`** | `H5Array` | `(T, C, Z, Y, X)` | HDF5 datasets |
 | ↳ `imaging_system = bruker` dataset | `BrukerArray` | `(T, C, Z, Y, X)` | Bruker HDF5 export; axes from its dimension labels |
 | ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
@@ -226,20 +224,18 @@ Note: frame count is computed from actual file size, not ops.npy (which may be s
 (binarray)=
 ### BinArray
 
-Direct binary file access when no ops.npy context is available. The user
-supplies the shape explicitly, and the array reports exactly that rank as
-`.shape` — it is the one array type whose `.shape` is not 5D.
+Direct binary file access when no ops.npy context is available. The file is
+a flat `(nframes, Ly, Lx)` memmap; pass that as `shape` when there is no
+`ops.npy` beside it. The array is `(T, 1, 1, Y, X)` like every other.
 
 ```python
 from mbo_utilities.arrays import BinArray
 
-# requires explicit shape — any rank up to 5D
 arr = BinArray("/path/to/data.bin", shape=(1000, 512, 512))
-print(arr.shape)  # (1000, 512, 512) — exactly what you passed in
-print(arr.nz)     # 1               — TCZYX sizes are still available
+print(arr.shape)  # (1000, 1, 1, 512, 512)
 
-# read/write via memmap
-arr[0] = new_frame
+# read/write via memmap with 5D keys
+arr[0, 0, 0] = new_frame
 arr.close()
 ```
 
@@ -548,16 +544,15 @@ All array types provide:
 
 | Property      | Description                                          |
 |---------------|------------------------------------------------------|
-| `.shape`      | 5D `(T, C, Z, Y, X)` (`BinArray`: the rank you passed in) |
+| `.shape`      | 5D `(T, C, Z, Y, X)`                                 |
 | `.dtype`      | data type                                            |
-| `.ndim`       | number of dims in `.shape` (5, except `BinArray`)    |
+| `.ndim`       | 5                                                    |
 | `.dims`       | dim labels, e.g. `('T', 'C', 'Z', 'Y', 'X')`         |
 | `.nt` `.nc` `.nz` `.ny` `.nx` | individual TCZYX sizes               |
 | `.metadata`   | file/array metadata dict                             |
 | `.num_planes` | number of z-planes (= `.nz`)                         |
 
-The `.nt`/`.nc`/`.nz`/`.ny`/`.nx` accessors give individual sizes and are
-correct for every array type, including `BinArray`.
+The `.nt`/`.nc`/`.nz`/`.ny`/`.nx` accessors give individual sizes.
 
 Most array types also provide:
 

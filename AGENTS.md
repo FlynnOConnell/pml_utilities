@@ -18,7 +18,6 @@ pml_utilities/
 │   ├── reader.py             # imread()
 │   ├── writer.py             # imwrite()
 │   ├── _writers.py           # per-format writers, ops.npy, processing_history
-│   ├── squeeze.py            # opt-in SqueezedView
 │   ├── arrays/               # one LazyArray subclass per format + read-time views
 │   │   ├── _base.py          # _imwrite_base, ReductionMixin, TiffReaderMixin, DIMS
 │   │   ├── features/         # dims, tags, slicing, selection, roi, phase, frame average, stats
@@ -57,7 +56,7 @@ pml_utilities/
 | Layer | Responsibility | Must not |
 |-------|----------------|----------|
 | `lazy_array` | `LazyArray` base, 5D accessors, `register_array_class`, `_dispatch` | Import numpy, tifffile, zarr, or any `arrays` module |
-| `arrays/*` | Open one format lazily; deposit the source's metadata; implement the 5D contract (§5) | Normalize metadata; write files; import `gui` |
+| `arrays/*` | Open one format lazily; deposit the source's metadata; report a 5D shape (§5) | Normalize metadata; write files; import `gui` |
 | `arrays/features` | Dims, tags, selection, ROI, phase, frame average, stats; format-agnostic | Know about any one file format |
 | `metadata` | Canonical vocabulary, alias resolution, `OutputMetadata`, ScanImage parsing | Read pixels |
 | `writer` + `_writers` | `imwrite`; emit canonical values under each format's keys; `ops.npy`; provenance | Hand-roll alias fan-out; every emitted key comes from the registry or `OutputMetadata` |
@@ -79,9 +78,9 @@ the rules it can; `.github/workflows/format.yml` applies them on every push to
 
 Numpy style (ruff `pydocstyle` convention `numpy`). Content rules are in `STYLE.md`.
 
-## 5. Lazy arrays: the 5D contract
+## 5. Lazy arrays: always 5D
 
-`imread()` returns a `LazyArray`. Its rank and axis order are fixed.
+`imread()` returns a `LazyArray`. Its ndim and axis order are fixed.
 
 ### 5.1 Shape
 
@@ -93,17 +92,19 @@ Numpy style (ruff `pydocstyle` convention `numpy`). Content rules are in `STYLE.
   order (time, channel, space).
 - `nt`, `nc`, `nz`, `ny`, `nx` are the five sizes by position; `num_timepoints`,
   `num_zplanes` are the same sizes by name through `dimension_specs`.
-- A subclass implements exactly `_shape5d()`, `__getitem__`, `dtype`, `can_open()`
-  and sets `self._metadata`. Everything else (`shape`, `ndim`, `dims`, `metadata`,
-  `dimension_specs`, `dx/dy/dz/fs/finterval`, `slider_dims`, `squeeze`,
-  `source_path`) is inherited from `LazyArray`. Subclass `LazyArray` directly;
-  `Shape5DMixin` is a compatibility alias scheduled for deletion.
+- A subclass implements exactly `shape`, `__getitem__`, `dtype`, `can_open()`
+  and sets `self._metadata`. Everything else (`ndim`, `dims`, `metadata`,
+  `dimension_specs`, `dx/dy/dz/fs/finterval`, `slider_dims`, `isel`,
+  `source_path`) is inherited from `LazyArray`. No class overrides `shape` or
+  `ndim` to report anything but 5D.
 - Spatial extent may depend on state (`roi`, axial shifts, phase correction); temporal
-  and channel extent may depend on `frame_average` and `channel`. `_shape5d()` is
+  and channel extent may depend on `frame_average` and `channel`. `shape` is
   therefore computed, not cached.
+- There is no squeeze on read: drop axes by indexing (`arr[:, 0, 0]` is TYX) or
+  with `np.squeeze(arr[:])`. `imread(squeeze=...)` raises `TypeError`.
 
-Pinned by `tests/test_lazyarray_contract.py`, `tests/test_shape5d.py`,
-`tests/test_natural_rank.py`.
+Pinned by `tests/test_lazy_array.py`, `tests/test_shape.py`,
+`tests/test_tiff_shape.py`.
 
 ### 5.2 Rank inference on read
 
@@ -150,8 +151,9 @@ Pinned by `tests/test_numpy_dims.py`, `tests/test_imagej_stack.py`.
 ### 5.3 Indexing
 
 - `__getitem__` takes numpy 5D semantics: a key shorter than 5 is padded with
-  `slice(None)`; integer axes squeeze out; `Ellipsis` expands. Wrappers over a
-  natural-rank source map keys with `arrays._base._index_5d_into_raw`.
+  `slice(None)`; integer axes squeeze out; `Ellipsis` expands. A reader whose file
+  stores fewer axes (a 3D tiff, a TYX `.bin`) maps keys with
+  `arrays._base._index_5d_into_raw` or a reshaped view of its memmap.
 - `np.asarray(arr)` returns one representative `(Y, X)` frame, never the whole array.
   Use `arr[:]` or chunked reads for the data.
 - Reductions (`mean`, `max`, `min`, `std`, `var`, `sum`) match numpy and stream in
@@ -163,29 +165,24 @@ Pinned by `tests/test_numpy_dims.py`, `tests/test_imagej_stack.py`.
   which are strided and binned.
 - `arr.vmin` / `arr.vmax` are the display range of the representative frame.
 
-### 5.4 Views and sanctioned exceptions
+### 5.4 Views
 
 Read-time views wrap a 5D array and stay 5D: `FrameAveragedView` (temporal binning,
 T // N), `PhaseCorrectedView` (bidirectional scan phase), `AxialShiftView`
-(per-plane shifts; changes Y/X when enabled). `base_array(arr)` unwraps them for
+(per-plane shifts; changes Y/X when enabled), `SelectionView` (`arr.isel(T=, C=, Z=)`
+with 0-based indices, like xarray's `isel` but no axis is dropped;
+`imread(path, channel=n)` is `isel(C=n)`). `base_array(arr)` unwraps them for
 `isinstance` checks.
 
-Four objects deliberately report a different rank:
-
-| Object | Reported shape | Why |
-|--------|----------------|-----|
-| `BinArray` | the shape you passed, usually `(T, Y, X)` | it is suite2p's input format; suite2p reads it 3D |
-| `MP4Array` | `(T, Y, X)` | video, not a dispatch target |
-| `_ChannelView` (`imread(path, channel=n)`) | `(T, Z, Y, X)` | feeds single-channel pipelines that expect TZYX |
-| `SqueezedView` (`arr.squeeze()`, `imread(squeeze=True)`) | size-1 T/C/Z dropped | notebook ergonomics; `.base` is the 5D array; writers use the base |
-
-All four still implement `_shape5d()` and `nt/nc/nz/ny/nx`, so writers and pipelines
-never branch on rank.
+`BinArray` is `(T, 1, 1, Y, X)` and `MP4Array` is `(T, 1, 1, Y, X)` like every other
+reader. Code handing one plane to a library that wants a 3D `(T, Y, X)` object
+wraps it at that call with `roi_workflow.PlaneMovie(arr, z=, c=)`; nothing in
+`arrays/` reports fewer than 5 axes.
 
 ### 5.5 `imread` dispatch
 
-1. `np.ndarray` → `NumpyArray`. A `SqueezedView` → its base. An object with
-   `_imwrite` and `shape` → returned unchanged.
+1. `np.ndarray` → `NumpyArray`. An object with `_imwrite` and `shape` →
+   returned unchanged.
 2. A path inside a `.zarr` store is redirected to the store root.
 3. Every class in the `mbo_utilities.lazy_arrays` entry-point group (plus
    `register_array_class` calls) is asked `can_open(path)` in descending
@@ -204,7 +201,7 @@ never branch on rank.
 `can_open` must be cheap (suffix, header, sidecar presence) and never raise. Add a
 class by listing it in `pyproject.toml` under `[project.entry-points."mbo_utilities.lazy_arrays"]`.
 
-Read-time kwargs `channel`, `frame_average`, `squeeze` are consumed by `imread`
+Read-time kwargs `channel` and `frame_average` are consumed by `imread`
 itself; `unit` (MESc), `dataset` (H5), `dims` (TIFF/NumPy/Zarr) reach the class and
 round-trip through `arr.reader_kwargs`.
 
@@ -400,7 +397,7 @@ scripts whose attribute names are already registered aliases.
    `frame_rate`, ...). Aliases are emitted only by `normalize_metadata` at write time.
 3. Never round at ingest.
 4. `num_timepoints`, `num_zplanes`, `num_color_channels`, `Lx`, `Ly` in the dict
-   must agree with `_shape5d()`. Shape is the truth; if they disagree, fix the dict.
+   must agree with `shape`. Shape is the truth; if they disagree, fix the dict.
 5. Keys the registry can resolve through a transform (`finterval`, `XResolution`,
    `TimeIncrement`) are deposited as-is, not pre-converted.
 6. A reader's `metadata` getter returns the dict; it does not mutate it.
@@ -1097,7 +1094,7 @@ Environment: `MBO_DEBUG`, `MBO_DIR` / `MBO_USER` (relocate `~/.mbo`),
 1. New module `mbo_utilities/arrays/<format>.py`. Subclass `LazyArray` (plus
    `ReductionMixin`; `RoiFeatureMixin` / `PhaseCorrectionMixin` if applicable).
 2. Implement `can_open` (cheap, never raises), `__init__` (open lazily, keep
-   `self.filenames`), `_shape5d`, `dtype`, `__getitem__` (5D keys), `close`.
+   `self.filenames`), `shape`, `dtype`, `__getitem__` (5D keys), `close`.
 3. Set `self._metadata` per §6.4. Put every source key you can into the registry's
    vocabulary; add missing aliases to `METADATA_PARAMS` (§10), never a private
    fallback.
@@ -1106,7 +1103,7 @@ Environment: `MBO_DEBUG`, `MBO_DIR` / `MBO_USER` (relocate `~/.mbo`),
    `PRIORITY` above 50 if its `can_open` is more specific than a suffix check.
 6. Add it to `arrays/__init__._LAZY_IMPORTS`, the `imread` docstring, and
    `docs/file_formats.md` (Quick Reference row + detection tree).
-7. Tests: shape/dims/indexing in the style of `tests/test_shape5d.py`, a round-trip
+7. Tests: shape/dims/indexing in the style of `tests/test_shape.py`, a round-trip
    in `tests/test_roundtrip.py`, synthetic data only.
 
 ## 10. Adding a metadata parameter, alias, or platform
@@ -1152,9 +1149,9 @@ MBO_PIPELINE_TIFF=/path/to/raw uv run pytest tests/local/ -v   # needs real Scan
 - Tests use synthetic fixtures from `tests/conftest.py`; real data lives under
   `~/.mbo/tests/lbm/mbo_utilities/` and tests skip when it is absent.
 - `RENDERCANVAS_FORCE_OFFSCREEN=1` is set by `conftest.py`; no test opens a window.
-- Contract tests to keep green when touching the three systems above:
-  `test_lazyarray_contract.py`, `test_shape5d.py`, `test_natural_rank.py`,
-  `test_numpy_dims.py`, `test_squeeze.py`, `test_imagej_stack.py`,
+- Tests to keep green when touching the three systems above:
+  `test_lazy_array.py`, `test_shape.py`, `test_tiff_shape.py`,
+  `test_numpy_dims.py`, `test_selection_view.py`, `test_imagej_stack.py`,
   `test_selection_indices.py`, `test_metadata_module.py`, `test_effective_rate.py`,
   `test_roundtrip.py`, `test_masknmf_pipeline.py`.
 - No functions defined inside tests. Do not mock file formats; write a small real
@@ -1207,10 +1204,6 @@ ones. Remove an entry when its fix lands.
 
 **Lazy arrays**
 
-- Every reader still inherits `Shape5DMixin` (`arrays/bin.py:43`, `h5.py:112`,
-  `isoview/array.py:1886`, `mesc.py:814`, `mp4.py:664`, `numpy.py:79`,
-  `suite2p.py:573`, `tiff.py:543,970`, `zarr.py:68`). Target: subclass `LazyArray`
-  directly, delete `Shape5DMixin` (`arrays/_base.py:40`).
 - `ZarrArray(dims=...)` is documented (`arrays/zarr.py:108`) but ignored, and the
   reader never reads `dimension_names` or `attrs["dims"]` back
   (`arrays/zarr.py:294-311`). `H5Array` never reads the `dims` attr the writer stamps
