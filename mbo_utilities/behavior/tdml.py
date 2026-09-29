@@ -100,7 +100,9 @@ def read_tdml(path):
             kernel = np.ones(width)
             counted = np.convolve(np.where(gap, 0.0, 1.0), kernel, "same")
             summed = np.convolve(np.where(gap, 0.0, speed), kernel, "same")
-            speed = np.divide(summed, counted, out=np.full_like(speed, np.nan), where=counted > 0)
+            speed = np.divide(
+                summed, counted, out=np.full_like(speed, np.nan), where=counted > 0
+            )
             speed[gap] = np.nan
             signals["speed"] = BehaviorSignal(t[1:], speed, "mm/s")
     events = {}

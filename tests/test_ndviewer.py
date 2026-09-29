@@ -50,7 +50,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-
 class LazyStandIn:
     """Array-protocol lazy stand-in: dtype/shape/ndim/__getitem__ only.
 
@@ -167,7 +166,6 @@ def viewer5d(base5d):
     iw.close()
 
 
-
 class TestConstruction:
     def test_factory_returns_adapter(self, viewer5d):
         from mbo_utilities.gui._ndviewer import MboNDViewer
@@ -215,7 +213,6 @@ class TestConstruction:
     def test_offscreen_draw(self, viewer5d):
         frame = viewer5d.figure.canvas.draw()
         assert getattr(frame, "shape", None) is not None
-
 
 
 class TestIndices:
@@ -282,7 +279,6 @@ class TestIndices:
         assert set(iw.current_index.keys()) == set(iw.ndwidget.indices.dims)
 
 
-
 class TestWindowFuncs:
     def test_legacy_dict_routed_with_window_order(self, viewer5d):
         # preview_data's legacy path sets {"t": (func, size)}; funcs for
@@ -346,7 +342,6 @@ class TestWindowFuncs:
         )
 
 
-
 class TestContrastResets:
     def test_reset_vmin_vmax_full_sample(self, viewer5d, base5d):
         iw = viewer5d
@@ -379,7 +374,6 @@ class TestContrastResets:
         assert iw.graphics[0].cmap == "viridis"
         assert iw.cmap == ["viridis"]
         iw.cmap = "gnuplot2"
-
 
 
 class TestSlidersUI:
@@ -513,7 +507,6 @@ class TestTogglePlaybackVendoredShape:
 
         parent = _StubParent(None)
         toggle_playback(parent)  # must not raise
-
 
 
 def _make_viewer(data, **kwargs):
@@ -962,7 +955,6 @@ class TestShowPassthrough:
             viewer5d._ndw.show = original
 
 
-
 class _WithLabels(LazyStandIn):
     slider_dim_labels = ("Timepoint", "Channel", "Z-plane")
 
@@ -1061,7 +1053,6 @@ class TestFpsSeedingFromData:
             iw.close()
 
 
-
 class TestFindSliderNameAliases:
     def test_mesc_depth_and_cube_labels_resolve_to_z(self):
         from mbo_utilities.arrays.features._dim_labels import find_slider_name
@@ -1075,7 +1066,6 @@ class TestFindSliderNameAliases:
         assert find_slider_name(("Tile", "Cam", "Zplane"), "z") == "Zplane"
         assert find_slider_name(("t", "c", "z"), "z") == "z"
         assert find_slider_name(("Timepoint", "Channel"), "z") is None
-
 
 
 class TestMultiArray:
@@ -1104,7 +1094,6 @@ class TestMultiArray:
             iw.figure.canvas.draw()
         finally:
             iw.close()
-
 
 
 class TestClose:

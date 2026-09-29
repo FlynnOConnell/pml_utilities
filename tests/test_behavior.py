@@ -79,7 +79,10 @@ def write_tdml(path: Path, sync: bool = True) -> Path:
             "time": 1.9,
         },
         {
-            "behavior_controller": {"valve": {"pin": 52, "action": "open"}, "millis": 6},
+            "behavior_controller": {
+                "valve": {"pin": 52, "action": "open"},
+                "millis": 6,
+            },
             "time": 2.0,
         },
         {

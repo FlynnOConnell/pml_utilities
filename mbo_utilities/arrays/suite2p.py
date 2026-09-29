@@ -1023,7 +1023,6 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         histogram_widget = kwargs.get("histogram_widget", True)
         window_funcs = kwargs.get("window_funcs")
 
-
         from mbo_utilities.gui._ndviewer import MboNDViewer
 
         return MboNDViewer(

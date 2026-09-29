@@ -119,7 +119,6 @@ def _result(rows, shape=(6, 6), z=0, kind="discover"):
     )
 
 
-
 def test_submit_success_and_single_poll(pm):
     mgr = rr.RoiRunManager(pm)
     run = rr.RoiRun(kind="extract", tag="a", description="extract rois_a")
@@ -176,7 +175,6 @@ def test_heavy_runs_serialize_on_the_gpu_lock(pm):
     assert len(_drain(mgr, pm, n=2)) == 2
     assert order == ["a", "a-done", "b"]
     assert ra.finished and rb.finished and not mgr.busy
-
 
 
 def test_spawn_records_pid_and_out_root(pm, tmp_path):
@@ -277,7 +275,6 @@ def test_stop_kills_spawned_only(pm, tmp_path):
     _drain(mgr, pm)
 
 
-
 def test_pick_map_strongest_lam_wins():
     res = _result(
         [
@@ -344,7 +341,6 @@ def test_derived_rgba_skips_discarded_and_invisible():
     assert not rr.derived_rgba((6, 6), [s], 0.5).any()
     # a discarded selection is not highlighted either
     assert not rr.derived_rgba((6, 6), [s], 0.5, selected=(s, 0)).any()
-
 
 
 def _pieces(pos):
@@ -505,7 +501,6 @@ def test_result_traces_carry_the_read_coordinates(tmp_path):
     assert rr.result_traces(plain) == []
     (t0, t1) = rr.result_traces(plain, uids=[7, 8])
     assert (t0.z, t0.c, t0.engine) == (3, 0, "masknmf") and t1.uid == 8
-
 
 
 def _run_dir(path, kind=None, n_stat=1, n_rois=None, pipeline=None):

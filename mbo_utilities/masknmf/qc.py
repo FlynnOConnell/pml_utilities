@@ -180,7 +180,6 @@ def _sparse_footprints(results):
     return idx[0].astype(np.int64), idx[1].astype(np.int64), val.astype(np.float64)
 
 
-
 def _summary_image(plane_dir: Path, img, title: str, save_name: str):
     """Render one full-FOV summary image, matching the lsp projection style."""
     plt = _agg_plt()
@@ -262,7 +261,6 @@ def plot_residual_correlation_footprints(
     )
 
 
-
 def plot_footprint_coverage(
     plane_dir: Path, results, shape, save_name="06_footprint_coverage.png"
 ):
@@ -309,7 +307,6 @@ def plot_footprint_coverage(
     )
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     _save(fig, Path(plane_dir) / save_name)
-
 
 
 def _roi_averages(results):
@@ -431,7 +428,6 @@ def plot_roi_signal_decomposition(
     )
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     _save(fig, Path(plane_dir) / save_name)
-
 
 
 def _calibrated_dff(results, pmd):
@@ -595,7 +591,6 @@ def plot_calibrated_dff(
     _save(fig, Path(plane_dir) / save_name)
 
 
-
 def plot_registration_summary(
     plane_dir: Path, shifts: np.ndarray, save_name="04_registration_shifts.png"
 ):
@@ -686,7 +681,6 @@ def plot_pmd_diagnostics(
     )
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     _save(fig, Path(plane_dir) / save_name)
-
 
 
 def _clear_previous(plane_dir: Path) -> None:

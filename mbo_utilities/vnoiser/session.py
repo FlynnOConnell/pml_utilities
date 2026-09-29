@@ -624,7 +624,6 @@ class CurationSession:
         return 500.0 if self.mode == "slow" else 100.0
 
 
-
 def voltage_run_for_mesc(mesc_path) -> Path | None:
     """What the voltage pipeline last left for a line scan: the newest results
     file beside it, else a ``PF`` folder of pickles beside it or one folder up

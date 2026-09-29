@@ -38,7 +38,6 @@ class CountingArray:
         return self._raw[key]
 
 
-
 class TestSampleArray:
     def test_two_dimensional_data_is_used_whole(self):
         data = np.arange(24, dtype=np.uint16).reshape(4, 6)
@@ -82,7 +81,6 @@ class TestSampleArray:
             counts = VMINMAX_SAMPLE_COUNTS[n]
             assert len(counts) == n
             assert int(np.prod(counts)) <= 72
-
 
 
 class FakeGraphic:
@@ -168,7 +166,6 @@ class TestSetContrast:
         ndg = FakeNDG()
         ndg.apply(np.array([[1.0, np.inf], [np.nan, 40.0]]))
         assert (ndg.graphic.vmin, ndg.graphic.vmax) == (1.0, 40.0)
-
 
 
 class _ShapeOnly:

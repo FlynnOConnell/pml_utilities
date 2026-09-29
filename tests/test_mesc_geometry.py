@@ -396,7 +396,9 @@ def test_a_ribbon_outline_is_a_closed_patch(mesc_path, tmp_path):
         zstack_depth_info(path, "MSession_0/MUnit_0"),
     )
     assert p["length_um"] == 20.0
-    (rec,) = [r for r in image_overlays(path, "MSession_0/MUnit_0") if r["munit"] == "MUnit_3"]
+    (rec,) = [
+        r for r in image_overlays(path, "MSession_0/MUnit_0") if r["munit"] == "MUnit_3"
+    ]
     assert rec["kind"] == "patch"
     assert rec["pixels"].shape == (11, 2)
     assert np.allclose(rec["pixels"][0], rec["pixels"][-1])

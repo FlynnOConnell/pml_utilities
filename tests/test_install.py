@@ -72,7 +72,6 @@ class TestArchSupported:
         assert install._arch_supported([], (6, 1))
 
 
-
 class TestDriverCuda:
     def test_parses_the_banner(self, monkeypatch):
         from mbo_utilities import gpu
@@ -100,7 +99,6 @@ class TestDriverCuda:
             "6.1",
             "WDDM",
         )
-
 
 
 def _fake_torch(
@@ -248,7 +246,6 @@ class TestCheckPkg:
         assert (feat.status, feat.version) == (Status.OK, "1.2.3")
 
 
-
 def _fake_status():
     from mbo_utilities.install import CudaInfo, InstallStatus
 
@@ -367,7 +364,6 @@ class TestCacheRoundTrip:
         }
         assert not env_cache.is_cache_valid({**base, "schema": 1})
         assert env_cache.is_cache_valid({**base, "schema": env_cache._CACHE_SCHEMA})
-
 
 
 class TestLauncherRows:

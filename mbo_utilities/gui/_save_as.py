@@ -265,7 +265,6 @@ def draw_saveas_popup(parent: Any):
         imgui.end_popup()
 
 
-
 def _draw_options_popup(parent: Any):
     """Draw the options popup for advanced save settings."""
     # track when options popup is about to open (for resetting defaults)

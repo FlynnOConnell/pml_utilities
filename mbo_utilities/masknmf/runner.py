@@ -784,7 +784,9 @@ def run_plane(
     n_rois = 0
     if results is not None:
         indices, values, baseline = _extract_footprints(results)
-        c = np.asarray(results.signals_array.export_temporal_demixed(), dtype=np.float32)
+        c = np.asarray(
+            results.signals_array.export_temporal_demixed(), dtype=np.float32
+        )
         # PMD standardisation images calibrate c back to movie units; without
         # them F.npy stays in noise-SD units and dF/F cannot be formed.
         info = _outputs.write_plane_outputs(
