@@ -156,6 +156,11 @@ Pinned by `tests/test_numpy_dims.py`, `tests/test_imagej_stack.py`.
   Use `arr[:]` or chunked reads for the data.
 - Reductions (`mean`, `max`, `min`, `std`, `var`, `sum`) match numpy and stream in
   chunks above 100M elements (`ReductionMixin`).
+- `arrays._base.temporal_mean(arr)` is the per-pixel mean over T as
+  `(C, Z, Y, X)` float32; a reader that can do better defines its own
+  `temporal_mean` (`MescArray` reads each raw channel once). The viewer's Mean
+  Subtraction and Invert Deflection use it, never the Signal Quality samples,
+  which are strided and binned.
 - `arr.vmin` / `arr.vmax` are the display range of the representative frame.
 
 ### 5.4 Views and sanctioned exceptions
@@ -747,6 +752,12 @@ the other.
   neuropil checkbox only when a plotted row's profile offers it, a dF/F settings
   popup only when a shown dF/F is computed here, labels the y axis from the rows
   (joined when they differ) and opens in seconds whenever the data has a rate.
+  The viewer's Mean Subtraction and Invert Deflection reach the rows through
+  `display_trace(..., subtract, invert)` (`deflect`, about the row's own mean
+  over T, which is the mask mean of the transformed image): a `raw` row and
+  its neuropil are shown `F - m`, `2m - F` or `m - F`, a dF/F computed here is
+  taken of the inverted raw trace, and a pipeline's own kinds keep the sign
+  it wrote.
   The plot has no box of its own: `imgui/lines.plot_style` makes implot's frame,
   plot background and border transparent, its grid lines invisible (by colour,
   so one scope covers the subplots too) and its ticks and legend dim, so the

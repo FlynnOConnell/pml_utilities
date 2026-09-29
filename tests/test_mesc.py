@@ -1000,3 +1000,136 @@ def test_linked_units_and_leading_slash_keys(tmp_path):
     )
     for a in (arr, ref, snap):
         a.close()
+
+
+@pytest.mark.parametrize("block_bytes", [100, 64 * 1024 * 1024])
+@pytest.mark.parametrize("unit", range(7))
+def test_temporal_mean_is_the_mean_of_every_frame(
+    mesc_path, unit, block_bytes, monkeypatch
+):
+    # 100 bytes splits every read mid-frame, packed rows included
+    monkeypatch.setattr("mbo_utilities.arrays.mesc._MEAN_BLOCK_BYTES", block_bytes)
+    arr = MescArray(mesc_path, unit=unit)
+    expected = np.asarray(arr[:], dtype=np.float64).mean(axis=0)
+    got = arr.temporal_mean()
+    assert got.dtype == np.float32
+    np.testing.assert_allclose(got, expected, rtol=1e-6)
+
+
+def test_temporal_mean_follows_the_roi_selection_and_start_frame(mesc_path):
+    arr = MescArray(mesc_path, unit=1, roi=3, start_frame=2)
+    expected = np.asarray(arr[:], dtype=np.float64).mean(axis=0)
+    np.testing.assert_allclose(arr.temporal_mean(), expected, rtol=1e-6)
+
+
+def test_temporal_mean_applies_a_fixed_scan_phase_shift(mesc_path):
+    arr = MescArray(mesc_path, unit=4, fix_phase=True, use_fft=False)
+    arr.phase_correction.shift = 2.0
+    expected = np.asarray(arr[:], dtype=np.float64).mean(axis=0)
+    np.testing.assert_allclose(arr.temporal_mean(), expected, rtol=1e-6)
+
+
+def test_generic_temporal_mean_agrees_with_the_one_pass_read(mesc_path):
+    from mbo_utilities.arrays._base import temporal_mean
+
+    arr = MescArray(mesc_path, unit=1)
+    in_memory = imread(np.asarray(arr[:]))
+    assert not hasattr(in_memory, "temporal_mean")
+    np.testing.assert_allclose(temporal_mean(in_memory), arr.temporal_mean(), rtol=1e-6)
+
+
+def _viewer_on(arr, mean_subtraction, invert_deflection):
+    """A `PreviewDataWidget` holding only what the spatial functions read."""
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+
+    names = arr.slider_dim_labels
+    w = object.__new__(PreviewDataWidget)
+    w.image_widget = SimpleNamespace(
+        data=[display_wrap(arr)],
+        _slider_dim_names=names,
+        indices=dict.fromkeys(names, 0),
+        spatial_func=None,
+    )
+    w.num_graphics = 1
+    w.logger = SimpleNamespace(info=print, exception=print)
+    w._gaussian_sigma = 0.0
+    w._mean_subtraction = mean_subtraction
+    w._invert_deflection = invert_deflection
+    w._mean_images = {}
+    w._mean_jobs = {}
+    w._mean_ready = False
+    return w
+
+
+class TestMeanDisplay:
+    """Mean Subtraction and Invert Deflection use the full per-pixel mean of
+    the (channel, ROI) on screen, alone or together.
+    """
+
+    @pytest.mark.parametrize(
+        "subtract,invert",
+        [(True, False), (False, True), (True, True)],
+    )
+    def test_each_combination_on_every_channel_and_roi(
+        self, mesc_path, subtract, invert
+    ):
+        arr = MescArray(mesc_path, unit=1)  # T=6, C=2, ROI=4
+        mean = np.asarray(arr[:], dtype=np.float64).mean(axis=0)
+        w = _viewer_on(arr, subtract, invert)
+        w._compute_mean_image(0, [arr, 0.0])
+        assert w._mean_ready
+        for c in range(2):
+            for z in range(4):
+                w.image_widget.indices = {"Timepoint": 3, "Channel": c, "ROI": z}
+                w._rebuild_spatial_func()
+                frame = np.asarray(arr[3, c, z])
+                shown = w.image_widget.spatial_func[0](frame)
+                m = mean[c, z]
+                expected = {
+                    (True, False): frame - m,
+                    (False, True): 2 * m - frame,
+                    (True, True): m - frame,
+                }[(subtract, invert)]
+                np.testing.assert_allclose(shown, expected, rtol=1e-5, atol=1e-2)
+        assert frame.dtype == np.uint16  # the read frame is never written
+
+    def test_roi_slider_is_found_by_position_not_label(self, mesc_path):
+        w = _viewer_on(MescArray(mesc_path, unit=2), True, False)  # T, ROI
+        w.image_widget.indices = {"Timepoint": 4, "ROI": 1}
+        assert w._displayed_cz(0) == (0, 1)
+
+    def test_off_clears_the_spatial_function(self, mesc_path):
+        arr = MescArray(mesc_path, unit=1)
+        w = _viewer_on(arr, False, False)
+        w._rebuild_spatial_func()
+        assert w.image_widget.spatial_func is None
+        assert not w._mean_jobs
+
+    def test_the_mean_is_computed_off_the_draw_thread_then_applied(self, mesc_path):
+        import time
+
+        arr = MescArray(mesc_path, unit=3)
+        w = _viewer_on(arr, True, False)
+        w._rebuild_spatial_func()
+        deadline = time.time() + 10
+        while w._mean_jobs and time.time() < deadline:
+            time.sleep(0.01)
+        assert w._mean_ready
+        w.image_widget.indices = {"Timepoint": 0, "ROI": 1}
+        w._rebuild_spatial_func()
+        frame = np.asarray(arr[0, 0, 1])
+        mean = np.asarray(arr[:], dtype=np.float64).mean(axis=0)[0, 1]
+        shown = w.image_widget.spatial_func[0](frame)
+        np.testing.assert_allclose(shown, frame - mean, rtol=1e-5, atol=1e-3)
+
+    def test_a_scan_phase_change_recomputes(self, mesc_path):
+        arr = MescArray(mesc_path, unit=4, use_fft=False)
+        w = _viewer_on(arr, True, False)
+        w._compute_mean_image(0, [arr, 0.0])
+        assert w._mean_image(0) is not None
+        arr.fix_phase = True
+        arr.phase_correction.shift = 2.0
+        assert w._mean_image(0) is None

@@ -723,6 +723,7 @@ class ManualRoiWidget:
         self.trace_sel: set[tuple] = set()  # trace-table keys to plot
         self._trace_stats: dict[tuple, tuple] = {}
         self._trace_display: dict[tuple, tuple] = {}
+        self._trace_deflection = (False, False)
         # one entry: the last windowed line, so panning does not recompute it
         self._trace_window_cache: dict[tuple, np.ndarray] = {}
         self.correct_neuropil = True
@@ -4153,7 +4154,10 @@ class ManualRoiWidget:
 
     def plot_y_label(self, rows) -> str:
         """The y axis label of what the rows show: one when they agree, else joined."""
-        labels = list(dict.fromkeys(y_label(t, self.kind) for t in rows))
+        subtract, invert = self.deflection()
+        labels = list(
+            dict.fromkeys(y_label(t, self.kind, subtract, invert) for t in rows)
+        )
         return " / ".join(label for label in labels if label) or DISPLAY_KINDS["dff"]
 
     def _plotted_rows(self, lines) -> list[RoiTrace]:
@@ -4202,19 +4206,35 @@ class ManualRoiWidget:
         self._trace_window_cache[(id(y), proj, size)] = out
         return out
 
+    def deflection(self) -> tuple[bool, bool]:
+        """The viewer's ``(Mean Subtraction, Invert Deflection)``, which the
+        traces follow so the plot reads like the image.
+        """
+        return (
+            bool(getattr(self.host, "mean_subtraction", False)),
+            bool(getattr(self.host, "invert_deflection", False)),
+        )
+
     def _display(self, key) -> tuple:
         """Cached ``(trace, neuropil)`` display arrays for one trace key, in
-        the panel's kind and dF/F settings (``annotation.display``).
+        the panel's kind, dF/F settings and the viewer's deflection
+        (``annotation.display``).
         """
+        deflection = self.deflection()
+        if deflection != self._trace_deflection:
+            self._trace_deflection = deflection
+            self._redisplay()
         got = self._trace_display.get(key)
         if got is None:
             trace = self.traces.get(key)
             if trace is None:
                 return None, None
-            y = display_trace(trace, self.kind, self.dff, self.correct_neuropil)
+            y = display_trace(
+                trace, self.kind, self.dff, self.correct_neuropil, *deflection
+            )
             if y is None:
                 return None, None
-            yneu = neuropil_overlay(trace, self.kind, self.dff)
+            yneu = neuropil_overlay(trace, self.kind, self.dff, *deflection)
             if yneu is not None:
                 yneu = np.ascontiguousarray(yneu, np.float32)
             got = (np.ascontiguousarray(y, np.float32), yneu)

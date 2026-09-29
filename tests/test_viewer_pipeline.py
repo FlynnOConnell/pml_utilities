@@ -235,6 +235,7 @@ class TestPerDataStateReset:
     RESET_FIELDS = [
         ("_mean_subtraction", True, False),
         ("_invert_deflection", True, False),
+        ("_mean_images", {0: object()}, {}),
         ("_gaussian_sigma", 5.0, 0.0),
         ("_proj", "max", "mean"),
         ("_window_size", 10, 1),
