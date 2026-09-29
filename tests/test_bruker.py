@@ -96,7 +96,9 @@ class TestShape:
         arr = imread(path)
         expected = np.moveaxis(data, 4, 1)
         np.testing.assert_array_equal(arr[:], expected)
-        np.testing.assert_array_equal(arr[3, 0, 0, 2:5, 1:7], expected[3, 0, 0, 2:5, 1:7])
+        np.testing.assert_array_equal(
+            arr[3, 0, 0, 2:5, 1:7], expected[3, 0, 0, 2:5, 1:7]
+        )
         assert arr[2:5].shape == (3, 1, 1, 16, 20)
         assert np.asarray(arr).shape == (16, 20)
 
@@ -129,7 +131,11 @@ class TestMetadata:
     def test_counts_agree_with_shape(self, bruker_volume_h5):
         path, _ = bruker_volume_h5
         md = imread(path).metadata
-        assert (md["num_timepoints"], md["num_color_channels"], md["num_zplanes"]) == (4, 2, 3)
+        assert (md["num_timepoints"], md["num_color_channels"], md["num_zplanes"]) == (
+            4,
+            2,
+            3,
+        )
         assert (md["Ly"], md["Lx"]) == (8, 10)
 
 

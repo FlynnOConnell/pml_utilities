@@ -253,7 +253,6 @@ def raw(mesc_path):
         yield f
 
 
-
 def test_list_units_reports_every_layout(mesc_path):
     units = list_mesc_units(mesc_path)
     assert [u["munit"] for u in units] == [f"MUnit_{i}" for i in range(7)]
@@ -324,7 +323,6 @@ def test_unit_selectors_are_equivalent(mesc_path, selector):
 def test_bad_unit_selector_raises(mesc_path, selector):
     with pytest.raises(ValueError, match="unit"):
         MescArray(mesc_path, unit=selector)
-
 
 
 def test_zstack_axis0_is_depth(mesc_path, raw):
@@ -490,7 +488,6 @@ def test_multicube_without_slices_attr_falls_back_to_frames(
     assert any("Slices" in r.message for r in caplog.records)
 
 
-
 def test_roi_selection_collapses_z_to_one_roi(mesc_path, raw):
     arr = MescArray(mesc_path, unit=1)
     src = raw["MSession_0/MUnit_1/Channel_0"][:]
@@ -515,7 +512,6 @@ def test_slider_labels_match_what_the_viewer_renders(mesc_path):
     arr.roi = 0
     assert arr.slider_dim_labels == ("Timepoint", "Channel")
     assert MescArray(mesc_path, unit=0).slider_dim_labels == ("Channel", "Z-plane")
-
 
 
 def test_sync_frame_is_reported_but_not_applied_by_default(mesc_path):
@@ -626,7 +622,6 @@ def test_metadata_overrides_do_not_touch_the_read_only_file(mesc_path):
     arr.metadata = {"dz": 12.0}
     assert arr.metadata["dz"] == 12.0
     assert MescArray(mesc_path, unit=4).metadata["dz"] is None
-
 
 
 def test_reads_only_the_requested_frames(mesc_path, monkeypatch):
@@ -744,7 +739,6 @@ def test_imwrite_roi_zero_fans_out_one_directory_per_roi(mesc_path, tmp_path):
     ]
 
 
-
 @pytest.fixture(scope="module")
 def single_unit_mesc(tmp_path_factory):
     """A .mesc holding exactly one MUnit."""
@@ -791,7 +785,6 @@ class TestUnitPicker:
         other.touch()
         assert _resolve_mesc_unit(other, None) == ({}, True)
         assert _resolve_mesc_unit(tmp_path, None) == ({}, True)
-
 
 
 class TestViewerFit:

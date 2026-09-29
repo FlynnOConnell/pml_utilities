@@ -2835,10 +2835,7 @@ class TestTracePlotView:
         # all three stacked: each plot under the trace adds its own height
         widget.motion = MotionPlot(MotionCorrection("RTMC", "um", {"X": (t, t)}))
         self._fits(widget)
-        assert (
-            widget._traces_panel.height
-            == MOTION_PANEL_HEIGHT + BEHAVIOR_PLOT_HEIGHT
-        )
+        assert widget._traces_panel.height == MOTION_PANEL_HEIGHT + BEHAVIOR_PLOT_HEIGHT
         assert widget._stack == ("behavior", "motion", "trace")
         # the behavior plot alone, then nothing
         widget.show_trace, widget.show_motion = False, False

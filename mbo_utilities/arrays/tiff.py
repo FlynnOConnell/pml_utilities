@@ -1622,7 +1622,6 @@ class ScanImageArray(
         return self._metadata.get("page_width")
 
     def imshow(self, **kwargs):
-
         arrays = []
         names = []
         for roi in self.iter_rois():

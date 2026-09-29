@@ -1961,7 +1961,9 @@ def discover_rois(
         )
         _runner._export_atomic(results, out_dir / _runner.DEMIX_FILE, info)
         coo_idx, values, baseline = _runner._extract_footprints(results)
-        cc = np.asarray(results.signals_array.export_temporal_demixed(), dtype=np.float32)
+        cc = np.asarray(
+            results.signals_array.export_temporal_demixed(), dtype=np.float32
+        )
         counts = _outputs.write_plane_outputs(
             out_dir,
             indices=coo_idx,

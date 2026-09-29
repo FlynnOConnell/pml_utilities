@@ -240,8 +240,12 @@ def test_numpy_frames_match_masknmf(run_dir):
     res = masknmf.DemixingResults.from_hdf5(
         run_dir / "calcium_spine_demixing.hdf5", device="cpu"
     )
-    np.testing.assert_allclose(arr[3, 1, 0], np.asarray(res.signals_array[3:4])[0], rtol=1e-5)
-    np.testing.assert_allclose(arr[5, 0, 0], np.asarray(res.compression_array[5:6])[0], rtol=1e-5)
+    np.testing.assert_allclose(
+        arr[3, 1, 0], np.asarray(res.signals_array[3:4])[0], rtol=1e-5
+    )
+    np.testing.assert_allclose(
+        arr[5, 0, 0], np.asarray(res.compression_array[5:6])[0], rtol=1e-5
+    )
     np.testing.assert_allclose(
         arr[2, 2, 0], np.asarray(res.residual_array[2:3])[0], rtol=1e-5, atol=1e-6
     )

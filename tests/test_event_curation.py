@@ -93,7 +93,6 @@ def _add_scan(pf_dir, scan="20"):
     (pf_dir / "scanIDs_ROIs.pkl").write_bytes(pickle.dumps(meta))
 
 
-
 class TestSession:
     def test_load_reads_the_processed_trace_and_finds_the_events(self, data_root):
         session = _loaded(data_root)
@@ -431,7 +430,6 @@ class TestSession:
         assert slow.candidate_window_ms == 500.0 and fast.candidate_window_ms == 100.0
         assert slow.analysis_trace.shape == slow.denoised.shape
         assert not np.array_equal(slow.analysis_trace, slow.denoised)
-
 
 
 class TestNearestIndex:
@@ -829,7 +827,6 @@ class TestViewerIntegration:
                 vis.figure.canvas.draw()
         finally:
             vis.close()
-
 
 
 def _raw_unit(munit: int, n_rois: int = 2, samples: int = 4000) -> dict:
@@ -1258,7 +1255,6 @@ class TestMboOpensTheLineScanViewer:
         assert calls[0][1]["zstack_key"] is None
 
 
-
 def _experiment_layout(root, name="expt1"):
     """``<expt>/<expt>/<expt>.mesc`` with ``PF`` and the Z-stack beside it."""
     experiment = root / name
@@ -1335,7 +1331,6 @@ class TestExperimentFolder:
         assert calls[0][0] == str(mesc)
         result = CliRunner().invoke(cli.main, ["linescan", str(tmp_path), "--view"])
         assert result.exit_code != 0 and "no <name>/<name>.mesc" in result.output
-
 
 
 class TestCurationWindow:

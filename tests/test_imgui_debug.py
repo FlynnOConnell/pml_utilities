@@ -1,5 +1,6 @@
 """Widgets > ImGui Debugger: a floating window of imgui's own debug tools and
-imgui_debugger's inspector; Widgets > Style Editor beside it. No tab, no submenus."""
+imgui_debugger's inspector; Widgets > Style Editor beside it. No tab, no submenus.
+"""
 
 from imgui_bundle import imgui
 from mbo_utilities.gui import widgets

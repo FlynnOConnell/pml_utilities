@@ -197,7 +197,6 @@ def resolve_hostname(host: str) -> str | None:
     return None
 
 
-
 def _parse_link_speed(text: str) -> float | None:
     """'2.5 Gbps' -> 2500.0 (Mbit/s). Windows also reports a bare bits/s int."""
     text = text.strip()
@@ -271,7 +270,6 @@ def local_link_mbps() -> dict[str, Any] | None:
             "mbps": mbps,
         }
     return None
-
 
 
 def _ping_rtts(target: str, samples: int) -> list[float]:
@@ -608,7 +606,6 @@ def probe_metadata(
     }
 
 
-
 def run_checks(
     host: str,
     path: str | None = None,
@@ -669,7 +666,6 @@ def run_checks(
             results["end_to_end"] = probe_end_to_end(host, path, size_mb, skip_mb=2048)
 
     return results
-
 
 
 def _mibs(value: float | None) -> str:

@@ -204,7 +204,6 @@ def tooltip_marks_right():
         _TOOLTIP_ALIGN_STACK.pop()
 
 
-
 def begin_popup_size():
     """Calculate popup size based on window dimensions."""
     width_em = hello_imgui.em_size(1.0)  # 1em in pixels
@@ -306,7 +305,6 @@ class PopupAutoSize:
         return int(extra) | int(imgui.WindowFlags_.always_auto_resize)
 
 
-
 def style_imgui_opaque():
     """Force fully opaque popups, modals, child windows, and frames.
 
@@ -352,7 +350,6 @@ def style_imgui_opaque():
     # dim overlay drawn behind a modal — strong dark to hide app contents
     style.set_color_(imgui.Col_.modal_window_dim_bg.value, ImVec4(0.0, 0.0, 0.0, 0.85))
     style.set_color_(imgui.Col_.nav_windowing_dim_bg.value, ImVec4(0.0, 0.0, 0.0, 0.85))
-
 
 
 def style_seaborn_dark():
@@ -419,7 +416,6 @@ def style_seaborn_dark():
     style.legend_padding = ImVec2(5, 5)
     style.mouse_pos_padding = ImVec2(5, 5)
     style.plot_min_size = ImVec2(300, 225)
-
 
 
 def checkbox_with_tooltip(label: str, value: bool, tooltip: str) -> bool:

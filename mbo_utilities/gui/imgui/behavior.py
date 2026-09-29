@@ -27,7 +27,13 @@ from mbo_utilities.gui.imgui.lines import (
     vec4,
 )
 
-__all__ = ["EPOCH_COLORS", "EVENT_COLORS", "LANE_SHARE", "SIGNAL_COLORS", "BehaviorPlot"]
+__all__ = [
+    "EPOCH_COLORS",
+    "EVENT_COLORS",
+    "LANE_SHARE",
+    "SIGNAL_COLORS",
+    "BehaviorPlot",
+]
 
 SIGNAL_COLORS = ((0.95, 0.75, 0.3), (0.45, 0.8, 1.0), (0.8, 0.6, 1.0))
 EVENT_COLORS = {

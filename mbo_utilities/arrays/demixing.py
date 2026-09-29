@@ -218,7 +218,9 @@ class DemixingArray(ReductionMixin, LazyArray):
         """The demixed temporal components as ``(T, num_rois)``."""
         if self._traces is None:
             with h5py.File(self.filenames[0], "r") as f:
-                self._traces = np.asarray(f[GROUP]["temporal_demixed"][()], dtype=np.float32)
+                self._traces = np.asarray(
+                    f[GROUP]["temporal_demixed"][()], dtype=np.float32
+                )
         return self._traces
 
     @property
@@ -288,7 +290,9 @@ class DemixingArray(ReductionMixin, LazyArray):
                         k1 = np.zeros((u.shape[1], 1), np.float32)
                         k2 = np.zeros((1, v.shape[1]), np.float32)
                     if "static_baseline" in g:
-                        b = np.asarray(g["static_baseline"][()], dtype=np.float32).reshape(-1)
+                        b = np.asarray(
+                            g["static_baseline"][()], dtype=np.float32
+                        ).reshape(-1)
                     else:
                         # masknmf's default baseline: the residual has mean zero
                         b = (

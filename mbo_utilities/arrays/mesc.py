@@ -1702,9 +1702,13 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             src = self._source_frames(c, range(self._nt))
             span = (c / layout.nc, 1 / layout.nc)
             if layout.kind == "zstack":
-                planes = [np.asarray(dataset[z], dtype=np.float64) for z in range(layout.nz)]
+                planes = [
+                    np.asarray(dataset[z], dtype=np.float64) for z in range(layout.nz)
+                ]
             elif layout.kind == "packed":
-                planes = _packed_mean(dataset, layout.rois, src, progress_callback, span)
+                planes = _packed_mean(
+                    dataset, layout.rois, src, progress_callback, span
+                )
             elif layout.kind == "multicube":
                 sums = _sum_axis0(
                     dataset, src, progress_callback, span, per_frame=layout.slices
@@ -1715,7 +1719,9 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
                     plane = sums[s] / src.size
                     if layout.rois:
                         box = layout.rois[cube]
-                        plane = plane[box["row0"] : box["row1"], box["col0"] : box["col1"]]
+                        plane = plane[
+                            box["row0"] : box["row1"], box["col0"] : box["col1"]
+                        ]
                     planes.append(plane)
             else:
                 page = _sum_axis0(dataset, src, progress_callback, span)[0] / src.size

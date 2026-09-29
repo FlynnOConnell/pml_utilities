@@ -25,7 +25,6 @@ def _importable(name: str) -> bool:
     return True
 
 
-
 T, LY, LX = 60, 48, 40
 
 
@@ -84,7 +83,6 @@ def planes(tmp_path, store):
     ]
 
 
-
 def test_select_all_by_default(store):
     assert rw.select_rois(store) == [0, 1, 2, 3]
 
@@ -119,7 +117,6 @@ def test_roi_selection_dict_roundtrip():
     assert rw.RoiSelection(**sel.to_dict()) == sel
 
 
-
 def test_open_registered_and_plane_index(planes):
     mov, ops = rw.open_registered(planes[1])
     assert mov.shape == (T, LY, LX) and mov.dtype == np.int16
@@ -149,7 +146,6 @@ def test_load_rois_from_zarr_and_sibling(tmp_path, store):
     assert rw.load_rois(store) is store
     with pytest.raises(ValueError):
         rw.load_rois(None)
-
 
 
 class _SpatialOnly:
@@ -303,7 +299,6 @@ def test_extract_from_in_memory_array(tmp_path, store):
     assert ops["Ly"] == LY and ops["source"] is None and "reg_file" not in ops
 
 
-
 def test_extract_mean_recovers_signal(planes, store):
     out = rw.extract_rois(planes[0], store, [0, 1], engine="mean", tag="t")
     assert out == planes[0] / "rois_t"
@@ -353,7 +348,6 @@ def test_extract_batches_match_single_pass(planes, store):
         rw.extract_rois(planes[0], store, [0, 1], batch_size=1000, tag="b1k") / "F.npy"
     )
     np.testing.assert_allclose(a, b, rtol=1e-5)
-
 
 
 def _stat_row(y=0, x=0, npix=1):
@@ -550,7 +544,6 @@ def test_run_discover_wiring(tmp_path, planes):
         )
 
 
-
 def test_run_register_none_extract(tmp_path, planes, store):
     outs = rw.run(
         tmp_path,
@@ -661,7 +654,6 @@ def test_cli_roi_run(tmp_path, planes, store):
     assert "Draw ROIs on the registered movie" in r.output
 
 
-
 def test_extract_suite2p_engine_matches_mean(planes, store):
     pytest.importorskip("suite2p")
     pytest.importorskip("lbm_suite2p_python")
@@ -743,7 +735,6 @@ def test_discover_masknmf(tmp_path, store):
         assert 2 <= s["xpix"].min() and s["xpix"].max() < 38
     ops = np.load(out / "ops.npy", allow_pickle=True).item()
     assert ops["roi_workflow"]["box"] == [4, 44, 2, 38]
-
 
 
 def _toy_pmd(t=24, h=14, w=12, rank=5, seed=0):

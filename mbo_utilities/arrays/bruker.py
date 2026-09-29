@@ -68,7 +68,9 @@ class BrukerArray(ReductionMixin, LazyArray):
             if dataset is None:
                 found = _bruker_datasets(self._f)
                 if not found:
-                    raise ValueError(f"no dataset marked imaging_system=bruker in {path}")
+                    raise ValueError(
+                        f"no dataset marked imaging_system=bruker in {path}"
+                    )
                 dataset = found[0]
             self._d = self._f[dataset]
             self.dataset_name = dataset

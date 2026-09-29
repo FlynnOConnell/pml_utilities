@@ -161,7 +161,6 @@ class TestFeatureGating:
         )
 
 
-
 class TestReloadDataConsistency:
     """`load_new_data` (file-dialog reload) must produce the same view as
     the initial launch path in `_create_image_widget`. Both must apply
@@ -326,7 +325,6 @@ class TestPerDataStateReset:
         assert "_reset_per_data_state(self)" in src, (
             "PreviewDataWidget._init_state must call _reset_per_data_state"
         )
-
 
 
 class TestCustomMetadataPropagation:
@@ -597,7 +595,6 @@ class TestOutputTimepointConsistency:
             assert actual_frames == 421, (
                 f"{bin_files[0].name}: bin has {actual_frames} frames, ops says {values}"
             )
-
 
 
 class TestReactiveFsZScaling:

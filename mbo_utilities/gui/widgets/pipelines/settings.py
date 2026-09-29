@@ -1143,7 +1143,6 @@ class MboSuite2pExtras:
     # gui-only display
     aspect: float = 1.0
 
-
     def to_dict(self) -> dict:
         return {
             field.name: getattr(self, field.name)
