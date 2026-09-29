@@ -620,16 +620,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         # from the loaded tree + suffix box (no raw-root dependency), so
         # nothing to seed here.
 
-        # Correct / Fuse output_dir defaults:
-        #   raw       → leave EMPTY so isoview's ProcessingConfig derives
-        #               output_dir from input_dir + .corrected[_<suffix>].
-        #               Pre-filling here freezes a stale ".corrected"
-        #               path that overrides the user's suffix at submit
-        #               time (isoview honors output_dir when set and
-        #               ignores output_suffix).
-        #   corrected → .corrected/ root (parent of scan_root). The
-        #               fuse task reads from here; it doesn't write a
-        #               new corrected tree, so no suffix conflict.
+        # a raw scan leaves output_dir empty: isoview honours it when set and then
+        # ignores output_suffix, freezing the user's suffix out
         if arr.kind == "corrected":
             self._output_dir = str(sr.parent)
         else:
@@ -2429,14 +2421,8 @@ class IsoviewPipelineWidget(PipelineWidget):
         return requested
 
     def _submit_fuse(self, arr: Any) -> None:
-        # multi_fuse accepts a ``.corrected/`` root directly — isoview's
-        # ProcessingConfig.__post_init__ walks SPM##/TM###### from there
-        # and strips the ".corrected*" suffix to name the sibling fused
-        # output dir. No raw stacks required on disk.
-        #
-        # IsoviewArray(kind="corrected").scan_root is the SPM## subdir
-        # under .corrected/, so walk ancestors for the .corrected* dir
-        # (same idiom as _submit_stitcher).
+        # multi_fuse takes a `.corrected/` root directly, and scan_root is the SPM##
+        # subdir under it, so walk ancestors for the `.corrected*` dir
         scan_root = Path(arr.scan_root)
         input_dir: Path | None = None
         for ancestor in (scan_root, *scan_root.parents):
@@ -2501,13 +2487,8 @@ class IsoviewPipelineWidget(PipelineWidget):
                 int(p["search_y_step"]),
             ]
 
-        # RAM-cap the worker count. Each tiled-fuse worker is a separate
-        # process that holds two full camera volumes + two masks + the
-        # fused output (isoview reads whole volumes via read_volume →
-        # arr[:]), so peak footprint is several× one Z×Y×X volume. With
-        # large IsoView volumes (e.g. 494×2048×2048 = ~3.9 GiB each), the
-        # default min(4, cpu//2) workers can exceed RAM and OOM mid-fusion.
-        # Only ever reduces the count; never raises it.
+        # each tiled-fuse worker holds several whole volumes, so cap the count by RAM;
+        # this only ever reduces it
         workers = self._ram_capped_fuse_workers(arr, self._workers)
 
         args = {

@@ -457,13 +457,8 @@ class ProcessManager:
             # open log file for redirection
             f_out = open(log_file, "a")  # Append mode
 
-            # Force UTF-8 stdio in the worker. lsp prints status lines
-            # containing unicode (e.g. `→` U+2192 in run_plane_bin), which
-            # crash with UnicodeEncodeError on Windows because the default
-            # console encoding is cp1252 — and cp1252 is also what Python
-            # picks for redirected stdio there. PYTHONIOENCODING + PYTHONUTF8
-            # together force utf-8 for stdout/stderr writes regardless of
-            # the host code page.
+            # force utf-8 stdio: redirected output on Windows defaults to cp1252,
+            # which raises on the unicode lsp prints
             child_env = os.environ.copy()
             child_env.setdefault("PYTHONIOENCODING", "utf-8")
             child_env.setdefault("PYTHONUTF8", "1")

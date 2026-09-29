@@ -1,7 +1,8 @@
 """masknmf demixing results (a ``DemixingResults`` hdf5) as a lazy 5D array.
 
-The file holds factors, not pixels: the PMD movie ``u v``, the demixed
-signals ``a c`` and the background terms. The C axis picks which
+The file holds factors, not pixels: the PMD movie ``spatial_compressed
+temporal_compressed``, the demixed signals ``spatial_demixed temporal_demixed``
+and the background terms. The C axis picks which
 reconstruction to render (``VIEWS``). Frames are rebuilt on read: with numpy
 on the cpu, or with masknmf when the compute-GPU policy (``MBO_GPU``,
 ``CUDA_VISIBLE_DEVICES``, the GUI preference) selects a working CUDA device.
@@ -27,8 +28,8 @@ logger = log.get("arrays.demixing")
 GROUP = "DemixingResults"
 VIEWS = ("pmd", "demixed", "residual")
 VIEW_LABELS = {
-    "pmd": "PMD movie (u v): the compressed, motion-corrected data",
-    "demixed": "demixed signals (a c): every ROI's footprint times its trace",
+    "pmd": "PMD movie: the compressed, motion-corrected data",
+    "demixed": "demixed signals: every ROI's footprint times its trace",
     "residual": "residual: PMD minus demixed signals and background",
 }
 CHANNELS = ("calcium", "glutamate")
@@ -74,7 +75,7 @@ def _describe(path: Path, label: str) -> dict:
     with h5py.File(path, "r") as f:
         g = f[GROUP]
         shape = tuple(int(x) for x in g["shape"][()])
-        a = g["a"]
+        a = g["spatial_demixed"]
         num_rois = int(a["size"][1]) if isinstance(a, h5py.Group) else int(a.shape[1])
     return {
         "path": path,
@@ -138,7 +139,7 @@ class DemixingArray(ReductionMixin, LazyArray):
         with h5py.File(path, "r") as f:
             g = f[GROUP]
             self._shape3 = tuple(int(x) for x in g["shape"][()])
-            a = g["a"]
+            a = g["spatial_demixed"]
             self.num_rois = (
                 int(a["size"][1]) if isinstance(a, h5py.Group) else int(a.shape[1])
             )
@@ -160,7 +161,7 @@ class DemixingArray(ReductionMixin, LazyArray):
                 if "iscell" in g
                 else np.ones(self.num_rois, dtype=bool)
             )
-            self._mean_img = np.asarray(g["mean_img"][()], dtype=np.float32).reshape(
+            self._mean_img = np.asarray(g["mean_image"][()], dtype=np.float32).reshape(
                 self._shape3[1:]
             )
             prov = (
@@ -214,18 +215,18 @@ class DemixingArray(ReductionMixin, LazyArray):
 
     @property
     def traces(self) -> np.ndarray:
-        """The demixed temporal components ``c`` as ``(T, num_rois)``."""
+        """The demixed temporal components as ``(T, num_rois)``."""
         if self._traces is None:
             with h5py.File(self.filenames[0], "r") as f:
-                self._traces = np.asarray(f[GROUP]["c"][()], dtype=np.float32)
+                self._traces = np.asarray(f[GROUP]["temporal_demixed"][()], dtype=np.float32)
         return self._traces
 
     @property
     def footprints(self) -> scipy.sparse.csc_matrix:
-        """The spatial footprints ``a`` as a ``(Y * X, num_rois)`` sparse matrix."""
+        """The spatial footprints as a ``(Y * X, num_rois)`` sparse matrix."""
         if self._footprints is None:
             with h5py.File(self.filenames[0], "r") as f:
-                self._footprints = _read_sparse(f[GROUP]["a"])
+                self._footprints = _read_sparse(f[GROUP]["spatial_demixed"])
         return self._footprints
 
     def footprint(self, k: int) -> np.ndarray:
@@ -269,22 +270,25 @@ class DemixingArray(ReductionMixin, LazyArray):
                 )
                 with h5py.File(self.filenames[0], "r") as f:
                     g = f[GROUP]
-                    u = _read_sparse(g["u"]).tocsr()
-                    v = np.asarray(g["v"][()], dtype=np.float32)
-                    a = _read_sparse(g["a"]).tocsr()
-                    cc = np.asarray(g["c"][()], dtype=np.float32)
-                    if "factorized_bkgd_term1" in g and "factorized_bkgd_term2" in g:
+                    u = _read_sparse(g["spatial_compressed"]).tocsr()
+                    v = np.asarray(g["temporal_compressed"][()], dtype=np.float32)
+                    a = _read_sparse(g["spatial_demixed"]).tocsr()
+                    cc = np.asarray(g["temporal_demixed"][()], dtype=np.float32)
+                    if (
+                        "factorized_background_term1" in g
+                        and "factorized_background_term2" in g
+                    ):
                         k1 = np.asarray(
-                            g["factorized_bkgd_term1"][()], dtype=np.float32
+                            g["factorized_background_term1"][()], dtype=np.float32
                         )
                         k2 = np.asarray(
-                            g["factorized_bkgd_term2"][()], dtype=np.float32
+                            g["factorized_background_term2"][()], dtype=np.float32
                         )
                     else:
                         k1 = np.zeros((u.shape[1], 1), np.float32)
                         k2 = np.zeros((1, v.shape[1]), np.float32)
-                    if "b" in g:
-                        b = np.asarray(g["b"][()], dtype=np.float32).reshape(-1)
+                    if "static_baseline" in g:
+                        b = np.asarray(g["static_baseline"][()], dtype=np.float32).reshape(-1)
                     else:
                         # masknmf's default baseline: the residual has mean zero
                         b = (
@@ -295,7 +299,7 @@ class DemixingArray(ReductionMixin, LazyArray):
                 self._factors = (u, v, a, cc, b, k1, k2)
         if self._results is not None:
             res = self._results
-            view = (res.pmd_array, res.ac_array, res.residual_array)[c]
+            view = (res.compression_array, res.signals_array, res.residual_array)[c]
             return np.asarray(view[ts], dtype=np.float32).reshape(len(ts), -1)
         u, v, a, cc, b, k1, k2 = self._factors
         if c == 1:

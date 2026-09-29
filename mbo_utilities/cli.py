@@ -370,7 +370,7 @@ def main(
 )
 @click.option(
     "--vis",
-    type=click.Choice(["demixing", "compression", "classification"]),
+    type=click.Choice(["demixing", "classification"]),
     default=None,
     help="For a masknmf demixing result: which of masknmf's viewers to open. "
     "Omitted: a prompt in the terminal, or the demixing viewer when there is none.",
@@ -380,8 +380,8 @@ def main(
     "raw_path",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
-    help="For a masknmf demixing result: the raw movie, shown as a panel in the demixing viewer and as the "
-    "reference in the compression viewer. Omitted: data_raw.bin or a lone .tif beside the result, if any.",
+    help="For a masknmf demixing result: the raw movie, shown as a panel in the demixing viewer. "
+    "Omitted: data_raw.bin beside the result, if any.",
 )
 @click.option(
     "--motion-correction",
@@ -424,7 +424,7 @@ def view(
       mbo view /data --widget manualroi  Open with the ROIs widget on (draw + label by hand)
       mbo view /data/scan.mesc --unit 2   Open one MESc measurement unit
       mbo view /data/scan.mesc --unit MUnit_35   A line-scan unit opens the line-scan viewer
-      mbo view run/demixing_results.hdf5 --vis compression   masknmf's compression viewer
+      mbo view run/demixing_results.hdf5 --vis classification   masknmf's classification viewer
       mbo view --list-gpus           Show available GPU adapters
       mbo view /data/raw --gpu 0     Force GPU index 0
     """
@@ -475,7 +475,7 @@ def view(
             if sys.stdin.isatty():
                 vis = click.prompt(
                     "masknmf viewer",
-                    type=click.Choice(["demixing", "compression", "classification"]),
+                    type=click.Choice(["demixing", "classification"]),
                     default="demixing",
                     show_choices=True,
                 )
@@ -2374,6 +2374,7 @@ def voltage(
         settings.events.duration_thres_ms = dur
     if as_pkl:
         settings.runtime.output_format = "pkl"
+    as_zarr = settings.runtime.output_format == "zarr"
     chosen = list(units) or [f"MUnit_{s}" for s in spec["scan_ids"]] or None
     # the runner narrates every step through the mbo logger; give its console lines a clock
     logger = log.get()
@@ -2464,36 +2465,28 @@ def results(path, out, overwrite):
 @main.command("app")
 @click.argument("path", type=click.Path(exists=True), required=False)
 @click.option(
-    "--nt",
-    type=int,
-    default=500,
-    show_default=True,
-    help="Timepoints read from PATH into memory.",
-)
-@click.option(
     "--frames",
     type=int,
     default=0,
     help="Draw N frames on an offscreen canvas and exit, for a smoke test.",
 )
-def app(path, nt, frames):
-    r"""The app host: apps drawn on one canvas, swappable between its areas.
+def app(path, frames):
+    r"""The app host: the viewer and the apps drawn around it on one canvas.
 
-    Opens PATH as (T, Y, X) from its first z-plane and colour channel, or a
-    synthetic movie when no path is given. The Apps menu switches each app on
-    and off, and each subplot's menu says which app draws on it.
+    Opens PATH lazily with imread, or a synthetic movie when no path is
+    given. The Apps menu switches each app on and off.
 
-    
+    \b
     Examples:
-      mbo app                          Synthetic movie, traces and image viewer
-      mbo app /data/raw.tiff --nt 200  The first 200 timepoints of a file
+      mbo app                          Synthetic movie
+      mbo app /data/raw.tiff           A file or folder imread opens
       mbo app --frames 5               Draw 5 frames offscreen and exit
     """
     if frames > 0:
         os.environ["RENDERCANVAS_FORCE_OFFSCREEN"] = "1"
     from mbo_utilities.gui.app import run_app
 
-    run_app(path, nt=nt, frames=frames)
+    run_app(path, frames=frames)
 
 
 if __name__ == "__main__":

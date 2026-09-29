@@ -1,4 +1,4 @@
-"""File > Style Editor: one editor per process, saved under ~/.mbo/imgui."""
+"""Widgets > Style Editor: one editor per process, saved under ~/.mbo/imgui."""
 
 import pytest
 from imgui_bundle import imgui
@@ -87,7 +87,7 @@ def test_closed_editor_draws_nothing():
     assert style_editor.get_style_editor().visible is False
 
 
-def test_the_imgui_debug_tab_has_no_style_entry():
+def test_the_imgui_debugger_window_has_no_style_entry():
     from mbo_utilities.gui.widgets import imgui_debug
 
     assert "style" not in {key for key, _, _ in imgui_debug.TOOLS}

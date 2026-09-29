@@ -75,10 +75,6 @@ class FrameAveragedView(LazyArray):
         self._out_dtype = np.float32 if dtype == "float32" else np.dtype(source.dtype)
         self._cache: OrderedDict[int, np.ndarray] = OrderedDict()
 
-    # ------------------------------------------------------------------
-    # identity
-    # ------------------------------------------------------------------
-
     @property
     def source(self):
         """The wrapped source array (never modified)."""
@@ -171,10 +167,6 @@ class FrameAveragedView(LazyArray):
             ]
         self._source.metadata = meta
 
-    # ------------------------------------------------------------------
-    # reads
-    # ------------------------------------------------------------------
-
     def _key5(self, key):
         if not isinstance(key, tuple):
             key = (key,)
@@ -254,10 +246,6 @@ class FrameAveragedView(LazyArray):
 
     def astype(self, dtype, *args, **kwargs):
         return np.asarray(self).astype(dtype, *args, **kwargs)
-
-    # ------------------------------------------------------------------
-    # source passthrough
-    # ------------------------------------------------------------------
 
     def __getattr__(self, name):
         # forward domain attributes (filenames, source_path, roi, ...) to the

@@ -155,7 +155,6 @@ def _convolve_2d(mov, ref_f, xp, fft2, ifft2):
 
 def _unwrap_fft_2d(mov_float, nr, out):
     # reshuffle fft output so zero-shift peak lands in the center of `out`
-    ncc = nr * 2 + 1
     out[:, :nr, :nr] = mov_float[:, -nr:, -nr:]
     out[:, nr:, :nr] = mov_float[:, : nr + 1, -nr:]
     out[:, :nr, nr:] = mov_float[:, -nr:, : nr + 1]
@@ -316,7 +315,6 @@ def _stream_plane_mean(
         use_5d = True
     elif getattr(arr, "ndim", None) == 4:
         T, Z, Y, X = arr.shape
-        C = 1
         use_5d = False
     else:
         raise ValueError(f"unsupported array shape {getattr(arr, 'shape', None)}")
@@ -700,13 +698,7 @@ class AxialShiftView:
         return np.asarray(self).astype(dtype, *args, **kwargs)
 
     def __getattr__(self, name):
-        # forward domain attributes (nz, num_planes, num_color_channels,
-        # num_rois, filenames, roi_mode, iter_rois, stack_type, fs, ...) to
-        # the wrapped source so the view is a transparent stand-in. shape /
-        # dims / metadata / dtype and the numpy protocol are defined
-        # explicitly above and never reach here. underscore names are not
-        # forwarded so internal state and the `_arr` peel property resolve
-        # normally (and __init__ stays recursion-safe before _source is set).
+        # underscore names are never forwarded, so __init__ stays recursion-safe
         if name.startswith("_"):
             raise AttributeError(name)
         return getattr(object.__getattribute__(self, "_source"), name)

@@ -679,8 +679,6 @@ class FileDialog:
             self._center_widget(btn_w)
             imgui.set_next_item_width(btn_w)
 
-            # Simple combo
-            # ret, idx = imgui.combo("##mode", current_item, items)
             _changed, self.selected_mode_index = imgui.combo(
                 "##mode", self.selected_mode_index, self.gui_modes
             )

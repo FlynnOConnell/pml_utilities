@@ -45,6 +45,8 @@ from mbo_utilities.gui.imgui.summary import SummaryImageViewer
 
 __all__ = [
     "MAX_ELEMENTS",
+    "HALO_THICKNESS",
+    "ON_ALPHA",
     "ON_THICKNESS",
     "SELECTED_THICKNESS",
     "ReferenceImage",
@@ -54,8 +56,10 @@ __all__ = [
     "reference_images",
 ]
 
-ON_THICKNESS = 2.5
+ON_THICKNESS = 2.0
+ON_ALPHA = 0.45
 SELECTED_THICKNESS = 4.0
+HALO_THICKNESS = 9.0
 # samples a projection reads at most: 200 MB of float32
 MAX_ELEMENTS = 50_000_000
 
@@ -225,24 +229,26 @@ class ReferenceView:
 
     def contours(self, key: str) -> list[tuple]:
         """The shown unit's ROIs on image ``key`` as ``(points, rgba,
-        thickness)`` for the popup: MESc's colours, the slider's ROI thicker.
+        thickness)`` for the popup: MESc's colours, dimmed, and the slider's
+        ROI last at full opacity over a white halo.
         """
         im = self.images.get(key)
         if im is None:
             return []
         roi = current_roi(self.parent.image_widget)
-        out = []
+        out, selected = [], []
         for r in im.records:
             rgb = (r["color"] or CLASS_COLORS[r["roi"] % len(CLASS_COLORS)])[:3]
             # the records are [col, row]; the popup draws [row, col]
-            out.append(
-                (
-                    r["pixels"][:, ::-1],
-                    (*rgb, 1.0),
-                    SELECTED_THICKNESS if r["roi"] == roi else ON_THICKNESS,
-                )
-            )
-        return out
+            pts = r["pixels"][:, ::-1]
+            if r["roi"] == roi:
+                selected += [
+                    (pts, (1.0, 1.0, 1.0, 1.0), HALO_THICKNESS),
+                    (pts, (*rgb, 1.0), SELECTED_THICKNESS),
+                ]
+            else:
+                out.append((pts, (*rgb, ON_ALPHA), ON_THICKNESS))
+        return out + selected
 
     def pick(self, key: str, py: float, px: float) -> int | None:
         """A click on image ``key`` at ``(py, px)``: the ROI whose line or

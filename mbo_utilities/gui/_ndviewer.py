@@ -663,10 +663,6 @@ class MboNDViewer:
         # seed playback rate from the data's own frame rate here
         self._seed_fps_from_data()
 
-    # ------------------------------------------------------------------
-    # construction helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _n_slider_dims(arr, rgb: bool) -> int:
         return max(int(arr.ndim) - 2 - (1 if rgb else 0), 0)
@@ -762,10 +758,6 @@ class MboNDViewer:
             name=name or "mbo_image",
         )
 
-    # ------------------------------------------------------------------
-    # name resolution
-    # ------------------------------------------------------------------
-
     def _resolve_dim(self, name) -> str:
         """Display name / letter / reference dim -> reference dim name"""
         name = str(name)
@@ -803,10 +795,6 @@ class MboNDViewer:
                     f"index {value} out of bounds for dim {dim!r} with size {size}"
                 )
         return value
-
-    # ------------------------------------------------------------------
-    # core mbo surface
-    # ------------------------------------------------------------------
 
     @property
     def ndwidget(self) -> NDWidget:
@@ -904,10 +892,6 @@ class MboNDViewer:
                 continue
             with contextlib.suppress(Exception):
                 g.cmap = name
-
-    # ------------------------------------------------------------------
-    # window / spatial function routing
-    # ------------------------------------------------------------------
 
     def _fold_positional(self, funcs, sizes) -> dict:
         folded = {}
@@ -1077,14 +1061,8 @@ class MboNDViewer:
             return
         vmin = getattr(g, "vmin", None)
         vmax = getattr(g, "vmax", None)
-        # _create_graphic re-fetches through the (now float-casting)
-        # slicer, carries cmap over, and rebinds the colorbar — but it
-        # rebuilds with the construction-time vmin/vmax and re-frames the
-        # camera, so snapshot both.
-        # The camera matters beyond losing the user's pan/zoom: show_object
-        # parks it at the new graphic's depth, which put it *on* the manual
-        # ROI overlays (they sit a unit in front of the image) and clipped
-        # them away for good — a gaussian sigma made the masks vanish.
+        # snapshot vmin/vmax and the camera: _create_graphic rebuilds with the
+        # construction-time range and parks the camera on the ROI overlays
         subplot = ndg._nd_subplot.subplot
         camera_state = None
         with contextlib.suppress(Exception):
@@ -1148,10 +1126,6 @@ class MboNDViewer:
                 queue.clear()
         self._force_render()
 
-    # ------------------------------------------------------------------
-    # contrast / histogram
-    # ------------------------------------------------------------------
-
     @property
     def compute_histogram(self) -> bool:
         return self._histogram_widget
@@ -1204,10 +1178,6 @@ class MboNDViewer:
             if g is None:
                 continue
             self._set_contrast(ndg, g.data.value)
-
-    # ------------------------------------------------------------------
-    # data swap
-    # ------------------------------------------------------------------
 
     def _teardown_ndgraphic(self, ndg):
         """Fully retire one NDGraphic: slicer executor, graphic, colorbar,
@@ -1336,7 +1306,6 @@ class MboNDViewer:
         """
         self._arrays[i] = new_array
 
-        # ---- reshape the shared index space ----
         counts = [self._n_slider_dims(a, r) for a, r in zip(self._arrays, self._rgb)]
         need = max(counts) if counts else 0
         ri = self._ndw.indices
@@ -1383,7 +1352,6 @@ class MboNDViewer:
             self._sliders._after_dims_changed(fps_snapshot)
             self._seed_fps_from_data()
 
-        # ---- stale closures over the old data are invalid ----
         self._window_funcs_state = None
         self._window_sizes_state = None
         self._frame_apply_state = {}
@@ -1400,7 +1368,6 @@ class MboNDViewer:
         for dim in self._dim_names:
             ri._indices[dim] = 1
 
-        # ---- rebuild the graphic + colorbar for the new array ----
         new_ndg = self._add_image(
             nd_subplot,
             new_array,
@@ -1444,10 +1411,6 @@ class MboNDViewer:
         if len(self._dim_names) == n:
             return self._make_dim_names(n, self._dim_names)
         return self._make_dim_names(n, None)
-
-    # ------------------------------------------------------------------
-    # lifecycle
-    # ------------------------------------------------------------------
 
     def show(self, **kwargs):
         return self._ndw.show(**kwargs)

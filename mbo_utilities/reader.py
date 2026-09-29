@@ -149,6 +149,7 @@ def imread(
     - .bin: Suite2p binary files (.bin + ops.npy)
     - .tif/.tiff: TIFF files (BigTIFF, OME-TIFF and raw ScanImage TIFFs)
     - .h5: HDF5 files
+    - .h5 with an ``imaging_system = bruker`` dataset: Bruker exports, axes from its dimension labels
     - .hdf5 with a DemixingResults group: masknmf demixing results, C = view (the GUI opens these in masknmf's viewers)
       (PMD movie, demixed signals, residual)
     - .mesc: Femtonics MESc acquisitions (one MUnit per array)
@@ -234,6 +235,33 @@ def imread(
     return arr
 
 
+def _open_first_recording(files, where, kwargs):
+    """Of ``files``, in the order given, the ones a format-specific class
+    (``PRIORITY`` above 50) claims are whole recordings each (a Bruker h5, a
+    MESc): the first opens through its class and the rest are logged by name;
+    None when no file is one. A suffix reader would guess such a file's axes,
+    and several never concatenate: they are separate sessions the user picks
+    by file.
+    """
+    recordings = [
+        (f, cls)
+        for f in files
+        if f.is_file()
+        for cls in [_dispatch(f)]
+        if cls is not None and cls.PRIORITY > 50
+    ]
+    if not recordings:
+        return None
+    first, cls = recordings[0]
+    if len(recordings) > 1:
+        logger.info(
+            f"{where} holds {len(recordings)} recordings; opening {first.name} with "
+            f"{cls.__name__}. Open a file to see another: "
+            f"{', '.join(f.name for f, _ in recordings[1:])}"
+        )
+    return cls(first, **_filter_kwargs(cls, kwargs))
+
+
 def _imread_impl(
     inputs: str | Path | np.ndarray | Sequence[str | Path],
     **kwargs,
@@ -282,13 +310,8 @@ def _imread_impl(
             logger.debug(f"Dispatch selected {cls.__name__} for {p}")
             return cls(p, **_filter_kwargs(cls, kwargs))
 
-        # Suite2p outputs take priority over isoview ancestor matching.
-        # detect_isoview_kind walks up parents looking for `.corrected` /
-        # `.fused` ancestors, so a suite2p plane folder sitting inside
-        # `<root>.corrected.registered/` would otherwise be returned as
-        # an IsoviewArray over the 5D source. ops.npy / plane subdirs are
-        # unambiguous suite2p markers — if present, the user pointed at
-        # the suite2p folder, not the source tree.
+        # suite2p markers win over isoview: detect_isoview_kind walks ancestors, so a
+        # plane folder under `<root>.corrected/` would otherwise open the source tree
         if p.is_dir():
             if (p / "ops.npy").exists():
                 logger.info(f"Detected Suite2p directory at {p}")
@@ -373,6 +396,12 @@ def _imread_impl(
                     )
                     return TiffArray(p)
 
+                # a folder of whole recordings (a Bruker h5, a MESc each): the
+                # first by name opens through its own class
+                opened = _open_first_recording(sorted(p.iterdir()), p, kwargs)
+                if opened is not None:
+                    return opened
+
                 paths = [Path(f) for f in p.glob("*") if f.is_file()]
                 logger.debug(f"Found {len(paths)} files in {p}")
         else:
@@ -393,6 +422,10 @@ def _imread_impl(
             )
 
         paths = [Path(p) for p in inputs]
+        # a list of whole recordings: the first listed opens through its own class
+        opened = _open_first_recording(paths, "the list", kwargs)
+        if opened is not None:
+            return opened
     else:
         raise TypeError(f"Unsupported input type: {type(inputs)}")
 

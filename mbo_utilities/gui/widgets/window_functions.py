@@ -11,6 +11,8 @@ from imgui_bundle import hello_imgui, imgui
 
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.widgets._base import Widget
+from mbo_utilities.gui.widgets.mesc_units import mesc_array_of
+from mbo_utilities.gui.widgets.preview_data import _base_5d
 
 
 class WindowFunctionsWidget(Widget):
@@ -18,7 +20,7 @@ class WindowFunctionsWidget(Widget):
 
     name = "Window Functions"
     priority = 10  # show first
-    toggle_key = "preview.window_functions"
+    toggle_key = "preview"
 
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
@@ -121,7 +123,7 @@ class SpatialFunctionsWidget(Widget):
 
     name = "Spatial Functions"
     priority = 11  # show after window functions
-    toggle_key = "preview.spatial_functions"
+    toggle_key = "preview"
 
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
@@ -167,23 +169,34 @@ class SpatialFunctionsWidget(Widget):
         if gaussian_changed:
             parent.gaussian_sigma = max(0.0, new_sigma)
 
-        # mean subtraction checkbox
-        zstats_ready = all(parent._zstats_done)
-        if not zstats_ready:
-            imgui.begin_disabled()
+        if _base_5d(parent.image_widget.data[0]).shape[0] <= 1:
+            return
 
         mean_sub_changed, mean_sub_value = imgui.checkbox(
             "Mean Subtraction", parent.mean_subtraction
         )
-        if not zstats_ready:
-            set_tooltip(
-                "Mean subtraction requires z-stats to be computed first (in progress...)"
-            )
-            imgui.end_disabled()
-        else:
-            set_tooltip(
-                "Subtract the mean image from each frame. Useful for visualizing activity changes."
-            )
-
-        if mean_sub_changed and zstats_ready:
+        set_tooltip(
+            "Subtract each pixel's mean over the whole recording from every "
+            "frame. The Traces panel's raw traces follow it. Display only; "
+            "runs and saved files read the raw data."
+        )
+        if mean_sub_changed:
             parent.mean_subtraction = mean_sub_value
+
+        if mesc_array_of(parent.image_widget.data[0]) is not None:
+            invert_changed, invert_value = imgui.checkbox(
+                "Invert Deflection", parent.invert_deflection
+            )
+            set_tooltip(
+                "Flip each frame about the mean image (2 x mean - frame), so a "
+                "negative-going indicator's spikes show bright. With Mean "
+                "Subtraction, mean - frame. The Traces panel follows it (a dF/F "
+                "computed there is taken of the inverted trace). Display only; "
+                "runs and saved files read the raw data."
+            )
+            if invert_changed:
+                parent.invert_deflection = invert_value
+
+        progress = parent.mean_image_progress()
+        if progress is not None:
+            imgui.text_disabled(f"computing mean image {progress:.0%}")

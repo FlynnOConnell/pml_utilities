@@ -214,14 +214,8 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
 
     monitor.update(0.1, f"Saving to {output_path.name}...")
 
-    # Define progress callback for imwrite. Multiple writers in mbo call
-    # this with different conventions:
-    #   - cb(fraction)                 — _writers.py per-chunk
-    #   - cb(current, total)           — generic per-frame writers
-    #   - cb(1.0, "Complete")          — _imwrite_base completion sentinel
-    # so we have to peek at `total` to figure out which form we got. If
-    # `total` is numeric, treat as (current, total) progress; otherwise
-    # treat it as a message override.
+    # writers call this as cb(fraction), cb(current, total) or cb(1.0, message),
+    # so a numeric `total` is the only way to tell them apart
     def _progress_cb(current, total=None, **kwargs):
         msg = "Writing..."
         if total is None:
@@ -449,14 +443,8 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             )
 
             scaled = out_meta.to_dict()
-            # Merge reactive values into ops:
-            # - When the scaled value is non-None, write it (the
-            #   normal path — source had the field, we scaled it).
-            # - When the scaled value IS None, EXPLICITLY remove the
-            #   key from ops so downstream code can't pick up a stale
-            #   default and pretend it's the answer. The user will see
-            #   None in ops.npy and immediately know something's wrong,
-            #   instead of silently getting fs=10.
+            # a None scaled value removes the key, so nothing downstream reads a
+            # stale default as the answer
             for key in (
                 "fs",
                 "dz",
@@ -1275,14 +1263,8 @@ def _bridge_isoview_logging(worker_logger: logging.Logger) -> None:
     iso_logger.setLevel(level)
     iso_logger.propagate = False
 
-    # Mirror isoview records onto the worker logger's own handlers (the
-    # per-task file, plus any GUI panel handler). Do NOT also add the root
-    # `mbo` StreamHandler: the worker's stderr is already redirected to that
-    # same per-task file (ProcessManager.spawn), so routing isoview through
-    # the stream handler too writes every line to the file a second time.
-    # mbo.* logs avoid this because propagate=False keeps them off the root
-    # stream handler. Fall back to the root handlers only when the worker
-    # logger has none (standalone invocation with no per-task file).
+    # never add the root `mbo` StreamHandler here: the worker's stderr already
+    # points at the same file, so every line would be written twice
     targets: list[logging.Handler] = list(worker_logger.handlers)
     if not targets:
         targets = list(logging.getLogger("mbo").handlers)

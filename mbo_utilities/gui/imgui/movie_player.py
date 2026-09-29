@@ -10,7 +10,7 @@ from mbo_utilities.gui.imgui.crop import crop_slices
 class MoviePlayer:
     """
     Imgui transport bar (play/pause, frame slider, fps) over a lazy (T, H, W)
-    array such as ACArray or PMDArray. Any object with .shape and [t] /
+    array such as SignalsArray or CompressionArray. Any object with .shape and [t] /
     [t, rows, cols] indexing works, and only the frame on screen is read.
 
     Unlike CheckboxWindow this is not an ImguiWindow: it owns no window and no

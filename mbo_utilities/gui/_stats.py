@@ -178,7 +178,6 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
     total_read_ms = 0.0
     total_compute_ms = 0.0
     total_bytes = 0
-    prev_end = time.perf_counter()
     step = 0
 
     for combo in combos:
@@ -203,7 +202,6 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
             total_read_ms += (t_after_read - t_iter_start) * 1000.0
             total_compute_ms += (t_after_compute - t_after_read) * 1000.0
             total_bytes += int(stack.nbytes)
-            prev_end = t_after_compute
 
             # cede the GIL between heavy reads so the GUI loop gets a window.
             time.sleep(_ZSTATS_YIELD_S)
@@ -411,14 +409,8 @@ def refresh_zstats(parent: Any):
     for i in range(n):
         reset_progress_state(f"zstats_{i}")
 
-    # Update nz from the array's dims tuple. Dims labels are not normalized:
-    # some readers emit lowercase ("t", "z", "c"), others uppercase
-    # ("T", "C", "Z", "Y", "X" — IsoviewArray, ScanImageArray, etc.)
-    # The case-sensitive `"z" in dims` test used to fail on uppercase
-    # readers, so we'd fall through to `shape[1]` — which on a 5D TCZYX
-    # array is the channel axis, not Z. Result: nz silently became nc, the
-    # zstats slider ran 0..nc-1 and surfaced "z" stats for what were really
-    # the first nc planes. Lowercase both sides before the lookup.
+    # lowercase both sides: dims labels are not normalized, and a missed Z falls
+    # through to shape[1], which on a 5D TCZYX array is C
     arr = parent.image_widget.data[0] if parent.image_widget.data else None
     dims = getattr(arr, "dims", None) if arr is not None else None
     dims_lower = tuple(d.lower() for d in dims) if dims else None

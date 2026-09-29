@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-import numpy as np
 from imgui_debugger import draw_path_popup
 
+from mbo_utilities import imread, log
 from mbo_utilities.gui.app._app import App
+
+logger = log.get("gui.app")
+
+NOTE = "any file or folder imread opens; nothing is read until it is shown"
 
 
 class OpenApp(App):
     """A path prompt that replaces what every other app is looking at.
 
-    Reads the first ``nt`` timepoints of the first z-plane and colour
-    channel into memory, the shape the apps here expect, and hands it to
-    ``AppHost.set_data``, which remounts whatever is on the slots.
+    Opens the path lazily with ``imread`` and hands the array to
+    ``AppHost.set_data``. A path that fails to open keeps the prompt up
+    with the reason under it.
     """
 
     id = "open"
@@ -25,8 +29,7 @@ class OpenApp(App):
     def __init__(self):
         super().__init__()
         self.path = ""
-        self.nt = 500
-        self.note = "the first z-plane and colour channel are read into memory"
+        self.note = NOTE
 
     def draw_window(self, host) -> None:
         if not self.open:
@@ -41,10 +44,13 @@ class OpenApp(App):
         )
         if not confirmed:
             return
-        from mbo_utilities import imread
-
-        array = imread(self.path)
-        host.set_data(
-            np.asarray(array[: min(self.nt, array.shape[0]), 0, 0], dtype=np.float32)
-        )
+        try:
+            array = imread(self.path)
+        except Exception as error:
+            logger.exception(f"could not open {self.path}")
+            self.note = f"{type(error).__name__}: {error}"
+            self.open = True
+            return
+        host.set_data(array)
+        self.note = NOTE
         self.open = False
