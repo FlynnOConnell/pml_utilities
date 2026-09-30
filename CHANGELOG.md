@@ -47,3 +47,8 @@ smaller internal tweaks are left out.
 - `arr.isel(T=, C=, Z=)` selects 0-based indices lazily, like xarray's `isel`, without dropping axes.
 - `arr.squeeze()` and `imread(squeeze=True)` are removed; index with integers (`arr[:, 0, 0]`) or use `np.squeeze(arr[:])`.
 - Subclasses implement `shape` directly; `_shape5d()` and `Shape5DMixin` are gone.
+- `np.asarray(arr)` raises `NotImplementedError` instead of returning one frame; read with `arr[:]` or `arr[t, c, z]`.
+- Scan-phase correction no longer depends on how many frames are read at once: offsets are estimated per fixed 100-frame window.
+- `arr.fs`, `arr.finterval` and `arr.dz` are `None` when the metadata does not give them (they were 1.0); ScanImage recordings with stacks off no longer report a z-step.
+- ScanImage frame rate and pixel size keep full precision (they were rounded to two decimals).
+- Zarr and HDF5 readers report `Lx`/`Ly` in `metadata`.

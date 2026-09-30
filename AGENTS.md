@@ -154,8 +154,9 @@ Pinned by `tests/test_numpy_dims.py`, `tests/test_imagej_stack.py`.
   `slice(None)`; integer axes squeeze out; `Ellipsis` expands. A reader whose file
   stores fewer axes (a 3D tiff, a TYX `.bin`) maps keys with
   `arrays._base._index_5d_into_raw` or a reshaped view of its memmap.
-- `np.asarray(arr)` returns one representative `(Y, X)` frame, never the whole array.
-  Use `arr[:]` or chunked reads for the data.
+- `np.asarray(arr)` raises `NotImplementedError`: it would read the whole array
+  without saying so. Read explicitly with `arr[:]`, one frame with `arr[t, c, z]`,
+  or in chunks. A reader never defines `__array__`.
 - Reductions (`mean`, `max`, `min`, `std`, `var`, `sum`) match numpy and stream in
   chunks above 100M elements (`ReductionMixin`).
 - `arrays._base.temporal_mean(arr)` is the per-pixel mean over T as
@@ -163,7 +164,7 @@ Pinned by `tests/test_numpy_dims.py`, `tests/test_imagej_stack.py`.
   `temporal_mean` (`MescArray` reads each raw channel once). The viewer's Mean
   Subtraction and Invert Deflection use it, never the Signal Quality samples,
   which are strided and binned.
-- `arr.vmin` / `arr.vmax` are the display range of the representative frame.
+- `arr.vmin` / `arr.vmax` are the display range of the first frame, `arr[0, 0, 0]`.
 
 ### 5.4 Views
 
@@ -173,6 +174,14 @@ T // N), `PhaseCorrectedView` (bidirectional scan phase), `AxialShiftView`
 with 0-based indices, like xarray's `isel` but no axis is dropped;
 `imread(path, channel=n)` is `isel(C=n)`). `base_array(arr)` unwraps them for
 `isinstance` checks.
+
+Scan-phase correction (`ScanImageArray`, `MescArray`, `PhaseCorrectedView`) gives a
+frame the same pixels however it is read. The `mean`, `max`, `std` and `mean-sub`
+methods estimate one offset per (c, z) for each fixed window of
+`analysis.phasecorr.PHASE_WINDOW` (100) frames, from the whole window, and cache it
+(`estimate_offset`); `frame` estimates each frame on its own; a fixed `shift`
+applies everywhere. An offset is never estimated from the block a caller happened
+to read.
 
 `BinArray` is `(T, 1, 1, Y, X)` and `MP4Array` is `(T, 1, 1, Y, X)` like every other
 reader. Code handing one plane to a library that wants a 3D `(T, Y, X)` object
@@ -1240,8 +1249,6 @@ ones. Remove an entry when its fix lands.
   `isoview_camera_fps`.
 - `_extract_tiff_scale` resolves `finterval` → `fs` and `XResolution` → `dx` itself
   (`arrays/isoview/array.py:915-935`) instead of depositing the ImageJ keys.
-- ScanImage ingest rounds `fs` and `pixel_resolution` to two decimals
-  (`metadata/scanimage.py:453,458`, `metadata/io.py:613`).
 - Registry labels say "Frame Rate" / "Frame Interval" (`metadata/base.py:231-232,262-263`).
   Target: "Sampling rate" / "Sampling interval" per §6.1.
 - `pixel_size_um` is registered under both `dx` and `dy` (`metadata/base.py:166,186`);
