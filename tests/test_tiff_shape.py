@@ -184,7 +184,7 @@ class TestTiffArray5DIndexing:
 
 
 class TestTiffArrayNumpyProtocol:
-    """np.asarray returns a representative (Y, X) frame; vmin/vmax never crash."""
+    """np.asarray raises; vmin/vmax never crash."""
 
     @pytest.mark.parametrize(
         "fixture_name", ["tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"]
@@ -202,14 +202,11 @@ class TestTiffArrayNumpyProtocol:
     @pytest.mark.parametrize(
         "fixture_name", ["tiff_2d", "tiff_3d_tyx", "tiff_3d_zyx", "tiff_4d_tzyx"]
     )
-    def test_asarray_returns_yx_frame(self, request, fixture_name):
+    def test_asarray_raises(self, request, fixture_name):
         fixture = request.getfixturevalue(fixture_name)
-        path = fixture[0]
-        arr = TiffArray(path)
-        materialized = np.asarray(arr)
-        # __array__ returns a single (Y, X) representative frame
-        assert materialized.ndim == 2
-        assert materialized.shape == (arr.ny, arr.nx)
+        arr = TiffArray(fixture[0])
+        with pytest.raises(NotImplementedError, match=r"arr\[:\]"):
+            np.asarray(arr)
 
 
 class TestVminVmaxAcrossArrayClasses:

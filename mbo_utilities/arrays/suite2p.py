@@ -919,17 +919,6 @@ class Suite2pArray(ReductionMixin, LazyArray):
             out = out.astype(self._target_dtype)
         return out
 
-    def __array__(self, dtype=None, copy=None) -> np.ndarray:
-        # return single frame for fast histogram/preview (prevents accidental full load)
-        if self._is_volumetric:
-            arrs = [p[0] for p in self._planes]
-            data = np.stack(arrs, axis=0)
-        else:
-            data = self._planes[0][0]
-        if dtype is not None:
-            data = data.astype(dtype)
-        return data
-
     def switch_channel(self, use_raw: bool = False):
         """Switch all planes between raw and registered data."""
         if any(not hasattr(p, "switch_channel") for p in self._planes):

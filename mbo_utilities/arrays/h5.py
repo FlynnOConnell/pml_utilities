@@ -313,15 +313,6 @@ class H5Array(ReductionMixin, LazyArray):
     def _getitem_permuted(self, key):
         return _index_5d_into_labeled(self._d, key, self._raw_dims)
 
-    def __array__(self, dtype=None, copy=None):
-        # representative (Y, X) frame for fast preview (no accidental full load)
-        data = np.asarray(self[0, 0, 0])
-        if self._target_dtype is not None:
-            data = data.astype(self._target_dtype)
-        if dtype is not None:
-            data = data.astype(dtype)
-        return data
-
     def close(self):
         """Close the HDF5 file."""
         self._f.close()
@@ -353,6 +344,7 @@ class H5Array(ReductionMixin, LazyArray):
             for d in self._datasets
         ]
         md["h5_raw_dims"] = "".join(self._raw_dims)
+        md["Ly"], md["Lx"] = self.ny, self.nx
         md.update(self._metadata_overlay)
         return md
 

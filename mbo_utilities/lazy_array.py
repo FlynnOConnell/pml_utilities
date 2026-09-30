@@ -38,6 +38,13 @@ class LazyArray:
     def ndim(self) -> int:
         return 5
 
+    def __array__(self, dtype=None, copy=None):
+        raise NotImplementedError(
+            f"np.asarray() on a {type(self).__name__} would read the whole "
+            f"{self.shape} array; read it explicitly with arr[:], or one "
+            "frame with arr[t, c, z]"
+        )
+
     @property
     def nt(self) -> int:
         """Number of timepoints."""

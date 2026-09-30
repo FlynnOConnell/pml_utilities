@@ -153,11 +153,6 @@ class SelectionView(LazyArray):
             key[i] = int(selected) if selected.ndim == 0 else _as_key(selected.tolist())
         return self._source[tuple(key)]
 
-    def __array__(self, dtype=None, copy=None):
-        # one (Y, X) frame, never the whole array
-        data = np.asarray(self[0, 0, 0])
-        return data.astype(dtype) if dtype is not None else data
-
     def __getattr__(self, name):
         # forward reader attributes (filenames, source_path, roi, ...) to the
         # source; underscore names are not forwarded so __init__ stays

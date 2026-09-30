@@ -772,15 +772,6 @@ class MP4Array(ReductionMixin, LazyArray):
             data = data.astype(self._target_dtype)
         return data
 
-    def __array__(self, dtype=None, copy=None):
-        # return first frame for fast histogram/preview (no full load)
-        data = self._read_gray(0)
-        if self._target_dtype is not None:
-            data = data.astype(self._target_dtype)
-        if dtype is not None:
-            data = data.astype(dtype)
-        return data
-
     def close(self) -> None:
         """Close the underlying video reader."""
         try:

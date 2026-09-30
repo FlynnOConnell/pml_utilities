@@ -6,16 +6,22 @@ can wrap any time-dimension array once at load and flip correction on/off
 without re-reading from disk. Mirrors ``AxialShiftView``: the source is never
 modified and ``shape``/``dims``/``metadata``/``dtype`` forward through.
 
-Correction uses ``bidir_phasecorr`` on whatever chunk is read: a single 2D
-frame estimates one offset from that frame; a multi-frame chunk (e.g. a save
-window) estimates one offset from its mean image and applies it to every frame
-(``method="mean"``), matching ``ScanImageArray``.
+A window method (``mean``, ``max``, ``std``, ``mean-sub``) estimates one offset
+per (c, z) for each fixed window of ``PHASE_WINDOW`` frames, from the whole
+window, so a frame gets the same correction however it is read; ``frame``
+estimates each frame on its own. Matches ``ScanImageArray``.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from mbo_utilities.analysis.phasecorr import (
+    PHASE_WINDOW,
+    _apply_offset,
+    bidir_phasecorr,
+    estimate_offset,
+)
 from mbo_utilities.arrays._registration import (
     _TCZYX,
     _idx_list,
@@ -25,6 +31,7 @@ from mbo_utilities.arrays.features import (
     PhaseCorrectionFeature,
     PhaseCorrectionMixin,
 )
+from mbo_utilities.lazy_array import LazyArray
 
 
 class PhaseCorrectedView(PhaseCorrectionMixin):
@@ -59,6 +66,7 @@ class PhaseCorrectedView(PhaseCorrectionMixin):
         )
         # per-(t, c, z) offset cache for the GUI's current-offset readout
         self._offset_cache: dict[tuple[int, int, int], float] = {}
+        self._window_offsets: dict[tuple, float] = {}
         self.phase_correction.add_event_handler(self._on_feature_change)
 
     def _on_feature_change(self, event):
@@ -103,6 +111,7 @@ class PhaseCorrectedView(PhaseCorrectionMixin):
 
     def _invalidate_offset_cache(self) -> None:
         self._offset_cache.clear()
+        self._window_offsets.clear()
 
     def get_offset_at(self, t, c, z) -> float | None:
         """Cached phase offset for the (t, c, z) cell, or None if not read yet."""
@@ -135,53 +144,69 @@ class PhaseCorrectedView(PhaseCorrectionMixin):
         spatial = (slice(None),) * (raw.ndim - 2) + (y_key, x_key)
         return raw[spatial]
 
-    def _apply(self, raw, t_key, c_key, z_key):
-        from mbo_utilities.analysis.phasecorr import _apply_offset, bidir_phasecorr
-
-        pc = self.phase_correction
-        flat = raw.reshape(-1, raw.shape[-2], raw.shape[-1])  # (N, Y, X)
-
-        shift = pc.effective_shift
-        if shift is not None:
-            out = _apply_offset(flat.copy(), float(shift), pc.use_fft)
-            offs = float(shift)
-        else:
-            out, offs = bidir_phasecorr(
-                flat,
-                method=pc.method.value,
-                use_fft=pc.use_fft,
-                max_offset=pc.max_offset,
-                border=pc.border,
-            )
-
-        self._record_offsets(t_key, c_key, z_key, offs)
-        return np.asarray(out).reshape(raw.shape)
-
-    def _record_offsets(self, t_key, c_key, z_key, offs) -> None:
+    def _coords(self, t_key, c_key, z_key) -> list[tuple[int, int, int]]:
         # frames are flattened T-major then C then Z; size-1 (int-indexed)
-        # axes drop out but keep the cartesian product aligned with that order.
-        coords = [
+        # axes drop out but keep the cartesian product aligned with that order
+        return [
             (t, c, z)
             for t in _idx_list(t_key, self._T)
             for c in _idx_list(c_key, self._C)
             for z in _idx_list(z_key, self._Z)
         ]
-        if np.ndim(offs) == 0:
-            for coord in coords:
-                self._offset_cache[coord] = float(offs)
-        else:
-            for coord, o in zip(coords, np.ravel(offs), strict=False):
-                self._offset_cache[coord] = float(o)
 
-    def __array__(self, dtype=None, copy=None):
-        # explicit so __getattr__ never leaks the source's rank via numpy.
-        data = np.asarray(self[0])
-        if dtype is not None:
-            data = data.astype(dtype)
-        return data
+    def _window_offset(self, window: int, c: int, z: int) -> float:
+        """Offset of (``c``, ``z``) over frames ``window * PHASE_WINDOW`` up
+        to the next window, estimated once from the whole window and cached.
+        """
+        pc = self.phase_correction
+        key = (window, c, z, pc.method.value, pc.use_fft, pc.border, pc.max_offset)
+        if key not in self._window_offsets:
+            t0 = window * PHASE_WINDOW
+            raw = np.asarray(self._source[t0 : min(t0 + PHASE_WINDOW, self._T), c, z])
+            self._window_offsets[key] = float(
+                estimate_offset(
+                    raw,
+                    method=pc.method.value,
+                    use_fft=pc.use_fft,
+                    max_offset=pc.max_offset,
+                    border=pc.border,
+                )
+            )
+        return self._window_offsets[key]
+
+    def _apply(self, raw, t_key, c_key, z_key):
+        pc = self.phase_correction
+        flat = raw.reshape(-1, raw.shape[-2], raw.shape[-1]).copy()  # (N, Y, X)
+        coords = self._coords(t_key, c_key, z_key)
+
+        shift = pc.effective_shift
+        if shift is not None:
+            offsets = [float(shift)] * len(coords)
+        elif pc.method.value == "frame":
+            flat, offs = bidir_phasecorr(
+                flat,
+                method="frame",
+                use_fft=pc.use_fft,
+                max_offset=pc.max_offset,
+                border=pc.border,
+            )
+            offsets = [float(o) for o in np.ravel(offs)]
+        else:
+            offsets = [self._window_offset(t // PHASE_WINDOW, c, z) for t, c, z in coords]
+            for offset in set(offsets):
+                idx = [i for i, o in enumerate(offsets) if o == offset]
+                flat[idx] = _apply_offset(flat[idx], offset, pc.use_fft)
+        if shift is not None:
+            flat = _apply_offset(flat, float(shift), pc.use_fft)
+
+        for coord, offset in zip(coords, offsets, strict=False):
+            self._offset_cache[coord] = offset
+        return np.asarray(flat).reshape(raw.shape)
+
+    __array__ = LazyArray.__array__
 
     def astype(self, dtype, *args, **kwargs):
-        return np.asarray(self).astype(dtype, *args, **kwargs)
+        return np.asarray(self[:]).astype(dtype, *args, **kwargs)
 
     def __getattr__(self, name):
         # forward domain attributes (filenames, fs, num_planes, source_path,

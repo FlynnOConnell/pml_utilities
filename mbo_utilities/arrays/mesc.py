@@ -67,7 +67,12 @@ import h5py
 import numpy as np
 
 from mbo_utilities import log
-from mbo_utilities.analysis.phasecorr import _apply_offset, bidir_phasecorr
+from mbo_utilities.analysis.phasecorr import (
+    PHASE_WINDOW,
+    _apply_offset,
+    bidir_phasecorr,
+    estimate_offset,
+)
 from mbo_utilities.arrays._base import (
     ReductionMixin,
     _imwrite_base,
@@ -1167,6 +1172,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, LazyArray
             self.roi = roi
 
         self._offset_cache: dict[tuple[int, int, int], float] = {}
+        self._window_offsets: dict[tuple, float] = {}
         self._layout_mean: np.ndarray | None = None
         self.phase_correction = PhaseCorrectionFeature(
             enabled=fix_phase,
@@ -1546,8 +1552,12 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, LazyArray
             return np.asarray(maps[c], dtype=np.int64)[idx]
         return idx
 
-    def _read_block(self, c: int, z: int, frames: Sequence[int]) -> np.ndarray:
-        """Read one (channel, z) column as ``(len(frames), ny, nx)``."""
+    def _read_block(
+        self, c: int, z: int, frames: Sequence[int], correct: bool = True
+    ) -> np.ndarray:
+        """Read one (channel, z) column as ``(len(frames), ny, nx)``;
+        ``correct=False`` skips scan-phase correction.
+        """
         layout = self._layout
         dataset = self._channels[min(c, len(self._channels) - 1)]
         kind = layout.kind
@@ -1573,7 +1583,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, LazyArray
             block = self._pad_to_frame(block)
         if layout.flip_y:
             block = block[:, ::-1, :]
-        if self.fix_phase and block.size:
+        if correct and self.fix_phase and block.size:
             block = self._apply_phase(block, c, z, frames)
         return block
 
@@ -1641,22 +1651,62 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, LazyArray
         out[:, :h, :w] = block[:, :h, :w]
         return out
 
+    def _window_offset(self, window: int, c: int, z: int) -> float:
+        """Scan-phase offset of (``c``, ``z``) over frames
+        ``window * PHASE_WINDOW`` up to the next window, estimated once and
+        cached, mirroring `ScanImageArray`.
+        """
+        key = (
+            window,
+            c,
+            z,
+            self.phasecorr_method,
+            self.use_fft,
+            self.border,
+            self.max_offset,
+        )
+        if key not in self._window_offsets:
+            t0 = window * PHASE_WINDOW
+            raw = self._read_block(
+                c, z, range(t0, min(t0 + PHASE_WINDOW, self._nt)), correct=False
+            )
+            self._window_offsets[key] = float(
+                estimate_offset(
+                    raw,
+                    method=self.phasecorr_method,
+                    use_fft=self.use_fft,
+                    max_offset=self.max_offset,
+                    border=self.border,
+                )
+            )
+        return self._window_offsets[key]
+
     def _apply_phase(self, block, c, z, frames) -> np.ndarray:
-        """Bidirectional scan-phase correction, mirroring `ScanImageArray`."""
+        """Bidirectional scan-phase correction, mirroring `ScanImageArray`:
+        a fixed shift, a per-frame estimate, or the frame's window offset.
+        """
         shift = self.phase_correction.effective_shift
         if shift is not None:
-            corrected, offset = _apply_offset(block, shift, use_fft=self.use_fft), shift
-        else:
-            corrected, offset = bidir_phasecorr(
+            offsets = [float(shift)] * len(frames)
+        elif self.phasecorr_method == "frame":
+            block, offs = bidir_phasecorr(
                 block,
-                method=self.phasecorr_method,
+                method="frame",
                 max_offset=self.max_offset,
                 border=self.border,
                 use_fft=self.use_fft,
             )
-        for t in frames:
-            self._offset_cache[(int(t), int(c), int(z))] = float(offset)
-        return corrected
+            for t, o in zip(frames, np.ravel(offs), strict=False):
+                self._offset_cache[(int(t), int(c), int(z))] = float(o)
+            return block
+        else:
+            offsets = [self._window_offset(int(t) // PHASE_WINDOW, c, z) for t in frames]
+        for offset in set(offsets):
+            idx = [i for i, o in enumerate(offsets) if o == offset]
+            block[idx] = _apply_offset(block[idx], offset, use_fft=self.use_fft)
+        for t, offset in zip(frames, offsets, strict=False):
+            self._offset_cache[(int(t), int(c), int(z))] = offset
+        return block
 
     def temporal_mean(self, progress_callback=None) -> np.ndarray:
         """Per-pixel mean over T as ``(C, Z, Y, X)`` float32.
@@ -1744,6 +1794,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, LazyArray
 
     def _invalidate_offset_cache(self) -> None:
         self._offset_cache.clear()
+        self._window_offsets.clear()
 
     def _z_indices(self, z_key) -> list[int]:
         """Requested Z positions mapped onto layout ROI/plane indices."""
@@ -1783,13 +1834,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, LazyArray
         if self._target_dtype is not None:
             out = out.astype(self._target_dtype)
         return out
-
-    def __array__(self, dtype=None, copy=None):
-        # one representative (Y, X) frame -- never an accidental full load
-        data = np.asarray(self[0, 0, 0])
-        if self._target_dtype is not None:
-            data = data.astype(self._target_dtype)
-        return data.astype(dtype) if dtype is not None else data
 
     def close(self):
         """Close the underlying HDF5 file."""

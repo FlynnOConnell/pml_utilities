@@ -18,6 +18,11 @@ ALL_PHASECORR_METHODS = set(TWO_DIM_PHASECORR_METHODS) | set(
 
 logger = log.get("phasecorr")
 
+# frames per scan-phase window: a window-method offset is estimated once per
+# window from all of its frames, so a frame's correction never depends on how
+# many frames were read with it
+PHASE_WINDOW = 100
+
 
 def _phase_corr_2d(frame, border=0, max_offset=4, use_fft=True):
     """Estimate horizontal shift between odd and even rows via 1D rFFT phase
@@ -85,6 +90,17 @@ def _apply_offset(img, offset, use_fft=False):
     return img
 
 
+def estimate_offset(frames, *, method="mean", use_fft=False, max_offset=10, border=4):
+    """One bidirectional offset for a ``(..., Y, X)`` stack, estimated from
+    the image ``method`` reduces it to (``mean``, ``max``, ``std``,
+    ``mean-sub``).
+    """
+    if method not in MBO_WINDOW_METHODS:
+        raise ValueError(f"unknown method {method}")
+    flat = frames.reshape(-1, *frames.shape[-2:])
+    return _phase_corr_2d(MBO_WINDOW_METHODS[method](flat), border, max_offset, use_fft)
+
+
 def bidir_phasecorr(
     arr, *, method="mean", use_fft=False, max_offset=10, border=4, offset=None
 ):
@@ -106,12 +122,14 @@ def bidir_phasecorr(
             offs = np.array(
                 [_phase_corr_2d(f, border, max_offset, use_fft) for f in flat]
             )
-        elif method in MBO_WINDOW_METHODS:
-            offs = _phase_corr_2d(
-                MBO_WINDOW_METHODS[method](flat), border, max_offset, use_fft
-            )
         else:
-            raise ValueError(f"unknown method {method}")
+            offs = estimate_offset(
+                flat,
+                method=method,
+                use_fft=use_fft,
+                max_offset=max_offset,
+                border=border,
+            )
 
     if np.ndim(offs) == 0:
         out = _apply_offset(arr.copy(), float(offs), use_fft)

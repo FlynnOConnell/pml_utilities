@@ -700,24 +700,6 @@ class TiffReaderMixin:
         self._target_dtype = np.dtype(dtype)
         return self
 
-    def __array__(self, dtype=None, copy=None):
-        """Return a representative (Y, X) frame (prevents accidental full load).
-
-        v4 arrays are always 5D TCZYX, so the first frame is self[0, 0, 0].
-        for legacy natural-rank shapes: 2D is the whole image; 3D/4D take
-        the first slice along the outer dim.
-        """
-        ndim = getattr(self, "ndim", None)
-        if ndim == 5:
-            data = np.asarray(self[0, 0, 0])
-        elif ndim == 2:
-            data = np.asarray(self[:])
-        else:
-            data = np.asarray(self[0])
-        if dtype is not None:
-            data = data.astype(dtype)
-        return data
-
     def _imwrite(
         self,
         outpath,
@@ -807,15 +789,9 @@ class ReductionMixin:
     _cached_vmax = None
 
     def _compute_frame_vminmax(self):
-        """Compute and cache vmin/vmax via __array__.
-
-        delegates to each subclass's __array__ so the result honors that
-        class's lazy-read strategy and reported rank. do NOT hardcode
-        index counts here (e.g. self[0,0,0]) — that breaks any class
-        whose __getitem__ doesn't tolerate over-long keys.
-        """
+        """Compute and cache vmin/vmax from the first (Y, X) frame."""
         if self._cached_vmin is None:
-            frame = np.asarray(self)
+            frame = np.asarray(self[0, 0, 0])
             self._cached_vmin = float(frame.min())
             self._cached_vmax = float(frame.max())
 

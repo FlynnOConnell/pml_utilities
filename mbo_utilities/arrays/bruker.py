@@ -153,10 +153,6 @@ class BrukerArray(ReductionMixin, LazyArray):
     def __getitem__(self, key):
         return _index_5d_into_labeled(self._d, key, self._raw_dims)
 
-    def __array__(self, dtype=None, copy=None):
-        data = np.asarray(self[0, 0, 0])
-        return data if dtype is None else data.astype(dtype)
-
     @property
     def reader_kwargs(self) -> dict:
         return {"dataset": self.dataset_name}

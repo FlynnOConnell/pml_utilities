@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from .base import ALIAS_MAP, METADATA_PARAMS, VoxelSize
+from .scanimage import get_z_step_size
 
 
 def _rate_precedence() -> tuple[dict[str, tuple[int, str]], int]:
@@ -409,7 +410,7 @@ def get_voxel_size(
     4. Legacy keys (umPerPixX, umPerPixY, umPerPixZ)
     5. OME keys (PhysicalSizeX, PhysicalSizeY, PhysicalSizeZ)
     6. ScanImage SI keys
-    7. Default: 1.0 micrometers
+    7. Default: 1.0 micrometers for dx and dy; dz stays None
 
     Parameters
     ----------
@@ -469,14 +470,8 @@ def get_voxel_size(
     # try to extract dz from ScanImage nested structure (NOT for LBM - user must supply)
     si_dz = None
     is_lbm = metadata.get("lbm_stack", False) or metadata.get("stack_type") == "lbm"
-    if not is_lbm:
-        si = metadata.get("si", {})
-        if isinstance(si, dict):
-            h_stack = si.get("hStackManager", {})
-            if isinstance(h_stack, dict):
-                si_dz = h_stack.get("actualStackZStepSize")
-                if si_dz is None:
-                    si_dz = h_stack.get("stackZStepSize")
+    if not is_lbm and isinstance(metadata.get("si"), dict):
+        si_dz = get_z_step_size(metadata)
 
     # resolve dx
     resolved_dx = dx
@@ -506,11 +501,6 @@ def get_voxel_size(
     if resolved_dz is None and si_dz is not None:
         with contextlib.suppress(TypeError, ValueError):
             resolved_dz = float(si_dz)
-
-    # for LBM stacks, dz must be user-supplied - no default
-    # for non-LBM, default to 1.0 if not found
-    if resolved_dz is None and not is_lbm:
-        resolved_dz = 1.0
 
     return VoxelSize(dx=resolved_dx, dy=resolved_dy, dz=resolved_dz)
 

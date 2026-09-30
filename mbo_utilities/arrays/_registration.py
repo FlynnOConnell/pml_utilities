@@ -22,6 +22,8 @@ import math
 
 import numpy as np
 
+from mbo_utilities.lazy_array import LazyArray
+
 try:
     from mkl_fft import fft2 as _np_fft2
     from mkl_fft import ifft2 as _np_ifft2
@@ -666,15 +668,10 @@ class AxialShiftView:
             out_zf[i, ..., pt + dy : pt + dy + Y, pl + dx : pl + dx + X] = raw_zf[i]
         return out
 
-    def __array__(self, dtype=None, copy=None):
-        # explicit (do not let __getattr__ leak the source's rank/shape).
-        data = np.asarray(self[0])
-        if dtype is not None:
-            data = data.astype(dtype)
-        return data
+    __array__ = LazyArray.__array__
 
     def astype(self, dtype, *args, **kwargs):
-        return np.asarray(self).astype(dtype, *args, **kwargs)
+        return np.asarray(self[:]).astype(dtype, *args, **kwargs)
 
     def __getattr__(self, name):
         # underscore names are never forwarded, so __init__ stays recursion-safe

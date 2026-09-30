@@ -64,7 +64,8 @@ class TestReads:
     def test_whole_array(self, pair):
         view, ref = pair
         assert np.array_equal(np.asarray(view[:]), ref)
-        assert np.array_equal(np.asarray(view), ref)
+        with pytest.raises(NotImplementedError):
+            np.asarray(view)
 
     def test_integer_and_negative_t(self, pair):
         view, ref = pair

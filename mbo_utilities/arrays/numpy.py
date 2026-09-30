@@ -286,15 +286,6 @@ class NumpyArray(ReductionMixin, LazyArray):
     def __len__(self) -> int:
         return self.nt
 
-    def __array__(self, dtype=None, copy=None):
-        # return a single 2D plane for fast preview
-        data = self.data
-        while getattr(data, "ndim", 0) > 2:
-            data = data[0]
-        if dtype is not None:
-            data = np.asarray(data).astype(dtype)
-        return np.asarray(data)
-
     def __repr__(self) -> str:
         mem_str = " (in-memory)" if self._is_in_memory else ""
         return (

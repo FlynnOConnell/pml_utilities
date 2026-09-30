@@ -241,12 +241,8 @@ class FrameAveragedView(LazyArray):
             return np.empty((0, *probe.shape), self._out_dtype)
         return np.stack([self._bin(t, rest) for t in bins])
 
-    def __array__(self, dtype=None, copy=None):
-        data = np.asarray(self[:])
-        return data.astype(dtype) if dtype is not None else data
-
     def astype(self, dtype, *args, **kwargs):
-        return np.asarray(self).astype(dtype, *args, **kwargs)
+        return np.asarray(self[:]).astype(dtype, *args, **kwargs)
 
     def __getattr__(self, name):
         # forward domain attributes (filenames, source_path, roi, ...) to the

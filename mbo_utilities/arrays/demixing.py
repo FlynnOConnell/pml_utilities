@@ -194,6 +194,13 @@ class DemixingArray(ReductionMixin, LazyArray):
         t, y, x = self._shape3
         return (t, len(VIEWS), 1, y, x)
 
+    def _compute_frame_vminmax(self):
+        # the stored mean image stands in for the first frame, so `mbo info`
+        # and the histogram never have to rebuild pixels
+        if self._cached_vmin is None:
+            self._cached_vmin = float(self._mean_img.min())
+            self._cached_vmax = float(self._mean_img.max())
+
     @property
     def dtype(self):
         return np.dtype(np.float32)
@@ -332,11 +339,6 @@ class DemixingArray(ReductionMixin, LazyArray):
         if isinstance(t_key, (int, np.integer)):
             out = out[0]
         return out
-
-    def __array__(self, dtype=None, copy=None):
-        # the stored mean image stands in for the representative frame, so
-        # `mbo info` and the histogram never have to rebuild pixels
-        return self._mean_img if dtype is None else self._mean_img.astype(dtype)
 
     def close(self) -> None:
         self._results = None

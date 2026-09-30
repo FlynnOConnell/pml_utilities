@@ -255,9 +255,13 @@ def get_z_step_size(metadata: dict) -> float | None:
     -----
     For piezo: si.hStackManager.stackZStepSize
     For LBM: user input required (typically ~20µm for LBM_MIMMS)
+    ScanImage saves a step size even with stacks off, so a recording with
+    ``hStackManager.enable`` False has none.
     """
     si = metadata.get("si", {})
     stack_mgr = si.get("hStackManager", {})
+    if stack_mgr.get("enable") is False:
+        return None
 
     # try actualStackZStepSize first, then stackZStepSize
     dz = stack_mgr.get("actualStackZStepSize")
@@ -455,12 +459,12 @@ def get_frame_rate(metadata: dict) -> float | None:
     # scanFrameRate is the most reliable source
     fs = roi_mgr.get("scanFrameRate")
     if fs is not None:
-        return round(float(fs), 2)
+        return float(fs)
 
     # fallback to computing from scanFramePeriod
     period = roi_mgr.get("scanFramePeriod")
     if period is not None and period > 0:
-        return round(1.0 / float(period), 2)
+        return 1.0 / float(period)
 
     return None
 

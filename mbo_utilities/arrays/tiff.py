@@ -16,7 +16,12 @@ import numpy as np
 from tifffile import TiffFile
 
 from mbo_utilities import log
-from mbo_utilities.analysis.phasecorr import _apply_offset, bidir_phasecorr
+from mbo_utilities.analysis.phasecorr import (
+    PHASE_WINDOW,
+    _apply_offset,
+    bidir_phasecorr,
+    estimate_offset,
+)
 from mbo_utilities.arrays._base import (
     ReductionMixin,
     TiffReaderMixin,
@@ -1308,24 +1313,26 @@ class ScanImageArray(
     def xslices(self):
         return [slice(0, roi["width"]) for roi in self._rois]
 
-    def _read_pages(self, frames, chans, yslice=slice(None), xslice=slice(None), **_):
-        pages = [f * self.num_channels + z for f in frames for z in chans]
+    def _page_files(self):
+        """``(tiff file, pages in it)`` for every file, in page order."""
+        if self._frames_per_file is not None:
+            return list(
+                zip(
+                    self.tiff_files,
+                    (f * self.num_channels for f in self._frames_per_file),
+                    strict=False,
+                )
+            )
+        return [(tf, len(tf.pages)) for tf in self.tiff_files]
+
+    def _read_raw_pages(self, pages, yslice=slice(None), xslice=slice(None)):
+        """``(len(pages), Y, X)`` uncorrected pixels of the given page indices."""
         tiff_width_px = index_length(xslice, self._page_width)
         tiff_height_px = index_length(yslice, self._page_height)
         buf = np.empty((len(pages), tiff_height_px, tiff_width_px), dtype=self.dtype)
 
         start = 0
-        tiff_iterator = (
-            zip(
-                self.tiff_files,
-                (f * self.num_channels for f in self._frames_per_file),
-                strict=False,
-            )
-            if self._frames_per_file is not None
-            else ((tf, len(tf.pages)) for tf in self.tiff_files)
-        )
-
-        for tf, num_pages in tiff_iterator:
+        for tf, num_pages in self._page_files():
             end = start + num_pages
             idxs = [i for i, p in enumerate(pages) if start <= p < end]
             if not idxs:
@@ -1361,54 +1368,81 @@ class ScanImageArray(
 
             if chunk.ndim == 2:
                 chunk = chunk[np.newaxis, ...]
-            chunk = chunk[..., yslice, xslice]
-
-            if self.fix_phase:
-                import time as _t
-
-                _t0 = _t.perf_counter()
-
-                # If we have a fixed shift, use it
-                shift = self.phase_correction.effective_shift
-
-                if shift is not None:
-                    # Use _apply_offset directly or feature.apply
-                    # Note: feature.apply returns 2D, but we have 3D (Z/T) chunk (N, Y, X)
-                    # Bidirectional phase correction applies to rows (X axis)
-                    # _apply_offset handles N-D arrays if applied along last axis?
-                    # Let's inspect source or assume it works like bidir_phasecorr
-
-                    # Fallback to applying manually using computed shift
-                    corrected = _apply_offset(chunk, shift, use_fft=self.use_fft)
-                    offset = shift
-                else:
-                    # compute offset on this chunk
-                    corrected, offset = bidir_phasecorr(
-                        chunk,
-                        method=self.phasecorr_method,
-                        max_offset=self.max_offset,
-                        border=self.border,
-                        use_fft=self.use_fft,
-                    )
-
-                buf[idxs] = corrected
-                self._last_offset = offset
-                # store offset per (t, c, z) so the GUI can show the value for
-                # the *currently displayed* frame, not whatever was read last.
-                # without this, any background read (histogram subsampler,
-                # zstats worker, etc.) clobbers _last_offset and the displayed
-                # number drifts even when the user isn't scrubbing.
-                self._record_offset_for_pages([pages[i] for i in idxs], float(offset))
-                _t1 = _t.perf_counter()
-                logger.debug(
-                    f"phase_corr: offset={offset:.2f}, method={self.phasecorr_method}, "
-                    f"fft={self.use_fft}, chunk={chunk.shape}, took {(_t1 - _t0) * 1000:.1f}ms"
-                )
-            else:
-                buf[idxs] = chunk
-                self._last_offset = 0.0
-                self._record_offset_for_pages([pages[i] for i in idxs], 0.0)
+            buf[idxs] = chunk[..., yslice, xslice]
             start = end
+        return buf
+
+    def _window_offset(self, window: int, chan: int) -> float:
+        """Scan-phase offset of encoded channel ``chan`` over frames
+        ``window * PHASE_WINDOW`` up to the next window, estimated once from
+        the whole uncropped pages and cached.
+        """
+        key = (
+            window,
+            chan,
+            self.phasecorr_method,
+            self.use_fft,
+            self.border,
+            self.max_offset,
+        )
+        cache = self.__dict__.setdefault("_window_offsets", {})
+        if key not in cache:
+            n_frames = sum(n for _, n in self._page_files()) // self.num_channels
+            t0 = window * PHASE_WINDOW
+            t1 = min(t0 + PHASE_WINDOW, n_frames)
+            raw = self._read_raw_pages(
+                [t * self.num_channels + chan for t in range(t0, t1)]
+            )
+            cache[key] = float(
+                estimate_offset(
+                    raw,
+                    method=self.phasecorr_method,
+                    use_fft=self.use_fft,
+                    max_offset=self.max_offset,
+                    border=self.border,
+                )
+            )
+        return cache[key]
+
+    def _read_pages(self, frames, chans, yslice=slice(None), xslice=slice(None), **_):
+        pages = [f * self.num_channels + z for f in frames for z in chans]
+        buf = self._read_raw_pages(pages, yslice, xslice)
+        tiff_height_px, tiff_width_px = buf.shape[1:]
+
+        if self.fix_phase:
+            shift = self.phase_correction.effective_shift
+            if shift is not None:
+                offsets = [float(shift)] * len(pages)
+            elif self.phasecorr_method == "frame":
+                offsets = [
+                    float(
+                        bidir_phasecorr(
+                            buf[i],
+                            max_offset=self.max_offset,
+                            border=self.border,
+                            use_fft=self.use_fft,
+                        )[1]
+                    )
+                    for i in range(len(pages))
+                ]
+            else:
+                offsets = [
+                    self._window_offset(
+                        p // self.num_channels // PHASE_WINDOW, p % self.num_channels
+                    )
+                    for p in pages
+                ]
+            for offset in set(offsets):
+                idxs = [i for i, o in enumerate(offsets) if o == offset]
+                buf[idxs] = _apply_offset(buf[idxs], offset, use_fft=self.use_fft)
+                # per (t, c, z), so the GUI shows the offset of the frame on
+                # screen, not whatever a background read computed last
+                self._record_offset_for_pages([pages[i] for i in idxs], offset)
+            if offsets:
+                self._last_offset = offsets[-1]
+        else:
+            self._last_offset = 0.0
+            self._record_offset_for_pages(pages, 0.0)
 
         logger.debug(
             f"_read_pages: {len(frames)} frames, {len(chans)} chans -> {buf.shape}"
@@ -1534,6 +1568,7 @@ class ScanImageArray(
         """
         if hasattr(self, "_offset_cache"):
             self._offset_cache.clear()
+        self.__dict__.pop("_window_offsets", None)
 
     def process_rois(self, frames, chans):
         if self.roi is not None and isinstance(self.roi, int) and self.roi != 0:
@@ -2028,14 +2063,6 @@ class PiezoArray(ScanImageArray):
             out = np.squeeze(out, axis=ax)
 
         return out
-
-    def __array__(self, dtype=None):
-        """Return full array as numpy array."""
-        data = self[:]
-        if dtype is not None:
-            return data.astype(dtype)
-        return data
-
 
 class SinglePlaneArray(ScanImageArray):
     """

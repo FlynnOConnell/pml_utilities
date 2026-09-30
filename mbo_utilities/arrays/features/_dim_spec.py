@@ -66,8 +66,9 @@ class DimensionSpec:
         whether this is spatial, iteratable, or batch
     size : int
         current size in this dimension
-    scale : float
-        physical size per index (e.g., dz=15um, dt=0.033s, dx=0.5um)
+    scale : float | None
+        physical size per index (e.g., dz=15um, dt=0.033s, dx=0.5um); None
+        for a Z or T whose step the metadata does not give
     unit : str | None
         physical unit: "second", "micrometer", None (for channels)
 
@@ -81,7 +82,7 @@ class DimensionSpec:
     name: str
     role: DimRole
     size: int
-    scale: float = 1.0
+    scale: float | None = 1.0
     unit: str | None = field(default=None)
 
     def __post_init__(self):
@@ -197,13 +198,10 @@ class DimensionSpecs:
             elif name == "Y":
                 scale = get_param(metadata, "dy", default=1.0) or 1.0
             elif name == "Z":
-                scale = get_param(metadata, "dz", default=1.0) or 1.0
+                scale = get_param(metadata, "dz") or None
             elif name == "T":
                 fs = get_param(metadata, "fs")
-                if fs and fs > 0:
-                    scale = 1.0 / fs  # time interval
-                else:
-                    scale = 1.0
+                scale = 1.0 / fs if fs and fs > 0 else None
 
             specs.append(
                 DimensionSpec(
@@ -265,20 +263,20 @@ class DimensionSpecs:
 
     @property
     def dz(self) -> float | None:
-        """z-step size (None if no Z dimension)."""
+        """z-step size (None if unknown)."""
         spec = self.get("Z")
         return spec.scale if spec else None
 
     @property
     def fs(self) -> float | None:
-        """Frame rate in Hz (None if no T or dt=0)."""
+        """Frame rate in Hz (None if unknown)."""
         spec = self.get("T")
-        if spec and spec.scale > 0:
+        if spec and spec.scale:
             return 1.0 / spec.scale
         return None
 
     @property
     def finterval(self) -> float | None:
-        """Frame interval in seconds (None if no T)."""
+        """Frame interval in seconds (None if unknown)."""
         spec = self.get("T")
         return spec.scale if spec else None

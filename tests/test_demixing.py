@@ -111,8 +111,10 @@ def test_reader_shape_metadata_and_rois(run_dir):
     fp = arr.footprint(1)
     assert fp.shape == (Y, X)
     assert np.count_nonzero(fp) == 4 and fp.flat[7] == 1.0
-    # the representative frame is the stored mean image, no factor rebuild
-    assert np.asarray(arr).shape == (Y, X)
+    # the display range comes off the stored mean image, no factor rebuild
+    assert arr.vmax == pytest.approx(float(arr._mean_img.max()))
+    with pytest.raises(NotImplementedError):
+        np.asarray(arr)
     unlabeled = DemixingArray(run_dir / "glutamate_global_activity_demixing.hdf5")
     assert unlabeled.roi_labels == ["-"] * K
     assert "fs" not in unlabeled.metadata

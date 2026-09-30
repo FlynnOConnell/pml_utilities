@@ -81,6 +81,23 @@ class TestCorrection:
         assert v.get_offset_at(0, 0, 0) == pytest.approx(-3.0, abs=0.1)
 
 
+class TestReadIndependence:
+    def test_a_frame_reads_the_same_alone_or_in_a_block(self, arr):
+        v = with_phasecorr(arr, enabled=True)
+        block = np.asarray(v[0:250, 0, 0])
+        for t in (0, 7, 99, 100, 180, 249):
+            assert np.array_equal(np.asarray(v[t, 0, 0]), block[t])
+        assert np.array_equal(np.asarray(v[90:130, 0, 0]), block[90:130])
+
+    def test_each_window_has_its_own_offset(self):
+        movie = _offset_movie(nt=200, shift=2)
+        movie[100:] = _offset_movie(nt=100, shift=4, seed=1)
+        v = with_phasecorr(NumpyArray(movie), enabled=True)
+        np.asarray(v[95:105, 0, 0])
+        assert v.get_offset_at(99, 0, 0) == pytest.approx(-2.0, abs=0.1)
+        assert v.get_offset_at(100, 0, 0) == pytest.approx(-4.0, abs=0.1)
+
+
 class TestCache:
     def test_offset_cache_miss_returns_none(self, arr):
         v = with_phasecorr(arr, enabled=True)

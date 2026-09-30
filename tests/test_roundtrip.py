@@ -190,3 +190,10 @@ class TestSourceArrayTypes:
         back = mbo.imread(next(output_dir.rglob("*.tif")))
         assert back.nt == 5
         assert np.array_equal(np.asarray(back[:])[:, 0], synthetic_4d_data[:5])
+
+
+@pytest.mark.parametrize("ext", [".zarr", ".h5"])
+def test_frame_size_in_metadata(tmp_path, ext):
+    src = mbo.imread(np.zeros((6, 2, 16, 12), dtype=np.int16))
+    back = mbo.imread(mbo.imwrite(src, tmp_path / "out", ext=ext))
+    assert (back.metadata["Ly"], back.metadata["Lx"]) == (16, 12)

@@ -100,7 +100,8 @@ class TestShape:
             arr[3, 0, 0, 2:5, 1:7], expected[3, 0, 0, 2:5, 1:7]
         )
         assert arr[2:5].shape == (3, 1, 1, 16, 20)
-        assert np.asarray(arr).shape == (16, 20)
+        with pytest.raises(NotImplementedError):
+            np.asarray(arr)
 
     def test_permuted_volume(self, bruker_volume_h5):
         path, data = bruker_volume_h5

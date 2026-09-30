@@ -52,7 +52,9 @@ def test_moving_the_t_slider_moves_the_playhead(host):
     viewer.indices[t_slider(host)] = 5
     host.figure.canvas.force_draw()
     assert host.frame == 5
-    assert host.playhead.time == pytest.approx(5 / host.data.fs)
+    # the fixture has no fs, so the playhead counts raw frames
+    assert host.data.fs is None
+    assert host.playhead.time == pytest.approx(5)
 
 
 def test_seeking_the_playhead_moves_the_t_slider(host):

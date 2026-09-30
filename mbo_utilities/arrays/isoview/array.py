@@ -2767,14 +2767,8 @@ class IsoviewArray(ReductionMixin, LazyArray):
         with LazyVolume(path, dimensions=self._stack_dimensions()) as v:
             return self._slab_from_volume(v, t_idx, c_idx, z_key, y_key, x_key)
 
-    def __array__(self, dtype=None, copy=None) -> np.ndarray:
-        out = np.asarray(self[0, 0])
-        if dtype is not None:
-            out = out.astype(dtype)
-        return out
-
     def astype(self, dtype, *args, **kwargs) -> np.ndarray:
-        return np.asarray(self).astype(dtype, *args, **kwargs)
+        return np.asarray(self[:]).astype(dtype, *args, **kwargs)
 
     def close(self) -> None:
         self._cache.clear()

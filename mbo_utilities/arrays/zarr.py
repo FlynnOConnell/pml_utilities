@@ -200,8 +200,9 @@ class ZarrArray(ReductionMixin, LazyArray):
         else:
             md = self._metadata[0].copy() if self._metadata[0] else {}
 
-        # ensure critical keys are present
+        # ensure critical keys are present; the frame size is the array's own
         md["dtype"] = self.dtype
+        md["Ly"], md["Lx"] = self.ny, self.nx
         if "num_timepoints" not in md and self.zs:
             tp = int(self.zs[0].shape[0])
             md["num_timepoints"] = tp
@@ -338,13 +339,6 @@ class ZarrArray(ReductionMixin, LazyArray):
     @property
     def size(self):
         return np.prod(self.shape)
-
-    def __array__(self, dtype=None, copy=None):
-        # return single frame for fast histogram/preview (prevents accidental full load)
-        data = self[0]
-        if dtype is not None:
-            data = data.astype(dtype)
-        return data
 
     @property
     def shape(self) -> tuple[int, int, int, int, int]:

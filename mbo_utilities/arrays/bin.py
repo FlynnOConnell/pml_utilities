@@ -109,13 +109,6 @@ class BinArray(ReductionMixin, LazyArray):
     def __len__(self):
         return self.nt
 
-    def __array__(self, dtype=None, copy=None):
-        # one frame, so a histogram or preview never loads the whole file
-        data = self._file[0]
-        if dtype is not None:
-            data = data.astype(dtype)
-        return data
-
     @property
     def nframes(self):
         return self.nt
