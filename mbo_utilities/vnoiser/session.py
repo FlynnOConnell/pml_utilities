@@ -528,6 +528,9 @@ class CurationSession:
             dash._rebuild_candidates(preserve_key=dash.event_keys[dash.current])
             dash._set_loaded_controls(True)
         dash._refresh_all()
+        if label == "unlabeled":
+            # the rebuild may have dropped candidates the first save auto-passed
+            dash._save_labels()
         return len(keys)
 
     def clear_labels(self) -> int:
