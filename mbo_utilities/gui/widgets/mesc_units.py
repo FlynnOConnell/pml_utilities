@@ -26,6 +26,8 @@ applies after the popup has drawn (``_pending``) rather than mid-frame.
 
 from __future__ import annotations
 
+import glob
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -34,6 +36,7 @@ from imgui_bundle import icons_fontawesome_6 as fa
 from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities import log
+from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.mesc_reference import ReferenceView, roi_slider
 from mbo_utilities.gui.widgets._base import Widget
@@ -42,6 +45,7 @@ from mbo_utilities.gui.widgets.pipelines import (
     quick_pipelines,
     shown_name,
 )
+from mbo_utilities.results import TRACES_PKL, results_pipeline, results_stamp
 
 logger = log.get("gui.mesc_units")
 
@@ -353,6 +357,9 @@ class MescTabWidget(Widget):
         self._reference: ReferenceView | None = None
         # a unit the popup's button asked for, applied once it has drawn
         self._pending: tuple[dict, int | None] | None = None
+        # the voltage run beside the open file the curation window can take,
+        # looked up once per file: (file, PF folder or results file, or None)
+        self._curation: tuple[str, Path | None] | None = None
         parent.reference_view = self.open_reference
         strip = getattr(parent, "top_strip", None)
         if strip is not None:
@@ -539,6 +546,35 @@ class MescTabWidget(Widget):
                     f"Open the {cls.name} pipeline in its own window, the same "
                     "configuration as the Process tab's, set to this recording and "
                     "the ROI and channel the sliders are on.",
+                    show_mark=False,
+                )
+            path = Path(mesc.filenames[0])
+            if self._curation is None or self._curation[0] != str(path):
+                # this file's newest voltage results file, else a PF folder beside it
+                runs = [
+                    p
+                    for p in path.parent.glob(f"{glob.escape(path.stem)}.*.zarr")
+                    if results_pipeline(p) == "voltage"
+                ]
+                pf = path.parent / "PF"
+                found = (
+                    max(runs, key=lambda p: (results_stamp(p) or datetime.min, p.name))
+                    if runs
+                    else pf
+                    if (pf / TRACES_PKL).is_file()
+                    else None
+                )
+                self._curation = (str(path), found)
+            if HAS_VNOISER and self._curation[1] is not None:
+                imgui.same_line(0, 12)
+                if imgui.small_button("Load curation viewer##mesc_curate"):
+                    # its module brings hello_imgui; the window is its own process
+                    from mbo_utilities.gui.curation_viewer import launch_curation_window
+
+                    launch_curation_window(self._curation[1])
+                set_tooltip(
+                    f"Open {self._curation[1].name} in the curation window, its own "
+                    "window (what `mbo curate` opens).",
                     show_mark=False,
                 )
             imgui.same_line(0, 12)

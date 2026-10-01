@@ -728,7 +728,7 @@ class TestWidget:
 
 class TestViewerIntegration:
     """The viewer has no curation panel of its own: the Curate button (the
-    Voltage pipeline's, or File > Curate) opens the curation window in a
+    Voltage pipeline's, or the MESc tab's) opens the curation window in a
     second process, what `mbo curate` runs.
     """
 

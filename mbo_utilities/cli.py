@@ -2188,7 +2188,7 @@ def curate(path, serve, host, port, channel):
     a PF folder beside it or raw (default: the last data path).
 
     Opens the desktop window, the one the viewer's Curate button opens
-    (the Voltage pipeline, or File > Curate). With --serve the
+    (the Voltage pipeline, or the MESc tab once a run is beside the file). With --serve the
     dashboard is rendered here and streamed to any browser that opens the
     printed URL: run it on the machine that holds the data and a GPU, and
     curate from a laptop. No login: keep --host on localhost and tunnel
