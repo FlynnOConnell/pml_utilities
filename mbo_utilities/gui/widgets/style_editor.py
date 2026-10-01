@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from imgui_bundle import imgui
 from imgui_debugger import ConfigStore, StyleEditor, StyleEditorConfig
 
 from mbo_utilities import log
@@ -24,6 +25,15 @@ __all__ = [
 ]
 
 logger = log.get("gui.style_editor")
+
+_OPAQUE_COLORS = (
+    imgui.Col_.window_bg,
+    imgui.Col_.popup_bg,
+    imgui.Col_.menu_bar_bg,
+    imgui.Col_.title_bg,
+    imgui.Col_.title_bg_active,
+    imgui.Col_.title_bg_collapsed,
+)
 
 _store: ConfigStore | None = None
 _editor: StyleEditor | None = None
@@ -64,6 +74,11 @@ def apply_saved_style() -> int:
     applied = style_store().apply_style()
     if applied:
         logger.info(f"applied saved imgui style ({applied} fields)")
+    # windows and popups stay opaque whatever the saved style says
+    style = imgui.get_style()
+    for col in _OPAQUE_COLORS:
+        c = style.color_(col)
+        style.set_color_(col, imgui.ImVec4(c.x, c.y, c.z, 1.0))
     return applied
 
 
