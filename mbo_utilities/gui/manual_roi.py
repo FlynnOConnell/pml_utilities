@@ -199,8 +199,8 @@ __all__ = [
 # height the Traces panel asks the top strip for (the strip adds the menu
 # row and its tab bar on top of this), and with the motion plot under the
 # trace; the trace's share of the pair until the splitter between them is dragged
-PANEL_HEIGHT = 226
-MOTION_PANEL_HEIGHT = 340
+PANEL_HEIGHT = 136
+MOTION_PANEL_HEIGHT = 204
 TRACE_SHARE = 0.6
 # what the behavior plot adds: signals over a raster strip need more than a shift trace
 BEHAVIOR_PLOT_HEIGHT = 200
