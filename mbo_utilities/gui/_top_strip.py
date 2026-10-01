@@ -48,6 +48,9 @@ TAB_BAR_HEIGHT = 24
 PANEL_PAD = 8 + 4 + TAB_BAR_HEIGHT + 8
 # the grab bar along the bottom edge
 HANDLE_HEIGHT = 14
+# a panel's first row of controls: a 20 px frame and the spacing under it;
+# the strip never shuts or drags smaller, so a panel's controls stay on screen
+ROW_HEIGHT = 24
 # never size or drag the strip so far down that the canvas has less than
 # this left to render into, after the other edge windows (the NDWidget's
 # slider block along the bottom) have taken theirs
@@ -168,10 +171,10 @@ class TopStrip(ImguiWindow):
 
     @property
     def shut_size(self) -> int:
-        """Height of the strip with the panels shut: the menu row, the tab row
-        and the bar, with no body between them.
+        """Height of the strip with the panels shut: the menu row, the tab row,
+        the panel's first row of controls and the bar.
         """
-        return strip_height(0)
+        return strip_height(ROW_HEIGHT)
 
     @property
     def collapsed(self) -> bool:
@@ -365,8 +368,7 @@ class TopStrip(ImguiWindow):
                     reopen = True
                 if selected:
                     active = panel.key
-                    if not self._shut:
-                        panel.draw()
+                    panel.draw()
                     imgui.end_tab_item()
             imgui.end_tab_bar()
             if active is not None:

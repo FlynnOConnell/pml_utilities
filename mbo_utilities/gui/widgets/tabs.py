@@ -215,7 +215,7 @@ class TraceTableTabWidget(Widget):
         if roi is None:
             return "Enable Widgets > Manual ROI Labeling to draw ROIs."
         if not roi.has_traces():
-            return "No traces yet: use the trace button on a row of the ROIs tab, or run extract / demix."
+            return "No traces yet: draw an ROI and use the trace button on a row of the ROIs tab, or run extract / demix."
         return None
 
     def draw(self) -> None:
