@@ -547,7 +547,7 @@ def _squeeze_for_viewer(arr):
 
 _NOTEBOOK_SIZE = (1400, 900)
 # the PreviewDataWidget on the figure's right edge
-_PREVIEW_WIDTH = 300
+_PREVIEW_WIDTH = 340
 
 
 def screen_box() -> tuple[int, int] | None:

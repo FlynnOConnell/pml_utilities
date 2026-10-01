@@ -11,7 +11,6 @@ from typing import Any
 
 from imgui_bundle import imgui, imgui_ctx
 
-from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._dialogs import start_open_prompt
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.gui.widgets.pipelines import (
@@ -21,7 +20,6 @@ from mbo_utilities.gui.widgets.pipelines import (
 )
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.gui.widgets.widget_toggles import draw_widgets_menu
-from mbo_utilities.install import VNOISER_HINT
 
 
 def draw_menu_bar(parent: Any):
@@ -60,29 +58,6 @@ def draw_menu_bar(parent: Any):
                     0
                 ]:
                     parent._saveas_popup_open = True
-                # the curation window (`mbo curate`) on the open PF folder or
-                # .mesc, in its own process; its module brings hello_imgui
-                from mbo_utilities.gui.curation_viewer import (
-                    curation_target,
-                    launch_curation_window,
-                )
-
-                target = curation_target(getattr(parent, "fpath", None))
-                if imgui.menu_item(
-                    "Curate",
-                    "",
-                    p_selected=False,
-                    enabled=HAS_VNOISER and target is not None,
-                )[0]:
-                    launch_curation_window(target)
-                if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
-                    imgui.set_tooltip(
-                        f"vnoiser is not installed: {VNOISER_HINT}"
-                        if not HAS_VNOISER
-                        else "Open a PF folder or a .mesc line scan first."
-                        if target is None
-                        else f"Open {target.name} in the curation window (its own window, what `mbo curate` opens)."
-                    )
                 imgui.separator()
                 if imgui.menu_item("Options", "", p_selected=False, enabled=True)[0]:
                     parent._show_options_popup = True

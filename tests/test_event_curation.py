@@ -128,12 +128,145 @@ class TestSession:
         assert session.label(1) == "yes"
         payload = json.loads(session.label_path.read_text(encoding="utf-8"))
         assert payload["mode"] == "fast"
-        keys = list(payload["events"])
+        keys = [
+            key
+            for key, event in payload["events"].items()
+            if event["curation_state"] == "manual"
+        ]
         assert len(keys) == 1
         assert keys[0].endswith(f"sample={int(session.candidates.indices[1])}")
         assert payload["events"][keys[0]]["label"] == "yes"
         session.set_label("unlabeled")
         assert session.counts() == (0, 0, 3)
+
+    def test_auto_passed_events_go_to_vnoiser_json(self, data_root):
+        """Every candidate shown green is in the file; the ones the auto
+        rules passed say so and come back as auto calls, not manual labels.
+        """
+        session = _loaded(data_root)
+        session.set_auto_template_threshold(-1.0)
+        session.select(1)
+        session.set_label("no")
+        assert session.labels() == ["auto_yes", "no", "auto_yes"]
+        events = json.loads(session.label_path.read_text(encoding="utf-8"))["events"]
+        saved = [events[key] for key in session.dash.event_keys]
+        assert [event["label"] for event in saved] == ["yes", "no", "yes"]
+        assert [event["curation_state"] for event in saved] == [
+            "auto",
+            "manual",
+            "auto",
+        ]
+        assert [event["manual_label"] for event in saved] == [
+            "unlabeled",
+            "no",
+            "unlabeled",
+        ]
+        again = _loaded(data_root)
+        assert again.counts() == (0, 1, 2)
+        assert again.labels() == ["auto_yes", "no", "auto_yes"]
+
+    def test_convert_curation_ids_renames_old_recordings(self, tmp_path):
+        """``scripts/convert_curation_ids.py`` moves the lines and labels saved
+        as ``<animal>/<experiment>/scan=<id>/domain=<name>`` under the name the
+        viewer looks for, changes nothing else, keeps the original beside the
+        file, and leaves a file alone when a saved name matches no recording.
+        """
+        from mbo_utilities.results import ResultsArray
+        from mbo_utilities.vnoiser import CurationSession
+        from scripts.convert_curation_ids import main
+
+        pf_dir = _write_spatial_recording(tmp_path / "stan1")
+        old = f"stan1/expt1/{RID}"
+        event = {
+            "label": "no",
+            "manual_label": "no",
+            "curation_state": "manual",
+            "recording": old,
+            "source_event_index": 2000,
+            "amplitude": 6.9,
+        }
+        files = {
+            # lines under the old name, one of them also under the viewer's
+            "fast": {
+                "version": 4,
+                "mode": "fast",
+                "candidate_detection": {
+                    "source": "denoised_trace",
+                    "thresholds": {old: 4.5},
+                    "auto_template_thresholds": {old: -1.0},
+                    "waveform_rejection": {old: False, RID: True},
+                    "slow_cutoff_hz": None,
+                },
+                "events": {f"{old}|sample=2000": event},
+            },
+            # the ROI file's soma1 is the traces' soma
+            "slow": {
+                "version": 4,
+                "mode": "slow",
+                "candidate_detection": {
+                    "thresholds": {"stan1/expt1/scan=10/domain=soma1": 4.0}
+                },
+                "events": {},
+            },
+            # a scan the folder does not hold
+            "manual": {
+                "version": 4,
+                "mode": "manual",
+                "candidate_detection": {
+                    "thresholds": {"stan1/expt1/scan=99/domain=soma": 1.0}
+                },
+                "events": {},
+            },
+        }
+        curation_dir = pf_dir / ".curation"
+        curation_dir.mkdir()
+        paths = {
+            mode: curation_dir / f"{mode}_template_curation.json" for mode in files
+        }
+        for mode, payload in files.items():
+            paths[mode].write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        before = {mode: path.read_text(encoding="utf-8") for mode, path in paths.items()}
+
+        # without --write nothing on disk changes
+        assert main([str(pf_dir)]) == 1
+        assert {m: p.read_text(encoding="utf-8") for m, p in paths.items()} == before
+        assert sorted(p.name for p in curation_dir.iterdir()) == sorted(
+            p.name for p in paths.values()
+        )
+
+        assert main([str(tmp_path), "--write"]) == 1
+        assert paths["manual"].read_text(encoding="utf-8") == before["manual"]
+        fast = json.loads(paths["fast"].read_text(encoding="utf-8"))
+        assert fast["candidate_detection"] == {
+            "source": "denoised_trace",
+            "thresholds": {RID: 4.5},
+            "auto_template_thresholds": {RID: -1.0},
+            "waveform_rejection": {RID: True},
+            "slow_cutoff_hz": None,
+        }
+        assert fast["events"] == {f"{RID}|sample=2000": {**event, "recording": RID}}
+        slow = json.loads(paths["slow"].read_text(encoding="utf-8"))
+        assert slow["candidate_detection"]["thresholds"] == {RID: 4.0}
+        backups = sorted(curation_dir.glob("*.orig"))
+        assert [b.name.split(".json.")[0] for b in backups] == [
+            "fast_template_curation",
+            "slow_template_curation",
+        ]
+        assert backups[0].read_text(encoding="utf-8") == before["fast"]
+
+        # a second run finds nothing to rename and writes nothing
+        converted = paths["fast"].read_bytes()
+        assert main([str(pf_dir), "--write"]) == 1
+        assert paths["fast"].read_bytes() == converted
+        assert sorted(curation_dir.glob("*.orig")) == backups
+
+        session = CurationSession(pf_dir, mode="fast")
+        session.load_run(ResultsArray(pf_dir, source=False), "scan10", "soma")
+        assert session.threshold == pytest.approx(4.5)
+        assert session.auto_template_threshold == pytest.approx(-1.0)
+        assert session.waveform_rejection is True
+        assert session.candidates.indices.tolist() == [2000, 3200]
+        assert session.labels() == ["no", "auto_yes"]
 
     def test_seeded_mode_auto_calls_and_colours(self, data_root):
         session = _loaded(data_root)
@@ -726,7 +859,7 @@ class TestWidget:
 
 class TestViewerIntegration:
     """The viewer has no curation panel of its own: the Curate button (the
-    Voltage pipeline's, or File > Curate) opens the curation window in a
+    Voltage pipeline's, or the MESc tab's) opens the curation window in a
     second process, what `mbo curate` runs.
     """
 
@@ -1463,7 +1596,9 @@ class TestClearLabels:
         assert "no" not in session.labels() and "yes" not in session.labels()
         assert session.clear_labels() == 0
         saved = json.loads(session.label_path.read_text(encoding="utf-8"))
-        assert saved["events"] == {}
+        assert {event["curation_state"] for event in saved["events"].values()} <= {
+            "auto"
+        }
         assert saved["candidate_detection"]["thresholds"]
 
 

@@ -312,17 +312,19 @@ class TestTopStripResize:
         strip = TopStrip(figure)
         assert strip.size == MENU_HEIGHT
 
-    def test_shut_keeps_the_tab_row(self, figure):
-        """The tabs stay visible so the user knows the panels are there."""
+    def test_shut_keeps_the_tabs_and_the_controls_row(self, figure):
+        """The tabs and the panel's first row of controls stay visible, so
+        a double click on the bar never hides a panel's checkboxes.
+        """
         from imgui_bundle import imgui
-        from mbo_utilities.gui._top_strip import TopStrip, strip_height
+        from mbo_utilities.gui._top_strip import ROW_HEIGHT, TopStrip, strip_height
 
         strip = TopStrip(figure)
         drawn = []
         strip.register(panel("a", height=180))
         strip.panels[0].draw = lambda: drawn.append(1)
         strip.toggle_collapsed()
-        assert strip.size == strip_height(0)
+        assert strip.size == strip_height(ROW_HEIGHT)
         bars = []
         real = imgui.begin_tab_bar
         imgui.begin_tab_bar = lambda *a, **k: bars.append(1) or real(*a, **k)
@@ -331,7 +333,7 @@ class TestTopStripResize:
         finally:
             imgui.begin_tab_bar = real
         assert bars == [1]
-        assert drawn == [], "a shut strip draws the tab headers, not the body"
+        assert drawn == [1], "a shut strip still draws the panel's controls row"
 
     def test_clicking_a_tab_opens_a_shut_strip(self, figure, monkeypatch):
         from imgui_bundle import imgui

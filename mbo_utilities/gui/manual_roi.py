@@ -199,8 +199,8 @@ __all__ = [
 # height the Traces panel asks the top strip for (the strip adds the menu
 # row and its tab bar on top of this), and with the motion plot under the
 # trace; the trace's share of the pair until the splitter between them is dragged
-PANEL_HEIGHT = 226
-MOTION_PANEL_HEIGHT = 340
+PANEL_HEIGHT = 136
+MOTION_PANEL_HEIGHT = 204
 TRACE_SHARE = 0.6
 # what the behavior plot adds: signals over a raster strip need more than a shift trace
 BEHAVIOR_PLOT_HEIGHT = 200
@@ -4324,11 +4324,18 @@ class ManualRoiWidget:
         target = self._plot_lines()
         motion = self.motion if self.motion else None
         behavior = self.behavior if self.behavior else None
-        _changed, self.show_trace = imgui.checkbox("Trace", self.show_trace)
-        set_tooltip(
-            "The selected traces; off gives the plots under it the whole panel.",
-            show_mark=False,
-        )
+        if target is not None:
+            _changed, self.show_trace = imgui.checkbox("Trace", self.show_trace)
+            set_tooltip(
+                "The selected traces; off gives the plots under it the whole panel.",
+                show_mark=False,
+            )
+        else:
+            imgui.begin_disabled()
+            imgui.checkbox("Trace", False)
+            imgui.end_disabled()
+            if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+                imgui.set_tooltip("No traces yet.")
         imgui.same_line(0, 12)
         # the whole recording went through its motion correction, so it
         # applies to every trace: always offered, on by default
@@ -4461,7 +4468,8 @@ class ManualRoiWidget:
             self.pending_traces()
         else:
             imgui.text_disabled(
-                f"No traces yet. Use {TRACE_ICON} on a row of the ROIs tab, or the Process tab's ROIs pipeline."
+                f"No traces yet. Draw an ROI and use {TRACE_ICON} on a row of the ROIs tab, "
+                "or the Process tab's ROIs pipeline."
             )
         show_trace = self.show_trace and target is not None
         show_motion = motion is not None and self.show_motion
@@ -4476,12 +4484,16 @@ class ManualRoiWidget:
             )
             if on
         )
-        # every plot under the trace adds its own height to the panel
-        self._traces_panel.height = (
-            PANEL_HEIGHT
-            + (MOTION_PANEL_HEIGHT - PANEL_HEIGHT) * int(show_motion)
-            + BEHAVIOR_PLOT_HEIGHT * int(show_behavior)
-        )
+        # every plot under the trace adds its own height to the panel; with
+        # no traces and nothing else to plot the panel is just its row of controls
+        if panels or target is not None:
+            self._traces_panel.height = (
+                PANEL_HEIGHT
+                + (MOTION_PANEL_HEIGHT - PANEL_HEIGHT) * int(show_motion)
+                + BEHAVIOR_PLOT_HEIGHT * int(show_behavior)
+            )
+        else:
+            self._traces_panel.height = int(imgui.get_frame_height_with_spacing())
         if panels != self._stack:
             # in or out of the subplots every plot is new to implot
             self._stack = panels
@@ -4490,7 +4502,8 @@ class ManualRoiWidget:
                 motion.refit()
             if behavior is not None:
                 behavior.refit()
-        if not panels:
+        # shut, the strip shows only the row of controls above
+        if not panels or self.strip.collapsed:
             return
         lines = None if target is None else target[1]
         height = max(imgui.get_content_region_avail().y - 4, 60.0)
@@ -4807,7 +4820,7 @@ class ManualRoiWidget:
             rows = [key for key in rows if key in wanted]
         if not rows:
             imgui.text_disabled(
-                f"No traces yet. Use {TRACE_ICON} on a row of the ROIs tab, or run the "
+                f"No traces yet. Draw an ROI and use {TRACE_ICON} on a row of the ROIs tab, or run the "
                 "Process tab's ROIs pipeline."
             )
             return

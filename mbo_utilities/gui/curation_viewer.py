@@ -37,7 +37,7 @@ Usage:
                                         in the cell; vis.widget is the dashboard
 
 The image viewer (``mbo scan.mesc``, ``mbo <expt>/PF``) has no curation of
-its own: its Curate button (the Voltage pipeline, or File > Curate) runs
+its own: its Curate button (the Voltage pipeline, or the MESc tab once a run is beside the file) runs
 :func:`launch_curation_window`, this window in a second process, since one
 imgui loop cannot host a second hello_imgui runner. The line-scan + Z-stack
 viewer that draws the lines on the stack is ``mbo linescan scan.mesc --view``
