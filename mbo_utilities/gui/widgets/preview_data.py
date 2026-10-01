@@ -176,7 +176,7 @@ def _mean_key(arr) -> tuple:
 
 
 # the Signal Quality plot on the top strip
-ZSTATS_PANEL_HEIGHT = 260
+ZSTATS_PANEL_HEIGHT = 156
 
 
 class PreviewDataWidget(EdgeWindow):
