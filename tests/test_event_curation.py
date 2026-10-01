@@ -225,7 +225,9 @@ class TestSession:
         }
         for mode, payload in files.items():
             paths[mode].write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        before = {mode: path.read_text(encoding="utf-8") for mode, path in paths.items()}
+        before = {
+            mode: path.read_text(encoding="utf-8") for mode, path in paths.items()
+        }
 
         # without --write nothing on disk changes
         assert main([str(pf_dir)]) == 1
