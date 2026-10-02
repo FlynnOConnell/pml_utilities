@@ -47,7 +47,7 @@ import pickle
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import numpy as np
 import zarr
@@ -81,6 +81,7 @@ __all__ = [
     "results_from_suite2p",
     "results_name",
     "results_pipeline",
+    "results_source",
     "results_stamp",
     "results_summary",
     "unit_for_source",
@@ -258,9 +259,11 @@ def results_stamp(path) -> datetime | None:
     return None
 
 
-def newest_results(folder, pipeline: str | None = None) -> Path | None:
+def newest_results(folder, pipeline: str | None = None, source=None) -> Path | None:
     """The newest results file directly in ``folder`` by the timestamp in its
-    name, limited to one ``pipeline`` when given; None when there is none.
+    name, limited to one ``pipeline`` and to the runs made from the recording
+    ``source`` (:func:`results_source`; a run naming no recording counts) when
+    given; None when there is none.
 
     A file named before this convention has no timestamp and sorts oldest.
     """
@@ -270,7 +273,9 @@ def newest_results(folder, pipeline: str | None = None) -> Path | None:
     found = [
         p
         for p in folder.glob("*.zarr")
-        if (kind := results_pipeline(p)) is not None and pipeline in (None, kind)
+        if (kind := results_pipeline(p)) is not None
+        and pipeline in (None, kind)
+        and (source is None or results_source(p) in ("", Path(source).name))
     ]
     if not found:
         return None
@@ -342,6 +347,22 @@ def pipeline_files(path) -> Path:
         if own.is_dir():
             return own
     return path
+
+
+def results_source(path) -> str:
+    """The file name of the recording a run was made from, as its ``source``
+    block records it, or "" when it names none (the archive's PF folders).
+    ``path`` is a results file or a native output folder.
+    """
+    path = Path(path)
+    if results_pipeline(path) is not None:
+        doc = json.loads((path / "zarr.json").read_text())["attributes"]
+    else:
+        file = pipeline_files(path) / PROVENANCE_FILE
+        doc = json.loads(file.read_text()) if file.is_file() else {}
+    block = doc.get("source") or {}
+    # a path written on Windows keeps its backslashes on any machine
+    return PureWindowsPath(str(block.get("path") or block.get("mesc") or "")).name
 
 
 def results_dir_of(path) -> Path | None:

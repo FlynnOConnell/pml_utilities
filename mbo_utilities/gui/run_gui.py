@@ -1159,7 +1159,9 @@ def _first_linescan_unit(path) -> str | None:
         return None
     path = Path(path)
     for parent in (path.parent.parent, path.parent):
-        found = newest_results(parent, "voltage") or results_dir_of(parent / "PF")
+        found = newest_results(parent, "voltage", source=path) or results_dir_of(
+            parent / "PF"
+        )
         if found is None:
             continue
         try:
