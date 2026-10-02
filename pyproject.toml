@@ -11,39 +11,31 @@ license = "BSD-3-Clause"
 requires-python = ">=3.12.7,<3.14"
 keywords = ["Microscopy", "ScanImage", "multiROI", "Tiff"]
 dependencies = [
-	"setuptools<81",
 	"click",
-	"numpy>=2.2.5,<2.4",
-	"pandas",
+	"numpy>=2.2.5",
 	"scipy",
 	"tifffile>=2025.3.30",
+	"imagecodecs>=2026.6.6",
 	"scikit-image",
 	"zarr>=3.1.3",
+	"numcodecs>=0.16",
 	"dask>=2025.3.0",
 	"imageio[ffmpeg]",
-	"ffmpeg-python",
 	"matplotlib>=3.10.1",
 	"cmap>=0.7.2",
 	"opencv-contrib-python-headless",
 	"h5py",
 	"psutil>=7.0",
 	"tqdm",
-	"icecream>=2.1.4",
+	"packaging",
 	"glfw",
 	"pyqt6>=6.7 ; sys_platform == 'linux'",
-	"pyqt6-sip ; sys_platform == 'linux'",
-	"pygfx>=0.15.2",
-	"llvmlite>=0.43.0",
 	"numba>=0.60.0",
-	"fastplotlib",
+	"fastplotlib[imgui]>=0.7.0,<0.8",
 	"rendercanvas>=2.7.2",
-	"uvicorn>=0.30",
-	"websockets>=13",
+	"wgpu>=0.30.1",
 	"imgui-bundle>=1.92.801,<1.92.900",
 	"imgui_debugger @ git+https://github.com/FlynnOConnell/imgui_debugger@ad9986a59b19428c4fa42f0b64891f8e03bac592",
-	"wgpu>=0.28.1",
-	"submitit>=1.5.0",
-	"imagecodecs>=2026.6.6",
 ]
 
 [project.scripts]
@@ -77,6 +69,8 @@ Repository = "https://github.com/FlynnOConnell/pml_utilities"
 Issues = "https://github.com/MillerBrainObservatory/mbo_utilities/issues"
 
 [project.optional-dependencies]
+hpc = ["submitit>=1.5.0"]
+server = ["uvicorn>=0.30", "websockets>=13"]
 napari = [
     "napari",
     "napari-ome-zarr",
@@ -109,9 +103,8 @@ docs = [
     "sphinxcontrib-bibtex",
     "jupytext",
     "myst_nb",
-    "pygfx>=0.14.0",
 ]
-all = ["pml_utilities[napari,notebooks]"]
+all = ["pml_utilities[hpc,napari,notebooks,server]"]
 
 [tool.uv]
 default-groups = ["dev", "suite2p", "napari", "notebooks", "docs"]
