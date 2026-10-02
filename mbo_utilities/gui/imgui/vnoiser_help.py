@@ -167,7 +167,10 @@ WINDOW = (
         "sliders are on",
     ),
     ("Current dataset", "the file, the scan on screen and its frame rate"),
-    ("Output folder", "where the results file goes: beside the .mesc unless you change it"),
+    (
+        "Output folder",
+        "where the results file goes: beside the .mesc unless you change it",
+    ),
     (
         "Set slice",
         "frames (one unbroken window), ROIs and one channel: only the chosen ROIs are read, and every "
@@ -195,7 +198,10 @@ WINDOW = (
         "starts the run in the background; the process console follows it, every ROI read and every domain "
         "denoised",
     ),
-    ("Load into Traces", "the finished run's denoised and line traces in the Traces tab, over the recording"),
+    (
+        "Load into Traces",
+        "the finished run's denoised and line traces in the Traces tab, over the recording",
+    ),
     (
         "Curate",
         "the curation window on the finished run; before any run, on the file's lines as recorded, each "
@@ -208,7 +214,10 @@ DOMAIN_RULES = (
         "a domain",
         "a named group of ROIs averaged into one trace: the lines over a soma, a branch, one cell's patch",
     ),
-    ("ROIs", "0-based, in the order they were drawn: 0,1,2 or 0:2 (both ends included)"),
+    (
+        "ROIs",
+        "0-based, in the order they were drawn: 0,1,2 or 0:2 (both ends included)",
+    ),
     ("to start", "one domain per ROI of the scan on screen: roi0, roi1, ..."),
     (
         "another scan",
@@ -246,7 +255,10 @@ PANELS = (
         "A1 - A4",
         "the four rules as sliders, each with how many candidates it passes; they apply on release",
     ),
-    ("B. template", "the average shape of the events it is built from, their snippets faint behind it"),
+    (
+        "B. template",
+        "the average shape of the events it is built from, their snippets faint behind it",
+    ),
     (
         "C. candidate",
         "the focused candidate over the template; the title carries how alike they are (cosine, 1 = the "
@@ -270,8 +282,14 @@ PANELS = (
 )
 RULES = (
     ("rule", "decides"),
-    ("A1 thr", "what a candidate is: every local maximum of the trace above the red line"),
-    ("A2 peak", "a candidate peaking at or above the teal line passes whatever its shape"),
+    (
+        "A1 thr",
+        "what a candidate is: every local maximum of the trace above the red line",
+    ),
+    (
+        "A2 peak",
+        "a candidate peaking at or above the teal line passes whatever its shape",
+    ),
     (
         "A3 PC1",
         "every candidate on the passing side of the purple line on the PCA passes; the arrow flips the side",
@@ -294,8 +312,14 @@ MODES = (
         "candidates from the denoised trace; the seed template is the quarter of them with the largest "
         "amplitude",
     ),
-    ("slow", "candidates from its low-pass view (under 40 Hz, editable), seeded the same way"),
-    ("manual", "no seed template and no rules: only your Yes events build the template"),
+    (
+        "slow",
+        "candidates from its low-pass view (under 40 Hz, editable), seeded the same way",
+    ),
+    (
+        "manual",
+        "no seed template and no rules: only your Yes events build the template",
+    ),
 )
 FILES = (
     ("in the run", "holds"),
@@ -321,7 +345,10 @@ FILES = (
         "pkl",
         "Output format pkl writes the older PF folder of pickles instead; the curation window opens either",
     ),
-    ("terminal", "mbo voltage file.mesc runs it, mbo curate file.mesc opens the curation window"),
+    (
+        "terminal",
+        "mbo voltage file.mesc runs it, mbo curate file.mesc opens the curation window",
+    ),
 )
 
 # the sketches' made-up recording: six spikes as (time, height) over SPAN time steps
@@ -375,7 +402,11 @@ MASKED = tuple(
 WINDOWS = tuple(
     tuple(
         zip(
-            [c for c in range(COLS) if row[c] > OPEN and (c == 0 or row[c - 1] <= OPEN)],
+            [
+                c
+                for c in range(COLS)
+                if row[c] > OPEN and (c == 0 or row[c - 1] <= OPEN)
+            ],
             [
                 c + 1
                 for c in range(COLS)
@@ -394,7 +425,11 @@ SCANS = (
     ("MUnit_32", "10 s", False),
     ("MUnit_27", "30 s", False),
 )
-DOMAINS = (("soma", "0,1,2", (0, 1, 2)), ("dend", "3:5", (3, 4, 5)), ("roi6", "6", (6,)))
+DOMAINS = (
+    ("soma", "0,1,2", (0, 1, 2)),
+    ("dend", "3:5", (3, 4, 5)),
+    ("roi6", "6", (6,)),
+)
 LINES = (
     (0.10, 0.62, 0.24, 0.50),
     (0.16, 0.76, 0.31, 0.66),
@@ -413,15 +448,20 @@ OWNER = tuple(
 # the PCA and a snippet as wide as given; the lines sit at these heights of the trace
 CALLS = ("yes", "auto_yes", "yes", "auto_no", "auto_yes", "no")
 COSINES = (0.97, 0.88, 0.95, 0.41, 0.98, 0.52)
-PCA = ((0.78, 0.60), (0.55, 0.30), (0.70, 0.42), (0.18, 0.70), (0.84, 0.35), (0.30, 0.25))
+PCA = (
+    (0.78, 0.60),
+    (0.55, 0.30),
+    (0.70, 0.42),
+    (0.18, 0.70),
+    (0.84, 0.35),
+    (0.30, 0.25),
+)
 SNIPPET_WIDTHS = (0.20, 0.24, 0.21, 0.60, 0.19, 0.50)
 THRESHOLD_AT = 0.2
 AUTO_PASS_AT = 0.74
 PC1_AT = 0.42
 SNIPPETS = tuple(
-    tuple(
-        0.1 + 0.8 * h * math.exp(-(((u - 20) / 20 / width) ** 2)) for u in range(41)
-    )
+    tuple(0.1 + 0.8 * h * math.exp(-(((u - 20) / 20 / width) ** 2)) for u in range(41))
     for (_s, h), width in zip(SPIKES, SNIPPET_WIDTHS, strict=True)
 )
 # the template: the mean snippet of the events it is built from
@@ -468,7 +508,10 @@ def arrow(dl, x0: float, x1: float, y: float) -> None:
     col = u32(DIM)
     dl.add_line(imgui.ImVec2(x0, y), imgui.ImVec2(x1 - 5, y), col, 1.5)
     dl.add_triangle_filled(
-        imgui.ImVec2(x1, y), imgui.ImVec2(x1 - 7, y - 4), imgui.ImVec2(x1 - 7, y + 4), col
+        imgui.ImVec2(x1, y),
+        imgui.ImVec2(x1 - 7, y - 4),
+        imgui.ImVec2(x1 - 7, y + 4),
+        col,
     )
 
 
@@ -514,7 +557,9 @@ def card(
     dl.add_rect(a, b, u32(EDGE), 4.0)
     size = imgui.calc_text_size(title)
     dl.add_text(
-        imgui.ImVec2(x + (w - size.x) / 2, y + (1.2 * em - size.y) / 2), u32(TEXT), title
+        imgui.ImVec2(x + (w - size.x) / 2, y + (1.2 * em - size.y) / 2),
+        u32(TEXT),
+        title,
     )
     return y + 1.2 * em
 
@@ -650,12 +695,14 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     x0, pw = p.x + gutter, w - gutter - 0.5 * em
     slot = ph / 3
     for i, (name, kind, color) in enumerate(
-        (("counts", "raw", RAW), ("z-score", "z", ZSCORE), ("denoised", "denoised", DENOISED))
+        (
+            ("counts", "raw", RAW),
+            ("z-score", "z", ZSCORE),
+            ("denoised", "denoised", DENOISED),
+        )
     ):
         y = top + i * slot
-        dl.add_text(
-            imgui.ImVec2(p.x + 0.6 * em, y + (slot - em) / 2), u32(color), name
-        )
+        dl.add_text(imgui.ImVec2(p.x + 0.6 * em, y + (slot - em) / 2), u32(color), name)
         polyline(dl, x0, y + 0.12 * slot, pw, 0.76 * slot, TRACES[kind], u32(color))
     y = top + 2 * slot + 0.12 * slot
     for s, h in SPIKES:
@@ -808,7 +855,9 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     sliders_w = len(SLIDERS) * col + 0.8 * em
     aw, ah = w - sliders_w - gap, 7.0 * em
     n = len(SPIKES)
-    top = card(dl, p.x, p.y, aw, 1.2 * em + ah, f"A. fast candidates: {n} ({n} in view)")
+    top = card(
+        dl, p.x, p.y, aw, 1.2 * em + ah, f"A. fast candidates: {n} ({n} in view)"
+    )
     x0, pw = p.x + 0.5 * em, aw - em
     y0, plot_h = top + 0.9 * em, ah - 1.3 * em
     polyline(dl, x0, y0, pw, plot_h, TRACES["denoised"], u32(RAW), 1.2)
@@ -865,7 +914,14 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
             1.0,
         )
     polyline(
-        dl, p.x + 0.5 * em, top + 0.4 * em, bw - em, bh - 0.8 * em, TEMPLATE, u32(TEXT), 2.5
+        dl,
+        p.x + 0.5 * em,
+        top + 0.4 * em,
+        bw - em,
+        bh - 0.8 * em,
+        TEMPLATE,
+        u32(TEXT),
+        2.5,
     )
     x = p.x + bw + gap
     top = card(
@@ -886,7 +942,16 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
         u32(SNIPPET),
         1.5,
     )
-    polyline(dl, x + 0.5 * em, top + 0.4 * em, bw - em, bh - 0.8 * em, TEMPLATE, u32(TEXT), 2.0)
+    polyline(
+        dl,
+        x + 0.5 * em,
+        top + 0.4 * em,
+        bw - em,
+        bh - 0.8 * em,
+        TEMPLATE,
+        u32(TEXT),
+        2.0,
+    )
     for dash in range(0, int(bh - 0.8 * em), 6):
         dl.add_line(
             imgui.ImVec2(x + bw / 2, top + 0.4 * em + dash),

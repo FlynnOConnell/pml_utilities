@@ -255,9 +255,7 @@ class CurationApp(_Dashboard):
             hello_imgui.ImGuiTheme_.darcula_darker
         )
         # the vnoiser guide's icons
-        params.callbacks.default_icon_font = (
-            hello_imgui.DefaultIconFont.font_awesome6
-        )
+        params.callbacks.default_icon_font = hello_imgui.DefaultIconFont.font_awesome6
         params.callbacks.show_gui = self.draw
         return params
 
