@@ -371,6 +371,53 @@ def test_planes_pick_the_rois_and_cut_the_domains(tmp_path):
     assert "traces/scan1_denoised.npy" in paths
 
 
+def test_one_roi_of_one_channel_runs_and_belongs_to_its_file(tmp_path):
+    """What the MESc tab's button submits: one scan, one ROI (``planes``), one channel. The run reads
+    that channel, records the domain table it was given, and belongs to its own file: another
+    .mesc in the folder has no run, and the widget reopened on the file gets the whole table back.
+    """
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
+    from mbo_utilities.results import newest_results, read_results
+    from mbo_utilities.vnoiser import voltage_run_for_mesc, voltage_unit_for_mesc
+
+    mesc, other = tmp_path / "a.mesc", tmp_path / "b.mesc"
+    page = _chessboard_mesc(mesc)
+    _chessboard_mesc(other)
+    domains = {"roi0": [0], "roi1": [1], "roi2": [2]}
+    paths = run_voltage_pipeline(
+        mesc, domains=domains, units=["MSession_0/MUnit_1"], planes=[2], channel=1
+    )
+    run = next(p for name, p in paths.items() if name.endswith(".zarr"))
+    results = read_results(run)
+    scan = results["scan1"]
+    assert scan.roi_names == ["roi1"] and [m.tolist() for m in scan.members] == [[1]]
+    # channel 1 is the page plus 50 counts
+    raw = np.clip(page + 50, 0, 65535).astype(np.uint16)[:, :, 20:40]
+    np.testing.assert_allclose(
+        scan.member_traces["raw"][0], raw.mean(axis=(1, 2)), rtol=1e-6
+    )
+    assert results.source["channel"] == 1 and results.source["planes"] == [2]
+    assert results.source["domains"] == domains
+    assert voltage_run_for_mesc(mesc) == run
+    assert voltage_unit_for_mesc(mesc, "MUnit_1").unit == "scan1"
+    assert voltage_run_for_mesc(other) is None
+    assert voltage_unit_for_mesc(other, "MUnit_1") is None
+    assert newest_results(tmp_path, "voltage") == run
+    assert newest_results(tmp_path, "voltage", source=other) is None
+
+    widget = VoltagePipelineWidget(SimpleNamespace(fpath=mesc, image_widget=None))
+    widget._ensure_state()
+    assert widget._last_status.startswith("Loaded the previous run")
+    assert widget._domain_rows == [["roi0", "0"], ["roi1", "1"], ["roi2", "2"]]
+    widget = VoltagePipelineWidget(SimpleNamespace(fpath=other, image_widget=None))
+    widget._ensure_state()
+    assert widget._last_status == ""
+    assert widget._domain_rows == [["roi0", "0"], ["roi1", "1"], ["roi2", "2"]]
+
+
 def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     """The default ``output_format="zarr"`` writes one
     ``<input>.<stamp>.voltage.zarr`` beside the input, no pickles and no PF

@@ -587,8 +587,17 @@ runner translates through the array's metadata, never the widget. On a MESc AOD 
 Z is the ROI index (`mesc_z_axis_meaning == "roi_index"`), so `planes` are the lines or
 patches to process: the voltage runner reads only those ROIs
 (`linescan_roi_read(rois=...)`), cuts every domain down to them, drops a domain left
-empty, and records `planes` in the provenance source block. The Voltage tab's slice
-popup labels the row "ROIs" but still sends `planes`.
+empty, and records `planes` and the domain table as it was given (`domains`) in the
+provenance source block. The Voltage tab's slice popup labels the row "ROIs" but
+still sends `planes`.
+
+The Voltage widget's domain table belongs to the scans ticked from the screen
+(`_fit_domains`): one domain per ROI, unless a table was loaded or edited and names
+only ROIs those scans have. A previous run's table (its source block's `domains`,
+the uncut one) seeds a scan on screen only when the scans that run processed have as
+many ROIs. `seed_from_view` then adds the ROI on screen as a domain of its own when
+the table leaves it out, so the button's run is never blocked by a table made for
+something else.
 
 The worker does `arr = imread(input_path, **reader_kwargs)`, then
 `apply_read_features(arr, args)`, then calls the runner. Runners take a `LazyArray`
@@ -655,6 +664,10 @@ pipeline's native files stay its cache and its compatibility layer.
   rerun is a new file and a listing sorts chronologically. Nothing matches a
   results name by pattern: `results_stamp(path)` reads the stamp back with
   `datetime.strptime` and `newest_results(folder, pipeline)` picks the latest run.
+  A run belongs to the recording its source block names (`results_source(path)`,
+  the file name): `newest_results(..., source=file)` and `voltage_run_for_mesc`
+  never hand one `.mesc` the run of another in the same folder; a run naming no
+  recording (the archive's PF folders) counts for any.
   Unit groups keep the §5.6 vocabulary (`unit_name("plane", 1)` is `zplane01`;
   scans are `scan<id>`).
 - **Molding.** A pipeline builds one `ResultUnit` per plane or scan and calls

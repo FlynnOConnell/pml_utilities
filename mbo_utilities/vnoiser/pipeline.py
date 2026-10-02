@@ -496,6 +496,7 @@ def run_voltage_pipeline(
     dfof_cfg = dfof_cfg or settings.dfof.config()
     spike_cfg = spike_cfg or settings.events.config()
     denoiser_factory = denoiser_factory or settings.denoiser.factory
+    given = {str(name): [int(r) for r in rs] for name, rs in domains.items()}
     rois = None
     if planes is not None:
         rois = sorted({int(p) - 1 for p in planes})
@@ -595,6 +596,8 @@ def run_voltage_pipeline(
                 "convert": bool(convert),
                 "frames": None if frames is None else [int(frames[0]), int(frames[1])],
                 "planes": None if planes is None else [int(p) for p in planes],
+                # the table as given; `planes` cuts the one the run works on
+                "domains": given,
                 "mbo_utilities": mbo_version,
             },
         }
