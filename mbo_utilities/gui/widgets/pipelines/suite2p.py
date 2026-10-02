@@ -49,7 +49,7 @@ class Suite2pPipelineWidget(PipelineWidget):
     """suite2p processing and results widget."""
 
     name = "Suite2p"
-    install_command = "uv pip install mbo_utilities[all]"
+    install_command = "uv pip install --no-deps lbm-suite2p-python && uv pip install suite2p rastermap torch torchvision"
     extracts_traces = True
 
     @property

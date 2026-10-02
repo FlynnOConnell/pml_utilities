@@ -28,7 +28,7 @@ class PipelineWidget(ABC):
     is_available: bool = False
 
     # install command to show when not available
-    install_command: str = "uv pip install mbo_utilities"
+    install_command: str = 'uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"'
 
     # file patterns / marker files, registered when the widget is discovered
     # through the ``mbo_utilities.pipelines`` entry-point group

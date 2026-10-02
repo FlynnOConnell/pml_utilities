@@ -95,7 +95,13 @@ class CurationServer:
         # import and the desktop branch of the figure helper would ask Qt for
         # a screen: a server has none
         os.environ.setdefault("RENDERCANVAS_FORCE_OFFSCREEN", "1")
-        from rendercanvas.http import asgi, resources
+        try:
+            from rendercanvas.http import asgi, resources
+        except ImportError as e:
+            raise ImportError(
+                "mbo curate --serve needs the rendercanvas http backend, which no release "
+                "has yet (2.7.2 lacks it): uv pip install git+https://github.com/pygfx/rendercanvas"
+            ) from e
 
         from mbo_utilities.gui.curation_viewer import CurationVis
 
@@ -130,7 +136,12 @@ class CurationServer:
         return int(self.asgi.get_count())
 
     def _uvicorn_config(self, **kwargs):
-        import uvicorn
+        try:
+            import uvicorn
+        except ImportError as e:
+            raise ImportError(
+                'uvicorn not installed. Install with: uv pip install "pml_utilities[server] @ git+https://github.com/FlynnOConnell/pml_utilities.git"'
+            ) from e
 
         return uvicorn.Config(
             self.asgi,
