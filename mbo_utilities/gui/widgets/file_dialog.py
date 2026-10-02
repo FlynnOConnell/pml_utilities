@@ -76,7 +76,7 @@ def _get_install_source() -> str:
         import importlib.metadata
         import json
 
-        dist = importlib.metadata.distribution("mbo-utilities")
+        dist = importlib.metadata.distribution("pml_utilities")
 
         # check direct_url.json (pip install from git url or editable)
         direct_url_text = dist.read_text("direct_url.json")

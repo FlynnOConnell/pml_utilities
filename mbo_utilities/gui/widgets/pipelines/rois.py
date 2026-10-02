@@ -97,7 +97,7 @@ class RoiPipelineWidget(PipelineWidget):
 
     name = "ROIs"
     is_available = True
-    install_command = "uv pip install mbo_utilities"
+    install_command = 'uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"'
     info = PipelineInfo(
         name="rois",
         description="Traces of hand-drawn ROIs (mean, suite2p or masknmf) per z-plane and channel",

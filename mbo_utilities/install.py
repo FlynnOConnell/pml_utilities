@@ -428,7 +428,7 @@ def check_installation(callback=None) -> InstallStatus:
     ]
 
     _update(0.9, "Checking napari...")
-    napari_hint = "uv pip install 'mbo_utilities[napari]'"
+    napari_hint = "uv pip install 'pml_utilities[napari] @ git+https://github.com/FlynnOConnell/pml_utilities.git'"
     napari = _check_pkg(
         "napari", "napari", "Napari", "the napari viewer mode", napari_hint
     )
