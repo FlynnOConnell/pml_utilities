@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import pytest
 from imgui_bundle import imgui
-
 from mbo_utilities.gui.imgui import vnoiser_help
 from mbo_utilities.gui.imgui.vnoiser_help import draw_vnoiser_help
 
@@ -65,9 +64,7 @@ def test_the_sketches_agree_with_their_own_counts():
     counts = {name: count for name, _color, _at, count in vnoiser_help.SLIDERS}
     n = len(peaks)
     assert counts["thr"] == f"{sum(v > vnoiser_help.THRESHOLD_AT for v in peaks)} found"
-    assert (
-        counts["peak"] == f"{sum(v >= vnoiser_help.AUTO_PASS_AT for v in peaks)}/{n}"
-    )
+    assert counts["peak"] == f"{sum(v >= vnoiser_help.AUTO_PASS_AT for v in peaks)}/{n}"
     assert (
         counts["PC1"]
         == f"{sum(u >= vnoiser_help.PC1_AT for u, _v in vnoiser_help.PCA)}/{n}"
