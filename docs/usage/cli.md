@@ -175,6 +175,7 @@ Create starter notebooks (mbo + LBM-Suite2p user guides).
 mbo init                       # notebooks in current directory
 mbo init /path/to/raw          # notebooks in /path/to/scripts, data path filled in
 mbo init /path/to/raw -o ./nb  # custom destination directory
+mbo init /path/to/scan.mesc    # the guides and the ASAP7 spine pipeline, unit and path filled in
 ```
 
 | Option | Description |

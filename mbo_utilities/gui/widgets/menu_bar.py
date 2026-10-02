@@ -13,6 +13,7 @@ from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities.gui._dialogs import start_open_prompt
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
+from mbo_utilities.gui.widgets.notebooks import draw_notebook_menu
 from mbo_utilities.gui.widgets.pipelines import (
     open_pipeline,
     quick_pipelines,
@@ -43,6 +44,9 @@ def draw_menu_bar(parent: Any):
                     "Open Folder", "Shift+O", p_selected=False, enabled=True
                 )[0]:
                     start_open_prompt(parent, "folder")
+                # the notebooks for the open recording: the scripts folder
+                # beside it and the shipped templates that fit it
+                draw_notebook_menu(parent)
                 imgui.separator()
                 if imgui.menu_item(
                     "Set Metadata", "Shift+M", p_selected=False, enabled=True
