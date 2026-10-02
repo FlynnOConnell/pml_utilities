@@ -57,11 +57,10 @@ jobs:
         # cwd is empty of any source tree, so these resolve to site-packages.
         run: |
           uv run --no-project python -c "
-          import mbo_utilities, fastplotlib as fpl, masknmf, importlib.metadata as md
+          import mbo_utilities, fastplotlib as fpl, importlib.metadata as md
           assert 'site-packages' in mbo_utilities.__file__, mbo_utilities.__file__
           print('pml_utilities', md.version('pml_utilities'))
           print('fastplotlib ', fpl.__version__, '| NDWidget:', hasattr(fpl, 'NDWidget'))
-          print('masknmf     ', md.version('masknmf'))
           from mbo_utilities import imread
           import mbo_utilities.lazy_array as la
           la._load_entry_point_arrays()
