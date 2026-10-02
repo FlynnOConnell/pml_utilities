@@ -21,6 +21,7 @@ from typing import Any
 
 import numpy as np
 from imgui_bundle import hello_imgui, imgui, imgui_ctx
+from imgui_bundle import icons_fontawesome_6 as fa
 from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities.arrays.features._dim_labels import slider_roles
@@ -36,6 +37,12 @@ from mbo_utilities.gui._imgui_helpers import (
     tooltip_marks_right,
 )
 from mbo_utilities.gui._selection_ui import draw_selection_table, resolve_dim_labels
+from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
+from mbo_utilities.gui.imgui.vnoiser_help import (
+    KEYBINDS,
+    TOOLTIP,
+    draw_vnoiser_help,
+)
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 from mbo_utilities.gui.widgets.pipelines.settings import (
     _MISSING_COLOR,
@@ -166,6 +173,9 @@ class VoltagePipelineWidget(PipelineWidget):
         self._domain_rows: list[list[str]] = []
         self._domain_error = ""
         self._domains_path = ""
+        self._help_open = False
+        self._help_keys = False
+        self._help_frame = -1
 
     def _array(self):
         iw = getattr(self.parent, "image_widget", None)
@@ -418,6 +428,11 @@ class VoltagePipelineWidget(PipelineWidget):
             fit_width(),
         ):
             imgui.spacing()
+            if imgui.small_button(
+                f"{fa.ICON_FA_CIRCLE_QUESTION} vnoiser guide##voltage_help"
+            ):
+                self._help_open = not self._help_open
+            set_tooltip(TOOLTIP, show_mark=False)
             self._draw_dataset_block()
             imgui.separator()
             self._draw_output_row()
@@ -440,6 +455,15 @@ class VoltagePipelineWidget(PipelineWidget):
             self._draw_modified_table()
             imgui.spacing()
             self._draw_run()
+        # the tab and its popped-out window can both draw this widget in one frame
+        if self._help_frame != imgui.get_frame_count():
+            self._help_frame = imgui.get_frame_count()
+            self._help_open, self._help_keys = draw_vnoiser_help(
+                self._help_open, self._help_keys
+            )
+            self._help_keys = draw_keybinds_popup(
+                KEYBINDS, self._help_keys, "Curation keybinds"
+            )
 
     def _draw_dataset_block(self) -> None:
         imgui.text_colored(_SUBSECTION_COLOR, "Current dataset")

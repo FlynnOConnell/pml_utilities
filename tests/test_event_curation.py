@@ -663,6 +663,11 @@ class TestWidget:
         assert curation.strip.panels[0] is curation.panel
         _frames(curation)
 
+    def test_the_vnoiser_guide_draws_from_the_frame_hook(self, curation):
+        curation.show_help = True
+        _frames(curation, 3)
+        assert curation.show_help and not curation.show_keybinds
+
     def test_scope_narrows_what_is_shown_and_flipped(
         self, curation, data_root, tmp_path
     ):
