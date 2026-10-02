@@ -25,7 +25,12 @@ from vnoiser.curation import (
 )
 from vnoiser.dataset import RecordingSample
 
-from mbo_utilities.results import ResultsArray, newest_results, results_dir_of
+from mbo_utilities.results import (
+    ResultsArray,
+    newest_results,
+    results_dir_of,
+    results_source,
+)
 
 __all__ = [
     "LABEL_RGBA",
@@ -629,17 +634,19 @@ class CurationSession:
 
 def voltage_run_for_mesc(mesc_path) -> Path | None:
     """What the voltage pipeline last left for a line scan: the newest results
-    file beside it, else a ``PF`` folder of pickles beside it or one folder up
-    (the ``<expt>/<expt>/<expt>.mesc`` layout keeps ``<expt>/PF``); None when
-    there is none.
+    file beside it that was made from it, else a ``PF`` folder of pickles
+    beside it or one folder up (the ``<expt>/<expt>/<expt>.mesc`` layout keeps
+    ``<expt>/PF``); None when there is none. Another recording's run in the
+    same folder is never this one's.
     """
     mesc_path = Path(mesc_path)
-    found = newest_results(mesc_path.parent, "voltage")
+    found = newest_results(mesc_path.parent, "voltage", source=mesc_path)
     if found is not None:
         return found
     for parent in (mesc_path.parent.parent, mesc_path.parent):
         found = results_dir_of(parent / "PF")
-        if found is not None:
+        # the archive's PF folders name no recording
+        if found is not None and results_source(found) in ("", mesc_path.name):
             return found
     return None
 
