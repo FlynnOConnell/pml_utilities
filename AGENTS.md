@@ -599,6 +599,19 @@ many ROIs. `seed_from_view` then adds the ROI on screen as a domain of its own w
 the table leaves it out, so the button's run is never blocked by a table made for
 something else.
 
+The pipeline's one help page is the vnoiser guide
+(`gui/imgui/vnoiser_help.draw_vnoiser_help(is_open, keys_open)`), drawn diagrams and
+tables after masknmf's curation and classification pages: the steps, a made-up trace
+through every stage, the Voltage window and its domain table, the curation window
+and its four rules, the files. The Voltage window's `vnoiser guide` button and the
+curation window's `guide` button (`h`) open it; `python -m
+mbo_utilities.gui.imgui.vnoiser_help` opens it alone (`--frames N --screenshot
+out.png` for a look without a window left open). It holds the curation window's
+`KEYBINDS`, imports neither vnoiser nor `gui._setup`, and gives itself an opaque
+window whatever the host's style. Every number its stage table quotes is a
+`VoltageSettings` default and every colour is the curation window's: change one and
+`tests/test_vnoiser_help.py` says which line of the guide to change with it.
+
 The worker does `arr = imread(input_path, **reader_kwargs)`, then
 `apply_read_features(arr, args)`, then calls the runner. Runners take a `LazyArray`
 or a path and the same 1-based selection kwargs; they never take GUI objects.

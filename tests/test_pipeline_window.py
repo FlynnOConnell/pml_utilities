@@ -41,6 +41,18 @@ def fake_process_manager():
     return FakeProcessManager()
 
 
+GUIDE_DRAWS = []
+
+
+def count_guide(is_open, keys_open):
+    GUIDE_DRAWS.append(is_open)
+    return is_open, keys_open
+
+
+def press_guide(label, *a, **k):
+    return REAL_SMALL_BUTTON(label, *a, **k) or "vnoiser guide" in label
+
+
 def line_scan_unit(session, n, lines=4, channels=1):
     """An AOD line-scan unit ``MUnit_<n>`` of 20 frames."""
     unit = session.create_group(f"MUnit_{n}")
@@ -291,6 +303,33 @@ def test_run_submits_the_scan_roi_and_channel_on_screen(uneven_mesc, monkeypatch
     assert args["domains"] == {f"roi{i}": [i] for i in range(6)}
     assert args["output_dir"] == str(uneven_mesc.parent)
     assert widget._last_status.startswith("Started (PID 4242)")
+
+
+def test_the_voltage_window_opens_the_vnoiser_guide(roi_mesc, monkeypatch):
+    """Its button toggles the guide, drawn once a frame even when the tab and
+    the popped-out window both draw the widget.
+    """
+    from mbo_utilities.gui.widgets.pipelines import open_pipeline
+
+    monkeypatch.setattr(
+        "mbo_utilities.gui.widgets.pipelines.voltage.draw_vnoiser_help", count_guide
+    )
+    widget = open_pipeline(fake_host(roi_mesc, "MSession_0/MUnit_5"), "Voltage")
+    GUIDE_DRAWS.clear()
+    frames(
+        lambda: (
+            imgui.begin("host"),
+            widget.draw_config(),
+            imgui.push_id("window"),
+            widget.draw_config(),
+            imgui.pop_id(),
+            imgui.end(),
+        )
+    )
+    assert GUIDE_DRAWS == [False, False]
+    monkeypatch.setattr(imgui, "small_button", press_guide)
+    frames(lambda: (imgui.begin("host"), widget.draw_config(), imgui.end()), n=1)
+    assert widget._help_open and GUIDE_DRAWS[-1] is True
 
 
 def test_shown_name_is_the_unit_else_the_file(roi_mesc, tmp_path):

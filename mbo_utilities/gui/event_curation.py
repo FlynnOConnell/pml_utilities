@@ -56,6 +56,11 @@ from mbo_utilities.gui.imgui.lines import (
 from mbo_utilities.gui.imgui.motion import MotionPlot
 from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
+from mbo_utilities.gui.imgui.vnoiser_help import (
+    KEYBINDS,
+    TOOLTIP,
+    draw_vnoiser_help,
+)
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.results import TRACES_PKL, ResultsArray, results_dir_of
@@ -104,27 +109,6 @@ BOX_COLORS = {"yes": (0.14, 0.72, 0.65, 1.0), "no": (0.95, 0.22, 0.30, 1.0)}
 BOX_PLOT_FLAGS = implot.Flags_.no_box_select | implot.Flags_.no_menus
 # drag-tool id of the box on a plot (the threshold lines are 1 and 2)
 BOX_TOOL_ID = 7
-
-KEYBINDS = (
-    ("y", "label the focused candidate yes"),
-    ("n", "label the focused candidate no"),
-    ("backspace", "clear its label"),
-    ("\u2190 / \u2192", "previous / next candidate in view"),
-    ("\u2191 / \u2193", "previous / next recording"),
-    ("click", "focus a candidate on the trace or the PCA plot"),
-    (
-        "Box accept / reject",
-        "box mode: right-drag a box on the trace or the PCA, then drag its edges",
-    ),
-    ("enter", "apply the box"),
-    ("esc", "leave box mode"),
-    (
-        "drag line",
-        "move the threshold (red) / auto-pass (teal) line on the trace, or the PC1 (purple) line on the PCA",
-    ),
-    ("scroll", "zoom (shift: x only, alt: y only); drag pans; double-click fits"),
-    ("k", "this list"),
-)
 
 _MODE_TITLES = {
     "fast": "fast candidates",
@@ -307,6 +291,7 @@ class EventCurationWidget:
         self.pca = ScatterPlot("##curation_pca", marker_size=7.0)
         self.autofit = True
         self.show_keybinds = False
+        self.show_help = False
         # Box accept / reject mode: the label a drawn box applies ("yes" /
         # "no"), the rectangle (plot name, corners in plot units, whether
         # the right button is still drawing it) and the candidates it holds
@@ -712,6 +697,9 @@ class EventCurationWidget:
         self._poll_folder_dialog()
         self._draw_prompt()
         self._handle_keys()
+        self.show_help, self.show_keybinds = draw_vnoiser_help(
+            self.show_help, self.show_keybinds
+        )
         self.show_keybinds = draw_keybinds_popup(
             KEYBINDS, self.show_keybinds, "Curation keybinds"
         )
@@ -777,6 +765,8 @@ class EventCurationWidget:
             return
         if imgui.is_key_pressed(imgui.Key.k, False):
             self.show_keybinds = not self.show_keybinds
+        if imgui.is_key_pressed(imgui.Key.h, False):
+            self.show_help = not self.show_help
         if imgui.is_key_pressed(imgui.Key.escape, False):
             self.exit_box_mode()
         if self.box_mode is not None and imgui.is_key_pressed(imgui.Key.enter, False):
@@ -870,6 +860,10 @@ class EventCurationWidget:
         if imgui.small_button("keybinds"):
             self.show_keybinds = not self.show_keybinds
         set_tooltip("k", show_mark=False)
+        imgui.same_line(0, em(0.6))
+        if imgui.small_button("guide"):
+            self.show_help = not self.show_help
+        set_tooltip(f"h: {TOOLTIP}", show_mark=False)
         if plot is not None:
             imgui.same_line(0, em(1.2))
             _changed, self.show_motion = imgui.checkbox(
