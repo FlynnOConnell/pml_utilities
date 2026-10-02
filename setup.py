@@ -9,7 +9,11 @@ from pathlib import Path
 from setuptools import setup
 from setuptools.command.build_py import build_py
 
-NOTEBOOKS = ("mbo_user_guide.ipynb", "lsp_user_guide.ipynb")
+NOTEBOOKS = (
+    "mbo_user_guide.ipynb",
+    "lsp_user_guide.ipynb",
+    "asap7_spine_pipeline.ipynb",
+)
 
 
 class build_py_with_notebooks(build_py):

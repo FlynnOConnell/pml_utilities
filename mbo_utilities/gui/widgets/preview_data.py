@@ -74,6 +74,7 @@ from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_windows
 
 # Import modular components
 from mbo_utilities.gui.widgets.menu_bar import draw_keybinds_popup, draw_menu_bar
+from mbo_utilities.gui.widgets.notebooks import draw_notebooks_window
 from mbo_utilities.gui.widgets.progress_bar import start_output_capture
 from mbo_utilities.gui.widgets.style_editor import (
     apply_saved_style,
@@ -1404,6 +1405,7 @@ class PreviewDataWidget(EdgeWindow):
         draw_options_popup(self)
         draw_imgui_debug_windows(self)
         draw_style_editor_window(self)
+        draw_notebooks_window(self)
         from mbo_utilities.gui._cloud import draw_cloud_popup
         from mbo_utilities.gui.widgets.biohpc import draw_biohpc_popup
 

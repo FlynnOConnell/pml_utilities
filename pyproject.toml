@@ -41,6 +41,7 @@ dependencies = [
 	"websockets>=13",
 	"imgui-bundle>=1.92.801,<1.92.900",
 	"imgui_debugger @ git+https://github.com/FlynnOConnell/imgui_debugger@ad9986a59b19428c4fa42f0b64891f8e03bac592",
+	"imgui_notebooks @ git+https://github.com/FlynnOConnell/imgui_notebooks@82c33f18f6def75383daa9ad39e78972293f3777",
 	"wgpu>=0.28.1",
 	"submitit>=1.5.0",
 	"imagecodecs>=2026.6.6",
