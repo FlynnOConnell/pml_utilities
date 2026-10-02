@@ -49,7 +49,12 @@ pml_utilities/
 ```
 
 `pip install -e .`, Python 3.12.7 to 3.13, `uv` for environments. Console scripts:
-`mbo`, `pollen`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers) and
+`mbo`, `pollen`. Extras: `hpc` (submitit), `server` (uvicorn, websockets), `napari`,
+`notebooks`, `docs`, `all`. The suite2p pipeline is a uv dependency group only:
+`lbm-suite2p-python` depends on the PyPI `mbo_utilities`, which `[tool.uv]`
+`override-dependencies` removes for a checkout and nothing can remove for a consumer.
+Every base dependency is imported somewhere under `mbo_utilities/`; a package a
+single optional command needs is an extra, with the install hint in its `ImportError`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers) and
 `mbo_utilities.pipelines` (pipelines).
 
 ## 2. Layer responsibilities
@@ -1192,7 +1197,7 @@ MBO_PIPELINE_TIFF=/path/to/raw uv run pytest tests/local/ -v   # needs real Scan
 cd docs && uv run make html
 ```
 
-MyST + Sphinx book theme; published on merge to `master` by
+MyST + Sphinx book theme; published on merge to `main` by
 `.github/workflows/deploy_docs.yml`. `docs/file_formats.md` (formats and shapes),
 `docs/canonical_metadata.md` (metadata design), `docs/development.md` (internals),
 `docs/usage/` (GUI, CLI, HPC). In-app help pages live in
