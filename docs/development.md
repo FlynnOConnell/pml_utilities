@@ -51,14 +51,14 @@ uv tool run ruff check --fix .
 ## Building Docs
 
 ```bash
-uv pip install "mbo_utilities[docs]"
+uv pip install "pml_utilities[docs] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 cd docs
 uv run make clean
 uv run make html
 ```
 
 The site at <https://millerbrainobservatory.github.io/mbo_utilities/> is rebuilt
-and published automatically on every merge to `master` (`.github/workflows/deploy_docs.yml`).
+and published automatically on every merge to `main` (`.github/workflows/deploy_docs.yml`).
 Pull requests build the docs as a check but do not publish. To republish without a
 merge, run the *Deploy Docs* workflow manually from the Actions tab.
 
