@@ -1,2 +1,3 @@
 include demos/mbo_user_guide.ipynb
 include demos/lsp_user_guide.ipynb
+include demos/asap7_spine_pipeline.ipynb

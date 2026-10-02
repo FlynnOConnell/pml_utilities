@@ -168,9 +168,13 @@ The in-app shortcut cheatsheet, opened with `k`.
 
 ### Menu Bar
 
-- **File**: Open File, Open Folder, Save As
+- **File**: Open File, Open Folder, Open Notebook, Save As
 - **Docs**: Help viewer, Keybinds, Online Docs link
 - **Settings**: Scope Inspector toggle, Status Indicator toggle
+
+### Open Notebook
+
+**File > Open Notebook** lists the notebooks for the open recording and opens one in the browser, starting JupyterLab (or marimo, for a `.py` notebook) in the Studio's own environment the first time; a second pick on the same folder is instant. Two groups follow the open file: **beside the data** is the `scripts` folder next to it, the place `mbo init` writes to, and **new from template** is the shipped starter notebooks that fit it. A template is copied to `scripts/` with the data path filled in the first time it is picked, and never overwritten after; a `.mesc` also gets its measurement unit filled in and offers the ASAP7 spine pipeline (masknmf). **Manage notebooks...** opens the panel: every server with its url and log, a Stop button, and forms to open any path or add a folder, here or on a machine you can ssh to, with the port forwarded for you. Folders added there come back next run.
 
 ### Options
 

@@ -1217,6 +1217,14 @@ When they disagree, fix the docs.
   is a base dependency, pinned to a commit of its GitHub repository in
   `pyproject.toml` (the PyPI release lags the API used here); bump the pin when
   it moves.
+- File > Open Notebook (`gui/widgets/notebooks.py`) is `imgui_notebooks`, a base
+  dependency pinned the same way. Its sources are the `scripts` folder beside the
+  open recording and the shipped templates that fit it (`notebook_templates.py`,
+  the table `mbo init` writes from; `demos/` is the source of truth, copied into
+  the package at build time by `setup.py`). A template is written beside the
+  data with the path and `.mesc` unit filled in when first picked. Servers run
+  in the Studio's own interpreter; folders added from the panel and the recent
+  list are in `get_mbo_dirs()["imgui"]/notebooks.json`.
 - The app host (`gui/app`) keeps its window geometry apart from the preview
   window's, in `get_mbo_dirs()["imgui"]/app.ini`.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,
