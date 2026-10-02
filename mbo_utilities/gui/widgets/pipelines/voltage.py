@@ -21,6 +21,7 @@ from typing import Any
 
 import numpy as np
 from imgui_bundle import hello_imgui, imgui, imgui_ctx
+from imgui_bundle import icons_fontawesome_6 as fa
 from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities.arrays.features._dim_labels import slider_roles
@@ -36,6 +37,12 @@ from mbo_utilities.gui._imgui_helpers import (
     tooltip_marks_right,
 )
 from mbo_utilities.gui._selection_ui import draw_selection_table, resolve_dim_labels
+from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
+from mbo_utilities.gui.imgui.vnoiser_help import (
+    KEYBINDS,
+    TOOLTIP,
+    draw_vnoiser_help,
+)
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 from mbo_utilities.gui.widgets.pipelines.settings import (
     _MISSING_COLOR,
@@ -166,6 +173,9 @@ class VoltagePipelineWidget(PipelineWidget):
         self._domain_rows: list[list[str]] = []
         self._domain_error = ""
         self._domains_path = ""
+        self._help_open = False
+        self._help_keys = False
+        self._help_frame = -1
 
     def _array(self):
         iw = getattr(self.parent, "image_widget", None)
@@ -214,10 +224,12 @@ class VoltagePipelineWidget(PipelineWidget):
         if fpath == self._last_fpath:
             # another unit of the same file on screen: the selection follows it
             if shown != self._last_unit and any(u["key"] == shown for u in self._units):
+                was = self._dims()[1]
                 self._last_unit = shown
                 self._scans = {u["key"]: u["key"] == shown for u in self._units}
                 self._first_env = {shown: True}
                 self._seed_slicing()
+                self._fit_domains(was)
             return
         self._last_fpath = fpath
         self._last_unit = shown
@@ -240,7 +252,6 @@ class VoltagePipelineWidget(PipelineWidget):
         if self._units:
             self._first_env[shown if on_screen else self._units[0]["key"]] = True
         self._seed_slicing()
-        _, n_lines, _ = self._dims()
         arr = self._array()
         run = arr.path if isinstance(arr, ResultsArray) else voltage_run_for_mesc(mesc)
         domains, scan_ids, first_env = {}, [], []
@@ -259,12 +270,19 @@ class VoltagePipelineWidget(PipelineWidget):
                     prov = files.provenance or {}
                     domains, scan_ids = files.domains, files.scan_ids
                     first_env = [str(s) for s in files.rois.get("scanID_1st_env", [])]
+                # the table the run was given; its own is cut down to the ROIs it read
+                domains = (prov.get("source") or {}).get("domains") or domains
                 self.settings = VoltageSettings.from_provenance(prov)
                 domains = {
                     k: v for k, v in domains.items() if k not in EXCLUDED_DOMAINS
                 }
+                # a table made for scans with another number of ROIs is not the shown scan's
+                ran = set(((prov.get("source") or {}).get("units") or {}).values())
+                counts = {int(u["nrois"]) for u in self._units if u["key"] in ran}
+                if on_screen and counts and self._dims()[1] not in counts:
+                    domains = {}
                 self._set_status(
-                    f"Loaded the previous run's scans and domains from {run.name}"
+                    f"Loaded the previous run's {'scans and domains' if domains else 'settings'} from {run.name}"
                 )
             except (OSError, ValueError, KeyError) as e:
                 self._set_status(
@@ -283,8 +301,6 @@ class VoltagePipelineWidget(PipelineWidget):
                 self._domain_error = f"{DOMAINS_FILE}: {e}"
         # after the previous run's settings land: the folder follows the output format
         self._outdir = self._default_outdir()
-        if not domains:
-            domains = {f"roi{i}": [i] for i in range(n_lines)}
         self._domain_rows = [
             [name, ",".join(str(r) for r in rois)] for name, rois in domains.items()
         ]
@@ -294,6 +310,22 @@ class VoltagePipelineWidget(PipelineWidget):
                 munit = u["key"].rsplit("_", 1)[-1]
                 self._scans[u["key"]] = munit in scan_ids
                 self._first_env[u["key"]] = munit in first_env
+        self._fit_domains(0)
+
+    def _fit_domains(self, was: int) -> None:
+        """One domain per ROI of the ticked scans, unless the table was loaded
+        or edited and names only ROIs they have. ``was`` is the ROI count the
+        table was last fitted to.
+        """
+        _, n_lines, _ = self._dims()
+        fits = self._domain_rows != [[f"roi{i}", str(i)] for i in range(was)]
+        for _, text in self._domain_rows:
+            try:
+                parse_roi_text(text, n_lines)
+            except ValueError:
+                fits = False
+        if not fits:
+            self._domain_rows = [[f"roi{i}", str(i)] for i in range(n_lines)]
 
     def _seed_slicing(self) -> None:
         """Every frame, every ROI, the first channel of the ticked scans."""
@@ -308,7 +340,8 @@ class VoltagePipelineWidget(PipelineWidget):
 
     def seed_from_view(self) -> None:
         """Tick only the recording on screen and select the ROI and channel
-        its sliders are on, over every frame. A unit without lines or
+        its sliders are on, over every frame. A domain table that leaves
+        that ROI out gets it as a domain of its own. A unit without lines or
         patches on screen (a picture) leaves the scans as seeded.
         """
         self._ensure_state()
@@ -316,14 +349,19 @@ class VoltagePipelineWidget(PipelineWidget):
         if not any(u["key"] == shown for u in self._units):
             self._seed_slicing()
             return
+        was = self._dims()[1]
         self._scans = {u["key"]: u["key"] == shown for u in self._units}
         self._seed_slicing()
+        self._fit_domains(was)
         iw = getattr(self.parent, "image_widget", None)
         names = tuple(getattr(iw, "dim_names", None) or ())
         # the sliders are the array's T, C, Z axes by position; Z is the ROI index here
         roles = {role: name for name, role in slider_roles(names).items()}
         if roles.get("z") is not None:
-            self._voltage_z_selection = str(int(iw.indices[roles["z"]]) + 1)
+            roi = int(iw.indices[roles["z"]])
+            self._voltage_z_selection = str(roi + 1)
+            if not any(roi in rois for rois in self._domains().values()):
+                self._domain_rows.append([f"roi{roi}", str(roi)])
         if roles.get("c") is not None:
             self._voltage_c_selection = str(int(iw.indices[roles["c"]]) + 1)
 
@@ -390,6 +428,11 @@ class VoltagePipelineWidget(PipelineWidget):
             fit_width(),
         ):
             imgui.spacing()
+            if imgui.small_button(
+                f"{fa.ICON_FA_CIRCLE_QUESTION} vnoiser guide##voltage_help"
+            ):
+                self._help_open = not self._help_open
+            set_tooltip(TOOLTIP, show_mark=False)
             self._draw_dataset_block()
             imgui.separator()
             self._draw_output_row()
@@ -412,6 +455,15 @@ class VoltagePipelineWidget(PipelineWidget):
             self._draw_modified_table()
             imgui.spacing()
             self._draw_run()
+        # the tab and its popped-out window can both draw this widget in one frame
+        if self._help_frame != imgui.get_frame_count():
+            self._help_frame = imgui.get_frame_count()
+            self._help_open, self._help_keys = draw_vnoiser_help(
+                self._help_open, self._help_keys
+            )
+            self._help_keys = draw_keybinds_popup(
+                KEYBINDS, self._help_keys, "Curation keybinds"
+            )
 
     def _draw_dataset_block(self) -> None:
         imgui.text_colored(_SUBSECTION_COLOR, "Current dataset")
@@ -1301,7 +1353,7 @@ class VoltagePipelineWidget(PipelineWidget):
             and (Path(self._outdir) / "denoised_trace_scans.pkl").exists()
         )
         results = (
-            newest_results(self._outdir, "voltage")
+            newest_results(self._outdir, "voltage", source=mesc)
             if self._outdir and not pf_done
             else None
         )

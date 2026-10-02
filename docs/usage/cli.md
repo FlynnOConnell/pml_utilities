@@ -320,6 +320,12 @@ and PCA, one recording at a time with arrows to flip, and the recordings
 table beside it. Labels are keyed `scan=<id>/domain=<name>` in
 `PF/.curation/<mode>_template_curation.json`.
 
+The window's `guide` button (`h`), and the `vnoiser guide` button at the top of
+the Voltage pipeline, open the vnoiser guide: one page of diagrams and tables on
+what each stage does to a trace, the Voltage window and its domain table, the
+curation window's panels and four rules, and the files a run leaves.
+`python -m mbo_utilities.gui.imgui.vnoiser_help` opens it on its own.
+
 To curate from another machine, serve the dashboard instead of opening a
 window: `mbo curate PATH --serve` (or `python -m mbo_utilities.gui.curation_server
 PATH`) renders it where the data and the GPU are and streams it to any browser
