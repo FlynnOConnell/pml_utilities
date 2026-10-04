@@ -445,6 +445,21 @@ def test_load_run_dir_suite2p_iscell_filter(tmp_path):
     assert len(rw.load_run_dir(d, iscell_only=False).stat) == 3
 
 
+def test_load_run_dir_files_norm_traces_under_what_the_run_wrote(tmp_path):
+    # lbm_suite2p_python writes a dF/F or, with norm_method zscore, a z-score
+    for method, d in (("dff", tmp_path / "z01"), ("zscore", tmp_path / "z02")):
+        d.mkdir()
+        np.save(d / "stat.npy", np.array([_stat_row()], dtype=object))
+        np.save(d / "F.npy", np.zeros((1, 5), np.float32))
+        np.save(d / "norm_traces.npy", np.full((1, 5), 2.0, np.float32))
+        np.save(d / "ops.npy", {"Ly": 8, "Lx": 9, "norm_method": method})
+    dff = rw.load_run_dir(tmp_path / "z01")
+    assert dff.norm.shape == (1, 5) and "zscore" not in dff.kinds
+    zscore = rw.load_run_dir(tmp_path / "z02")
+    assert zscore.norm is None
+    np.testing.assert_array_equal(zscore.kinds["zscore"], np.full((1, 5), 2.0))
+
+
 def test_load_run_dir_vanilla_plane_names(tmp_path):
     # vanilla suite2p writes suite2p/plane0, plane1... 0-based
     d = tmp_path / "plane1"

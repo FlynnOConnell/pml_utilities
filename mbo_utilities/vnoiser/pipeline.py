@@ -791,19 +791,12 @@ def run_voltage_pipeline(
         if as_zarr:
             import shutil
 
-            from mbo_utilities.results import (
-                pipeline_files,
-                results_from_pf,
-                write_results,
-            )
+            from mbo_utilities.results import Results, pipeline_files
 
             if progress_callback is not None:
                 progress_callback(0.97, "writing the results zarr")
             usage.begin("results")
-            result_units, root = results_from_pf(pf_dir)
-            results_path = write_results(
-                results_path, result_units, overwrite=True, **root
-            )
+            results_path = Results.from_pf(pf_dir).write(results_path, overwrite=True)
             usage.end(f"wrote {results_path.name}")
             prov = _write_timing(pf_dir, usage)
             # the results file replaces the pickles; everything else the run

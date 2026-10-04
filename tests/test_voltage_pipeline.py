@@ -380,7 +380,7 @@ def test_one_roi_of_one_channel_runs_and_belongs_to_its_file(tmp_path):
     from types import SimpleNamespace
 
     from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
-    from mbo_utilities.results import newest_results, read_results
+    from mbo_utilities.results import Results, newest_results
     from mbo_utilities.vnoiser import voltage_run_for_mesc, voltage_unit_for_mesc
 
     mesc, other = tmp_path / "a.mesc", tmp_path / "b.mesc"
@@ -391,7 +391,7 @@ def test_one_roi_of_one_channel_runs_and_belongs_to_its_file(tmp_path):
         mesc, domains=domains, units=["MSession_0/MUnit_1"], planes=[2], channel=1
     )
     run = next(p for name, p in paths.items() if name.endswith(".zarr"))
-    results = read_results(run)
+    results = Results.read(run)
     scan = results["scan1"]
     assert scan.roi_names == ["roi1"] and [m.tolist() for m in scan.members] == [[1]]
     # channel 1 is the page plus 50 counts
@@ -426,10 +426,10 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     """
     from mbo_utilities import imread
     from mbo_utilities.results import (
+        Results,
         ResultsArray,
         newest_results,
         pipeline_files,
-        read_results,
         results_stamp,
     )
     from mbo_utilities.vnoiser import voltage_run_for_mesc, voltage_unit_for_mesc
@@ -462,7 +462,7 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     assert own == zarr_path / "voltage"
     assert (own / "test.h5").is_file() and (own / "pipeline.json").is_file()
     assert (traces / "scan1_denoised.npy").is_file() and "voltage/test.h5" in paths
-    results = read_results(paths[zarr_name])
+    results = Results.read(paths[zarr_name])
     assert (
         results.pipeline == "voltage"
         and list(results.units) == ["scan1"]
@@ -528,7 +528,7 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     second = next(p for k, p in again.items() if k.endswith(".zarr"))
     assert results_stamp(second) >= results_stamp(zarr_path)
     assert newest_results(tmp_path, "voltage") == second and list(
-        read_results(second).units
+        Results.read(second).units
     ) == ["scan1"]
 
 
@@ -539,7 +539,7 @@ def test_every_step_is_timed_and_logged(tmp_path):
     callback runs from the first ROI to 1.0 in order.
     """
     from mbo_utilities import log
-    from mbo_utilities.results import read_results
+    from mbo_utilities.results import Results
     from mbo_utilities.vnoiser.pipeline import TIMINGS_FILE
 
     mesc = tmp_path / "chess_session2.mesc"
@@ -672,7 +672,7 @@ def test_every_step_is_timed_and_logged(tmp_path):
         s["seconds"] for s in timings["steps"] if s["step"] == "denoise"
     ) == pytest.approx(timing["totals"]["denoise"], abs=1e-2)
 
-    results = read_results(zarr_path)
+    results = Results.read(zarr_path)
     assert (
         results.provenance["timing"] == timing
         and results.provenance["processing_history"] == history
@@ -840,10 +840,10 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
     from mbo_utilities.gui.widgets.pipelines.settings import _MISSING_COLOR
     from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
     from mbo_utilities.results import (
+        Results,
         ResultUnit,
         pipeline_files,
         results_name,
-        write_results,
     )
 
     mesc = tmp_path / "session1.mesc"
@@ -887,8 +887,8 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
         members=[np.array([0, 1]), np.array([2])],
         attrs={"scan_id": "3", "first_env": True},
     )
-    results = write_results(
-        out / results_name(mesc, pipeline="voltage"), [scan], pipeline="voltage"
+    results = Results(pipeline="voltage", units={scan.name: scan}).write(
+        out / results_name(mesc, pipeline="voltage")
     )
     if layout == "legacy":
         own = out

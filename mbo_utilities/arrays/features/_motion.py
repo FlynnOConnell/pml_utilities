@@ -20,12 +20,15 @@ class MotionCorrection:
     stage the way a plot shows it: ``"RTMC"`` for the AOD's real-time
     correction (``MescArray.motion_correction``, in µm); a registration's
     per-frame offsets (suite2p's ``xoff`` / ``yoff``, masknmf's shifts, in px)
-    take the same shape.
+    take the same shape. ``planes`` maps a label to the z-plane its trace
+    belongs to, for a stage that ran on each plane alone (suite2p registers a
+    volume plane by plane); a label it leaves out applies to every plane.
     """
 
     source: str
     unit: str
     traces: dict[str, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict)
+    planes: dict[str, int] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.traces)

@@ -75,6 +75,7 @@ from mbo_utilities.gui._colormaps import (
 from mbo_utilities.gui._colormaps import (
     DEFAULT_COLORMAPS as _DEFAULT_COLORMAPS,
 )
+from mbo_utilities.gui._colormaps import listed_name as _listed_name
 
 _CONTRAST_MODES = ("Full", "Auto", "Manual")
 _CONTRAST_AUTO = 1
@@ -313,6 +314,7 @@ class SummaryImageViewer(Widget):
         ] = {}
         self._save_dialog: Any = None
         self._last_save_msg: str = ""
+        self._images_z: int | None = None
 
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
@@ -338,8 +340,36 @@ class SummaryImageViewer(Widget):
         )
 
     def _active_metadata(self) -> dict:
+        """The array's metadata, its images swapped for the ones the plane
+        on screen's results unit carries (a suite2p volume's ops are plane
+        1's; each plane's meanImg, max_proj, Vcorr and refImg are its own).
+        """
         arr = self._active_array()
-        return (getattr(arr, "metadata", None) or {}) if arr is not None else {}
+        if arr is None:
+            return {}
+        md = dict(getattr(arr, "metadata", None) or {})
+        results = getattr(arr, "results", None)
+        on_screen = getattr(self.parent, "slice", None)
+        z = int(on_screen.z) if on_screen is not None else 0
+        if z != self._images_z:
+            self._images_z = z
+            self._hist_cache.clear()
+        if results is None:
+            return md
+        unit = next(
+            (u for u in results.units.values() if u.attrs.get("z") == z), None
+        )
+        if unit is None:
+            return md
+        for kind, key in (
+            ("mean", "meanImg"),
+            ("max", "max_proj"),
+            ("corr", "Vcorr"),
+            ("ref", "refImg"),
+        ):
+            if kind in unit.images:
+                md[key] = unit.images[kind]
+        return md
 
     def _sync_cmap_with_fpl(self) -> None:
         """Adopt the parent ImageWidget's colormap as our default once.
@@ -361,11 +391,13 @@ class SummaryImageViewer(Widget):
         if not graphics:
             return
         try:
-            cmap_name = str(graphics[0].cmap)
+            cmap = graphics[0].cmap
         except Exception:
             return
-        if not cmap_name:
+        # None for an RGB image
+        if cmap is None:
             return
+        cmap_name = _listed_name(cmap)
         if cmap_name not in self._cmaps:
             self._cmaps = [cmap_name] + list(_DEFAULT_COLORMAPS)
         self._cmap_idx = self._cmaps.index(cmap_name)

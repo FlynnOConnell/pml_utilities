@@ -444,3 +444,30 @@ class TestMenuRowCluster:
             assert gui._title is None
         finally:
             iw.close()
+
+
+class TestActivePlane:
+    """Signal Quality marks the plane on screen through the host's slice, not
+    by reading the sliders itself (AGENTS.md §7.6).
+    """
+
+    def test_the_active_plane_follows_the_z_slider(self):
+        from types import SimpleNamespace
+
+        from mbo_utilities.gui._stats import _active_stat, current_breakout_key
+
+        iw, gui = TestSignalQualitySplit._gui()
+        try:
+            z_spec = SimpleNamespace(series=SimpleNamespace(name="zplane"))
+            t_spec = SimpleNamespace(series=SimpleNamespace(name="timepoint"))
+            assert gui.slice.z == 0 and _active_stat(gui, z_spec) == 1
+            iw.indices["z"] = 3
+            assert gui.slice.z == 3 and _active_stat(gui, z_spec) == 4
+            iw.indices["t"] = 2
+            assert gui.slice.t == 2 and _active_stat(gui, t_spec) == 3
+            assert _active_stat(gui, None) is None
+            # a host without a slice has no active plane to mark
+            assert _active_stat(SimpleNamespace(), z_spec) is None
+            assert current_breakout_key(gui, 0) == ()
+        finally:
+            iw.close()

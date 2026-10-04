@@ -766,10 +766,17 @@ def _create_image_widget(
         from mbo_utilities.gui.roi_runs import run_dir_complete
         from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
 
+        from mbo_utilities.lazy_array import base_array
+
         src = data_array.source_path
+        results = getattr(base_array(data_array), "results", None)
         manual_roi = (
             widget == "manualroi"
             or widget_enabled("manual_roi")
+            or (
+                results is not None
+                and any(u.member_kind == "pixel" for u in results.units.values())
+            )
             or (
                 src is not None
                 and (

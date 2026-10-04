@@ -3,7 +3,7 @@
 
 A pipeline's native outputs (suite2p's ``F.npy`` and ``stat.npy``, masknmf's
 suite2p-shaped plane dirs, the voltage pipeline's ``PF`` pickles) differ in
-every detail; this module fixes one shape they all mold into so a reader,
+every detail; this module fixes one shape they all take so a reader,
 a viewer or a notebook opens any of them the same way. The contract is
 AGENTS.md §7.5; the schema is::
 
@@ -28,11 +28,14 @@ AGENTS.md §7.5; the schema is::
                                         (pipeline.json, timings.json, its
                                         native h5 and npy); :func:`pipeline_files`
 
-:func:`results_from_suite2p` molds suite2p and masknmf output folders,
-:func:`results_from_pf` the voltage pipeline's ``PF`` folder; a new pipeline
-builds :class:`ResultUnit` objects and calls :func:`write_results`.
-:class:`ResultsArray` opens any of them as a :class:`LazyArray`, so `imread`
-returns one reader whichever pipeline wrote the run.
+:meth:`Results.from_suite2p` reads suite2p and masknmf output folders into
+that shape without writing anything, :meth:`Results.from_pf` the voltage
+pipeline's ``PF`` folder, :meth:`Results.read` a results file and
+:meth:`Results.open` any of them; a new pipeline builds :class:`ResultUnit`
+objects and calls :meth:`Results.write`. :class:`ResultsArray` opens any of
+them as a :class:`LazyArray`, so `imread` returns one reader whichever
+pipeline wrote the run, and a reader whose format is a pipeline's own output
+(``Suite2pArray``) answers the same object on ``arr.results``.
 
 :func:`results_name` names the file after its input so it sits beside it,
 :func:`results_stamp` reads the timestamp back with ``datetime.strptime``
@@ -71,14 +74,9 @@ __all__ = [
     "ResultUnit",
     "Results",
     "ResultsArray",
-    "mold_results",
     "newest_results",
-    "open_results",
     "pipeline_files",
-    "read_results",
     "results_dir_of",
-    "results_from_pf",
-    "results_from_suite2p",
     "results_name",
     "results_pipeline",
     "results_source",
@@ -86,7 +84,6 @@ __all__ = [
     "results_summary",
     "unit_for_source",
     "unit_name",
-    "write_results",
 ]
 
 logger = log.get("results")
@@ -110,8 +107,9 @@ RESULTS_STAMP = "%Y-%m-%d-%H-%M-%S"
 TRACE_KINDS = {
     "raw": "fluorescence in the recording's units (suite2p F; a line's mean counts)",
     "neuropil": "neuropil fluorescence (suite2p Fneu)",
-    "dff": "dF/F (masknmf norm_traces in percent; the voltage pipeline's dfof_raw)",
-    "zscore": "z-scored dF/F",
+    "dff": "dF/F (masknmf norm_traces in percent; lbm_suite2p_python's and the "
+    "voltage pipeline's dfof_raw as a fraction)",
+    "zscore": "z-scored trace (lbm_suite2p_python norm_traces with norm_method zscore)",
     "denoised": "denoised trace (the voltage pipeline's curated trace)",
     "spikes": "deconvolved activity (suite2p spks)",
 }
@@ -193,20 +191,563 @@ class ResultUnit:
 
 @dataclass
 class Results:
-    """A results file read back, every array in memory."""
+    """One run's output, every array in memory.
 
-    path: Path
-    pipeline: str
-    created: str
-    tags: list[str]
-    source: dict
-    settings: dict
-    metadata: dict
-    provenance: dict
-    units: dict[str, ResultUnit]
+    :meth:`read` reads a results file back; :meth:`from_suite2p` and
+    :meth:`from_pf` give a pipeline's native folder the same shape without
+    writing anything; :meth:`open` takes any of them. A pipeline builds its
+    :class:`ResultUnit` objects, constructs one of these and calls
+    :meth:`write`.
+    """
+
+    pipeline: str = ""
+    units: dict[str, ResultUnit] = field(default_factory=dict)
+    source: dict = field(default_factory=dict)
+    settings: dict = field(default_factory=dict)
+    metadata: dict = field(default_factory=dict)
+    provenance: dict = field(default_factory=dict)
+    tags: list[str] | None = None
+    created: str = ""
+    path: Path | None = None
 
     def __getitem__(self, name: str) -> ResultUnit:
         return self.units[name]
+
+    @classmethod
+    def open(cls, path) -> Results:
+        """Any run's output: a results file read back, the newest one in a
+        folder, else the pipeline's native folder (the voltage pipeline's
+        ``PF`` pickles, suite2p or masknmf plane dirs) in the same shape.
+        The one door onto a run.
+        """
+        path = Path(path)
+        if results_pipeline(path) is not None:
+            return cls.read(path)
+        found = newest_results(path)
+        if found is not None:
+            return cls.read(found)
+        if (path / TRACES_PKL).is_file():
+            return cls.from_pf(path)
+        return cls.from_suite2p(path)
+
+    @classmethod
+    def read(cls, path) -> Results:
+        """A results file read back, every array in memory."""
+        path = Path(path)
+        root = zarr.open_group(str(path), mode="r")
+        attrs = dict(root.attrs)
+        if RESULTS_ATTR not in attrs:
+            raise ValueError(f"{path} is not a results file (no {RESULTS_ATTR!r} attr)")
+        units = {}
+        for name in attrs["units"]:
+            group = root[name]
+            a = dict(group.attrs)
+            k = int(a["n_rois"])
+            offsets = group["rois/offsets"][:]
+            member = group["rois/member"][:]
+            weight = group["rois/weight"][:]
+            traces = {
+                kind: group["traces"][kind][:] for kind in group["traces"].array_keys()
+            }
+            member_traces = (
+                {
+                    kind: group["members"][kind][:]
+                    for kind in group["members"].array_keys()
+                }
+                if "members" in group
+                else {}
+            )
+            images = (
+                {kind: group["images"][kind][:] for kind in group["images"].array_keys()}
+                if "images" in group
+                else {}
+            )
+            frame = group["events/frame"][:]
+            roi_index = group["events/roi"][:]
+            roi_names = [str(n) for n in a["roi_names"]]
+            events = {
+                roi_names[i]: frame[roi_index == i] for i in np.unique(roi_index)
+            }
+            units[name] = ResultUnit(
+                name=name,
+                kind=str(a["kind"]),
+                index=int(a["index"]),
+                fs=None if a.get("fs") is None else float(a["fs"]),
+                roi_names=roi_names,
+                traces=traces,
+                member_kind=str(a["member_kind"]),
+                members=[member[offsets[i] : offsets[i + 1]] for i in range(k)],
+                weights=[weight[offsets[i] : offsets[i + 1]] for i in range(k)],
+                image_shape=None
+                if a.get("image_shape") is None
+                else (int(a["image_shape"][0]), int(a["image_shape"][1])),
+                iscell=group["rois/iscell"][:],
+                member_traces=member_traces,
+                events=events,
+                images=images,
+                attrs={
+                    key: value for key, value in a.items() if key not in _UNIT_ATTRS
+                },
+            )
+        return cls(
+            pipeline=str(attrs.get("pipeline", "")),
+            units=units,
+            source=dict(attrs.get("source") or {}),
+            settings=dict(attrs.get("settings") or {}),
+            metadata=dict(attrs.get("metadata") or {}),
+            provenance=dict(attrs.get("provenance") or {}),
+            tags=[str(t) for t in attrs.get("tags", [])],
+            created=str(attrs.get("created", "")),
+            path=path,
+        )
+
+    @classmethod
+    def from_suite2p(cls, path, plane_dirs=None) -> Results:
+        """Suite2p or masknmf output as results, read from the native files.
+
+        ``path`` is one plane dir or a folder of ``zplaneNN`` / ``planeNN``
+        dirs, taken in plane-number order; ``plane_dirs`` names the dirs
+        outright in the order their planes stack (a ``Suite2pArray`` passes
+        its own). A dir without ``stat.npy`` and ``F.npy`` (a registration-only
+        run) gives no unit, and every unit records its ``plane_dir`` and ``z``,
+        the position its plane has in that order. ``F`` is ``raw``, ``Fneu``
+        ``neuropil``, ``spks`` ``spikes``, ``norm_traces`` ``dff`` or
+        ``zscore`` (:func:`norm_traces_kind`); ``stat`` gives each ROI's pixels
+        and ``lam`` weights;
+        ``meanImg``, ``max_proj``, ``Vcorr`` and ``refImg`` are the images.
+        ``index`` is the plane number: a ``zplaneNN`` tag is 1-based, vanilla
+        suite2p's ``planeN`` 0-based.
+        """
+        from mbo_utilities.metadata import get_param
+
+        path = Path(path)
+        if plane_dirs is None:
+            if (path / "stat.npy").is_file():
+                plane_dirs = [path]
+            else:
+                found = [
+                    p
+                    for p in path.iterdir()
+                    if p.is_dir() and (p / "stat.npy").is_file() and (p / "F.npy").is_file()
+                ]
+                numbers = {
+                    p: re.search(r"plane(\d+)", p.name, re.IGNORECASE) for p in found
+                }
+                plane_dirs = sorted(
+                    found,
+                    key=lambda p: (
+                        numbers[p] is None,
+                        int(numbers[p].group(1)) if numbers[p] else 0,
+                        p.name,
+                    ),
+                )
+        units, pipeline, settings, metadata = [], "suite2p", {}, {}
+        for z, plane_dir in enumerate(Path(p) for p in plane_dirs):
+            if not ((plane_dir / "stat.npy").is_file() and (plane_dir / "F.npy").is_file()):
+                continue
+            ops = (
+                np.load(plane_dir / "ops.npy", allow_pickle=True).item()
+                if (plane_dir / "ops.npy").is_file()
+                else {}
+            )
+            stat = np.load(plane_dir / "stat.npy", allow_pickle=True)
+            F = np.load(plane_dir / "F.npy")
+            vanilla = re.fullmatch(r"plane(\d+)", plane_dir.name, re.IGNORECASE)
+            z_tags = [
+                t for t in filename_tags(plane_dir.name) if t.definition.label == "zplane"
+            ]
+            if vanilla:
+                index = int(vanilla.group(1)) + 1
+            elif z_tags:
+                index = int(z_tags[0].start)
+            else:
+                index = int(ops.get("plane") or z + 1)
+            ly, lx = int(ops.get("Ly", 0) or 0), int(ops.get("Lx", 0) or 0)
+            if not ly or not lx:
+                for key in ("meanImg", "max_proj", "refImg"):
+                    if isinstance(ops.get(key), np.ndarray) and ops[key].ndim == 2:
+                        ly, lx = ops[key].shape
+                        break
+            members, weights = [], []
+            for s in stat:
+                ypix, xpix = (
+                    np.asarray(s["ypix"], dtype=np.int64).ravel(),
+                    np.asarray(s["xpix"], dtype=np.int64).ravel(),
+                )
+                members.append(ypix * lx + xpix)
+                weights.append(
+                    np.asarray(
+                        s.get("lam", np.ones(ypix.size)), dtype=np.float32
+                    ).ravel()
+                )
+            traces = {"raw": F}
+            for file, kind in (
+                ("Fneu.npy", "neuropil"),
+                ("spks.npy", "spikes"),
+                ("norm_traces.npy", norm_traces_kind(ops)),
+            ):
+                if (plane_dir / file).is_file():
+                    traces[kind] = np.load(plane_dir / file)
+            images = {
+                kind: np.asarray(ops[key])
+                for key, kind in (
+                    ("meanImg", "mean"),
+                    ("max_proj", "max"),
+                    ("Vcorr", "corr"),
+                    ("refImg", "ref"),
+                )
+                if isinstance(ops.get(key), np.ndarray) and ops[key].ndim == 2
+            }
+            units.append(
+                ResultUnit(
+                    name=unit_name("plane", index),
+                    kind="plane",
+                    index=index,
+                    fs=get_param(ops, "fs") if ops else None,
+                    roi_names=[str(i) for i in range(len(stat))],
+                    traces=traces,
+                    member_kind="pixel",
+                    members=members,
+                    weights=weights,
+                    image_shape=(ly, lx) if ly and lx else None,
+                    iscell=np.load(plane_dir / "iscell.npy")
+                    if (plane_dir / "iscell.npy").is_file()
+                    else None,
+                    images=images,
+                    attrs={"plane_dir": str(plane_dir), "z": z},
+                )
+            )
+            if ops.get("pipeline") == "masknmf":
+                pipeline = "masknmf"
+                settings = dict(ops.get("masknmf") or {})
+            if not metadata:
+                metadata = ops
+        if not units:
+            raise FileNotFoundError(f"no stat.npy and F.npy in {path} or its plane dirs")
+        return cls(
+            pipeline=pipeline,
+            units={u.name: u for u in units},
+            settings=settings,
+            metadata=metadata,
+            path=path,
+        )
+
+    @classmethod
+    def from_pf(cls, pf_dir) -> Results:
+        """The voltage pipeline's ``PF`` folder of pickles as results, one scan per unit.
+
+        The domains are the ROIs (``roi_names``), their lines the members, the
+        curated trace is ``denoised``, ``test.h5`` gives ``dff`` and ``zscore``,
+        the peaks are the events and ``traces/scan<id>_rois.npy`` (when the
+        folder has it) the members' ``raw`` traces. The folder's
+        ``pipeline.json`` is the ``provenance``.
+        """
+        import h5py
+
+        pf_dir = Path(pf_dir)
+        files = pipeline_files(pf_dir)
+        traces_pkl = _read_pickle(pf_dir / TRACES_PKL)
+        rates = {
+            str(k): v
+            for k, v in (_read_pickle(pf_dir / "fs_scans.pkl") or {}).items()
+        }
+        rois = _read_pickle(pf_dir / "scanIDs_ROIs.pkl") or {}
+        peaks = _read_pickle(pf_dir / "detected_events_peaks.pkl") or {}
+        provenance = {}
+        if (files / PROVENANCE_FILE).is_file():
+            provenance = json.loads((files / PROVENANCE_FILE).read_text())
+        traces = {
+            str(s): {str(d): np.asarray(t) for d, t in v.items()}
+            for s, v in (traces_pkl or {}).items()
+        }
+        scan_ids = [str(s) for s in rois.get("scanID_spatial", list(traces))]
+        first_env = {str(s) for s in rois.get("scanID_1st_env", [])}
+        roi_list = {
+            str(s): [int(r) for r in v]
+            for s, v in (rois.get("roi_list") or {}).items()
+        }
+        source = dict(provenance.get("source") or {})
+        source_units = {
+            str(k): str(v) for k, v in (source.get("units") or {}).items()
+        }
+        if not source.get("mesc"):
+            from mbo_utilities.analysis.linescan import experiment_linescan_mesc
+
+            beside = experiment_linescan_mesc(pf_dir)
+            if beside is not None:
+                source["mesc"] = str(beside)
+        domains = {
+            FINAL_DOMAIN_NAMES.get(str(k), str(k)): [int(r) for r in v]
+            for k, v in (rois.get("domain_ROInumber") or {}).items()
+            if str(k) not in EXCLUDED_DOMAINS
+        }
+        traced = list(dict.fromkeys(d for v in traces.values() for d in v))
+        names = [d for d in domains if d in traced] + [
+            d for d in traced if d not in domains
+        ]
+        # the run's own record of the rates wins: fs_scans.pkl is the scanner's, pipeline.json the traces'
+        declared = {
+            str(k): float(v) for k, v in (provenance.get("fs_hz") or {}).items()
+        }
+        units = []
+        for scan in scan_ids:
+            rows = [d for d in names if d in traces.get(scan, {})]
+            denoised = (
+                np.stack([traces[scan][d] for d in rows])
+                if rows
+                else np.zeros((0, 0), np.float32)
+            )
+            kinds = {"denoised": denoised}
+            if (files / DFOF_H5).is_file():
+                with h5py.File(files / DFOF_H5, "r") as f:
+                    if scan in f:
+                        kinds["dff"] = f[scan]["dfof_raw"][:]
+                        kinds["zscore"] = f[scan]["dfof_zscore"][:]
+            member_traces = {}
+            raw_file = files / "traces" / f"scan{scan}_rois.npy"
+            if raw_file.is_file():
+                member_traces["raw"] = np.load(raw_file)
+            rate = declared.get(scan, rates.get(scan))
+            found = {
+                str(d): np.asarray(v, dtype=np.int64)
+                for d, v in (peaks.get(scan) or {}).items()
+            }
+            units.append(
+                ResultUnit(
+                    name=unit_name("scan", _scan_index(scan, scan_ids)),
+                    kind="scan",
+                    index=_scan_index(scan, scan_ids),
+                    fs=None if rate is None else float(rate),
+                    roi_names=rows,
+                    traces=kinds,
+                    member_kind="line",
+                    members=[
+                        np.asarray(domains.get(d, []), dtype=np.int64) for d in rows
+                    ],
+                    member_traces=member_traces,
+                    events={d: found[d] for d in rows if d in found and found[d].size},
+                    attrs={
+                        "scan_id": scan,
+                        "source_unit": source_units.get(scan) or f"MUnit_{scan}",
+                        "first_env": scan in first_env,
+                        "member_ids": roi_list.get(scan, []),
+                    },
+                )
+            )
+        return cls(
+            pipeline="voltage",
+            units={u.name: u for u in units},
+            source=source,
+            settings=dict(provenance.get("settings") or {}),
+            metadata=dict(provenance.get("source_metadata") or {}),
+            provenance=provenance,
+            path=pf_dir,
+        )
+
+    def write(self, path, overwrite: bool = False) -> Path:
+        """Write the units as one results file at ``path``; returns it.
+
+        ``source`` says what was processed (path, units or planes, reader
+        kwargs), ``settings`` is the pipeline's ``Settings.to_dict()``,
+        ``metadata`` the source array's metadata (stripped for export) and
+        ``provenance`` whatever else the pipeline recorded. ``tags`` default
+        to the ones in the file's own name.
+        """
+        path = Path(path)
+        units = list(self.units.values())
+        if path.exists() and not overwrite:
+            raise FileExistsError(f"{path} exists; pass overwrite=True")
+        if not units:
+            raise ValueError("no units to write")
+        names = [u.name for u in units]
+        if len(set(names)) != len(names):
+            raise ValueError(f"duplicate unit names: {names}")
+        for unit in units:
+            if unit.kind not in UNIT_KINDS:
+                raise ValueError(
+                    f"{unit.name}: kind must be one of {UNIT_KINDS}, got {unit.kind!r}"
+                )
+            if unit.member_kind not in MEMBER_KINDS:
+                raise ValueError(
+                    f"{unit.name}: member_kind must be one of {MEMBER_KINDS}, got {unit.member_kind!r}"
+                )
+            k, t = unit.n_rois, unit.n_timepoints
+            for kind, arr in unit.traces.items():
+                if kind not in TRACE_KINDS:
+                    raise ValueError(
+                        f"{unit.name}: unknown trace kind {kind!r}; use one of {sorted(TRACE_KINDS)}"
+                    )
+                if np.shape(arr) != (k, t):
+                    raise ValueError(
+                        f"{unit.name}: traces/{kind} is {np.shape(arr)}, expected ({k}, {t})"
+                    )
+            for kind, arr in unit.member_traces.items():
+                if kind not in TRACE_KINDS:
+                    raise ValueError(
+                        f"{unit.name}: unknown trace kind {kind!r}; use one of {sorted(TRACE_KINDS)}"
+                    )
+                if np.ndim(arr) != 2 or np.shape(arr)[1] != t:
+                    raise ValueError(
+                        f"{unit.name}: members/{kind} is {np.shape(arr)}, expected (n_members, {t})"
+                    )
+            if len(unit.members) != k:
+                raise ValueError(
+                    f"{unit.name}: {len(unit.members)} member lists for {k} ROIs"
+                )
+            if unit.weights is not None and [len(w) for w in unit.weights] != [
+                len(m) for m in unit.members
+            ]:
+                raise ValueError(f"{unit.name}: weights do not match members")
+            if unit.iscell is not None and np.shape(unit.iscell) != (k, 2):
+                raise ValueError(
+                    f"{unit.name}: iscell is {np.shape(unit.iscell)}, expected ({k}, 2)"
+                )
+            for kind, arr in unit.images.items():
+                if kind not in IMAGE_KINDS:
+                    raise ValueError(
+                        f"{unit.name}: unknown image kind {kind!r}; use one of {sorted(IMAGE_KINDS)}"
+                    )
+                if np.ndim(arr) != 2:
+                    raise ValueError(
+                        f"{unit.name}: images/{kind} must be (Y, X), got {np.shape(arr)}"
+                    )
+            unknown = [r for r in unit.events if r not in unit.roi_names]
+            if unknown:
+                raise ValueError(f"{unit.name}: events for unknown ROIs {unknown}")
+            clash = [a for a in unit.attrs if a in _UNIT_ATTRS]
+            if clash:
+                raise ValueError(f"{unit.name}: attrs {clash} are written by the schema")
+
+        created = datetime.now(UTC).isoformat(timespec="seconds")
+        tags = [
+            str(t)
+            for t in (
+                self.tags
+                if self.tags is not None
+                else (x.to_string() for x in filename_tags(path))
+            )
+        ]
+        root = zarr.open_group(str(path), mode="w", zarr_format=3)
+        root.attrs.update(
+            {
+                RESULTS_ATTR: RESULTS_VERSION,
+                "pipeline": str(self.pipeline),
+                "created": created,
+                "tags": tags,
+                "units": names,
+                "source": _make_json_serializable(dict(self.source or {})),
+                "settings": _make_json_serializable(dict(self.settings or {})),
+                "metadata": _make_json_serializable(
+                    strip_for_export(dict(self.metadata or {}))
+                ),
+                "provenance": _make_json_serializable(dict(self.provenance or {})),
+            }
+        )
+        for unit in units:
+            k, t = unit.n_rois, unit.n_timepoints
+            group = root.create_group(unit.name)
+            group.attrs.update(
+                {
+                    "kind": unit.kind,
+                    "index": int(unit.index),
+                    "fs": None if unit.fs is None else float(unit.fs),
+                    "n_rois": k,
+                    "n_timepoints": t,
+                    "roi_names": [str(n) for n in unit.roi_names],
+                    "member_kind": unit.member_kind,
+                    "image_shape": None
+                    if unit.image_shape is None
+                    else [int(v) for v in unit.image_shape],
+                    **_make_json_serializable(dict(unit.attrs)),
+                }
+            )
+            traces = group.create_group("traces")
+            for kind, arr in unit.traces.items():
+                data = np.ascontiguousarray(arr, dtype=np.float32)
+                chunks = tuple(
+                    max(1, min(n, c)) for n, c in zip(data.shape, _CHUNK, strict=True)
+                )
+                traces.create_array(
+                    kind, data=data, chunks=chunks, dimension_names=("roi", "t")
+                )
+            rois = group.create_group("rois")
+            offsets = np.zeros(k + 1, dtype=np.int64)
+            offsets[1:] = np.cumsum([len(m) for m in unit.members])
+            member = (
+                np.concatenate(
+                    [np.asarray(m, dtype=np.int64).ravel() for m in unit.members]
+                )
+                if k
+                else np.zeros(0, np.int64)
+            )
+            if unit.weights is None:
+                weight = np.ones(len(member), dtype=np.float32)
+            else:
+                weight = (
+                    np.concatenate(
+                        [np.asarray(w, dtype=np.float32).ravel() for w in unit.weights]
+                    )
+                    if k
+                    else np.zeros(0, np.float32)
+                )
+            rois.create_array("offsets", data=offsets, chunks=(max(1, k + 1),))
+            rois.create_array(
+                "member", data=member, chunks=(max(1, min(len(member), 1 << 20)),)
+            )
+            rois.create_array(
+                "weight", data=weight, chunks=(max(1, min(len(weight), 1 << 20)),)
+            )
+            iscell = (
+                np.ones((k, 2), dtype=np.float32)
+                if unit.iscell is None
+                else np.asarray(unit.iscell, dtype=np.float32)
+            )
+            rois.create_array("iscell", data=iscell, chunks=(max(1, k), 2))
+            if unit.member_traces:
+                members = group.create_group("members")
+                for kind, arr in unit.member_traces.items():
+                    data = np.ascontiguousarray(arr, dtype=np.float32)
+                    chunks = tuple(
+                        max(1, min(n, c))
+                        for n, c in zip(data.shape, _CHUNK, strict=True)
+                    )
+                    members.create_array(
+                        kind, data=data, chunks=chunks, dimension_names=("member", "t")
+                    )
+            events = group.create_group("events")
+            frames, roi_index = [], []
+            for i, roi in enumerate(unit.roi_names):
+                found = np.asarray(unit.events.get(roi, ()), dtype=np.int64).ravel()
+                frames.append(np.sort(found))
+                roi_index.append(np.full(found.size, i, dtype=np.int32))
+            frame = np.concatenate(frames) if frames else np.zeros(0, np.int64)
+            roi_index = (
+                np.concatenate(roi_index) if roi_index else np.zeros(0, np.int32)
+            )
+            events.create_array(
+                "frame", data=frame, chunks=(max(1, min(frame.size, 1 << 20)),)
+            )
+            events.create_array(
+                "roi", data=roi_index, chunks=(max(1, min(roi_index.size, 1 << 20)),)
+            )
+            if unit.images:
+                images = group.create_group("images")
+                for kind, arr in unit.images.items():
+                    data = np.ascontiguousarray(arr, dtype=np.float32)
+                    images.create_array(
+                        kind, data=data, chunks=data.shape, dimension_names=("y", "x")
+                    )
+        self.path, self.created, self.tags = path, created, tags
+        logger.info(f"wrote {len(units)} unit(s) of {self.pipeline} results to {path}")
+        return path
+
+
+def norm_traces_kind(ops: dict) -> str:
+    """The trace kind a plane's ``norm_traces.npy`` holds: ``zscore`` when its
+    ops say lbm_suite2p_python z-scored it (``norm_method``), else ``dff``
+    (lbm_suite2p_python's as a fraction, masknmf's in percent).
+    """
+    return "zscore" if ops.get("norm_method") == "zscore" else "dff"
 
 
 def unit_name(kind: str, index: int) -> str:
@@ -371,7 +912,7 @@ def results_dir_of(path) -> Path | None:
     (its own results file, or a ``PF`` beside it). None for anything else.
 
     Suite2p and masknmf plane dirs are not claimed here: they open as a
-    ``Suite2pArray``, and :func:`results_from_suite2p` molds them on demand.
+    ``Suite2pArray``, whose ``results`` is :meth:`Results.from_suite2p` of them.
     """
     p = Path(path)
     if p.is_file():
@@ -391,37 +932,6 @@ def results_dir_of(path) -> Path | None:
     return None
 
 
-def mold_results(path) -> Results:
-    """A native output folder as :class:`Results` in memory, writing nothing:
-    the voltage pipeline's ``PF`` of pickles, else suite2p / masknmf plane dirs.
-    """
-    path = Path(path)
-    molder = results_from_pf if (path / TRACES_PKL).is_file() else results_from_suite2p
-    units, root = molder(path)
-    return Results(
-        path=path,
-        pipeline=str(root.get("pipeline") or ""),
-        created="",
-        tags=[],
-        source=dict(root.get("source") or {}),
-        settings=dict(root.get("settings") or {}),
-        metadata=dict(root.get("metadata") or {}),
-        provenance=dict(root.get("provenance") or {}),
-        units={u.name: u for u in units},
-    )
-
-
-def open_results(path) -> Results:
-    """Any run's output as :class:`Results`: a results file read back, or a
-    native output folder molded into one. The one door onto a run.
-    """
-    path = Path(path)
-    if results_pipeline(path) is not None:
-        return read_results(path)
-    found = newest_results(path)
-    return read_results(found) if found is not None else mold_results(path)
-
-
 def unit_for_source(results: Results, source_unit: str) -> str | None:
     """The unit of ``results`` that processed recording unit ``source_unit``
     (``MSession_0/MUnit_30``, or just ``MUnit_30``), or None.
@@ -439,470 +949,6 @@ def unit_for_source(results: Results, source_unit: str) -> str | None:
             (n for n, u in results.units.items() if u.index == int(number)), None
         )
     return None
-
-
-def write_results(
-    path,
-    units,
-    *,
-    pipeline: str,
-    source: dict | None = None,
-    settings: dict | None = None,
-    metadata: dict | None = None,
-    provenance: dict | None = None,
-    tags=None,
-    overwrite: bool = False,
-) -> Path:
-    """Write ``units`` as one results file; returns its path.
-
-    ``source`` says what was processed (path, units or planes, reader
-    kwargs), ``settings`` is the pipeline's ``Settings.to_dict()``,
-    ``metadata`` the source array's metadata (stripped for export) and
-    ``provenance`` whatever else the pipeline recorded. ``tags`` default to
-    the ones in the file's own name.
-    """
-    path = Path(path)
-    units = list(units)
-    if path.exists() and not overwrite:
-        raise FileExistsError(f"{path} exists; pass overwrite=True")
-    if not units:
-        raise ValueError("no units to write")
-    names = [u.name for u in units]
-    if len(set(names)) != len(names):
-        raise ValueError(f"duplicate unit names: {names}")
-    for unit in units:
-        if unit.kind not in UNIT_KINDS:
-            raise ValueError(
-                f"{unit.name}: kind must be one of {UNIT_KINDS}, got {unit.kind!r}"
-            )
-        if unit.member_kind not in MEMBER_KINDS:
-            raise ValueError(
-                f"{unit.name}: member_kind must be one of {MEMBER_KINDS}, got {unit.member_kind!r}"
-            )
-        k, t = unit.n_rois, unit.n_timepoints
-        for kind, arr in unit.traces.items():
-            if kind not in TRACE_KINDS:
-                raise ValueError(
-                    f"{unit.name}: unknown trace kind {kind!r}; use one of {sorted(TRACE_KINDS)}"
-                )
-            if np.shape(arr) != (k, t):
-                raise ValueError(
-                    f"{unit.name}: traces/{kind} is {np.shape(arr)}, expected ({k}, {t})"
-                )
-        for kind, arr in unit.member_traces.items():
-            if kind not in TRACE_KINDS:
-                raise ValueError(
-                    f"{unit.name}: unknown trace kind {kind!r}; use one of {sorted(TRACE_KINDS)}"
-                )
-            if np.ndim(arr) != 2 or np.shape(arr)[1] != t:
-                raise ValueError(
-                    f"{unit.name}: members/{kind} is {np.shape(arr)}, expected (n_members, {t})"
-                )
-        if len(unit.members) != k:
-            raise ValueError(
-                f"{unit.name}: {len(unit.members)} member lists for {k} ROIs"
-            )
-        if unit.weights is not None and [len(w) for w in unit.weights] != [
-            len(m) for m in unit.members
-        ]:
-            raise ValueError(f"{unit.name}: weights do not match members")
-        if unit.iscell is not None and np.shape(unit.iscell) != (k, 2):
-            raise ValueError(
-                f"{unit.name}: iscell is {np.shape(unit.iscell)}, expected ({k}, 2)"
-            )
-        for kind, arr in unit.images.items():
-            if kind not in IMAGE_KINDS:
-                raise ValueError(
-                    f"{unit.name}: unknown image kind {kind!r}; use one of {sorted(IMAGE_KINDS)}"
-                )
-            if np.ndim(arr) != 2:
-                raise ValueError(
-                    f"{unit.name}: images/{kind} must be (Y, X), got {np.shape(arr)}"
-                )
-        unknown = [r for r in unit.events if r not in unit.roi_names]
-        if unknown:
-            raise ValueError(f"{unit.name}: events for unknown ROIs {unknown}")
-        clash = [a for a in unit.attrs if a in _UNIT_ATTRS]
-        if clash:
-            raise ValueError(f"{unit.name}: attrs {clash} are written by the schema")
-
-    root = zarr.open_group(str(path), mode="w", zarr_format=3)
-    root.attrs.update(
-        {
-            RESULTS_ATTR: RESULTS_VERSION,
-            "pipeline": str(pipeline),
-            "created": datetime.now(UTC).isoformat(timespec="seconds"),
-            "tags": [
-                str(t)
-                for t in (
-                    tags
-                    if tags is not None
-                    else (x.to_string() for x in filename_tags(path))
-                )
-            ],
-            "units": names,
-            "source": _make_json_serializable(dict(source or {})),
-            "settings": _make_json_serializable(dict(settings or {})),
-            "metadata": _make_json_serializable(strip_for_export(dict(metadata or {}))),
-            "provenance": _make_json_serializable(dict(provenance or {})),
-        }
-    )
-    for unit in units:
-        k, t = unit.n_rois, unit.n_timepoints
-        group = root.create_group(unit.name)
-        group.attrs.update(
-            {
-                "kind": unit.kind,
-                "index": int(unit.index),
-                "fs": None if unit.fs is None else float(unit.fs),
-                "n_rois": k,
-                "n_timepoints": t,
-                "roi_names": [str(n) for n in unit.roi_names],
-                "member_kind": unit.member_kind,
-                "image_shape": None
-                if unit.image_shape is None
-                else [int(v) for v in unit.image_shape],
-                **_make_json_serializable(dict(unit.attrs)),
-            }
-        )
-        traces = group.create_group("traces")
-        for kind, arr in unit.traces.items():
-            data = np.ascontiguousarray(arr, dtype=np.float32)
-            chunks = tuple(
-                max(1, min(n, c)) for n, c in zip(data.shape, _CHUNK, strict=True)
-            )
-            traces.create_array(
-                kind, data=data, chunks=chunks, dimension_names=("roi", "t")
-            )
-        rois = group.create_group("rois")
-        offsets = np.zeros(k + 1, dtype=np.int64)
-        offsets[1:] = np.cumsum([len(m) for m in unit.members])
-        member = (
-            np.concatenate(
-                [np.asarray(m, dtype=np.int64).ravel() for m in unit.members]
-            )
-            if k
-            else np.zeros(0, np.int64)
-        )
-        if unit.weights is None:
-            weight = np.ones(len(member), dtype=np.float32)
-        else:
-            weight = (
-                np.concatenate(
-                    [np.asarray(w, dtype=np.float32).ravel() for w in unit.weights]
-                )
-                if k
-                else np.zeros(0, np.float32)
-            )
-        rois.create_array("offsets", data=offsets, chunks=(max(1, k + 1),))
-        rois.create_array(
-            "member", data=member, chunks=(max(1, min(len(member), 1 << 20)),)
-        )
-        rois.create_array(
-            "weight", data=weight, chunks=(max(1, min(len(weight), 1 << 20)),)
-        )
-        iscell = (
-            np.ones((k, 2), dtype=np.float32)
-            if unit.iscell is None
-            else np.asarray(unit.iscell, dtype=np.float32)
-        )
-        rois.create_array("iscell", data=iscell, chunks=(max(1, k), 2))
-        if unit.member_traces:
-            members = group.create_group("members")
-            for kind, arr in unit.member_traces.items():
-                data = np.ascontiguousarray(arr, dtype=np.float32)
-                chunks = tuple(
-                    max(1, min(n, c)) for n, c in zip(data.shape, _CHUNK, strict=True)
-                )
-                members.create_array(
-                    kind, data=data, chunks=chunks, dimension_names=("member", "t")
-                )
-        events = group.create_group("events")
-        frames, roi_index = [], []
-        for i, roi in enumerate(unit.roi_names):
-            found = np.asarray(unit.events.get(roi, ()), dtype=np.int64).ravel()
-            frames.append(np.sort(found))
-            roi_index.append(np.full(found.size, i, dtype=np.int32))
-        frame = np.concatenate(frames) if frames else np.zeros(0, np.int64)
-        roi_index = np.concatenate(roi_index) if roi_index else np.zeros(0, np.int32)
-        events.create_array(
-            "frame", data=frame, chunks=(max(1, min(frame.size, 1 << 20)),)
-        )
-        events.create_array(
-            "roi", data=roi_index, chunks=(max(1, min(roi_index.size, 1 << 20)),)
-        )
-        if unit.images:
-            images = group.create_group("images")
-            for kind, arr in unit.images.items():
-                data = np.ascontiguousarray(arr, dtype=np.float32)
-                images.create_array(
-                    kind, data=data, chunks=data.shape, dimension_names=("y", "x")
-                )
-    logger.info(f"wrote {len(units)} unit(s) of {pipeline} results to {path}")
-    return path
-
-
-def read_results(path) -> Results:
-    """Read a results file back, every array in memory."""
-    path = Path(path)
-    root = zarr.open_group(str(path), mode="r")
-    attrs = dict(root.attrs)
-    if RESULTS_ATTR not in attrs:
-        raise ValueError(f"{path} is not a results file (no {RESULTS_ATTR!r} attr)")
-    units = {}
-    for name in attrs["units"]:
-        group = root[name]
-        a = dict(group.attrs)
-        k = int(a["n_rois"])
-        offsets = group["rois/offsets"][:]
-        member = group["rois/member"][:]
-        weight = group["rois/weight"][:]
-        traces = {
-            kind: group["traces"][kind][:] for kind in group["traces"].array_keys()
-        }
-        member_traces = (
-            {kind: group["members"][kind][:] for kind in group["members"].array_keys()}
-            if "members" in group
-            else {}
-        )
-        images = (
-            {kind: group["images"][kind][:] for kind in group["images"].array_keys()}
-            if "images" in group
-            else {}
-        )
-        frame = group["events/frame"][:]
-        roi_index = group["events/roi"][:]
-        roi_names = [str(n) for n in a["roi_names"]]
-        events = {roi_names[i]: frame[roi_index == i] for i in np.unique(roi_index)}
-        units[name] = ResultUnit(
-            name=name,
-            kind=str(a["kind"]),
-            index=int(a["index"]),
-            fs=None if a.get("fs") is None else float(a["fs"]),
-            roi_names=roi_names,
-            traces=traces,
-            member_kind=str(a["member_kind"]),
-            members=[member[offsets[i] : offsets[i + 1]] for i in range(k)],
-            weights=[weight[offsets[i] : offsets[i + 1]] for i in range(k)],
-            image_shape=None
-            if a.get("image_shape") is None
-            else (int(a["image_shape"][0]), int(a["image_shape"][1])),
-            iscell=group["rois/iscell"][:],
-            member_traces=member_traces,
-            events=events,
-            images=images,
-            attrs={key: value for key, value in a.items() if key not in _UNIT_ATTRS},
-        )
-    return Results(
-        path=path,
-        pipeline=str(attrs.get("pipeline", "")),
-        created=str(attrs.get("created", "")),
-        tags=[str(t) for t in attrs.get("tags", [])],
-        source=dict(attrs.get("source") or {}),
-        settings=dict(attrs.get("settings") or {}),
-        metadata=dict(attrs.get("metadata") or {}),
-        provenance=dict(attrs.get("provenance") or {}),
-        units=units,
-    )
-
-
-def results_from_suite2p(path) -> tuple[list[ResultUnit], dict]:
-    """Mold a suite2p or masknmf output folder into result units.
-
-    ``path`` is one plane dir or a folder of ``zplaneNN`` / ``planeNN`` dirs.
-    ``F`` is ``raw``, ``Fneu`` ``neuropil``, ``spks`` ``spikes``,
-    ``norm_traces`` (masknmf's percent dF/F) ``dff``; ``stat`` gives each
-    ROI's pixels and ``lam`` weights; ``meanImg``, ``max_proj``, ``Vcorr`` and
-    ``refImg`` are the images. Returns ``(units, root)`` where ``root`` holds
-    the ``pipeline``, ``settings`` and ``metadata`` for :func:`write_results`.
-    """
-    from mbo_utilities.metadata import get_param
-
-    path = Path(path)
-    plane_dirs = (
-        [path]
-        if (path / "F.npy").is_file()
-        else sorted(p for p in path.iterdir() if p.is_dir() and (p / "F.npy").is_file())
-    )
-    if not plane_dirs:
-        raise FileNotFoundError(f"no F.npy in {path} or its plane dirs")
-    units, root = [], {"pipeline": "suite2p", "settings": {}, "metadata": {}}
-    for plane_dir in plane_dirs:
-        ops = (
-            np.load(plane_dir / "ops.npy", allow_pickle=True).item()
-            if (plane_dir / "ops.npy").is_file()
-            else {}
-        )
-        stat = np.load(plane_dir / "stat.npy", allow_pickle=True)
-        F = np.load(plane_dir / "F.npy")
-        match = re.search(r"plane(\d+)", plane_dir.name, re.IGNORECASE)
-        index = (
-            int(match.group(1))
-            if match
-            else int(ops.get("plane", len(units) + 1) or len(units) + 1)
-        )
-        ly, lx = int(ops.get("Ly", 0) or 0), int(ops.get("Lx", 0) or 0)
-        if not ly or not lx:
-            for key in ("meanImg", "max_proj", "refImg"):
-                if isinstance(ops.get(key), np.ndarray) and ops[key].ndim == 2:
-                    ly, lx = ops[key].shape
-                    break
-        members, weights = [], []
-        for s in stat:
-            ypix, xpix = (
-                np.asarray(s["ypix"], dtype=np.int64).ravel(),
-                np.asarray(s["xpix"], dtype=np.int64).ravel(),
-            )
-            members.append(ypix * lx + xpix)
-            weights.append(
-                np.asarray(s.get("lam", np.ones(ypix.size)), dtype=np.float32).ravel()
-            )
-        traces = {"raw": F}
-        for file, kind in (
-            ("Fneu.npy", "neuropil"),
-            ("spks.npy", "spikes"),
-            ("norm_traces.npy", "dff"),
-        ):
-            if (plane_dir / file).is_file():
-                traces[kind] = np.load(plane_dir / file)
-        images = {
-            kind: np.asarray(ops[key])
-            for key, kind in (
-                ("meanImg", "mean"),
-                ("max_proj", "max"),
-                ("Vcorr", "corr"),
-                ("refImg", "ref"),
-            )
-            if isinstance(ops.get(key), np.ndarray) and ops[key].ndim == 2
-        }
-        units.append(
-            ResultUnit(
-                name=unit_name("plane", index),
-                kind="plane",
-                index=index,
-                fs=get_param(ops, "fs") if ops else None,
-                roi_names=[str(i) for i in range(len(stat))],
-                traces=traces,
-                member_kind="pixel",
-                members=members,
-                weights=weights,
-                image_shape=(ly, lx) if ly and lx else None,
-                iscell=np.load(plane_dir / "iscell.npy")
-                if (plane_dir / "iscell.npy").is_file()
-                else None,
-                images=images,
-                attrs={"plane_dir": str(plane_dir)},
-            )
-        )
-        if ops.get("pipeline") == "masknmf":
-            root["pipeline"] = "masknmf"
-            root["settings"] = dict(ops.get("masknmf") or {})
-        if not root["metadata"]:
-            root["metadata"] = ops
-    return units, root
-
-
-def results_from_pf(pf_dir) -> tuple[list[ResultUnit], dict]:
-    """Mold the voltage pipeline's ``PF`` folder of pickles into result units, one scan each.
-
-    The domains are the ROIs (``roi_names``), their lines the members, the
-    curated trace is ``denoised``, ``test.h5`` gives ``dff`` and ``zscore``,
-    the peaks are the events and ``traces/scan<id>_rois.npy`` (when the
-    folder has it) the members' ``raw`` traces. Returns ``(units, root)``
-    with the folder's ``pipeline.json`` as ``provenance``.
-    """
-    import h5py
-
-    pf_dir = Path(pf_dir)
-    files = pipeline_files(pf_dir)
-    traces_pkl = _read_pickle(pf_dir / TRACES_PKL)
-    rates = {
-        str(k): v for k, v in (_read_pickle(pf_dir / "fs_scans.pkl") or {}).items()
-    }
-    rois = _read_pickle(pf_dir / "scanIDs_ROIs.pkl") or {}
-    peaks = _read_pickle(pf_dir / "detected_events_peaks.pkl") or {}
-    provenance = {}
-    if (files / PROVENANCE_FILE).is_file():
-        provenance = json.loads((files / PROVENANCE_FILE).read_text())
-    traces = {
-        str(s): {str(d): np.asarray(t) for d, t in v.items()}
-        for s, v in (traces_pkl or {}).items()
-    }
-    scan_ids = [str(s) for s in rois.get("scanID_spatial", list(traces))]
-    first_env = {str(s) for s in rois.get("scanID_1st_env", [])}
-    roi_list = {
-        str(s): [int(r) for r in v] for s, v in (rois.get("roi_list") or {}).items()
-    }
-    source = dict(provenance.get("source") or {})
-    source_units = {str(k): str(v) for k, v in (source.get("units") or {}).items()}
-    if not source.get("mesc"):
-        from mbo_utilities.analysis.linescan import experiment_linescan_mesc
-
-        beside = experiment_linescan_mesc(pf_dir)
-        if beside is not None:
-            source["mesc"] = str(beside)
-    domains = {
-        FINAL_DOMAIN_NAMES.get(str(k), str(k)): [int(r) for r in v]
-        for k, v in (rois.get("domain_ROInumber") or {}).items()
-        if str(k) not in EXCLUDED_DOMAINS
-    }
-    traced = list(dict.fromkeys(d for v in traces.values() for d in v))
-    names = [d for d in domains if d in traced] + [
-        d for d in traced if d not in domains
-    ]
-    # the run's own record of the rates wins: fs_scans.pkl is the scanner's, pipeline.json the traces'
-    declared = {str(k): float(v) for k, v in (provenance.get("fs_hz") or {}).items()}
-    units = []
-    for scan in scan_ids:
-        rows = [d for d in names if d in traces.get(scan, {})]
-        denoised = (
-            np.stack([traces[scan][d] for d in rows])
-            if rows
-            else np.zeros((0, 0), np.float32)
-        )
-        kinds = {"denoised": denoised}
-        if (files / DFOF_H5).is_file():
-            with h5py.File(files / DFOF_H5, "r") as f:
-                if scan in f:
-                    kinds["dff"] = f[scan]["dfof_raw"][:]
-                    kinds["zscore"] = f[scan]["dfof_zscore"][:]
-        member_traces = {}
-        raw_file = files / "traces" / f"scan{scan}_rois.npy"
-        if raw_file.is_file():
-            member_traces["raw"] = np.load(raw_file)
-        rate = declared.get(scan, rates.get(scan))
-        found = {
-            str(d): np.asarray(v, dtype=np.int64)
-            for d, v in (peaks.get(scan) or {}).items()
-        }
-        units.append(
-            ResultUnit(
-                name=unit_name("scan", _scan_index(scan, scan_ids)),
-                kind="scan",
-                index=_scan_index(scan, scan_ids),
-                fs=None if rate is None else float(rate),
-                roi_names=rows,
-                traces=kinds,
-                member_kind="line",
-                members=[np.asarray(domains.get(d, []), dtype=np.int64) for d in rows],
-                member_traces=member_traces,
-                events={d: found[d] for d in rows if d in found and found[d].size},
-                attrs={
-                    "scan_id": scan,
-                    "source_unit": source_units.get(scan) or f"MUnit_{scan}",
-                    "first_env": scan in first_env,
-                    "member_ids": roi_list.get(scan, []),
-                },
-            )
-        )
-    root = {
-        "pipeline": "voltage",
-        "source": source,
-        "settings": dict(provenance.get("settings") or {}),
-        "metadata": dict(provenance.get("source_metadata") or {}),
-        "provenance": provenance,
-    }
-    return units, root
 
 
 # AGENTS.md 7.2 puts a pipeline's info on its widget; the voltage widget needs
@@ -941,8 +987,8 @@ def _scan_index(scan: str, scan_ids: list[str]) -> int:
 
 
 class ResultsArray(ReductionMixin, LazyArray):
-    """One run's output as an array: a results file, or a native output folder
-    molded into one, whichever pipeline wrote it.
+    """One run's output as an array: a results file, or a pipeline's native
+    output folder read as one, whichever pipeline wrote it.
 
     The image is the recording the run processed when that file is reachable
     (``results.source``), so the viewer shows the movie the traces came from;
@@ -979,7 +1025,7 @@ class ResultsArray(ReductionMixin, LazyArray):
         self.path = path
         self.filenames = [path]
         self._metadata: dict = {}
-        self.results = open_results(path)
+        self.results = Results.open(path)
         names = list(self.results.units)
         if unit is not None and unit not in self.results.units:
             resolved = unit_for_source(self.results, unit)

@@ -20,7 +20,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from mbo_utilities.results import FINAL_DOMAIN_NAMES, TRACES_PKL, mold_results
+from mbo_utilities.results import FINAL_DOMAIN_NAMES, TRACES_PKL, Results
 from mbo_utilities.vnoiser import recording_id
 
 SAVED_ID = re.compile(r"(?:^|/)scan=([^/]+)/domain=(.+)$")
@@ -50,7 +50,7 @@ def main(argv=None) -> int:
             if pf_dir not in current:
                 current[pf_dir] = {
                     recording_id(unit, roi)
-                    for unit in mold_results(pf_dir).units.values()
+                    for unit in Results.from_pf(pf_dir).units.values()
                     for roi in unit.roi_names
                 }
             payload = json.loads(label_file.read_text(encoding="utf-8"))

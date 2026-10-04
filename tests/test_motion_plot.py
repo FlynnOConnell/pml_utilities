@@ -114,6 +114,40 @@ def test_the_plot_draws_alone_in_frames_and_in_linked_subplots():
     assert list(ratios.row_ratios) == [pytest.approx(0.3), pytest.approx(0.7)]
 
 
+def record_line(seen: list, label, *_args, **_kwargs) -> None:
+    seen.append(label)
+
+
+def draw_plane(plot, z) -> None:
+    plot.draw("##motion", 200.0, z=z)
+
+
+def test_a_stage_run_plane_by_plane_draws_only_the_plane_on_screen(monkeypatch):
+    from mbo_utilities.gui.imgui import motion as motion_module
+    from mbo_utilities.gui.imgui.motion import MotionPlot
+
+    t = np.arange(100) / 10.0
+    plot = MotionPlot(
+        MotionCorrection(
+            "suite2p",
+            "px",
+            {"X a": (t, t), "Y a": (t, -t), "X b": (t, 2 * t), "Z": (t, t)},
+            planes={"X a": 0, "Y a": 0, "X b": 1},
+        )
+    )
+    drawn = []
+    monkeypatch.setattr(motion_module, "line", partial(record_line, drawn))
+    _frame(partial(draw_plane, plot, 0), frames=1)
+    # a trace no plane claims belongs to all of them
+    assert drawn == ["X a", "Y a", "Z"]
+    drawn.clear()
+    _frame(partial(draw_plane, plot, 1), frames=1)
+    assert drawn == ["X b", "Z"]
+    drawn.clear()
+    _frame(partial(draw_plane, plot, None), frames=1)
+    assert drawn == ["X a", "Y a", "X b", "Z"]
+
+
 class FakeOverlay:
     def __init__(self):
         from mbo_utilities.gui.playhead import Playhead

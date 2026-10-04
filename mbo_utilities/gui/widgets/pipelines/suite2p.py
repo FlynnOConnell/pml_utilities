@@ -13,8 +13,9 @@ import numpy as np
 from imgui_bundle import imgui
 
 from mbo_utilities.gui._availability import HAS_SUITE2P
-from mbo_utilities.gui._imgui_helpers import PopupAutoSize
+from mbo_utilities.gui._imgui_helpers import PopupAutoSize, set_tooltip
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
+from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import set_last_dir
 
 # lazy availability check cache
@@ -131,10 +132,11 @@ class Suite2pPipelineWidget(PipelineWidget):
         self._savepath_flash_start = None
         self._show_savepath_popup = False
 
-        # diagnostics popup state (lazy init)
+        # diagnostics popup state (lazy init); the unit of the plane on screen it shows
         self._diagnostics_widget = None
         self._show_diagnostics_popup = False
         self._diagnostics_popup_open = False
+        self._diagnostics_unit = None
         self._file_dialog = None
 
         # grid search viewer state (lazy init)
@@ -302,8 +304,47 @@ class Suite2pPipelineWidget(PipelineWidget):
             if len(matches) > 0:
                 diag.selected_roi = int(matches[0])
 
+    def _screen_unit(self):
+        """The results unit of the plane on screen, when the data shown is a
+        run's output with a plane dir to write curation back to; else None.
+        """
+        host = self.parent
+        on_screen = getattr(host, "slice", None)
+        data = getattr(getattr(host, "image_widget", None), "data", None)
+        results = getattr(base_array(data[0]), "results", None) if data else None
+        if results is None or on_screen is None:
+            return None
+        return next(
+            (
+                u
+                for u in results.units.values()
+                if u.member_kind == "pixel"
+                and u.attrs.get("plane_dir")
+                and u.attrs.get("z") == on_screen.z
+            ),
+            None,
+        )
+
     def _draw_diagnostics_popup(self):
         """Draw the diagnostics popup window if open."""
+        # the data on screen is a run's output: its plane's diagnostics, following the Z slider
+        unit = self._screen_unit()
+        if unit is not None:
+            if imgui.button("Diagnostics of the plane on screen"):
+                self._show_diagnostics_popup = True
+                self._diagnostics_unit = None
+            set_tooltip(
+                "The ROIs, accept flags and traces the run found on the z-plane "
+                "shown; follows the Z slider",
+                show_mark=False,
+            )
+            if (
+                self._diagnostics_popup_open or self._show_diagnostics_popup
+            ) and self._diagnostics_unit is not unit:
+                self._get_diagnostics_widget().load_unit(
+                    unit, Path(unit.attrs["plane_dir"])
+                )
+                self._diagnostics_unit = unit
         # Check if file dialog has a result
         if self._file_dialog is not None and self._file_dialog.ready():
             result = self._file_dialog.result()

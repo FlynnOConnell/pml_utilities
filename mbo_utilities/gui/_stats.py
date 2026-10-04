@@ -461,17 +461,11 @@ def current_breakout_key(parent: Any, idx: int) -> tuple:
     spec = specs[idx] if specs and idx < len(specs) else None
     if spec is None or not spec.groups:
         return ()
-    iw = getattr(parent, "image_widget", None)
-    names = tuple(getattr(iw, "_slider_dim_names", None) or ()) if iw else ()
+    on_screen = getattr(parent, "slice", None)
     key: list[int] = []
     for g in spec.groups:
-        v = 0
-        name = find_slider_name(names, g.name)
-        if iw is not None and name:
-            try:
-                v = int(iw.indices[name])
-            except (KeyError, IndexError, TypeError, ValueError):
-                v = 0
+        v = on_screen.of(_slider_role(g.name)) if on_screen is not None else None
+        v = 0 if v is None else int(v)
         key.append(min(g.indices, key=lambda k: abs(k - v)))
     return tuple(key)
 
@@ -645,17 +639,19 @@ def _active_stat(parent: Any, spec: SummaryStatsSpec | None) -> int | None:
     """
     if spec is None or spec.series is None:
         return None
-    iw = getattr(parent, "image_widget", None)
-    if iw is None or getattr(iw, "n_sliders", 0) < 1:
+    on_screen = getattr(parent, "slice", None)
+    if on_screen is None:
         return None
-    names = tuple(getattr(iw, "_slider_dim_names", None) or ())
-    name = find_slider_name(names, spec.series.name)
-    if name is None:
-        return None
-    try:
-        return int(iw.indices[name]) + 1
-    except (KeyError, IndexError, TypeError, ValueError):
-        return None
+    index = on_screen.of(_slider_role(spec.series.name))
+    return None if index is None else int(index) + 1
+
+
+def _slider_role(axis: str) -> str:
+    """What to ask the slice for an axis name: ``t`` / ``c`` / ``z`` for a
+    T, C or Z spelling, else the name itself (a tile or camera dim).
+    """
+    canon = canonical_axis(axis)
+    return canon.lower() if canon in ("T", "C", "Z") else str(axis)
 
 
 def _combined_stats(parent, metrics) -> dict | None:
@@ -1219,9 +1215,8 @@ def _draw_combined_zplane_plot(
                     np.array([float(active_z)], dtype=np.float64),
                     implot.Spec(line_weight=2.0, line_color=_ACTIVE_Z_COLOR),
                 )
-                # find y for annotation — clamp to series so the label
-                # sits on the curve rather than floating in the void.
-                _idx = int(min(max(active_z - 1, 0), len(mean_vals) - 1))
+                # the label sits on the sampled point nearest the active plane
+                _idx = int(np.argmin(np.abs(np.asarray(z, float) - active_z)))
                 short = stat_label[:1].upper() or "Z"
                 implot.annotation(
                     float(active_z),
@@ -1319,7 +1314,7 @@ def _draw_zplane_signal_plot(
                     np.array([float(active_z)], dtype=np.float64),
                     implot.Spec(line_weight=2.0, line_color=_ACTIVE_Z_COLOR),
                 )
-                _idx = int(min(max(active_z - 1, 0), len(mean_vals) - 1))
+                _idx = int(np.argmin(np.abs(z - active_z)))
                 implot.annotation(
                     float(active_z),
                     float(mean_vals[_idx]),

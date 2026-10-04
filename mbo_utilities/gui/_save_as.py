@@ -20,6 +20,7 @@ from mbo_utilities.arrays.features import (
     DimensionTag,
     parse_timepoint_selection,
 )
+from mbo_utilities.gui._colormaps import listed_name
 from mbo_utilities.gui._files import NATIVE_DIALOGS, no_dialog_hint
 from mbo_utilities.gui._imgui_helpers import (
     PopupAutoSize,
@@ -533,10 +534,11 @@ def _preview_fps(parent: Any) -> float | None:
 
 def _preview_cmap(parent: Any) -> str | None:
     try:
-        c = str(parent.image_widget.graphics[0].cmap or "")
+        cmap = parent.image_widget.graphics[0].cmap
     except Exception:
         return None
-    return c or None
+    # None for an RGB image
+    return None if cmap is None else listed_name(cmap)
 
 
 def _preview_vmin_vmax(parent: Any) -> tuple[float, float] | None:

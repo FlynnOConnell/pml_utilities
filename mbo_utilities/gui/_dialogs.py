@@ -444,9 +444,8 @@ def _reset_per_data_state(parent: Any) -> None:
     parent._saveas_frame_average = 1
     parent._s2p_frame_average = 1
     parent._masknmf_frame_average = 1
-    # contrast / z-tracking
+    # contrast
     parent._auto_contrast_on_z = False
-    parent._last_z_idx = 0
     # save-as dialog selections
     parent._saveas_selected_roi = set()
     parent._saveas_rois = False

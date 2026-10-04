@@ -64,6 +64,7 @@ class MotionPlot:
         self.duration_s = motion.duration_s if motion else 0.0
         self.y_label = f"{motion.source} shift ({motion.unit})" if motion else ""
         self._fit = True
+        self._z: int | None = None
 
     def __bool__(self) -> bool:
         return bool(self.traces)
@@ -84,6 +85,7 @@ class MotionPlot:
         x_per_second: float = 1.0,
         x_label: str = "time (s)",
         x_axis: bool = True,
+        z: int | None = None,
     ) -> tuple[float | None, bool]:
         """The traces on one plot; inside subplots ``height`` is the cell's.
         The x axis is time in the host's units, ``x_per_second`` of them per
@@ -92,13 +94,17 @@ class MotionPlot:
         whole recording (``duration_s``, the traces' own extent without),
         which is also as far as the x axis can pan. ``cursor`` marks a time
         in x units; with ``cursor_id`` it is draggable, and the moved time
-        and whether it is held come back.
+        and whether it is held come back. ``z`` is the z-plane on screen: a
+        trace that belongs to another plane (``MotionCorrection.planes``) is
+        left out, and y fits again when the plane changes.
         """
         fit, self._fit = self._fit, False
         duration = float(duration_s) if duration_s is not None else self.duration_s
         x_max = max(duration * x_per_second, 1e-3)
-        if fit:
+        planes = self.motion.planes if z is not None else {}
+        if fit or (planes and z != self._z):
             implot.set_next_axis_to_fit(implot.ImAxis_.y1)
+        self._z = z
         with line_plot(
             plot_id,
             x_label if x_axis else "",
@@ -120,6 +126,8 @@ class MotionPlot:
                     {label: t * x_per_second for label, (t, _v) in self.traces.items()},
                 )
             for label, (_t, v) in self.traces.items():
+                if planes.get(label, z) != z:
+                    continue
                 r, g, b = MOTION_COLORS.get(label[0], (0.8, 0.8, 0.8))
                 line(
                     label, v, x=self._scaled[1][label], color=(r, g, b, 0.9), weight=1.0

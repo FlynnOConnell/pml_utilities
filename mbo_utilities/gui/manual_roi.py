@@ -96,12 +96,10 @@ from mbo_utilities.annotation import (
     available_kinds,
     display_trace,
     displayed_kind,
-    neuropil_overlay,
     trace_profile,
     y_label,
 )
 from mbo_utilities.annotation.display import DFF_METHODS
-from mbo_utilities.arrays.features._dim_labels import slider_roles
 from mbo_utilities.arrays.features._dim_tags import (
     TAG_REGISTRY,
     DimensionTag,
@@ -145,6 +143,7 @@ from mbo_utilities.gui.imgui.behavior import BehaviorPlot
 from mbo_utilities.gui.imgui.lines import plot_style, subplots
 from mbo_utilities.gui.imgui.motion import MotionPlot
 from mbo_utilities.gui.playhead import Playhead, TimeAxis
+from mbo_utilities.gui.slice import Slice, viewer_positions, viewer_roles
 from mbo_utilities.gui.roi_runs import (
     MASK_MODES,
     RING_SCALE,
@@ -174,6 +173,7 @@ from mbo_utilities.roi_workflow import (
     SAVE_NAME,
     PlaneMovie,
     demix_rois,
+    detection_algo,
     discover_rois,
     extract_rois,
     feather_mask,
@@ -381,23 +381,7 @@ def help_markdown() -> str:
 
 
 _CURSOR_COLOR = imgui.ImVec4(1.0, 0.85, 0.3, 0.9)
-# the trace reads over the neuropil under it, which keeps implot's 1.0
 _TRACE_WEIGHT = 1.5
-_FNEU_COLOR = (0.25, 0.55, 1.0, 1.0)
-_fneu_cmap: int | None = None
-
-
-def _fneu_colormap() -> int:
-    """The registered single-blue colormap every neuropil line draws with."""
-    global _fneu_cmap
-    if _fneu_cmap is None:
-        idx = implot.get_colormap_index("mbo_fneu")
-        if idx < 0:
-            idx = implot.add_colormap(
-                "mbo_fneu", np.array([_FNEU_COLOR, _FNEU_COLOR], np.float32)
-            )
-        _fneu_cmap = int(idx)
-    return _fneu_cmap
 
 
 def _line_colormap(rgb) -> int:
@@ -586,7 +570,7 @@ class ManualRoiWidget:
         self.image = iw.graphics[0]
         self.ny, self.nx = self.image.data.value.shape[:2]
 
-        self.roles = slider_roles(iw.dim_names)
+        self.roles = viewer_roles(iw)
         self.tdim, self.cdim, self.zdim = (self._axis_for(r) for r in ("t", "c", "z"))
         self._bind_recording()
         # every scrolling dim except time keys its own mask plane, so masks
@@ -638,6 +622,8 @@ class ManualRoiWidget:
         self.opacity = 0.45
         self.show_derived = True
         self.derived_opacity = 0.6
+        # the trace table lists the slice on screen; "all slices" lifts it
+        self.traces_this_slice = True
         # how masks draw: a ring standing in for each ROI, its own border,
         # or the filled footprint. The vector modes stroke in screen pixels
         # (line_width), the ring in image pixels (ring_scale over the mask's
@@ -656,14 +642,24 @@ class ManualRoiWidget:
             {"source": np.zeros(0, np.int64)}, self.classes.labels, 0
         )
 
-        # one time for every view of the recording: the host's when it has one
+        # one time and one slice for every view of the recording: the host's
+        # when it has them, fed by its handler on the sliders; a widget on a
+        # bare viewer makes its own and feeds them itself
         self.playhead = getattr(host, "playhead", None)
+        self.slice = getattr(host, "slice", None)
+        self._own_slice = self.slice is None
         if self.playhead is None:
             self.playhead = Playhead()
             if host is not None:
                 host.playhead = self.playhead
+        if self.slice is None:
+            self.slice = Slice()
+            self.slice.move(*viewer_positions(iw), source=self)
+            if host is not None:
+                host.slice = self.slice
+            iw.ndwidget.indices.add_event_handler(self._on_indices)
         self.model.set_view(self._view_pos())
-        iw.ndwidget.indices.add_event_handler(self._on_indices)
+        self.slice.add_event_handler(self._on_slice, "slice")
 
         self.overlay = self.subplot.add_image(
             np.zeros((self.ny, self.nx, 4), np.uint8),
@@ -722,11 +718,10 @@ class ManualRoiWidget:
         self._trace_threads: list[threading.Thread] = []
         self.trace_sel: set[tuple] = set()  # trace-table keys to plot
         self._trace_stats: dict[tuple, tuple] = {}
-        self._trace_display: dict[tuple, tuple] = {}
+        self._trace_display: dict[tuple, np.ndarray] = {}
         self._trace_deflection = (False, False)
         # one entry: the last windowed line, so panning does not recompute it
         self._trace_window_cache: dict[tuple, np.ndarray] = {}
-        self.correct_neuropil = True
         # what the plot shows of each row (a DISPLAY_KINDS name); None lets
         # every row's pipeline pick, and a kind a row lacks falls back the same way
         self._kind: str | None = None
@@ -817,6 +812,8 @@ class ManualRoiWidget:
         self.motion = MotionPlot(getattr(arr, "motion_correction", None))
         self.behavior = BehaviorPlot(behavior_for(arr) if arr is not None else None)
         self.line_positions = list(getattr(arr, "line_positions", None) or [])
+        # what the pipeline that wrote the data found (a suite2p run's planes)
+        self.results = getattr(arr, "results", None)
 
     def _line_position(self, trace: RoiTrace) -> dict:
         """Where the line a row was read on sits: the recording's placement
@@ -857,10 +854,12 @@ class ManualRoiWidget:
                 renderer.remove_event_handler(fn, kind)
             except (KeyError, ValueError):
                 pass
-        try:
-            self.iw.ndwidget.indices.remove_event_handler(self._on_indices)
-        except (KeyError, ValueError, AttributeError):
-            pass
+        if self._own_slice:
+            try:
+                self.iw.ndwidget.indices.remove_event_handler(self._on_indices)
+            except (KeyError, ValueError, AttributeError):
+                pass
+        self.slice.remove_event_handler(self._on_slice)
         self.playhead.remove_event_handler(self._on_playhead)
         # the parked store and table must not keep calling into a closed widget
         self.model.close()
@@ -945,15 +944,9 @@ class ManualRoiWidget:
 
     def _view_pos(self) -> dict[str, int]:
         """The slider position over the dims that key mask planes."""
-        pos = {}
-        for name, _n in self.plane_axes:
-            # a unit switch (MESc) can drop a scroll dim the store was keyed
-            # on; that dim then sits at plane 0 rather than taking the GUI down
-            try:
-                pos[name] = int(self.iw.indices[name])
-            except KeyError:
-                pos[name] = 0
-        return pos
+        # a unit switch (MESc) can drop a scroll dim the store was keyed on;
+        # that dim then sits at plane 0 rather than taking the GUI down
+        return {name: self.slice.positions.get(name, 0) for name, _n in self.plane_axes}
 
     def _current_z(self) -> int:
         """Flat store plane for the viewer's scroll position (see
@@ -974,11 +967,16 @@ class ManualRoiWidget:
         return self.store.plane_label(plane)
 
     def _on_indices(self, _indices):
-        self.model.set_view(self._view_pos())
+        """A widget on a bare viewer feeds its own slice and playhead."""
+        self.slice.move(*viewer_positions(self.iw), source=self)
         if self.tdim is not None:
             self.playhead.seek(
                 self.viewer_axis().seconds(self.current_frame()), source=self
             )
+
+    def _on_slice(self, _event):
+        """The sliders sit on another channel or z-plane: the store plane follows."""
+        self.model.set_view(self._view_pos())
 
     def _on_playhead(self, event):
         """Another view moved the playhead: put the viewer's T on that frame."""
@@ -1150,9 +1148,12 @@ class ManualRoiWidget:
         planes = [r.plane for r in rois]
         sources = [0] * len(rois)
         oks = [1] * len(rois)
+        probs = [np.nan] * len(rois)
         for si, s in enumerate(self.derived):
             if not s.visible:
                 continue
+            iscell = s.result.iscell
+            scored = iscell is not None and np.ndim(iscell) == 2 and iscell.shape[1] > 1
             for k, stat_row in enumerate(s.result.stat):
                 if k in s.discarded:
                     continue
@@ -1160,6 +1161,7 @@ class ManualRoiWidget:
                 planes.append(s.result.z)
                 sources.append(1 + si)
                 oks.append(1 if s.accepted[k] else 0)
+                probs.append(float(iscell[k, 1]) if scored else np.nan)
         self._row_index = {pair: row for row, pair in enumerate(self.rows)}
         if (
             self.selected_derived is not None
@@ -1175,10 +1177,13 @@ class ManualRoiWidget:
         self.classes = LabelSet(len(self.rows), self.store.label_names, labels)
         self.store.label_names = self.classes.names
         planes = np.asarray(planes, np.int64)
+        # in the order columns() lists them: the sort column indexes this dict
         columns = {
             "source": np.asarray(sources, np.int64),
             "ok": np.asarray(oks, np.int64),
         }
+        if self.has_prob:
+            columns["prob"] = np.asarray(probs, np.float64)
         if self.store.nz > 1:
             columns["z"] = planes
         self.order.columns = columns
@@ -1205,8 +1210,22 @@ class ManualRoiWidget:
                 self.derived[si].classes[k] = ci
 
     @property
+    def has_prob(self) -> bool:
+        """Whether a loaded set carries a classifier probability (suite2p's ``iscell[:, 1]``)."""
+        return any(
+            s.result.iscell is not None
+            and np.ndim(s.result.iscell) == 2
+            and s.result.iscell.shape[1] > 1
+            for s in self.derived
+        )
+
+    @property
     def columns(self) -> tuple[str, ...]:
-        return COLUMNS + (("z",) if self.store.nz > 1 else ())
+        return (
+            COLUMNS
+            + (("prob",) if self.has_prob else ())
+            + (("z",) if self.store.nz > 1 else ())
+        )
 
     def _formatters(self) -> dict:
         def source(row):
@@ -1231,7 +1250,16 @@ class ManualRoiWidget:
                 return ""
             return "yes" if self.derived[si].accepted[k] else "no"
 
-        return {"source": source, "ok": ok, "z": zplane}
+        def prob(row):
+            si, k = self.rows[row]
+            if si < 0:
+                return ""
+            iscell = self.derived[si].result.iscell
+            if iscell is None or np.ndim(iscell) < 2 or iscell.shape[1] < 2:
+                return ""
+            return f"{float(iscell[k, 1]):.2f}"
+
+        return {"source": source, "ok": ok, "prob": prob, "z": zplane}
 
     def _arm_mode(self, mode: str):
         """One of "off", "roi", "region" owns the stroke drawer."""
@@ -1947,6 +1975,9 @@ class ManualRoiWidget:
             colors={int(k): tuple(float(x) for x in v) for k, v in colors.items()},
         )
         self.derived.append(s)
+        if self.store.nz > 1 and len(self.derived) == 1 and self.order.plane is None:
+            # per-plane results: the ROI table opens on the plane on screen
+            self.order.plane = self.z
         self._merge_run_traces(res, s.name)
         for k in range(len(res.stat)):
             if k not in s.discarded and (s.name, k) not in self._promoted:
@@ -1982,6 +2013,7 @@ class ManualRoiWidget:
             F=np.asarray(res.F[k], np.float32),
             Fneu=None if res.Fneu is None else np.asarray(res.Fneu[k], np.float32),
             norm=None if res.norm is None else np.asarray(res.norm[k], np.float32),
+            kinds={name: np.asarray(v[k], np.float32) for name, v in res.kinds.items()},
             frames=res.frames,
             path=res.path,
         )
@@ -2035,7 +2067,7 @@ class ManualRoiWidget:
         the file (``<file>.zarr/zplane01``). Returns True when anything
         loaded.
         """
-        from mbo_utilities.results import read_results, results_pipeline
+        from mbo_utilities.results import Results, results_pipeline
 
         path = Path(path)
         if path.parent.suffix == ".zarr" and results_pipeline(path) is None:
@@ -2043,7 +2075,7 @@ class ManualRoiWidget:
         else:
             file, only = path, None
         try:
-            results = read_results(file)
+            results = Results.read(file)
         except Exception as e:  # noqa: BLE001 - shown in the status row
             self._run_error = f"could not load {file.name}: {e}"
             return False
@@ -2389,11 +2421,14 @@ class ManualRoiWidget:
                 return
             # the parked sets and traces key uids of the previous data's
             # store; fall through to this data's own registry
-        if self.fpath is None:
-            return
         self._restoring = True
         try:
-            for entry in load_run_registry(registry_path(self.fpath, self.tag)):
+            entries = (
+                load_run_registry(registry_path(self.fpath, self.tag))
+                if self.fpath is not None
+                else []
+            )
+            for entry in entries:
                 path = Path(entry["path"])
                 if not run_dir_complete(path):
                     # a spawned pipeline may have suffixed the dir name
@@ -2414,14 +2449,45 @@ class ManualRoiWidget:
                     ):
                         continue
                 self._registry_extra.append(entry)
+            self._load_array_results()
+        finally:
+            self._restoring = False
+
+    def _load_array_results(self) -> None:
+        """Show what the pipeline that wrote the data on screen found: one
+        derived set per pixel unit of the array's ``results`` (a suite2p
+        volume's planes each land on their own z), keyed by the plane dir the
+        unit was read from so curation writes back there. An array with no
+        results that sits in a run dir still shows that dir's ROIs.
+        """
+        results = self.results
+        if results is None:
+            if self.fpath is None:
+                return
             own = labels_path(self.fpath).parent
             if run_dir_complete(own) and not any(
                 s.result.path == own for s in self.derived
             ):
-                # the data sits in a suite2p / masknmf result dir: show its ROIs
                 self.load_run(own)
-        finally:
-            self._restoring = False
+            return
+        for unit in results.units.values():
+            if unit.member_kind != "pixel" or unit.image_shape is None:
+                continue
+            if tuple(unit.image_shape) != (self.ny, self.nx):
+                continue
+            path = Path(
+                unit.attrs.get("plane_dir") or (results.path or Path()) / unit.name
+            )
+            if any(s.result.path == path for s in self.derived):
+                continue
+            res = run_result_from_unit(unit, path, results.pipeline)
+            if results.metadata:
+                # the run's ops say which detector made the rows (s2p-sparsery, s2p-cellpose)
+                res = replace(res, algo=detection_algo(results.metadata))
+            if self.store.nz == 1 and res.z != 0:
+                # the movie on screen IS this plane, whatever z the unit recorded
+                res = replace(res, z=0)
+            self._add_derived(res)
 
     def _autosave(self):
         if self._writer is None:
@@ -4146,12 +4212,6 @@ class ManualRoiWidget:
         offered = {kind for trace in rows for kind in available_kinds(trace)}
         return tuple(kind for kind in DISPLAY_KINDS if kind in offered)
 
-    def neuropil_offered(self, rows) -> bool:
-        """Whether a plotted row's pipeline measured a neuropil to correct with."""
-        return any(
-            trace_profile(t.engine).neuropil and t.Fneu is not None for t in rows
-        )
-
     def plot_y_label(self, rows) -> str:
         """The y axis label of what the rows show: one when they agree, else joined."""
         subtract, invert = self.deflection()
@@ -4215,10 +4275,10 @@ class ManualRoiWidget:
             bool(getattr(self.host, "invert_deflection", False)),
         )
 
-    def _display(self, key) -> tuple:
-        """Cached ``(trace, neuropil)`` display arrays for one trace key, in
-        the panel's kind, dF/F settings and the viewer's deflection
-        (``annotation.display``).
+    def _display(self, key) -> np.ndarray | None:
+        """The cached display array for one trace key, in the panel's kind,
+        dF/F settings and the viewer's deflection (``annotation.display``);
+        None when the row is gone or carries nothing.
         """
         deflection = self.deflection()
         if deflection != self._trace_deflection:
@@ -4228,16 +4288,11 @@ class ManualRoiWidget:
         if got is None:
             trace = self.traces.get(key)
             if trace is None:
-                return None, None
-            y = display_trace(
-                trace, self.kind, self.dff, self.correct_neuropil, *deflection
-            )
+                return None
+            y = display_trace(trace, self.kind, self.dff, *deflection)
             if y is None:
-                return None, None
-            yneu = neuropil_overlay(trace, self.kind, self.dff, *deflection)
-            if yneu is not None:
-                yneu = np.ascontiguousarray(yneu, np.float32)
-            got = (np.ascontiguousarray(y, np.float32), yneu)
+                return None
+            got = np.ascontiguousarray(y, np.float32)
             self._trace_display[key] = got
         return got
 
@@ -4375,29 +4430,19 @@ class ManualRoiWidget:
                 )
         rows = [] if target is None else self._plotted_rows(target[1])
         # the pipelines behind the plotted rows decide what the panel offers
-        if self.neuropil_offered(rows):
-            imgui.same_line(0, 12)
-            changed, self.correct_neuropil = imgui.checkbox(
-                "neuropil corrected", self.correct_neuropil
-            )
-            set_tooltip(
-                "subtract the pipeline's neuropil (0.7 x Fneu) from the raw trace before "
-                "dF/F; offered by suite2p and the mean engine's ring, never by masknmf",
-                show_mark=False,
-            )
-            if changed:
-                self._redisplay()
         kinds = self.kind_options(rows)
         if kinds:
             imgui.same_line(0, 12)
             shown = [displayed_kind(t, self.kind) for t in rows]
             current = self.kind if self.kind in kinds else shown[0]
-            imgui.set_next_item_width(em(6.5))
+            imgui.set_next_item_width(em(9))
             changed, sel = imgui.combo(
                 "##trace_kind", kinds.index(current), list(kinds)
             )
             set_tooltip(
-                "What each row shows: raw, its pipeline's dF/F (or one computed here), "
+                "What each row shows, one line per row: dff (its pipeline's dF/F, or "
+                "one computed here), raw (F alone), neuropil (Fneu alone), "
+                "raw - neuropil (F minus the pipeline's share of Fneu), spikes, "
                 "denoised, z-score. A row without that kind shows its pipeline's default.",
                 show_mark=False,
             )
@@ -4409,7 +4454,8 @@ class ManualRoiWidget:
                 if imgui.small_button("dF/F##dff_settings"):
                     imgui.open_popup("##dff_settings")
                 set_tooltip(
-                    "The baseline of a dF/F computed here from a raw trace",
+                    "The baseline of a dF/F computed here: from raw - neuropil "
+                    "when the row has a neuropil, from the raw trace otherwise",
                     show_mark=False,
                 )
                 self._draw_dff_settings(rows)
@@ -4609,6 +4655,7 @@ class ManualRoiWidget:
             x_per_second=plot.per_second,
             x_label=X_AXIS_LABELS[self.x_unit],
             x_axis=x_axis,
+            z=self.slice.z,
         )
         if held and moved is not None:
             self.playhead.seek(plot.seconds(moved), source="motion_plot")
@@ -4668,7 +4715,7 @@ class ManualRoiWidget:
             if self.behavior and self.show_behavior:
                 self.behavior.shade_into(plot.per_second)
             for label, tkey in lines:
-                y, yneu = self._display(tkey)
+                y = self._display(tkey)
                 if y is None:
                     continue
                 # each row sits where it was recorded
@@ -4684,15 +4731,6 @@ class ManualRoiWidget:
                     spec=implot.Spec(line_weight=_TRACE_WEIGHT),
                 )
                 if rgb is not None:
-                    implot.pop_colormap()
-                if yneu is not None:
-                    implot.push_colormap(_fneu_colormap())
-                    implot.plot_line(
-                        f"{label} Fneu",
-                        self._windowed(yneu),
-                        xscale=xscale,
-                        xstart=xstart,
-                    )
                     implot.pop_colormap()
                 pair = self._key_to_pair(tkey)
                 if pair is not None:
@@ -4749,8 +4787,27 @@ class ManualRoiWidget:
         return rows
 
     def _trace_rows(self) -> list[tuple]:
-        """Every listable trace key: the table's rows, in insertion order."""
-        return self.traces.keys
+        """The table's rows, in insertion order: every trace key, or only the
+        ones placed on the slice on screen (drawn ROIs, loaded components and
+        scanned lines read on the channel and z-plane shown; a results file's
+        rows have no slice and always show).
+        """
+        keys = self.traces.keys
+        if not self.traces_this_slice or self.store.nz <= 1:
+            return keys
+        z, c = self.slice.z, self.slice.c
+        out = []
+        for key in keys:
+            trace = self.traces.get(key)
+            placed = trace is not None and (
+                trace.stands_for_roi
+                or trace.source == FULL_IMAGE
+                or "line" in trace.extra
+                or self._set_by_name(trace.source) is not None
+            )
+            if not placed or (trace.z == z and trace.c == c):
+                out.append(key)
+        return out
 
     def _trace_cells(self, key) -> tuple:
         """The text of one row's roi / z / c / engine / source columns."""
@@ -4782,7 +4839,7 @@ class ManualRoiWidget:
         """
         got = self._trace_stats.get(key)
         if got is None:
-            y, _ = self._display(key)
+            y = self._display(key)
             f = y if y is not None else np.zeros(0, np.float32)
             if f.size:
                 med = float(np.median(f))
@@ -4844,6 +4901,15 @@ class ManualRoiWidget:
             "algo components are discarded)",
             show_mark=False,
         )
+        if self.store.nz > 1:
+            imgui.same_line(0, 12)
+            changed, every = imgui.checkbox("all slices", not self.traces_this_slice)
+            if changed:
+                self.traces_this_slice = not every
+            set_tooltip(
+                "List the rows of every channel and z-plane, not only the slice on screen",
+                show_mark=False,
+            )
         # stretch, not fit-to-content: the tab is a narrow column and
         # fixed-width columns ran off its right edge. frames and peak start
         # hidden — right-click the header to bring them back.

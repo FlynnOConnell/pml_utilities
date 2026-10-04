@@ -62,6 +62,7 @@ from mbo_utilities.annotation.ngff import LabelsZarr
 from mbo_utilities.annotation.store import RoiLabelStore
 from mbo_utilities.arrays.features._dim_tags import filename_tags
 from mbo_utilities.arrays.features._slicing import index_window
+from mbo_utilities.results import norm_traces_kind
 
 __all__ = [
     "PlaneMovie",
@@ -677,6 +678,8 @@ class RunResult:
     #: ``(start, stop, step)`` the run read; None for every frame or a gapped selection
     frames: tuple[int, int, int] | None = None
     tp_indices: list[int] | None = None
+    #: every other trace the run wrote, by kind (``spikes`` from suite2p's spks.npy)
+    kinds: dict[str, np.ndarray] = field(default_factory=dict)
 
 
 def detection_algo(ops: dict) -> str:
@@ -752,7 +755,7 @@ def load_run_dir(
         return np.load(path / name) if (path / name).exists() else None
 
     F, Fneu, norm = _opt("F.npy"), _opt("Fneu.npy"), _opt("norm_traces.npy")
-    iscell = _opt("iscell.npy")
+    iscell, spikes = _opt("iscell.npy"), _opt("spks.npy")
     stale = [
         n
         for n, a in (
@@ -760,6 +763,7 @@ def load_run_dir(
             ("Fneu.npy", Fneu),
             ("norm_traces.npy", norm),
             ("iscell.npy", iscell),
+            ("spks.npy", spikes),
         )
         if a is not None and len(a) != len(stat)
     ]
@@ -772,6 +776,10 @@ def load_run_dir(
         Fneu = None if "Fneu.npy" in stale else Fneu
         norm = None if "norm_traces.npy" in stale else norm
         iscell = None if "iscell.npy" in stale else iscell
+        spikes = None if "spks.npy" in stale else spikes
+    kinds = {} if spikes is None else {"spikes": spikes}
+    if norm is not None and norm_traces_kind(ops) == "zscore":
+        kinds["zscore"], norm = norm, None
     uids = None
     if (path / "rois.json").exists():
         rows = json.loads((path / "rois.json").read_text())
@@ -801,6 +809,7 @@ def load_run_dir(
         uids = uids[keep] if uids is not None else None
         store_indices = store_indices[keep] if store_indices is not None else None
         iscell = iscell[keep]
+        kinds = {k: v[keep] for k, v in kinds.items()}
     return RunResult(
         path=path,
         kind=str(kind),
@@ -823,6 +832,7 @@ def load_run_dir(
         tp_indices=None
         if not wf.get("tp_indices")
         else [int(t) for t in wf["tp_indices"]],
+        kinds=kinds,
     )
 
 
@@ -834,14 +844,17 @@ def _frames_tuple(value) -> tuple[int, int, int] | None:
     return (start, stop, int(value[2]) if len(value) > 2 else 1)
 
 
-def run_result_from_unit(unit, path, pipeline: str = "") -> RunResult:
+def run_result_from_unit(unit, path, pipeline: str = "", z: int | None = None) -> RunResult:
     """One pixel unit of a results file (``mbo_utilities.results``) as a
     :class:`RunResult`, so the ROI widget shows it like a run dir.
 
     Members become ``stat`` rows (``ypix``, ``xpix``, ``lam``) on the unit's
     ``image_shape``; ``raw`` / ``neuropil`` / ``dff`` become ``F`` / ``Fneu``
-    / ``norm``. ``path`` is the identity the widget keys the set by, normally
-    ``<file>.zarr/<unit name>``.
+    / ``norm`` and every other trace kind lands in ``kinds``. ``path`` is the
+    identity the widget keys the set by, normally ``<file>.zarr/<unit name>``
+    or the plane dir the unit was read from. ``z`` is the plane's position in
+    the array shown; by default the unit's own ``attrs["z"]``, else its plane
+    number minus one.
     """
     if unit.member_kind != "pixel" or unit.image_shape is None:
         raise ValueError(
@@ -864,10 +877,14 @@ def run_result_from_unit(unit, path, pipeline: str = "") -> RunResult:
             "npix": int(ypix.size),
         }
     kind = str(pipeline or unit.attrs.get("pipeline") or "suite2p")
+    if z is None:
+        z = unit.attrs.get("z")
+    if z is None:
+        z = int(unit.index) - 1 if unit.kind == "plane" else 0
     return RunResult(
         path=Path(path),
         kind=kind,
-        z=int(unit.index) - 1 if unit.kind == "plane" else 0,
+        z=int(z),
         shape=(ly, lx),
         stat=stat,
         F=None
@@ -883,6 +900,11 @@ def run_result_from_unit(unit, path, pipeline: str = "") -> RunResult:
         uids=None,
         store_indices=None,
         algo=kind,
+        kinds={
+            k: np.asarray(v, np.float32)
+            for k, v in unit.traces.items()
+            if k not in ("raw", "neuropil", "dff")
+        },
     )
 
 

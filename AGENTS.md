@@ -31,7 +31,6 @@ pml_utilities/
 │   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # Miller Brain Studio (imgui + fastplotlib)
-│   │   ├── app/              # `mbo app`: the viewer and apps docked or windowed around it (§17.1)
 │   │   ├── playhead.py       # one time in seconds shared by every view (§7.6)
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
@@ -67,6 +66,7 @@ single optional command needs is an extra, with the install hint in its `ImportE
 | `metadata` | Canonical vocabulary, alias resolution, `OutputMetadata`, ScanImage parsing | Read pixels |
 | `writer` + `_writers` | `imwrite`; emit canonical values under each format's keys; `ops.npy`; provenance | Hand-roll alias fan-out; every emitted key comes from the registry or `OutputMetadata` |
 | `masknmf` `vnoiser` `roi_workflow` `hpc` | Run a pipeline from a settings dataclass; write suite2p-shaped outputs | Import `imgui_bundle`, `fastplotlib`, or `mbo_utilities.gui` |
+| `gui` views | Draw what the array answers (`results`, `motion_correction`, `behavior`) at the position the host's `Slice` and `Playhead` say is on screen (§7.6) | Read `iw.indices` itself; parse a pipeline's files; name a format |
 | `gui/widgets/pipelines` | Draw a pipeline's config; spawn its worker task | Compute inline; hold pipeline math |
 | `gui/tasks` + `gui/_worker` | Re-open the source in a subprocess and call the runner | Depend on GUI state; args are JSON |
 | `cli` | Thin click wrappers over `imread`/`imwrite`/runners | Hold logic unreachable from Python |
@@ -267,13 +267,21 @@ applied as `arr.motion_correction`, a `features.MotionCorrection` or `None`
 
 | Field | Meaning |
 |-------|---------|
-| `source` | the stage, as a plot labels it: `RTMC` today; `suite2p`, `masknmf` when their per-frame offsets land |
+| `source` | the stage, as a plot labels it: `RTMC` for an AOD scan, `suite2p` for a suite2p run; `masknmf` when its per-frame offsets land |
 | `unit` | `um` for the AOD's real-time correction, `px` for a registration's offsets |
 | `traces` | `{label: (t, shift)}`, `t` in seconds on the recording's T axis, one trace per axis; a label starts with its axis letter (`X`, `Z layer 3`) |
+| `planes` | `{label: z}` for a stage that ran on each z-plane alone; a label it leaves out applies to every plane |
 
 - `MescArray.motion_correction` is the `total` RTMC curves (`rtmc_motion`); the
   `intercycle` increments stay on `arr.rtmc`. A unit that armed RTMC without it
   ever moving reports `None`.
+- `Suite2pArray.motion_correction` is each plane's rigid `xoff` / `yoff` from its
+  `ops.npy`, in px, at `frame / fs` (frames without an `fs`). A plane with neither,
+  or with both all zero, gives no trace; no trace at all is `None`. One plane's
+  traces are `X` and `Y`; a volume's are named after their plane dir
+  (`X zplane03_tp00001-01574`) and listed in `planes`, and the Traces tab draws
+  only the plane on screen (`MotionPlot.draw(z=slice.z)`, y refit on a plane
+  change). The nonrigid block offsets (`xoff1` / `yoff1`) are not shown.
 - One GUI consumer: `gui/imgui/motion.MotionPlot`, drawn in linked subplots
   with the trace by the Traces tab (over it, §7.6 the stack,
   `manual_roi.draw_traces`), the line-scan viewer's `LineTracesPanel` and the
@@ -283,7 +291,8 @@ applied as `arr.motion_correction`, a `features.MotionCorrection` or `None`
 - Adding a source means overriding `motion_correction` on the reader; nothing in
   `gui` names a source.
 
-Pinned by `tests/test_motion_plot.py`, `tests/test_mesc.py`.
+Pinned by `tests/test_motion_plot.py`, `tests/test_mesc.py`,
+`tests/test_suite2p_results.py`.
 
 ### 5.9 Behavior
 
@@ -688,14 +697,21 @@ pipeline's native files stay its cache and its compatibility layer.
   recording (the archive's PF folders) counts for any.
   Unit groups keep the §5.6 vocabulary (`unit_name("plane", 1)` is `zplane01`;
   scans are `scan<id>`).
-- **Molding.** A pipeline builds one `ResultUnit` per plane or scan and calls
-  `write_results(path, units, pipeline=..., source=..., settings=..., metadata=...)`.
-  `results_from_suite2p(dir)` molds suite2p and MaskNMF folders (`F` → `raw`, `Fneu` →
-  `neuropil`, `spks` → `spikes`, `norm_traces` → `dff`, `stat` → pixel members,
-  `meanImg`/`max_proj`/`Vcorr`/`refImg` → images); `results_from_pf(dir)` molds the
-  voltage pipeline's `PF` folder (domains are the ROIs, their lines the members with
-  `members/raw`, `test.h5` gives `dff` and `zscore`, peaks are the events). Copy one of
-  them for a new pipeline; never invent a trace or image kind, add it to the registry.
+- **Building.** A pipeline builds one `ResultUnit` per plane or scan, constructs
+  `Results(pipeline=..., units={name: unit}, source=..., settings=..., metadata=...)`
+  and calls `results.write(path)`. `Results.from_suite2p(dir, plane_dirs=None)` reads
+  suite2p and MaskNMF folders into the same shape without writing (`F` → `raw`,
+  `Fneu` → `neuropil`, `spks` → `spikes`, `norm_traces` → `dff`, or `zscore` when
+  the plane's ops say `norm_method = "zscore"` (`norm_traces_kind`, which
+  `roi_workflow.load_run_dir` reads the same file through), `stat` → pixel
+  members, `meanImg`/`max_proj`/`Vcorr`/`refImg` → images): plane dirs in
+  plane-number order (`zplaneNN` is 1-based, vanilla `planeN` 0-based), or the dirs
+  given in the order their planes stack, a dir without `stat.npy` + `F.npy` giving no
+  unit; every unit records `attrs["plane_dir"]` and `attrs["z"]`, its position in
+  that order. `Results.from_pf(dir)` reads the voltage pipeline's `PF` folder
+  (domains are the ROIs, their lines the members with `members/raw`, `test.h5` gives
+  `dff` and `zscore`, peaks are the events). Copy one of them for a new pipeline;
+  never invent a trace or image kind, add it to the registry.
 - **Writing.** It is the voltage pipeline's default
   (`VoltageSettings.runtime.output_format == "zarr"`, the Run tab's Output format):
   the run works in a `<name>.work` scratch folder, writes the results file beside the
@@ -704,23 +720,33 @@ pipeline's native files stay its cache and its compatibility layer.
   whole output and no `PF` folder is left. `mbo voltage --pkl` (`output_format ==
   "pkl"`) writes the archive's PF folder of pickles instead. `mbo results <dir>`
   converts an existing suite2p, MaskNMF or PF folder.
-- **Reading.** There is one reader and it is generic. `read_results(path)` returns
-  `Results` (`.units[name]` → `ResultUnit`, every array in memory); `mold_results(dir)`
-  turns a native output folder into the same object in memory without writing
-  anything, and `open_results(path)` is the one door that takes either. `imread`
-  returns a `ResultsArray` (`results.py`, `PRIORITY` 70) for a results file, a
-  voltage `PF` folder, or a folder holding one; `results_dir_of(path)` is what it
-  resolves with. No pipeline gets an array class of its own: a run's units, traces,
-  ROIs, events and images are on `arr.results`, and the recording it processed is
-  the image when `results.source` names a reachable file, else a trace raster.
-  `results_pipeline(path)` and `results_summary(path)` read only `zarr.json` files
-  and are what `can_open` and the run scanners use; `ZarrArray` declines a results
-  file. `imread` never returns a results file as a movie of itself.
+- **Reading.** There is one reader and it is generic. `Results.read(path)` reads a
+  results file back (`.units[name]` → `ResultUnit`, every array in memory) and
+  `Results.open(path)` is the one door that takes a file, a folder holding one, or
+  a pipeline's native folder. `imread` returns a `ResultsArray` (`results.py`,
+  `PRIORITY` 70) for a results file, a voltage `PF` folder, or a folder holding one;
+  `results_dir_of(path)` is what it resolves with. No pipeline gets an array class
+  of its own: a run's units, traces, ROIs, events and images are on `arr.results`
+  (`LazyArray.results`, a settable property, None by default). `ResultsArray` sets
+  it to what it opened; `Suite2pArray` answers `Results.from_suite2p` of its own
+  plane dirs, read once on first use, so a suite2p volume's planes arrive in the
+  array's z order with `attrs["z"]` the 5D z (None for a registration-only run).
+  The recording a `ResultsArray` processed is its image when `results.source` names
+  a reachable file, else a trace raster. `results_pipeline(path)` and
+  `results_summary(path)` read only `zarr.json` files and are what `can_open` and
+  the run scanners use; `ZarrArray` declines a results file. `imread` never returns
+  a results file as a movie of itself. No widget parses a plane dir: it asks the
+  array for `results`.
 - **Viewing.** The ROI widget's Traces tab takes a results file through the same door
   as a run dir: `ManualRoiWidget.load_run(path)` (a file, or one unit as
   `<file>.zarr/zplane01`) calls `load_results`. A pixel unit becomes a `RunResult`
   (`roi_workflow.run_result_from_unit`) and loads as a derived set with its overlay,
-  exactly like `stat.npy` + `F.npy`; a line unit becomes an `external` `TraceSet` with
+  exactly like `stat.npy` + `F.npy`, keyed by the plane dir the unit was read from
+  (`attrs["plane_dir"]`) so accept/reject writes back to that dir's `iscell.npy`;
+  the array's own `results` load the same way when the widget opens
+  (`ManualRoiWidget._load_array_results`), one derived set per plane on its own z,
+  `spks` as the `spikes` kind and `iscell[:, 1]` as the ROI table's `prob` column.
+  A line unit becomes an `external` `TraceSet` with
   one row per ROI (its `denoised` trace, else `dff`, else `raw`) and one per member
   line, every row named by its ROI (`roi3`, `roi3 (raw)`; a line of a multi-line
   ROI adds itself, `roi3 line 12 (raw)`) and carrying its `fs`, the line it was read
@@ -731,7 +757,8 @@ pipeline's native files stay its cache and its compatibility layer.
   "Load into Traces" button does it on demand. A new pipeline that writes the results
   zarr therefore reaches the Traces tab with no GUI code.
 
-Pinned by `tests/test_results.py`, `tests/test_voltage_pipeline.py`.
+Pinned by `tests/test_results.py`, `tests/test_suite2p_results.py`,
+`tests/test_voltage_pipeline.py`.
 
 ### 7.6 Manual ROIs
 
@@ -768,27 +795,36 @@ the other.
   (`TRACE_PROFILES`, keyed by the row's `engine`, which a results file sets to its
   `pipeline`; a plugin calls `register_trace_profile` beside its `PipelineInfo`;
   anything else gets `DEFAULT_TRACE_PROFILE`) declares the kinds its rows can show
-  (`DISPLAY_KINDS`, the results zarr's `TRACE_KINDS`), the one shown first
-  (`voltage` opens on `denoised`, the rest on `dff`), whether a neuropil correction
-  is offered (only a pipeline that measured a real `Fneu`: `suite2p`, and `mean`'s
-  ring; never `masknmf`, whose `Fneu` is zeros), the `DffSettings` for a dF/F
-  computed from a raw row (`analysis/dff.py`: a rolling max-min baseline sized in
-  seconds, the percentile when the row has no `fs`), whether a stored dF/F is
-  percent or a fraction, and the raw trace's label. A row carries `F`, `Fneu`,
-  `norm` and every other kind in `kinds`, all read by `RoiTrace.array(kind)`. The
-  panel and the trace table read every row through
-  `display_trace(trace, kind, settings, neuropil)`; `displayed_kind` says which kind
-  that was (a kind the row lacks falls back to its profile's default) and `y_label`
-  names the axis for it. The panel offers the kinds the plotted rows have, shows the
-  neuropil checkbox only when a plotted row's profile offers it, a dF/F settings
-  popup only when a shown dF/F is computed here, labels the y axis from the rows
-  (joined when they differ) and opens in seconds whenever the data has a rate.
+  (`DISPLAY_KINDS`: the results zarr's `TRACE_KINDS` plus `SUBTRACTED`,
+  `raw - neuropil`, the one kind computed here and stored nowhere), the one shown
+  first (`voltage` opens on `denoised`, the rest on `dff`), the `DffSettings` for a
+  dF/F computed from a raw row (`analysis/dff.py`: a rolling max-min baseline sized
+  in seconds, the percentile when the row has no `fs`), whether a stored dF/F is
+  percent (`masknmf`) or a fraction (`voltage`, and `suite2p`, whose
+  `norm_traces` lbm_suite2p_python writes as `(F - F0) / F0`; the plot is always
+  percent), and the `unit` its raw traces are in. A pipeline that
+  measured a real `Fneu` (`suite2p`, and `mean`'s ring; never `masknmf`, whose
+  `Fneu` is zeros) lists `neuropil` and `SUBTRACTED` among its kinds, with the
+  `neuropil_coeff` it subtracts with. A row carries `F`, `Fneu`, `norm` and every
+  other kind in `kinds`, all read by `RoiTrace.array(kind)`. The panel and the
+  trace table read every row through `display_trace(trace, kind, settings)`, one
+  line per row: `raw` is `F` alone, `neuropil` is `Fneu` alone, `SUBTRACTED` is
+  `F - neuropil_coeff * Fneu`, `dff` is the row's own dF/F, else one computed here
+  from the `SUBTRACTED` trace when the row has a neuropil and from `F` otherwise.
+  `displayed_kind` says which kind that was (a kind the row lacks falls back to its
+  profile's default) and `y_label` names the axis for it with its unit
+  (`F (a.u.)`, `Fneu (a.u.)`, `F - 0.7 Fneu (a.u.)`, `dF/F (%)`). The panel offers
+  the kinds the plotted rows have in one combo and nothing else decides what is
+  subtracted: no neuropil checkbox, no second line under a trace. It shows a dF/F
+  settings popup only when a shown dF/F is computed here, labels the y axis from
+  the rows (joined when they differ) and opens in seconds whenever the data has a
+  rate.
   The viewer's Mean Subtraction and Invert Deflection reach the rows through
   `display_trace(..., subtract, invert)` (`deflect`, about the row's own mean
-  over T, which is the mask mean of the transformed image): a `raw` row and
-  its neuropil are shown `F - m`, `2m - F` or `m - F`, a dF/F computed here is
-  taken of the inverted raw trace, and a pipeline's own kinds keep the sign
-  it wrote.
+  over T, which is the mask mean of the transformed image): `raw`, `neuropil`
+  and `SUBTRACTED` are shown `y - m`, `2m - y` or `m - y`, a dF/F computed here
+  is taken of the inverted trace, and a pipeline's own kinds keep the sign it
+  wrote.
   The plot has no box of its own: `imgui/lines.plot_style` makes implot's frame,
   plot background and border transparent, its grid lines invisible (by colour,
   so one scope covers the subplots too) and its ticks and legend dim, so the
@@ -937,6 +973,21 @@ the other.
   (`PreviewDataWidget.playhead`); the line-scan viewer's `LineScanOverlay` owns one
   for its Timepoint slider, kymograph selector, trace and motion cursors. A new
   time-bound view subscribes to the playhead; it never reads another view's cursor.
+- **Slice.** `gui/slice.Slice` is the slice on screen the same way: every slider's
+  0-based index by the viewer's dim name (`positions`), which array axis each slider
+  scrolls (`roles`, from `viewer_roles`: the squeeze wrapper's kept axes when the
+  viewer has one, else T, C, Z by position) and `t` / `c` / `z` by role; it emits
+  `slice` with its `source` when anything but T moves. One per host
+  (`PreviewDataWidget.slice`), fed by the host's one handler on
+  `ndwidget.indices`, which also seeks the playhead; a widget on a bare viewer makes
+  and feeds its own. Every view that depends on the channel or z-plane shown reads
+  or subscribes to it and never reads `iw.indices` itself: the ROI widget's store
+  plane (`_on_slice` → `RoiModel.set_view`), its overlays and both its tables (the
+  ROI table's "this plane" filter turns on when per-plane results load; the trace
+  table lists the slice on screen unless "all slices" is ticked), the host's mean
+  image and auto-contrast, Signal Quality's active plane (`_stats._active_stat`),
+  the Summary Images (the plane's own `results` images) and Diagnostics (the plane's
+  unit). Pinned by `tests/test_slice.py`.
 - **Color by.** `RoiModel.column(name)` gives one number per uid (`plane`, `z`, `c`,
   `area`, `class`); `RoiModel.colorize(values, cmap, categorical)` maps them through
   a `cmap` colormap into `RoiLabelStore.tint`, a display-only color per uid that
@@ -1222,8 +1273,6 @@ When they disagree, fix the docs.
   is a base dependency, pinned to a commit of its GitHub repository in
   `pyproject.toml` (the PyPI release lags the API used here); bump the pin when
   it moves.
-- The app host (`gui/app`) keeps its window geometry apart from the preview
-  window's, in `get_mbo_dirs()["imgui"]/app.ini`.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,
   `KEEP_TEST_OUTPUT`, `MBO_PIPELINE_TIFF`; logging and retention variables are
   listed in §8.5.
@@ -1656,144 +1705,3 @@ Rule: shorter item shifted down by `curr_line_text_base_offset - baseline`; text
 | tree indent | `indent_spacing` (21 ~ `font_size + 2*frame_padding.x`) |
 | em | `hello_imgui.em_size(n)` = `n * get_font_size()` |
 | pixel snap | cursor truncated to int each `item_size`; pass integer sizes |
-
-## 17. Proposal: arrays and pipelines as GUI contributors
-
-**Status: a proposal, not a contract.** Nothing in this section is implemented, and
-the stages are sketches, not complete designs. Until a stage lands and moves its
-rules into §2 and §7, the code follows the sections above. Fill in the gaps when a
-stage is taken up; do not build against this section as if it were settled.
-
-The frame is model-view-controller with the immediate-mode twist: imgui keeps no
-view objects, so the split that matters is a GUI-free observable model, draw
-functions that only read it, and a command layer that mutates it or starts work.
-
-### 17.1 Where it stands
-
-Four places already have the shape and are the template:
-
-- `motion_correction` (§5.8): a reader answers a typed, GUI-free dataclass or None,
-  `MotionPlot` draws it, nothing in `gui` names a format.
-- `annotation`: `RoiModel` is `Observable`; `manual_roi.py` and the ROIs pipeline
-  are two views of it and neither polls the other.
-- `Playhead` (§7.6): one piece of shared state every view subscribes to.
-- `TraceProfile` (§7.6) and the results zarr (§7.5): the pipeline declares what its
-  data means, generic views render any pipeline.
-- `gui/app` (`mbo app`), the preview window's replacement in progress. `AppHost`
-  is built on the viewer's figure (an `NDWidget` makes its own), holds the open
-  `LazyArray`, the `Playhead` and the channel and z-plane on screen, and says
-  `data_changed` to every app when other data opens. An `App` draws through
-  `draw_options` / `draw_canvas` into a dock tab or a floating window the host
-  picks. Ported: the viewer (`ViewerApp`), Open, Summary Images, Projections,
-  Tile Grid, Metadata, Diagnostics, Log and the imgui tools. Not yet: window and
-  spatial functions, frame averaging, scan phase, Signal Quality, keyboard
-  shortcuts, Save As, Set Metadata, the Process tab, Manual ROI, MESc, IsoView
-  tools, the process console, Help / Keybinds / Options, BioHPC / Cloud.
-  `HostAsParent` is the shim a ported `Widget` reads; it only shrinks.
-
-Everything else is the opposite shape (counts from 2026-09-19):
-
-- The host widget is a grab bag: 215 distinct `parent._x` attributes across `gui`,
-  and `_dialogs._reset_per_data_state` is a hand-kept list of which to clear when
-  the array changes. Every unit swap risks a leak.
-- Widgets sniff formats: the `mesc_units` tab, `tile_grid` and
-  `isoview_align_views` decide `is_supported(parent)` by unwrapping the array and
-  checking its class. A new format has to write imgui code in `gui/widgets/` to
-  appear anywhere.
-- Discovery is a package scan (`gui/widgets/__init__._discover_widgets`), so no
-  reader and no plugin can contribute a panel, tab or table.
-- Pipelines are hardcoded widget classes (§15) drawing their settings by hand
-  (`pipelines/voltage.py` 875 lines, `pipelines/isoview.py` 3303).
-- Tables are written four times (MESc units, ROIs, Traces, runs), each with its own
-  sort, hide and action code.
-- Two side apps rebuild the viewer: `linescan_viewer.py` (1729 lines) and the
-  curation dashboard.
-
-### 17.2 Target shape
-
-Three GUI-free things an array or pipeline provides, and generic views that draw them.
-
-- **Facets.** Typed answers an array gives about itself beyond pixels, as properties
-  returning a dataclass or None: `units` (sibling units and their links),
-  `overlays(unit)` (ROI outlines in an image's pixels), `line_positions`, `views`
-  and `tiles` for IsoView, `scan_phase`, `motion_correction` (exists). `LazyArray`
-  answers None; a reader overrides. §5.8 generalized; `arrays` still never imports
-  `gui` (§2).
-- **Session.** One observable object per viewer (`mbo_utilities/session.py`,
-  GUI-free): the array, the indices, the playhead, the selection, the open-unit
-  cache, loaded runs and results, display options. It replaces the host widget's
-  attributes; `swap_viewer_array` becomes `session.open(arr)`, one event, and views
-  rebuild from it instead of a reset list.
-- **Contributions.** What a facet or a pipeline wants on screen, as data:
-  `Panel(section, controls)`, `Tab(table)`, `Table(columns, rows, actions, links)`,
-  `Overlay(records)`, `Form(dataclass)`. Controls are a small vocabulary: choice,
-  toggle, number, button, info, table, overlay, plot. A reader ships a
-  `contributions(session)` function beside its class, found through the entry point
-  that registers the reader. A pipeline's `PipelineInfo` gains `settings`,
-  `trace_profile`, `axes_consumed` and `applies_to`, so the Run tab draws it as a form.
-
-| Role | What | Rule |
-|------|------|------|
-| Model | arrays + facets, session, annotation, results, registries | GUI-free, observable, tested on synthetic files |
-| View | generic draw functions: `TableView`, `FormView`, `OverlayView`, the trace and motion plots | reads the session, emits intents, holds no state |
-| Controller | intent handlers and commands: `session.open_unit`, `ProcessManager.spawn`, worker tasks | the only code that mutates the model or starts work |
-
-For MESc this would read (illustrative; names not settled):
-
-```python
-class MescArray(LazyArray):
-    units: UnitSet | None                 # list_mesc_units + links as a dataclass
-    def overlays(self, unit) -> list[OverlayRecord]   # image_overlays
-
-def contributions(session):
-    a = session.array
-    return [
-        Tab("MESc", Table(UNIT_COLUMNS, unit_rows(a.units), links=unit_links, on_row=session.open_unit)),
-        Overlay("ROI Overlay", a.overlays(session.unit), plane=session.indices),
-    ]
-```
-
-The voltage pipeline contributes the same way: a form from `VoltageSettings`, its
-domain table, its trace profile; its results tab already comes from the results zarr.
-
-### 17.3 Stages
-
-Ordered by what unblocks what. Each stage is shippable alone and lands with a pinned
-test; each one's rules move into §2 and §7 when it lands.
-
-1. **Session.** Move per-dataset state off the host widget; widgets take `session`,
-   not `parent`; `swap_viewer_array` and `_reset_per_data_state` collapse into
-   `session.open`. Pin: open two arrays in sequence, assert nothing leaks.
-2. **Facets.** `units`, `overlays`, `line_positions` on `MescArray`; `views`, `tiles`
-   on `IsoviewArray`. The four format widgets become views gated on
-   `session.array.units is not None`; `mesc_array_of` goes away. Pin: one test per
-   facet on the synthetic files `tests/test_mesc_geometry.py` builds.
-3. **Table and Panel vocabulary.** `Table` model and one `TableView`; port the MESc
-   table first, then runs, ROIs, Traces. Discovery moves from the package scan to
-   registries: built-ins, readers' `contributions`, pipelines' infos. Pin: a Table
-   model test plus one bare-context draw test (the `tests/test_mesc_tab.py` pattern).
-4. **Declarative pipelines.** Entry points as the only registration (§15).
-   `PipelineInfo` carries `settings`, `trace_profile`, `axes_consumed`, `applies_to`;
-   a `FormView` draws any settings dataclass; a widget class keeps only sections a
-   form cannot express (voltage's domains and curation). Pin: a pipeline registered
-   only through an entry point shows up with a runnable form.
-5. **Fold the side apps.** The line-scan viewer's snapshot, stack and reference
-   panels and the curation dashboard become contributions on the standard viewer,
-   bound to the session's playhead; `viewers.get_viewer_class` (pollen) becomes one too.
-
-Rules to add to §2 when stage 1 lands: a `gui` module never names a format, it asks
-the session for a facet; state lives on the session, never on the host widget; a
-table is a `Table` model drawn by `TableView`; a pipeline appears through its
-`PipelineInfo`, never by editing the Run tab.
-
-Open questions, deliberately unanswered here: where a format's `contributions`
-module lives and how the reader entry point points at it; whether `Session` is one
-class or a small tree (viewer, annotation, runs); how a contribution declares its
-imgui-only escape hatch; what a `Form` does with nested dataclasses and tri-state
-stage toggles; how the side apps' own sliders map onto the session's indices.
-
-Two cautions. Do not start in `manual_roi.py` (4390 lines) or `pipelines/isoview.py`;
-stages 1 to 3 shrink them by subtraction. Keep the control vocabulary small: choice
-and table cover every format need seen so far, forms cover most pipeline settings,
-and anything else stays hand-written imgui behind a contribution rather than a new
-abstraction.

@@ -1,5 +1,5 @@
 """The results zarr (AGENTS.md §7.5): naming from filename tags, the write/read
-round trip, and molding suite2p-shaped folders into it. The voltage
+round trip, and reading suite2p-shaped folders into it. The voltage
 pipeline's PF conversion is in ``test_voltage_pipeline.py``.
 """
 
@@ -10,15 +10,13 @@ import pytest
 import zarr
 from mbo_utilities.arrays.features._dim_tags import filename_tags, parse_tag
 from mbo_utilities.results import (
+    Results,
     ResultUnit,
     newest_results,
-    read_results,
-    results_from_suite2p,
     results_name,
     results_pipeline,
     results_stamp,
     unit_name,
-    write_results,
 )
 
 
@@ -92,7 +90,9 @@ def test_newest_results_picks_the_latest_run_of_a_pipeline(tmp_path):
         (datetime(2026, 9, 17, 8, 0, 0), "suite2p"),
     ):
         name = results_name("session1.mesc", stamp, pipeline=pipeline)
-        made[name] = write_results(tmp_path / name, [unit], pipeline=pipeline)
+        made[name] = Results(pipeline=pipeline, units={unit.name: unit}).write(
+            tmp_path / name
+        )
     assert (
         newest_results(tmp_path, "voltage").name
         == "session1.2026-09-16-17-05-00.voltage.zarr"
@@ -140,24 +140,29 @@ def test_write_and_read_round_trip(tmp_path):
         iscell=np.array([[1, 0.9], [0, 0.1], [1, 0.5]]),
         images={"mean": rng.normal(size=(4, 5))},
     )
-    path = write_results(
-        tmp_path
-        / results_name("mouse_session1.tif", datetime(2026, 9, 16, 14, 30, 22)),
-        [scan, plane],
+    written = Results(
         pipeline="test",
+        units={"scan35": scan, "zplane01": plane},
         source={"path": "mouse_session1.tif"},
         settings={"a": (1, 2)},
         metadata={"fs": 10.0, "si": {"x": np.arange(3)}, "meanImg": np.zeros((4, 5))},
+    )
+    path = written.write(
+        tmp_path
+        / results_name("mouse_session1.tif", datetime(2026, 9, 16, 14, 30, 22))
     )
     assert (
         path.name == "mouse_session1.2026-09-16-14-30-22.zarr"
         and results_pipeline(path) == "test"
     )
+    # the write stamps the object with where and when it landed
+    assert written.path == path and written.created and written.tags == ["session01"]
     assert results_pipeline(tmp_path) is None
-    back = read_results(path)
+    back = Results.read(path)
     assert (
         back.pipeline == "test"
         and back.tags == ["session01"]
+        and back.path == path
         and list(back.units) == ["scan35", "zplane01"]
     )
     assert back.source == {"path": "mouse_session1.tif"} and back.settings == {
@@ -193,9 +198,12 @@ def test_write_and_read_round_trip(tmp_path):
     np.testing.assert_allclose(p.images["mean"], plane.images["mean"], rtol=1e-6)
     assert p.events == {} and p.member_traces == {}
     with pytest.raises(FileExistsError):
-        write_results(path, [scan], pipeline="test")
-    write_results(path, [scan], pipeline="test", overwrite=True)
-    assert list(read_results(path).units) == ["scan35"]
+        Results(pipeline="test", units={"scan35": scan}).write(path)
+    Results(pipeline="test", units={"scan35": scan}).write(path, overwrite=True)
+    assert list(Results.read(path).units) == ["scan35"]
+    # Results.open takes the file, or the folder holding it
+    assert list(Results.open(path).units) == ["scan35"]
+    assert list(Results.open(tmp_path).units) == ["scan35"]
 
 
 def test_write_rejects_shapes_outside_the_schema(tmp_path):
@@ -208,28 +216,27 @@ def test_write_rejects_shapes_outside_the_schema(tmp_path):
         members=[np.zeros(0, int)],
     )
     with pytest.raises(ValueError, match="no units"):
-        write_results(tmp_path / "a.zarr", [], pipeline="x")
+        Results(pipeline="x").write(tmp_path / "a.zarr")
     with pytest.raises(ValueError, match="kind"):
-        write_results(
-            tmp_path / "a.zarr",
-            [ResultUnit(name="u", kind="tile", index=0)],
-            pipeline="x",
-        )
+        Results(
+            pipeline="x", units={"u": ResultUnit(name="u", kind="tile", index=0)}
+        ).write(tmp_path / "a.zarr")
+    one = Results(pipeline="x", units={unit.name: unit})
     unit.traces["F"] = np.zeros((1, 5))
     with pytest.raises(ValueError, match="unknown trace kind"):
-        write_results(tmp_path / "a.zarr", [unit], pipeline="x")
+        one.write(tmp_path / "a.zarr")
     del unit.traces["F"]
     unit.traces["dff"] = np.zeros((2, 5))
     with pytest.raises(ValueError, match="expected \\(1, 5\\)"):
-        write_results(tmp_path / "a.zarr", [unit], pipeline="x")
+        one.write(tmp_path / "a.zarr")
     del unit.traces["dff"]
     unit.events = {"9": np.array([1])}
     with pytest.raises(ValueError, match="unknown ROIs"):
-        write_results(tmp_path / "a.zarr", [unit], pipeline="x")
+        one.write(tmp_path / "a.zarr")
     unit.events = {}
     unit.attrs = {"fs": 3.0}
     with pytest.raises(ValueError, match="written by the schema"):
-        write_results(tmp_path / "a.zarr", [unit], pipeline="x")
+        one.write(tmp_path / "a.zarr")
 
 
 def _suite2p_plane(plane_dir, n_frames=30, pipeline=None):
@@ -271,17 +278,30 @@ def _suite2p_plane(plane_dir, n_frames=30, pipeline=None):
     np.save(plane_dir / "ops.npy", ops)
 
 
-def test_suite2p_and_masknmf_folders_mold_into_results(tmp_path):
+def test_a_suite2p_planes_norm_traces_are_filed_under_what_the_run_wrote(tmp_path):
+    for method in ("dff", "zscore"):
+        plane_dir = tmp_path / method / "zplane01_tp00001-00030"
+        _suite2p_plane(plane_dir)
+        ops = np.load(plane_dir / "ops.npy", allow_pickle=True).item()
+        np.save(plane_dir / "ops.npy", {**ops, "norm_method": method})
+        np.save(plane_dir / "norm_traces.npy", np.full((2, 30), 2.0, np.float32))
+        (unit,) = Results.from_suite2p(plane_dir).units.values()
+        assert set(unit.traces) == {"raw", "neuropil", "spikes", method}
+
+
+def test_suite2p_and_masknmf_folders_read_as_results(tmp_path):
     run = tmp_path / "run"
     _suite2p_plane(run / "zplane02_tp00001-00030")
     _suite2p_plane(run / "zplane01_tp00001-00030", pipeline="masknmf")
-    units, root = results_from_suite2p(run)
+    results = Results.from_suite2p(run)
+    units = list(results.units.values())
     assert [u.name for u in units] == ["zplane01", "zplane02"] and [
         u.index for u in units
     ] == [1, 2]
-    assert root["pipeline"] == "masknmf" and root["settings"] == {
+    assert results.pipeline == "masknmf" and results.settings == {
         "runtime": {"device": "cpu"}
     }
+    assert results.path == run and results.source == {} and results.tags is None
     first = units[0]
     assert (
         first.fs == 9.5
@@ -294,19 +314,20 @@ def test_suite2p_and_masknmf_folders_mold_into_results(tmp_path):
     assert set(first.traces) == {"raw", "neuropil", "spikes", "dff"} and set(
         units[1].traces
     ) == {"raw", "neuropil", "spikes"}
+    # every unit records the dir it came from and its position in the stack
     assert set(first.images) == {"mean", "max"} and first.attrs["plane_dir"].endswith(
         "zplane01_tp00001-00030"
     )
-    path = write_results(
-        run / results_name(run, datetime(2026, 9, 16, 14, 30, 22), pipeline="masknmf"),
-        units,
-        **root,
+    assert [u.attrs["z"] for u in units] == [0, 1]
+    path = results.write(
+        run / results_name(run, datetime(2026, 9, 16, 14, 30, 22), pipeline="masknmf")
     )
     assert path.name == "run.2026-09-16-14-30-22.masknmf.zarr"
-    back = read_results(path)
+    back = Results.read(path)
     assert back.pipeline == "masknmf" and list(back.units) == ["zplane01", "zplane02"]
     np.testing.assert_allclose(back["zplane01"].traces["dff"], 3.0)
     np.testing.assert_allclose(back["zplane02"].iscell, [[1, 0.8], [0, 0.2]])
+    assert back["zplane02"].attrs["z"] == 1
     # per-frame vectors and images do not ride along in the root metadata
     assert (
         "yoff" not in back.metadata
@@ -314,13 +335,45 @@ def test_suite2p_and_masknmf_folders_mold_into_results(tmp_path):
         and back.metadata["fs"] == 9.5
     )
     # one plane dir on its own works too, named from its tags
-    single, root = results_from_suite2p(run / "zplane02_tp00001-00030")
-    assert len(single) == 1 and root["pipeline"] == "suite2p"
+    single = Results.from_suite2p(run / "zplane02_tp00001-00030")
+    assert len(single.units) == 1 and single.pipeline == "suite2p"
+    assert single["zplane02"].attrs["z"] == 0
     assert results_name(
         run / "zplane02_tp00001-00030", datetime(2026, 9, 16, 14, 30, 22)
     ) == ("zplane02_tp00001-00030.2026-09-16-14-30-22.zarr")
     with pytest.raises(FileNotFoundError):
-        results_from_suite2p(tmp_path)
+        Results.from_suite2p(tmp_path)
+    # a folder of plane dirs opens the same way through the one door
+    assert list(Results.open(run / "zplane02_tp00001-00030").units) == ["zplane02"]
+
+
+def test_from_suite2p_orders_planes_by_number_and_z_is_the_position(tmp_path):
+    run = tmp_path / "run"
+    # dir names sort differently from their plane numbers; a dir with no
+    # detection (a registration-only pass) is not a unit; vanilla suite2p's
+    # plane0 is 0-based and lands as plane 1
+    _suite2p_plane(run / "zplane10")
+    _suite2p_plane(run / "zplane03_tp00001-00030")
+    _suite2p_plane(run / "zplane01")
+    (run / "zplane02").mkdir()
+    np.save(run / "zplane02" / "ops.npy", {"Ly": 4, "Lx": 5})
+    results = Results.from_suite2p(run)
+    assert list(results.units) == ["zplane01", "zplane03", "zplane10"]
+    assert [u.index for u in results.units.values()] == [1, 3, 10]
+    assert [u.attrs["z"] for u in results.units.values()] == [0, 1, 2]
+    # an explicit list is the stack: positions are kept even past a skipped dir
+    stacked = Results.from_suite2p(
+        run,
+        plane_dirs=[run / "zplane01", run / "zplane02", run / "zplane10"],
+    )
+    assert list(stacked.units) == ["zplane01", "zplane10"]
+    assert [u.attrs["z"] for u in stacked.units.values()] == [0, 2]
+    vanilla = tmp_path / "vanilla"
+    _suite2p_plane(vanilla / "plane0")
+    _suite2p_plane(vanilla / "plane1")
+    assert [
+        (u.name, u.index) for u in Results.from_suite2p(vanilla).units.values()
+    ] == [("zplane01", 1), ("zplane02", 2)]
 
 
 def test_pixel_units_load_as_run_results_for_the_roi_widget(tmp_path):
@@ -328,16 +381,20 @@ def test_pixel_units_load_as_run_results_for_the_roi_widget(tmp_path):
 
     run = tmp_path / "run"
     _suite2p_plane(run / "zplane02_tp00001-00030", pipeline="masknmf")
-    units, root = results_from_suite2p(run)
-    path = write_results(run / "2026-09-16_run.zarr", units, **root)
-    unit = read_results(path)["zplane02"]
+    results = Results.from_suite2p(run)
+    path = results.write(run / "2026-09-16_run.zarr")
+    unit = Results.read(path)["zplane02"]
     res = run_result_from_unit(unit, path / unit.name, "masknmf")
+    # z is the plane's position in the folder it was read from, not its number
     assert (
         res.path == path / "zplane02"
         and res.kind == "masknmf"
-        and res.z == 1
+        and res.z == 0
         and res.shape == (4, 5)
     )
+    assert run_result_from_unit(unit, path / unit.name, "masknmf", z=3).z == 3
+    # every other trace kind rides along by name
+    assert set(res.kinds) == {"spikes"} and res.kinds["spikes"].shape == (2, 30)
     assert [s["ypix"].tolist() for s in res.stat] == [[0, 0], [2]] and [
         s["xpix"].tolist() for s in res.stat
     ] == [[0, 1], [3]]
@@ -369,8 +426,7 @@ def test_results_files_are_run_dirs_to_the_roi_widget(tmp_path):
 
     run = tmp_path / "zplane01_tp00001-00030"
     _suite2p_plane(run)
-    units, root = results_from_suite2p(run)
-    beside = write_results(tmp_path / "2026-09-16_session01.zarr", units, **root)
+    beside = Results.from_suite2p(run).write(tmp_path / "2026-09-16_session01.zarr")
     scan = ResultUnit(
         name="scan35",
         kind="scan",
@@ -382,14 +438,14 @@ def test_results_files_are_run_dirs_to_the_roi_widget(tmp_path):
         members=[np.array([0, 1]), np.array([2])],
     )
     (tmp_path / "PF").mkdir()
-    pf = write_results(
-        tmp_path / "PF" / "2026-09-16_stan1.zarr", [scan], pipeline="voltage"
+    pf = Results(pipeline="voltage", units={scan.name: scan}).write(
+        tmp_path / "PF" / "2026-09-16_stan1.zarr"
     )
     assert results_summary(beside) == {
         "pipeline": "suite2p",
         "units": ["zplane01"],
         "n_rois": 2,
-        "created": read_results(beside).created,
+        "created": Results.read(beside).created,
     }
     assert results_summary(tmp_path) is None
     assert (
@@ -417,8 +473,8 @@ def test_imread_does_not_open_a_results_file_as_an_image(tmp_path):
         traces={"raw": np.zeros((1, 5))},
         members=[np.zeros(0, int)],
     )
-    path = write_results(
-        tmp_path / "2026-09-16_session01.zarr", [unit], pipeline="suite2p"
+    path = Results(pipeline="suite2p", units={unit.name: unit}).write(
+        tmp_path / "2026-09-16_session01.zarr"
     )
     assert not ZarrArray.can_open(path)
     assert ZarrArray.can_open(tmp_path / "movie.zarr")

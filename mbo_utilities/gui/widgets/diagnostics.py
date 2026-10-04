@@ -96,6 +96,53 @@ class DiagnosticsWidget:
         self._training_dir = None
         self._exported_datasets = []  # list of paths to exported training data
 
+    def load_unit(self, unit, plane_dir: Path) -> None:
+        """Show one pixel unit of a run's results (``results.ResultUnit``):
+        its ROIs, accept flags and traces, with ``ops.npy`` from the plane
+        dir it was read from, where ``iscell.npy`` is written back.
+        """
+        from mbo_utilities.file_io import load_npy
+
+        plane_dir = Path(plane_dir)
+        ops_path = plane_dir / "ops.npy"
+        if ops_path.exists():
+            ops_arr = load_npy(ops_path)
+            self.ops = ops_arr.item() if ops_arr.ndim == 0 else ops_arr
+        else:
+            self.ops = None
+        ly, lx = unit.image_shape
+        stat = np.empty(unit.n_rois, dtype=object)
+        weights = unit.weights if unit.weights is not None else [None] * unit.n_rois
+        for k, (members, lam) in enumerate(zip(unit.members, weights, strict=True)):
+            ypix, xpix = np.divmod(np.asarray(members, np.int64).ravel(), lx)
+            stat[k] = {
+                "ypix": ypix.astype(np.int32),
+                "xpix": xpix.astype(np.int32),
+                "lam": np.ones(ypix.size, np.float32)
+                if lam is None
+                else np.asarray(lam, np.float32),
+                "med": (float(np.median(ypix)), float(np.median(xpix)))
+                if ypix.size
+                else (0.0, 0.0),
+                "npix": int(ypix.size),
+            }
+        self.stat = stat
+        self.iscell = (
+            None if unit.iscell is None else np.asarray(unit.iscell, np.float32).copy()
+        )
+        self.iscell_original = None if self.iscell is None else self.iscell.copy()
+        self.F = unit.traces.get("raw")
+        self.Fneu = unit.traces.get("neuropil")
+        self.loaded_path = plane_dir
+        self._save_path = plane_dir
+        iscell_path = plane_dir / "iscell.npy"
+        self._last_iscell_mtime = (
+            iscell_path.stat().st_mtime if iscell_path.exists() else None
+        )
+        self._compute_metrics()
+        self._update_filter_ranges()
+        self.selected_roi = 0
+
     def load_results(self, plane_dir: Path):
         """Load suite2p results from a plane directory."""
         from mbo_utilities.file_io import load_npy

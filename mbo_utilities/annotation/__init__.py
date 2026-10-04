@@ -9,6 +9,7 @@ layer.
 
 from mbo_utilities.annotation.display import (
     DISPLAY_KINDS,
+    SUBTRACTED,
     TRACE_PROFILES,
     DffSettings,
     TraceProfile,
@@ -16,7 +17,6 @@ from mbo_utilities.annotation.display import (
     deflect,
     display_trace,
     displayed_kind,
-    neuropil_overlay,
     register_trace_profile,
     trace_profile,
     y_label,
@@ -47,6 +47,7 @@ __all__ = [
     "ENGINES",
     "FULL_IMAGE",
     "ROI_COLORS",
+    "SUBTRACTED",
     "TRACE_PROFILES",
     "UNLABELED",
     "DffSettings",
@@ -65,7 +66,6 @@ __all__ = [
     "class_color",
     "display_trace",
     "displayed_kind",
-    "neuropil_overlay",
     "register_trace_profile",
     "trace_key",
     "trace_profile",

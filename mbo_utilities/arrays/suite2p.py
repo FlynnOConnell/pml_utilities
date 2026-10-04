@@ -23,6 +23,7 @@ from mbo_utilities.arrays._base import (
     _imwrite_base,
     _normalize_key,
 )
+from mbo_utilities.arrays.features import MotionCorrection
 from mbo_utilities.file_io import load_npy
 from mbo_utilities.lazy_array import register_array_class
 from mbo_utilities.metadata import get_param, normalize_ops_arrays
@@ -669,6 +670,8 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         self._use_reg_tif = use_reg_tif
         self._planes: list[_SinglePlaneReader | _Suite2pRegTifPlaneReader] = []
         self._is_volumetric = False
+        self._results = None
+        self._results_read = False
 
         # determine if this is a volume or single plane
         if path.is_dir():
@@ -818,6 +821,55 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
     def num_planes(self) -> int:
         """Number of Z-planes."""
         return len(self._planes)
+
+    @property
+    def results(self):
+        """The detection this run wrote, as ``results.Results``: one unit per
+        plane in the array's z order, each stamped with its ``plane_dir`` and
+        ``z``; None when no plane carries ``stat.npy`` and ``F.npy`` (a
+        registration-only run). Read once, on first use.
+        """
+        if not self._results_read:
+            from mbo_utilities.results import Results
+
+            self._results_read = True
+            try:
+                self._results = Results.from_suite2p(
+                    self.source_path,
+                    plane_dirs=[p.ops_path.parent for p in self._planes],
+                )
+            except FileNotFoundError:
+                self._results = None
+        return self._results
+
+    @results.setter
+    def results(self, value) -> None:
+        self._results, self._results_read = value, True
+
+    @property
+    def motion_correction(self) -> MotionCorrection | None:
+        """Suite2p's rigid registration offsets (each plane's ``xoff`` and
+        ``yoff``, in px) on the recording's time axis; None when no plane was
+        registered or none moved. A volume is registered plane by plane, so
+        its traces are named after their plane dir and listed in ``planes``.
+        The nonrigid block offsets (``xoff1`` / ``yoff1``) are left out.
+        """
+        fs = self.fs or 1.0
+        traces, planes = {}, {}
+        for z, plane in enumerate(self._planes):
+            xoff, yoff = plane.metadata.get("xoff"), plane.metadata.get("yoff")
+            if xoff is None or yoff is None or not (np.any(xoff) or np.any(yoff)):
+                continue
+            for axis, shift in (("X", xoff), ("Y", yoff)):
+                label = axis
+                if self._is_volumetric:
+                    label = f"{axis} {plane.ops_path.parent.name}"
+                    planes[label] = z
+                traces[label] = (
+                    np.arange(len(shift)) / fs,
+                    np.asarray(shift, dtype=np.float64),
+                )
+        return MotionCorrection("suite2p", "px", traces, planes) if traces else None
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
         return (self._nframes, 1, self._nz, self._ly, self._lx)
@@ -991,6 +1043,7 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
                     raw_arr._lx = raw_reader.Lx
                     raw_arr._dtype = raw_reader.dtype
                     raw_arr._metadata = {}
+                    raw_arr._results, raw_arr._results_read = None, True
                     arrays.append(raw_arr)
                     names.append("raw")
                 except Exception as e:
@@ -1007,6 +1060,7 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
                     reg_arr._lx = reg_reader.Lx
                     reg_arr._dtype = reg_reader.dtype
                     reg_arr._metadata = {}
+                    reg_arr._results, reg_arr._results_read = None, True
                     arrays.append(reg_arr)
                     names.append("registered")
                 except Exception as e:

@@ -62,6 +62,8 @@ from mbo_utilities.gui._metadata_editor import draw_metadata_popup
 from mbo_utilities.gui._options_popup import draw_options_popup
 from mbo_utilities.gui._popups import draw_process_console_popup, draw_tools_popups
 from mbo_utilities.gui._save_as import draw_saveas_popup
+from mbo_utilities.gui.playhead import Playhead, TimeAxis
+from mbo_utilities.gui.slice import Slice, viewer_positions
 from mbo_utilities.gui._stats import (
     compute_zstats,
     draw_stats_section,
@@ -79,6 +81,7 @@ from mbo_utilities.gui.widgets.style_editor import (
     apply_saved_style,
     draw_style_editor_window,
 )
+from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import get_last_dir, get_mbo_dirs
 from mbo_utilities.reader import MBO_AVAILABLE_FTYPES
 
@@ -282,6 +285,12 @@ class PreviewDataWidget(EdgeWindow):
         self.image_widget = iw
         self.num_graphics = len(self.image_widget.graphics)
         self.shape = self.image_widget.data[0].shape
+        # the position on screen, shared by every view: one handler on the
+        # sliders feeds the slice (channel, z-plane) and the playhead (time)
+        self.slice = Slice()
+        self.playhead = Playhead()
+        iw.ndwidget.indices.add_event_handler(self._on_indices)
+        self._on_indices(None)
 
         # Determine data type (ScanImage or volumetric TIFF).
         # Peel the squeeze wrapper so isinstance sees the real class.
@@ -298,6 +307,7 @@ class PreviewDataWidget(EdgeWindow):
 
         # Initialize state
         self._init_state()
+        self.slice.add_event_handler(self._on_slice, "slice")
 
         # Initialize z-stats tracking
         self._init_zstats()
@@ -1095,34 +1105,29 @@ class PreviewDataWidget(EdgeWindow):
         self._mean_jobs.pop(i, None)
         self._mean_ready = True
 
-    def _slider_axes(self, i: int) -> tuple[int, ...]:
-        """5D axis (0 T, 1 C, 2 Z) behind each of graphic ``i``'s sliders."""
-        from mbo_utilities.gui.run_gui import _ScrubTimingProxy, _SqueezeSingletonDims
+    def _on_indices(self, _indices) -> None:
+        """The viewer's sliders moved: the slice and the playhead follow."""
+        positions, roles = viewer_positions(self.image_widget)
+        self.slice.move(positions, roles, source=self)
+        t_name = next((name for name, role in roles.items() if role == "t"), None)
+        if t_name is not None:
+            self.playhead.seek(
+                self.time_axis().seconds(positions[t_name]), source=self
+            )
 
-        arr = self.image_widget.data[i]
-        while isinstance(arr, _ScrubTimingProxy):
-            arr = arr._wrapped
-        if isinstance(arr, _SqueezeSingletonDims):
-            return tuple(a for a in arr._kept if a < 3)
-        return tuple(range(len(arr.shape) - 2))
+    def time_axis(self) -> TimeAxis:
+        """The viewer's T slider on the playhead's clock: frames at the binning shown."""
+        arr = base_array(self.image_widget.data[0])
+        return TimeAxis.sampled(
+            getattr(arr, "fs", None), getattr(self, "_frame_average", 1) or 1
+        )
 
-    def _displayed_cz(self, i: int = 0) -> tuple[int, int]:
-        """The (channel, z) index graphic ``i`` shows, read by slider position.
-
-        Labels vary by reader (``ROI`` on a MESc AOD unit, ``Cam`` on IsoView)
-        and are not all known to `find_slider_name`, so the squeeze wrapper's
-        kept axes say which slider is which.
-        """
-        iw = self.image_widget
-        names = iw._slider_dim_names or ()
-        out = [0, 0]
-        for k, axis in enumerate(self._slider_axes(i)):
-            if axis in (1, 2) and k < len(names):
-                try:
-                    out[axis - 1] = int(iw.indices[names[k]])
-                except (IndexError, KeyError, TypeError, ValueError):
-                    pass
-        return out[0], out[1]
+    def _on_slice(self, _event) -> None:
+        """Another channel or z-plane is on screen: its mean image and contrast follow."""
+        if self._mean_subtraction or self._invert_deflection:
+            self._update_mean_subtraction()
+        if self._auto_contrast_on_z and self.image_widget:
+            self.image_widget.reset_vmin_vmax_frame()
 
     @property
     def auto_contrast_on_z(self) -> bool:
@@ -1275,7 +1280,7 @@ class PreviewDataWidget(EdgeWindow):
         for i in range(self.num_graphics):
             mean = self._mean_image(i) if uses_mean else None
             if mean is not None:
-                c, z = self._displayed_cz(i)
+                c, z = self.slice.c, self.slice.z
                 mean = mean[min(c, mean.shape[0] - 1), min(z, mean.shape[1] - 1)]
             mean_imgs.append(mean)
 
@@ -1483,18 +1488,6 @@ class PreviewDataWidget(EdgeWindow):
             self._mean_ready = False
             if self._mean_subtraction or self._invert_deflection:
                 self._update_mean_subtraction()
-                self.image_widget.reset_vmin_vmax_frame()
-
-        # the mean image is per (c, z): rebind it when either slider moves
-        c_idx, z_idx = self._displayed_cz(0)
-        if z_idx != self._last_z_idx or c_idx != getattr(self, "_last_c_idx", 0):
-            self._last_z_idx = z_idx
-            self._last_c_idx = c_idx
-            # rebuild mean-sub (if active) and reset contrast (if auto) are
-            # independent concerns — both can apply on the same z change.
-            if self._mean_subtraction or self._invert_deflection:
-                self._update_mean_subtraction()
-            if self._auto_contrast_on_z and self.image_widget:
                 self.image_widget.reset_vmin_vmax_frame()
 
     def draw_stats_section(self):

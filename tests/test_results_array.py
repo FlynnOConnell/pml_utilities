@@ -15,8 +15,8 @@ from mbo_utilities.reader import imread
 from mbo_utilities.results import (
     RASTER_WIDTH,
     TRACES_PKL,
+    Results,
     ResultsArray,
-    open_results,
     pipeline_files,
     results_dir_of,
 )
@@ -227,7 +227,7 @@ def test_the_archive_layout_finds_the_line_scan_without_provenance(tmp_path):
         arr.unit_key == "MSession_0/MUnit_35"
         and arr.metadata["mesc_layout"] == "packed"
     )
-    assert open_results(pf).source["mesc"] == str(mesc)
+    assert Results.open(pf).source["mesc"] == str(mesc)
 
 
 def test_a_missing_unit_falls_back_to_the_raster(tmp_path):

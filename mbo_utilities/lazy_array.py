@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, ClassVar
 if TYPE_CHECKING:
     from mbo_utilities.arrays.features import MotionCorrection
     from mbo_utilities.behavior import Behavior
+    from mbo_utilities.results import Results
 
 # canonical dims by reported rank (OME-NGFF 0.5: time -> channel -> space)
 _DEFAULT_DIMS_BY_NDIM: dict[int, tuple[str, ...]] = {
@@ -308,6 +309,19 @@ class LazyArray:
     @behavior.setter
     def behavior(self, value: Behavior | None) -> None:
         self._behavior = value
+
+    @property
+    def results(self) -> Results | None:
+        """A pipeline's output for this recording (``results.Results``: units,
+        traces, ROIs, events, images), or None when nothing is attached. A
+        reader whose format is a pipeline's own output (``Suite2pArray``,
+        ``ResultsArray``) answers its own; anything else can be handed one.
+        """
+        return getattr(self, "_results", None)
+
+    @results.setter
+    def results(self, value: Results | None) -> None:
+        self._results = value
 
     @property
     def source_path(self) -> Path | None:

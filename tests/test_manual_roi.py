@@ -30,7 +30,7 @@ os.environ.setdefault("RENDERCANVAS_FORCE_OFFSCREEN", "1")
 
 import numpy as np
 import pytest
-from mbo_utilities.annotation import RoiTrace
+from mbo_utilities.annotation import SUBTRACTED, RoiTrace
 
 
 def _offscreen_selected() -> bool:
@@ -1812,7 +1812,7 @@ class TestTracesTab:
         ``roi0 (raw)`` for its one line, and a line of a multi-line ROI adds
         itself; every row carries its line on z and the pipeline's channel.
         """
-        from mbo_utilities.results import ResultUnit, write_results
+        from mbo_utilities.results import Results, ResultUnit
 
         unit = ResultUnit(
             name="scan3",
@@ -1826,12 +1826,9 @@ class TestTracesTab:
             member_traces={"raw": np.ones((3, 8), np.float32)},
             attrs={"member_ids": [4, 5, 7]},
         )
-        path = write_results(
-            tmp_path / "2026-09-16_session01.zarr",
-            [unit],
-            pipeline="voltage",
-            source={"channel": 1},
-        )
+        path = Results(
+            pipeline="voltage", units={unit.name: unit}, source={"channel": 1}
+        ).write(tmp_path / "2026-09-16_session01.zarr")
         assert widget.load_results(path)
         rows = {
             t.name: t
@@ -2622,14 +2619,11 @@ class TestTracePlotView:
         assert widget.x_unit == "frames"
 
     def test_the_plotted_rows_pipelines_decide_the_panels_offer(self, widget):
-        """Kind combo, neuropil checkbox and y label all come from the rows'
-        trace profiles (AGENTS.md §7.6, Trace display).
+        """The kind combo and the y label come from the rows' trace profiles
+        (AGENTS.md §7.6, Trace display).
         """
-        from mbo_utilities.annotation import RoiTrace
-
         rows = [widget.traces.get(k) for k in self._two_traces(widget)]
-        # quick traces are mean-engine rows without a ring: no neuropil to offer
-        assert widget.neuropil_offered(rows) is False
+        # quick traces are mean-engine rows without a ring: no neuropil kinds
         assert widget.kind_options(rows) == ("dff", "raw")
         assert widget.plot_y_label(rows) == "dF/F (%)"
         s2p = RoiTrace(
@@ -2648,9 +2642,13 @@ class TestTracePlotView:
             norm=np.ones(6, np.float32),
             kinds={"denoised": np.ones(6, np.float32)},
         )
-        assert (
-            widget.neuropil_offered([s2p]) is True
-            and widget.neuropil_offered([volt]) is False
+        # rows of two pipelines: every kind either has, in selector order
+        assert widget.kind_options([s2p, volt]) == (
+            "dff",
+            "denoised",
+            "raw",
+            "neuropil",
+            SUBTRACTED,
         )
         assert widget.kind_options([volt]) == ("dff", "denoised")
         assert widget.plot_y_label([volt]) == "denoised"
@@ -2662,12 +2660,31 @@ class TestTracePlotView:
         widget.kind = None
         # the display cache follows the kind
         widget.kind = "raw"
-        y, _ = widget._display(rows[0].key)
-        np.testing.assert_array_equal(y, rows[0].F)
+        np.testing.assert_array_equal(widget._display(rows[0].key), rows[0].F)
         widget._redisplay()
         widget.kind = None
-        y, _ = widget._display(rows[0].key)
-        assert not np.array_equal(y, rows[0].F)
+        assert not np.array_equal(widget._display(rows[0].key), rows[0].F)
+
+    def test_a_suite2p_row_is_one_line_in_every_kind(self, widget):
+        f, fneu = np.arange(6, dtype=np.float32) + 10, np.full(6, 2.0, np.float32)
+        s2p = widget.traces.add(
+            RoiTrace(
+                uid=0, member=0, source="run", engine="suite2p", F=f, Fneu=fneu
+            )
+        )
+        widget.select_trace(s2p.key)
+        assert widget.kind_options([s2p]) == ("dff", "raw", "neuropil", SUBTRACTED)
+        shown = {"raw": f, "neuropil": fneu, SUBTRACTED: f - 0.7 * fneu}
+        labels = {
+            "raw": "F (a.u.)",
+            "neuropil": "Fneu (a.u.)",
+            SUBTRACTED: "F - 0.7 Fneu (a.u.)",
+        }
+        for kind, y in shown.items():
+            widget.kind = kind
+            np.testing.assert_allclose(widget._display(s2p.key), y, rtol=1e-6)
+            assert widget.plot_y_label([s2p]) == labels[kind]
+            self._fits(widget)
 
     def test_time_units_need_a_sampling_rate(self, widget):
         widget._fs_read, widget._fs_value = True, None
@@ -4000,26 +4017,25 @@ class TestTraceDeflection:
     def test_raw_rows_follow_the_hosts_switches(self, widget):
         widget.host = _DeflectingHost()
         widget.kind = "raw"
-        widget.correct_neuropil = False
         widget.add_roi(square(10, 10, 9))
         widget.quick_trace(0)
         pump(widget)
         (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
         f = np.asarray(trace.F, np.float64)
-        np.testing.assert_allclose(widget._display(trace.key)[0], f, rtol=1e-6)
+        np.testing.assert_allclose(widget._display(trace.key), f, rtol=1e-6)
 
         widget.host.invert_deflection = True
         np.testing.assert_allclose(
-            widget._display(trace.key)[0], 2 * f.mean() - f, rtol=1e-5
+            widget._display(trace.key), 2 * f.mean() - f, rtol=1e-5
         )
         widget.host.mean_subtraction = True
         np.testing.assert_allclose(
-            widget._display(trace.key)[0], f.mean() - f, rtol=1e-4, atol=1e-5
+            widget._display(trace.key), f.mean() - f, rtol=1e-4, atol=1e-5
         )
         assert widget.plot_y_label([trace]).startswith("mean - ")
         widget.host.invert_deflection = False
         np.testing.assert_allclose(
-            widget._display(trace.key)[0], f - f.mean(), rtol=1e-4, atol=1e-5
+            widget._display(trace.key), f - f.mean(), rtol=1e-4, atol=1e-5
         )
 
     def test_a_switch_refits_the_plot(self, widget):
@@ -4036,3 +4052,87 @@ class TestTraceDeflection:
 
     def test_no_host_shows_the_rows_as_measured(self, widget):
         assert widget.deflection() == (False, False)
+
+
+class TestArrayResults:
+    """A run's output opened as the data (AGENTS.md §7.5): its planes' ROIs,
+    traces and accept flags load from ``arr.results`` and follow the slice on
+    screen (§7.6).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _session_toggle(self):
+        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
+
+        set_widget_enabled("manual_roi", False, persist=False)
+        yield
+        set_widget_enabled("manual_roi", False, persist=False)
+
+    def test_a_volume_loads_one_set_per_plane_and_follows_z(self, tmp_path):
+        from tests.test_suite2p_results import _plane
+
+        from mbo_utilities import imread
+        from mbo_utilities.annotation.display import available_kinds
+        from mbo_utilities.gui.run_gui import _create_image_widget
+        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+
+        _plane(tmp_path / "zplane01_tp00001-00006", 1)
+        _plane(tmp_path / "zplane02_tp00001-00006", 2)
+        arr = imread(tmp_path)
+        iw = _create_image_widget(
+            arr, widget="preview", figure_kwargs_override={"size": FIGURE_SIZE}
+        )
+        try:
+            gui = next(
+                w
+                for w in iw.figure.imgui_windows.values()
+                if isinstance(w, PreviewDataWidget)
+            )
+            roi = gui.manual_roi
+            # a run's output turns the ROI widget on by itself
+            assert roi is not None and roi.slice is gui.slice
+            assert [s.result.z for s in roi.derived] == [0, 1]
+            assert [s.result.path.name for s in roi.derived] == [
+                "zplane01_tp00001-00006",
+                "zplane02_tp00001-00006",
+            ]
+            assert [s.result.kind for s in roi.derived] == ["suite2p", "suite2p"]
+            # the ROI table opens on the plane on screen, with the classifier's probability
+            assert roi.order.plane == 0 and "prob" in roi.columns
+            assert roi._formatters()["prob"](roi._row_index[(0, 0)]) == "0.90"
+            # the overlay and the trace table show the plane on screen
+            assert derived_showing(roi)
+            rows = roi._trace_rows()
+            assert len(rows) == 1 and roi.traces.get(rows[0]).z == 0
+            assert "spikes" in available_kinds(roi.traces.get(rows[0]))
+            iw.indices["z"] = 1
+            assert gui.slice.z == 1 and roi.z == 1 and derived_showing(roi)
+            rows = roi._trace_rows()
+            assert len(rows) == 1 and roi.traces.get(rows[0]).z == 1
+            assert roi.order.plane == 1
+            roi.traces_this_slice = False
+            assert len(roi._trace_rows()) == 2
+        finally:
+            iw.close()
+
+    def test_a_plane_opened_on_its_own_sits_on_z_zero(self, tmp_path):
+        from tests.test_suite2p_results import _plane
+
+        from mbo_utilities import imread
+        from mbo_utilities.gui._ndviewer import MboNDViewer
+        from mbo_utilities.gui.manual_roi import ManualRoiWidget
+        from mbo_utilities.gui.run_gui import _squeeze_for_viewer
+
+        _plane(tmp_path / "zplane02_tp00001-00006", 2)
+        arr = imread(tmp_path / "zplane02_tp00001-00006")
+        iw = MboNDViewer(data=_squeeze_for_viewer(arr), figure_kwargs={"size": FIGURE_SIZE})
+        iw.show()
+        try:
+            w = ManualRoiWidget(iw, fpath=arr.source_path, auto_trace=False)
+            assert len(w.derived) == 1 and w.derived[0].result.z == 0
+            assert w.derived[0].result.path == tmp_path / "zplane02_tp00001-00006"
+            assert derived_showing(w) and len(w._trace_rows()) == 1
+            # the widget on a bare viewer feeds a slice of its own
+            assert w._own_slice and w.slice.z == 0
+        finally:
+            iw.close()

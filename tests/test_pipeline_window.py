@@ -221,10 +221,10 @@ def test_a_run_of_a_scan_with_other_rois_does_not_seed_the_domains(tmp_path):
     """
     from mbo_utilities.gui.widgets.pipelines import open_pipeline
     from mbo_utilities.results import (
+        Results,
         ResultUnit,
         pipeline_files,
         results_name,
-        write_results,
     )
 
     mesc = tmp_path / "session3.mesc"
@@ -245,11 +245,8 @@ def test_a_run_of_a_scan_with_other_rois_does_not_seed_the_domains(tmp_path):
         members=[np.array([0, 1])],
         attrs={"scan_id": "3"},
     )
-    run = write_results(
-        tmp_path / results_name(mesc, pipeline="voltage"),
-        [scan],
-        pipeline="voltage",
-        source=source,
+    run = Results(pipeline="voltage", units={scan.name: scan}, source=source).write(
+        tmp_path / results_name(mesc, pipeline="voltage")
     )
     pipeline_files(run).mkdir()
     (pipeline_files(run) / "pipeline.json").write_text(

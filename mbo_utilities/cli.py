@@ -15,7 +15,6 @@ Usage patterns:
 """
 
 import logging
-import os
 import sys
 import threading
 import time
@@ -2422,71 +2421,38 @@ def voltage(
     "--overwrite", is_flag=True, default=False, help="Replace an existing results file."
 )
 def results(path, out, overwrite):
-    """Mold a pipeline's output folder into one results zarr.
+    """Write a pipeline's output folder as one results zarr.
 
     PATH is a suite2p or masknmf output folder (one plane dir, or a folder
     of zplaneNN dirs) or the voltage pipeline's PF folder. The file holds
     every plane or scan as a group of (roi, t) traces, ROI membership,
-    events and summary images; `mbo_utilities.results.read_results` reads
+    events and summary images; `mbo_utilities.results.Results.read` reads
     it back.
 
     \b
       mbo results run/zplane01_tp00001-01574
       mbo results stan112_expt12/PF -o stan112_expt12/PF/2026-09-16_stan112_expt12.zarr
     """
-    from mbo_utilities.results import (
-        results_dir_of,
-        results_from_pf,
-        results_from_suite2p,
-        results_name,
-        write_results,
-    )
+    from mbo_utilities.results import Results, results_dir_of, results_name
 
     path = Path(path)
     pf_dir = results_dir_of(path)
     if pf_dir is not None:
-        units, root = results_from_pf(pf_dir)
-        source = (root["source"] or {}).get("mesc") or pf_dir
+        found = Results.from_pf(pf_dir)
+        source = found.source.get("mesc") or pf_dir
     else:
         try:
-            units, root = results_from_suite2p(path)
+            found = Results.from_suite2p(path)
         except FileNotFoundError as e:
             raise click.BadParameter(str(e), param_hint="PATH")
         source = path
     target = Path(out) if out else path / results_name(source)
     try:
-        written = write_results(target, units, overwrite=overwrite, **root)
+        written = found.write(target, overwrite=overwrite)
     except (FileExistsError, ValueError) as e:
         click.echo(f"error: {e}", err=True)
         raise click.Abort
-    click.echo(f"wrote {len(units)} unit(s) to {written}")
-
-
-@main.command("app")
-@click.argument("path", type=click.Path(exists=True), required=False)
-@click.option(
-    "--frames",
-    type=int,
-    default=0,
-    help="Draw N frames on an offscreen canvas and exit, for a smoke test.",
-)
-def app(path, frames):
-    r"""The app host: the viewer and the apps drawn around it on one canvas.
-
-    Opens PATH lazily with imread, or a synthetic movie when no path is
-    given. The Apps menu switches each app on and off.
-
-    \b
-    Examples:
-      mbo app                          Synthetic movie
-      mbo app /data/raw.tiff           A file or folder imread opens
-      mbo app --frames 5               Draw 5 frames offscreen and exit
-    """
-    if frames > 0:
-        os.environ["RENDERCANVAS_FORCE_OFFSCREEN"] = "1"
-    from mbo_utilities.gui.app import run_app
-
-    run_app(path, frames=frames)
+    click.echo(f"wrote {len(found.units)} unit(s) to {written}")
 
 
 if __name__ == "__main__":

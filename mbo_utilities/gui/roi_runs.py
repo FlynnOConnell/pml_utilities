@@ -551,6 +551,7 @@ def result_traces(res: RunResult, uids=None) -> list[RoiTrace]:
                 norm=None
                 if res.norm is None
                 else np.asarray(res.norm[row], np.float32),
+                kinds={k: np.asarray(v[row], np.float32) for k, v in res.kinds.items()},
                 frames=res.frames,
                 path=res.path,
                 extra={}

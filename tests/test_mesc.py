@@ -11,6 +11,7 @@ expectations read straight out of h5py.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -1031,17 +1032,30 @@ def test_generic_temporal_mean_agrees_with_the_one_pass_read(mesc_path):
     np.testing.assert_allclose(temporal_mean(in_memory), arr.temporal_mean(), rtol=1e-6)
 
 
+class _Sliders(SimpleNamespace):
+    """A viewer stub whose ``indices`` assignment reaches the host's slice,
+    as the real viewer's indices event does.
+    """
+
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        owner = getattr(self, "owner", None)
+        if name == "indices" and owner is not None:
+            owner._on_indices(None)
+
+
 def _viewer_on(arr, mean_subtraction, invert_deflection):
     """A `PreviewDataWidget` holding only what the spatial functions read."""
-    from types import SimpleNamespace
-
+    from mbo_utilities.gui.playhead import Playhead
+    from mbo_utilities.gui.slice import Slice
     from mbo_utilities.gui.widgets.mesc_units import display_wrap
     from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
 
     names = arr.slider_dim_labels
     w = object.__new__(PreviewDataWidget)
-    w.image_widget = SimpleNamespace(
+    w.image_widget = _Sliders(
         data=[display_wrap(arr)],
+        dim_names=names,
         _slider_dim_names=names,
         indices=dict.fromkeys(names, 0),
         spatial_func=None,
@@ -1054,6 +1068,11 @@ def _viewer_on(arr, mean_subtraction, invert_deflection):
     w._mean_images = {}
     w._mean_jobs = {}
     w._mean_ready = False
+    w._frame_average = 1
+    w.slice = Slice()
+    w.playhead = Playhead()
+    w.image_widget.owner = w
+    w._on_indices(None)
     return w
 
 
@@ -1089,10 +1108,10 @@ class TestMeanDisplay:
                 np.testing.assert_allclose(shown, expected, rtol=1e-5, atol=1e-2)
         assert frame.dtype == np.uint16  # the read frame is never written
 
-    def test_roi_slider_is_found_by_position_not_label(self, mesc_path):
+    def test_roi_slider_is_found_by_its_axis_not_label(self, mesc_path):
         w = _viewer_on(MescArray(mesc_path, unit=2), True, False)  # T, ROI
         w.image_widget.indices = {"Timepoint": 4, "ROI": 1}
-        assert w._displayed_cz(0) == (0, 1)
+        assert (w.slice.t, w.slice.c, w.slice.z) == (4, 0, 1)
 
     def test_off_clears_the_spatial_function(self, mesc_path):
         arr = MescArray(mesc_path, unit=1)

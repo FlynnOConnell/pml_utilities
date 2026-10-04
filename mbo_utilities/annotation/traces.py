@@ -54,6 +54,7 @@ class RoiTrace:
     source computed; any other kind the source produced (``denoised``,
     ``zscore``, ``spikes``: ``annotation.display.DISPLAY_KINDS``) sits in
     ``kinds`` under its name, and :meth:`array` reads any of them by kind.
+    ``raw - neuropil`` is carried by no row: ``display_trace`` computes it.
     """
 
     uid: int
