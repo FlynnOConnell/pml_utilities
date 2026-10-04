@@ -23,7 +23,7 @@ glossary
 
 ```bash
 # install
-uv pip install mbo_utilities
+uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 
 # launch gui
 mbo

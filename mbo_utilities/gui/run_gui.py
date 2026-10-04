@@ -190,7 +190,7 @@ def _check_for_upgrade() -> tuple[str, str | None]:
 
     # fetch from pypi
     try:
-        url = "https://pypi.org/pypi/mbo-utilities/json"
+        url = "https://pypi.org/pypi/pml-utilities/json"
         with urllib.request.urlopen(url, timeout=5) as response:
             data = json.loads(response.read().decode())
             latest = data["info"]["version"]
@@ -231,11 +231,9 @@ def _print_upgrade_status():
             if parse(current) < parse(latest):
                 click.secho("\nUpgrade available! Run:", fg="cyan")
                 click.secho(
-                    "  uv pip install --upgrade mbo-utilities", fg="cyan", bold=True
-                )
-                click.echo("  or")
-                click.secho(
-                    "  pip install --upgrade mbo-utilities", fg="cyan", bold=True
+                    '  uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"',
+                    fg="cyan",
+                    bold=True,
                 )
             else:
                 click.secho(
@@ -246,7 +244,9 @@ def _print_upgrade_status():
             if current != latest:
                 click.secho("\nDifferent version on PyPI. To upgrade:", fg="cyan")
                 click.secho(
-                    "  uv pip install --upgrade mbo-utilities", fg="cyan", bold=True
+                    '  uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"',
+                    fg="cyan",
+                    bold=True,
                 )
 
 

@@ -2027,7 +2027,8 @@ def _draw_section_suite2p_content(self):
         )
         imgui.text("Install with:")
         imgui.text_colored(
-            imgui.ImVec4(0.6, 0.8, 1.0, 1.0), "uv pip install mbo_utilities"
+            imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
+            "uv pip install --no-deps lbm-suite2p-python && uv pip install suite2p rastermap torch torchvision",
         )
         return
 

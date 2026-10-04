@@ -60,7 +60,7 @@ def _make_executor(folder, params: dict):
         import submitit
     except ImportError as e:
         raise ImportError(
-            'submitit not installed. Install with: pip install "mbo_utilities[hpc]"'
+            'submitit not installed. Install with: uv pip install "pml_utilities[hpc] @ git+https://github.com/FlynnOConnell/pml_utilities.git"'
         ) from e
     ex = submitit.AutoExecutor(folder=str(folder))
     ex.update_parameters(**params)

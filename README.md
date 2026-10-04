@@ -5,8 +5,7 @@
 </p>
 
 <p align="center">
-<a href="https://github.com/MillerBrainObservatory/mbo_utilities/actions/workflows/test_python.yml"><img src="https://github.com/MillerBrainObservatory/mbo_utilities/actions/workflows/test_python.yml/badge.svg" alt="CI"></a>
-<a href="https://badge.fury.io/py/mbo-utilities"><img src="https://badge.fury.io/py/mbo-utilities.svg" alt="PyPI version"></a>
+<a href="https://github.com/FlynnOConnell/pml_utilities/actions/workflows/install-check.yml"><img src="https://github.com/FlynnOConnell/pml_utilities/actions/workflows/install-check.yml/badge.svg" alt="Install from git URL beside masknmf"></a>
 <a href="https://millerbrainobservatory.github.io/mbo_utilities/"><img src="https://img.shields.io/badge/docs-online-green" alt="Documentation"></a>
 </p>
 
@@ -38,50 +37,62 @@ Image processing utilities for the [Miller Brain Observatory](https://github.com
 
 ## Installation
 
-We recommend [uv](https://docs.astral.sh/uv/) for managing environments.
+Python 3.12.7 to 3.13. The distribution is `pml_utilities`; it installs the
+`mbo_utilities` package and the `mbo` command, so it cannot share an environment
+with the PyPI `mbo_utilities`.
 
-Simply remove the `uv` from the below commands if using a different python package manager.
-
-See [the MBO guide on virtual environments](https://millerbrainobservatory.github.io/guides/venvs.html) for more information on managing python environments.
+We recommend [uv](https://docs.astral.sh/uv/) for managing environments; drop the
+`uv` from the commands below for plain pip.
 
 ```bash
-uv venv --python 3.12.9
-# .venv\Scripts\activate   # optional 
+uv venv --python 3.12
+uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+```
+
+### With masknmf-toolbox (optional)
+
+Install both in one command so the shared pins (fastplotlib, imgui-bundle, numpy,
+opencv) are resolved together; two separate installs let the second one move them.
+masknmf's `main` still pins fastplotlib 0.6.1, which this package excludes, so use a
+masknmf revision that allows 0.7.
+
+```bash
+uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox" "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```
 
 ### Quick viewer (no install)
 
-Open data in the viewer without installing anything:
-
 ```bash
-uvx --from mbo-utilities mbo /path/to/data
+uvx --from "git+https://github.com/FlynnOConnell/pml_utilities.git" mbo /path/to/data
 ```
 
-### Base (viewer, I/O, metadata, scan-phase)
+### Extras
+
+The base install is the viewer, I/O, metadata and scan-phase tools, with no pytorch.
 
 ```bash
-uv pip install mbo_utilities
+uv pip install "pml_utilities[hpc] @ git+https://github.com/FlynnOConnell/pml_utilities.git"        # mbo hpc: submitit / SLURM
+uv pip install "pml_utilities[server] @ git+https://github.com/FlynnOConnell/pml_utilities.git"     # mbo curate --serve (see note)
+uv pip install "pml_utilities[napari] @ git+https://github.com/FlynnOConnell/pml_utilities.git"     # napari viewer
+uv pip install "pml_utilities[notebooks] @ git+https://github.com/FlynnOConnell/pml_utilities.git"  # jupyterlab + notebook rendering
+uv pip install "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"        # the four above
 ```
 
-The base install is lightweight (no pytorch). Add an extra for the
-processing pipelines:
+`mbo curate --serve` also needs rendercanvas's http backend, which is not in a
+release yet (2.7.2 lacks it): `uv pip install git+https://github.com/pygfx/rendercanvas`.
+
+Pipelines are their own packages:
 
 ```bash
-# suite2p / cellpose pipeline + rastermap + z-registration (pulls pytorch + Qt)
-uv pip install "mbo_utilities[suite2p]"
-
-# napari viewer
-uv pip install "mbo_utilities[napari]"
-
-# isoview light-sheet pipeline
-uv pip install "mbo_utilities[isoview]"
-
-# jupyterlab + notebook rendering
-uv pip install "mbo_utilities[notebooks]"
-
-# everything
-uv pip install "mbo_utilities[all]"
+uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox"   # MaskNMF (optional, see above)
+uv pip install isoview                                 # isoview light-sheet
+uv pip install --no-deps lbm-suite2p-python            # suite2p, step 1
+uv pip install suite2p rastermap torch torchvision     # suite2p, step 2
 ```
+
+`lbm-suite2p-python` declares a dependency on the PyPI `mbo_utilities`, whose files
+would overwrite this package's, so install it with `--no-deps`. From a checkout,
+`uv sync --group suite2p` does the same through the override in `pyproject.toml`.
 
 ### Linux system libraries (Ubuntu/Debian)
 
@@ -128,7 +139,7 @@ Wayland session.
 
 PyTorch and CuPy require CUDA-specific wheels that must be installed separately.
 
-Suite2p (from the `[suite2p]` extra) requires pytorch. Installation depends on your cuda version. See the pytorch [Get Started](https://pytorch.org/get-started/locally/) page for the correct install command for your OS/Cuda version.
+Suite2p requires pytorch. Installation depends on your cuda version. See the pytorch [Get Started](https://pytorch.org/get-started/locally/) page for the correct install command for your OS/Cuda version.
 
 ```bash
 # pytorch with CUDA 12.N (required for suite2p GPU)
@@ -145,26 +156,10 @@ uv pip install cupy-cuda11x  # for CUDA 11.x
 ### Verify installation
 
 ```bash
-uv run mbo --check-install
+mbo --check-install
 ```
 
 This will show the status of all packages, GPU availability, and provide exact install commands for anything missing.
-
-### Installation script (recommended for new users)
-
-The install script handles environment creation, GPU detection, and optional dependencies automatically.
-
-```powershell
-# Windows (PowerShell)
-irm https://raw.githubusercontent.com/MillerBrainObservatory/mbo_utilities/master/scripts/install.ps1 | iex
-```
-
-```bash
-# Linux/macOS
-curl -sSL https://raw.githubusercontent.com/MillerBrainObservatory/mbo_utilities/master/scripts/install.sh | bash
-```
-
-> **Note:** The `mbo` command is available globally thanks to [uv tools](https://docs.astral.sh/uv/concepts/tools/). Update with `uv tool upgrade mbo_utilities`.
 
 ## Usage
 
@@ -255,13 +250,9 @@ pixels.
 
 ### Upgrade
 
-The CLI tool can be upgraded with `uv tool upgrade mbo_utilities`, or the package can be upgraded with `uv pip install -U mbo_utilities`.
-
-| Method | Command |
-|--------|---------|
-| Install script | Re-run install script |
-| CLI tool | `uv tool upgrade mbo_utilities` |
-| Virtual env | `uv pip install -U mbo_utilities` |
+```bash
+uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+```
 
 ## ScanImage Acquisition Modes
 
@@ -280,25 +271,9 @@ The CLI tool can be upgraded with `uv tool upgrade mbo_utilities`, or the packag
 
 ## Uninstall
 
-**If installed via quick install script:**
-
-```powershell
-# Windows
-uv tool uninstall mbo_utilities
-Remove-Item -Recurse -Force "$env:USERPROFILE\.mbo"
-Remove-Item "$env:USERPROFILE\Desktop\Miller Brain Studio.lnk" -ErrorAction SilentlyContinue
-```
-
 ```bash
-# Linux/macOS
-uv tool uninstall mbo_utilities
-rm -rf ~/.mbo
-```
-
-**If installed in a project venv:**
-
-```bash
-uv pip uninstall mbo_utilities
+uv pip uninstall pml_utilities
+rm -rf ~/.mbo          # settings, logs and caches
 ```
 
 ## Troubleshooting

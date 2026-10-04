@@ -14,7 +14,7 @@ The time-series viewer: image canvas with axes and histogram, plus the side pane
 ## Quick Start
 
 ```bash
-uv pip install mbo_utilities
+uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 mbo                    # opens file dialog
 mbo /path/to/data      # opens specific file
 mbo /path --metadata   # metadata only

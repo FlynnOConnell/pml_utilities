@@ -471,8 +471,6 @@ mbo formats
 
 ## Upgrade
 
-| Method | Command |
-|--------|---------|
-| Install script | Re-run install script |
-| CLI only | `uv tool upgrade mbo_utilities` |
-| Virtual env | `uv pip install -U mbo_utilities` |
+```bash
+uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+```

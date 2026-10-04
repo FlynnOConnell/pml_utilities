@@ -381,7 +381,7 @@ def draw_run_tab(parent: Any) -> None:
         imgui.text("Install a pipeline package:")
         imgui.text_colored(
             imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
-            "uv pip install mbo_utilities",
+            "uv pip install 'pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git'",
         )
         return
 
