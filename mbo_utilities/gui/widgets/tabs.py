@@ -126,9 +126,7 @@ class RunTabWidget(Widget):
 
         pipelines = get_available_pipelines()
         if not pipelines:
-            return (
-                "No pipelines registered.\nInstall with: uv pip install 'pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git'"
-            )
+            return "No pipelines registered.\nInstall with: uv pip install 'pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git'"
         lines = ["No pipeline is installed.\nInstall one of:"]
         for cls in pipelines:
             lines.append(f"  {cls.name}: {cls.install_command}")
