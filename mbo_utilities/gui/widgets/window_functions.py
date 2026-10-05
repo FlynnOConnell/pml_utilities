@@ -11,7 +11,11 @@ from imgui_bundle import imgui, hello_imgui
 
 from mbo_utilities.gui.widgets._base import Widget
 from mbo_utilities.gui._imgui_helpers import set_tooltip
-from mbo_utilities.gui._colormaps import DEFAULT_COLORMAPS, DEFAULT_COLORMAP
+from mbo_utilities.gui._colormaps import (
+    DEFAULT_COLORMAP,
+    DEFAULT_COLORMAPS,
+    listed_name,
+)
 
 
 class WindowFunctionsWidget(Widget):
@@ -96,7 +100,7 @@ class SpatialFunctionsWidget(Widget):
         if iw is None:
             return
         try:
-            cmap_name = str(list(iw.graphics)[0].cmap or "")
+            cmap_name = listed_name(list(iw.graphics)[0].cmap)
         except Exception:
             return
         if not cmap_name:

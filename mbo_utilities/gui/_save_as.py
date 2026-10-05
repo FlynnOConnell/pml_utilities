@@ -19,6 +19,7 @@ from mbo_utilities.metadata import get_param
 from mbo_utilities.arrays import _sanitize_suffix
 from mbo_utilities.arrays.features import DimensionTag, TAG_REGISTRY, parse_timepoint_selection, TimeSelection
 from mbo_utilities.preferences import get_last_dir, set_last_dir
+from mbo_utilities.gui._colormaps import listed_name
 from mbo_utilities.gui._imgui_helpers import (
     PopupAutoSize,
     set_tooltip,
@@ -550,10 +551,9 @@ def _preview_fps(parent: Any) -> float | None:
 
 def _preview_cmap(parent: Any) -> str | None:
     try:
-        c = str(parent.image_widget.graphics[0].cmap or "")
+        return listed_name(parent.image_widget.graphics[0].cmap)
     except Exception:
         return None
-    return c or None
 
 
 def _preview_vmin_vmax(parent: Any) -> tuple[float, float] | None:
