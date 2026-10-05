@@ -642,7 +642,7 @@ class SummaryImageViewer(Widget):
                     break
                 pts.append(imgui.ImVec2(sx, sy))
             if len(pts) >= 3:
-                draw_list.add_polyline(pts, color, imgui.ImDrawFlags_.closed, 1.5)
+                draw_list.add_polyline(pts, color, 1.5, imgui.ImDrawFlags_.closed)
 
     def _open_save_dialog(self, key: str, arr: np.ndarray) -> None:
         if self._save_dialog is not None:
