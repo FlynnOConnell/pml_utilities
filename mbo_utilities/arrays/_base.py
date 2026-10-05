@@ -766,13 +766,13 @@ class TiffReaderMixin:
         return self._imwrite(outpath, **kwargs)
 
     def imshow(self, **kwargs):
-        """Display array using fastplotlib ImageWidget."""
-        import fastplotlib as fpl
+        """Display the array in the viewer (fastplotlib NDWidget)."""
+        from mbo_utilities.gui._ndviewer import MboNDViewer
 
         histogram_widget = kwargs.get("histogram_widget", True)
         figure_kwargs = kwargs.get("figure_kwargs", {"size": (800, 1000)})
         window_funcs = kwargs.get("window_funcs")
-        return fpl.ImageWidget(
+        return MboNDViewer(
             data=self,
             cmap="gnuplot2",
             histogram_widget=histogram_widget,

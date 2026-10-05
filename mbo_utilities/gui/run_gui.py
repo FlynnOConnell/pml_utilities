@@ -487,14 +487,15 @@ class _ScrubTimingProxy:
 
 
 def _create_image_widget(data_array, widget: bool = True, figure_kwargs_override=None):
-    """Create fastplotlib ImageWidget with optional PreviewDataWidget.
+    """Create the viewer (fastplotlib NDWidget behind ``MboNDViewer``) with
+    optional PreviewDataWidget.
 
     `figure_kwargs_override` replaces the auto-selected canvas/size dict (used by
     scripts/capture_docs.py to build an offscreen viewer for headless capture).
     """
     import copy
     import numpy as np
-    import fastplotlib as fpl
+    from mbo_utilities.gui._ndviewer import MboNDViewer
 
     try:
         from rendercanvas.pyqt6 import RenderCanvas
@@ -601,7 +602,7 @@ def _create_image_widget(data_array, widget: bool = True, figure_kwargs_override
             arrays.append(_squeeze_for_viewer(arr))
             names.append(f"ROI {r}" if r else (base_name or "Full Image"))
 
-        iw = fpl.ImageWidget(
+        iw = MboNDViewer(
             data=arrays,
             names=names,
             slider_dim_names=slider_dim_names,
@@ -613,7 +614,7 @@ def _create_image_widget(data_array, widget: bool = True, figure_kwargs_override
             graphic_kwargs=graphic_kwargs,
         )
     else:
-        iw = fpl.ImageWidget(
+        iw = MboNDViewer(
             data=_squeeze_for_viewer(data_array),
             slider_dim_names=slider_dim_names,
             window_funcs=window_funcs,
@@ -637,12 +638,12 @@ def _create_image_widget(data_array, widget: bool = True, figure_kwargs_override
     if widget:
         from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
 
-        gui = PreviewDataWidget(
+        # the EdgeWindow registers itself on the figure
+        PreviewDataWidget(
             iw=iw,
             fpath=data_array.source_path,
             size=300,
         )
-        iw.figure.add_gui(gui)
 
     return iw
 

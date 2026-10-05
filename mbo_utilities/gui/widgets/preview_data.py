@@ -71,8 +71,8 @@ from mbo_utilities.gui._metadata_editor import draw_metadata_popup
 from mbo_utilities.gui._options_popup import draw_options_popup
 
 
-import fastplotlib as fpl
-from fastplotlib.ui import EdgeWindow
+from mbo_utilities.gui._edge_window import EdgeWindow
+from mbo_utilities.gui._ndviewer import MboNDViewer
 import contextlib
 
 __all__ = ["PreviewDataWidget"]
@@ -154,8 +154,8 @@ class PreviewDataWidget(EdgeWindow):
 
     Parameters
     ----------
-    iw : fastplotlib.ImageWidget
-        The ImageWidget to attach to.
+    iw : MboNDViewer
+        The viewer to attach to.
     fpath : str | list | None
         Path(s) to the data file(s).
     threading_enabled : bool
@@ -168,7 +168,7 @@ class PreviewDataWidget(EdgeWindow):
 
     def __init__(
         self,
-        iw: fpl.ImageWidget,
+        iw: MboNDViewer,
         fpath: str | None | list = None,
         threading_enabled: bool = True,
         size: int | None = None,
@@ -196,7 +196,8 @@ class PreviewDataWidget(EdgeWindow):
             figure=iw.figure,
             size=250 if size is None else size,
             location=location,
-            title=title,
+            # fastplotlib draws a title row for an edge window that has a title
+            title=title if show_title else None,
             window_flags=flags,
         )
 
@@ -396,8 +397,6 @@ class PreviewDataWidget(EdgeWindow):
 
     def _init_state(self):
         """Initialize widget state."""
-        for subplot in self.image_widget.figure:
-            subplot.toolbar = False
         self.image_widget._sliders_ui._loop = True
 
         # Determine nz and nc (z-planes and channels) using dims property
@@ -667,14 +666,9 @@ class PreviewDataWidget(EdgeWindow):
 
     # === Properties ===
 
-    @property
-    def processors(self) -> list:
-        """Access to underlying NDImageProcessor instances."""
-        return self.image_widget._image_processors
-
     def _get_data_arrays(self) -> list:
-        """Get underlying data arrays from image processors."""
-        return [proc.data for proc in self.processors]
+        """The viewer's data arrays."""
+        return list(getattr(self.image_widget, "data", None) or [])
 
     @property
     def current_offset(self) -> list[float]:
@@ -870,13 +864,7 @@ class PreviewDataWidget(EdgeWindow):
             return
         self._window_size = value
         self.logger.debug(f"Window size set to {value}.")
-        if not self.processors:
-            return
-        n_slider_dims = self.processors[0].n_slider_dims
-        if n_slider_dims == 0:
-            return
-        per_processor_sizes = (self._window_size,) + (None,) * (n_slider_dims - 1)
-        self._set_processor_attr("window_sizes", per_processor_sizes)
+        self._update_window_funcs()
 
     # === Internal methods ===
 
@@ -884,50 +872,6 @@ class PreviewDataWidget(EdgeWindow):
         """Trigger a frame refresh on the ImageWidget."""
         current_indices = list(self.image_widget.indices)
         self.image_widget.indices = current_indices
-
-    def _set_processor_attr(self, attr: str, value):
-        """Set processor attribute without expensive histogram recomputation."""
-        if not self.processors:
-            return
-
-        # save histogram state and disable recomputation during update
-        saved = [(p._compute_histogram, p._histogram) for p in self.processors]
-        for proc in self.processors:
-            proc._compute_histogram = False
-
-        try:
-            if attr == "window_funcs":
-                if isinstance(value, tuple):
-                    value = [value] * len(self.processors)
-                self.image_widget.window_funcs = value
-            elif attr == "window_sizes":
-                if isinstance(value, (tuple, list)) and not isinstance(value[0], (tuple, list, type(None))):
-                    value = [value] * len(self.processors)
-                self.image_widget.window_sizes = value
-            elif attr == "spatial_func":
-                self.image_widget.spatial_func = value
-            else:
-                for proc in self.processors:
-                    setattr(proc, attr, value)
-                self._refresh_image_widget()
-        except Exception as e:
-            self.logger.exception(f"Error setting {attr}: {e}")
-        finally:
-            # restore histogram state
-            for proc, (orig_compute, orig_hist) in zip(self.processors, saved):
-                proc._compute_histogram = orig_compute
-                proc._histogram = orig_hist
-            # fix dock visibility (fastplotlib sets to 0 when histogram is None)
-            for subplot in self.image_widget.figure:
-                if subplot.docks["right"].size < 1:
-                    subplot.docks["right"].size = 80
-
-        # fpl's window_funcs/window_sizes/spatial_func setters refresh via
-        # `self.indices = self.indices`, but that runs *before* the histogram
-        # restore above and can leave the displayed graphic stale. Force a
-        # post-restore refresh so changes take effect immediately.
-        if attr in ("window_funcs", "window_sizes", "spatial_func"):
-            self._refresh_image_widget()
 
     def _refresh_widgets(self):
         """Refresh widgets based on current data capabilities."""
@@ -983,9 +927,7 @@ class PreviewDataWidget(EdgeWindow):
         )
 
         if not any_mean_sub and sigma is None:
-            def identity(frame):
-                return frame
-            self._set_processor_attr("spatial_func", identity)
+            self.image_widget.spatial_func = None
             return
 
         spatial_funcs = []
@@ -1003,7 +945,7 @@ class PreviewDataWidget(EdgeWindow):
 
             spatial_funcs.append(self._make_spatial_func(mean_img, sigma))
 
-        self._set_processor_attr("spatial_func", spatial_funcs)
+        self.image_widget.spatial_func = spatial_funcs
 
     def _sampled_mean_pos(self, i: int, z_idx: int, n_rows: int) -> int:
         """Row in graphic ``i``'s mean-images stack for displayed plane z_idx.
@@ -1059,34 +1001,24 @@ class PreviewDataWidget(EdgeWindow):
         return spatial_func
 
     def _update_window_funcs(self):
-        """Update window_funcs on image widget based on current projection mode."""
-        if not self.processors:
+        """Map projection mode + window size onto the viewer's
+        ``window_funcs`` ({"t": (func, size)}). Sizes are odd-ified so the
+        window is centered on the current frame; size<=1 clears the
+        projection (raw frame).
+        """
+        iw = self.image_widget
+        if "t" not in (getattr(iw, "slider_dims", None) or ()):
             return
-
-        def mean_wrapper(data, axis, keepdims):
-            return np.mean(data, axis=axis, keepdims=keepdims)
-
-        def max_wrapper(data, axis, keepdims):
-            return np.max(data, axis=axis, keepdims=keepdims)
-
-        def std_wrapper(data, axis, keepdims):
-            return np.std(data, axis=axis, keepdims=keepdims)
-
-        proj_funcs = {"mean": mean_wrapper, "max": max_wrapper, "std": std_wrapper}
-        proj_func = proj_funcs.get(self._proj, mean_wrapper)
-
-        n_slider_dims = self.processors[0].n_slider_dims
-
-        if n_slider_dims == 0:
-            return
-        elif n_slider_dims == 1:
-            window_funcs = (proj_func,)
-        elif n_slider_dims == 2:
-            window_funcs = (proj_func, None)
-        else:
-            window_funcs = (proj_func,) + (None,) * (n_slider_dims - 1)
-
-        self._set_processor_attr("window_funcs", window_funcs)
+        try:
+            size = int(self._window_size)
+            if size <= 1:
+                iw.window_funcs = None
+                return
+            proj_funcs = {"mean": np.mean, "max": np.max, "std": np.std}
+            func = proj_funcs.get(self._proj, np.mean)
+            iw.window_funcs = {"t": (func, max(3, size | 1))}
+        except Exception as e:
+            self.logger.exception(f"Error applying window funcs: {e}")
 
     def gui_progress_callback(self, frac, meta=None):
         """Handle progress callbacks from save operations."""
@@ -1126,8 +1058,8 @@ class PreviewDataWidget(EdgeWindow):
 
     # === Rendering ===
 
-    def draw_window(self):
-        """Override parent to handle keyboard shortcuts and global popups."""
+    def draw(self):
+        """Keyboard shortcuts and the global popups, then the edge window."""
         handle_keyboard_shortcuts(self)
         check_file_dialogs(self)
 
@@ -1157,7 +1089,7 @@ class PreviewDataWidget(EdgeWindow):
         except Exception:
             pass
 
-        super().draw_window()
+        super().draw()
 
     def update(self):
         """Main render callback."""

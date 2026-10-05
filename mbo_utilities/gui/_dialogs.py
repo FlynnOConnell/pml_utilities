@@ -291,7 +291,7 @@ def load_new_data(parent: Any, path: str):
     """
     Load new data from the specified path using iw-array API.
 
-    Uses iw.set_data() to swap data arrays, which handles shape changes.
+    Swaps the array with ``iw.data[0] = new``, which handles shape changes.
     """
     from mbo_utilities.arrays import TiffArray
     from mbo_utilities.gui.run_gui import _SqueezeSingletonDims, _ScrubTimingProxy
@@ -361,10 +361,7 @@ def load_new_data(parent: Any, path: str):
         if hasattr(parent, "_rebuild_spatial_func"):
             parent._rebuild_spatial_func()
         if hasattr(parent, "image_widget") and parent.image_widget is not None:
-            for proc in parent.image_widget._image_processors:
-                proc.window_funcs = None
-                proc.window_sizes = None
-                proc.window_order = None
+            parent.image_widget.window_funcs = None
 
         # iw-array API: use data indexer for replacing data
         # data[0] = new_array triggers _reset_dimensions() automatically

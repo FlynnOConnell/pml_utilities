@@ -27,7 +27,7 @@ from mbo_utilities.metadata.scanimage import (
 )
 
 if TYPE_CHECKING:
-    from fastplotlib.widgets import ImageWidget
+    from mbo_utilities.gui._ndviewer import MboNDViewer
 
 __all__ = ["PollenCalibrationViewer"]
 
@@ -93,7 +93,7 @@ class PollenCalibrationViewer(BaseViewer):
 
     def __init__(
         self,
-        image_widget: ImageWidget,
+        image_widget: MboNDViewer,
         fpath: str | list[str],
         parent=None,
         **kwargs,
