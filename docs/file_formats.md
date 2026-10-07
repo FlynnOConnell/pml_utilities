@@ -58,6 +58,7 @@ the 5D array underneath for writers and the viewer.
 | **`.h5`** | `H5Array` | `(T, C, Z, Y, X)` | HDF5 datasets |
 | ↳ `imaging_system = bruker` dataset | `BrukerArray` | `(T, C, Z, Y, X)` | Bruker HDF5 export; axes from its dimension labels |
 | ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
+| ↳ `CompressionArray` group | `CompressedMovieArray` | `(T, 1, 1, Y, X)` | masknmf compressed movie (`compression.hdf5`, `alignment.hdf5`) |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
 | **`.zarr`** | `ZarrArray` | `(T, C, Z, Y, X)` | Zarr v3 / OME-Zarr |
 | ↳ `<stem>.<stamp>.<pipeline>.zarr` results | `ResultsArray` / `Results.read` | traces, not an image | Any pipeline's results file (`mbo_utilities.results`); one reader whichever pipeline wrote it |
@@ -78,6 +79,7 @@ imread(path)
 ├── .h5 / .hdf5
 │   ├── imaging_system = bruker ──────────► BrukerArray
 │   ├── DemixingResults group ────────────► DemixingArray (masknmf)
+│   ├── CompressionArray group ───────────► CompressedMovieArray (masknmf)
 │   └── else ─────────────────────────────► H5Array
 ├── .mesc ─────────────────────────────────► MescArray (one MUnit)
 ├── .zarr ────────────────────────────────► ZarrArray
@@ -307,6 +309,23 @@ for entry in list_demixing_results("run/calcium_spine_demixing.hdf5"):
 `fs` comes from the `mbo_provenance` attribute the MaskNMF pipeline stamps;
 files from other runs report no rate. `mbo <file>` opens these in masknmf's
 own viewers rather than the Studio viewer (see the GUI guide).
+
+(compressedmoviearray)=
+### CompressedMovieArray
+
+An hdf5 with a `CompressionArray` group: a movie masknmf compressed, stored as
+factors. The MaskNMF pipeline writes `compression.hdf5` (the denoised,
+registered movie) in each `zplaneNN/`, and `alignment.hdf5` when registration
+estimates its shifts on a denoised copy. Frames are rebuilt with numpy on
+read, in the units of the movie that was compressed (the stored mean and noise
+scale are added back). A file that also holds a `DemixingResults` group opens
+as a `DemixingArray`.
+
+```python
+arr = mbo.imread("run/zplane01/compression.hdf5")
+print(arr.shape)        # (T, 1, 1, Y, X)
+frame = arr[100, 0, 0]  # (Y, X) float32
+```
 
 (mescarray)=
 ### MescArray
