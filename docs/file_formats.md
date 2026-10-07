@@ -60,7 +60,7 @@ the 5D array underneath for writers and the viewer.
 | ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
 | **`.zarr`** | `ZarrArray` | `(T, C, Z, Y, X)` | Zarr v3 / OME-Zarr |
-| ↳ `<stem>.<stamp>.<pipeline>.zarr` results | `ResultsArray` / `read_results` | traces, not an image | Any pipeline's results file (`mbo_utilities.results`); one reader whichever pipeline wrote it |
+| ↳ `<stem>.<stamp>.<pipeline>.zarr` results | `ResultsArray` / `Results.read` | traces, not an image | Any pipeline's results file (`mbo_utilities.results`); one reader whichever pipeline wrote it |
 | **`.npy`** | `NumpyArray` | `(T, C, Z, Y, X)` | Memory-mapped numpy |
 | **`np.ndarray`** | `NumpyArray` | `(T, C, Z, Y, X)` | In-memory wrapper |
 | **Directory** | | | |

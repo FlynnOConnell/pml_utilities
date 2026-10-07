@@ -1591,69 +1591,61 @@ def gpu(watch, show_processes, as_json):
     default=False,
     help="Overwrite existing notebooks.",
 )
-def init(data_path, output_dir, overwrite):
+@click.option(
+    "--unit",
+    default="",
+    help="MESc measurement unit for the spine pipeline, e.g. MSession_0/MUnit_3.",
+)
+def init(data_path, output_dir, overwrite, unit):
     r"""
-    Create starter notebooks (mbo + LBM-Suite2p user guides).
+    Create starter notebooks: the user guides, and the ASAP7 spine pipeline for a .mesc.
 
     With DATA_PATH, notebooks go in <DATA_PATH>/../scripts and the data path
-    is filled in. Without it, notebooks go in the current directory.
+    is filled in. Without it, notebooks go in the current directory. The
+    Studio's File > Open Notebook writes the same notebooks to the same place.
 
     \b
     Examples:
       mbo init                       # notebooks in current directory
       mbo init /data/raw             # notebooks in /data/scripts, path filled in
       mbo init /data/raw -o ./nb     # notebooks in ./nb
+      mbo init /data/scan.mesc       # the guides and the spine pipeline
+      mbo init /data/scan.mesc --unit MSession_0/MUnit_3
     """
-    # Shipped copy (wheel / uv tool install) is generated from demos/ at build
-    # time into the package. Fall back to demos/ for source/editable runs.
-    pkg_dir = Path(__file__).resolve().parent
-    candidates = [pkg_dir / "assets" / "notebooks", pkg_dir.parent / "demos"]
-    src_dir = next(
-        (c for c in candidates if (c / "mbo_user_guide.ipynb").exists()),
-        candidates[0],
+    from mbo_utilities.notebook_templates import (
+        notebook_path,
+        scripts_dir,
+        template_dir,
+        templates_for,
+        write_notebook,
     )
-
-    # source notebook -> default data-path token replaced when DATA_PATH given
-    notebooks = {
-        "mbo_user_guide.ipynb": "D:/demo/raw",
-        "lsp_user_guide.ipynb": "D:/demo/raw",
-    }
 
     if output_dir is not None:
         dest = Path(output_dir).expanduser()
     elif data_path is not None:
-        dest = Path(data_path).expanduser().resolve().parent / "scripts"
+        dest = scripts_dir(data_path)
     else:
         dest = Path.cwd()
-    dest.mkdir(parents=True, exist_ok=True)
-
-    fill = Path(data_path).expanduser().resolve().as_posix() if data_path else None
-
-    from datetime import date
-
-    today = date.today().isoformat()
 
     written = []
-    for filename, token in notebooks.items():
-        src = src_dir / filename
-        if not src.exists():
-            click.secho(f"Missing: {filename}", fg="red")
+    for template in templates_for(data_path):
+        if not (template_dir() / template.filename).exists():
+            click.secho(f"Missing: {template.filename}", fg="red")
             continue
-        out = dest / f"{today}_{filename}"
-        if out.exists() and not overwrite:
-            click.secho(f"Exists: {out}  (--overwrite to replace)", fg="yellow")
+        out = write_notebook(template, dest, data_path, unit, overwrite=overwrite)
+        if out is None:
+            click.secho(
+                f"Exists: {notebook_path(template, dest)}  (--overwrite to replace)",
+                fg="yellow",
+            )
             continue
-        text = src.read_text(encoding="utf-8")
-        if fill and token:
-            text = text.replace(token, fill)
-        out.write_text(text, encoding="utf-8")
         written.append(out)
         click.secho(f"Created: {out}", fg="green")
 
     if not written:
         return
-    if fill:
-        click.echo(f"Data path: {fill}")
+    if data_path:
+        click.echo(f"Data path: {Path(data_path).expanduser().resolve().as_posix()}")
     click.echo(f"\nOpen with:\n  jupyter lab {dest}")
 
 
@@ -2415,7 +2407,7 @@ def voltage(
     "--out",
     type=click.Path(dir_okay=False),
     default=None,
-    help="The .zarr to write. Default: <date>_<tags>.zarr inside PATH, tags from PATH's name.",
+    help="The .zarr to write. Default: <name>.<stamp>.<pipeline>.zarr inside PATH, named after PATH.",
 )
 @click.option(
     "--overwrite", is_flag=True, default=False, help="Replace an existing results file."
@@ -2431,12 +2423,12 @@ def results(path, out, overwrite):
 
     \b
       mbo results run/zplane01_tp00001-01574
-      mbo results stan112_expt12/PF -o stan112_expt12/PF/2026-09-16_stan112_expt12.zarr
+      mbo results stan112_expt12/PF -o stan112_expt12/stan112_expt12.voltage.zarr
     """
-    from mbo_utilities.results import Results, results_dir_of, results_name
+    from mbo_utilities.results import TRACES_PKL, Results, results_name
 
     path = Path(path)
-    pf_dir = results_dir_of(path)
+    pf_dir = next((d for d in (path, path / "PF") if (d / TRACES_PKL).is_file()), None)
     if pf_dir is not None:
         found = Results.from_pf(pf_dir)
         source = found.source.get("mesc") or pf_dir
@@ -2446,7 +2438,7 @@ def results(path, out, overwrite):
         except FileNotFoundError as e:
             raise click.BadParameter(str(e), param_hint="PATH")
         source = path
-    target = Path(out) if out else path / results_name(source)
+    target = Path(out) if out else path / results_name(source, pipeline=found.pipeline)
     try:
         written = found.write(target, overwrite=overwrite)
     except (FileExistsError, ValueError) as e:

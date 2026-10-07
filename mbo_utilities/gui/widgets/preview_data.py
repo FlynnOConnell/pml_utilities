@@ -62,20 +62,21 @@ from mbo_utilities.gui._metadata_editor import draw_metadata_popup
 from mbo_utilities.gui._options_popup import draw_options_popup
 from mbo_utilities.gui._popups import draw_process_console_popup, draw_tools_popups
 from mbo_utilities.gui._save_as import draw_saveas_popup
-from mbo_utilities.gui.playhead import Playhead, TimeAxis
-from mbo_utilities.gui.slice import Slice, viewer_positions
 from mbo_utilities.gui._stats import (
     compute_zstats,
     draw_stats_section,
     hydrate_zstats,
     refresh_zstats,
 )
+from mbo_utilities.gui.playhead import Playhead, TimeAxis
+from mbo_utilities.gui.slice import Slice, viewer_positions
 from mbo_utilities.gui.widgets import draw_all_widgets, get_supported_widgets
 from mbo_utilities.gui.widgets.gui_logger import GuiLogger, GuiLogHandler
 from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_windows
 
 # Import modular components
 from mbo_utilities.gui.widgets.menu_bar import draw_keybinds_popup, draw_menu_bar
+from mbo_utilities.gui.widgets.notebooks import draw_notebooks_window
 from mbo_utilities.gui.widgets.progress_bar import start_output_capture
 from mbo_utilities.gui.widgets.style_editor import (
     apply_saved_style,
@@ -1111,9 +1112,7 @@ class PreviewDataWidget(EdgeWindow):
         self.slice.move(positions, roles, source=self)
         t_name = next((name for name, role in roles.items() if role == "t"), None)
         if t_name is not None:
-            self.playhead.seek(
-                self.time_axis().seconds(positions[t_name]), source=self
-            )
+            self.playhead.seek(self.time_axis().seconds(positions[t_name]), source=self)
 
     def time_axis(self) -> TimeAxis:
         """The viewer's T slider on the playhead's clock: frames at the binning shown."""
@@ -1409,6 +1408,7 @@ class PreviewDataWidget(EdgeWindow):
         draw_options_popup(self)
         draw_imgui_debug_windows(self)
         draw_style_editor_window(self)
+        draw_notebooks_window(self)
         try:
             from mbo_utilities.gui.widgets.isoview_crop import (
                 draw_window as _draw_iso_crop_window,

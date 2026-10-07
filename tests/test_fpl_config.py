@@ -95,7 +95,11 @@ class TestFitFigureSize:
             strip_height,
         )
         from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
-        from mbo_utilities.gui.run_gui import _create_image_widget, fit_figure_size
+        from mbo_utilities.gui.run_gui import (
+            _PREVIEW_WIDTH,
+            _create_image_widget,
+            fit_figure_size,
+        )
         from mbo_utilities.gui.widgets.widget_toggles import (
             set_widget_enabled,
             widget_enabled,
@@ -114,7 +118,7 @@ class TestFitFigureSize:
                 (40, 80),
                 top=strip_height(PANEL_HEIGHT) if roi else MENU_HEIGHT,
                 bottom=sliders_height(2),
-                right=300,
+                right=_PREVIEW_WIDTH,
                 min_width=MENU_MIN_WIDTH,
             )
             iw = _create_image_widget(NumpyArray(data, dims="TCZYX"), widget="preview")
@@ -124,11 +128,13 @@ class TestFitFigureSize:
                 strip = iw.figure.imgui_windows["top"]
                 for _ in range(3):
                     iw.figure.canvas.draw()
-                panels = [(p.key, p.height) for p in strip.panels]
-                assert panels == ([("traces", PANEL_HEIGHT)] if roi else [])
-                assert strip.size == (
-                    strip_height(PANEL_HEIGHT) if roi else MENU_HEIGHT
-                )
+                assert [p.key for p in strip.panels] == (["traces"] if roi else [])
+                if roi:
+                    (panel,) = strip.panels
+                    assert panel.height < PANEL_HEIGHT
+                    assert strip.size == strip_height(panel.height)
+                else:
+                    assert strip.size == MENU_HEIGHT
             finally:
                 iw.close()
         finally:

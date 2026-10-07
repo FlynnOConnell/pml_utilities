@@ -765,7 +765,6 @@ def _create_image_widget(
         from mbo_utilities.gui.manual_roi import labels_path
         from mbo_utilities.gui.roi_runs import run_dir_complete
         from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
-
         from mbo_utilities.lazy_array import base_array
 
         src = data_array.source_path
