@@ -204,6 +204,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
     """masknmf processing widget."""
 
     name = "MaskNMF"
+    run_label = "Run MaskNMF"
     install_command = (
         "uv pip install git+https://github.com/apasarkar/masknmf-toolbox.git"
     )
@@ -214,18 +215,23 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
     def __init__(self, parent: Any):
         super().__init__(parent)
-        from mbo_utilities.masknmf.params import MasknmfSettings
-
-        self.settings = MasknmfSettings()
+        self.settings = self.default_settings()
         self._outdir = ""
         self._outdir_dialog = None
         self._fix_phase = True
         self._use_fft = True
+        self._invert_deflection = False
         self._last_status = ""
         self._show_settings_popup = False
         self._settings_sizer: PopupAutoSize | None = None
         self._show_slice_popup = False
         self._last_fpath = None
+
+    def default_settings(self):
+        """The settings Defaults resets to."""
+        from mbo_utilities.masknmf.params import MasknmfSettings
+
+        return MasknmfSettings()
 
     # -- data probes -----------------------------------------------------
 
@@ -270,6 +276,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
         max_frames, num_planes, num_channels = self._dims()
         fpath_changed = fpath != self._last_fpath
         if fpath_changed:
+            self._invert_deflection = bool(
+                getattr(self.parent, "invert_deflection", False)
+            )
             self._hydrate_from_run(fpath)
         if fpath_changed or getattr(self, "_masknmf_last_max_tp", None) != max_frames:
             self._last_fpath = fpath
@@ -434,6 +443,15 @@ class MaskNMFPipelineWidget(PipelineWidget):
             if self._fix_phase:
                 imgui.same_line()
                 _, self._use_fft = imgui.checkbox("FFT##masknmf_fft", self._use_fft)
+            _, self._invert_deflection = imgui.checkbox(
+                "Invert deflection##masknmf_invert", self._invert_deflection
+            )
+            set_tooltip(
+                "Flip every frame about the mean image before processing, so an "
+                "indicator that dims on activity (ASAP, Voltron) reads positive. "
+                "Starts as the viewer's Invert Deflection.",
+                show_mark=False,
+            )
             # temporal binning lives on the parent so "Apply to dataset" in
             # Window Functions seeds it, the same way the save-as menu is
             self.parent._masknmf_frame_average = draw_frame_average_input(
@@ -599,9 +617,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 imgui.Col_.button_active, imgui.ImVec4(0.50, 0.28, 0.08, 1.0)
             )
             if imgui.button("Defaults##masknmf_defaults", imgui.ImVec2(_BTN_W, 0)):
-                from mbo_utilities.masknmf.params import MasknmfSettings
-
-                self.settings = MasknmfSettings()
+                self.settings = self.default_settings()
             imgui.pop_style_color(3)
             set_tooltip("Reset every parameter to its default.", show_mark=False)
 
@@ -684,6 +700,25 @@ class MaskNMFPipelineWidget(PipelineWidget):
             )
             self._f_int2(reg, "overlaps", "Overlaps", lo=0)
             self._f_int2(reg, "max_deviation_rigid", "Max deviation", lo=0)
+        self._f_check(
+            reg,
+            "denoised_reference",
+            "Register on a denoised copy",
+            tooltip="Estimate the shifts on a quick denoised copy of the movie "
+            "and apply them to the raw frames. Steadier shifts on noisy or "
+            "fast recordings; the copy is saved as alignment.hdf5.",
+        )
+        if reg.denoised_reference:
+            self._f_int2(
+                reg,
+                "reference_block_sizes",
+                "Copy block sizes",
+                lo=2,
+                tooltip="Patch size in px of the denoised copy; small blocks keep fine detail.",
+            )
+            self._f_int(reg, "reference_max_components", "Copy components")
+            self._f_int(reg, "reference_spatial_avg_factor", "Copy spatial avg")
+            self._f_int(reg, "reference_temporal_avg_factor", "Copy temporal avg")
 
     def _draw_compression_params(self) -> None:
         comp = self.settings.compression
@@ -903,7 +938,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
             imgui.set_cursor_pos_x(
                 imgui.get_cursor_pos_x() + (run_avail - _RUN_W) * 0.5
             )
-        clicked = imgui.button("Run MaskNMF", imgui.ImVec2(_RUN_W, 0))
+        clicked = imgui.button(self.run_label, imgui.ImVec2(_RUN_W, 0))
         if not ready:
             imgui.end_disabled()
         imgui.pop_style_color(3)
@@ -948,6 +983,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 "settings": self.settings.to_dict(),
                 "fix_phase": self._fix_phase,
                 "use_fft": self._use_fft,
+                "invert_deflection": self._invert_deflection,
                 "frame_average": int(
                     getattr(self.parent, "_masknmf_frame_average", 1) or 1
                 ),
@@ -957,9 +993,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 "custom_metadata": dict(getattr(self.parent, "_custom_metadata", {})),
             }
             if len(planes) == 1:
-                description = f"MaskNMF plane{planes[0]:02d}"
+                description = f"{self.name} plane{planes[0]:02d}"
             else:
-                description = f"MaskNMF: {len(planes)} plane(s)"
+                description = f"{self.name}: {len(planes)} plane(s)"
             if multi_channel:
                 description += f" ch{channel}"
 
