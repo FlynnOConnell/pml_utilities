@@ -169,19 +169,21 @@ Results
 
 ## Init
 
-Create starter notebooks (mbo + LBM-Suite2p user guides).
+Create starter notebooks: the mbo and LBM-Suite2p user guides, and for a `.mesc` the ASAP7 spine pipeline.
 
 ```bash
 mbo init                       # notebooks in current directory
 mbo init /path/to/raw          # notebooks in /path/to/scripts, data path filled in
 mbo init /path/to/raw -o ./nb  # custom destination directory
-mbo init /path/to/scan.mesc    # the guides and the ASAP7 spine pipeline, unit and path filled in
+mbo init /path/to/scan.mesc    # the guides and the ASAP7 spine pipeline, path filled in
+mbo init /path/to/scan.mesc --unit MSession_0/MUnit_3   # and the unit
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-o, --output` | Destination directory (overrides default location) |
 | `--overwrite` | Overwrite existing notebooks |
+| `--unit` | MESc measurement unit filled into the spine pipeline (default `MSession_0/MUnit_0`) |
 
 With a `DATA_PATH` argument, notebooks are written to a `scripts/` directory beside the data and the data path is pre-filled. Without it, notebooks go in the current directory with default paths.
 
@@ -413,7 +415,7 @@ one `<stem>.<stamp>.voltage.zarr` file beside the input instead of a PF folder
 of pickles, the shape every pipeline's results share
 (`mbo_utilities.results`). One group per scan holds the `denoised`, `dff` and
 `zscore` traces `(ROI, frame)`, the lines of each ROI, the lines' `raw` traces
-and the detected events; `read_results(path)` reads it back and `imread` opens
+and the detected events; `Results.read(path)` reads it back and `imread` opens
 it as a `ResultsArray`. `test.h5`, `traces/`, `pipeline.json` and
 `timings.json` are written either way: inside the results file in a `voltage/`
 folder named after the pipeline, or loose in the PF folder with `--pkl`.

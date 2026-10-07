@@ -8,6 +8,7 @@ from the panel and the recent list are kept in ``~/.mbo/imgui/notebooks.json``.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from imgui_notebooks import (
 
 from mbo_utilities import log
 from mbo_utilities.arrays.mesc import MescArray
+from mbo_utilities.lazy_array import base_array
 from mbo_utilities.notebook_templates import (
     TEMPLATES,
     notebook_path,
@@ -94,12 +96,14 @@ class StudioNotebookMenu(NotebookMenu):
     def open(self, notebook: Notebook):
         if notebook.group == TEMPLATE_GROUP and not Path(notebook.path).exists():
             template = next(t for t in TEMPLATES if notebook.path.endswith(t.filename))
-            array = self.parent.image_widget.data[0]
-            # peel the squeeze wrapper so isinstance sees the real class
-            underlying = getattr(array, "_arr", array)
+            underlying = base_array(self.parent.image_widget.data[0])
             unit = underlying.unit_key if isinstance(underlying, MescArray) else ""
-            write_notebook(template, Path(notebook.root), data_path(self.parent), unit)
-            logger.info(f"wrote {notebook.path} from {template.filename}")
+            out = write_notebook(
+                template, Path(notebook.root), data_path(self.parent), unit
+            )
+            if out is not None:
+                logger.info(f"wrote {out} from {template.filename}")
+                notebook = replace(notebook, path=str(out))
         return super().open(notebook)
 
 

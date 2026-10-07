@@ -148,8 +148,7 @@ def test_write_and_read_round_trip(tmp_path):
         metadata={"fs": 10.0, "si": {"x": np.arange(3)}, "meanImg": np.zeros((4, 5))},
     )
     path = written.write(
-        tmp_path
-        / results_name("mouse_session1.tif", datetime(2026, 9, 16, 14, 30, 22))
+        tmp_path / results_name("mouse_session1.tif", datetime(2026, 9, 16, 14, 30, 22))
     )
     assert (
         path.name == "mouse_session1.2026-09-16-14-30-22.zarr"
@@ -478,3 +477,27 @@ def test_imread_does_not_open_a_results_file_as_an_image(tmp_path):
     )
     assert not ZarrArray.can_open(path)
     assert ZarrArray.can_open(tmp_path / "movie.zarr")
+
+
+def test_mbo_results_converts_a_folder_that_already_holds_its_results(tmp_path):
+    from click.testing import CliRunner
+    from mbo_utilities.cli import main
+
+    plane = tmp_path / "zplane01_tp00001-00030"
+    _suite2p_plane(plane)
+    runner = CliRunner()
+    first = runner.invoke(main, ["results", str(plane)])
+    assert first.exit_code == 0, first.output
+    second = runner.invoke(main, ["results", str(plane), "--overwrite"])
+    assert second.exit_code == 0, second.output
+    written = sorted(plane.glob("*.zarr"))
+    assert written
+    assert all(Results.read(p).units for p in written)
+    assert all(p.name.endswith(f".{Results.read(p).pipeline}.zarr") for p in written)
+
+
+def test_from_suite2p_refuses_two_dirs_of_one_plane(tmp_path):
+    _suite2p_plane(tmp_path / "zplane01_tp00001-00030")
+    _suite2p_plane(tmp_path / "zplane01_tp00031-00060")
+    with pytest.raises(ValueError, match="are both zplane01"):
+        Results.from_suite2p(tmp_path)

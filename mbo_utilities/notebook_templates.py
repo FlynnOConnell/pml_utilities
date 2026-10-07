@@ -41,19 +41,15 @@ TEMPLATES = (
 
 
 def template_dir() -> Path:
-    """Where the shipped notebooks are: the package copy a build made, else ``demos/`` in a checkout."""
+    """Where the shipped notebooks are: ``demos/`` in a checkout, else the package copy a build made."""
     pkg_dir = Path(__file__).resolve().parent
-    candidates = [pkg_dir / "assets" / "notebooks", pkg_dir.parent / "demos"]
-    return next(
-        (c for c in candidates if (c / TEMPLATES[0].filename).exists()), candidates[0]
-    )
+    demos = pkg_dir.parent / "demos"
+    return demos if demos.is_dir() else pkg_dir / "assets" / "notebooks"
 
 
 def templates_for(data_path: str | Path | None) -> list[Template]:
-    """The templates for ``data_path``: every one when there is no data, else those for its suffix."""
-    if data_path is None:
-        return list(TEMPLATES)
-    suffix = Path(data_path).suffix.lower()
+    """The templates for ``data_path``: those for its suffix, or only the generic ones without data."""
+    suffix = Path(data_path).suffix.lower() if data_path is not None else ""
     return [t for t in TEMPLATES if not t.suffix or t.suffix == suffix]
 
 

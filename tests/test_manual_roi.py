@@ -1807,6 +1807,46 @@ class TestTracesTab:
             widget._trace_sort = (col, True)
             assert widget._sorted_trace_rows() == [key]
 
+    def test_curating_a_results_file_writes_where_it_reloads_from(
+        self, widget, tmp_path
+    ):
+        from mbo_utilities.results import Results, ResultUnit
+
+        plane_dir = tmp_path / "zplane01_tp00001-00006"
+        plane_dir.mkdir()
+        units = {
+            name: ResultUnit(
+                name=name,
+                kind="plane",
+                index=index,
+                roi_names=["roi0", "roi1"],
+                traces={"raw": np.ones((2, 6), np.float32)},
+                members=[np.array([0, 1]), np.array([130])],
+                image_shape=(64, 64),
+                iscell=np.array([[1, 0.9], [1, 0.4]], np.float32),
+                attrs=attrs,
+            )
+            for name, index, attrs in (
+                ("zplane01", 1, {"plane_dir": str(plane_dir), "z": 0}),
+                ("zplane02", 2, {"z": 0}),
+            )
+        }
+        path = Results(pipeline="suite2p", units=units).write(
+            tmp_path / "run.2026-10-07-00-00-00.suite2p.zarr"
+        )
+        assert widget.load_results(path)
+        by_path = {s.result.path: i for i, s in enumerate(widget.derived)}
+        assert set(by_path) == {plane_dir, path / "zplane02"}
+        widget.set_accepted(by_path[plane_dir], 1, False)
+        widget.set_accepted(by_path[path / "zplane02"], 1, False)
+        np.testing.assert_array_equal(
+            np.load(plane_dir / "iscell.npy")[:, 0], [1.0, 0.0]
+        )
+        assert not (path / "zplane02" / "iscell.npy").exists()
+        np.testing.assert_allclose(
+            Results.read(path).units["zplane02"].iscell, [[1, 0.9], [0, 0.4]]
+        )
+
     def test_results_rows_are_named_by_their_roi(self, widget, tmp_path):
         """A line unit's rows read as the ROI: ``roi0`` for its denoised trace,
         ``roi0 (raw)`` for its one line, and a line of a multi-line ROI adds
@@ -2668,9 +2708,7 @@ class TestTracePlotView:
     def test_a_suite2p_row_is_one_line_in_every_kind(self, widget):
         f, fneu = np.arange(6, dtype=np.float32) + 10, np.full(6, 2.0, np.float32)
         s2p = widget.traces.add(
-            RoiTrace(
-                uid=0, member=0, source="run", engine="suite2p", F=f, Fneu=fneu
-            )
+            RoiTrace(uid=0, member=0, source="run", engine="suite2p", F=f, Fneu=fneu)
         )
         widget.select_trace(s2p.key)
         assert widget.kind_options([s2p]) == ("dff", "raw", "neuropil", SUBTRACTED)
@@ -3741,6 +3779,30 @@ class TestPlayheadWiring:
         finally:
             iw.close()
 
+    def test_frame_averaging_keeps_one_clock_with_the_host(self):
+        from mbo_utilities.arrays._average_view import FrameAveragedView
+        from mbo_utilities.arrays.numpy import NumpyArray
+        from mbo_utilities.gui._ndviewer import MboNDViewer
+        from mbo_utilities.gui.manual_roi import ManualRoiWidget
+        from mbo_utilities.gui.playhead import TimeAxis
+
+        data = np.random.default_rng(0).random((40, 32, 32)).astype(np.float32)
+        view = FrameAveragedView(NumpyArray(data, metadata={"fs": 30.0}), 4)
+        iw = MboNDViewer(data=view, figure_kwargs={"size": FIGURE_SIZE})
+        iw.show()
+        try:
+            host = _StubHost()
+            host.frame_average = 4
+            w = ManualRoiWidget(iw, fpath=None, host=host, auto_trace=False)
+            assert w.fs() == 30.0
+            host_axis = TimeAxis.sampled(30.0, 4)
+            assert w.viewer_axis().per_second == host_axis.per_second == 7.5
+            w.playhead.seek(host_axis.seconds(8), source=host)
+            assert w.current_frame() == 8
+            w.close()
+        finally:
+            iw.close()
+
     def test_the_plots_draw_on_the_playhead(self, widget):
         from imgui_bundle import implot
         from mbo_utilities.arrays.features import MotionCorrection
@@ -3889,8 +3951,8 @@ class TestFullImage:
     def test_full_plane_workers_read_the_run_coordinates(self, cwidget, tmp_path):
         cwidget.fpath = tmp_path / "movie.tif"
         spawned = []
-        cwidget.manager.spawn = (
-            lambda run, task_type, args: spawned.append((run, task_type, args)) or run
+        cwidget.manager.spawn = lambda run, task_type, args: (
+            spawned.append((run, task_type, args)) or run
         )
         cwidget.iw.indices["c"] = 1
         cwidget.iw.indices["z"] = 1
@@ -4125,7 +4187,9 @@ class TestArrayResults:
 
         _plane(tmp_path / "zplane02_tp00001-00006", 2)
         arr = imread(tmp_path / "zplane02_tp00001-00006")
-        iw = MboNDViewer(data=_squeeze_for_viewer(arr), figure_kwargs={"size": FIGURE_SIZE})
+        iw = MboNDViewer(
+            data=_squeeze_for_viewer(arr), figure_kwargs={"size": FIGURE_SIZE}
+        )
         iw.show()
         try:
             w = ManualRoiWidget(iw, fpath=arr.source_path, auto_trace=False)

@@ -1591,7 +1591,12 @@ def gpu(watch, show_processes, as_json):
     default=False,
     help="Overwrite existing notebooks.",
 )
-def init(data_path, output_dir, overwrite):
+@click.option(
+    "--unit",
+    default="",
+    help="MESc measurement unit for the spine pipeline, e.g. MSession_0/MUnit_3.",
+)
+def init(data_path, output_dir, overwrite, unit):
     r"""
     Create starter notebooks: the user guides, and the ASAP7 spine pipeline for a .mesc.
 
@@ -1605,6 +1610,7 @@ def init(data_path, output_dir, overwrite):
       mbo init /data/raw             # notebooks in /data/scripts, path filled in
       mbo init /data/raw -o ./nb     # notebooks in ./nb
       mbo init /data/scan.mesc       # the guides and the spine pipeline
+      mbo init /data/scan.mesc --unit MSession_0/MUnit_3
     """
     from mbo_utilities.notebook_templates import (
         notebook_path,
@@ -1626,7 +1632,7 @@ def init(data_path, output_dir, overwrite):
         if not (template_dir() / template.filename).exists():
             click.secho(f"Missing: {template.filename}", fg="red")
             continue
-        out = write_notebook(template, dest, data_path, overwrite=overwrite)
+        out = write_notebook(template, dest, data_path, unit, overwrite=overwrite)
         if out is None:
             click.secho(
                 f"Exists: {notebook_path(template, dest)}  (--overwrite to replace)",
@@ -2401,7 +2407,7 @@ def voltage(
     "--out",
     type=click.Path(dir_okay=False),
     default=None,
-    help="The .zarr to write. Default: <date>_<tags>.zarr inside PATH, tags from PATH's name.",
+    help="The .zarr to write. Default: <name>.<stamp>.<pipeline>.zarr inside PATH, named after PATH.",
 )
 @click.option(
     "--overwrite", is_flag=True, default=False, help="Replace an existing results file."
@@ -2417,12 +2423,12 @@ def results(path, out, overwrite):
 
     \b
       mbo results run/zplane01_tp00001-01574
-      mbo results stan112_expt12/PF -o stan112_expt12/PF/2026-09-16_stan112_expt12.zarr
+      mbo results stan112_expt12/PF -o stan112_expt12/stan112_expt12.voltage.zarr
     """
-    from mbo_utilities.results import Results, results_dir_of, results_name
+    from mbo_utilities.results import TRACES_PKL, Results, results_name
 
     path = Path(path)
-    pf_dir = results_dir_of(path)
+    pf_dir = next((d for d in (path, path / "PF") if (d / TRACES_PKL).is_file()), None)
     if pf_dir is not None:
         found = Results.from_pf(pf_dir)
         source = found.source.get("mesc") or pf_dir
@@ -2432,7 +2438,7 @@ def results(path, out, overwrite):
         except FileNotFoundError as e:
             raise click.BadParameter(str(e), param_hint="PATH")
         source = path
-    target = Path(out) if out else path / results_name(source)
+    target = Path(out) if out else path / results_name(source, pipeline=found.pipeline)
     try:
         written = found.write(target, overwrite=overwrite)
     except (FileExistsError, ValueError) as e:

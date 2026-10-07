@@ -29,7 +29,7 @@ def test_templates_for_a_mesc_include_the_spine_pipeline():
     assert "asap7_spine_pipeline.ipynb" not in [
         t.filename for t in templates_for("/data/raw")
     ]
-    assert templates_for(None) == list(TEMPLATES)
+    assert templates_for(None) == [t for t in TEMPLATES if not t.suffix]
 
 
 def test_shipped_spine_template_is_clean_and_carries_its_tokens():

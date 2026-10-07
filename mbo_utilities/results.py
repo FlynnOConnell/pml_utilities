@@ -258,16 +258,17 @@ class Results:
                 else {}
             )
             images = (
-                {kind: group["images"][kind][:] for kind in group["images"].array_keys()}
+                {
+                    kind: group["images"][kind][:]
+                    for kind in group["images"].array_keys()
+                }
                 if "images" in group
                 else {}
             )
             frame = group["events/frame"][:]
             roi_index = group["events/roi"][:]
             roi_names = [str(n) for n in a["roi_names"]]
-            events = {
-                roi_names[i]: frame[roi_index == i] for i in np.unique(roi_index)
-            }
+            events = {roi_names[i]: frame[roi_index == i] for i in np.unique(roi_index)}
             units[name] = ResultUnit(
                 name=name,
                 kind=str(a["kind"]),
@@ -328,7 +329,9 @@ class Results:
                 found = [
                     p
                     for p in path.iterdir()
-                    if p.is_dir() and (p / "stat.npy").is_file() and (p / "F.npy").is_file()
+                    if p.is_dir()
+                    and (p / "stat.npy").is_file()
+                    and (p / "F.npy").is_file()
                 ]
                 numbers = {
                     p: re.search(r"plane(\d+)", p.name, re.IGNORECASE) for p in found
@@ -343,7 +346,9 @@ class Results:
                 )
         units, pipeline, settings, metadata = [], "suite2p", {}, {}
         for z, plane_dir in enumerate(Path(p) for p in plane_dirs):
-            if not ((plane_dir / "stat.npy").is_file() and (plane_dir / "F.npy").is_file()):
+            if not (
+                (plane_dir / "stat.npy").is_file() and (plane_dir / "F.npy").is_file()
+            ):
                 continue
             ops = (
                 np.load(plane_dir / "ops.npy", allow_pickle=True).item()
@@ -354,7 +359,9 @@ class Results:
             F = np.load(plane_dir / "F.npy")
             vanilla = re.fullmatch(r"plane(\d+)", plane_dir.name, re.IGNORECASE)
             z_tags = [
-                t for t in filename_tags(plane_dir.name) if t.definition.label == "zplane"
+                t
+                for t in filename_tags(plane_dir.name)
+                if t.definition.label == "zplane"
             ]
             if vanilla:
                 index = int(vanilla.group(1)) + 1
@@ -423,10 +430,20 @@ class Results:
             if not metadata:
                 metadata = ops
         if not units:
-            raise FileNotFoundError(f"no stat.npy and F.npy in {path} or its plane dirs")
+            raise FileNotFoundError(
+                f"no stat.npy and F.npy in {path} or its plane dirs"
+            )
+        by_name = {}
+        for u in units:
+            if u.name in by_name:
+                raise ValueError(
+                    f"{by_name[u.name].attrs['plane_dir']} and {u.attrs['plane_dir']} "
+                    f"are both {u.name}; pass plane_dirs to choose one"
+                )
+            by_name[u.name] = u
         return cls(
             pipeline=pipeline,
-            units={u.name: u for u in units},
+            units=by_name,
             settings=settings,
             metadata=metadata,
             path=path,
@@ -448,8 +465,7 @@ class Results:
         files = pipeline_files(pf_dir)
         traces_pkl = _read_pickle(pf_dir / TRACES_PKL)
         rates = {
-            str(k): v
-            for k, v in (_read_pickle(pf_dir / "fs_scans.pkl") or {}).items()
+            str(k): v for k, v in (_read_pickle(pf_dir / "fs_scans.pkl") or {}).items()
         }
         rois = _read_pickle(pf_dir / "scanIDs_ROIs.pkl") or {}
         peaks = _read_pickle(pf_dir / "detected_events_peaks.pkl") or {}
@@ -463,13 +479,10 @@ class Results:
         scan_ids = [str(s) for s in rois.get("scanID_spatial", list(traces))]
         first_env = {str(s) for s in rois.get("scanID_1st_env", [])}
         roi_list = {
-            str(s): [int(r) for r in v]
-            for s, v in (rois.get("roi_list") or {}).items()
+            str(s): [int(r) for r in v] for s, v in (rois.get("roi_list") or {}).items()
         }
         source = dict(provenance.get("source") or {})
-        source_units = {
-            str(k): str(v) for k, v in (source.get("units") or {}).items()
-        }
+        source_units = {str(k): str(v) for k, v in (source.get("units") or {}).items()}
         if not source.get("mesc"):
             from mbo_utilities.analysis.linescan import experiment_linescan_mesc
 
@@ -616,7 +629,9 @@ class Results:
                 raise ValueError(f"{unit.name}: events for unknown ROIs {unknown}")
             clash = [a for a in unit.attrs if a in _UNIT_ATTRS]
             if clash:
-                raise ValueError(f"{unit.name}: attrs {clash} are written by the schema")
+                raise ValueError(
+                    f"{unit.name}: attrs {clash} are written by the schema"
+                )
 
         created = datetime.now(UTC).isoformat(timespec="seconds")
         tags = [

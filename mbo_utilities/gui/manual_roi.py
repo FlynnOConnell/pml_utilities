@@ -72,6 +72,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+import zarr
 from imgui_bundle import (
     icons_fontawesome_6 as fa,
 )
@@ -143,7 +144,6 @@ from mbo_utilities.gui.imgui.behavior import BehaviorPlot
 from mbo_utilities.gui.imgui.lines import plot_style, subplots
 from mbo_utilities.gui.imgui.motion import MotionPlot
 from mbo_utilities.gui.playhead import Playhead, TimeAxis
-from mbo_utilities.gui.slice import Slice, viewer_positions, viewer_roles
 from mbo_utilities.gui.roi_runs import (
     MASK_MODES,
     RING_SCALE,
@@ -165,6 +165,7 @@ from mbo_utilities.gui.roi_runs import (
     save_run_registry,
     set_color,
 )
+from mbo_utilities.gui.slice import Slice, viewer_positions, viewer_roles
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.results import unit_name
@@ -2084,7 +2085,13 @@ class ManualRoiWidget:
             if only is not None and unit.name != only:
                 continue
             if unit.member_kind == "pixel" and unit.image_shape is not None:
-                res = run_result_from_unit(unit, file / unit.name, results.pipeline)
+                plane_dir = unit.attrs.get("plane_dir")
+                key = (
+                    Path(plane_dir)
+                    if plane_dir and Path(plane_dir).is_dir()
+                    else file / unit.name
+                )
+                res = run_result_from_unit(unit, key, results.pipeline)
                 if (
                     self.store.nz == 1
                     and res.z != 0
@@ -2286,18 +2293,22 @@ class ManualRoiWidget:
 
     def set_accepted(self, si: int, k: int, on: bool | None = None):
         """Flip (or set) one derived component's accepted flag, mirrored
-        into the run dir's ``iscell.npy``.
+        into the run dir's ``iscell.npy``, or a results file's ``rois/iscell``.
         """
         s = self.derived[si]
         s.accepted[k] = (not s.accepted[k]) if on is None else bool(on)
         path = s.result.path / "iscell.npy"
         try:
-            n = len(s.result.stat)
-            iscell = np.load(path) if path.exists() else np.ones((n, 2), np.float32)
-            if len(iscell) != n:
-                iscell = np.ones((n, 2), np.float32)
-            iscell[k, 0] = 1.0 if s.accepted[k] else 0.0
-            np.save(path, iscell)
+            if s.result.path.parent.suffix == ".zarr":
+                group = zarr.open_group(s.result.path.parent, mode="r+")
+                group[f"{s.result.path.name}/rois/iscell"][k, 0] = float(s.accepted[k])
+            else:
+                n = len(s.result.stat)
+                iscell = np.load(path) if path.exists() else np.ones((n, 2), np.float32)
+                if len(iscell) != n:
+                    iscell = np.ones((n, 2), np.float32)
+                iscell[k, 0] = 1.0 if s.accepted[k] else 0.0
+                np.save(path, iscell)
         except OSError as e:
             self._save_error = f"iscell save failed: {e}"
         self._resync()
@@ -4160,23 +4171,17 @@ class ManualRoiWidget:
         return f" x{taken}" if taken != now and taken > 1 else ""
 
     def fs(self) -> float | None:
-        """Sampling rate of the data behind the view in Hz, or None.
+        """Raw sampling rate of the recording behind the view in Hz, or None.
 
-        Read once from the array's metadata; without one the trace plot can
-        only offer frame units.
+        Read once from the array ``imread`` returned, under any frame
+        averaging, since every ``TimeAxis`` applies the binning itself;
+        without one the trace plot can only offer frame units.
         """
         if not self._fs_read:
             self._fs_read = True
-            movie = self.movie()
-            meta = getattr(getattr(movie, "arr", None), "metadata", None)
-            if meta:
-                try:
-                    from mbo_utilities.metadata import get_param
-
-                    rate = get_param(dict(meta), "fs")
-                    self._fs_value = float(rate) if rate else None
-                except Exception:
-                    self.logger.debug("no usable fs in metadata", exc_info=True)
+            data = getattr(self.iw, "data", None)
+            rate = getattr(base_array(data[0]), "fs", None) if data else None
+            self._fs_value = float(rate) if rate else None
         return self._fs_value
 
     def x_units(self) -> tuple[str, ...]:
