@@ -3,7 +3,7 @@
 Every toggleable piece of UI is one :class:`WidgetEntry`, drawn as one
 checkbox; the draw code for each widget asks :func:`widget_enabled` before
 rendering. Below the checkboxes the menu opens the floating tool windows:
-the style editor, the imgui debugger, BioHPC and the cloud runner.
+the style editor and the imgui debugger.
 
 State is keyed by entry (``"preview"``) and persisted in preferences, so
 toggles survive a restart. Anything absent from the stored mapping falls
@@ -205,8 +205,4 @@ def draw_widgets_menu(parent: Any) -> None:
             "The variable inspector over this window's state, and Dear "
             "ImGui's own metrics, debug log, ID stack tool and demo."
         )
-    if imgui.menu_item("BioHPC...", "", False, True)[0]:
-        parent._show_biohpc = True
-    if imgui.menu_item("Cloud (GPU)...", "", False, True)[0]:
-        parent._show_cloud = True
     imgui.end_menu()

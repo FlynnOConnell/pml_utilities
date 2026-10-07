@@ -3,8 +3,7 @@
 Every tab in the main tab bar is a ``placement = "tab"`` widget with an entry
 in the Widgets menu. The bodies live where the work lives — the Preview and
 Signal Quality tabs delegate to ``PreviewDataWidget``, Process to the pipelines
-package, Cloud to ``gui/_cloud.py`` — so these classes are only the seam
-between a tab and its panel.
+package — so these classes are only the seam between a tab and its panel.
 
 Manual ROI labelling is split: its control sections sit over the ROI table
 in the ROIs tab here and the trace table is the Traces tab, beside Image and
