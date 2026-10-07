@@ -13,8 +13,6 @@ class Host:
 
     def __init__(self):
         self.fpath = "session1.tif"
-        self._show_biohpc = False
-        self._show_cloud = False
 
 
 def draw_frames(parent, n=2, menu=False):

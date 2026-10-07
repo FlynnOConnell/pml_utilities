@@ -1409,11 +1409,6 @@ class PreviewDataWidget(EdgeWindow):
         draw_options_popup(self)
         draw_imgui_debug_windows(self)
         draw_style_editor_window(self)
-        from mbo_utilities.gui._cloud import draw_cloud_popup
-        from mbo_utilities.gui.widgets.biohpc import draw_biohpc_popup
-
-        draw_biohpc_popup(self)
-        draw_cloud_popup(self)
         try:
             from mbo_utilities.gui.widgets.isoview_crop import (
                 draw_window as _draw_iso_crop_window,

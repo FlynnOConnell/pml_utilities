@@ -1057,7 +1057,7 @@ One logger tree, one console sink per process, one log file per background task.
   ImGui Debugger (`gui/widgets/imgui_debug.py`: `imgui_debugger`'s variable
   inspector over the preview window, and switches for Dear ImGui's
   metrics/debugger, debug log, ID stack tool, demo and about windows, drawn from
-  `PreviewDataWidget.draw` every frame), BioHPC and Cloud.
+  `PreviewDataWidget.draw` every frame).
 - The GUI's Debug panel (`gui_logger.GuiLogger`) receives every `mbo.*` record through
   a `GuiLogHandler` attached in `preview_data._init_logging`; it filters by level and
   logger, and its master level dropdown calls `set_global_level`.

@@ -24,11 +24,6 @@ were drawn and keeps the three views of the same experiment in step:
   that slice, length and sampling; click a row to select. Prev/next-depth
   buttons (also ``[`` / ``]``) walk only through slices that carry lines;
   ``n`` / ``p`` step through ROIs.
-- **Curation** (top edge + under the ROI panel, when vnoiser is installed):
-  "curate ROI n" runs vnoiser's wavelet denoiser on the selected line's
-  trace (cached beside the file) and opens the event curation panels on it;
-  the focused candidate moves the Timepoint so the kymograph shows it.
-  Labels go to ``.curation/<mode>_template_curation.json`` beside the file.
 
 Panels are genuinely independent (own controller, own sliders, movable
 separately): built on `fastplotlib.widgets.nd_widget` directly rather than
@@ -54,8 +49,8 @@ Usage:
     button opens `mbo curate`, the dashboard alone, gui/curation_viewer.py)
     python -m mbo_utilities.gui.linescan_viewer [mesc_path] [--ref MUnit_x]
         [--zstack MUnit_y] [--zstack-file stack.mesc] [--channel 0] [--flip-y]
-        [--no-traces] [--traces rois_linescan/MUnit_x] [--curate 0]
-        [--no-curation] [--dry-run] [--screenshot out.png]
+        [--no-traces] [--traces rois_linescan/MUnit_x] [--dry-run]
+        [--screenshot out.png]
 
 ``--dry-run`` prints the unit choice, every stack's fit and the line
 placement without opening a window; ``--screenshot`` renders the window
@@ -353,30 +348,14 @@ class TraceJob:
 
 class TraceAttach:
     """Per-render poll (``figure.add_animations``) that builds the traces
-    or curation panel once the ``TraceJob`` finishes, then removes itself.
+    panel once the ``TraceJob`` finishes, then removes itself.
     """
 
-    def __init__(
-        self,
-        ndw,
-        job: TraceJob,
-        overlay,
-        line_panel,
-        ref_arr,
-        mesc_path,
-        ref_key,
-        curation: bool,
-        curate: int | None,
-    ):
+    def __init__(self, ndw, job: TraceJob, overlay, ref_arr):
         self.ndw = ndw
         self.job = job
         self.overlay = overlay
-        self.line_panel = line_panel
         self.ref_arr = ref_arr
-        self.mesc_path = mesc_path
-        self.ref_key = ref_key
-        self.curation = curation
-        self.curate = curate
         ndw.figure.add_animations(self)
 
     def __call__(self) -> None:
@@ -386,39 +365,16 @@ class TraceAttach:
         traces = self.job.result
         if traces is None:
             return
-        traces = traces[: self.overlay.n]
-        line_curation = None
-        if self.curation:
-            line_curation = LineCuration.build(
-                self.ndw,
-                self.overlay,
-                self.ref_arr,
-                traces,
-                self.mesc_path,
-                self.ref_key,
-            )
         from mbo_utilities.gui._top_strip import TopStrip
 
-        # the raw trace and the motion plot get a tab beside Curation on the
-        # same strip, or their own strip without curation
-        strip = (
-            TopStrip(self.ndw.figure)
-            if line_curation is None
-            else line_curation.widget.strip
-        )
         self.ndw.linescan_traces = LineTracesPanel(
             self.ndw,
             self.overlay,
-            traces,
-            strip,
-            line_curation is None,
+            traces[: self.overlay.n],
+            TopStrip(self.ndw.figure),
+            True,
             motion=self.ref_arr.motion_correction,
         )
-        if line_curation is not None:
-            self.ndw.linescan_curation = line_curation
-            self.line_panel.curation = line_curation
-            if self.curate is not None:
-                line_curation.curate(self.curate)
 
 
 def _close_figure(figure) -> None:
@@ -825,13 +781,11 @@ class LinePanel:
         ndw,
         overlay: LineScanOverlay,
         size: int = LINE_PANEL_WIDTH,
-        curation=None,
         units: list[dict] | None = None,
         switch=None,
         job: TraceJob | None = None,
     ):
         self.overlay = overlay
-        self.curation = curation
         # the background trace computation, for a progress line until done
         self.job = job
         # the file's line-scan units; picking another reopens the window on it
@@ -957,8 +911,6 @@ class LinePanel:
             imgui.spacing()
             imgui.text_disabled(f"computing traces  ROI {done}/{total}")
             imgui.progress_bar(done / total if total else 0.0, imgui.ImVec2(-1, 0), "")
-        if self.curation is not None:
-            self.curation.draw()
 
 
 class StandardTraces:
@@ -1132,8 +1084,8 @@ class LineTracesPanel:
     A scan that went through motion correction (``arr.motion_correction``)
     gets its motion plot under it in linked subplots: one time axis, the
     plot areas aligned, a splitter between them, the same cursor, its own y
-    range; ``Trace`` and ``MC`` show either alone. Its own ``Traces`` tab,
-    on the curation widget's strip when there is one.
+    range; ``Trace`` and ``MC`` show either alone. Its own ``Traces`` tab
+    on the top strip.
     """
 
     def __init__(
@@ -1301,211 +1253,6 @@ class LineTracesPanel:
             ov.playhead.seek(cursor, source="line_motion")
 
 
-class LineCuration:
-    """vnoiser event curation of the selected line's trace.
-
-    The curation panels (trace with candidates, template / candidate / PCA)
-    claim the figure's top edge; this draws the controls under the ROI
-    table. The selected ROI's raw trace goes through vnoiser's denoiser the
-    first time (cached beside the file under ``.curation/cache``), and the
-    focused candidate moves the Reference's Timepoint so the kymograph
-    shows that event.
-    """
-
-    def __init__(
-        self,
-        widget,
-        overlay: LineScanOverlay,
-        traces: np.ndarray,
-        mesc_path,
-        ref_key: str,
-    ):
-        from mbo_utilities.vnoiser import voltage_unit_for_mesc
-
-        self.widget = widget
-        self.overlay = overlay
-        self.traces = traces
-        self.mesc_path = Path(mesc_path)
-        self.munit = ref_key.rsplit("/", 1)[-1]
-        # the pipeline's processed traces for this scan, when the experiment
-        # has a voltage run: what the curation notebook shows, per ROI
-        # (a group of lines), no denoising needed
-        self.run = voltage_unit_for_mesc(self.mesc_path, ref_key)
-        self.unit = None if self.run is None else self.run.results.units[self.run.unit]
-        self.auto = self.run is not None
-        self.curated: int | None = None
-        self.curated_domain: str | None = None
-        if self.run is not None:
-            print(
-                f"\nrun traces for {self.unit.name}: {', '.join(self.unit.roi_names)} "
-                f"({self.run.path})"
-            )
-            # the curation shows this scan's ROIs: the recordings of the unit
-            # on screen (another unit is the combo in the panel); the run's
-            # other units stay in the catalog but out of view
-            shown = self.run.unit
-            widget.scope = lambda rec: rec.unit == shown
-            # every ROI of this unit loads now; a line click then just
-            # focuses its trace
-            widget.scan(str(self.run.path))
-            widget.status = "loading every ROI; select a line to focus its trace"
-        else:
-            widget.status = "select a line, then denoise it"
-        widget.on_focus = self._on_focus
-        # a flip through recordings follows on the line overlay
-        widget.on_recording = self._on_recording
-        overlay.on_select.append(self._on_select)
-
-    @classmethod
-    def build(cls, ndw, overlay, ref_arr, traces, mesc_path, ref_key):
-        """The curation widget on ``ndw``'s figure, or None (printed) when
-        vnoiser is not installed.
-        """
-        import logging
-        from types import SimpleNamespace
-
-        from mbo_utilities.gui._availability import HAS_VNOISER
-        from mbo_utilities.install import VNOISER_HINT
-
-        if not HAS_VNOISER:
-            print(f"\nvnoiser is not installed; no curation panels ({VNOISER_HINT}).")
-            return None
-        from mbo_utilities.gui.event_curation import EventCurationWidget
-
-        parent = SimpleNamespace(
-            image_widget=ndw,
-            logger=logging.getLogger("linescan_viewer"),
-            fpath=str(mesc_path),
-        )
-        widget = EventCurationWidget(parent, data_path="")
-        return cls(widget, overlay, traces, mesc_path, ref_key)
-
-    def recording_id(self, i: int) -> str:
-        return f"{self.mesc_path.stem}/{self.munit}/roi={int(i)}"
-
-    def _on_recording(self, rid: str) -> None:
-        """Select a line of the domain (or the ROI) that was flipped to."""
-        if "domain=" in rid and self.unit is not None:
-            domain = rid.rsplit("domain=", 1)[-1]
-            lines = self.lines_of(domain)
-            if lines and self.overlay.selected not in lines:
-                self.curated_domain = domain
-                self.overlay.select_roi(lines[0])
-        elif "roi=" in rid:
-            try:
-                roi = int(rid.rsplit("roi=", 1)[-1])
-            except ValueError:
-                return
-            self.curated = roi
-            if roi != self.overlay.selected:
-                self.overlay.select_roi(roi)
-
-    def lines_of(self, domain: str) -> list[int]:
-        """The lines the run averaged into ROI ``domain``."""
-        if self.unit is None or domain not in self.unit.roi_names:
-            return []
-        return [int(m) for m in self.unit.members[self.unit.roi_names.index(domain)]]
-
-    def domain_of_line(self, i: int) -> str | None:
-        """The run ROI that averages line ``i``, or None."""
-        k = None if self.unit is None else self.unit.member_roi(int(i))
-        return None if k is None else self.unit.roi_names[k]
-
-    def curate(self, i: int) -> None:
-        """Curate line ``i``: its run ROI trace when the pipeline ran on this
-        scan, else its raw trace through the denoiser.
-        """
-        domain = self.domain_of_line(i)
-        if domain is not None:
-            self.curate_domain(domain)
-        else:
-            self.denoise(i)
-
-    def curate_domain(self, domain: str) -> None:
-        """Load the pipeline's processed trace of ``domain`` (the notebook's
-        data for this scan) into the curation.
-        """
-        from mbo_utilities.vnoiser import recording_id as curation_id
-
-        if self.unit is None or domain not in self.unit.roi_names:
-            return
-        run_dir = str(self.run.path)
-        if self.widget.data_path != run_dir:
-            # catalogs the experiment and loads this unit's ROIs
-            self.widget.scan(run_dir)
-        self.curated_domain = domain
-        self.curated = None
-        self.widget.load(curation_id(self.unit, domain))
-
-    def denoise(self, i: int) -> None:
-        """Run the raw trace of line ``i`` through vnoiser's denoiser (or
-        restore its cache) and curate it.
-        """
-        i = int(i)
-        if not 0 <= i < len(self.traces):
-            return
-        self.curated = i
-        self.curated_domain = None
-        self.widget.load_trace(
-            self.traces[i],
-            self.overlay.fs,
-            recording_id=self.recording_id(i),
-            label=f"{self.munit} ROI {i}",
-            source_path=self.mesc_path,
-        )
-
-    def _on_select(self, i: int) -> None:
-        if not self.auto:
-            return
-        domain = self.domain_of_line(i)
-        if domain is not None:
-            if domain != self.curated_domain:
-                self.curate_domain(domain)
-        elif i != self.curated:
-            self.denoise(i)
-
-    def _on_focus(self, t_s: float) -> None:
-        self.overlay.goto_time(t_s)
-
-    def draw(self) -> None:
-        from imgui_bundle import imgui
-
-        from mbo_utilities.gui._theme import section
-
-        section("Curation")
-        i = self.overlay.selected
-        loading = self.widget.loading
-        domain = self.domain_of_line(i)
-        imgui.begin_disabled(loading)
-        if domain is not None:
-            rois = ", ".join(str(r) for r in self.lines_of(domain))
-            if imgui.button(f"curate {domain}"):
-                self.curate_domain(domain)
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(
-                    f"the pipeline's processed trace for {domain} (lines {rois}), "
-                    "as the curation notebook shows it"
-                )
-            imgui.same_line()
-        if imgui.button(f"denoise ROI {i}"):
-            self.denoise(i)
-        imgui.end_disabled()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "run vnoiser's wavelet denoiser on this line's raw trace (minutes the "
-                "first time, cached after) and detect candidate events"
-            )
-        imgui.same_line()
-        _changed, self.auto = imgui.checkbox("on select", self.auto)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("curate every line as it is selected")
-        if self.curated_domain is not None and self.curated_domain != domain:
-            imgui.text_disabled(f"showing {self.curated_domain}")
-        elif self.curated is not None and self.curated != i:
-            imgui.text_disabled(f"showing ROI {self.curated}")
-        self.widget.draw_embedded()
-
-
 def build_overlay(
     ndw,
     mesc_path,
@@ -1643,8 +1390,6 @@ def open_linescan_viewer(
     flip_y: bool = False,
     traces_dir=None,
     no_traces: bool = False,
-    curation: bool = True,
-    curate: int | None = None,
     ask: bool = False,
     dry_run: bool = False,
     screenshot=None,
@@ -1807,7 +1552,6 @@ def open_linescan_viewer(
 
     from mbo_utilities.gui._ndviewer import _COL, _ROW, _ref_to_index, sliders_height
     from mbo_utilities.gui._top_strip import strip_height
-    from mbo_utilities.gui.event_curation import PANEL_HEIGHT as CURATION_PANEL_HEIGHT
     from mbo_utilities.gui.run_gui import (
         _after_show,
         _figure_kwargs_for_here,
@@ -1838,14 +1582,11 @@ def open_linescan_viewer(
     if screenshot is not None:
         figure_kwargs = {"canvas": "offscreen", "size": (1500, 950)}
     else:
-        # the strip holds the curation panel, else the raw traces tab
-        # sized for the panel the traces will bring, even while they compute
+        # sized for the traces panel, even while the traces compute
         motion = ref_arr.motion_correction is not None
         panel = (
             0
             if job is None
-            else CURATION_PANEL_HEIGHT
-            if curation
             else TRACES_MOTION_PANEL_HEIGHT
             if motion
             else TRACES_PANEL_HEIGHT
@@ -1923,7 +1664,6 @@ def open_linescan_viewer(
         snapshot=snapshot,
         zstack_path=zstack_path,
     )
-    line_curation = None
     traces_panel = None
     if overlay is not None:
         if job is not None and screenshot is not None:
@@ -1932,26 +1672,14 @@ def open_linescan_viewer(
             job.start()
             job.wait()
         if job is not None and job.done and job.result is not None:
-            traces = job.result[: overlay.n]
             from mbo_utilities.gui._top_strip import TopStrip
 
-            if curation:
-                line_curation = LineCuration.build(
-                    ndw, overlay, ref_arr, traces, mesc_path, ref_key
-                )
-            # the raw trace and the motion plot get a tab beside Curation on
-            # the same strip, or their own strip without curation
-            strip = (
-                TopStrip(ndw.figure)
-                if line_curation is None
-                else line_curation.widget.strip
-            )
             traces_panel = LineTracesPanel(
                 ndw,
                 overlay,
-                traces,
-                strip,
-                line_curation is None,
+                job.result[: overlay.n],
+                TopStrip(ndw.figure),
+                True,
                 motion=ref_arr.motion_correction,
             )
 
@@ -1967,49 +1695,31 @@ def open_linescan_viewer(
                 flip_y=flip_y,
                 traces_dir=None,
                 no_traces=no_traces,
-                curation=curation,
                 run_loop=False,
             )
             _close_figure(ndw.figure)
 
         pending = job is not None and not job.done
-        line_panel = LinePanel(
+        LinePanel(
             ndw,
             overlay,
-            curation=line_curation,
             units=linescan_units,
             switch=switch,
             job=job if pending else None,
         )
         if pending:
-            ndw.linescan_trace_attach = TraceAttach(
-                ndw,
-                job,
-                overlay,
-                line_panel,
-                ref_arr,
-                mesc_path,
-                ref_key,
-                curation,
-                curate,
-            )
+            ndw.linescan_trace_attach = TraceAttach(ndw, job, overlay, ref_arr)
     # keep the overlay and panels alive with the widget
     ndw.linescan_overlay = overlay
-    ndw.linescan_curation = line_curation
     ndw.linescan_traces = traces_panel
     ndw.linescan_trace_job = job
 
     ndw.show()
     _after_show(ndw)
-    if line_curation is not None and curate is not None:
-        line_curation.curate(curate)
 
     if screenshot is not None:
         import imageio.v3 as iio
 
-        if line_curation is not None and curate is not None:
-            print("waiting for the denoiser...", flush=True)
-            line_curation.widget.wait()
         for _ in range(10):
             ndw.figure.canvas.draw()
         # NDWidget fetches slices through the event loop, which never runs
@@ -2046,17 +1756,6 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="the .mesc holding the Z-stack when it was saved separately from "
         "the line scan (default: look in mesc_path)",
-    )
-    ap.add_argument(
-        "--no-curation",
-        action="store_true",
-        help="skip the vnoiser event-curation panels even when vnoiser is installed",
-    )
-    ap.add_argument(
-        "--curate",
-        type=int,
-        default=None,
-        help="denoise and curate this ROI as soon as the window opens",
     )
     ap.add_argument(
         "--channel", type=int, default=0, help="channel for the traces panel"
@@ -2106,8 +1805,6 @@ def main(argv: list[str] | None = None) -> None:
         flip_y=args.flip_y,
         traces_dir=args.traces,
         no_traces=args.no_traces,
-        curation=not args.no_curation,
-        curate=args.curate,
         ask=True,
         dry_run=args.dry_run,
         screenshot=args.screenshot,
