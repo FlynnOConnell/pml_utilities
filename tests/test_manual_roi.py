@@ -4131,12 +4131,12 @@ class TestArrayResults:
         set_widget_enabled("manual_roi", False, persist=False)
 
     def test_a_volume_loads_one_set_per_plane_and_follows_z(self, tmp_path):
-        from tests.test_suite2p_results import _plane
-
         from mbo_utilities import imread
         from mbo_utilities.annotation.display import available_kinds
         from mbo_utilities.gui.run_gui import _create_image_widget
         from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+
+        from tests.test_suite2p_results import _plane
 
         _plane(tmp_path / "zplane01_tp00001-00006", 1)
         _plane(tmp_path / "zplane02_tp00001-00006", 2)
@@ -4178,12 +4178,12 @@ class TestArrayResults:
             iw.close()
 
     def test_a_plane_opened_on_its_own_sits_on_z_zero(self, tmp_path):
-        from tests.test_suite2p_results import _plane
-
         from mbo_utilities import imread
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
         from mbo_utilities.gui.run_gui import _squeeze_for_viewer
+
+        from tests.test_suite2p_results import _plane
 
         _plane(tmp_path / "zplane02_tp00001-00006", 2)
         arr = imread(tmp_path / "zplane02_tp00001-00006")

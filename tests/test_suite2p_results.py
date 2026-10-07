@@ -126,7 +126,9 @@ def test_a_volumes_offsets_are_listed_by_the_plane_they_belong_to(tmp_path):
         "Y zplane03_tp00001-00006": 2,
     }
     assert list(motion.traces) == list(motion.planes)
-    np.testing.assert_array_equal(motion.traces["X zplane03_tp00001-00006"][1], 2 * ramp)
+    np.testing.assert_array_equal(
+        motion.traces["X zplane03_tp00001-00006"][1], 2 * ramp
+    )
 
 
 def test_results_can_be_handed_to_any_array():

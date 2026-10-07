@@ -41,9 +41,7 @@ class Slice(Observable):
         """
         positions = {str(k): int(v) for k, v in positions.items()}
         roles = {str(k): str(v) for k, v in roles.items()}
-        previous = {
-            k: v for k, v in self.positions.items() if self.roles.get(k) != "t"
-        }
+        previous = {k: v for k, v in self.positions.items() if self.roles.get(k) != "t"}
         now = {k: v for k, v in positions.items() if roles.get(k) != "t"}
         self.positions, self.roles = positions, roles
         if now == previous:

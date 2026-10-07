@@ -98,9 +98,7 @@ def test_the_raw_trace_its_neuropil_and_their_difference_are_three_kinds():
     masknmf = RoiTrace(uid=1, engine="masknmf", F=F, Fneu=np.zeros(4))
     assert available_kinds(masknmf) == ("dff", "raw")
     f0 = float(np.percentile(F, 20))
-    np.testing.assert_allclose(
-        display_trace(masknmf), (F - f0) / f0 * 100.0, rtol=1e-5
-    )
+    np.testing.assert_allclose(display_trace(masknmf), (F - f0) / f0 * 100.0, rtol=1e-5)
     spikes = RoiTrace(uid=1, engine="suite2p", F=F, kinds={"spikes": FNEU})
     assert y_label(spikes, "spikes") == "spikes (a.u.)"
 

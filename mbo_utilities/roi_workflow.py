@@ -844,7 +844,9 @@ def _frames_tuple(value) -> tuple[int, int, int] | None:
     return (start, stop, int(value[2]) if len(value) > 2 else 1)
 
 
-def run_result_from_unit(unit, path, pipeline: str = "", z: int | None = None) -> RunResult:
+def run_result_from_unit(
+    unit, path, pipeline: str = "", z: int | None = None
+) -> RunResult:
     """One pixel unit of a results file (``mbo_utilities.results``) as a
     :class:`RunResult`, so the ROI widget shows it like a run dir.
 

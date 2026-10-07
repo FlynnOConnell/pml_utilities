@@ -356,9 +356,7 @@ class SummaryImageViewer(Widget):
             self._hist_cache.clear()
         if results is None:
             return md
-        unit = next(
-            (u for u in results.units.values() if u.attrs.get("z") == z), None
-        )
+        unit = next((u for u in results.units.values() if u.attrs.get("z") == z), None)
         if unit is None:
             return md
         for kind, key in (
