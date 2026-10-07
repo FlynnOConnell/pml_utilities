@@ -23,6 +23,7 @@ import numpy as np
 from mbo_utilities import log
 from mbo_utilities.masknmf import outputs as _outputs
 from mbo_utilities.masknmf.params import (
+    ALIGN_FILE,
     DEMIX_FILE,
     MOCO_FILE,
     PMD_FILE,
@@ -285,10 +286,21 @@ def _stage_registration(
         device=device,
         batch_size=runtime.frame_batch_size,
     )
+    reference = raw
+    if cfg.denoised_reference:
+        logger.info("masknmf: denoising a copy of the movie to register on")
+        reference = masknmf.CompressStrategy(
+            **cfg.reference_kwargs(),
+            frame_batch_size=runtime.frame_batch_size,
+            device=device,
+        ).compress(raw)
+        _export_atomic(reference, plane_dir / ALIGN_FILE, prov)
+    else:
+        (plane_dir / ALIGN_FILE).unlink(missing_ok=True)
     logger.info(f"masknmf: computing {cfg.strategy} registration template")
-    strategy.compute_template(raw)
+    strategy.compute_template(reference)
     logger.info("masknmf: estimating shifts")
-    moco = strategy.motion_correct(raw)
+    moco = strategy.motion_correct(reference, target_movie=raw)
     moco.output_device = moco.strategy.device
     _export_atomic(moco, moco_path, prov)
     shifts = _to_np(moco.shifts)

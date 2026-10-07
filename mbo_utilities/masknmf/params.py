@@ -22,6 +22,8 @@ STAGE_FORCE = 2
 MOCO_FILE = "motion_correction.hdf5"
 PMD_FILE = "compression.hdf5"
 DEMIX_FILE = "demixing_results.hdf5"
+# the denoised copy shifts are estimated on when registration uses one
+ALIGN_FILE = "alignment.hdf5"
 
 
 @dataclass
@@ -33,6 +35,12 @@ class MasknmfRegistrationSettings:
     minimum_patch_sizes: tuple[int, int] = (50, 50)
     overlaps: tuple[int, int] = (5, 5)
     max_deviation_rigid: tuple[int, int] = (2, 2)
+    # estimate shifts on a quick denoised copy and apply them to the raw movie
+    denoised_reference: bool = False
+    reference_block_sizes: tuple[int, int] = (4, 4)
+    reference_max_components: int = 20
+    reference_spatial_avg_factor: int = 4
+    reference_temporal_avg_factor: int = 2
 
     def strategy_kwargs(self) -> dict:
         """Kwargs for the masknmf motion-corrector constructor."""
@@ -44,6 +52,16 @@ class MasknmfRegistrationSettings:
                 "max_deviation_rigid": tuple(self.max_deviation_rigid),
             }
         return {"max_shifts": tuple(self.max_shifts)}
+
+    def reference_kwargs(self) -> dict:
+        """Kwargs for the masknmf ``CompressStrategy`` that makes the denoised copy."""
+        return {
+            "block_sizes": tuple(self.reference_block_sizes),
+            "max_components": int(self.reference_max_components),
+            "max_consecutive_failures": 1,
+            "spatial_avg_factor": int(self.reference_spatial_avg_factor),
+            "temporal_avg_factor": int(self.reference_temporal_avg_factor),
+        }
 
 
 @dataclass

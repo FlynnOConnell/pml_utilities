@@ -1,6 +1,6 @@
 """masknmf integration tests: params round-trip, stage gating, suite2p-shaped
 output conversion. No masknmf install required — the compute stages are only
-exercised when the package is present (none here yet).
+exercised when the package is present (the denoised-reference registration run).
 """
 
 import json
@@ -353,3 +353,77 @@ class TestSplineDetrender:
             pytest.skip("masknmf not importable")
         det = self._make(168_533, 429.93)
         assert det is not None and det.window == int(40 * 429.93)
+
+
+def test_reference_kwargs_make_the_denoised_copy():
+    reg = MasknmfSettings().registration
+    assert reg.denoised_reference is False
+    reg.reference_block_sizes = [6, 6]
+    assert reg.reference_kwargs() == {
+        "block_sizes": (6, 6),
+        "max_components": 20,
+        "max_consecutive_failures": 1,
+        "spatial_avg_factor": 4,
+        "temporal_avg_factor": 2,
+    }
+
+
+@pytest.fixture
+def shaking_movie():
+    """(T, 1, 1, Y, X) int16: two blobs moved by known integer shifts plus noise."""
+    rng = np.random.default_rng(0)
+    yy, xx = np.mgrid[:48, :48]
+    base = (
+        400
+        + 300 * np.exp(-((yy - 24) ** 2 + (xx - 20) ** 2) / 30)
+        + 200 * np.exp(-((yy - 12) ** 2 + (xx - 34) ** 2) / 20)
+    )
+    shifts = rng.integers(-3, 4, size=(300, 2))
+    mov = np.stack([np.roll(base, tuple(s), axis=(0, 1)) for s in shifts])
+    mov = mov + rng.normal(0, 40, mov.shape)
+    return mov.astype(np.int16)[:, None, None], shifts
+
+
+@pytest.mark.slow
+def test_denoised_reference_registers_the_raw_movie(tmp_path, shaking_movie):
+    pytest.importorskip("masknmf")
+    import h5py
+
+    from mbo_utilities.arrays.numpy import NumpyArray
+    from mbo_utilities.masknmf import run_plane
+
+    movie, shifts = shaking_movie
+    s = MasknmfSettings()
+    s.registration.denoised_reference = True
+    s.registration.max_shifts = (6, 6)
+    s.compression.denoise = False
+    s.compression.block_sizes = (16, 16)
+    s.demixing.do_demixing = STAGE_SKIP
+    s.runtime.device = "cpu"
+    s.runtime.keep_raw = True
+    arr = NumpyArray(movie, dims="TCZYX", metadata={"fs": 100.0})
+    ops = run_plane(
+        arr,
+        tmp_path,
+        settings=s,
+        writer_kwargs={"invert_deflection": True},
+        replot=False,
+    )
+    plane = ops.parent
+    assert (plane / "alignment.hdf5").exists()
+    assert (plane / "compression.hdf5").exists()
+
+    data = movie[:, 0, 0].astype(np.float32)
+    raw = np.fromfile(plane / "data_raw.bin", np.int16).reshape(data.shape)
+    assert np.abs(raw - np.rint(2 * data.mean(axis=0) - data)).max() <= 1
+
+    with h5py.File(plane / "motion_correction.hdf5") as f:
+        est = f["RigidRegistrationArray"]["shifts"][()]
+    assert np.corrcoef(est[:, 0], shifts[:, 0])[0, 1] > 0.9
+    assert np.corrcoef(est[:, 1], shifts[:, 1])[0, 1] > 0.9
+
+    reg = np.fromfile(plane / "data.bin", np.int16).reshape(data.shape)
+    inner = (slice(None), slice(6, -6), slice(6, -6))
+    assert reg[inner].astype(float).var(axis=0).mean() < raw[inner].astype(
+        float
+    ).var(axis=0).mean()
