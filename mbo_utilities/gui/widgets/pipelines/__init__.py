@@ -78,6 +78,15 @@ def _register_pipelines_sync() -> None:
             pass
 
         try:
+            from mbo_utilities.gui.widgets.pipelines.voltage_preprocessing import (
+                VoltagePreprocessingWidget,
+            )
+
+            _PIPELINE_CLASSES.append(VoltagePreprocessingWidget)
+        except Exception:
+            pass
+
+        try:
             from mbo_utilities.gui.widgets.pipelines.voltage import (
                 VoltagePipelineWidget,
             )
