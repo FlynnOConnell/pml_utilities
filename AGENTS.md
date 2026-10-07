@@ -172,7 +172,9 @@ Pinned by `tests/test_numpy_dims.py`, `tests/test_imagej_stack.py`.
 
 Read-time views wrap a 5D array and stay 5D: `FrameAveragedView` (temporal binning,
 T // N), `PhaseCorrectedView` (bidirectional scan phase), `AxialShiftView`
-(per-plane shifts; changes Y/X when enabled). `base_array(arr)` unwraps them for
+(per-plane shifts; changes Y/X when enabled), `InvertedDeflectionView` (float32,
+`2 * mean - frame` about the whole source's temporal mean; the `invert_deflection`
+read feature, the viewer's Invert Deflection as data). `base_array(arr)` unwraps them for
 `isinstance` checks.
 
 Four objects deliberately report a different rank:
