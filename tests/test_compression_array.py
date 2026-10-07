@@ -1,4 +1,4 @@
-"""masknmf compressed movies (``CompressionArray`` hdf5) as lazy 5D arrays."""
+"""masknmf compressed movies (``CompressionArray`` hdf5) as lazy 5D arrays, and a plane folder's movies for the registration viewer."""
 
 import h5py
 import numpy as np
@@ -89,3 +89,26 @@ def test_it_matches_masknmf_on_a_real_export(tmp_path):
     np.testing.assert_allclose(
         imread(path)[:, 0, 0], np.asarray(pmd[:]), rtol=1e-4, atol=1e-3
     )
+
+
+def test_a_plane_folders_movies_in_panel_order(compressed, factors):
+    from mbo_utilities.gui.registration_viewer import registration_movies
+
+    plane = compressed.parent
+    raw = np.arange(T * Y * X, dtype=np.int16).reshape(T, Y, X)
+    raw.tofile(plane / "data_raw.bin")
+    (raw + 1).tofile(plane / "data.bin")
+    np.save(plane / "ops.npy", {"Ly": Y, "Lx": X, "nframes": T, "fs": 250.0})
+    movies = registration_movies(plane)
+    assert list(movies) == ["raw", "registered", "denoised"]
+    assert all(m.shape == (T, Y, X) for m in movies.values())
+    np.testing.assert_array_equal(movies["raw"][:], raw)
+    np.testing.assert_array_equal(movies["registered"][:], raw + 1)
+    np.testing.assert_allclose(movies["denoised"][:], movie(factors), rtol=1e-5)
+
+
+def test_a_folder_without_movies_is_refused(tmp_path):
+    from mbo_utilities.gui.registration_viewer import registration_movies
+
+    with pytest.raises(FileNotFoundError):
+        registration_movies(tmp_path)
