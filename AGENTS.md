@@ -53,7 +53,11 @@ pml_utilities/
 `lbm-suite2p-python` depends on the PyPI `mbo_utilities`, which `[tool.uv]`
 `override-dependencies` removes for a checkout and nothing can remove for a consumer.
 Every base dependency is imported somewhere under `mbo_utilities/`; a package a
-single optional command needs is an extra, with the install hint in its `ImportError`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers) and
+single optional command needs is an extra, with the install hint in its `ImportError`.
+masknmf is not pinned yet: the MaskNMF and Voltage Preprocessing pipelines need its
+`ui/launcher-pages` branch, `uv pip install "masknmf @
+git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"`; to test
+against a local checkout, `uv pip install ~/repos/masknmf-toolbox`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers) and
 `mbo_utilities.pipelines` (pipelines).
 
 ## 2. Layer responsibilities

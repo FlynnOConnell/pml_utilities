@@ -534,3 +534,25 @@ The GUI can launch external tools when installed:
 - suite2p results viewer with trace quality stats
 - diagnostics viewer for signal quality analysis
 - grid search viewer for parameter exploration
+
+## Voltage Preprocessing
+
+Available when `masknmf` is installed; the MaskNMF and Voltage Preprocessing entries need masknmf's `ui/launcher-pages` branch until it is released:
+
+```bash
+uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"
+```
+
+The MaskNMF pipeline up to the denoised movie, for fast, noisy recordings such as voltage imaging:
+
+1. **Alignment copy**: a quick denoised copy of the movie, used only to estimate motion.
+2. **Registration**: the shifts estimated on the alignment copy are applied to the raw frames.
+3. **Denoising**: the registered movie is compressed and denoised.
+
+Demixing starts off (**Pipeline Settings > Demixing**). The same option is in the MaskNMF entry's Registration column as **Register on a denoised copy**.
+
+- **Set slice** picks a frame window, so settings can be tried on a few thousand frames first; each window gets its own `zplaneNN_tpAAAAA-BBBBB` folder.
+- **Invert deflection** (in **Set slice**) flips every frame about the mean image before processing, so an indicator that dims on activity reads positive. It starts as the viewer's **Invert Deflection**; programmatically it is `imread(path, invert_deflection=True)`.
+- **View movies** shows the last plane folder written under the output folder as raw, alignment copy, registered and denoised side by side on one time slider. `python -m mbo_utilities.gui.registration_viewer <plane folder>` opens the same window.
+
+A plane folder holds `data_raw.bin` (raw, inverted when asked), `data.bin` (registered), `alignment.hdf5`, `compression.hdf5` (denoised) and `ops.npy`. Running MaskNMF on the same output folder with the same registration and compression settings and demixing on reuses both stages and only demixes.
