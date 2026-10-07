@@ -795,6 +795,7 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
         "frame_average": int(args.get("frame_average") or 1),
+        "invert_deflection": bool(args.get("invert_deflection", False)),
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)

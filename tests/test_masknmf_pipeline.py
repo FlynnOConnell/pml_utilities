@@ -427,3 +427,39 @@ def test_denoised_reference_registers_the_raw_movie(tmp_path, shaking_movie):
     assert reg[inner].astype(float).var(axis=0).mean() < raw[inner].astype(
         float
     ).var(axis=0).mean()
+
+
+@pytest.mark.slow
+def test_task_masknmf_registers_the_inverted_movie(tmp_path, shaking_movie):
+    pytest.importorskip("masknmf")
+    import logging
+
+    import tifffile
+
+    from mbo_utilities.gui.tasks import task_masknmf
+
+    movie, _ = shaking_movie
+    tif = tmp_path / "movie.tif"
+    tifffile.imwrite(tif, movie[:, 0, 0])
+    s = MasknmfSettings()
+    s.registration.denoised_reference = True
+    s.compression.do_compression = STAGE_SKIP
+    s.demixing.do_demixing = STAGE_SKIP
+    s.runtime.device = "cpu"
+    s.runtime.keep_raw = True
+    task_masknmf(
+        {
+            "input_path": str(tif),
+            "output_dir": str(tmp_path / "out"),
+            "planes": [1],
+            "settings": s.to_dict(),
+            "fix_phase": False,
+            "invert_deflection": True,
+        },
+        logging.getLogger("test"),
+    )
+    plane = next((tmp_path / "out").glob("zplane01*"))
+    data = movie[:, 0, 0].astype(np.float32)
+    raw = np.fromfile(plane / "data_raw.bin", np.int16).reshape(data.shape)
+    assert np.abs(raw - np.rint(2 * data.mean(axis=0) - data)).max() <= 1
+    assert (plane / "alignment.hdf5").exists() and (plane / "data.bin").exists()

@@ -593,7 +593,7 @@ was looking at:
 | `input_path` | `arr.source_path` |
 | `reader_kwargs` | `source_reader_kwargs(arr)`: `unit`, `dataset`, `dims`, `frame_average`, `channel` |
 | `timepoints`, `planes`, `channels` | 1-based selection from `to_lsp_kwargs` |
-| `fix_phase`, `use_fft`, `phasecorr_method`, `mean_subtraction` | read features, applied by `apply_read_features` |
+| `fix_phase`, `use_fft`, `phasecorr_method`, `mean_subtraction`, `invert_deflection` | read features, applied by `apply_read_features` |
 | `output_path` | output directory |
 | `settings` | `Settings.to_dict()` |
 | `_uuid`, `_log_file` | injected by `ProcessManager.spawn`; read by `TaskMonitor` and `setup_logging` (§8.3) |
