@@ -60,15 +60,21 @@ def test_write_notebook_fills_path_and_unit_and_keeps_an_existing_copy(
     mesc.parent.mkdir()
     dest = scripts_dir(mesc)
     out = write_notebook(SPINE, dest, mesc, "MSession_0/MUnit_3")
-    assert out == notebook_path(SPINE, dest, date.today())
+    assert out == notebook_path(SPINE, dest, date.today(), "MSession_0/MUnit_3")
+    assert out.name.endswith("_asap7_spine_pipeline_MSession_0_MUnit_3.ipynb")
     text = out.read_text(encoding="utf-8")
     assert mesc.resolve().as_posix() in text
     assert 'UNIT = "MSession_0/MUnit_3"' in text
     assert SPINE.path_token not in text
     out.write_text("edited", encoding="utf-8")
-    assert write_notebook(SPINE, dest, mesc) is None
+    assert write_notebook(SPINE, dest, mesc, "MSession_0/MUnit_3") is None
     assert out.read_text(encoding="utf-8") == "edited"
-    assert write_notebook(SPINE, dest, mesc, overwrite=True) == out
+    other = write_notebook(SPINE, dest, mesc, "MSession_0/MUnit_16")
+    assert other is not None and other != out
+    assert 'UNIT = "MSession_0/MUnit_16"' in other.read_text(encoding="utf-8")
+    assert (
+        write_notebook(SPINE, dest, mesc, "MSession_0/MUnit_3", overwrite=True) == out
+    )
     assert "edited" not in out.read_text(encoding="utf-8")
 
 

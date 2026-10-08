@@ -43,6 +43,7 @@ __all__ = [
     "get_notebook_menu",
     "scripts_notebooks",
     "template_notebooks",
+    "view_unit",
 ]
 
 logger = log.get("gui.notebooks")
@@ -69,15 +70,24 @@ def scripts_notebooks(parent: Any) -> list[Notebook]:
     return FolderSource(scripts_dir(data), label=SCRIPTS_GROUP).notebooks()
 
 
+def view_unit(parent: Any) -> str:
+    """The ``.mesc`` unit on screen (``MSession_0/MUnit_3``), or ``""`` for any other recording or none."""
+    if parent.image_widget is None:
+        return ""
+    underlying = base_array(parent.image_widget.data[0])
+    return underlying.unit_key if isinstance(underlying, MescArray) else ""
+
+
 def template_notebooks(parent: Any) -> list[Notebook]:
     """One entry per shipped template that applies to the open recording, at the path its copy gets."""
     data = data_path(parent)
     if data is None:
         return []
     dest = scripts_dir(data)
+    unit = view_unit(parent)
     return [
         Notebook(
-            str(notebook_path(t, dest)),
+            str(notebook_path(t, dest, unit=unit)),
             label=t.title,
             group=TEMPLATE_GROUP,
             root=str(dest),
@@ -95,11 +105,12 @@ class StudioNotebookMenu(NotebookMenu):
 
     def open(self, notebook: Notebook):
         if notebook.group == TEMPLATE_GROUP and not Path(notebook.path).exists():
-            template = next(t for t in TEMPLATES if notebook.path.endswith(t.filename))
-            underlying = base_array(self.parent.image_widget.data[0])
-            unit = underlying.unit_key if isinstance(underlying, MescArray) else ""
+            template = next(t for t in TEMPLATES if t.title == notebook.label)
             out = write_notebook(
-                template, Path(notebook.root), data_path(self.parent), unit
+                template,
+                Path(notebook.root),
+                data_path(self.parent),
+                view_unit(self.parent),
             )
             if out is not None:
                 logger.info(f"wrote {out} from {template.filename}")

@@ -1635,7 +1635,7 @@ def init(data_path, output_dir, overwrite, unit):
         out = write_notebook(template, dest, data_path, unit, overwrite=overwrite)
         if out is None:
             click.secho(
-                f"Exists: {notebook_path(template, dest)}  (--overwrite to replace)",
+                f"Exists: {notebook_path(template, dest, unit=unit)}  (--overwrite to replace)",
                 fg="yellow",
             )
             continue
