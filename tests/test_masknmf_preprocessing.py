@@ -203,7 +203,6 @@ def test_a_run_folder_that_demixed_names_its_results_file(tmp_path):
 
 def test_registration_qc_refuses_a_path_that_is_not_a_run(tmp_path):
     import click
-
     from mbo_utilities.gui.run_gui import run_gui
 
     movie = tmp_path / "movie.tif"
