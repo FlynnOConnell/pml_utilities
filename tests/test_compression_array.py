@@ -94,20 +94,22 @@ def test_it_matches_masknmf_on_a_real_export(tmp_path):
     )
 
 
-def test_a_run_folders_movies_in_panel_order(compressed, factors):
+def test_an_unregistered_run_shows_raw_and_its_pmd(compressed, factors):
     from mbo_utilities.gui.registration_viewer import registration_movies
 
     run = compressed.parent
     raw = np.arange(T * Y * X, dtype=np.int16).reshape(T, Y, X)
     tifffile.imwrite(run / "movie.tif", raw)
-    compressed.rename(run / "results.hdf5")
+    compressed.rename(run / "alignment.hdf5")
+    with h5py.File(run / "results.hdf5", "w"):
+        pass
     inputs = {"movie": {"path": str(run / "movie.tif"), "z": 0, "c": 0}}
     (run / "config.json").write_text(json.dumps({"inputs": inputs}))
     movies = registration_movies(run)
-    assert list(movies) == ["raw", "denoised"]
+    assert list(movies) == ["raw", "raw (pmd)"]
     assert all(m.shape == (T, Y, X) for m in movies.values())
     np.testing.assert_array_equal(movies["raw"][:], raw)
-    np.testing.assert_allclose(movies["denoised"][:], movie(factors), rtol=1e-5)
+    np.testing.assert_allclose(movies["raw (pmd)"][:], movie(factors), rtol=1e-5)
 
 
 def test_a_folder_without_a_run_is_refused(tmp_path):

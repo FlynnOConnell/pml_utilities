@@ -21,6 +21,7 @@ from mbo_utilities import log
 from mbo_utilities.arrays._base import ReductionMixin, _normalize_key
 from mbo_utilities.arrays.features._motion import MotionCorrection
 from mbo_utilities.lazy_array import LazyArray
+from mbo_utilities.masknmf.params import ALIGN_FILE
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 logger = log.get("arrays.masknmf_run")
@@ -93,18 +94,23 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
     """One masknmf run folder as its registered movie, ``(T, 1, 1, Y, X)``.
 
     ``raw`` is the recording the run read; without a registration in
-    ``results.hdf5`` the registered movie is the raw one. ``device`` is where
-    masknmf applies the shifts.
+    ``results.hdf5`` the registered movie is the raw one. With
+    ``on_alignment_copy`` the shifts are replayed on the run's
+    ``alignment.hdf5`` (the denoised copy they were estimated on) instead of
+    the recording. ``device`` is where masknmf applies the shifts.
     """
 
     # above ResultsArray (70), which claims any folder holding a results file
     PRIORITY = 75
 
-    def __init__(self, filenames: Path | str, device: str = "cpu"):
+    def __init__(
+        self, filenames: Path | str, device: str = "cpu", on_alignment_copy: bool = False
+    ):
         run = Path(filenames)
         self.run_folder = run
         self.filenames = [run]
         self.device = device
+        self.on_alignment_copy = on_alignment_copy
         self._registered = None
         self._results_read = False
         self.config = run_config(run)
@@ -138,15 +144,20 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
 
     @property
     def registered(self):
-        """The registration replayed on ``raw`` (masknmf), or ``raw`` when the run did not register."""
+        """The registration replayed on ``raw`` or the alignment copy (masknmf), or ``raw`` when the run did not register."""
         if self._registered is None:
             if self._group is None:
                 self._registered = self.raw
             else:
                 from masknmf.io import REGISTRATION_ARRAYS
 
+                movie = self.raw
+                if self.on_alignment_copy:
+                    from masknmf import CompressionArray
+
+                    movie = CompressionArray.from_hdf5(self.run_folder / ALIGN_FILE)
                 self._registered = REGISTRATION_ARRAYS[self._group].from_hdf5(
-                    self.run_folder / RESULTS_FILE, input_movie=self.raw, device=self.device
+                    self.run_folder / RESULTS_FILE, input_movie=movie, device=self.device
                 )
         return self._registered
 

@@ -339,11 +339,16 @@ plane, channel and frames, and the stored shifts are replayed on it with
 masknmf.
 
 ```python
-arr = mbo.imread("out/20261007T183740_masknmf_zplane01")
+run = "out/20261007T183740_masknmf_zplane01"
+arr = mbo.imread(run)
 print(arr.shape)          # (T, 1, 1, Y, X), registered
 arr.raw[100]              # (Y, X) frame of the recording as the run read it
 arr.motion_correction     # the shifts as Y and X traces in px
 arr.results               # the run's results file, when demixing ran
+
+# the shifts replayed on the alignment copy instead of the recording
+from mbo_utilities.arrays import MasknmfRunArray
+pmd = MasknmfRunArray(run, on_alignment_copy=True)
 ```
 
 (mescarray)=

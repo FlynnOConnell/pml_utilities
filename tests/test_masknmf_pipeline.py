@@ -449,6 +449,27 @@ def test_a_run_folder_holds_no_movie_and_registers_the_raw_one(
 
 
 @pytest.mark.slow
+def test_the_viewer_shows_raw_registered_and_both_as_pmd(
+    tmp_path, shaking_tif, denoised_registration
+):
+    masknmf = pytest.importorskip("masknmf")
+    from mbo_utilities.gui.registration_viewer import registration_movies
+    from mbo_utilities.masknmf import run_plane
+
+    run = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    movies = registration_movies(run)
+    assert list(movies) == ["raw", "registered", "raw (pmd)", "registered (pmd)"]
+    pmd = masknmf.CompressionArray.from_hdf5(run / "alignment.hdf5")
+    replayed = masknmf.RigidRegistrationArray.from_hdf5(
+        run / "results.hdf5", input_movie=pmd, device="cpu"
+    )
+    expected = np.asarray(replayed[list(range(10))])
+    expected = expected.cpu().numpy() if hasattr(expected, "cpu") else expected
+    np.testing.assert_allclose(movies["registered (pmd)"][:10], expected, rtol=1e-4, atol=1e-3)
+    np.testing.assert_allclose(movies["raw (pmd)"][:10], np.asarray(pmd[:10]), rtol=1e-4, atol=1e-3)
+
+
+@pytest.mark.slow
 def test_a_later_run_copies_the_stages_whose_provenance_matches(
     tmp_path, shaking_tif, denoised_registration
 ):

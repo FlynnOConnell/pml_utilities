@@ -3,8 +3,8 @@
 Registration estimates its shifts on a quick denoised copy of the movie and
 applies them to the raw frames, then the registered movie is compressed and
 denoised; demixing starts off. Run it on a frame window (Set slice) to try
-settings, and View movies to see raw, the alignment copy, registered and
-denoised side by side. Everything else is the MaskNMF widget.
+settings, and View movies to see raw and registered over the same two as
+PMD (the alignment copy, and that copy registered). Everything else is the MaskNMF widget.
 """
 
 from pathlib import Path
@@ -40,8 +40,8 @@ class VoltagePreprocessingWidget(MaskNMFPipelineWidget):
         if not self._outdir:
             imgui.end_disabled()
         set_tooltip(
-            "Raw, the alignment copy, registered and denoised side by side, from "
-            "the run folder last written under the output folder.",
+            "Raw and registered over raw (pmd) and registered (pmd), from the run "
+            "folder last written under the output folder.",
             show_mark=False,
         )
         if not clicked:
