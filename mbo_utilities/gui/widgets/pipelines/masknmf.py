@@ -948,7 +948,10 @@ class MaskNMFPipelineWidget(PipelineWidget):
             "frame means and the mean inside a box you move on any movie.",
             show_mark=False,
         )
-        if self._viewer_launch is not None and time.monotonic() - self._viewer_checked > 1.0:
+        if (
+            self._viewer_launch is not None
+            and time.monotonic() - self._viewer_checked > 1.0
+        ):
             self._viewer_checked = time.monotonic()
             pid, log_name = self._viewer_launch
             try:
@@ -958,7 +961,11 @@ class MaskNMFPipelineWidget(PipelineWidget):
             if not alive:
                 self._viewer_launch = None
                 logs = sorted(get_mbo_dirs()["logs"].glob(f"*_{log_name}.log"))
-                text = logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
+                text = (
+                    logs[-1].read_text(encoding="utf-8", errors="replace")
+                    if logs
+                    else ""
+                )
                 if "Traceback" in text:
                     last = [line for line in text.splitlines() if line.strip()][-1]
                     self._last_status = f"QC viewer failed: {last} (log: {logs[-1]})"
@@ -976,7 +983,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
         run = max(written)[1]
         # its own process: a second figure built inside this imgui frame crashes imgui
         log_name = f"movies_{run.name}"
-        pid = launch_window("mbo_utilities.gui.reg_denoise_viewer", [str(run)], log_name)
+        pid = launch_window(
+            "mbo_utilities.gui.reg_denoise_viewer", [str(run)], log_name
+        )
         self._viewer_launch = (pid, log_name)
         self._last_status = f"Opening {run.name} in its own window (PID {pid})."
 

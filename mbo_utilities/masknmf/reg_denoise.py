@@ -275,9 +275,8 @@ class RegDenoiseRun:
         from masknmf.utils._serialization import load_dict
 
         import masknmf
-        from mbo_utilities.reader import imread
-
         from mbo_utilities.arrays.masknmf_run import is_masknmf_run
+        from mbo_utilities.reader import imread
 
         path = Path(path)
         if path.is_dir():
@@ -367,7 +366,9 @@ class RegDenoiseRun:
         with h5py.File(run / RESULTS_FILE, "r") as f:
             compressed = "CompressionArray" in f
         if (run / ALIGN_FILE).is_file():
-            pmds["raw"] = masknmf.CompressionArray.from_hdf5(run / ALIGN_FILE, device=device)
+            pmds["raw"] = masknmf.CompressionArray.from_hdf5(
+                run / ALIGN_FILE, device=device
+            )
         if compressed:
             pmds["registered"] = masknmf.CompressionArray.from_hdf5(
                 run / RESULTS_FILE, device=device

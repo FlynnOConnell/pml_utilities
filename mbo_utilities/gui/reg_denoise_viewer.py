@@ -164,6 +164,8 @@ if __name__ == "__main__":
     import fastplotlib as fpl
 
     parser = argparse.ArgumentParser(description=TITLE)
-    parser.add_argument("path", type=Path, help="a reg-denoise results.hdf5 or a MaskNMF run folder")
+    parser.add_argument(
+        "path", type=Path, help="a reg-denoise results.hdf5 or a MaskNMF run folder"
+    )
     RegDenoiseViewer(parser.parse_args().path).show()
     fpl.loop.run()

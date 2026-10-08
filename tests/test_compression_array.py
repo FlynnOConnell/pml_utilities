@@ -1,6 +1,5 @@
 """masknmf compressed movies (``CompressionArray`` hdf5) as lazy 5D arrays, and a run folder's movies for the registration viewer."""
 
-
 import h5py
 import numpy as np
 import pytest

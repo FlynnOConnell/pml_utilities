@@ -470,12 +470,18 @@ def test_the_qc_viewer_opens_a_run_folder_with_its_shifts_and_both_pmds(
     from mbo_utilities.masknmf.reg_denoise import RegDenoiseRun, dense
 
     _, shifts = shaking_movie
-    run = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    run = run_plane(
+        str(shaking_tif), tmp_path, settings=denoised_registration, replot=False
+    )
     qc = RegDenoiseRun.open(run)
     assert list(qc.movies) == ["raw", "registered", "pmd(raw)", "pmd(registered)"]
-    assert all(m.shape == qc.raw.shape and m.dtype == np.float32 for m in qc.movies.values())
+    assert all(
+        m.shape == qc.raw.shape and m.dtype == np.float32 for m in qc.movies.values()
+    )
     assert len(qc.times) == qc.raw.shape[0]
-    np.testing.assert_allclose(qc.registered, MasknmfRunArray(run)[:, 0, 0], rtol=1e-4, atol=1e-3)
+    np.testing.assert_allclose(
+        qc.registered, MasknmfRunArray(run)[:, 0, 0], rtol=1e-4, atol=1e-3
+    )
     pmd = masknmf.CompressionArray.from_hdf5(run / "alignment.hdf5")
     pmd.rescale = True
     pmd.include_trend = True

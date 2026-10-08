@@ -144,30 +144,40 @@ def test_view_movies_opens_the_newest_run_folder(widget, tmp_path, monkeypatch):
     assert "4243" in widget._last_status
 
 
-def test_a_viewer_that_crashes_puts_its_error_in_the_status_line(widget, tmp_path, monkeypatch):
+def test_a_viewer_that_crashes_puts_its_error_in_the_status_line(
+    widget, tmp_path, monkeypatch
+):
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "20261008_150000_movies_run1.log").write_text(
         "Traceback (most recent call last):\n  ...\nValueError: no raw movie\n"
     )
     monkeypatch.setattr(
-        "mbo_utilities.gui.widgets.pipelines.masknmf.get_mbo_dirs", lambda: {"logs": logs}
+        "mbo_utilities.gui.widgets.pipelines.masknmf.get_mbo_dirs",
+        lambda: {"logs": logs},
     )
-    monkeypatch.setattr("mbo_utilities.gui.widgets.pipelines.masknmf.psutil.Process", gone_process)
+    monkeypatch.setattr(
+        "mbo_utilities.gui.widgets.pipelines.masknmf.psutil.Process", gone_process
+    )
     widget._viewer_launch = (999999, "movies_run1")
     frames(widget.draw_config, n=1)
     assert widget._viewer_launch is None
     assert widget._last_status.startswith("QC viewer failed: ValueError: no raw movie")
 
 
-def test_a_viewer_closed_normally_leaves_the_status_alone(widget, tmp_path, monkeypatch):
+def test_a_viewer_closed_normally_leaves_the_status_alone(
+    widget, tmp_path, monkeypatch
+):
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "20261008_150000_movies_run1.log").write_text("opening viewer\n")
     monkeypatch.setattr(
-        "mbo_utilities.gui.widgets.pipelines.masknmf.get_mbo_dirs", lambda: {"logs": logs}
+        "mbo_utilities.gui.widgets.pipelines.masknmf.get_mbo_dirs",
+        lambda: {"logs": logs},
     )
-    monkeypatch.setattr("mbo_utilities.gui.widgets.pipelines.masknmf.psutil.Process", gone_process)
+    monkeypatch.setattr(
+        "mbo_utilities.gui.widgets.pipelines.masknmf.psutil.Process", gone_process
+    )
     widget._viewer_launch = (999999, "movies_run1")
     widget._last_status = "Opening run1"
     frames(widget.draw_config, n=1)
@@ -176,7 +186,6 @@ def test_a_viewer_closed_normally_leaves_the_status_alone(widget, tmp_path, monk
 
 def test_a_run_folder_that_demixed_names_its_results_file(tmp_path):
     import h5py
-
     from mbo_utilities.arrays.masknmf_run import run_demixing
 
     run = tmp_path / "20261008T143623_masknmf_zplane01"
