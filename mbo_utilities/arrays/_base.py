@@ -51,8 +51,9 @@ def _normalize_key(key, ndim):
     """Normalize an indexing key: wrap in tuple, expand Ellipsis, strip trailing Ellipsis."""
     if not isinstance(key, tuple):
         key = (key,)
-    if Ellipsis in key:
-        idx = key.index(Ellipsis)
+    # identity, not ==: an ndarray in the key would compare elementwise
+    idx = next((i for i, k in enumerate(key) if k is Ellipsis), None)
+    if idx is not None:
         n_missing = ndim - (len(key) - 1)
         key = key[:idx] + (slice(None),) * max(n_missing, 0) + key[idx + 1 :]
     return key
