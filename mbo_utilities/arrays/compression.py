@@ -4,7 +4,8 @@ The file holds the movie as factors, ``spatial_compressed temporal_compressed``
 plus the per-pixel mean and noise scale it was standardized by. Frames are
 rebuilt on read with numpy, in the units of the movie that was compressed.
 The MaskNMF pipeline's ``roi_workflow`` caches write ``compression.hdf5``;
-a run folder's ``results.hdf5`` holds the same group.
+a run folder's ``results.hdf5`` holds the same group and, when registration
+ran on a denoised copy, ``alignment.hdf5`` holds that copy.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ register_pipeline(
     PipelineInfo(
         name="compression",
         description="masknmf compressed movie",
-        input_patterns=["**/compression.hdf5"],
+        input_patterns=["**/compression.hdf5", "**/alignment.hdf5"],
         output_patterns=[],
         input_extensions=["hdf5", "h5"],
         output_extensions=[],

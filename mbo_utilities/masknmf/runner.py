@@ -3,8 +3,8 @@
 Each plane runs into a new masknmf run folder,
 ``<save_path>/<yyyymmddTHHMMSS>_masknmf_zplaneNN[_tpAAAAA-BBBBB]/``:
 ``results.hdf5`` with one group per stage, ``config.json``, the masknmf log,
-the results zarr (``mbo_utilities.results``) when demixing ran, and the QC
-figures. No movie
+``alignment.hdf5`` when registration ran on a denoised copy, the results zarr
+(``mbo_utilities.results``) when demixing ran, and the QC figures. No movie
 is written: the stages read the recording through ``imread`` and the
 registered movie is the stored shifts replayed on it
 (``arrays.masknmf_run.MasknmfRunArray``). Skip/Run/Force gates each stage on
@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -32,6 +33,7 @@ from mbo_utilities import log
 from mbo_utilities.arrays.masknmf_run import RESULTS_FILE
 from mbo_utilities.masknmf import outputs as _outputs
 from mbo_utilities.masknmf.params import (
+    ALIGN_FILE,
     PMD_FILE,
     MasknmfSettings,
     stage_action,
@@ -157,7 +159,7 @@ def generate_plane_dirname(plane: int, frame_indices: list[int] | None = None) -
 
 
 def _register(raw, cfg, runtime, device: str, logger):
-    """The registration of ``raw``, template and shifts estimated on it."""
+    """``(registration array over raw, the movie its shifts were estimated on)``."""
     import masknmf
 
     corrector_cls = (
@@ -170,12 +172,20 @@ def _register(raw, cfg, runtime, device: str, logger):
         device=device,
         batch_size=runtime.frame_batch_size,
     )
+    reference = raw
+    if cfg.denoised_reference:
+        logger.info("masknmf: denoising a copy of the movie to register on")
+        reference = masknmf.CompressStrategy(
+            **cfg.reference_kwargs(),
+            frame_batch_size=runtime.frame_batch_size,
+            device=device,
+        ).compress(raw)
     logger.info(f"masknmf: computing {cfg.strategy} registration template")
-    strategy.compute_template(raw)
+    strategy.compute_template(reference)
     logger.info("masknmf: estimating shifts")
-    moco = strategy.motion_correct(raw, target_movie=raw)
+    moco = strategy.motion_correct(reference, target_movie=raw)
     moco.output_device = moco.strategy.device
-    return moco
+    return moco, reference
 
 
 def _shift_mask(shifts, shape: tuple[int, int], border: int) -> np.ndarray:
@@ -572,11 +582,15 @@ def run_plane(
             if action == "reuse":
                 logger.info(f"masknmf: reusing the registration of {previous.name}")
                 _copy_groups(previous, results_path, [cls.__name__, cls._strategy_cls.__name__])
+                if (previous / ALIGN_FILE).is_file():
+                    shutil.copyfile(previous / ALIGN_FILE, run / ALIGN_FILE)
                 moco = cls.from_hdf5(results_path, input_movie=raw, device=device)
             else:
-                moco = _register(raw, reg, runtime, device, logger)
+                moco, reference = _register(raw, reg, runtime, device, logger)
                 moco.export(results_path)
                 _stamp(results_path, cls.__name__, reg_prov)
+                if reference is not raw:
+                    reference.export(run / ALIGN_FILE)
             shifts = _to_np(moco.shifts)
             template = getattr(moco.strategy, "template", None)
             template = None if template is None else _to_np(template)

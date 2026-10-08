@@ -355,6 +355,19 @@ class TestSplineDetrender:
         assert det is not None and det.window == int(40 * 429.93)
 
 
+def test_reference_kwargs_make_the_denoised_copy():
+    reg = MasknmfSettings().registration
+    assert reg.denoised_reference is False
+    reg.reference_block_sizes = [6, 6]
+    assert reg.reference_kwargs() == {
+        "block_sizes": (6, 6),
+        "max_components": 20,
+        "max_consecutive_failures": 1,
+        "spatial_avg_factor": 4,
+        "temporal_avg_factor": 2,
+    }
+
+
 @pytest.fixture
 def shaking_movie():
     """(T, 1, 1, Y, X) int16: two blobs moved by known integer shifts plus noise."""
@@ -434,17 +447,44 @@ def test_a_run_folder_holds_no_movie_and_registers_the_raw_one(
     assert reg[inner].var(axis=0).mean() < raw[inner].var(axis=0).mean()
 
 
+@pytest.fixture
+def denoised_registration(registration_settings):
+    registration_settings.registration.denoised_reference = True
+    return registration_settings
+
+
+@pytest.mark.slow
+def test_the_viewer_shows_raw_registered_and_both_as_pmd(
+    tmp_path, shaking_tif, denoised_registration
+):
+    masknmf = pytest.importorskip("masknmf")
+    from mbo_utilities.gui.registration_viewer import registration_movies
+    from mbo_utilities.masknmf import run_plane
+
+    run = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    movies = registration_movies(run)
+    assert list(movies) == ["raw", "registered", "raw (pmd)", "registered (pmd)"]
+    pmd = masknmf.CompressionArray.from_hdf5(run / "alignment.hdf5")
+    replayed = masknmf.RigidRegistrationArray.from_hdf5(
+        run / "results.hdf5", input_movie=pmd, device="cpu"
+    )
+    expected = np.asarray(replayed[list(range(10))])
+    expected = expected.cpu().numpy() if hasattr(expected, "cpu") else expected
+    np.testing.assert_allclose(movies["registered (pmd)"][:10], expected, rtol=1e-4, atol=1e-3)
+    np.testing.assert_allclose(movies["raw (pmd)"][:10], np.asarray(pmd[:10]), rtol=1e-4, atol=1e-3)
+
+
 @pytest.mark.slow
 def test_a_later_run_copies_the_stages_whose_provenance_matches(
-    tmp_path, shaking_tif, registration_settings
+    tmp_path, shaking_tif, denoised_registration
 ):
     pytest.importorskip("masknmf")
     from mbo_utilities.masknmf import run_plane
 
-    first = run_plane(str(shaking_tif), tmp_path, settings=registration_settings, replot=False)
-    second = run_plane(str(shaking_tif), tmp_path, settings=registration_settings, replot=False)
-    registration_settings.compression.block_sizes = (12, 12)
-    third = run_plane(str(shaking_tif), tmp_path, settings=registration_settings, replot=False)
+    first = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    second = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    denoised_registration.compression.block_sizes = (12, 12)
+    third = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
     assert len({first, second, third}) == 3
     actions = [
         {k: v["action"] for k, v in json.loads((r / "config.json").read_text())["timings"].items()}
@@ -453,6 +493,7 @@ def test_a_later_run_copies_the_stages_whose_provenance_matches(
     assert actions[0]["registration"] == actions[0]["compression"] == "compute"
     assert actions[1]["registration"] == actions[1]["compression"] == "reuse"
     assert actions[2] == {"registration": "reuse", "compression": "compute", "demixing": "skip"}
+    assert (third / "alignment.hdf5").exists()
 
 
 @pytest.mark.slow

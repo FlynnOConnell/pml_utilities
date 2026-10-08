@@ -2,7 +2,8 @@
 
 The MaskNMF pipeline writes one run folder per plane, masknmf's own layout:
 ``<yyyymmddTHHMMSS>_masknmf_zplaneNN[_tpAAAAA-BBBBB]/`` with ``results.hdf5``
-(one group per stage), ``config.json`` and the log. No movie is written. The raw movie is the
+(one group per stage), ``config.json``, the log and, when registration ran on
+a denoised copy, ``alignment.hdf5``. No movie is written. The raw movie is the
 recording itself, re-opened from ``config.json``'s ``inputs["movie"]`` (path,
 reader kwargs, read features, plane, channel, frames), and the registered
 movie replays the stored shifts on it with masknmf.
@@ -21,6 +22,7 @@ from mbo_utilities.arrays._base import ReductionMixin, _normalize_key
 from mbo_utilities.arrays.features._frame_average import INVERT_DEFLECTION_KEY
 from mbo_utilities.arrays.features._motion import MotionCorrection
 from mbo_utilities.lazy_array import LazyArray
+from mbo_utilities.masknmf.params import ALIGN_FILE
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 logger = log.get("arrays.masknmf_run")
@@ -97,18 +99,23 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
     """One masknmf run folder as its registered movie, ``(T, 1, 1, Y, X)``.
 
     ``raw`` is the recording the run read; without a registration in
-    ``results.hdf5`` the registered movie is the raw one. ``device`` is where
-    masknmf applies the shifts.
+    ``results.hdf5`` the registered movie is the raw one. With
+    ``on_alignment_copy`` the shifts are replayed on the run's
+    ``alignment.hdf5`` (the denoised copy they were estimated on) instead of
+    the recording, never inverted. ``device`` is where masknmf applies the shifts.
     """
 
     # above ResultsArray (70), which claims any folder holding a results file
     PRIORITY = 75
 
-    def __init__(self, filenames: Path | str, device: str = "cpu"):
+    def __init__(
+        self, filenames: Path | str, device: str = "cpu", on_alignment_copy: bool = False
+    ):
         run = Path(filenames)
         self.run_folder = run
         self.filenames = [run]
         self.device = device
+        self.on_alignment_copy = on_alignment_copy
         self._registered = None
         self._results_read = False
         self.config = run_config(run)
@@ -142,7 +149,7 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
 
     @property
     def registered(self):
-        """The registration replayed on ``raw`` (masknmf), or ``raw`` when the run did not register."""
+        """The registration replayed on ``raw`` or the alignment copy (masknmf), or ``raw`` when the run did not register."""
         if self._registered is None:
             if self._group is None:
                 self._registered = self.raw
@@ -152,10 +159,17 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
                 from masknmf import OphysArray
 
                 after = self.config["inputs"]["movie"].get("registered_before_inversion")
+                if self.on_alignment_copy:
+                    from masknmf import CompressionArray
+
+                    movie = CompressionArray.from_hdf5(self.run_folder / ALIGN_FILE)
+                    after = False
+                elif after:
+                    movie = run_raw_movie(self.run_folder, invert=False)
+                else:
+                    movie = self.raw
                 self._registered = REGISTRATION_ARRAYS[self._group].from_hdf5(
-                    self.run_folder / RESULTS_FILE,
-                    input_movie=run_raw_movie(self.run_folder, invert=False) if after else self.raw,
-                    device=self.device,
+                    self.run_folder / RESULTS_FILE, input_movie=movie, device=self.device
                 )
                 if after:
                     self._registered = OphysArray(

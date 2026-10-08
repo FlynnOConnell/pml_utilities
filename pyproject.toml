@@ -62,9 +62,6 @@ masknmf_run = "mbo_utilities.arrays.masknmf_run:MasknmfRunArray"
 numpy = "mbo_utilities.arrays.numpy:NumpyArray"
 isoview = "mbo_utilities.arrays.isoview.array:IsoviewArray"
 
-[project.entry-points."mbo_utilities.pipelines"]
-rois = "mbo_utilities.gui.widgets.pipelines.rois:RoiPipelineWidget"
-
 [project.urls]
 Homepage = "https://github.com/millerbrainobservatory/mbo_utilities"
 Documentation = "https://millerbrainobservatory.github.io/mbo_utilities/index.html"

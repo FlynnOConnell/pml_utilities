@@ -665,6 +665,7 @@ open its runs as they open masknmf's:
                         configs (MasknmfSettings), inputs.movie (path, reader_kwargs,
                         read_features, plane, z, c, frames | tp_indices, fs), run, timings
     <folder name>.log   masknmf's log
+    alignment.hdf5      the denoised copy registration ran on (Denoise before registration)
     <stem>.<stamp>.masknmf.zarr   the results file (§7.5) when demixing ran
     *.png               QC figures
 ```
@@ -676,7 +677,11 @@ With Invert Deflection the runner registers the movie as recorded and inverts
 the registered movie for compression and demixing (`2 * mean - x` holds a still
 mean against a moving frame, so registering it leaves motion behind);
 `inputs.movie.registered_before_inversion` tells the reader to replay the
-shifts the same way.
+shifts the same way. The MaskNMF widget's **Denoise before registration**
+(`registration.denoised_reference`) estimates the shifts on a quick PMD copy of
+the movie as recorded and applies them to the raw frames; **View movies** opens
+`gui/registration_viewer` on the newest run folder (raw, registered, and both
+as PMD: `alignment.hdf5`, and `MasknmfRunArray(run, on_alignment_copy=True)`).
 
 `mbo reg-denoise` (`masknmf/reg_denoise.py`) is pre-registration denoising for
 one channel: the raw movie's PMD (`raw/CompressionArray`), the rigid
@@ -889,7 +894,8 @@ the other.
   is drawn (its mean at the run coordinates); no tab is selected for the user. The row
   buttons on the ROIs tab, the `t` key and the Process tab all run one ROI the way
   the Process tab is set (`engine`, `run_where`, `run_frames`, `run_tag`).
-- **The ROIs pipeline** (`RoiPipelineWidget`, name `ROIs`, `axes_consumed`
+- **The ROIs pipeline** (`RoiPipelineWidget`, name `ROIs`; not listed in the
+  Process tab until it is reworked, neither hardcoded nor an entry point; `axes_consumed`
   `T: range, Z: select-one, C: select-one`) applies to any array with a time axis.
   It picks which ROIs (selected / group, listed, this slice, all), where they are
   read, the engine and tag, runs them, and shows the trace table cut down to those
@@ -1417,10 +1423,9 @@ ones. Remove an entry when its fix lands.
 **Pipelines**
 
 - Built-in widgets are hardcoded in `gui/widgets/pipelines/__init__.py:51-73` and
-  built-in tasks in `gui/tasks.py:1608-1619`; of the five widgets only `ROIs`
-  declares `info` and has a `pyproject.toml` `mbo_utilities.pipelines` entry (it is
-  also in the hardcoded list so a checkout finds it); none declares `task_type` or
-  `task_func`. Target: §7.2 for every built-in, entry points as the only
+  built-in tasks in `gui/tasks.py:1608-1619`; the `mbo_utilities.pipelines`
+  entry-point group is empty (`ROIs`, the one widget that declares `info`, is off
+  the Process tab for now); none declares `task_type` or `task_func`. Target: §7.2 for every built-in, entry points as the only
   registration path.
 - Suite2p's `PipelineInfo` is registered from the reader module with category
   `segmentation` (`arrays/suite2p.py:31-54`); MaskNMF, ROI workflow, and the IsoView

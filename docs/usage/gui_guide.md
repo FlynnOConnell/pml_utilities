@@ -544,7 +544,23 @@ Needs masknmf's `ui/launcher-pages` branch until it is released:
 uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"
 ```
 
-For fast, noisy recordings such as voltage imaging, motion is estimated on a denoised copy:
+For fast, noisy recordings such as voltage imaging, motion is estimated on a denoised copy.
+
+Quick start, one MESc unit:
+
+- Open the session: `mbo path	o\session.mesc`, or **File > Open**.
+- In the **MESc** tab, click the MUnit you want to process.
+- **Process > MaskNMF**.
+- Tick **Denoise before registration**.
+- **Set slice**: in **Channel**, pick the first channel only (listed as `1`); optionally narrow **Frames** to try settings on a short window.
+- Set the output folder (**Browse**).
+- **Pipeline Settings > Demixing**: set **Skip** unless you need ROIs; demixing is the slow stage.
+- **Run MaskNMF**; progress is in the Process Console (status button in the menu bar).
+- When it finishes, **View movies** shows raw and registered over the same two as PMD.
+
+From the GUI: **Process > MaskNMF**, tick **Denoise before registration**. The shifts are estimated on a quick PMD copy of the movie (as recorded, not inverted) and applied to the raw frames; the copy is saved as `alignment.hdf5` in the run folder and its block sizes are under **Pipeline Settings > Registration**. Turn demixing off under **Pipeline Settings** to stop at the denoised movie. **View movies** opens the last run folder under the output folder in its own window: raw and registered on top, the same two as PMD below (`python -m mbo_utilities.gui.registration_viewer <run folder>`).
+
+From the terminal, `mbo reg-denoise` runs the same three steps on one channel:
 
 1. **Reference**: the raw movie is PMD-compressed as recorded (not inverted).
 2. **Registration**: rigid shifts estimated on that compression are applied to the raw frames.
@@ -557,4 +573,4 @@ mbo scan_MSession_0_MUnit_3.reg_denoise/results.hdf5
 
 The second command opens **Registration-Denoising Quality Control**: raw and registered on top, the two compressions below, on one time slider and one camera. The traces above show the recording's RTMC curves (µm), the masknmf shifts (px), each movie's whole-frame mean, and each movie's mean inside the rectangle drawn on any of them.
 
-In the MaskNMF entry, **Invert deflection** (in **Set slice**) flips frames about the mean image so an indicator that dims on activity reads positive. Registration runs on the movie as recorded and the registered movie is inverted for compression and demixing. A run folder is masknmf's: `results.hdf5`, `config.json` and the log; no movie is copied, so `mbo <run folder>` replays the shifts on the recording. A later run on the same output folder with the same registration and compression settings and demixing on copies both stages from the last run and only demixes.
+In the MaskNMF entry, **Invert deflection** (in **Set slice**) flips frames about the mean image so an indicator that dims on activity reads positive. Registration runs on the movie as recorded and the registered movie is inverted for compression and demixing. A run folder is masknmf's: `results.hdf5`, `config.json`, the log and, with Denoise before registration, `alignment.hdf5`; no movie is copied, so `mbo <run folder>` replays the shifts on the recording. A later run on the same output folder with the same registration and compression settings and demixing on copies both stages from the last run and only demixes.

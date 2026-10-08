@@ -3572,11 +3572,9 @@ class TestRoiPipelineTab:
     engine; it edits the ROI widget's run settings and shows its table.
     """
 
-    def test_registered_and_applies_to_movies(self):
-        from mbo_utilities.gui.widgets.pipelines import get_available_pipelines
+    def test_applies_to_movies(self):
         from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
 
-        assert RoiPipelineWidget in get_available_pipelines()
         assert RoiPipelineWidget.name == "ROIs" and RoiPipelineWidget.is_available
         assert RoiPipelineWidget.applies_to(np.zeros((6, 8, 8)))
         assert RoiPipelineWidget.applies_to(np.zeros((6, 2, 3, 8, 8)))

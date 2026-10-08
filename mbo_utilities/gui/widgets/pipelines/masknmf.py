@@ -6,6 +6,9 @@ Settings popup with Skip/Run/Force stage columns and modified-orange
 tinting against dataclass defaults, a modified-parameters table, and a
 green centered Run button. Run spawns the "masknmf" worker task; each plane
 lands in a masknmf run folder (``masknmf.runner``) with a results zarr.
+Denoise before registration estimates the shifts on a quick denoised copy
+(``alignment.hdf5``); View movies opens the last run's raw and registered
+movies over the same two as PMD.
 """
 
 import dataclasses
@@ -315,6 +318,15 @@ class MaskNMFPipelineWidget(PipelineWidget):
         if imgui.button("Pipeline Settings##masknmf_settings", imgui.ImVec2(160, 0)):
             self._show_settings_popup = True
         set_tooltip("Per-stage Skip/Run/Force and parameters.", show_mark=False)
+        self._f_check(
+            self.settings.registration,
+            "denoised_reference",
+            "Denoise before registration",
+            tooltip="Estimate the shifts on a quick denoised copy of the movie "
+            "and apply them to the raw frames. Steadier shifts on noisy or "
+            "fast recordings; the copy is saved as alignment.hdf5. Its block "
+            "sizes are under Pipeline Settings > Registration.",
+        )
         self._draw_settings_popup()
         imgui.spacing()
         self._draw_modified_table()
@@ -678,6 +690,24 @@ class MaskNMFPipelineWidget(PipelineWidget):
             )
             self._f_int2(reg, "overlaps", "Overlaps", lo=0)
             self._f_int2(reg, "max_deviation_rigid", "Max deviation", lo=0)
+        self._f_check(
+            reg,
+            "denoised_reference",
+            "Denoise before registration",
+            tooltip="Estimate the shifts on a quick denoised copy of the movie "
+            "and apply them to the raw frames; the copy is saved as alignment.hdf5.",
+        )
+        if reg.denoised_reference:
+            self._f_int2(
+                reg,
+                "reference_block_sizes",
+                "Copy block sizes",
+                lo=2,
+                tooltip="Patch size in px of the denoised copy; small blocks keep fine detail.",
+            )
+            self._f_int(reg, "reference_max_components", "Copy components")
+            self._f_int(reg, "reference_spatial_avg_factor", "Copy spatial avg")
+            self._f_int(reg, "reference_temporal_avg_factor", "Copy temporal avg")
 
     def _draw_compression_params(self) -> None:
         comp = self.settings.compression
@@ -901,6 +931,29 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
         if clicked and ready:
             self._submit(planes)
+
+        if not self._outdir:
+            imgui.begin_disabled()
+        view = imgui.button("View movies##masknmf_view", imgui.ImVec2(_BTN_W * 1.5, 0))
+        if not self._outdir:
+            imgui.end_disabled()
+        set_tooltip(
+            "Raw and registered over raw (pmd) and registered (pmd), from the run "
+            "folder last written under the output folder.",
+            show_mark=False,
+        )
+        if not view:
+            return
+        written = [(p.stat().st_mtime, p.parent) for p in Path(self._outdir).glob("**/config.json")]
+        if not written:
+            self._last_status = f"No run folder in {self._outdir} yet."
+            return
+        from mbo_utilities.gui.launch import launch_window
+
+        run = max(written)[1]
+        # its own process: a second figure built inside this imgui frame crashes imgui
+        pid = launch_window("mbo_utilities.gui.registration_viewer", [str(run)], f"movies_{run.name}")
+        self._last_status = f"Opened {run.name} in its own window (PID {pid})."
 
     def _submit(self, planes: list[int]) -> None:
         from mbo_utilities.gui.widgets.process_manager import get_process_manager

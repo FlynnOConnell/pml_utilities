@@ -152,7 +152,7 @@ def imread(
     - .h5 with an ``imaging_system = bruker`` dataset: Bruker exports, axes from its dimension labels
     - .hdf5 with a DemixingResults group: masknmf demixing results, C = view (the GUI opens these in masknmf's viewers)
       (PMD movie, demixed signals, residual)
-    - .hdf5 with a CompressionArray group: a masknmf compressed movie (compression.hdf5)
+    - .hdf5 with a CompressionArray group: a masknmf compressed movie (compression.hdf5, alignment.hdf5)
     - .mesc: Femtonics MESc acquisitions (one MUnit per array)
     - .zarr: Zarr v3
     - .npy: NumPy arrays
