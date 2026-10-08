@@ -974,3 +974,31 @@ def test_plane_dirs_are_read_through_the_tag_vocabulary(tmp_path):
             ),
         )
         assert rw.load_run_dir(d).z == z, name
+
+
+def test_masknmf_registration_feeds_extraction_from_run_folders(tmp_path, store):
+    if not (_importable("masknmf") and _importable("torch")):
+        pytest.skip("masknmf/torch not importable")
+    n = 200
+    rng = np.random.default_rng(0)
+    mov = rng.integers(90, 110, size=(n, 2, LY, LX)).astype(np.int16)
+    for i, rec in enumerate(store.rois):
+        mask = store.labels[rec.plane] == (i + 1)
+        mov[::10, rec.plane][:, mask] += np.int16(100 * (i + 1))
+    np.save(tmp_path / "rec.npy", mov)
+    out = rw.run(
+        tmp_path / "rec.npy",
+        tmp_path / "reg",
+        register_method="masknmf",
+        process="extract",
+        rois=store,
+        planes=[2],
+        register_settings=_MNMF,
+    )
+    assert set(out) == {1}
+    run = out[1].parent
+    assert run.parent == tmp_path / "reg" and run.name.endswith("_masknmf_zplane02")
+    assert not (run / "data.bin").exists()
+    res = rw.load_run_dir(out[1])
+    assert res.kind == "extract" and res.F.shape == (2, n)
+    assert rw.register(tmp_path / "reg", "", "none") == [run]

@@ -619,15 +619,18 @@ def _kind_of(ops: dict) -> str:
 
 def run_dir_complete(d) -> bool:
     """True when ``d`` holds a loadable run: ``stat.npy`` + ``ops.npy``, a
-    results file (``mbo_utilities.results``), or one unit inside one
-    (``<file>.zarr/zplane01``).
+    results file (``mbo_utilities.results``), a masknmf run folder holding
+    one, or one unit inside one (``<file>.zarr/zplane01``).
     """
-    from mbo_utilities.results import results_pipeline
+    from mbo_utilities.arrays.masknmf_run import is_masknmf_run
+    from mbo_utilities.results import newest_results, results_pipeline
 
     d = Path(d)
     if (d / "stat.npy").exists() and (d / "ops.npy").exists():
         return True
     if results_pipeline(d) is not None:
+        return True
+    if is_masknmf_run(d) and newest_results(d) is not None:
         return True
     return (
         d.parent.suffix == ".zarr"
@@ -639,13 +642,14 @@ def run_dir_complete(d) -> bool:
 def finished_dirs(out_root, planes=None) -> list[Path]:
     """Completed output dirs under ``out_root`` for 1-based ``planes`` (any
     plane when None): the root itself when it holds outputs, else its
-    ``zplaneNN*`` children - pipelines may suffix the name with a frame
-    range, so match by prefix.
+    children naming the plane - suite2p's ``zplaneNN*`` (pipelines may
+    suffix a frame range) and masknmf's ``<stamp>_masknmf_zplaneNN*`` run
+    folders.
     """
     root = Path(out_root)
     if run_dir_complete(root):
         return [root]
-    pats = [f"zplane{int(p):02d}*" for p in planes] if planes else ["zplane*"]
+    pats = [f"*zplane{int(p):02d}*" for p in planes] if planes else ["*zplane*"]
     out: list[Path] = []
     for pat in pats:
         out += [d for d in sorted(root.glob(pat)) if d.is_dir() and run_dir_complete(d)]
@@ -656,7 +660,7 @@ def scan_run_dirs(fpath) -> list[dict]:
     """Loadable run dirs beside ``fpath``, newest first.
 
     Covers ``rois_<tag>/`` dirs (and their per-plane ``zNN/`` children) and
-    sibling ``zplane*`` trees from full-plane pipelines (including their own
+    sibling ``zplane*`` trees and masknmf ``*_zplane*`` run folders from full-plane pipelines (including their own
     ``rois_*`` subsets), vanilla suite2p ``plane*`` / ``suite2p/plane*`` dirs,
     and the opened dir itself when it holds results. Rows are ``{"path", "kind", "n_rois", "mtime"}``; a
     dir without ``stat.npy`` + ``ops.npy`` (still being written, say) is
@@ -679,7 +683,7 @@ def scan_run_dirs(fpath) -> list[dict]:
         for child in sorted(d.glob("z[0-9]*")):
             if child.is_dir():
                 add(child)
-    for d in sorted(base.glob("zplane*")):
+    for d in sorted(base.glob("*zplane*")):
         if not d.is_dir():
             continue
         add(d)
@@ -714,7 +718,7 @@ def scan_run_dirs(fpath) -> list[dict]:
     # results files (mbo_utilities.results) beside the data, in a run dir, or in a PF folder
     from mbo_utilities.results import results_summary
 
-    for pattern in ("*.zarr", f"{OUT_PREFIX}*/*.zarr", "zplane*/*.zarr", "PF/*.zarr"):
+    for pattern in ("*.zarr", f"{OUT_PREFIX}*/*.zarr", "*zplane*/*.zarr", "PF/*.zarr"):
         for z in sorted(base.glob(pattern)):
             summary = results_summary(z)
             if summary is None:

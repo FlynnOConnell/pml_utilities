@@ -13,8 +13,9 @@ traces) reads through that view. If the array is spatially lazy, ROI reads
 touch only the ROI's bounding box; if it is not, they still work.
 
 Sources can be a lazy array, a numpy array, or anything ``imread`` opens -
-a raw file, a suite2p / masknmf plane dir (``ops.npy`` + registered
-``data.bin``), or a directory of plane dirs.
+a raw file, a suite2p plane dir (``ops.npy`` + registered ``data.bin``), a
+masknmf run folder (its registered movie rebuilt from the recording), or a
+directory of either.
 
 ROIs come from the manual-ROI tool (``manual_labels.zarr`` /
 ``RoiLabelStore``). The processing steps are
@@ -610,16 +611,20 @@ def plane_index(plane_dir: str | Path, ops: dict | None = None) -> int:
 
 
 def _find_plane_dirs(root: str | Path) -> list[Path]:
+    """Suite2p-shaped plane dirs (``ops.npy``) or masknmf run folders at or under ``root``."""
+    from mbo_utilities.arrays.masknmf_run import RUN_CONFIG, is_masknmf_run
+
     root = Path(root)
-    if (root / "ops.npy").exists():
+    if (root / "ops.npy").exists() or is_masknmf_run(root):
         return [root]
     dirs = sorted(
         p.parent
-        for p in root.rglob("ops.npy")
+        for p in (*root.rglob("ops.npy"), *root.rglob(RUN_CONFIG))
         if not p.parent.name.startswith(OUT_PREFIX)
+        and ((p.parent / "ops.npy").exists() or is_masknmf_run(p.parent))
     )
     if not dirs:
-        raise FileNotFoundError(f"no ops.npy under {root}")
+        raise FileNotFoundError(f"no ops.npy or masknmf run folder under {root}")
     return dirs
 
 
@@ -923,7 +928,7 @@ def register(
     force: bool = False,
     logger=None,
 ) -> list[Path]:
-    """Register ``input_data`` and return the suite2p-shaped plane dirs.
+    """Register ``input_data`` and return the plane dirs: suite2p-shaped, or masknmf run folders.
 
     ``planes`` are 1-based (lsp / masknmf convention); ``None`` means every
     z-plane. ``method="none"`` treats ``input_data`` as already-registered
@@ -932,8 +937,9 @@ def register(
     - ``suite2p``: ``lbm_suite2p_python.run_volume`` with detection off
       (``roidetect=0``). ``settings`` are extra ops.
     - ``masknmf``: ``mbo_utilities.masknmf.run_plane`` with compression and
-      demixing skipped. ``settings`` is a ``MasknmfSettings`` dict; only its
-      ``registration`` / ``runtime`` sections are used.
+      demixing skipped, one run folder per plane (``MasknmfRunArray`` opens
+      its registered movie). ``settings`` is a ``MasknmfSettings`` dict; only
+      its ``registration`` / ``runtime`` sections are used.
     """
     logger = logger or log.get("roi_workflow")
     save_path = Path(save_path)
@@ -987,11 +993,11 @@ def register(
         s.registration.do_registration = STAGE_FORCE if force else STAGE_RUN
         s.compression.do_compression = STAGE_SKIP
         s.demixing.do_demixing = STAGE_SKIP
-        s.runtime.keep_bin = True
         logger.info(
             f"roi_workflow: masknmf registration of planes {planes} -> {save_path}"
         )
-        for p in planes:
+        # a run folder per plane; its registered movie is the shifts replayed on the source
+        runs = [
             mnmf_run_plane(
                 arr,
                 save_path,
@@ -1003,6 +1009,10 @@ def register(
                 replot=False,
                 logger=logger,
             )
+            for p in planes
+        ]
+        logger.info(f"roi_workflow: registration done in {time.time() - t0:.1f}s")
+        return runs
     else:
         raise ValueError(f"unknown registration method {method!r}")
 
@@ -1578,7 +1588,8 @@ def _cached_pmd_crop(
     ----------
     source
         The plane source ``movie`` was opened from; its plane dir is where
-        the cached ``compression.hdf5`` is looked up.
+        the cached ``compression.hdf5`` (or a masknmf run folder's
+        ``results.hdf5``) is looked up.
     movie : PlaneMovie
         The crop to serve; its ``box`` gives the window.
     cfg : MasknmfCompressionSettings
@@ -1594,6 +1605,10 @@ def _cached_pmd_crop(
         is no usable cache (no plane dir, no file, stale settings, a shape
         mismatch, or ``movie`` is not a crop).
     """
+    import h5py
+
+    from mbo_utilities.arrays.compression import GROUP, has_compressed_movie
+    from mbo_utilities.arrays.masknmf_run import RESULTS_FILE
     from mbo_utilities.masknmf import runner as _runner
     from mbo_utilities.masknmf.params import PMD_FILE, STAGE_FORCE
 
@@ -1603,10 +1618,17 @@ def _cached_pmd_crop(
     src = _source_path(source)
     if src is None:
         return None
-    pmd_path = (src if src.is_dir() else src.parent) / PMD_FILE
-    if not pmd_path.exists():
-        return None
-    stored = _runner._read_provenance(pmd_path)
+    folder = src if src.is_dir() else src.parent
+    pmd_path = folder / RESULTS_FILE
+    if has_compressed_movie(pmd_path):
+        with h5py.File(pmd_path, "r") as f:
+            stored = f[GROUP].attrs.get("mbo_provenance")
+        stored = None if stored is None else json.loads(stored)
+    else:
+        pmd_path = folder / PMD_FILE
+        if not pmd_path.exists():
+            return None
+        stored = _runner._read_provenance(pmd_path)
     if stored is None or stored.get("settings") != _runner._stage_hash(
         cfg, "do_compression"
     ):
