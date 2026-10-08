@@ -56,6 +56,15 @@ def is_masknmf_run(path: Path | str) -> bool:
     return (p / RUN_CONFIG).is_file() and (p / RESULTS_FILE).is_file()
 
 
+def run_demixing(path: Path | str) -> Path | None:
+    """A run folder's ``results.hdf5`` when the run demixed, else None."""
+    p = Path(path)
+    if not is_masknmf_run(p):
+        return None
+    with h5py.File(p / RESULTS_FILE, "r") as f:
+        return p / RESULTS_FILE if "DemixingResults" in f else None
+
+
 def run_config(run: Path | str) -> dict:
     """A run folder's ``config.json``."""
     return json.loads((Path(run) / RUN_CONFIG).read_text(encoding="utf-8"))

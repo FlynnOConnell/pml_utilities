@@ -20,7 +20,13 @@ The `mbo` command provides tools for viewing, converting, and analyzing imaging 
 mbo                          # file dialog
 mbo /path/to/data            # open specific file
 mbo /path/to/data --metadata # show only metadata
+mbo /path/to/<time>_masknmf_zplane01 --qc   # a MaskNMF run in Registration-Denoising Quality Control
 ```
+
+A MaskNMF run folder opens in the Studio, or in masknmf's demixing viewer when
+the run demixed; `--qc` opens raw | registered over both as PMD, with the RTMC
+curves, the masknmf shifts, each movie's frame mean and its mean inside a box
+you drag.
 
 ::::{grid} 1 1 2 2
 :gutter: 3
