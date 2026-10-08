@@ -69,7 +69,7 @@ against a local checkout, `uv pip install ~/repos/masknmf-toolbox`. Entry-point 
 | `arrays/features` | Dims, tags, selection, ROI, phase, frame average, stats; format-agnostic | Know about any one file format |
 | `metadata` | Canonical vocabulary, alias resolution, `OutputMetadata`, ScanImage parsing | Read pixels |
 | `writer` + `_writers` | `imwrite`; emit canonical values under each format's keys; `ops.npy`; provenance | Hand-roll alias fan-out; every emitted key comes from the registry or `OutputMetadata` |
-| `masknmf` `vnoiser` `roi_workflow` `hpc` | Run a pipeline from a settings dataclass; write suite2p-shaped outputs | Import `imgui_bundle`, `fastplotlib`, or `mbo_utilities.gui` |
+| `masknmf` `vnoiser` `roi_workflow` `hpc` | Run a pipeline from a settings dataclass; write its outputs (§7.4) | Import `imgui_bundle`, `fastplotlib`, or `mbo_utilities.gui` |
 | `gui` views | Draw what the array answers (`results`, `motion_correction`, `behavior`) at the position the host's `Slice` and `Playhead` say is on screen (§7.6) | Read `iw.indices` itself; parse a pipeline's files; name a format |
 | `gui/widgets/pipelines` | Draw a pipeline's config; spawn its worker task | Compute inline; hold pipeline math |
 | `gui/tasks` + `gui/_worker` | Re-open the source in a subprocess and call the runner | Depend on GUI state; args are JSON |
@@ -201,7 +201,7 @@ never branch on rank.
 3. Every class in the `mbo_utilities.lazy_arrays` entry-point group (plus
    `register_array_class` calls) is asked `can_open(path)` in descending
    `PRIORITY`; ties keep entry-point order. First `True` wins. Priorities today:
-   `IsoviewArray` 90, `ResultsArray` 70, `MescArray` 60, `BrukerArray` 60, everything else 50.
+   `IsoviewArray` 90, `MasknmfRunArray` 75, `ResultsArray` 70, `MescArray` 60, `BrukerArray` 60, everything else 50.
 4. Inputs no class claims (file lists, `.bin`, `.klb`, `.mp4`, `reg_tif/`, mixed
    directories) fall through to the legacy chain in `reader._imread_impl`.
 5. A directory or list of files a class above 50 claims (a Bruker h5, a MESc:
@@ -649,9 +649,33 @@ summary widgets, and `mbo info` load them unchanged:
   zplane02_tp00001-01574/
 ```
 
-Filenames are matched; semantics may differ and the pipeline wins (MaskNMF writes
-zeros for `Fneu`/`spks`). Anything pipeline-specific keeps its own name
-(`demixing_results.hdf5`, `PF/`, `norm_traces.npy`).
+Filenames are matched; semantics may differ and the pipeline wins. Anything
+pipeline-specific keeps its own name (`demixing_results.hdf5`, `PF/`,
+`norm_traces.npy`).
+
+MaskNMF is the exception: it writes masknmf's own run folder per plane and no
+movie, so `masknmf view`, `masknmf.io.OpenedResults` and the masknmf launcher
+open its runs as they open masknmf's:
+
+```
+<save_path>/
+  20261007T183740_masknmf_zplane01_tp00001-01574/
+    results.hdf5        RigidRegistrationArray + RigidMotionCorrector, CompressionArray,
+                        DemixingResults; each stage group's mbo_provenance attr
+    config.json         masknmf.io.write_run_config: pipeline mbo_utilities.masknmf,
+                        configs (MasknmfSettings), inputs.movie (path, reader_kwargs,
+                        read_features, plane, z, c, frames | tp_indices, fs), run, timings
+    <folder name>.log   masknmf's log
+    alignment.hdf5      the denoised copy registration ran on (denoised_reference)
+    <stem>.<stamp>.masknmf.zarr   the results file (§7.5) when demixing ran
+    *.png               QC figures
+```
+
+`MasknmfRunArray` (`imread(<run folder>)`) re-opens the recording from
+`inputs.movie` and replays the stored shifts on it, so the registered movie is
+never on disk; its `results` is the zarr, its `motion_correction` the shifts.
+A stage set to Run copies its group from the newest earlier run folder of the
+same plane when the group's provenance (settings hash and input) matches.
 
 `hpc/` runs the suite2p pipeline only (`lbm_suite2p_python.pipeline`), configured by
 `hpc.toml` (`[io]`, `[slurm]`, `[pipeline]`, `[parameters]`); a second pipeline gets

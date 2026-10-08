@@ -1,35 +1,51 @@
 """masknmf pipeline runner: registration -> PMD compression -> demixing.
 
-Per-plane flow mirrors lbm_suite2p_python.run_plane: write (or reuse) a
-``data_raw.bin`` suite2p binary via imwrite, run the masknmf stages with
-Skip/Run/Force gating on each stage's native HDF5 export
-(``motion_correction.hdf5`` / ``compression.hdf5`` / ``demixing_results.hdf5``),
-then export suite2p-shaped npy sidecars and QC figures. Re-running over an
-existing output dir with all stages cached only redoes exports + figures.
+Each plane runs into a new masknmf run folder,
+``<save_path>/<yyyymmddTHHMMSS>_masknmf_zplaneNN[_tpAAAAA-BBBBB]/``:
+``results.hdf5`` with one group per stage, ``config.json``, the masknmf log,
+``alignment.hdf5`` when registration ran on a denoised copy, the results zarr
+(``mbo_utilities.results``) when demixing ran, and the QC figures. No movie
+is written: the stages read the recording through ``imread`` and the
+registered movie is the stored shifts replayed on it
+(``arrays.masknmf_run.MasknmfRunArray``). Skip/Run/Force gates each stage on
+the newest earlier run folder of the same plane: a stage whose stored
+provenance matches is copied over instead of recomputed.
 
 masknmf imports are function-local: the package is optional, heavy to import,
 and its stage math runs in the spawned worker subprocess.
 """
 
+import functools
 import hashlib
 import json
+import logging
 import os
+import shutil
 import time
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
+import h5py
 import numpy as np
 
 from mbo_utilities import log
+from mbo_utilities.arrays.masknmf_run import RESULTS_FILE
 from mbo_utilities.masknmf import outputs as _outputs
 from mbo_utilities.masknmf.params import (
     ALIGN_FILE,
     DEMIX_FILE,
-    MOCO_FILE,
     PMD_FILE,
     MasknmfSettings,
     stage_action,
 )
+
+# the pipeline name a run's config.json records
+PIPELINE = "mbo_utilities.masknmf"
+
+
+def _no_progress(**_) -> None:
+    pass
 
 
 def _hash(obj) -> str:
@@ -44,20 +60,8 @@ def _stage_hash(cfg, tri_field: str) -> str:
     return _hash(d)
 
 
-def _raw_fingerprint(plane_dir: Path) -> str:
-    raw = plane_dir / "data_raw.bin"
-    try:
-        with open(raw, "rb") as f:
-            head = f.read(65536)
-        return _hash([raw.stat().st_size, hashlib.sha1(head).hexdigest()])
-    except OSError:
-        return ""
-
-
 def _read_provenance(path: Path) -> dict | None:
     try:
-        import h5py
-
         with h5py.File(path, "r") as f:
             return json.loads(f.attrs["mbo_provenance"])
     except Exception:
@@ -73,11 +77,31 @@ def _export_atomic(obj, path: Path, prov: dict | None = None) -> None:
         tmp.unlink()
     obj.export(str(tmp))
     if prov is not None:
-        import h5py
-
         with h5py.File(tmp, "a") as f:
             f.attrs["mbo_provenance"] = json.dumps(prov, sort_keys=True)
     os.replace(tmp, path)
+
+
+def _matches(previous: Path | None, group: str, prov: dict) -> bool:
+    """Whether the previous run's results file holds ``group`` made with ``prov``."""
+    if previous is None:
+        return False
+    with h5py.File(previous / RESULTS_FILE, "r") as f:
+        if group not in f or "mbo_provenance" not in f[group].attrs:
+            return False
+        return json.loads(f[group].attrs["mbo_provenance"]) == prov
+
+
+def _copy_groups(previous: Path, results_path: Path, groups: list[str]) -> None:
+    with h5py.File(previous / RESULTS_FILE, "r") as src, h5py.File(results_path, "a") as dst:
+        for group in groups:
+            if group in src:
+                src.copy(src[group], dst, group)
+
+
+def _stamp(results_path: Path, group: str, prov: dict) -> None:
+    with h5py.File(results_path, "a") as f:
+        f[group].attrs["mbo_provenance"] = json.dumps(prov, sort_keys=True)
 
 
 def _to_np(x) -> np.ndarray:
@@ -135,147 +159,10 @@ def generate_plane_dirname(plane: int, frame_indices: list[int] | None = None) -
     return name
 
 
-def _history_entry(step: str, duration: float | None = None, **extra) -> dict:
-    try:
-        from importlib.metadata import version
-
-        ver = version("masknmf")
-    except Exception:
-        ver = "unknown"
-    entry = {
-        "step": step,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "masknmf_version": ver,
-    }
-    if duration is not None:
-        entry["duration_seconds"] = round(duration, 2)
-    entry.update(extra)
-    return entry
-
-
-def _valid_raw_bin(plane_dir: Path, nframes: int, ly: int, lx: int) -> bool:
-    raw = plane_dir / "data_raw.bin"
-    if not raw.exists():
-        return False
-    # trust the recorded dims over the array's reported shape — multi-ROI
-    # stitching can write a different height than the source reports
-    ops_path = plane_dir / "ops.npy"
-    if ops_path.exists():
-        try:
-            ops = np.load(ops_path, allow_pickle=True).item()
-            ly = int(ops.get("Ly") or ly)
-            lx = int(ops.get("Lx") or lx)
-        except Exception:
-            pass
-    return raw.stat().st_size == nframes * ly * lx * 2
-
-
-def _write_raw_bin(
-    input_data,
-    plane_dir: Path,
-    plane: int,
-    channel: int | None,
-    frame_indices: list[int] | None,
-    metadata: dict | None,
-    writer_kwargs: dict | None,
-    logger,
-) -> Path:
-    from mbo_utilities import imread, imwrite
-    from mbo_utilities.arrays.features import apply_read_features
-
-    arr = input_data if hasattr(input_data, "shape") else imread(input_data)
-    # read-time features (phase settings, frame_average) apply to the array;
-    # nz below must see the binned/phase-set array, not the raw reader
-    arr, kwargs = apply_read_features(arr, writer_kwargs)
-    if frame_indices is not None:
-        kwargs["timepoints"] = [i + 1 for i in frame_indices]
-    if channel is not None:
-        kwargs["channels"] = [int(channel)]
-    # single-z sources (incl. natural-rank 3D readers) take the planeless
-    # fast path; a planes= selection would force 5D indexing onto them
-    nz = int(arr._shape5d()[2]) if hasattr(arr, "_shape5d") else 1
-    if nz > 1:
-        kwargs["planes"] = int(plane)
-    imwrite(
-        arr,
-        plane_dir,
-        ext=".bin",
-        output_name="data_raw.bin",
-        metadata=dict(metadata or {}),
-        overwrite=True,
-        **kwargs,
-    )
-    logger.info(f"masknmf: wrote {plane_dir / 'data_raw.bin'}")
-    return plane_dir / "data_raw.bin"
-
-
-def _open_raw(plane_dir: Path) -> tuple[np.memmap, dict]:
-    ops = _outputs.merge_ops(plane_dir, {})
-    ly = ops.get("Ly") or ops.get("ly")
-    lx = ops.get("Lx") or ops.get("lx")
-    if not ly or not lx:
-        raise ValueError(f"{plane_dir / 'ops.npy'} lacks Ly/Lx")
-    ly, lx = int(ly), int(lx)
-    raw = plane_dir / "data_raw.bin"
-    nframes = raw.stat().st_size // (ly * lx * 2)
-    mov = np.memmap(raw, dtype=np.int16, mode="r", shape=(nframes, ly, lx))
-    return mov, ops
-
-
-def _stage_registration(
-    raw, cfg, runtime, plane_dir: Path, device: str, logger, raw_fp
-):
-    """Returns (movie_for_compression, shifts_np, template_np, seconds, prov_key)."""
-    moco_path = plane_dir / MOCO_FILE
-    action = stage_action(cfg.do_registration, moco_path.exists())
-    if action == "skip":
-        logger.info("masknmf: registration skipped")
-        return raw, None, None, 0.0, raw_fp
-
+def _register(raw, cfg, runtime, device: str, logger):
+    """``(registration array over raw, the movie its shifts were estimated on)``."""
     import masknmf
 
-    prov = {"settings": _stage_hash(cfg, "do_registration"), "input": raw_fp}
-    key = _hash(prov)
-    cls = (
-        masknmf.PiecewiseRigidRegistrationArray
-        if cfg.strategy == "pwrigid"
-        else masknmf.RigidRegistrationArray
-    )
-    if action == "reuse":
-        stored = _read_provenance(moco_path)
-        if stored is not None and stored != prov:
-            logger.info(
-                f"masknmf: cached {MOCO_FILE} stale (settings or input changed); recomputing"
-            )
-            action = "compute"
-    if action == "reuse":
-        try:
-            import torch
-
-            moco = cls.from_hdf5(str(moco_path), input_movie=raw)
-            # pwrigid ctor skips the shifts-vs-frames check the rigid one has
-            if int(moco.shifts.shape[0]) != int(raw.shape[0]):
-                raise ValueError(
-                    f"cached shifts cover {int(moco.shifts.shape[0])} frames, "
-                    f"movie has {raw.shape[0]}"
-                )
-            # from_hdf5 rebuilds the strategy with device='auto'; honor the
-            # configured device for reads
-            moco.output_device = torch.device(device)
-            logger.info(f"masknmf: reusing {MOCO_FILE}")
-            shifts = _to_np(moco.shifts)
-            template = getattr(moco.strategy, "template", None)
-            return (
-                moco,
-                shifts,
-                _to_np(template) if template is not None else None,
-                0.0,
-                key,
-            )
-        except Exception as e:
-            logger.warning(f"masknmf: cached {MOCO_FILE} unusable ({e}); recomputing")
-
-    t0 = time.time()
     corrector_cls = (
         masknmf.PiecewiseRigidMotionCorrector
         if cfg.strategy == "pwrigid"
@@ -294,24 +181,12 @@ def _stage_registration(
             frame_batch_size=runtime.frame_batch_size,
             device=device,
         ).compress(raw)
-        _export_atomic(reference, plane_dir / ALIGN_FILE, prov)
-    else:
-        (plane_dir / ALIGN_FILE).unlink(missing_ok=True)
     logger.info(f"masknmf: computing {cfg.strategy} registration template")
     strategy.compute_template(reference)
     logger.info("masknmf: estimating shifts")
     moco = strategy.motion_correct(reference, target_movie=raw)
     moco.output_device = moco.strategy.device
-    _export_atomic(moco, moco_path, prov)
-    shifts = _to_np(moco.shifts)
-    template = getattr(moco.strategy, "template", None)
-    return (
-        moco,
-        shifts,
-        _to_np(template) if template is not None else None,
-        time.time() - t0,
-        key,
-    )
+    return moco, reference
 
 
 def _shift_mask(shifts, shape: tuple[int, int], border: int) -> np.ndarray:
@@ -333,6 +208,26 @@ def _shift_mask(shifts, shape: tuple[int, int], border: int) -> np.ndarray:
     return mask
 
 
+def _compress(moco, cfg, device: str, mask, fs, logger):
+    """The PMD ``CompressionArray`` of ``moco``."""
+    import masknmf
+
+    kw = cfg.strategy_kwargs()
+    kw["pixel_weighting"] = mask
+    strat_cls = (
+        masknmf.CompressDenoiseStrategy if cfg.denoise else masknmf.CompressStrategy
+    )
+    strat = strat_cls(device=device, **kw)
+    if cfg.detrend:
+        detrender = _spline_detrender(
+            int(moco.shape[0]), fs, 40, 25, device, logger, "compression"
+        )
+        if detrender is not None:
+            strat.detrender = detrender
+    logger.info("masknmf: running PMD compression")
+    return strat.compress(moco)
+
+
 def _stage_compression(
     moco,
     cfg,
@@ -345,7 +240,7 @@ def _stage_compression(
     upstream_key,
     upstream_computed,
 ):
-    """Returns (CompressionArray, seconds, prov_key)."""
+    """``compression.hdf5`` in ``plane_dir``, cached by provenance; returns (CompressionArray, seconds, prov_key)."""
     pmd_path = plane_dir / PMD_FILE
     cached = pmd_path.exists()
     action = stage_action(cfg.do_compression, cached)
@@ -356,8 +251,6 @@ def _stage_compression(
     }
     key = _hash(prov)
     if action == "skip" and not cached:
-        # registration-only run (e.g. roi_workflow.register): nothing to
-        # demix from, so the caller skips demixing too
         logger.info(
             "masknmf: compression skipped (no cached PMD; demixing will be skipped)"
         )
@@ -388,21 +281,7 @@ def _stage_compression(
             logger.warning(f"masknmf: cached {PMD_FILE} unusable ({e}); recomputing")
 
     t0 = time.time()
-    kw = cfg.strategy_kwargs()
-    kw["pixel_weighting"] = mask
-    strat_cls = (
-        masknmf.CompressDenoiseStrategy if cfg.denoise else masknmf.CompressStrategy
-    )
-    strat = strat_cls(device=device, **kw)
-    nframes = int(moco.shape[0])
-    if cfg.detrend:
-        detrender = _spline_detrender(
-            nframes, fs, 40, 25, device, logger, "compression"
-        )
-        if detrender is not None:
-            strat.detrender = detrender
-    logger.info("masknmf: running PMD compression")
-    pmd = strat.compress(moco)
+    pmd = _compress(moco, cfg, device, mask, fs, logger)
     _export_atomic(pmd, pmd_path, prov)
     # reload so demixing always consumes the exact persisted decomposition
     return masknmf.CompressionArray.from_hdf5(str(pmd_path)), time.time() - t0, key
@@ -474,63 +353,15 @@ def clamp_background_downsampling(cfg, ly: int, lx: int, logger=None):
     return out
 
 
-def _stage_demixing(
-    pmd,
-    cfg,
-    runtime,
-    plane_dir: Path,
-    device: str,
-    fs,
-    logger,
-    upstream_key,
-    upstream_computed,
-):
-    """Returns (DemixingResults | None, seconds)."""
-    demix_path = plane_dir / DEMIX_FILE
-    action = stage_action(cfg.do_demixing, demix_path.exists())
-    if action == "skip":
-        logger.info("masknmf: demixing skipped")
-        return None, 0.0
-
+def _demix(pmd, cfg, runtime, device: str, fs, logger):
+    """``DemixingResults`` of ``pmd``: filtered passes seed the unfiltered ones."""
     import masknmf
-
-    # before the provenance hash, so the cache key reflects what actually ran
-    cfg = clamp_background_downsampling(cfg, pmd.shape[1], pmd.shape[2], logger)
-    prov = {
-        "settings": _stage_hash(cfg, "do_demixing"),
-        "input": upstream_key,
-        "fs": fs,
-    }
-    if action == "reuse" and upstream_computed:
-        logger.info("masknmf: upstream stage recomputed; recomputing demixing")
-        action = "compute"
-    if action == "reuse":
-        stored = _read_provenance(demix_path)
-        if stored is not None and stored != prov:
-            logger.info(
-                f"masknmf: cached {DEMIX_FILE} stale (settings or input changed); recomputing"
-            )
-            action = "compute"
-    if action == "reuse":
-        try:
-            results = masknmf.DemixingResults.from_hdf5(str(demix_path))
-            logger.info(f"masknmf: reusing {DEMIX_FILE}")
-            return results, 0.0
-        except Exception as e:
-            logger.warning(f"masknmf: cached {DEMIX_FILE} unusable ({e}); recomputing")
-
     import torch
     from masknmf.demixing import NoSignalsDetectedError
 
-    t0 = time.time()
     detrender = _spline_detrender(
         int(pmd.shape[0]), fs, 20, 20, device, logger, "demixing"
     )
-
-    def _empty_cache():
-        if device.startswith("cuda"):
-            torch.cuda.empty_cache()
-
     logger.info(f"masknmf: spatial highpass (sigma={cfg.filter_sigma})")
     filtered = masknmf.demixing.filters.spatial_filter_compressed_array(
         pmd,
@@ -538,7 +369,8 @@ def _stage_demixing(
         filter_sigma=cfg.filter_sigma,
         target_device=device,
     )
-    _empty_cache()
+    if device.startswith("cuda"):
+        torch.cuda.empty_cache()
 
     demixer = masknmf.SignalDemixer(
         filtered, device=device, frame_batch_size=runtime.frame_batch_size
@@ -554,7 +386,8 @@ def _stage_demixing(
             **cfg.nmf_kwargs(cfg.support_threshold_lo, ring=False, detrender=detrender)
         )
         filtered_results = demixer.results
-        _empty_cache()
+        if device.startswith("cuda"):
+            torch.cuda.empty_cache()
     if filtered_results is None:
         raise ValueError(
             "masknmf found no signals in the highpass-filtered movie; "
@@ -586,46 +419,15 @@ def _stage_demixing(
             **cfg.nmf_kwargs(cfg.unfiltered_support_lo, ring=True, detrender=detrender)
         )
         results = demixer.results
-        _empty_cache()
+        if device.startswith("cuda"):
+            torch.cuda.empty_cache()
     if results is None:
         raise ValueError("masknmf unfiltered demixing did not complete a pass")
-
-    _export_atomic(results, demix_path, prov)
-    return results, time.time() - t0
-
-
-def _write_registered_bin(
-    moco, plane_dir: Path, logger
-) -> tuple[np.ndarray, np.ndarray]:
-    """Stream the registered movie to data.bin; returns (meanImg, max_proj).
-
-    Written to a temp name and renamed on completion: np.memmap
-    preallocates the full file up front, so a crash mid-write would
-    otherwise leave a full-size partial data.bin that later runs (and
-    Suite2pArray) trust as complete.
-    """
-    nframes, ly, lx = (int(s) for s in moco.shape)
-    tmp = plane_dir / "data.bin.partial"
-    out = np.memmap(tmp, dtype=np.int16, mode="w+", shape=(nframes, ly, lx))
-    acc = np.zeros((ly, lx), dtype=np.float64)
-    mx = np.full((ly, lx), -np.inf, dtype=np.float64)
-    step = 200
-    for t0 in range(0, nframes, step):
-        # masknmf arrays raise on slice stops past n_frames instead of
-        # clamping like numpy
-        chunk = _to_np(moco[t0 : min(t0 + step, nframes)]).astype(np.float32)
-        acc += chunk.sum(axis=0)
-        np.maximum(mx, chunk.max(axis=0), out=mx)
-        out[t0 : t0 + chunk.shape[0]] = np.clip(chunk, -32768, 32767).astype(np.int16)
-    out.flush()
-    del out
-    os.replace(tmp, plane_dir / "data.bin")
-    logger.info(f"masknmf: wrote {plane_dir / 'data.bin'}")
-    return (acc / max(nframes, 1)).astype(np.float32), mx.astype(np.float32)
+    return results
 
 
 def _movie_stats(moco) -> tuple[np.ndarray, np.ndarray]:
-    """meanImg/max_proj from up to 500 evenly-sampled frames (no bin write)."""
+    """meanImg/max_proj from up to 500 evenly-sampled frames."""
     nframes = int(moco.shape[0])
     idx = np.unique(np.linspace(0, nframes - 1, min(nframes, 500)).astype(int))
     frames = _to_np(moco[idx.tolist()]).astype(np.float32)
@@ -642,6 +444,41 @@ def _extract_footprints(results):
     )
 
 
+def _results_unit(results, pmd, plane: int, run: Path, fs, images: dict):
+    """``(unit, ROIs with a positive F0)``: the demixing as one pixel unit of a
+    results file, with calibrated ``raw`` and ``dff`` traces.
+    """
+    from mbo_utilities.results import ResultUnit, unit_name
+
+    indices, values, baseline = _extract_footprints(results)
+    c = np.asarray(results.signals_array.export_temporal_demixed(), dtype=np.float32)
+    n_rois = int(c.shape[1])
+    footprints = _outputs.split_sparse_footprints(indices, values, n_rois)
+    # the PMD standardisation images calibrate c back to movie units
+    gain, f0 = _outputs.roi_calibration(
+        footprints,
+        var_img=_to_np(pmd.noise_variance_image),
+        mean_img=_to_np(pmd.mean_image),
+        baseline=baseline,
+    )
+    F, dff = _outputs.calibrated_traces(c, gain, f0)
+    return ResultUnit(
+        name=unit_name("plane", plane),
+        kind="plane",
+        index=plane,
+        fs=fs,
+        roi_names=[str(k) for k in range(n_rois)],
+        traces={"raw": F, "dff": dff},
+        member_kind="pixel",
+        members=[pix.astype(np.int64) for pix, _ in footprints],
+        weights=[lam.astype(np.float32) for _, lam in footprints],
+        image_shape=tuple(int(s) for s in results.fov_shape),
+        iscell=np.ones((n_rois, 2), dtype=np.float32),
+        images=images,
+        attrs={"plane_dir": str(run), "z": plane - 1},
+    ), int((f0 > 0).sum())
+
+
 def run_plane(
     input_data,
     save_path,
@@ -650,13 +487,27 @@ def run_plane(
     metadata: dict | None = None,
     frame_indices: list[int] | None = None,
     channel: int | None = None,
-    plane_name: str | None = None,
     replot: bool = True,
     writer_kwargs: dict | None = None,
     logger=None,
     progress_callback=None,
 ) -> Path:
-    """Run the masknmf pipeline on one z-plane (1-based). Returns ops.npy path."""
+    """Run the masknmf pipeline on one z-plane (1-based) into a new run folder; returns it.
+
+    ``writer_kwargs`` are the read features applied to the recording
+    (``fix_phase``, ``use_fft``, ``frame_average``, ``invert_deflection``);
+    ``channel`` is 1-based; ``progress_callback(step=, message=)``.
+    """
+    import masknmf
+
+    from mbo_utilities import imread
+    from mbo_utilities.arrays.features import apply_read_features
+    from mbo_utilities.arrays.features._slicing import index_window
+    from mbo_utilities.metadata import get_param
+    from mbo_utilities.reader import source_reader_kwargs
+    from mbo_utilities.results import Results, results_name
+    from mbo_utilities.roi_workflow import PlaneMovie
+
     logger = logger or log.get()
     if not isinstance(settings, MasknmfSettings):
         settings = MasknmfSettings.from_dict(settings)
@@ -667,223 +518,169 @@ def run_plane(
         settings.runtime,
     )
     save_path = Path(save_path)
-    plane_dir = save_path / (plane_name or generate_plane_dirname(plane, frame_indices))
-    plane_dir.mkdir(parents=True, exist_ok=True)
     device = _resolve_device(runtime.device, logger)
-    total_t0 = time.time()
-
-    def _progress(step: str, message: str):
-        if progress_callback is not None:
-            try:
-                progress_callback(step=step, message=message)
-            except Exception:
-                pass
-
-    # 1) raw binary (reused when dims already match, like lsp _should_write_bin)
-    from mbo_utilities import imread
-    from mbo_utilities.metadata import get_param
+    progress = progress_callback or _no_progress
 
     arr = input_data if hasattr(input_data, "shape") else imread(input_data)
-    src_ly, src_lx = int(arr.shape[-2]), int(arr.shape[-1])
-    want_frames = len(frame_indices) if frame_indices is not None else int(arr.shape[0])
-    force_bin = reg.do_registration == 2 or comp.do_compression == 2
-    if force_bin or not _valid_raw_bin(plane_dir, want_frames, src_ly, src_lx):
-        _progress("writing_binary", f"Writing raw binary for plane {plane}")
-        _write_raw_bin(
-            arr,
-            plane_dir,
-            plane,
-            channel,
-            frame_indices,
-            metadata,
-            writer_kwargs,
-            logger,
-        )
-    else:
-        logger.info("masknmf: reusing existing data_raw.bin")
-
-    raw, ops = _open_raw(plane_dir)
-    raw_fp = _raw_fingerprint(plane_dir)
-    fs = get_param(ops, "fs") or get_param(dict(metadata or {}), "fs")
-    fs = float(fs) if fs else None
-    timing: dict = {}
-    history = list(ops.get("processing_history") or [])
-
-    # 2) registration
-    _progress("registration", f"Registering plane {plane}")
-    moco, shifts, template, timing["registration"], reg_key = _stage_registration(
-        raw, reg, runtime, plane_dir, device, logger, raw_fp
+    source = getattr(arr, "source_path", None)
+    reader_kwargs = source_reader_kwargs(arr)
+    read_features = {k: v for k, v in (writer_kwargs or {}).items() if v is not None}
+    arr, _ = apply_read_features(arr, read_features)
+    nz = int(arr._shape5d()[2]) if hasattr(arr, "_shape5d") else 1
+    z = plane - 1 if nz > 1 else 0
+    c = int(channel) - 1 if channel is not None else 0
+    raw = PlaneMovie(arr, z=z, c=c).select(frame_indices)
+    window = index_window(frame_indices)
+    fs = get_param(dict(metadata or {}), "fs") or get_param(
+        dict(getattr(arr, "metadata", None) or {}), "fs"
     )
-    reg_computed = timing["registration"] > 0
-    if reg_computed:
-        history.append(
-            _history_entry(
-                "masknmf_registration", timing["registration"], strategy=reg.strategy
-            )
-        )
-    elif shifts is not None:
-        history.append(
-            _history_entry("masknmf_registration", strategy=reg.strategy, reused=True)
-        )
-
-    # 3) compression
-    _progress("compression", f"Compressing plane {plane}")
-    mask = _shift_mask(shifts, raw.shape[1:], runtime.exclude_border_radius)
-    pmd, timing["compression"], pmd_key = _stage_compression(
-        moco,
-        comp,
-        runtime,
-        plane_dir,
-        device,
-        mask,
-        fs,
-        logger,
-        reg_key,
-        reg_computed,
-    )
-    comp_computed = timing["compression"] > 0
-    if comp_computed:
-        history.append(
-            _history_entry(
-                "masknmf_compression",
-                timing["compression"],
-                rank=pmd.compression_rank if pmd is not None else 0,
-            )
-        )
-    else:
-        history.append(
-            _history_entry(
-                "masknmf_compression",
-                rank=pmd.compression_rank if pmd is not None else 0,
-                reused=True,
-            )
-        )
-
-    # 4) demixing
-    _progress("demixing", f"Demixing plane {plane}")
-    if pmd is None:
-        logger.info("masknmf: demixing skipped (no PMD)")
-        results, timing["detection"] = None, 0.0
-    else:
-        results, timing["detection"] = _stage_demixing(
-            pmd,
-            demix,
-            runtime,
-            plane_dir,
-            device,
-            fs,
-            logger,
-            pmd_key,
-            reg_computed or comp_computed,
-        )
-    if timing["detection"]:
-        history.append(_history_entry("masknmf_demixing", timing["detection"]))
-    elif results is not None:
-        history.append(_history_entry("masknmf_demixing", reused=True))
-
-    # 5) exports: registered binary + summary images + suite2p sidecars
-    _progress("exports", f"Writing outputs for plane {plane}")
-    is_registered = shifts is not None
-    if (
-        runtime.keep_bin
-        and is_registered
-        and (force_bin or reg_computed or not (plane_dir / "data.bin").exists())
-    ):
-        mean_img, max_proj = _write_registered_bin(moco, plane_dir, logger)
-    else:
-        mean_img, max_proj = _movie_stats(moco)
-
-    n_rois = 0
-    if results is not None:
-        indices, values, baseline = _extract_footprints(results)
-        c = np.asarray(
-            results.signals_array.export_temporal_demixed(), dtype=np.float32
-        )
-        # PMD standardisation images calibrate c back to movie units; without
-        # them F.npy stays in noise-SD units and dF/F cannot be formed.
-        info = _outputs.write_plane_outputs(
-            plane_dir,
-            indices=indices,
-            values=values,
-            c=c,
-            shape=raw.shape[1:],
-            baseline=baseline,
-            var_img=_to_np(pmd.noise_variance_image) if pmd is not None else None,
-            mean_img=_to_np(pmd.mean_image) if pmd is not None else None,
-        )
-        n_rois = info["n_rois"]
-        logger.info(f"masknmf: plane {plane} -> {n_rois} ROIs")
-        if info["n_calibrated"] < n_rois:
-            logger.warning(
-                f"masknmf: plane {plane} - {n_rois - info['n_calibrated']}/{n_rois} "
-                "ROIs have no positive F0; their dF/F is written as zeros"
-            )
-
-    vcorr = None
-    if results is not None:
-        try:
-            ci = np.asarray(results.standard_correlation_images[:])
-            vcorr = ci.max(axis=0) if ci.ndim == 3 else ci
-        except Exception:
-            vcorr = None
-
-    timing["total_plane_runtime"] = time.time() - total_t0
-    updates = {
-        "Ly": raw.shape[1],
-        "Lx": raw.shape[2],
-        "nframes": raw.shape[0],
+    fs = float(fs) / (window[2] if window else 1) if fs else None
+    movie = {
+        "path": None if source is None else str(source),
+        "name": None if source is None else Path(source).name,
+        "reader_kwargs": reader_kwargs,
+        "read_features": read_features,
         "plane": plane,
-        "nplanes": 1,
-        "nchannels": 1,
-        "anatomical_only": 0,
-        "meanImg": mean_img,
-        "max_proj": max_proj,
-        "yrange": [0, raw.shape[1]],
-        "xrange": [0, raw.shape[2]],
-        "timing": {
-            "registration": timing.get("registration", 0.0),
-            "detection": timing.get("detection", 0.0),
-            "extraction": timing.get("compression", 0.0),
-            "classification": 0.0,
-            "deconvolution": 0.0,
-            "total_plane_runtime": timing["total_plane_runtime"],
-        },
-        "n_rois": n_rois,
-        "pmd_rank": pmd.compression_rank if pmd is not None else 0,
-        "pipeline": "masknmf",
-        "masknmf": settings.to_dict(),
-        "processing_history": history,
+        "z": z,
+        "c": c,
+        "frames": None if window is None else list(window),
+        "tp_indices": None
+        if frame_indices is None or window is not None
+        else [int(t) for t in frame_indices],
+        "fs": fs,
     }
-    if fs:
-        updates["fs"] = fs
-    if template is not None:
-        updates["refImg"] = template
-    if vcorr is not None:
-        updates["Vcorr"] = vcorr
-    ops = _outputs.merge_ops(plane_dir, updates)
 
-    # 6) QC figures — regenerated on every run (idempotent replot)
-    if replot:
-        _progress("figures", f"Plotting QC for plane {plane}")
-        from mbo_utilities.masknmf import qc
-
-        qc.plot_plane_figures(
-            plane_dir, shifts=shifts, pmd=pmd, results=results, fs=fs, logger=logger
+    name = f"masknmf_{generate_plane_dirname(plane, frame_indices)}"
+    earlier = sorted(p for p in save_path.glob(f"*_{name}") if (p / RESULTS_FILE).is_file())
+    previous = earlier[-1] if earlier else None
+    run = masknmf.io.create_run_folder(save_path, name)
+    handler = masknmf.io.log_to(run)
+    results_path = run / RESULTS_FILE
+    logger.info(f"masknmf: plane {plane} -> {run}")
+    timings: dict = {}
+    record = {"start": datetime.now().isoformat(timespec="seconds"), "device": device}
+    try:
+        progress(step="registration", message=f"Registering plane {plane}")
+        t0 = time.time()
+        cls = (
+            masknmf.PiecewiseRigidRegistrationArray
+            if reg.strategy == "pwrigid"
+            else masknmf.RigidRegistrationArray
         )
+        reg_prov = {"settings": _stage_hash(reg, "do_registration"), "input": _hash(movie)}
+        reg_key = _hash(reg_prov)
+        action = stage_action(reg.do_registration, _matches(previous, cls.__name__, reg_prov))
+        shifts = template = None
+        if action == "skip":
+            logger.info("masknmf: registration skipped")
+            moco = raw
+        else:
+            if action == "reuse":
+                logger.info(f"masknmf: reusing the registration of {previous.name}")
+                _copy_groups(previous, results_path, [cls.__name__, cls._strategy_cls.__name__])
+                if (previous / ALIGN_FILE).is_file():
+                    shutil.copyfile(previous / ALIGN_FILE, run / ALIGN_FILE)
+                moco = cls.from_hdf5(results_path, input_movie=raw, device=device)
+            else:
+                moco, reference = _register(raw, reg, runtime, device, logger)
+                moco.export(results_path)
+                _stamp(results_path, cls.__name__, reg_prov)
+                if reference is not raw:
+                    reference.export(run / ALIGN_FILE)
+            shifts = _to_np(moco.shifts)
+            template = getattr(moco.strategy, "template", None)
+            template = None if template is None else _to_np(template)
+        timings["registration"] = {"seconds": round(time.time() - t0, 2), "action": action}
 
-    # drop the raw binary only when a registered data.bin replaces it —
-    # otherwise the plane dir would hold no movie for Suite2pArray to read
-    if not runtime.keep_raw and (plane_dir / "data.bin").exists():
-        del moco
-        if hasattr(raw, "_mmap"):
-            raw._mmap.close()
-        del raw
-        try:
-            (plane_dir / "data_raw.bin").unlink()
-        except OSError:
-            pass
+        progress(step="compression", message=f"Compressing plane {plane}")
+        t0 = time.time()
+        comp_prov = {"settings": _stage_hash(comp, "do_compression"), "input": reg_key, "fs": fs}
+        comp_key = _hash(comp_prov)
+        group = masknmf.io.group_name_compression()
+        cached = _matches(previous, group, comp_prov)
+        action = stage_action(comp.do_compression, cached)
+        if action == "skip" and not cached:
+            logger.info("masknmf: compression skipped (demixing will be skipped)")
+            pmd = None
+        else:
+            if action == "compute":
+                mask = _shift_mask(shifts, raw.shape[1:], runtime.exclude_border_radius)
+                _compress(moco, comp, device, mask, fs, logger).export(results_path)
+                _stamp(results_path, group, comp_prov)
+            else:
+                logger.info(f"masknmf: reusing the compression of {previous.name}")
+                _copy_groups(previous, results_path, [group])
+            # demixing consumes the decomposition as the file holds it
+            pmd = masknmf.CompressionArray.from_hdf5(results_path)
+        timings["compression"] = {"seconds": round(time.time() - t0, 2), "action": action}
 
-    return plane_dir / "ops.npy"
+        progress(step="demixing", message=f"Demixing plane {plane}")
+        t0 = time.time()
+        results = None
+        if pmd is None:
+            action = "skip"
+        else:
+            demix = clamp_background_downsampling(demix, pmd.shape[1], pmd.shape[2], logger)
+            demix_prov = {"settings": _stage_hash(demix, "do_demixing"), "input": comp_key, "fs": fs}
+            group = masknmf.io.group_name_demixing()
+            action = stage_action(demix.do_demixing, _matches(previous, group, demix_prov))
+            if action == "compute":
+                _demix(pmd, demix, runtime, device, fs, logger).export(results_path)
+                _stamp(results_path, group, demix_prov)
+            elif action == "reuse":
+                logger.info(f"masknmf: reusing the demixing of {previous.name}")
+                _copy_groups(previous, results_path, [group])
+            if action != "skip":
+                results = masknmf.DemixingResults.from_hdf5(results_path, device=device)
+        timings["demixing"] = {"seconds": round(time.time() - t0, 2), "action": action}
+
+        progress(step="exports", message=f"Writing outputs for plane {plane}")
+        if results is not None:
+            mean_img, max_proj = _movie_stats(moco)
+            images = {"mean": mean_img, "max": max_proj}
+            ci = np.asarray(results.standard_correlation_images[:])
+            images["corr"] = ci.max(axis=0) if ci.ndim == 3 else ci
+            if template is not None:
+                images["ref"] = template
+            unit, n_calibrated = _results_unit(results, pmd, plane, run, fs, images)
+            Results(
+                pipeline="masknmf",
+                units={unit.name: unit},
+                source={"path": movie["path"], "planes": [plane], "reader_kwargs": reader_kwargs},
+                settings=settings.to_dict(),
+                metadata={"fs": fs} if fs else {},
+            ).write(run / results_name(source or run.name, pipeline="masknmf"))
+            logger.info(f"masknmf: plane {plane} -> {unit.n_rois} ROIs")
+            if n_calibrated < unit.n_rois:
+                logger.warning(
+                    f"masknmf: plane {plane} - {unit.n_rois - n_calibrated}/{unit.n_rois} "
+                    "ROIs have no positive F0; their dF/F is written as zeros"
+                )
+        if replot:
+            progress(step="figures", message=f"Plotting QC for plane {plane}")
+            from mbo_utilities.masknmf import qc
+
+            qc.plot_plane_figures(
+                run,
+                shifts=shifts,
+                pmd=pmd,
+                results=results,
+                fs=fs,
+                vcorr=images["corr"] if results is not None else None,
+                logger=logger,
+            )
+        record["status"] = "completed"
+    except BaseException:
+        record["status"] = "failed"
+        raise
+    finally:
+        record["end"] = datetime.now().isoformat(timespec="seconds")
+        masknmf.io.write_run_config(
+            run, PIPELINE, settings.to_dict(), run=record, inputs={"movie": movie}, timings=timings
+        )
+        logging.getLogger("masknmf").removeHandler(handler)
+        handler.close()
+    return run
 
 
 def run_volume(
@@ -899,7 +696,10 @@ def run_volume(
     logger=None,
     progress_callback=None,
 ) -> list[Path]:
-    """Run the masknmf pipeline over selected 1-based z-planes."""
+    """Run the masknmf pipeline over selected 1-based z-planes; returns their run folders.
+
+    ``progress_callback(plane=, total_planes=, step=, message=)``.
+    """
     logger = logger or log.get()
     from mbo_utilities import imread
 
@@ -907,34 +707,21 @@ def run_volume(
     if planes is None:
         nz = int(arr._shape5d()[2]) if hasattr(arr, "_shape5d") else 1
         planes = list(range(1, nz + 1))
-
-    ops_files: list[Path] = []
-    for i, plane in enumerate(planes):
-
-        def _plane_progress(step="", message="", _i=i):
-            if progress_callback is not None:
-                progress_callback(
-                    plane=_i, total_planes=len(planes), step=step, message=message
-                )
-
-        ops_files.append(
-            run_plane(
-                arr,
-                save_path,
-                plane=plane,
-                settings=settings,
-                metadata=metadata,
-                frame_indices=frame_indices,
-                channel=channel,
-                replot=replot,
-                writer_kwargs=writer_kwargs,
-                logger=logger,
-                progress_callback=_plane_progress,
-            )
+    return [
+        run_plane(
+            arr,
+            save_path,
+            plane=plane,
+            settings=settings,
+            metadata=metadata,
+            frame_indices=frame_indices,
+            channel=channel,
+            replot=replot,
+            writer_kwargs=writer_kwargs,
+            logger=logger,
+            progress_callback=None
+            if progress_callback is None
+            else functools.partial(progress_callback, plane=i, total_planes=len(planes)),
         )
-
-    if replot and len(ops_files) > 1:
-        from mbo_utilities.masknmf import qc
-
-        qc.plot_volume_figures(Path(save_path), ops_files, logger=logger)
-    return ops_files
+        for i, plane in enumerate(planes)
+    ]

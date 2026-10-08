@@ -6,9 +6,9 @@ each stage mirror the upstream ``masknmf.pipelines.configs`` dataclasses so
 values pass straight through ``asdict``-style into the strategies.
 
 Stage tri-states follow the suite2p convention: 0=skip, 1=run, 2=force.
-"skip" means the stage's cached HDF5 output is required (compression) or the
-stage is bypassed entirely (registration); "run" reuses a valid cached output;
-"force" always recomputes.
+"skip" bypasses the stage (compression: the last run's is reused when it
+matches); "run" copies the last run folder's stage when its provenance
+matches, else computes; "force" always recomputes.
 """
 
 from dataclasses import asdict, dataclass, field, fields
@@ -18,8 +18,7 @@ STAGE_SKIP = 0
 STAGE_RUN = 1
 STAGE_FORCE = 2
 
-# per-stage native outputs inside a plane dir; gating keys on their presence
-MOCO_FILE = "motion_correction.hdf5"
+# compression and demixing files roi_workflow caches in its own output dirs
 PMD_FILE = "compression.hdf5"
 DEMIX_FILE = "demixing_results.hdf5"
 # the denoised copy shifts are estimated on when registration uses one
@@ -157,11 +156,6 @@ class MasknmfRuntimeSettings:
     device: str = "cuda"  # auto | cuda | cpu
     frame_batch_size: int = 300
     exclude_border_radius: int = 0
-    # native HDF5 stage outputs stay on disk so Skip/Run gating can resume
-    keep_intermediates: bool = True
-    # suite2p-parity binaries
-    keep_bin: bool = True  # write registered data.bin
-    keep_raw: bool = False  # keep data_raw.bin after the run
 
 
 @dataclass

@@ -380,7 +380,7 @@ def main(
     type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="For a masknmf demixing result: the raw movie, shown as a panel in the demixing viewer. "
-    "Omitted: data_raw.bin beside the result, if any.",
+    "Omitted: the recording a run folder's config.json names, else data_raw.bin beside the result, if any.",
 )
 @click.option(
     "--motion-correction",
@@ -388,7 +388,7 @@ def main(
     type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="For a masknmf demixing result: a motion correction hdf5 whose shifts plot above the traces. "
-    "Omitted: motion_correction.hdf5 beside the result, if any.",
+    "Omitted: the registration in a run folder's results.hdf5, else motion_correction.hdf5 beside the result, if any.",
 )
 @click.option(
     "--debug/--no-debug",
