@@ -622,7 +622,11 @@ class MescTabWidget(Widget):
             for i, (name, hidden) in enumerate(UNIT_COLUMNS):
                 column_flags = imgui.TableColumnFlags_.width_fixed
                 if i == 0:
-                    column_flags |= imgui.TableColumnFlags_.default_sort
+                    # the row's selectable lives here; hidden, a row takes no clicks
+                    column_flags |= (
+                        imgui.TableColumnFlags_.default_sort
+                        | imgui.TableColumnFlags_.no_hide
+                    )
                 if hidden:
                     column_flags |= imgui.TableColumnFlags_.default_hide
                 imgui.table_setup_column(name, column_flags)
