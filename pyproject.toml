@@ -58,6 +58,7 @@ mesc = "mbo_utilities.arrays.mesc:MescArray"
 results = "mbo_utilities.results:ResultsArray"
 demixing = "mbo_utilities.arrays.demixing:DemixingArray"
 compression = "mbo_utilities.arrays.compression:CompressedMovieArray"
+masknmf_run = "mbo_utilities.arrays.masknmf_run:MasknmfRunArray"
 numpy = "mbo_utilities.arrays.numpy:NumpyArray"
 isoview = "mbo_utilities.arrays.isoview.array:IsoviewArray"
 
