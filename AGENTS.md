@@ -686,7 +686,8 @@ the movie as recorded and applies them to the raw frames; **View movies** opens
 alignment copy, `pmd(registered)` the compression stage, the recording's RTMC)
 as well as a reg-denoise file. A viewer that dies leaves its traceback in
 `~/.mbo/logs/<stamp>_movies_<run>.log` and its last line in the widget's
-status. From a terminal, `mbo <run folder> --qc` opens the same viewer;
+status. From a terminal, `mbo <run folder> --qc` opens the same viewer, and
+the launcher's **Registration QC (MaskNMF run)** entry is the same switch;
 without `--qc` a run folder opens in the Studio (`MasknmfRunArray`), or in
 masknmf's demixing viewer when its `results.hdf5` holds a `DemixingResults`
 (`arrays.masknmf_run.run_demixing`).
