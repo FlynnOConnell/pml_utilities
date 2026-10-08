@@ -32,12 +32,9 @@ def fake_process_manager():
     return FakeProcessManager()
 
 
-class FakeViewer:
-    def __init__(self, plane):
-        VIEWED.append(plane)
-
-    def show(self):
-        pass
+def fake_launch(module, args, log_name):
+    VIEWED.append((module, args))
+    return 4243
 
 
 def frames(fn, n=2):
@@ -123,9 +120,7 @@ def test_run_sends_the_inverted_movie_and_the_preset(widget, tmp_path, monkeypat
 def test_view_movies_opens_the_newest_run_folder(widget, tmp_path, monkeypatch):
     import os
 
-    monkeypatch.setattr(
-        "mbo_utilities.gui.registration_viewer.registration_viewer", FakeViewer
-    )
+    monkeypatch.setattr("mbo_utilities.gui.launch.launch_window", fake_launch)
     monkeypatch.setattr(imgui, "button", press)
     PRESSED.clear()
     PRESSED.add("View movies")
@@ -138,4 +133,6 @@ def test_view_movies_opens_the_newest_run_folder(widget, tmp_path, monkeypatch):
     widget._outdir = str(out)
     VIEWED.clear()
     frames(widget.draw_config, n=1)
-    assert VIEWED == [out / "20261007T110000_masknmf_zplane01"]
+    run = out / "20261007T110000_masknmf_zplane01"
+    assert VIEWED == [("mbo_utilities.gui.registration_viewer", [str(run)])]
+    assert "4243" in widget._last_status

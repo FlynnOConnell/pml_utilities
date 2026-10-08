@@ -24,10 +24,6 @@ class VoltagePreprocessingWidget(MaskNMFPipelineWidget):
     name = "Voltage Preprocessing"
     run_label = "Run Preprocessing"
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self._viewer = None
-
     def default_settings(self):
         from mbo_utilities.masknmf.params import STAGE_SKIP
 
@@ -54,9 +50,9 @@ class VoltagePreprocessingWidget(MaskNMFPipelineWidget):
         if not written:
             self._last_status = f"No run folder in {self._outdir} yet."
             return
-        from mbo_utilities.gui.registration_viewer import registration_viewer
+        from mbo_utilities.gui.launch import launch_window
 
         run = max(written)[1]
-        self._viewer = registration_viewer(run)
-        self._viewer.show()
-        self._last_status = f"Showing {run.name}."
+        # its own process: a second figure built inside this imgui frame crashes imgui
+        pid = launch_window("mbo_utilities.gui.registration_viewer", [str(run)], f"movies_{run.name}")
+        self._last_status = f"Opened {run.name} in its own window (PID {pid})."
