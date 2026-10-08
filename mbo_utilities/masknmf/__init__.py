@@ -1,8 +1,8 @@
 """masknmf pipeline integration (optional; requires the `masknmf` package).
 
-Stage-gated registration -> PMD compression -> demixing per z-plane, writing
-suite2p-shaped outputs so the shared QC/figure/GUI tooling applies. See
-`runner.run_plane` / `runner.run_volume`.
+Stage-gated registration -> PMD compression -> demixing per z-plane, each
+into a masknmf run folder (``results.hdf5``, ``config.json``, the log) with a
+results zarr for the shared tooling. See `runner.run_plane` / `runner.run_volume`.
 """
 
 _LAZY = {

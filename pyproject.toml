@@ -57,6 +57,8 @@ bruker = "mbo_utilities.arrays.bruker:BrukerArray"
 mesc = "mbo_utilities.arrays.mesc:MescArray"
 results = "mbo_utilities.results:ResultsArray"
 demixing = "mbo_utilities.arrays.demixing:DemixingArray"
+compression = "mbo_utilities.arrays.compression:CompressedMovieArray"
+masknmf_run = "mbo_utilities.arrays.masknmf_run:MasknmfRunArray"
 numpy = "mbo_utilities.arrays.numpy:NumpyArray"
 isoview = "mbo_utilities.arrays.isoview.array:IsoviewArray"
 
@@ -69,6 +71,8 @@ Documentation = "https://millerbrainobservatory.github.io/mbo_utilities/index.ht
 Repository = "https://github.com/FlynnOConnell/pml_utilities"
 Issues = "https://github.com/MillerBrainObservatory/mbo_utilities/issues"
 
+# masknmf is not pinned yet; the MaskNMF and Voltage Preprocessing pipelines need its ui/launcher-pages branch:
+# uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"
 [project.optional-dependencies]
 hpc = ["submitit>=1.5.0"]
 server = ["uvicorn>=0.30", "websockets>=13"]

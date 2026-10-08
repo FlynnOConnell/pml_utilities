@@ -730,14 +730,15 @@ def plot_plane_figures(
     pmd=None,
     results=None,
     fs: float | None = None,
+    vcorr: np.ndarray | None = None,
     logger=None,
 ) -> None:
-    """All per-plane QC: the renamed lsp suite plus masknmf-native panels."""
+    """All per-plane QC: the renamed lsp suite (on a suite2p-shaped dir) plus masknmf-native panels."""
     logger = logger or log.get()
     plane_dir = Path(plane_dir)
     _clear_previous(plane_dir)
 
-    if results is not None and _has_lsp():
+    if results is not None and _has_lsp() and (plane_dir / "stat.npy").exists():
 
         def _roi_stats():
             from lbm_suite2p_python.postprocessing import compute_roi_stats
@@ -755,16 +756,15 @@ def plot_plane_figures(
         _try(logger, "roi stats", _roi_stats)
         _try(logger, "zplane figures", _zplane_figs)
         _rename_lsp_outputs(plane_dir, logger)
-    elif results is not None:
+    elif results is not None and not _has_lsp():
         logger.info(
             "masknmf qc: lbm_suite2p_python not installed - "
             "skipping the shared figure suite"
         )
 
     if results is not None:
-        vcorr = None
         ops_path = plane_dir / "ops.npy"
-        if ops_path.exists():
+        if vcorr is None and ops_path.exists():
             try:
                 vcorr = np.load(ops_path, allow_pickle=True).item().get("Vcorr")
             except Exception:
@@ -786,7 +786,7 @@ def plot_plane_figures(
                 plane_dir,
                 resid,
             )
-            if _has_lsp():
+            if _has_lsp() and (plane_dir / "stat.npy").exists():
                 _try(
                     logger,
                     "residual correlation footprints",
@@ -838,63 +838,3 @@ def plot_plane_figures(
         _try(
             logger, "registration summary", plot_registration_summary, plane_dir, shifts
         )
-
-
-def plot_volume_figures(save_path: Path, ops_files: list[Path], logger=None) -> None:
-    """Volume-level QC via the lsp aggregate suite (zstats + summary PNGs)."""
-    logger = logger or log.get()
-    if not _has_lsp():
-        logger.info("masknmf qc: lbm_suite2p_python not installed - no volume figures")
-        return
-    save_path = Path(save_path)
-    ops_files = [str(p) for p in ops_files]
-
-    def _stats():
-        from lbm_suite2p_python.volume import get_volume_stats
-
-        get_volume_stats(ops_files, overwrite=True)
-
-    def _diagnostics():
-        from lbm_suite2p_python.volume import plot_volume_diagnostics
-
-        plot_volume_diagnostics(
-            ops_files, save_path=str(save_path / "volume_quality_diagnostics.png")
-        )
-
-    def _ortho():
-        from lbm_suite2p_python.volume import plot_orthoslices
-
-        plot_orthoslices(ops_files, save_path=str(save_path / "orthoslices.png"))
-
-    def _roi_map():
-        from lbm_suite2p_python.volume import plot_3d_roi_map
-
-        plot_3d_roi_map(
-            ops_files, save_path=str(save_path / "roi_map_3d.png"), color_by="snr"
-        )
-        plot_3d_roi_map(
-            ops_files,
-            save_path=str(save_path / "roi_map_3d_plane.png"),
-            color_by="plane",
-        )
-
-    def _overlay():
-        from lbm_suite2p_python.zplane import plot_volume_accepted_rejected_overlay
-
-        plot_volume_accepted_rejected_overlay(
-            ops_files, savepath=str(save_path / "volume_segmentation_overlay.png")
-        )
-
-    def _traces():
-        from lbm_suite2p_python.volume import plot_volume_trace_figures
-
-        plot_volume_trace_figures(
-            ops_files, str(save_path), norm_method="zscore", correct_neuropil=False
-        )
-
-    _try(logger, "volume stats", _stats)
-    _try(logger, "volume diagnostics", _diagnostics)
-    _try(logger, "orthoslices", _ortho)
-    _try(logger, "3d roi map", _roi_map)
-    _try(logger, "segmentation overlay", _overlay)
-    _try(logger, "volume trace figures", _traces)

@@ -1,6 +1,6 @@
 """masknmf integration tests: params round-trip, stage gating, suite2p-shaped
 output conversion. No masknmf install required — the compute stages are only
-exercised when the package is present (none here yet).
+exercised when the package is present (the denoised-reference registration run).
 """
 
 import json
@@ -238,23 +238,23 @@ def test_find_masknmf_run(tmp_path):
     assert find_masknmf_run(tmp_path) == (None, None)
     assert find_masknmf_run(None) == (None, None)
 
-    # failed run: stage cache exists, ops.npy never stamped -> outdir only
-    plane = tmp_path / "zplane01"
-    plane.mkdir()
-    (plane / "motion_correction.hdf5").touch()
+    # a run folder of another pipeline: outdir only
+    older = tmp_path / "20261007T120000_masknmf_zplane01"
+    older.mkdir()
+    (older / "results.hdf5").touch()
+    (older / "config.json").write_text(json.dumps({"pipeline": "Other", "configs": {}}))
     params, outdir = find_masknmf_run(tmp_path)
     assert params is None and outdir == str(tmp_path)
 
-    # partial run whose ops.npy predates the masknmf stamp
-    np.save(plane / "ops.npy", {"Ly": 4, "Lx": 5})
-    params, outdir = find_masknmf_run(plane)
-    assert params is None and outdir == str(tmp_path)
-
-    # completed run: parameters come back, from any entry point
+    # the newest run folder's parameters come back, from any entry point
     saved = MasknmfSettings()
     saved.demixing.maxiter = 55
-    np.save(plane / "ops.npy", {"pipeline": "masknmf", "masknmf": saved.to_dict()})
-    for entry in (tmp_path, plane, plane / "ops.npy"):
+    newer = tmp_path / "20261007T130000_masknmf_zplane01"
+    newer.mkdir()
+    (newer / "results.hdf5").touch()
+    config = {"pipeline": "mbo_utilities.masknmf", "configs": saved.to_dict()}
+    (newer / "config.json").write_text(json.dumps(config))
+    for entry in (tmp_path, newer, newer / "config.json"):
         params, outdir = find_masknmf_run(entry)
         assert outdir == str(tmp_path)
         assert MasknmfSettings.from_dict(params).demixing.maxiter == 55
@@ -353,3 +353,212 @@ class TestSplineDetrender:
             pytest.skip("masknmf not importable")
         det = self._make(168_533, 429.93)
         assert det is not None and det.window == int(40 * 429.93)
+
+
+def test_reference_kwargs_make_the_denoised_copy():
+    reg = MasknmfSettings().registration
+    assert reg.denoised_reference is False
+    reg.reference_block_sizes = [6, 6]
+    assert reg.reference_kwargs() == {
+        "block_sizes": (6, 6),
+        "max_components": 20,
+        "max_consecutive_failures": 1,
+        "spatial_avg_factor": 4,
+        "temporal_avg_factor": 2,
+    }
+
+
+@pytest.fixture
+def shaking_movie():
+    """(T, 1, 1, Y, X) int16: two blobs moved by known integer shifts plus noise."""
+    rng = np.random.default_rng(0)
+    yy, xx = np.mgrid[:48, :48]
+    base = (
+        400
+        + 300 * np.exp(-((yy - 24) ** 2 + (xx - 20) ** 2) / 30)
+        + 200 * np.exp(-((yy - 12) ** 2 + (xx - 34) ** 2) / 20)
+    )
+    shifts = rng.integers(-3, 4, size=(300, 2))
+    mov = np.stack([np.roll(base, tuple(s), axis=(0, 1)) for s in shifts])
+    mov = mov + rng.normal(0, 40, mov.shape)
+    return mov.astype(np.int16)[:, None, None], shifts
+
+
+@pytest.fixture
+def shaking_tif(tmp_path, shaking_movie):
+    import tifffile
+
+    movie, _ = shaking_movie
+    path = tmp_path / "movie.tif"
+    tifffile.imwrite(path, movie[:, 0, 0])
+    return path
+
+
+@pytest.fixture
+def denoised_registration():
+    s = MasknmfSettings()
+    s.registration.denoised_reference = True
+    s.registration.max_shifts = (6, 6)
+    s.compression.denoise = False
+    s.compression.block_sizes = (16, 16)
+    s.demixing.do_demixing = STAGE_SKIP
+    s.runtime.device = "cpu"
+    return s
+
+
+@pytest.mark.slow
+def test_a_run_folder_holds_no_movie_and_registers_the_raw_one(
+    tmp_path, shaking_tif, shaking_movie, denoised_registration
+):
+    pytest.importorskip("masknmf")
+    import h5py
+
+    from mbo_utilities import imread
+    from mbo_utilities.arrays.masknmf_run import MasknmfRunArray
+    from mbo_utilities.masknmf import run_plane
+
+    movie, shifts = shaking_movie
+    run = run_plane(
+        str(shaking_tif),
+        tmp_path / "out",
+        settings=denoised_registration,
+        writer_kwargs={"invert_deflection": True},
+        replot=False,
+    )
+    assert run.parent == tmp_path / "out" and run.name.endswith("_masknmf_zplane01")
+    names = {p.name for p in run.iterdir()}
+    assert {"results.hdf5", "config.json", "alignment.hdf5", f"{run.name}.log"} <= names
+    assert not names & {"data.bin", "data_raw.bin", "ops.npy", "stat.npy"}
+    with h5py.File(run / "results.hdf5") as f:
+        assert {"RigidRegistrationArray", "RigidMotionCorrector", "CompressionArray"} <= set(f)
+        est = f["RigidRegistrationArray"]["shifts"][()]
+    assert np.corrcoef(est[:, 0], shifts[:, 0])[0, 1] > 0.9
+    assert np.corrcoef(est[:, 1], shifts[:, 1])[0, 1] > 0.9
+    config = json.loads((run / "config.json").read_text())
+    assert config["pipeline"] == "mbo_utilities.masknmf" and config["run"]["status"] == "completed"
+    assert config["inputs"]["movie"]["read_features"] == {"invert_deflection": True}
+
+    arr = imread(run)
+    assert isinstance(arr, MasknmfRunArray) and arr.shape == (300, 1, 1, 48, 48)
+    data = movie[:, 0, 0].astype(np.float32)
+    raw = np.asarray(arr.raw[:])
+    np.testing.assert_allclose(raw, 2 * data.mean(axis=0) - data, rtol=1e-5)
+    inner = (slice(None), slice(6, -6), slice(6, -6))
+    reg = np.asarray(arr[:, 0, 0])
+    assert reg[inner].var(axis=0).mean() < raw[inner].var(axis=0).mean()
+
+
+@pytest.mark.slow
+def test_the_viewer_shows_raw_registered_and_both_as_pmd(
+    tmp_path, shaking_tif, denoised_registration
+):
+    masknmf = pytest.importorskip("masknmf")
+    from mbo_utilities.gui.registration_viewer import registration_movies
+    from mbo_utilities.masknmf import run_plane
+
+    run = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    movies = registration_movies(run)
+    assert list(movies) == ["raw", "registered", "raw (pmd)", "registered (pmd)"]
+    pmd = masknmf.CompressionArray.from_hdf5(run / "alignment.hdf5")
+    replayed = masknmf.RigidRegistrationArray.from_hdf5(
+        run / "results.hdf5", input_movie=pmd, device="cpu"
+    )
+    expected = np.asarray(replayed[list(range(10))])
+    expected = expected.cpu().numpy() if hasattr(expected, "cpu") else expected
+    np.testing.assert_allclose(movies["registered (pmd)"][:10], expected, rtol=1e-4, atol=1e-3)
+    np.testing.assert_allclose(movies["raw (pmd)"][:10], np.asarray(pmd[:10]), rtol=1e-4, atol=1e-3)
+
+
+@pytest.mark.slow
+def test_a_later_run_copies_the_stages_whose_provenance_matches(
+    tmp_path, shaking_tif, denoised_registration
+):
+    pytest.importorskip("masknmf")
+    from mbo_utilities.masknmf import run_plane
+
+    first = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    second = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    denoised_registration.compression.block_sizes = (12, 12)
+    third = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    assert len({first, second, third}) == 3
+    actions = [
+        {k: v["action"] for k, v in json.loads((r / "config.json").read_text())["timings"].items()}
+        for r in (first, second, third)
+    ]
+    assert actions[0]["registration"] == actions[0]["compression"] == "compute"
+    assert actions[1]["registration"] == actions[1]["compression"] == "reuse"
+    assert actions[2] == {"registration": "reuse", "compression": "compute", "demixing": "skip"}
+    assert (third / "alignment.hdf5").exists()
+
+
+@pytest.mark.slow
+def test_task_masknmf_registers_the_inverted_movie(tmp_path, shaking_tif, shaking_movie):
+    pytest.importorskip("masknmf")
+    import logging
+
+    from mbo_utilities.arrays.masknmf_run import run_raw_movie
+    from mbo_utilities.gui.tasks import task_masknmf
+
+    movie, _ = shaking_movie
+    s = MasknmfSettings()
+    s.registration.denoised_reference = True
+    s.compression.do_compression = STAGE_SKIP
+    s.demixing.do_demixing = STAGE_SKIP
+    s.runtime.device = "cpu"
+    task_masknmf(
+        {
+            "input_path": str(shaking_tif),
+            "output_dir": str(tmp_path / "out"),
+            "planes": [1],
+            "settings": s.to_dict(),
+            "fix_phase": False,
+            "invert_deflection": True,
+        },
+        logging.getLogger("test"),
+    )
+    run = next((tmp_path / "out").glob("*_masknmf_zplane01"))
+    data = movie[:, 0, 0].astype(np.float32)
+    np.testing.assert_allclose(run_raw_movie(run)[:], 2 * data.mean(axis=0) - data, rtol=1e-5)
+    assert (run / "alignment.hdf5").exists()
+
+
+@pytest.fixture
+def firing_tif(tmp_path):
+    """Three gaussian cells with sparse exponential transients, (600, 48, 48) int16."""
+    import tifffile
+
+    rng = np.random.default_rng(0)
+    yy, xx = np.mgrid[:48, :48]
+    mov = np.full((600, 48, 48), 200.0)
+    for cy, cx in ((12, 12), (30, 34), (36, 14)):
+        footprint = np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / 12)
+        spikes = (rng.random(600) < 0.03).astype(float)
+        trace = np.convolve(spikes, np.exp(-np.arange(30) / 6))[:600] * 400
+        mov += footprint[None] * (100 + trace[:, None, None])
+    mov += rng.normal(0, 15, mov.shape)
+    path = tmp_path / "cells.tif"
+    tifffile.imwrite(path, mov.astype(np.int16))
+    return path
+
+
+@pytest.mark.slow
+def test_demixing_writes_the_results_file(tmp_path, firing_tif):
+    pytest.importorskip("masknmf")
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("masknmf's superpixel init needs CUDA")
+    from mbo_utilities import imread
+    from mbo_utilities.masknmf import run_plane
+    from mbo_utilities.results import Results
+
+    s = MasknmfSettings()
+    s.compression.denoise = False
+    s.compression.block_sizes = (16, 16)
+    s.demixing.patch_size = (24, 24)
+    s.runtime.device = "cuda"
+    run = run_plane(str(firing_tif), tmp_path, settings=s, metadata={"fs": 30.0})
+    unit = Results.open(run).units["zplane01"]
+    assert unit.n_rois == 3 and unit.traces["raw"].shape == (3, 600)
+    assert set(unit.images) == {"mean", "max", "corr", "ref"}
+    assert imread(run).results.units["zplane01"].n_rois == 3
+    assert any(p.suffix == ".png" for p in run.iterdir())

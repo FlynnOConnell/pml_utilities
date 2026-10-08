@@ -903,12 +903,12 @@ class TestViewerIntegration:
     def test_launch_runs_mbo_curate_in_its_own_process(self, tmp_path, monkeypatch):
         from types import SimpleNamespace
 
-        from mbo_utilities.gui import curation_viewer
+        from mbo_utilities.gui import curation_viewer, launch
 
         spawned = []
-        monkeypatch.setattr(curation_viewer, "get_mbo_dirs", lambda: {"logs": tmp_path})
+        monkeypatch.setattr(launch, "get_mbo_dirs", lambda: {"logs": tmp_path})
         monkeypatch.setattr(
-            curation_viewer.subprocess,
+            launch.subprocess,
             "Popen",
             lambda cmd, **kwargs: spawned.append((cmd, kwargs))
             or SimpleNamespace(pid=4242),
@@ -924,7 +924,7 @@ class TestViewerIntegration:
             "--channel",
             "1",
         ]
-        assert kwargs["stdin"] is curation_viewer.subprocess.DEVNULL
+        assert kwargs["stdin"] is launch.subprocess.DEVNULL
         logs = list(tmp_path.glob("*_curate_PF.log"))
         assert len(logs) == 1 and Path(kwargs["stdout"].name) == logs[0]
 

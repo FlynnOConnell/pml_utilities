@@ -2023,12 +2023,15 @@ class ManualRoiWidget:
         """Read one run dir into the widget: extract runs merge their
         traces, everything else loads as a derived set (every row, the
         rejected ones included - curation happens here). A results file
-        (``mbo_utilities.results``), or one unit inside one, goes through
-        :meth:`load_results`.
+        (``mbo_utilities.results``), one unit inside one, or a masknmf run
+        folder (its newest results file) goes through :meth:`load_results`.
         """
-        from mbo_utilities.results import results_pipeline
+        from mbo_utilities.arrays.masknmf_run import is_masknmf_run
+        from mbo_utilities.results import newest_results, results_pipeline
 
         path = Path(path)
+        if is_masknmf_run(path) and newest_results(path) is not None:
+            return self.load_results(newest_results(path), discarded, classes, colors)
         if results_pipeline(path) is not None or (
             path.parent.suffix == ".zarr" and results_pipeline(path.parent) is not None
         ):

@@ -561,3 +561,41 @@ def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path):
     finally:
         iw.close()
         set_widget_enabled("manual_roi", was, persist=False)
+
+
+ROW_WIDTHS = []
+REAL_TABLE_HEADER = imgui.table_header
+
+
+def hide_session_header(label):
+    # what unticking "session" in the header's right-click menu does
+    if label == "session":
+        imgui.table_set_column_enabled(0, False)
+    return REAL_TABLE_HEADER(label)
+
+
+def measure_selectable(label, selected, *a, **k):
+    out = REAL_SELECTABLE(label, selected, *a, **k)
+    ROW_WIDTHS.append(imgui.get_item_rect_size().x)
+    return out
+
+
+def test_a_row_stays_clickable_when_the_session_column_is_hidden(mesc_path):
+    """The row's selectable sits in the session column; hiding that column
+    must not leave the row without a click target.
+    """
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+
+    arr = MescArray(mesc_path, unit=0)
+    widget = MescTabWidget(FakeParent([display_wrap(arr)]))
+    imgui.table_header = hide_session_header
+    imgui.selectable = measure_selectable
+    try:
+        ROW_WIDTHS.clear()
+        draw_frames(widget, n=3)
+    finally:
+        imgui.table_header = REAL_TABLE_HEADER
+        imgui.selectable = REAL_SELECTABLE
+        arr.close()
+    assert ROW_WIDTHS and min(ROW_WIDTHS[-2:]) > 100

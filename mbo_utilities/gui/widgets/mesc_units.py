@@ -541,11 +541,10 @@ class MescTabWidget(Widget):
             for cls in quick_pipelines(self.parent):
                 imgui.same_line(0, 12)
                 if imgui.small_button(f"{cls.name} on {unit_name}##quick_{cls.name}"):
-                    open_pipeline(self.parent, cls.name, "window", seed=True)
+                    open_pipeline(self.parent, cls.name, seed=True)
                 set_tooltip(
-                    f"Open the {cls.name} pipeline in its own window, the same "
-                    "configuration as the Process tab's, set to this recording and "
-                    "the ROI and channel the sliders are on.",
+                    f"Open the {cls.name} pipeline in the Process tab, set to this "
+                    "recording and the ROI and channel the sliders are on.",
                     show_mark=False,
                 )
             path = Path(mesc.filenames[0])
@@ -623,7 +622,11 @@ class MescTabWidget(Widget):
             for i, (name, hidden) in enumerate(UNIT_COLUMNS):
                 column_flags = imgui.TableColumnFlags_.width_fixed
                 if i == 0:
-                    column_flags |= imgui.TableColumnFlags_.default_sort
+                    # the row's selectable lives here; hidden, a row takes no clicks
+                    column_flags |= (
+                        imgui.TableColumnFlags_.default_sort
+                        | imgui.TableColumnFlags_.no_hide
+                    )
                 if hidden:
                     column_flags |= imgui.TableColumnFlags_.default_hide
                 imgui.table_setup_column(name, column_flags)
