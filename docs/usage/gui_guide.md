@@ -548,7 +548,7 @@ For fast, noisy recordings such as voltage imaging, motion is estimated on a den
 
 Quick start, one MESc unit:
 
-- Open the session: `mbo path	o\session.mesc`, or **File > Open**.
+- Open the session: `mbo path\to\session.mesc`, or **File > Open**.
 - In the **MESc** tab, click the MUnit you want to process.
 - **Process > MaskNMF**.
 - Tick **Denoise before registration**.
