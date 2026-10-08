@@ -4,8 +4,8 @@ Mirrors the Suite2p run experience: Current-dataset block, output folder
 row, Frames & Planes slicing popup (draw_selection_table), a Pipeline
 Settings popup with Skip/Run/Force stage columns and modified-orange
 tinting against dataclass defaults, a modified-parameters table, and a
-green centered Run button. Run spawns the "masknmf" worker task; results
-land as suite2p-shaped plane dirs readable by the existing results tooling.
+green centered Run button. Run spawns the "masknmf" worker task; each plane
+lands in a masknmf run folder (``masknmf.runner``) with a results zarr.
 """
 
 import dataclasses
@@ -92,64 +92,38 @@ def _check_masknmf_available() -> bool:
     return _HAS_MASKNMF
 
 
-_STAGE_FILES = ("motion_correction.hdf5", "compression.hdf5", "demixing_results.hdf5")
-
-
-def _is_masknmf_plane_dir(p: Path) -> bool:
-    return any((p / f).exists() for f in _STAGE_FILES)
-
-
 def find_masknmf_run(fpath) -> tuple[dict | None, str | None]:
     """Locate a masknmf run at/around ``fpath``.
 
-    Returns ``(params, outdir)``: the settings dict saved in the plane
-    dir's ops.npy (None when the run died before stamping it — the stage
-    HDF5s still mark the tree as a run), and the folder Run should target
-    so stage gating resumes in place. Both None when ``fpath`` is not
-    part of a masknmf run.
+    Returns ``(params, outdir)``: the settings the newest run folder's
+    ``config.json`` recorded, and the folder its run folders sit in, so Run
+    writes the next run beside it and reuses its stages. Both None when
+    ``fpath`` is neither a run folder nor a folder holding one.
     """
+    from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_config
+    from mbo_utilities.masknmf.runner import PIPELINE
+
     if fpath is None:
         return None, None
     if isinstance(fpath, (list, tuple)):
         if not fpath:
             return None, None
         fpath = fpath[0]
-    try:
-        p = Path(str(fpath))
-    except (TypeError, ValueError):
-        return None, None
-    if not p.exists():
-        return None, None
+    p = Path(str(fpath))
     if p.is_file():
         p = p.parent
-
-    if _is_masknmf_plane_dir(p):
-        plane_dir, outdir = p, p.parent
+    if not p.is_dir():
+        return None, None
+    if is_masknmf_run(p):
+        run = p
     else:
-        plane_dir = None
-        try:
-            for child in sorted(p.iterdir()):
-                if child.is_dir() and _is_masknmf_plane_dir(child):
-                    plane_dir, outdir = child, p
-                    break
-        except (OSError, PermissionError):
+        runs = sorted(c for c in p.iterdir() if c.is_dir() and is_masknmf_run(c))
+        if not runs:
             return None, None
-        if plane_dir is None:
-            return None, None
-
-    params = None
-    ops_path = plane_dir / "ops.npy"
-    if ops_path.exists():
-        try:
-            import numpy as np
-
-            ops = np.load(ops_path, allow_pickle=True).item()
-            saved = ops.get("masknmf")
-            if isinstance(saved, dict):
-                params = saved
-        except Exception:
-            pass
-    return params, str(outdir)
+        run = runs[-1]
+    config = run_config(run)
+    params = config.get("configs") if config.get("pipeline") == PIPELINE else None
+    return params, str(run.parent)
 
 
 def _field_default(obj, name: str):
@@ -396,7 +370,10 @@ class MaskNMFPipelineWidget(PipelineWidget):
             max(imgui.get_content_region_avail().x - _BTN_W - 12, 100)
         )
         _, self._outdir = imgui.input_text("##masknmf_outdir", self._outdir)
-        set_tooltip("Save path. One zplaneNN dir per plane.", show_mark=False)
+        set_tooltip(
+            "Save path. Each plane runs into its own <time>_masknmf_zplaneNN folder.",
+            show_mark=False,
+        )
         imgui.same_line()
         if imgui.button("Browse##masknmf_outdir_btn", imgui.ImVec2(_BTN_W, 0)):
             start = str(get_last_dir("masknmf_outdir") or Path.home())
@@ -657,8 +634,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 if i < 2:
                     imgui.same_line()
             set_tooltip(
-                "Skip: bypass / reuse cached stage output. Run: reuse when "
-                "present, else compute. Force: always recompute.",
+                "Skip: bypass the stage (compression: reuse the last run's when it "
+                "matches). Run: copy the last run folder's stage when its settings "
+                "and input match, else compute. Force: always recompute.",
                 show_mark=False,
             )
             imgui.separator()
@@ -855,18 +833,6 @@ class MaskNMFPipelineWidget(PipelineWidget):
         )
         self._mod_pop(pushed)
         rt.exclude_border_radius = max(0, rt.exclude_border_radius)
-        pushed = self._mod_push(rt, "keep_bin")
-        _, rt.keep_bin = imgui.checkbox(
-            "Write registered data.bin##masknmf_keepbin", rt.keep_bin
-        )
-        self._mod_pop(pushed)
-        set_tooltip("Registered movie as suite2p binary.", show_mark=False)
-        imgui.same_line()
-        pushed = self._mod_push(rt, "keep_raw")
-        _, rt.keep_raw = imgui.checkbox(
-            "Keep data_raw.bin##masknmf_keepraw", rt.keep_raw
-        )
-        self._mod_pop(pushed)
 
     def _draw_modified_table(self) -> None:
         mods = _collect_modified(self.settings)
@@ -988,7 +954,6 @@ class MaskNMFPipelineWidget(PipelineWidget):
                     getattr(self.parent, "_masknmf_frame_average", 1) or 1
                 ),
                 "tp_indices": tp_indices,
-                "selected_planes_0based": [p - 1 for p in planes],
                 "channel": channel if (multi_channel or has_channels) else None,
                 "custom_metadata": dict(getattr(self.parent, "_custom_metadata", {})),
             }

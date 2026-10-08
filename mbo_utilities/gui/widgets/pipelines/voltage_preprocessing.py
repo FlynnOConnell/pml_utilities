@@ -34,7 +34,6 @@ class VoltagePreprocessingWidget(MaskNMFPipelineWidget):
         settings = super().default_settings()
         settings.registration.denoised_reference = True
         settings.demixing.do_demixing = STAGE_SKIP
-        settings.runtime.keep_raw = True
         return settings
 
     def _draw_run(self) -> None:
@@ -46,18 +45,18 @@ class VoltagePreprocessingWidget(MaskNMFPipelineWidget):
             imgui.end_disabled()
         set_tooltip(
             "Raw, the alignment copy, registered and denoised side by side, from "
-            "the plane folder last written under the output folder.",
+            "the run folder last written under the output folder.",
             show_mark=False,
         )
         if not clicked:
             return
-        written = [(p.stat().st_mtime, p.parent) for p in Path(self._outdir).glob("**/ops.npy")]
+        written = [(p.stat().st_mtime, p.parent) for p in Path(self._outdir).glob("**/config.json")]
         if not written:
-            self._last_status = f"No plane folder in {self._outdir} yet."
+            self._last_status = f"No run folder in {self._outdir} yet."
             return
         from mbo_utilities.gui.registration_viewer import registration_viewer
 
-        plane = max(written)[1]
-        self._viewer = registration_viewer(plane)
+        run = max(written)[1]
+        self._viewer = registration_viewer(run)
         self._viewer.show()
-        self._last_status = f"Showing {plane.name}."
+        self._last_status = f"Showing {run.name}."

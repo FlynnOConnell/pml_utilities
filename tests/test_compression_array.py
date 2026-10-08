@@ -1,8 +1,11 @@
-"""masknmf compressed movies (``CompressionArray`` hdf5) as lazy 5D arrays, and a plane folder's movies for the registration viewer."""
+"""masknmf compressed movies (``CompressionArray`` hdf5) as lazy 5D arrays, and a run folder's movies for the registration viewer."""
+
+import json
 
 import h5py
 import numpy as np
 import pytest
+import tifffile
 
 from mbo_utilities import imread
 from mbo_utilities.arrays.compression import CompressedMovieArray
@@ -91,23 +94,23 @@ def test_it_matches_masknmf_on_a_real_export(tmp_path):
     )
 
 
-def test_a_plane_folders_movies_in_panel_order(compressed, factors):
+def test_a_run_folders_movies_in_panel_order(compressed, factors):
     from mbo_utilities.gui.registration_viewer import registration_movies
 
-    plane = compressed.parent
+    run = compressed.parent
     raw = np.arange(T * Y * X, dtype=np.int16).reshape(T, Y, X)
-    raw.tofile(plane / "data_raw.bin")
-    (raw + 1).tofile(plane / "data.bin")
-    np.save(plane / "ops.npy", {"Ly": Y, "Lx": X, "nframes": T, "fs": 250.0})
-    movies = registration_movies(plane)
-    assert list(movies) == ["raw", "registered", "denoised"]
+    tifffile.imwrite(run / "movie.tif", raw)
+    compressed.rename(run / "results.hdf5")
+    inputs = {"movie": {"path": str(run / "movie.tif"), "z": 0, "c": 0}}
+    (run / "config.json").write_text(json.dumps({"inputs": inputs}))
+    movies = registration_movies(run)
+    assert list(movies) == ["raw", "denoised"]
     assert all(m.shape == (T, Y, X) for m in movies.values())
     np.testing.assert_array_equal(movies["raw"][:], raw)
-    np.testing.assert_array_equal(movies["registered"][:], raw + 1)
     np.testing.assert_allclose(movies["denoised"][:], movie(factors), rtol=1e-5)
 
 
-def test_a_folder_without_movies_is_refused(tmp_path):
+def test_a_folder_without_a_run_is_refused(tmp_path):
     from mbo_utilities.gui.registration_viewer import registration_movies
 
     with pytest.raises(FileNotFoundError):

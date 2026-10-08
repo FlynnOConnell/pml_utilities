@@ -107,8 +107,9 @@ Features:
 
 ### masknmf viewers
 
-A masknmf demixing result (`mbo run/demixing_results.hdf5`, or any
-`*_demixing.hdf5` from a glutamate/calcium spine run) does not open in the
+A masknmf demixing result (a run folder's `results.hdf5`, an older
+`demixing_results.hdf5`, or any `*_demixing.hdf5` from a glutamate/calcium
+spine run) does not open in the
 Studio viewer. It opens in one of masknmf's own viewers, chosen before launch
 (`--vis`, or a prompt in the terminal when `--vis` is omitted); the viewer
 window is masknmf's, with nothing added:
@@ -551,8 +552,8 @@ The MaskNMF pipeline up to the denoised movie, for fast, noisy recordings such a
 
 Demixing starts off (**Pipeline Settings > Demixing**). The same option is in the MaskNMF entry's Registration column as **Register on a denoised copy**.
 
-- **Set slice** picks a frame window, so settings can be tried on a few thousand frames first; each window gets its own `zplaneNN_tpAAAAA-BBBBB` folder.
+- **Set slice** picks a frame window, so settings can be tried on a few thousand frames first; every run gets its own `<time>_masknmf_zplaneNN_tpAAAAA-BBBBB` folder.
 - **Invert deflection** (in **Set slice**) flips every frame about the mean image before processing, so an indicator that dims on activity reads positive. It starts as the viewer's **Invert Deflection**; programmatically it is `imread(path, invert_deflection=True)`.
-- **View movies** shows the last plane folder written under the output folder as raw, alignment copy, registered and denoised side by side on one time slider. `python -m mbo_utilities.gui.registration_viewer <plane folder>` opens the same window.
+- **View movies** shows the last run folder written under the output folder as raw, alignment copy, registered and denoised side by side on one time slider. `python -m mbo_utilities.gui.registration_viewer <run folder>` opens the same window.
 
-A plane folder holds `data_raw.bin` (raw, inverted when asked), `data.bin` (registered), `alignment.hdf5`, `compression.hdf5` (denoised) and `ops.npy`. Running MaskNMF on the same output folder with the same registration and compression settings and demixing on reuses both stages and only demixes.
+A run folder is masknmf's: `results.hdf5` (the registration, the denoised movie and, with demixing, the signals), `config.json`, the log and `alignment.hdf5`. No movie is copied: raw is the recording itself and registered is the shifts replayed on it, so `mbo <run folder>` opens the registered movie and `masknmf view <run folder>/results.hdf5` works too. A later run on the same output folder with the same registration and compression settings and demixing on copies both stages from the last run and only demixes.

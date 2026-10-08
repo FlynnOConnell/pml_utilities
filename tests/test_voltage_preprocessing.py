@@ -82,7 +82,6 @@ def test_the_preset_registers_on_a_denoised_copy_and_stops_before_demixing(widge
     s = widget.settings
     assert s.registration.denoised_reference is True
     assert s.demixing.do_demixing == STAGE_SKIP
-    assert s.runtime.keep_raw is True
     assert widget.default_settings().to_dict() == s.to_dict()
     assert MasknmfSettings().registration.denoised_reference is False
 
@@ -121,7 +120,7 @@ def test_run_sends_the_inverted_movie_and_the_preset(widget, tmp_path, monkeypat
     assert SPAWNED[0]["description"] == "Voltage Preprocessing plane01"
 
 
-def test_view_movies_opens_the_newest_plane_folder(widget, tmp_path, monkeypatch):
+def test_view_movies_opens_the_newest_run_folder(widget, tmp_path, monkeypatch):
     import os
 
     monkeypatch.setattr(
@@ -131,11 +130,12 @@ def test_view_movies_opens_the_newest_plane_folder(widget, tmp_path, monkeypatch
     PRESSED.clear()
     PRESSED.add("View movies")
     out = tmp_path / "out"
-    for i, name in enumerate(("zplane01_tp00001-00040", "zplane01_tp00001-00010")):
+    names = ("20261007T120000_masknmf_zplane01", "20261007T110000_masknmf_zplane01")
+    for i, name in enumerate(names):
         (out / name).mkdir(parents=True)
-        np.save(out / name / "ops.npy", {})
-        os.utime(out / name / "ops.npy", (i, i))
+        (out / name / "config.json").write_text("{}")
+        os.utime(out / name / "config.json", (i, i))
     widget._outdir = str(out)
     VIEWED.clear()
     frames(widget.draw_config, n=1)
-    assert VIEWED == [out / "zplane01_tp00001-00010"]
+    assert VIEWED == [out / "20261007T110000_masknmf_zplane01"]
