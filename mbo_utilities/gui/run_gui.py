@@ -1002,9 +1002,23 @@ def _run_gui_impl(
         # the file dialog hands back a list even for one file
         if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
             data_in = data_in[0]
-        from mbo_utilities.arrays.masknmf_run import run_demixing
+        from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_demixing
         from mbo_utilities.masknmf.reg_denoise import is_reg_denoise
 
+        qc = qc or mode == "Registration QC (MaskNMF run)"
+        if (
+            qc
+            and isinstance(data_in, (str, Path))
+            and not (
+                is_reg_denoise(data_in)
+                or is_masknmf_run(data_in)
+                or is_masknmf_run(Path(data_in).parent)
+            )
+        ):
+            raise click.ClickException(
+                f"{Path(data_in).name} is not a MaskNMF run folder, its results.hdf5 or a "
+                "reg-denoise result; Registration QC (--qc) opens only those"
+            )
         if (
             not metadata_only
             and isinstance(data_in, (str, Path))

@@ -231,7 +231,11 @@ class FileDialog:
         self._show_deps_popup = False
 
         # GUI Modes (pollen calibration auto-detected, not user-selectable)
-        self.gui_modes = ["Fastplotlib viewer (default)", "Napari viewer"]
+        self.gui_modes = [
+            "Fastplotlib viewer (default)",
+            "Napari viewer",
+            "Registration QC (MaskNMF run)",
+        ]
         self.selected_mode_index = 0
 
         # GPU adapter selection. -1 == wgpu auto-pick; otherwise an index
@@ -684,7 +688,10 @@ class FileDialog:
             )
             if imgui.is_item_hovered():
                 wrapped_tooltip(
-                    f"Select Application: {self.gui_modes[self.selected_mode_index]}"
+                    f"Select Application: {self.gui_modes[self.selected_mode_index]}. "
+                    "Registration QC opens a MaskNMF run folder (or its results.hdf5) as "
+                    "raw | registered over both as PMD, with RTMC, masknmf shifts and a "
+                    "box you drag; the same as `mbo <run folder> --qc`."
                 )
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))

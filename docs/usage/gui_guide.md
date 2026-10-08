@@ -557,7 +557,7 @@ Quick start, one MESc unit:
 - **Pipeline Settings > Demixing**: set **Skip** unless you need ROIs; demixing is the slow stage.
 - **Run MaskNMF**; progress is in the Process Console (status button in the menu bar).
 - When it finishes, **View movies** shows raw and registered over the same two as PMD, with the RTMC curves, the masknmf shifts, each movie's frame mean, and each movie's mean inside a box you drag on any of them. If the window does not appear, the status line under the button says why.
-- Later, from a terminal: `mbo path\to\<time>_masknmf_zplane01 --qc` opens the same viewer on a run folder. Without `--qc` a run folder opens in the Studio, or in masknmf's demixing viewer when the run demixed.
+- Later, from a terminal: `mbo path\to\<time>_masknmf_zplane01 --qc` opens the same viewer on a run folder; from the launcher (`mbo` alone), pick **Registration QC (MaskNMF run)** in the viewer dropdown, then **Open Folder** on the run. Without `--qc` a run folder opens in the Studio, or in masknmf's demixing viewer when the run demixed.
 
 From the GUI: **Process > MaskNMF**, tick **Denoise before registration**. The shifts are estimated on a quick PMD copy of the movie (as recorded, not inverted) and applied to the raw frames; the copy is saved as `alignment.hdf5` in the run folder and its block sizes are under **Pipeline Settings > Registration**. Turn demixing off under **Pipeline Settings** to stop at the denoised movie. **View movies** opens the last run folder under the output folder in **Registration-Denoising Quality Control** (below), in its own window; `mbo <run folder> --qc` opens it from a terminal.
 

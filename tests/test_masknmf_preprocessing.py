@@ -199,3 +199,20 @@ def test_a_run_folder_that_demixed_names_its_results_file(tmp_path):
     assert run_demixing(run) == run / "results.hdf5"
     assert run_demixing(tmp_path) is None
     assert run_demixing(run / "results.hdf5") is None
+
+
+def test_registration_qc_refuses_a_path_that_is_not_a_run(tmp_path):
+    import click
+
+    from mbo_utilities.gui.run_gui import run_gui
+
+    movie = tmp_path / "movie.tif"
+    movie.write_bytes(b"")
+    with pytest.raises(click.ClickException, match="not a MaskNMF run folder"):
+        run_gui(data_in=str(movie), qc=True)
+
+
+def test_the_launcher_offers_registration_qc():
+    from mbo_utilities.gui.widgets.file_dialog import FileDialog
+
+    assert "Registration QC (MaskNMF run)" in FileDialog().gui_modes
