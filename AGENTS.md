@@ -575,17 +575,16 @@ pipelines use the same path; nothing is hardcoded by name.
 - `extracts_traces = True` + `extract_traces(movie, labels)` opts the pipeline into
   the manual-ROI "Extract trace" action.
 - A pipeline's widget is one object per host (`pipelines.pipeline_instance`),
-  drawn wherever it is opened: the Process tab, or a floating window through
-  `open_pipeline(host, name, "window")`, which the tab's **Pop out** button, the
-  Process menu and `Shift+P` call. `draw_pipeline_windows` draws the popped-out ones from
-  the top strip's frame hook (registered by `RunTabWidget`) under a `push_id`, so
-  the tab and the window can show the same widget in one frame. A widget
-  therefore never opens a window of its own and never assumes which one it is in.
+  drawn by the Process tab. `open_pipeline(host, name)` selects it there and
+  brings the tab forward. A widget never opens a window of its own and never
+  assumes what it is drawn in, so the Process tab can later move into a window
+  and back without the widgets knowing.
 - `seeds_from_view = True` + `seed_from_view()` sets the widget's selection to
   what the viewer shows (the recording on screen, the slice its sliders are on);
   `open_pipeline(..., seed=True)` calls it first, and `quick_pipelines(host)`
-  lists the pipelines that apply and set it, which is how the MESc tab header
-  offers "Voltage on MUnit_3" without naming a pipeline.
+  lists the pipelines that apply and set it, which is how the MESc tab header,
+  the Process menu and `Shift+P` offer "Voltage on MUnit_3" without naming a
+  pipeline.
 
 ### 7.3 Input contract
 
@@ -970,7 +969,7 @@ the other.
   meaning (`COLUMN_HELP`) and `?` opens `assets/docs/mesc.md`, the plain-words
   page on what a `.mesc` holds. The header line, not a row, carries one button
   per `quick_pipelines` entry (`Voltage on MUnit_3`): it opens that pipeline in
-  a floating window seeded from the unit and sliders on screen (§7.2).
+  the Process tab seeded from the unit and sliders on screen (§7.2).
 - **Full image.** The ROIs pipeline's `full image` target is the whole frame as
   one mask at the run coordinates: with `mean` a `FULL_IMAGE` row of the trace
   table (`ManualRoiWidget.trace_full`, keyed `("member", "full image", "z<z>c<c>")`

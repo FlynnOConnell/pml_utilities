@@ -541,11 +541,10 @@ class MescTabWidget(Widget):
             for cls in quick_pipelines(self.parent):
                 imgui.same_line(0, 12)
                 if imgui.small_button(f"{cls.name} on {unit_name}##quick_{cls.name}"):
-                    open_pipeline(self.parent, cls.name, "window", seed=True)
+                    open_pipeline(self.parent, cls.name, seed=True)
                 set_tooltip(
-                    f"Open the {cls.name} pipeline in its own window, the same "
-                    "configuration as the Process tab's, set to this recording and "
-                    "the ROI and channel the sliders are on.",
+                    f"Open the {cls.name} pipeline in the Process tab, set to this "
+                    "recording and the ROI and channel the sliders are on.",
                     show_mark=False,
                 )
             path = Path(mesc.filenames[0])
