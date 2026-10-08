@@ -87,6 +87,12 @@ if TYPE_CHECKING:
     from mbo_utilities.arrays._average_view import (
         average_frames as average_frames,
     )
+    from mbo_utilities.arrays._inverted_view import (
+        InvertedDeflectionView as InvertedDeflectionView,
+    )
+    from mbo_utilities.arrays._inverted_view import (
+        invert_deflection as invert_deflection,
+    )
     from mbo_utilities.arrays._phasecorr_view import (
         PhaseCorrectedView as PhaseCorrectedView,
     )
@@ -168,6 +174,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "list_mesc_units": (".mesc", "list_mesc_units"),
     "DemixingArray": (".demixing", "DemixingArray"),
     "list_demixing_results": (".demixing", "list_demixing_results"),
+    "CompressedMovieArray": (".compression", "CompressedMovieArray"),
+    "MasknmfRunArray": (".masknmf_run", "MasknmfRunArray"),
     "MP4Array": (".mp4", "MP4Array"),
     "TiffArray": (".tiff", "TiffArray"),
     "ScanImageArray": (".tiff", "ScanImageArray"),
@@ -195,6 +203,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # temporal frame averaging (read-time wrapper)
     "FrameAveragedView": ("._average_view", "FrameAveragedView"),
     "average_frames": ("._average_view", "average_frames"),
+    # deflection inversion (read-time wrapper)
+    "InvertedDeflectionView": ("._inverted_view", "InvertedDeflectionView"),
+    "invert_deflection": ("._inverted_view", "invert_deflection"),
     # features subpackage
     "features": (".features", None),
     # ROI mixin
@@ -245,7 +256,9 @@ __all__ = [
     "CHUNKS_4D",
     "BinArray",
     "BrukerArray",
+    "CompressedMovieArray",
     "DemixingArray",
+    "MasknmfRunArray",
     "LBMPiezoArray",
     "H5Array",
     "IsoviewArray",
@@ -292,4 +305,7 @@ __all__ = [
     # Frame averaging
     "FrameAveragedView",
     "average_frames",
+    # Deflection inversion
+    "InvertedDeflectionView",
+    "invert_deflection",
 ]

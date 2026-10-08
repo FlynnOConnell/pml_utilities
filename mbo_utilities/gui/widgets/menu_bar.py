@@ -68,8 +68,7 @@ def draw_menu_bar(parent: Any):
                 imgui.end_menu()
             draw_widgets_menu(parent)
             if imgui.begin_menu("Process", True):
-                # one entry per pipeline that can set itself to what is on
-                # screen, then the Process tab's selection popped out
+                # one entry per pipeline that can set itself to what is on screen
                 shown = shown_name(parent)
                 quick = quick_pipelines(parent)
                 for cls in quick:
@@ -79,28 +78,14 @@ def draw_menu_bar(parent: Any):
                         p_selected=False,
                         enabled=True,
                     )[0]:
-                        open_pipeline(parent, cls.name, "window", seed=True)
+                        open_pipeline(parent, cls.name, seed=True)
                     if imgui.is_item_hovered():
                         imgui.set_tooltip(
-                            f"Open the {cls.name} pipeline in its own window, set to "
+                            f"Open the {cls.name} pipeline in the Process tab, set to "
                             "this recording and the ROI and channel on screen."
                         )
-                if quick:
-                    imgui.separator()
-                selected = getattr(parent, "_selected_pipeline_name", None)
-                if imgui.menu_item(
-                    f"Pop out {selected}" if selected else "Pop out",
-                    "",
-                    p_selected=False,
-                    enabled=bool(selected),
-                )[0]:
-                    open_pipeline(parent, selected, "window")
-                if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
-                    imgui.set_tooltip(
-                        "The pipeline selected in the Process tab, in a floating window."
-                        if selected
-                        else "Select a pipeline in the Process tab first."
-                    )
+                if not quick:
+                    imgui.text_disabled("No pipeline sets itself to this data.")
                 imgui.end_menu()
             if imgui.begin_menu("Docs", True):
                 if imgui.menu_item("Help", "h", p_selected=False, enabled=True)[0]:

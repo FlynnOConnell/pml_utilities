@@ -38,10 +38,12 @@ PHASE_FEATURE_KEYS: tuple[str, ...] = (
     "max_offset",
 )
 FRAME_AVERAGE_KEY = "frame_average"
+INVERT_DEFLECTION_KEY = "invert_deflection"
 READ_FEATURE_KEYS: tuple[str, ...] = (
     *PHASE_FEATURE_KEYS,
     "mean_subtraction",
     FRAME_AVERAGE_KEY,
+    INVERT_DEFLECTION_KEY,
 )
 
 
@@ -152,11 +154,13 @@ def apply_read_features(arr, kwargs: dict | None = None, **extra) -> tuple[Any, 
     """Apply read-time feature kwargs to ``arr``.
 
     Phase settings (``fix_phase``, ``use_fft``, ``phasecorr_method``,
-    ``border``, ``max_offset``), ``mean_subtraction`` and ``frame_average``
-    are popped from ``kwargs`` (merged with ``extra``) and applied. Phase and
-    mean-subtraction keys are set as attributes when the array has them, the
-    way the save-as worker always did; ``frame_average`` wraps the array in a
-    ``FrameAveragedView`` (or unwraps one when the factor is 1).
+    ``border``, ``max_offset``), ``mean_subtraction``, ``frame_average`` and
+    ``invert_deflection`` are popped from ``kwargs`` (merged with ``extra``)
+    and applied. Phase and mean-subtraction keys are set as attributes when
+    the array has them, the way the save-as worker always did;
+    ``frame_average`` wraps the array in a ``FrameAveragedView`` (or unwraps
+    one when the factor is 1) and ``invert_deflection`` in an
+    ``InvertedDeflectionView`` on top of it.
 
     Keys whose value is ``None`` are skipped, so a caller can forward a whole
     options dict without deciding per key. Unknown keys are returned
@@ -181,5 +185,12 @@ def apply_read_features(arr, kwargs: dict | None = None, **extra) -> tuple[Any, 
         factor = opts.pop(FRAME_AVERAGE_KEY)
         if factor is not None:
             arr = FrameAverageFeature(factor).apply(arr)
+
+    if INVERT_DEFLECTION_KEY in opts:
+        enabled = opts.pop(INVERT_DEFLECTION_KEY)
+        if enabled is not None:
+            from mbo_utilities.arrays._inverted_view import invert_deflection
+
+            arr = invert_deflection(arr, bool(enabled))
 
     return arr, opts

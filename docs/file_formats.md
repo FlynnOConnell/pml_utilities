@@ -58,6 +58,7 @@ the 5D array underneath for writers and the viewer.
 | **`.h5`** | `H5Array` | `(T, C, Z, Y, X)` | HDF5 datasets |
 | ↳ `imaging_system = bruker` dataset | `BrukerArray` | `(T, C, Z, Y, X)` | Bruker HDF5 export; axes from its dimension labels |
 | ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
+| ↳ `CompressionArray` group | `CompressedMovieArray` | `(T, 1, 1, Y, X)` | masknmf compressed movie (`compression.hdf5`, `results.hdf5`, `alignment.hdf5`) |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
 | **`.zarr`** | `ZarrArray` | `(T, C, Z, Y, X)` | Zarr v3 / OME-Zarr |
 | ↳ `<stem>.<stamp>.<pipeline>.zarr` results | `ResultsArray` / `Results.read` | traces, not an image | Any pipeline's results file (`mbo_utilities.results`); one reader whichever pipeline wrote it |
@@ -67,6 +68,7 @@ the 5D array underneath for writers and the viewer.
 | ↳ `ops.npy` | `Suite2pArray` | `(T, C, Z, Y, X)` (Z=1) | Suite2p single-plane |
 | ↳ `planeXX/ops.npy` | `Suite2pArray` | `(T, C, Z, Y, X)` | Suite2p volumetric |
 | ↳ `planeXX.tiff` | `TiffArray` | `(T, C, Z, Y, X)` | Multi-plane TIFF volume |
+| ↳ `config.json` + `results.hdf5` | `MasknmfRunArray` | `(T, 1, 1, Y, X)` | MaskNMF run folder: the registered movie, rebuilt from the recording |
 
 ### Detection Logic
 
@@ -78,6 +80,7 @@ imread(path)
 ├── .h5 / .hdf5
 │   ├── imaging_system = bruker ──────────► BrukerArray
 │   ├── DemixingResults group ────────────► DemixingArray (masknmf)
+│   ├── CompressionArray group ───────────► CompressedMovieArray (masknmf)
 │   └── else ─────────────────────────────► H5Array
 ├── .mesc ─────────────────────────────────► MescArray (one MUnit)
 ├── .zarr ────────────────────────────────► ZarrArray
@@ -283,8 +286,9 @@ it is.
 ### DemixingArray
 
 An hdf5 with a `DemixingResults` group: what masknmf's demixing exports, either
-`demixing_results.hdf5` from the MaskNMF pipeline (one per `zplaneNN/`) or
-`<channel>_<pass>_demixing.hdf5` from a glutamate/calcium spine run. The file
+`results.hdf5` in a MaskNMF run folder, `demixing_results.hdf5` from an older
+MaskNMF run (one per `zplaneNN/`) or `<channel>_<pass>_demixing.hdf5` from a
+glutamate/calcium spine run. The file
 holds factors rather than pixels, so C selects which reconstruction to
 render: `0` the PMD movie (`u v`), `1` the demixed signals (`a c`), `2` the
 residual. Frames are rebuilt from the factors on first read: with numpy on
@@ -304,9 +308,49 @@ for entry in list_demixing_results("run/calcium_spine_demixing.hdf5"):
     print(entry["label"], entry["channel"], entry["num_rois"])
 ```
 
-`fs` comes from the `mbo_provenance` attribute the MaskNMF pipeline stamps;
+`fs` comes from the `mbo_provenance` attribute older MaskNMF runs stamp;
 files from other runs report no rate. `mbo <file>` opens these in masknmf's
 own viewers rather than the Studio viewer (see the GUI guide).
+
+(compressedmoviearray)=
+### CompressedMovieArray
+
+An hdf5 with a `CompressionArray` group: a movie masknmf compressed, stored as
+factors. A MaskNMF run folder's `results.hdf5` holds the denoised,
+registered movie, and its `alignment.hdf5` the copy registration estimated
+its shifts on (Denoise before registration). Frames are rebuilt with numpy on read, in the units of the
+movie that was compressed (the stored mean and noise scale are added back). A
+file that also holds a `DemixingResults` group opens as a `DemixingArray`.
+
+```python
+arr = mbo.imread("plane01/compression.hdf5")
+print(arr.shape)        # (T, 1, 1, Y, X)
+frame = arr[100, 0, 0]  # (Y, X) float32
+```
+
+(masknmfrunarray)=
+### MasknmfRunArray
+
+A MaskNMF run folder, `<yyyymmddTHHMMSS>_masknmf_zplaneNN[_tp...]/` with
+`config.json` and `results.hdf5` (AGENTS.md §7.4), opens as its registered
+movie. No movie is stored: `config.json` records the recording, its reader
+kwargs and read features (scan phase, invert deflection, frame average), the
+plane, channel and frames, and the stored shifts are replayed on it with
+masknmf. A run made with Invert Deflection replays them on the recording as
+it was and inverts the result, the order the run registered in.
+
+```python
+run = "out/20261007T183740_masknmf_zplane01"
+arr = mbo.imread(run)
+print(arr.shape)          # (T, 1, 1, Y, X), registered
+arr.raw[100]              # (Y, X) frame of the recording as the run read it
+arr.motion_correction     # the shifts as Y and X traces in px
+arr.results               # the run's results file, when demixing ran
+
+# the shifts replayed on the alignment copy instead of the recording
+from mbo_utilities.arrays import MasknmfRunArray
+pmd = MasknmfRunArray(run, on_alignment_copy=True)
+```
 
 (mescarray)=
 ### MescArray

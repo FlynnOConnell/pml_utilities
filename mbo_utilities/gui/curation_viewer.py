@@ -48,10 +48,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-import subprocess
-import sys
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -63,7 +60,6 @@ from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._edge_window import EdgeWindow
 from mbo_utilities.gui._theme import em
 from mbo_utilities.install import VNOISER_HINT
-from mbo_utilities.preferences import get_mbo_dirs
 
 __all__ = [
     "CurationApp",
@@ -452,40 +448,13 @@ def launch_curation_window(path, channel: int = 0) -> int:
     ``mbo curate PATH`` does, and return its pid. The window outlives the
     viewer that opened it; its output goes to ``~/.mbo/logs``.
     """
-    python = sys.executable
-    if sys.platform == "win32" and python.endswith("python.exe"):
-        # no console window beside the curation window
-        pythonw = python[:-10] + "pythonw.exe"
-        if Path(pythonw).exists():
-            python = pythonw
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = get_mbo_dirs()["logs"] / f"{stamp}_curate_{Path(str(path)).stem}.log"
-    cmd = [
-        python,
-        "-m",
+    from mbo_utilities.gui.launch import launch_window
+
+    return launch_window(
         "mbo_utilities.gui.curation_viewer",
-        str(path),
-        "--channel",
-        str(int(channel)),
-    ]
-    with log_file.open("a", encoding="utf-8") as out:
-        if sys.platform == "win32":
-            proc = subprocess.Popen(
-                cmd,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                stderr=out,
-            )
-        else:
-            proc = subprocess.Popen(
-                cmd,
-                start_new_session=True,
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                stderr=out,
-            )
-    return proc.pid
+        [str(path), "--channel", str(int(channel))],
+        f"curate_{Path(str(path)).stem}",
+    )
 
 
 def main(argv: list[str] | None = None) -> None:

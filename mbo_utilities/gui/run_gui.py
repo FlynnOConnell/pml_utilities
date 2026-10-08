@@ -1001,6 +1001,24 @@ def _run_gui_impl(
         # the file dialog hands back a list even for one file
         if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
             data_in = data_in[0]
+        from mbo_utilities.masknmf.reg_denoise import is_reg_denoise
+
+        if (
+            not metadata_only
+            and isinstance(data_in, (str, Path))
+            and is_reg_denoise(data_in)
+        ):
+            from mbo_utilities.gui.reg_denoise_viewer import RegDenoiseViewer
+
+            viewer = RegDenoiseViewer(data_in, raw_path=raw_path)
+            output = viewer.show()
+            if in_notebook():
+                display_widget(output)
+                return viewer
+            import fastplotlib as fpl
+
+            fpl.loop.run()
+            return None
         # a masknmf demixing result opens in masknmf's own viewers
         from mbo_utilities.arrays.demixing import has_demixing_results
 

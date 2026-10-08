@@ -1,6 +1,7 @@
 """masknmf's own viewers on a demixing result.
 
-``mbo run/demixing_results.hdf5`` lands here instead of the Studio viewer.
+``mbo run/demixing_results.hdf5``, or a masknmf run folder's ``results.hdf5``,
+lands here instead of the Studio viewer.
 Which of masknmf's viewers opens is decided before launch (``--vis`` or the
 prompt in ``mbo view``); the viewer windows are masknmf's, untouched. Torch
 and masknmf are required; the device follows the compute-GPU policy in
@@ -17,6 +18,7 @@ import h5py
 import numpy as np
 
 from mbo_utilities import log
+from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_config, run_raw_movie
 from mbo_utilities.gpu import compute_gpu
 
 logger = log.get("gui.masknmf_vis")
@@ -43,8 +45,9 @@ class MasknmfViewers:
     """masknmf's viewers on one demixing result, built on demand.
 
     ``open(kind)`` builds the viewer once and shows it. The demixing viewer
-    takes the raw movie as an extra panel when there is one (the plane binary
-    beside the result, else ``raw_path``) and the shifts of
+    takes the raw movie as an extra panel when there is one (the recording a
+    run folder read, the plane binary beside the result, else ``raw_path``),
+    the registration a run's ``results.hdf5`` holds, and the shifts of
     ``motion_correction_path`` (or the motion export beside the result) as a
     trace panel.
     """
@@ -71,6 +74,8 @@ class MasknmfViewers:
             )
             self._nframes = int(f["DemixingResults"]["shape"][0])
         self._fs = float(prov["fs"]) if prov.get("fs") else None
+        if self._fs is None and is_masknmf_run(self.path.parent):
+            self._fs = run_config(self.path.parent)["inputs"]["movie"].get("fs")
         if device is None:
             device = "cpu"
             if compute_gpu()["backend"] == "cuda":
@@ -84,7 +89,11 @@ class MasknmfViewers:
         return np.arange(self._nframes) / self._fs if self._fs else None
 
     def _raw_movie(self):
-        """The raw movie: the plane binary beside the result, else ``raw_path``, else None."""
+        """The raw movie: the recording a masknmf run folder read, else the
+        plane binary beside the result, else ``raw_path``, else None.
+        """
+        if is_masknmf_run(self.path.parent):
+            return run_raw_movie(self.path.parent)
         if self.files["raw"] is not None and self.files["ops"] is not None:
             ops = np.load(self.files["ops"], allow_pickle=True).item()
             ly, lx = int(ops["Ly"]), int(ops["Lx"])

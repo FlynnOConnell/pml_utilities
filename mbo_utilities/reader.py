@@ -152,6 +152,7 @@ def imread(
     - .h5 with an ``imaging_system = bruker`` dataset: Bruker exports, axes from its dimension labels
     - .hdf5 with a DemixingResults group: masknmf demixing results, C = view (the GUI opens these in masknmf's viewers)
       (PMD movie, demixed signals, residual)
+    - .hdf5 with a CompressionArray group: a masknmf compressed movie (compression.hdf5, alignment.hdf5)
     - .mesc: Femtonics MESc acquisitions (one MUnit per array)
     - .zarr: Zarr v3
     - .npy: NumPy arrays
@@ -176,6 +177,11 @@ def imread(
         The returned array is a ``FrameAveragedView`` with ``T // N`` frames
         and a frame rate divided by N. Round-trips through
         ``source_reader_kwargs(arr)`` like ``channel`` does.
+    invert_deflection : bool, optional
+        Flip every frame about the per-pixel temporal mean (``2 * mean -
+        frame``), so an indicator that dims on activity reads positive-going.
+        The returned array is an ``InvertedDeflectionView``; round-trips
+        through ``source_reader_kwargs(arr)``.
     dataset : str, optional
         HDF5 dataset to open (``.h5`` inputs only), nested paths accepted
         (e.g. ``"imaging/data"``). When omitted, common names are probed
@@ -214,11 +220,16 @@ def imread(
     # the binned array the user was looking at. Wrapped before the channel
     # view so that view keeps its 4D surface on top.
     frame_average = kwargs.pop("frame_average", None)
+    inverted = kwargs.pop("invert_deflection", False)
     arr = _imread_impl(inputs, **kwargs)
     if frame_average is not None and int(frame_average) > 1:
         from mbo_utilities.arrays._average_view import average_frames
 
         arr = average_frames(arr, int(frame_average))
+    if inverted:
+        from mbo_utilities.arrays._inverted_view import invert_deflection
+
+        arr = invert_deflection(arr)
     if channel is not None:
         from mbo_utilities.arrays._channel_view import _ChannelView
 

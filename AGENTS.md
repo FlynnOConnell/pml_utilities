@@ -53,7 +53,11 @@ pml_utilities/
 `lbm-suite2p-python` depends on the PyPI `mbo_utilities`, which `[tool.uv]`
 `override-dependencies` removes for a checkout and nothing can remove for a consumer.
 Every base dependency is imported somewhere under `mbo_utilities/`; a package a
-single optional command needs is an extra, with the install hint in its `ImportError`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers) and
+single optional command needs is an extra, with the install hint in its `ImportError`.
+masknmf is not pinned yet: the MaskNMF pipeline and `mbo reg-denoise` need its
+`ui/launcher-pages` branch, `uv pip install "masknmf @
+git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"`; to test
+against a local checkout, `uv pip install ~/repos/masknmf-toolbox`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers) and
 `mbo_utilities.pipelines` (pipelines).
 
 ## 2. Layer responsibilities
@@ -65,7 +69,7 @@ single optional command needs is an extra, with the install hint in its `ImportE
 | `arrays/features` | Dims, tags, selection, ROI, phase, frame average, stats; format-agnostic | Know about any one file format |
 | `metadata` | Canonical vocabulary, alias resolution, `OutputMetadata`, ScanImage parsing | Read pixels |
 | `writer` + `_writers` | `imwrite`; emit canonical values under each format's keys; `ops.npy`; provenance | Hand-roll alias fan-out; every emitted key comes from the registry or `OutputMetadata` |
-| `masknmf` `vnoiser` `roi_workflow` `hpc` | Run a pipeline from a settings dataclass; write suite2p-shaped outputs | Import `imgui_bundle`, `fastplotlib`, or `mbo_utilities.gui` |
+| `masknmf` `vnoiser` `roi_workflow` `hpc` | Run a pipeline from a settings dataclass; write its outputs (§7.4) | Import `imgui_bundle`, `fastplotlib`, or `mbo_utilities.gui` |
 | `gui` views | Draw what the array answers (`results`, `motion_correction`, `behavior`) at the position the host's `Slice` and `Playhead` say is on screen (§7.6) | Read `iw.indices` itself; parse a pipeline's files; name a format |
 | `gui/widgets/pipelines` | Draw a pipeline's config; spawn its worker task | Compute inline; hold pipeline math |
 | `gui/tasks` + `gui/_worker` | Re-open the source in a subprocess and call the runner | Depend on GUI state; args are JSON |
@@ -172,7 +176,9 @@ Pinned by `tests/test_numpy_dims.py`, `tests/test_imagej_stack.py`.
 
 Read-time views wrap a 5D array and stay 5D: `FrameAveragedView` (temporal binning,
 T // N), `PhaseCorrectedView` (bidirectional scan phase), `AxialShiftView`
-(per-plane shifts; changes Y/X when enabled). `base_array(arr)` unwraps them for
+(per-plane shifts; changes Y/X when enabled), `InvertedDeflectionView` (float32,
+`2 * mean - frame` about the whole source's temporal mean; the `invert_deflection`
+read feature, the viewer's Invert Deflection as data). `base_array(arr)` unwraps them for
 `isinstance` checks.
 
 Four objects deliberately report a different rank:
@@ -195,7 +201,7 @@ never branch on rank.
 3. Every class in the `mbo_utilities.lazy_arrays` entry-point group (plus
    `register_array_class` calls) is asked `can_open(path)` in descending
    `PRIORITY`; ties keep entry-point order. First `True` wins. Priorities today:
-   `IsoviewArray` 90, `ResultsArray` 70, `MescArray` 60, `BrukerArray` 60, everything else 50.
+   `IsoviewArray` 90, `MasknmfRunArray` 75, `ResultsArray` 70, `MescArray` 60, `BrukerArray` 60, everything else 50.
 4. Inputs no class claims (file lists, `.bin`, `.klb`, `.mp4`, `reg_tif/`, mixed
    directories) fall through to the legacy chain in `reader._imread_impl`.
 5. A directory or list of files a class above 50 claims (a Bruker h5, a MESc:
@@ -569,17 +575,16 @@ pipelines use the same path; nothing is hardcoded by name.
 - `extracts_traces = True` + `extract_traces(movie, labels)` opts the pipeline into
   the manual-ROI "Extract trace" action.
 - A pipeline's widget is one object per host (`pipelines.pipeline_instance`),
-  drawn wherever it is opened: the Process tab, or a floating window through
-  `open_pipeline(host, name, "window")`, which the tab's **Pop out** button, the
-  Process menu and `Shift+P` call. `draw_pipeline_windows` draws the popped-out ones from
-  the top strip's frame hook (registered by `RunTabWidget`) under a `push_id`, so
-  the tab and the window can show the same widget in one frame. A widget
-  therefore never opens a window of its own and never assumes which one it is in.
+  drawn by the Process tab. `open_pipeline(host, name)` selects it there and
+  brings the tab forward. A widget never opens a window of its own and never
+  assumes what it is drawn in, so the Process tab can later move into a window
+  and back without the widgets knowing.
 - `seeds_from_view = True` + `seed_from_view()` sets the widget's selection to
   what the viewer shows (the recording on screen, the slice its sliders are on);
   `open_pipeline(..., seed=True)` calls it first, and `quick_pipelines(host)`
-  lists the pipelines that apply and set it, which is how the MESc tab header
-  offers "Voltage on MUnit_3" without naming a pipeline.
+  lists the pipelines that apply and set it, which is how the MESc tab header,
+  the Process menu and `Shift+P` offer "Voltage on MUnit_3" without naming a
+  pipeline.
 
 ### 7.3 Input contract
 
@@ -591,7 +596,7 @@ was looking at:
 | `input_path` | `arr.source_path` |
 | `reader_kwargs` | `source_reader_kwargs(arr)`: `unit`, `dataset`, `dims`, `frame_average`, `channel` |
 | `timepoints`, `planes`, `channels` | 1-based selection from `to_lsp_kwargs` |
-| `fix_phase`, `use_fft`, `phasecorr_method`, `mean_subtraction` | read features, applied by `apply_read_features` |
+| `fix_phase`, `use_fft`, `phasecorr_method`, `mean_subtraction`, `invert_deflection` | read features, applied by `apply_read_features` |
 | `output_path` | output directory |
 | `settings` | `Settings.to_dict()` |
 | `_uuid`, `_log_file` | injected by `ProcessManager.spawn`; read by `TaskMonitor` and `setup_logging` (§8.3) |
@@ -643,9 +648,51 @@ summary widgets, and `mbo info` load them unchanged:
   zplane02_tp00001-01574/
 ```
 
-Filenames are matched; semantics may differ and the pipeline wins (MaskNMF writes
-zeros for `Fneu`/`spks`). Anything pipeline-specific keeps its own name
-(`demixing_results.hdf5`, `PF/`, `norm_traces.npy`).
+Filenames are matched; semantics may differ and the pipeline wins. Anything
+pipeline-specific keeps its own name (`demixing_results.hdf5`, `PF/`,
+`norm_traces.npy`).
+
+MaskNMF is the exception: it writes masknmf's own run folder per plane and no
+movie, so `masknmf view`, `masknmf.io.OpenedResults` and the masknmf launcher
+open its runs as they open masknmf's:
+
+```
+<save_path>/
+  20261007T183740_masknmf_zplane01_tp00001-01574/
+    results.hdf5        RigidRegistrationArray + RigidMotionCorrector, CompressionArray,
+                        DemixingResults; each stage group's mbo_provenance attr
+    config.json         masknmf.io.write_run_config: pipeline mbo_utilities.masknmf,
+                        configs (MasknmfSettings), inputs.movie (path, reader_kwargs,
+                        read_features, plane, z, c, frames | tp_indices, fs), run, timings
+    <folder name>.log   masknmf's log
+    alignment.hdf5      the denoised copy registration ran on (Denoise before registration)
+    <stem>.<stamp>.masknmf.zarr   the results file (§7.5) when demixing ran
+    *.png               QC figures
+```
+
+`MasknmfRunArray` (`imread(<run folder>)`) re-opens the recording from
+`inputs.movie` and replays the stored shifts on it, so the registered movie is
+never on disk; its `results` is the zarr, its `motion_correction` the shifts.
+With Invert Deflection the runner registers the movie as recorded and inverts
+the registered movie for compression and demixing (`2 * mean - x` holds a still
+mean against a moving frame, so registering it leaves motion behind);
+`inputs.movie.registered_before_inversion` tells the reader to replay the
+shifts the same way. The MaskNMF widget's **Denoise before registration**
+(`registration.denoised_reference`) estimates the shifts on a quick PMD copy of
+the movie as recorded and applies them to the raw frames; **View movies** opens
+`gui/registration_viewer` on the newest run folder (raw, registered, and both
+as PMD: `alignment.hdf5`, and `MasknmfRunArray(run, on_alignment_copy=True)`).
+
+`mbo reg-denoise` (`masknmf/reg_denoise.py`) is pre-registration denoising for
+one channel: the raw movie's PMD (`raw/CompressionArray`), the rigid
+registration estimated on it, and the registered movie's PMD
+(`CompressionArray`) in one `results.hdf5` whose root attrs
+`mbo_pipeline = "reg_denoise"` and `mbo_provenance` (source, unit, channel,
+first frame, fs, settings) let `mbo <file>` open it in
+`gui/reg_denoise_viewer.RegDenoiseViewer`: the four movies on one time axis
+under masknmf's `TracePlot` (RTMC, shifts, frame means, a rectangle ROI).
+A stage set to Run copies its group from the newest earlier run folder of the
+same plane when the group's provenance (settings hash and input) matches.
 
 `hpc/` runs the suite2p pipeline only (`lbm_suite2p_python.pipeline`), configured by
 `hpc.toml` (`[io]`, `[slurm]`, `[pipeline]`, `[parameters]`); a second pipeline gets
@@ -847,7 +894,8 @@ the other.
   is drawn (its mean at the run coordinates); no tab is selected for the user. The row
   buttons on the ROIs tab, the `t` key and the Process tab all run one ROI the way
   the Process tab is set (`engine`, `run_where`, `run_frames`, `run_tag`).
-- **The ROIs pipeline** (`RoiPipelineWidget`, name `ROIs`, `axes_consumed`
+- **The ROIs pipeline** (`RoiPipelineWidget`, name `ROIs`; not listed in the
+  Process tab until it is reworked, neither hardcoded nor an entry point; `axes_consumed`
   `T: range, Z: select-one, C: select-one`) applies to any array with a time axis.
   It picks which ROIs (selected / group, listed, this slice, all), where they are
   read, the engine and tag, runs them, and shows the trace table cut down to those
@@ -940,7 +988,7 @@ the other.
   meaning (`COLUMN_HELP`) and `?` opens `assets/docs/mesc.md`, the plain-words
   page on what a `.mesc` holds. The header line, not a row, carries one button
   per `quick_pipelines` entry (`Voltage on MUnit_3`): it opens that pipeline in
-  a floating window seeded from the unit and sliders on screen (§7.2).
+  the Process tab seeded from the unit and sliders on screen (§7.2).
 - **Full image.** The ROIs pipeline's `full image` target is the whole frame as
   one mask at the run coordinates: with `mean` a `FULL_IMAGE` row of the trace
   table (`ManualRoiWidget.trace_full`, keyed `("member", "full image", "z<z>c<c>")`
@@ -1375,10 +1423,9 @@ ones. Remove an entry when its fix lands.
 **Pipelines**
 
 - Built-in widgets are hardcoded in `gui/widgets/pipelines/__init__.py:51-73` and
-  built-in tasks in `gui/tasks.py:1608-1619`; of the five widgets only `ROIs`
-  declares `info` and has a `pyproject.toml` `mbo_utilities.pipelines` entry (it is
-  also in the hardcoded list so a checkout finds it); none declares `task_type` or
-  `task_func`. Target: §7.2 for every built-in, entry points as the only
+  built-in tasks in `gui/tasks.py:1608-1619`; the `mbo_utilities.pipelines`
+  entry-point group is empty (`ROIs`, the one widget that declares `info`, is off
+  the Process tab for now); none declares `task_type` or `task_func`. Target: §7.2 for every built-in, entry points as the only
   registration path.
 - Suite2p's `PipelineInfo` is registered from the reader module with category
   `segmentation` (`arrays/suite2p.py:31-54`); MaskNMF, ROI workflow, and the IsoView

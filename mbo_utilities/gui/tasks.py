@@ -736,9 +736,9 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
     Masknmf pipeline task.
 
     Runs mbo_utilities.masknmf.runner per selected plane: stage-gated
-    registration -> PMD compression -> demixing, suite2p-shaped outputs,
-    shared QC figures. Stage Skip/Run/Force tri-states travel inside
-    args["settings"].
+    registration -> PMD compression -> demixing into one masknmf run folder
+    per plane under output_dir, QC figures beside. Stage Skip/Run/Force
+    tri-states travel inside args["settings"].
     """
     monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
     monitor.update(0.01, "Initializing masknmf pipeline...")
@@ -749,7 +749,6 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
     settings = args.get("settings") or {}
     custom_metadata = args.get("custom_metadata") or {}
     tp_indices = args.get("tp_indices")
-    selected_planes_0based = args.get("selected_planes_0based")
     channel = args.get("channel")
 
     try:
@@ -759,42 +758,15 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
         logger.exception(f"masknmf: cannot open input {input_path!r}: {e}")
         raise
 
-    # source metadata -> ops, with fs/dz reactively scaled on stride selections
+    # the runner reads fs from here and scales it by the frame stride itself
     metadata = dict(getattr(src_arr, "metadata", {}) or {})
     metadata.update(custom_metadata)
-    src_shape = tuple(src_arr._shape5d()) if hasattr(src_arr, "_shape5d") else None
-    if src_shape is not None and (
-        tp_indices is not None or selected_planes_0based is not None
-    ):
-        try:
-            from mbo_utilities.metadata import OutputMetadata
-
-            selections = {}
-            if tp_indices is not None:
-                selections["T"] = list(tp_indices)
-            if selected_planes_0based is not None:
-                selections["Z"] = list(selected_planes_0based)
-            scaled = OutputMetadata(
-                source=metadata,
-                source_shape=src_shape,
-                source_dims=("T", "C", "Z", "Y", "X"),
-                selections=selections,
-            ).to_dict()
-            # fs deliberately NOT copied: the per-plane imwrite scales it
-            # once from its timepoints= stride; pre-scaling here would
-            # divide by the stride twice. The bin write can't see the
-            # z-stride, so dz (and dx/dy) must be pre-scaled.
-            for key in ("dz", "dx", "dy"):
-                if scaled.get(key) is not None:
-                    metadata[key] = scaled[key]
-            logger.info(f"task_masknmf: reactive metadata -> dz={metadata.get('dz')}")
-        except Exception as e:
-            logger.warning(f"task_masknmf: reactive dz/dx/dy scaling failed: {e}")
 
     writer_kwargs = {
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
         "frame_average": int(args.get("frame_average") or 1),
+        "invert_deflection": bool(args.get("invert_deflection", False)),
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -836,8 +808,7 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
         def _progress(plane=0, total_planes=1, step="", message="", **kw):
             slot = 0.85 / max(total_planes, 1)
             offsets = {
-                "writing_binary": 0.02,
-                "registration": 0.10,
+                "registration": 0.02,
                 "compression": 0.35,
                 "demixing": 0.55,
                 "exports": 0.85,
@@ -848,7 +819,7 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
 
         from mbo_utilities.masknmf import run_volume
 
-        run_volume(
+        runs = run_volume(
             src_arr,
             output_dir,
             planes=planes,
@@ -862,7 +833,7 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
         )
 
         monitor.finish("masknmf pipeline completed.")
-        logger.info("masknmf completed successfully")
+        logger.info(f"masknmf completed: {', '.join(str(r) for r in runs)}")
 
     except Exception as e:
         monitor.fail(str(e), details={"traceback": traceback.format_exc()})

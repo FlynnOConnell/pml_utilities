@@ -107,8 +107,9 @@ Features:
 
 ### masknmf viewers
 
-A masknmf demixing result (`mbo run/demixing_results.hdf5`, or any
-`*_demixing.hdf5` from a glutamate/calcium spine run) does not open in the
+A masknmf demixing result (a run folder's `results.hdf5`, an older
+`demixing_results.hdf5`, or any `*_demixing.hdf5` from a glutamate/calcium
+spine run) does not open in the
 Studio viewer. It opens in one of masknmf's own viewers, chosen before launch
 (`--vis`, or a prompt in the terminal when `--vis` is omitted); the viewer
 window is masknmf's, with nothing added:
@@ -534,3 +535,42 @@ The GUI can launch external tools when installed:
 - suite2p results viewer with trace quality stats
 - diagnostics viewer for signal quality analysis
 - grid search viewer for parameter exploration
+
+## Pre-registration denoising
+
+Needs masknmf's `ui/launcher-pages` branch until it is released:
+
+```bash
+uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"
+```
+
+For fast, noisy recordings such as voltage imaging, motion is estimated on a denoised copy.
+
+Quick start, one MESc unit:
+
+- Open the session: `mbo path\to\session.mesc`, or **File > Open**.
+- In the **MESc** tab, click the MUnit you want to process.
+- **Process > MaskNMF**.
+- Tick **Denoise before registration**.
+- **Set slice**: in **Channel**, pick the first channel only (listed as `1`); optionally narrow **Frames** to try settings on a short window.
+- Set the output folder (**Browse**).
+- **Pipeline Settings > Demixing**: set **Skip** unless you need ROIs; demixing is the slow stage.
+- **Run MaskNMF**; progress is in the Process Console (status button in the menu bar).
+- When it finishes, **View movies** shows raw and registered over the same two as PMD.
+
+From the GUI: **Process > MaskNMF**, tick **Denoise before registration**. The shifts are estimated on a quick PMD copy of the movie (as recorded, not inverted) and applied to the raw frames; the copy is saved as `alignment.hdf5` in the run folder and its block sizes are under **Pipeline Settings > Registration**. Turn demixing off under **Pipeline Settings** to stop at the denoised movie. **View movies** opens the last run folder under the output folder in its own window: raw and registered on top, the same two as PMD below (`python -m mbo_utilities.gui.registration_viewer <run folder>`).
+
+From the terminal, `mbo reg-denoise` runs the same three steps on one channel:
+
+1. **Reference**: the raw movie is PMD-compressed as recorded (not inverted).
+2. **Registration**: rigid shifts estimated on that compression are applied to the raw frames.
+3. **Compression**: the registered movie is PMD-compressed.
+
+```bash
+mbo reg-denoise scan.mesc --unit MSession_0/MUnit_3
+mbo scan_MSession_0_MUnit_3.reg_denoise/results.hdf5
+```
+
+The second command opens **Registration-Denoising Quality Control**: raw and registered on top, the two compressions below, on one time slider and one camera. The traces above show the recording's RTMC curves (µm), the masknmf shifts (px), each movie's whole-frame mean, and each movie's mean inside the rectangle drawn on any of them.
+
+In the MaskNMF entry, **Invert deflection** (in **Set slice**) flips frames about the mean image so an indicator that dims on activity reads positive. Registration runs on the movie as recorded and the registered movie is inverted for compression and demixing. A run folder is masknmf's: `results.hdf5`, `config.json`, the log and, with Denoise before registration, `alignment.hdf5`; no movie is copied, so `mbo <run folder>` replays the shifts on the recording. A later run on the same output folder with the same registration and compression settings and demixing on copies both stages from the last run and only demixes.

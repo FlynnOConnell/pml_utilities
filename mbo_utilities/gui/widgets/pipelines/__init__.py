@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import hello_imgui, imgui, imgui_ctx
+from imgui_bundle import imgui
 
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 from mbo_utilities.lazy_array import base_array
@@ -83,13 +83,6 @@ def _register_pipelines_sync() -> None:
             )
 
             _PIPELINE_CLASSES.append(VoltagePipelineWidget)
-        except Exception:
-            pass
-
-        try:
-            from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
-
-            _PIPELINE_CLASSES.append(RoiPipelineWidget)
         except Exception:
             pass
 
@@ -281,13 +274,9 @@ def pipeline_instance(parent: Any, cls: type[PipelineWidget]) -> PipelineWidget:
     return parent._pipeline_instances[cls.name]
 
 
-def open_pipeline(
-    parent: Any, name: str, where: str = "window", seed: bool = False
-) -> PipelineWidget | None:
-    """Show the pipeline called ``name``: in a floating window
-    (``where="window"``, drawn by :func:`draw_pipeline_windows`) or in the
-    Process tab (``"tab"``, selecting it there). It is the same widget either
-    way. ``seed`` first sets its selection to what the viewer shows
+def open_pipeline(parent: Any, name: str, seed: bool = False) -> PipelineWidget | None:
+    """Select the pipeline called ``name`` in the Process tab and bring the
+    tab forward. ``seed`` first sets its selection to what the viewer shows
     (:meth:`PipelineWidget.seed_from_view`). None when no registered
     pipeline has that name.
     """
@@ -298,59 +287,9 @@ def open_pipeline(
     pipeline = pipeline_instance(parent, cls)
     if seed:
         pipeline.seed_from_view()
-    if where == "tab":
-        parent._selected_pipeline_name = name
-        parent._force_run_tab = True
-        return pipeline
-    if not hasattr(parent, "_pipeline_windows"):
-        parent._pipeline_windows = []
-    if name not in parent._pipeline_windows:
-        parent._pipeline_windows.append(name)
-    parent._pipeline_window_focus = name
+    parent._selected_pipeline_name = name
+    parent._force_run_tab = True
     return pipeline
-
-
-def draw_pipeline_windows(parent: Any) -> None:
-    """Draw every pipeline opened as a floating window (:func:`open_pipeline`):
-    the widget the Process tab draws, under an imgui id of its own so both can
-    show at once. Runs from the top strip's frame hook, so the windows stay up
-    whatever tab is selected; closing one takes it off the list.
-    """
-    names = list(getattr(parent, "_pipeline_windows", None) or [])
-    if not names:
-        return
-    focus = getattr(parent, "_pipeline_window_focus", None)
-    parent._pipeline_window_focus = None
-    viewport = imgui.get_main_viewport()
-    for name in names:
-        pipeline = parent._pipeline_instances.get(name)
-        if pipeline is None:
-            parent._pipeline_windows.remove(name)
-            continue
-        # a fixed first size: the widget sizes its columns from the window,
-        # so an auto-resizing window would never settle
-        imgui.set_next_window_size(
-            imgui.ImVec2(
-                min(hello_imgui.em_size(52), viewport.size.x * 0.9),
-                min(hello_imgui.em_size(44), viewport.size.y * 0.9),
-            ),
-            imgui.Cond_.first_use_ever,
-        )
-        imgui.set_next_window_pos(
-            viewport.get_center(), imgui.Cond_.first_use_ever, imgui.ImVec2(0.5, 0.5)
-        )
-        if name == focus:
-            imgui.set_next_window_focus()
-        expanded, keep = imgui.begin(f"{name}###pipeline_window_{name}", True)
-        if expanded:
-            with imgui_ctx.push_id("window"):
-                try:
-                    pipeline.draw()
-                except Exception as e:
-                    imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), f"Error: {e}")
-        imgui.end()
-        if not keep:
-            parent._pipeline_windows.remove(name)
 
 
 def draw_run_tab(parent: Any) -> None:
@@ -437,16 +376,7 @@ def draw_run_tab(parent: Any) -> None:
             idx = new_idx
     pipeline_cls, _label, state = entries[idx]
     parent._selected_pipeline_name = pipeline_cls.name
-    if state == "ok":
-        if len(entries) > 1:
-            imgui.same_line()
-        if imgui.small_button("Pop out##run_tab_window"):
-            open_pipeline(parent, pipeline_cls.name, "window")
-        imgui.set_item_tooltip(
-            "Open this pipeline in a floating window: the same configuration, "
-            "kept up while you use the other tabs."
-        )
-    if len(entries) > 1 or state == "ok":
+    if len(entries) > 1:
         imgui.separator()
 
     if state == "missing":
@@ -520,7 +450,6 @@ __all__ = [
     "MboSuite2pExtras",
     "any_pipeline_available",
     "cleanup_pipelines",
-    "draw_pipeline_windows",
     "draw_run_tab",
     "draw_section_suite2p",
     "draw_suite2p_settings_panel",

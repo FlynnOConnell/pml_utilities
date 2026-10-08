@@ -380,7 +380,9 @@ def main(
     type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="For a masknmf demixing result: the raw movie, shown as a panel in the demixing viewer. "
-    "Omitted: data_raw.bin beside the result, if any.",
+    "Omitted: the recording a run folder's config.json names, else data_raw.bin beside the result, "
+    "if any. For a pre-registration denoising result: the recording to read in place of the one "
+    "its provenance names.",
 )
 @click.option(
     "--motion-correction",
@@ -388,7 +390,7 @@ def main(
     type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="For a masknmf demixing result: a motion correction hdf5 whose shifts plot above the traces. "
-    "Omitted: motion_correction.hdf5 beside the result, if any.",
+    "Omitted: the registration in a run folder's results.hdf5, else motion_correction.hdf5 beside the result, if any.",
 )
 @click.option(
     "--debug/--no-debug",
@@ -1635,7 +1637,7 @@ def init(data_path, output_dir, overwrite, unit):
         out = write_notebook(template, dest, data_path, unit, overwrite=overwrite)
         if out is None:
             click.secho(
-                f"Exists: {notebook_path(template, dest)}  (--overwrite to replace)",
+                f"Exists: {notebook_path(template, dest, unit=unit)}  (--overwrite to replace)",
                 fg="yellow",
             )
             continue
@@ -2445,6 +2447,58 @@ def results(path, out, overwrite):
         click.echo(f"error: {e}", err=True)
         raise click.Abort
     click.echo(f"wrote {len(found.units)} unit(s) to {written}")
+
+
+@main.command("reg-denoise")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--unit", default=None, help="The .mesc unit, e.g. MSession_0/MUnit_3.")
+@click.option("--channel", type=int, default=1, show_default=True, help="Channel, 1-based.")
+@click.option(
+    "--first-frame",
+    type=int,
+    default=200,
+    show_default=True,
+    help="0-based frame the run starts at; earlier frames are left out.",
+)
+@click.option(
+    "--max-shift",
+    type=int,
+    default=40,
+    show_default=True,
+    help="Largest rigid shift allowed, px.",
+)
+@click.option(
+    "-o",
+    "--out",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="Folder for results.hdf5. Default: <stem>[_<unit>].reg_denoise beside PATH.",
+)
+@click.option(
+    "--overwrite", is_flag=True, default=False, help="Replace an existing results.hdf5."
+)
+def reg_denoise(path, unit, channel, first_frame, max_shift, out, overwrite):
+    """Pre-registration denoising: compress, register to the compression, compress again.
+
+    Writes one results.hdf5 holding the compression of the raw movie, the
+    registration estimated on it and the compression of the registered
+    movie. `mbo <folder>/results.hdf5` opens it in the Registration-Denoising
+    Quality Control viewer.
+
+    \b
+      mbo reg-denoise scan.mesc --unit MSession_0/MUnit_3
+    """
+    from mbo_utilities.masknmf.params import RegDenoiseSettings
+    from mbo_utilities.masknmf.reg_denoise import run_reg_denoise
+
+    settings = RegDenoiseSettings(channel=channel, first_frame=first_frame)
+    settings.registration.max_shifts = (max_shift, max_shift)
+    try:
+        written = run_reg_denoise(path, out, settings, unit=unit, overwrite=overwrite)
+    except (FileExistsError, ValueError) as e:
+        click.echo(f"error: {e}", err=True)
+        raise click.Abort
+    click.echo(f"wrote {written}\nview with: mbo {written}")
 
 
 if __name__ == "__main__":

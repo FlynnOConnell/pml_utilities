@@ -6,22 +6,27 @@ each stage mirror the upstream ``masknmf.pipelines.configs`` dataclasses so
 values pass straight through ``asdict``-style into the strategies.
 
 Stage tri-states follow the suite2p convention: 0=skip, 1=run, 2=force.
-"skip" means the stage's cached HDF5 output is required (compression) or the
-stage is bypassed entirely (registration); "run" reuses a valid cached output;
-"force" always recomputes.
+"skip" bypasses the stage (compression: the last run's is reused when it
+matches); "run" copies the last run folder's stage when its provenance
+matches, else computes; "force" always recomputes.
 """
 
 from dataclasses import asdict, dataclass, field, fields
+from functools import partial
 from typing import Any
 
 STAGE_SKIP = 0
 STAGE_RUN = 1
 STAGE_FORCE = 2
 
-# per-stage native outputs inside a plane dir; gating keys on their presence
-MOCO_FILE = "motion_correction.hdf5"
+# compression and demixing files roi_workflow caches in its own output dirs
 PMD_FILE = "compression.hdf5"
 DEMIX_FILE = "demixing_results.hdf5"
+# the denoised copy shifts are estimated on when registration uses one
+ALIGN_FILE = "alignment.hdf5"
+
+REG_DENOISE_FILE = "results.hdf5"
+REG_DENOISE_PIPELINE = "reg_denoise"
 
 
 @dataclass
@@ -33,6 +38,12 @@ class MasknmfRegistrationSettings:
     minimum_patch_sizes: tuple[int, int] = (50, 50)
     overlaps: tuple[int, int] = (5, 5)
     max_deviation_rigid: tuple[int, int] = (2, 2)
+    # estimate shifts on a quick denoised copy and apply them to the raw movie
+    denoised_reference: bool = False
+    reference_block_sizes: tuple[int, int] = (4, 4)
+    reference_max_components: int = 20
+    reference_spatial_avg_factor: int = 4
+    reference_temporal_avg_factor: int = 2
 
     def strategy_kwargs(self) -> dict:
         """Kwargs for the masknmf motion-corrector constructor."""
@@ -44,6 +55,16 @@ class MasknmfRegistrationSettings:
                 "max_deviation_rigid": tuple(self.max_deviation_rigid),
             }
         return {"max_shifts": tuple(self.max_shifts)}
+
+    def reference_kwargs(self) -> dict:
+        """Kwargs for the masknmf ``CompressStrategy`` that makes the denoised copy."""
+        return {
+            "block_sizes": tuple(self.reference_block_sizes),
+            "max_components": int(self.reference_max_components),
+            "max_consecutive_failures": 1,
+            "spatial_avg_factor": int(self.reference_spatial_avg_factor),
+            "temporal_avg_factor": int(self.reference_temporal_avg_factor),
+        }
 
 
 @dataclass
@@ -139,11 +160,6 @@ class MasknmfRuntimeSettings:
     device: str = "cuda"  # auto | cuda | cpu
     frame_batch_size: int = 300
     exclude_border_radius: int = 0
-    # native HDF5 stage outputs stay on disk so Skip/Run gating can resume
-    keep_intermediates: bool = True
-    # suite2p-parity binaries
-    keep_bin: bool = True  # write registered data.bin
-    keep_raw: bool = False  # keep data_raw.bin after the run
 
 
 @dataclass
@@ -172,6 +188,70 @@ class MasknmfSettings:
             ),
             compression=_load_section(MasknmfCompressionSettings, d.get("compression")),
             demixing=_load_section(MasknmfDemixingSettings, d.get("demixing")),
+            runtime=_load_section(MasknmfRuntimeSettings, d.get("runtime")),
+        )
+
+
+@dataclass
+class RegDenoiseSettings:
+    """Pre-registration denoising: compress the raw movie, register to that
+    compression, compress the registered movie.
+
+    Defaults are the ASAP7 spine notebook's reference run, with the registered
+    movie compressed the same way as the raw one. ``channel`` is 1-based;
+    ``first_frame`` is the 0-based frame the run starts at.
+    """
+
+    channel: int = 1
+    first_frame: int = 200
+    reference: MasknmfCompressionSettings = field(
+        default_factory=partial(
+            MasknmfCompressionSettings,
+            denoise=False,
+            block_sizes=(4, 4),
+            spatial_avg_factor=4,
+            temporal_avg_factor=2,
+            detrend=False,
+        )
+    )
+    registration: MasknmfRegistrationSettings = field(
+        default_factory=partial(MasknmfRegistrationSettings, max_shifts=(40, 40))
+    )
+    # CompressDenoiseStrategy flattened ASAP7 ribbons to ~0.2% of their temporal std
+    compression: MasknmfCompressionSettings = field(
+        default_factory=partial(
+            MasknmfCompressionSettings,
+            denoise=False,
+            block_sizes=(4, 4),
+            spatial_avg_factor=4,
+            temporal_avg_factor=2,
+            detrend=False,
+        )
+    )
+    runtime: MasknmfRuntimeSettings = field(default_factory=MasknmfRuntimeSettings)
+
+    def to_dict(self) -> dict:
+        return _tuples_to_lists(asdict(self))
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "RegDenoiseSettings":
+        d = d or {}
+        default = cls()
+        return cls(
+            channel=int(d.get("channel", default.channel)),
+            first_frame=int(d.get("first_frame", default.first_frame)),
+            reference=_load_section(
+                MasknmfCompressionSettings,
+                {**asdict(default.reference), **(d.get("reference") or {})},
+            ),
+            registration=_load_section(
+                MasknmfRegistrationSettings,
+                {**asdict(default.registration), **(d.get("registration") or {})},
+            ),
+            compression=_load_section(
+                MasknmfCompressionSettings,
+                {**asdict(default.compression), **(d.get("compression") or {})},
+            ),
             runtime=_load_section(MasknmfRuntimeSettings, d.get("runtime")),
         )
 

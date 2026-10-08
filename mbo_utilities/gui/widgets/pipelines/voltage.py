@@ -175,7 +175,6 @@ class VoltagePipelineWidget(PipelineWidget):
         self._domains_path = ""
         self._help_open = False
         self._help_keys = False
-        self._help_frame = -1
 
     def _array(self):
         iw = getattr(self.parent, "image_widget", None)
@@ -455,15 +454,12 @@ class VoltagePipelineWidget(PipelineWidget):
             self._draw_modified_table()
             imgui.spacing()
             self._draw_run()
-        # the tab and its popped-out window can both draw this widget in one frame
-        if self._help_frame != imgui.get_frame_count():
-            self._help_frame = imgui.get_frame_count()
-            self._help_open, self._help_keys = draw_vnoiser_help(
-                self._help_open, self._help_keys
-            )
-            self._help_keys = draw_keybinds_popup(
-                KEYBINDS, self._help_keys, "Curation keybinds"
-            )
+        self._help_open, self._help_keys = draw_vnoiser_help(
+            self._help_open, self._help_keys
+        )
+        self._help_keys = draw_keybinds_popup(
+            KEYBINDS, self._help_keys, "Curation keybinds"
+        )
 
     def _draw_dataset_block(self) -> None:
         imgui.text_colored(_SUBSECTION_COLOR, "Current dataset")
