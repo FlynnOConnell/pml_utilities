@@ -10,7 +10,6 @@ import pytest
 imgui = pytest.importorskip("imgui_bundle").imgui
 
 from mbo_utilities.arrays.numpy import NumpyArray  # noqa: E402
-from mbo_utilities.masknmf.params import STAGE_SKIP, MasknmfSettings  # noqa: E402
 
 SPAWNED = []
 VIEWED = []
@@ -78,7 +77,10 @@ def test_denoising_before_registration_starts_off(widget):
 
 
 def test_the_process_tab_lists_masknmf_and_not_rois_or_voltage_preprocessing():
-    from mbo_utilities.gui.widgets.pipelines import _PIPELINE_CLASSES, _register_pipelines_sync
+    from mbo_utilities.gui.widgets.pipelines import (
+        _PIPELINE_CLASSES,
+        _register_pipelines_sync,
+    )
 
     _register_pipelines_sync()
     names = [cls.name for cls in _PIPELINE_CLASSES]
@@ -94,7 +96,9 @@ def test_it_draws_with_the_settings_popup_open(widget):
     assert widget._invert_deflection is True
 
 
-def test_run_sends_the_inverted_movie_and_the_denoised_copy(widget, tmp_path, monkeypatch):
+def test_run_sends_the_inverted_movie_and_the_denoised_copy(
+    widget, tmp_path, monkeypatch
+):
     monkeypatch.setattr(
         "mbo_utilities.gui.widgets.process_manager.get_process_manager",
         fake_process_manager,

@@ -92,7 +92,10 @@ def _matches(previous: Path | None, group: str, prov: dict) -> bool:
 
 
 def _copy_groups(previous: Path, results_path: Path, groups: list[str]) -> None:
-    with h5py.File(previous / RESULTS_FILE, "r") as src, h5py.File(results_path, "a") as dst:
+    with (
+        h5py.File(previous / RESULTS_FILE, "r") as src,
+        h5py.File(results_path, "a") as dst,
+    ):
         for group in groups:
             if group in src:
                 src.copy(src[group], dst, group)
@@ -555,7 +558,9 @@ def run_plane(
         movie["registered_before_inversion"] = True
 
     name = f"masknmf_{generate_plane_dirname(plane, frame_indices)}"
-    earlier = sorted(p for p in save_path.glob(f"*_{name}") if (p / RESULTS_FILE).is_file())
+    earlier = sorted(
+        p for p in save_path.glob(f"*_{name}") if (p / RESULTS_FILE).is_file()
+    )
     previous = earlier[-1] if earlier else None
     run = masknmf.io.create_run_folder(save_path, name)
     handler = masknmf.io.log_to(run)
@@ -571,9 +576,14 @@ def run_plane(
             if reg.strategy == "pwrigid"
             else masknmf.RigidRegistrationArray
         )
-        reg_prov = {"settings": _stage_hash(reg, "do_registration"), "input": _hash(movie)}
+        reg_prov = {
+            "settings": _stage_hash(reg, "do_registration"),
+            "input": _hash(movie),
+        }
         reg_key = _hash(reg_prov)
-        action = stage_action(reg.do_registration, _matches(previous, cls.__name__, reg_prov))
+        action = stage_action(
+            reg.do_registration, _matches(previous, cls.__name__, reg_prov)
+        )
         shifts = template = None
         if action == "skip":
             logger.info("masknmf: registration skipped")
@@ -581,7 +591,9 @@ def run_plane(
         else:
             if action == "reuse":
                 logger.info(f"masknmf: reusing the registration of {previous.name}")
-                _copy_groups(previous, results_path, [cls.__name__, cls._strategy_cls.__name__])
+                _copy_groups(
+                    previous, results_path, [cls.__name__, cls._strategy_cls.__name__]
+                )
                 if (previous / ALIGN_FILE).is_file():
                     shutil.copyfile(previous / ALIGN_FILE, run / ALIGN_FILE)
                 moco = cls.from_hdf5(results_path, input_movie=raw, device=device)
@@ -594,7 +606,10 @@ def run_plane(
             shifts = _to_np(moco.shifts)
             template = getattr(moco.strategy, "template", None)
             template = None if template is None else _to_np(template)
-        timings["registration"] = {"seconds": round(time.time() - t0, 2), "action": action}
+        timings["registration"] = {
+            "seconds": round(time.time() - t0, 2),
+            "action": action,
+        }
         if inverted:
             moco = masknmf.OphysArray(
                 moco,
@@ -606,7 +621,11 @@ def run_plane(
 
         progress(step="compression", message=f"Compressing plane {plane}")
         t0 = time.time()
-        comp_prov = {"settings": _stage_hash(comp, "do_compression"), "input": reg_key, "fs": fs}
+        comp_prov = {
+            "settings": _stage_hash(comp, "do_compression"),
+            "input": reg_key,
+            "fs": fs,
+        }
         comp_key = _hash(comp_prov)
         group = masknmf.io.group_name_compression()
         cached = _matches(previous, group, comp_prov)
@@ -624,7 +643,10 @@ def run_plane(
                 _copy_groups(previous, results_path, [group])
             # demixing consumes the decomposition as the file holds it
             pmd = masknmf.CompressionArray.from_hdf5(results_path)
-        timings["compression"] = {"seconds": round(time.time() - t0, 2), "action": action}
+        timings["compression"] = {
+            "seconds": round(time.time() - t0, 2),
+            "action": action,
+        }
 
         progress(step="demixing", message=f"Demixing plane {plane}")
         t0 = time.time()
@@ -632,10 +654,18 @@ def run_plane(
         if pmd is None:
             action = "skip"
         else:
-            demix = clamp_background_downsampling(demix, pmd.shape[1], pmd.shape[2], logger)
-            demix_prov = {"settings": _stage_hash(demix, "do_demixing"), "input": comp_key, "fs": fs}
+            demix = clamp_background_downsampling(
+                demix, pmd.shape[1], pmd.shape[2], logger
+            )
+            demix_prov = {
+                "settings": _stage_hash(demix, "do_demixing"),
+                "input": comp_key,
+                "fs": fs,
+            }
             group = masknmf.io.group_name_demixing()
-            action = stage_action(demix.do_demixing, _matches(previous, group, demix_prov))
+            action = stage_action(
+                demix.do_demixing, _matches(previous, group, demix_prov)
+            )
             if action == "compute":
                 _demix(pmd, demix, runtime, device, fs, logger).export(results_path)
                 _stamp(results_path, group, demix_prov)
@@ -658,7 +688,11 @@ def run_plane(
             Results(
                 pipeline="masknmf",
                 units={unit.name: unit},
-                source={"path": movie["path"], "planes": [plane], "reader_kwargs": reader_kwargs},
+                source={
+                    "path": movie["path"],
+                    "planes": [plane],
+                    "reader_kwargs": reader_kwargs,
+                },
                 settings=settings.to_dict(),
                 metadata={"fs": fs} if fs else {},
             ).write(run / results_name(source or run.name, pipeline="masknmf"))
@@ -688,7 +722,12 @@ def run_plane(
     finally:
         record["end"] = datetime.now().isoformat(timespec="seconds")
         masknmf.io.write_run_config(
-            run, PIPELINE, settings.to_dict(), run=record, inputs={"movie": movie}, timings=timings
+            run,
+            PIPELINE,
+            settings.to_dict(),
+            run=record,
+            inputs={"movie": movie},
+            timings=timings,
         )
         logging.getLogger("masknmf").removeHandler(handler)
         handler.close()
@@ -733,7 +772,9 @@ def run_volume(
             logger=logger,
             progress_callback=None
             if progress_callback is None
-            else functools.partial(progress_callback, plane=i, total_planes=len(planes)),
+            else functools.partial(
+                progress_callback, plane=i, total_planes=len(planes)
+            ),
         )
         for i, plane in enumerate(planes)
     ]

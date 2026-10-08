@@ -2452,7 +2452,9 @@ def results(path, out, overwrite):
 @main.command("reg-denoise")
 @click.argument("path", type=click.Path(exists=True))
 @click.option("--unit", default=None, help="The .mesc unit, e.g. MSession_0/MUnit_3.")
-@click.option("--channel", type=int, default=1, show_default=True, help="Channel, 1-based.")
+@click.option(
+    "--channel", type=int, default=1, show_default=True, help="Channel, 1-based."
+)
 @click.option(
     "--first-frame",
     type=int,

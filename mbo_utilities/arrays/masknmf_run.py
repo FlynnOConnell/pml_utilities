@@ -109,7 +109,10 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
     PRIORITY = 75
 
     def __init__(
-        self, filenames: Path | str, device: str = "cpu", on_alignment_copy: bool = False
+        self,
+        filenames: Path | str,
+        device: str = "cpu",
+        on_alignment_copy: bool = False,
     ):
         run = Path(filenames)
         self.run_folder = run
@@ -121,11 +124,17 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
         self.config = run_config(run)
         self.raw = run_raw_movie(run)
         if self.raw is None:
-            raise ValueError(f"{run} was run on an in-memory array; there is no recording to read")
+            raise ValueError(
+                f"{run} was run on an in-memory array; there is no recording to read"
+            )
         movie = self.config["inputs"]["movie"]
         self._metadata = dict(getattr(self.raw.arr, "metadata", None) or {})
         self._metadata.update(
-            {"num_timepoints": self.raw.shape[0], "Ly": self.raw.shape[1], "Lx": self.raw.shape[2]}
+            {
+                "num_timepoints": self.raw.shape[0],
+                "Ly": self.raw.shape[1],
+                "Lx": self.raw.shape[2],
+            }
         )
         if movie.get("fs"):
             self._metadata["fs"] = float(movie["fs"])
@@ -158,7 +167,9 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
 
                 from masknmf import OphysArray
 
-                after = self.config["inputs"]["movie"].get("registered_before_inversion")
+                after = self.config["inputs"]["movie"].get(
+                    "registered_before_inversion"
+                )
                 if self.on_alignment_copy:
                     from masknmf import CompressionArray
 
@@ -169,7 +180,9 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
                 else:
                     movie = self.raw
                 self._registered = REGISTRATION_ARRAYS[self._group].from_hdf5(
-                    self.run_folder / RESULTS_FILE, input_movie=movie, device=self.device
+                    self.run_folder / RESULTS_FILE,
+                    input_movie=movie,
+                    device=self.device,
                 )
                 if after:
                     self._registered = OphysArray(
@@ -196,7 +209,11 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
             return None
         shifts = shifts.reshape(shifts.shape[0], -1, 2).mean(axis=1)
         fs = self._metadata.get("fs")
-        t = np.arange(shifts.shape[0]) / fs if fs else np.arange(shifts.shape[0], dtype=float)
+        t = (
+            np.arange(shifts.shape[0]) / fs
+            if fs
+            else np.arange(shifts.shape[0], dtype=float)
+        )
         return MotionCorrection(
             source="masknmf",
             unit="px",

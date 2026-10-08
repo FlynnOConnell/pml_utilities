@@ -428,13 +428,20 @@ def test_a_run_folder_holds_no_movie_and_registers_the_raw_one(
     assert {"results.hdf5", "config.json", f"{run.name}.log"} <= names
     assert not names & {"data.bin", "data_raw.bin", "ops.npy", "stat.npy"}
     with h5py.File(run / "results.hdf5") as f:
-        assert {"RigidRegistrationArray", "RigidMotionCorrector", "CompressionArray"} <= set(f)
+        assert {
+            "RigidRegistrationArray",
+            "RigidMotionCorrector",
+            "CompressionArray",
+        } <= set(f)
         est = f["RigidRegistrationArray"]["shifts"][()]
     # the shifts that undo a roll by s are -s
     assert np.corrcoef(est[:, 0], shifts[:, 0])[0, 1] < -0.9
     assert np.corrcoef(est[:, 1], shifts[:, 1])[0, 1] < -0.9
     config = json.loads((run / "config.json").read_text())
-    assert config["pipeline"] == "mbo_utilities.masknmf" and config["run"]["status"] == "completed"
+    assert (
+        config["pipeline"] == "mbo_utilities.masknmf"
+        and config["run"]["status"] == "completed"
+    )
     assert config["inputs"]["movie"]["read_features"] == {"invert_deflection": True}
 
     arr = imread(run)
@@ -461,7 +468,9 @@ def test_the_viewer_shows_raw_registered_and_both_as_pmd(
     from mbo_utilities.gui.registration_viewer import registration_movies
     from mbo_utilities.masknmf import run_plane
 
-    run = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    run = run_plane(
+        str(shaking_tif), tmp_path, settings=denoised_registration, replot=False
+    )
     movies = registration_movies(run)
     assert list(movies) == ["raw", "registered", "raw (pmd)", "registered (pmd)"]
     pmd = masknmf.CompressionArray.from_hdf5(run / "alignment.hdf5")
@@ -470,8 +479,12 @@ def test_the_viewer_shows_raw_registered_and_both_as_pmd(
     )
     expected = np.asarray(replayed[list(range(10))])
     expected = expected.cpu().numpy() if hasattr(expected, "cpu") else expected
-    np.testing.assert_allclose(movies["registered (pmd)"][:10], expected, rtol=1e-4, atol=1e-3)
-    np.testing.assert_allclose(movies["raw (pmd)"][:10], np.asarray(pmd[:10]), rtol=1e-4, atol=1e-3)
+    np.testing.assert_allclose(
+        movies["registered (pmd)"][:10], expected, rtol=1e-4, atol=1e-3
+    )
+    np.testing.assert_allclose(
+        movies["raw (pmd)"][:10], np.asarray(pmd[:10]), rtol=1e-4, atol=1e-3
+    )
 
 
 @pytest.mark.slow
@@ -481,23 +494,38 @@ def test_a_later_run_copies_the_stages_whose_provenance_matches(
     pytest.importorskip("masknmf")
     from mbo_utilities.masknmf import run_plane
 
-    first = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
-    second = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    first = run_plane(
+        str(shaking_tif), tmp_path, settings=denoised_registration, replot=False
+    )
+    second = run_plane(
+        str(shaking_tif), tmp_path, settings=denoised_registration, replot=False
+    )
     denoised_registration.compression.block_sizes = (12, 12)
-    third = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    third = run_plane(
+        str(shaking_tif), tmp_path, settings=denoised_registration, replot=False
+    )
     assert len({first, second, third}) == 3
     actions = [
-        {k: v["action"] for k, v in json.loads((r / "config.json").read_text())["timings"].items()}
+        {
+            k: v["action"]
+            for k, v in json.loads((r / "config.json").read_text())["timings"].items()
+        }
         for r in (first, second, third)
     ]
     assert actions[0]["registration"] == actions[0]["compression"] == "compute"
     assert actions[1]["registration"] == actions[1]["compression"] == "reuse"
-    assert actions[2] == {"registration": "reuse", "compression": "compute", "demixing": "skip"}
+    assert actions[2] == {
+        "registration": "reuse",
+        "compression": "compute",
+        "demixing": "skip",
+    }
     assert (third / "alignment.hdf5").exists()
 
 
 @pytest.mark.slow
-def test_task_masknmf_registers_the_inverted_movie(tmp_path, shaking_tif, shaking_movie):
+def test_task_masknmf_registers_the_inverted_movie(
+    tmp_path, shaking_tif, shaking_movie
+):
     pytest.importorskip("masknmf")
     import logging
 
@@ -522,7 +550,9 @@ def test_task_masknmf_registers_the_inverted_movie(tmp_path, shaking_tif, shakin
     )
     run = next((tmp_path / "out").glob("*_masknmf_zplane01"))
     data = movie[:, 0, 0].astype(np.float32)
-    np.testing.assert_allclose(run_raw_movie(run)[:], 2 * data.mean(axis=0) - data, rtol=1e-5)
+    np.testing.assert_allclose(
+        run_raw_movie(run)[:], 2 * data.mean(axis=0) - data, rtol=1e-5
+    )
 
 
 @pytest.fixture

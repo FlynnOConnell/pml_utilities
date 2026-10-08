@@ -6,7 +6,6 @@ import h5py
 import numpy as np
 import pytest
 import tifffile
-
 from mbo_utilities import imread
 from mbo_utilities.arrays.compression import CompressedMovieArray
 
@@ -66,7 +65,9 @@ def test_frames_are_rebuilt_in_movie_units(compressed, factors):
 )
 def test_keys_agree_with_numpy(compressed, factors, key):
     full = movie(factors)[:, None, None]
-    np.testing.assert_allclose(CompressedMovieArray(compressed)[key], full[key], rtol=1e-5)
+    np.testing.assert_allclose(
+        CompressedMovieArray(compressed)[key], full[key], rtol=1e-5
+    )
 
 
 def test_the_representative_frame_is_the_mean_image(compressed, factors):

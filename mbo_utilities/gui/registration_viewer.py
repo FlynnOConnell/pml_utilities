@@ -30,7 +30,9 @@ def registration_movies(run: Path | str) -> dict[str, object]:
     if aligned:
         movies["raw (pmd)"] = CompressedMovieArray(run / ALIGN_FILE).squeeze()
     if aligned and registered:
-        movies["registered (pmd)"] = MasknmfRunArray(run, on_alignment_copy=True).squeeze()
+        movies["registered (pmd)"] = MasknmfRunArray(
+            run, on_alignment_copy=True
+        ).squeeze()
     return movies
 
 

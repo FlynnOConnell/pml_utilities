@@ -944,7 +944,10 @@ class MaskNMFPipelineWidget(PipelineWidget):
         )
         if not view:
             return
-        written = [(p.stat().st_mtime, p.parent) for p in Path(self._outdir).glob("**/config.json")]
+        written = [
+            (p.stat().st_mtime, p.parent)
+            for p in Path(self._outdir).glob("**/config.json")
+        ]
         if not written:
             self._last_status = f"No run folder in {self._outdir} yet."
             return
@@ -952,7 +955,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
         run = max(written)[1]
         # its own process: a second figure built inside this imgui frame crashes imgui
-        pid = launch_window("mbo_utilities.gui.registration_viewer", [str(run)], f"movies_{run.name}")
+        pid = launch_window(
+            "mbo_utilities.gui.registration_viewer", [str(run)], f"movies_{run.name}"
+        )
         self._last_status = f"Opened {run.name} in its own window (PID {pid})."
 
     def _submit(self, planes: list[int]) -> None:

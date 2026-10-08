@@ -6,9 +6,12 @@ import h5py
 import numpy as np
 import pytest
 import tifffile
-
 from mbo_utilities import imread
-from mbo_utilities.arrays.masknmf_run import MasknmfRunArray, is_masknmf_run, run_raw_movie
+from mbo_utilities.arrays.masknmf_run import (
+    MasknmfRunArray,
+    is_masknmf_run,
+    run_raw_movie,
+)
 from mbo_utilities.results import Results, ResultUnit, results_name
 
 T, Y, X = 20, 6, 8
@@ -42,7 +45,11 @@ def run(tmp_path, recording):
         "tp_indices": None,
         "fs": 30.0,
     }
-    config = {"pipeline": "mbo_utilities.masknmf", "inputs": {"movie": movie}, "configs": {}}
+    config = {
+        "pipeline": "mbo_utilities.masknmf",
+        "inputs": {"movie": movie},
+        "configs": {},
+    }
     (folder / "config.json").write_text(json.dumps(config))
     return folder
 

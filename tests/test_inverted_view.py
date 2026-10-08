@@ -5,7 +5,6 @@ through ``imread`` and ``apply_read_features``.
 import numpy as np
 import pytest
 import tifffile
-
 from mbo_utilities import imread
 from mbo_utilities.arrays import InvertedDeflectionView, invert_deflection
 from mbo_utilities.arrays.features import READ_FEATURE_KEYS, apply_read_features
