@@ -227,22 +227,25 @@ def on_frames(motion: MotionCorrection | None, t: np.ndarray) -> dict[str, np.nd
 
 @dataclass
 class RegDenoiseRun:
-    """One ``results.hdf5`` from ``run_reg_denoise`` with its four movies.
+    """One ``run_reg_denoise`` result or MaskNMF run folder with its movies.
 
     ``raw`` is the source channel reopened from the provenance (or
     ``raw_path``); ``registered`` is masknmf's registration of it; ``pmd_raw``
-    and ``pmd_registered`` are the two compressions in raw units. All four are
-    ``(T, Y, X)`` float32 in memory. ``rtmc`` is the source's own motion
-    correction (MESc RTMC, µm), ``shifts`` masknmf's (px).
+    and ``pmd_registered`` are the two compressions in raw units, None when
+    the run did not make one. Every movie is ``(T, Y, X)`` float32 in memory.
+    ``times`` is each frame's time in seconds on the recording's clock (frame
+    numbers without a rate). ``rtmc`` is the source's own motion correction
+    (MESc RTMC, µm), ``shifts`` masknmf's (px), None without a registration.
     """
 
     path: Path
     provenance: dict
+    times: np.ndarray
     raw: np.ndarray
     registered: np.ndarray
-    pmd_raw: np.ndarray
-    pmd_registered: np.ndarray
-    shifts: MotionCorrection
+    pmd_raw: np.ndarray | None
+    pmd_registered: np.ndarray | None
+    shifts: MotionCorrection | None
     rtmc: MotionCorrection | None
 
     @property
@@ -250,19 +253,14 @@ class RegDenoiseRun:
         return self.provenance.get("fs")
 
     @property
-    def times(self) -> np.ndarray:
-        """Each frame's time in seconds on the recording's clock, else frame numbers."""
-        frames = self.provenance["first_frame"] + np.arange(len(self.raw))
-        return frames / self.fs if self.fs else frames.astype(np.float64)
-
-    @property
     def movies(self) -> dict[str, np.ndarray]:
-        return {
+        movies = {
             "raw": self.raw,
             "registered": self.registered,
             "pmd(raw)": self.pmd_raw,
             "pmd(registered)": self.pmd_registered,
         }
+        return {name: m for name, m in movies.items() if m is not None}
 
     @classmethod
     def open(
@@ -271,12 +269,21 @@ class RegDenoiseRun:
         raw_path: Path | str | None = None,
         device: str = "cpu",
     ) -> RegDenoiseRun:
+        """A ``run_reg_denoise`` ``results.hdf5``, or a MaskNMF run folder or its
+        ``results.hdf5`` (``from_run_folder``).
+        """
         from masknmf.utils._serialization import load_dict
 
         import masknmf
         from mbo_utilities.reader import imread
 
+        from mbo_utilities.arrays.masknmf_run import is_masknmf_run
+
         path = Path(path)
+        if path.is_dir():
+            return cls.from_run_folder(path, device=device)
+        if not is_reg_denoise(path) and is_masknmf_run(path.parent):
+            return cls.from_run_folder(path.parent, device=device)
         with h5py.File(path, "r") as f:
             if f.attrs.get("mbo_pipeline") != REG_DENOISE_PIPELINE:
                 raise ValueError(f"{path} is not a pre-registration denoising result")
@@ -317,6 +324,7 @@ class RegDenoiseRun:
         return cls(
             path=path,
             provenance=provenance,
+            times=t,
             raw=raw,
             registered=dense(registration),
             pmd_raw=dense(pmd_raw),
@@ -325,4 +333,67 @@ class RegDenoiseRun:
                 "masknmf", "px", {"Y": (t, shifts[:, 0]), "X": (t, shifts[:, 1])}
             ),
             rtmc=arr.motion_correction,
+        )
+
+    @classmethod
+    def from_run_folder(cls, run: Path | str, device: str = "cpu") -> RegDenoiseRun:
+        """A MaskNMF run folder as the same movies.
+
+        ``raw`` and ``registered`` are ``MasknmfRunArray``'s (inverted when the
+        run used Invert Deflection), ``pmd_raw`` the denoised copy registration
+        ran on (``alignment.hdf5``, inverted the same way), ``pmd_registered``
+        the run's compression stage.
+        """
+        import masknmf
+        from mbo_utilities.arrays.masknmf_run import RESULTS_FILE, MasknmfRunArray
+        from mbo_utilities.lazy_array import base_array
+        from mbo_utilities.masknmf.params import ALIGN_FILE
+
+        run = Path(run)
+        movie_array = MasknmfRunArray(run, device=device)
+        movie = movie_array.config["inputs"]["movie"]
+        n = movie_array.raw.shape[0]
+        if movie.get("frames") is not None:
+            frames = np.arange(*movie["frames"])
+        elif movie.get("tp_indices") is not None:
+            frames = np.asarray(movie["tp_indices"])
+        else:
+            frames = np.arange(n)
+        source = movie_array.raw.arr
+        fs = source.fs
+        t = frames / fs if fs else frames.astype(np.float64)
+
+        pmds = {}
+        with h5py.File(run / RESULTS_FILE, "r") as f:
+            compressed = "CompressionArray" in f
+        if (run / ALIGN_FILE).is_file():
+            pmds["raw"] = masknmf.CompressionArray.from_hdf5(run / ALIGN_FILE, device=device)
+        if compressed:
+            pmds["registered"] = masknmf.CompressionArray.from_hdf5(
+                run / RESULTS_FILE, device=device
+            )
+        for pmd in pmds.values():
+            pmd.rescale = True
+            pmd.include_trend = True
+        if "raw" in pmds and movie.get("registered_before_inversion"):
+            pmds["raw"] = masknmf.OphysArray(
+                pmds["raw"], negative_indicator=True, include_mean=True, device=device
+            )
+
+        shifts = movie_array.shifts
+        if shifts is not None:
+            shifts = shifts.reshape(shifts.shape[0], -1, 2).mean(axis=1)
+            shifts = MotionCorrection(
+                "masknmf", "px", {"Y": (t, shifts[:, 0]), "X": (t, shifts[:, 1])}
+            )
+        return cls(
+            path=run,
+            provenance={"fs": fs, "source": movie},
+            times=t,
+            raw=dense(movie_array.raw),
+            registered=dense(movie_array.registered),
+            pmd_raw=dense(pmds["raw"]) if "raw" in pmds else None,
+            pmd_registered=dense(pmds["registered"]) if "registered" in pmds else None,
+            shifts=shifts,
+            rtmc=base_array(source).motion_correction,
         )

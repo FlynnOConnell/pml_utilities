@@ -461,30 +461,29 @@ def denoised_registration(registration_settings):
 
 
 @pytest.mark.slow
-def test_the_viewer_shows_raw_registered_and_both_as_pmd(
-    tmp_path, shaking_tif, denoised_registration
+def test_the_qc_viewer_opens_a_run_folder_with_its_shifts_and_both_pmds(
+    tmp_path, shaking_tif, shaking_movie, denoised_registration
 ):
     masknmf = pytest.importorskip("masknmf")
-    from mbo_utilities.gui.registration_viewer import registration_movies
+    from mbo_utilities.arrays.masknmf_run import MasknmfRunArray
     from mbo_utilities.masknmf import run_plane
+    from mbo_utilities.masknmf.reg_denoise import RegDenoiseRun, dense
 
-    run = run_plane(
-        str(shaking_tif), tmp_path, settings=denoised_registration, replot=False
-    )
-    movies = registration_movies(run)
-    assert list(movies) == ["raw", "registered", "raw (pmd)", "registered (pmd)"]
+    _, shifts = shaking_movie
+    run = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    qc = RegDenoiseRun.open(run)
+    assert list(qc.movies) == ["raw", "registered", "pmd(raw)", "pmd(registered)"]
+    assert all(m.shape == qc.raw.shape and m.dtype == np.float32 for m in qc.movies.values())
+    assert len(qc.times) == qc.raw.shape[0]
+    np.testing.assert_allclose(qc.registered, MasknmfRunArray(run)[:, 0, 0], rtol=1e-4, atol=1e-3)
     pmd = masknmf.CompressionArray.from_hdf5(run / "alignment.hdf5")
-    replayed = masknmf.RigidRegistrationArray.from_hdf5(
-        run / "results.hdf5", input_movie=pmd, device="cpu"
-    )
-    expected = np.asarray(replayed[list(range(10))])
-    expected = expected.cpu().numpy() if hasattr(expected, "cpu") else expected
-    np.testing.assert_allclose(
-        movies["registered (pmd)"][:10], expected, rtol=1e-4, atol=1e-3
-    )
-    np.testing.assert_allclose(
-        movies["raw (pmd)"][:10], np.asarray(pmd[:10]), rtol=1e-4, atol=1e-3
-    )
+    pmd.rescale = True
+    pmd.include_trend = True
+    np.testing.assert_allclose(qc.pmd_raw, dense(pmd), rtol=1e-4, atol=1e-3)
+    assert set(qc.shifts.traces) == {"Y", "X"}
+    assert np.corrcoef(qc.shifts.traces["Y"][1], shifts[:, 0])[0, 1] < -0.9
+    assert qc.rtmc is None
+    assert list(RegDenoiseRun.open(run / "results.hdf5").movies) == list(qc.movies)
 
 
 @pytest.mark.slow
