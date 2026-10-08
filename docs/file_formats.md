@@ -58,7 +58,7 @@ the 5D array underneath for writers and the viewer.
 | **`.h5`** | `H5Array` | `(T, C, Z, Y, X)` | HDF5 datasets |
 | ↳ `imaging_system = bruker` dataset | `BrukerArray` | `(T, C, Z, Y, X)` | Bruker HDF5 export; axes from its dimension labels |
 | ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
-| ↳ `CompressionArray` group | `CompressedMovieArray` | `(T, 1, 1, Y, X)` | masknmf compressed movie (`results.hdf5`, `alignment.hdf5`) |
+| ↳ `CompressionArray` group | `CompressedMovieArray` | `(T, 1, 1, Y, X)` | masknmf compressed movie (`compression.hdf5`, `results.hdf5`) |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
 | **`.zarr`** | `ZarrArray` | `(T, C, Z, Y, X)` | Zarr v3 / OME-Zarr |
 | ↳ `<stem>.<stamp>.<pipeline>.zarr` results | `ResultsArray` / `Results.read` | traces, not an image | Any pipeline's results file (`mbo_utilities.results`); one reader whichever pipeline wrote it |
@@ -317,13 +317,12 @@ own viewers rather than the Studio viewer (see the GUI guide).
 
 An hdf5 with a `CompressionArray` group: a movie masknmf compressed, stored as
 factors. A MaskNMF run folder's `results.hdf5` holds the denoised,
-registered movie, and its `alignment.hdf5` the copy registration estimated
-its shifts on. Frames are rebuilt with numpy on read, in the units of the
+registered movie. Frames are rebuilt with numpy on read, in the units of the
 movie that was compressed (the stored mean and noise scale are added back). A
 file that also holds a `DemixingResults` group opens as a `DemixingArray`.
 
 ```python
-arr = mbo.imread("run/alignment.hdf5")
+arr = mbo.imread("plane01/compression.hdf5")
 print(arr.shape)        # (T, 1, 1, Y, X)
 frame = arr[100, 0, 0]  # (Y, X) float32
 ```
@@ -336,7 +335,8 @@ A MaskNMF run folder, `<yyyymmddTHHMMSS>_masknmf_zplaneNN[_tp...]/` with
 movie. No movie is stored: `config.json` records the recording, its reader
 kwargs and read features (scan phase, invert deflection, frame average), the
 plane, channel and frames, and the stored shifts are replayed on it with
-masknmf.
+masknmf. A run made with Invert Deflection replays them on the recording as
+it was and inverts the result, the order the run registered in.
 
 ```python
 run = "out/20261007T183740_masknmf_zplane01"
@@ -345,10 +345,6 @@ print(arr.shape)          # (T, 1, 1, Y, X), registered
 arr.raw[100]              # (Y, X) frame of the recording as the run read it
 arr.motion_correction     # the shifts as Y and X traces in px
 arr.results               # the run's results file, when demixing ran
-
-# the shifts replayed on the alignment copy instead of the recording
-from mbo_utilities.arrays import MasknmfRunArray
-pmd = MasknmfRunArray(run, on_alignment_copy=True)
 ```
 
 (mescarray)=

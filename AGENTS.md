@@ -54,7 +54,7 @@ pml_utilities/
 `override-dependencies` removes for a checkout and nothing can remove for a consumer.
 Every base dependency is imported somewhere under `mbo_utilities/`; a package a
 single optional command needs is an extra, with the install hint in its `ImportError`.
-masknmf is not pinned yet: the MaskNMF and Voltage Preprocessing pipelines need its
+masknmf is not pinned yet: the MaskNMF pipeline and `mbo reg-denoise` need its
 `ui/launcher-pages` branch, `uv pip install "masknmf @
 git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"`; to test
 against a local checkout, `uv pip install ~/repos/masknmf-toolbox`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers) and
@@ -665,7 +665,6 @@ open its runs as they open masknmf's:
                         configs (MasknmfSettings), inputs.movie (path, reader_kwargs,
                         read_features, plane, z, c, frames | tp_indices, fs), run, timings
     <folder name>.log   masknmf's log
-    alignment.hdf5      the denoised copy registration ran on (denoised_reference)
     <stem>.<stamp>.masknmf.zarr   the results file (§7.5) when demixing ran
     *.png               QC figures
 ```
@@ -673,6 +672,20 @@ open its runs as they open masknmf's:
 `MasknmfRunArray` (`imread(<run folder>)`) re-opens the recording from
 `inputs.movie` and replays the stored shifts on it, so the registered movie is
 never on disk; its `results` is the zarr, its `motion_correction` the shifts.
+With Invert Deflection the runner registers the movie as recorded and inverts
+the registered movie for compression and demixing (`2 * mean - x` holds a still
+mean against a moving frame, so registering it leaves motion behind);
+`inputs.movie.registered_before_inversion` tells the reader to replay the
+shifts the same way.
+
+`mbo reg-denoise` (`masknmf/reg_denoise.py`) is pre-registration denoising for
+one channel: the raw movie's PMD (`raw/CompressionArray`), the rigid
+registration estimated on it, and the registered movie's PMD
+(`CompressionArray`) in one `results.hdf5` whose root attrs
+`mbo_pipeline = "reg_denoise"` and `mbo_provenance` (source, unit, channel,
+first frame, fs, settings) let `mbo <file>` open it in
+`gui/reg_denoise_viewer.RegDenoiseViewer`: the four movies on one time axis
+under masknmf's `TracePlot` (RTMC, shifts, frame means, a rectangle ROI).
 A stage set to Run copies its group from the newest earlier run folder of the
 same plane when the group's provenance (settings hash and input) matches.
 

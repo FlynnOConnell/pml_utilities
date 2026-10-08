@@ -536,24 +536,25 @@ The GUI can launch external tools when installed:
 - diagnostics viewer for signal quality analysis
 - grid search viewer for parameter exploration
 
-## Voltage Preprocessing
+## Pre-registration denoising
 
-Available when `masknmf` is installed; the MaskNMF and Voltage Preprocessing entries need masknmf's `ui/launcher-pages` branch until it is released:
+Needs masknmf's `ui/launcher-pages` branch until it is released:
 
 ```bash
 uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"
 ```
 
-The MaskNMF pipeline up to the denoised movie, for fast, noisy recordings such as voltage imaging:
+For fast, noisy recordings such as voltage imaging, motion is estimated on a denoised copy:
 
-1. **Alignment copy**: a quick denoised copy of the movie, used only to estimate motion.
-2. **Registration**: the shifts estimated on the alignment copy are applied to the raw frames.
-3. **Denoising**: the registered movie is compressed and denoised.
+1. **Reference**: the raw movie is PMD-compressed as recorded (not inverted).
+2. **Registration**: rigid shifts estimated on that compression are applied to the raw frames.
+3. **Compression**: the registered movie is PMD-compressed.
 
-Demixing starts off (**Pipeline Settings > Demixing**). The same option is in the MaskNMF entry's Registration column as **Register on a denoised copy**.
+```bash
+mbo reg-denoise scan.mesc --unit MSession_0/MUnit_3
+mbo scan_MSession_0_MUnit_3.reg_denoise/results.hdf5
+```
 
-- **Set slice** picks a frame window, so settings can be tried on a few thousand frames first; every run gets its own `<time>_masknmf_zplaneNN_tpAAAAA-BBBBB` folder.
-- **Invert deflection** (in **Set slice**) flips every frame about the mean image before processing, so an indicator that dims on activity reads positive. It starts as the viewer's **Invert Deflection**; programmatically it is `imread(path, invert_deflection=True)`.
-- **View movies** shows the last run folder written under the output folder in its own window, on one time slider: raw and registered on top, and below them the same two as PMD (the alignment copy, and the alignment copy with the shifts applied), so the denoised versions sit under the originals. `python -m mbo_utilities.gui.registration_viewer <run folder>` opens the same window.
+The second command opens **Registration-Denoising Quality Control**: raw and registered on top, the two compressions below, on one time slider and one camera. The traces above show the recording's RTMC curves (µm), the masknmf shifts (px), each movie's whole-frame mean, and each movie's mean inside the rectangle drawn on any of them.
 
-A run folder is masknmf's: `results.hdf5` (the registration, the denoised movie and, with demixing, the signals), `config.json`, the log and `alignment.hdf5`. No movie is copied: raw is the recording itself and registered is the shifts replayed on it, so `mbo <run folder>` opens the registered movie and `masknmf view <run folder>/results.hdf5` works too. A later run on the same output folder with the same registration and compression settings and demixing on copies both stages from the last run and only demixes.
+In the MaskNMF entry, **Invert deflection** (in **Set slice**) flips frames about the mean image so an indicator that dims on activity reads positive. Registration runs on the movie as recorded and the registered movie is inverted for compression and demixing. A run folder is masknmf's: `results.hdf5`, `config.json` and the log; no movie is copied, so `mbo <run folder>` replays the shifts on the recording. A later run on the same output folder with the same registration and compression settings and demixing on copies both stages from the last run and only demixes.

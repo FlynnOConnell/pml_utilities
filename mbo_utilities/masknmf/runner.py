@@ -3,8 +3,8 @@
 Each plane runs into a new masknmf run folder,
 ``<save_path>/<yyyymmddTHHMMSS>_masknmf_zplaneNN[_tpAAAAA-BBBBB]/``:
 ``results.hdf5`` with one group per stage, ``config.json``, the masknmf log,
-``alignment.hdf5`` when registration ran on a denoised copy, the results zarr
-(``mbo_utilities.results``) when demixing ran, and the QC figures. No movie
+the results zarr (``mbo_utilities.results``) when demixing ran, and the QC
+figures. No movie
 is written: the stages read the recording through ``imread`` and the
 registered movie is the stored shifts replayed on it
 (``arrays.masknmf_run.MasknmfRunArray``). Skip/Run/Force gates each stage on
@@ -20,7 +20,6 @@ import hashlib
 import json
 import logging
 import os
-import shutil
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -33,8 +32,6 @@ from mbo_utilities import log
 from mbo_utilities.arrays.masknmf_run import RESULTS_FILE
 from mbo_utilities.masknmf import outputs as _outputs
 from mbo_utilities.masknmf.params import (
-    ALIGN_FILE,
-    DEMIX_FILE,
     PMD_FILE,
     MasknmfSettings,
     stage_action,
@@ -160,7 +157,7 @@ def generate_plane_dirname(plane: int, frame_indices: list[int] | None = None) -
 
 
 def _register(raw, cfg, runtime, device: str, logger):
-    """``(registration array over raw, the movie its shifts were estimated on)``."""
+    """The registration of ``raw``, template and shifts estimated on it."""
     import masknmf
 
     corrector_cls = (
@@ -173,20 +170,12 @@ def _register(raw, cfg, runtime, device: str, logger):
         device=device,
         batch_size=runtime.frame_batch_size,
     )
-    reference = raw
-    if cfg.denoised_reference:
-        logger.info("masknmf: denoising a copy of the movie to register on")
-        reference = masknmf.CompressStrategy(
-            **cfg.reference_kwargs(),
-            frame_batch_size=runtime.frame_batch_size,
-            device=device,
-        ).compress(raw)
     logger.info(f"masknmf: computing {cfg.strategy} registration template")
-    strategy.compute_template(reference)
+    strategy.compute_template(raw)
     logger.info("masknmf: estimating shifts")
-    moco = strategy.motion_correct(reference, target_movie=raw)
+    moco = strategy.motion_correct(raw, target_movie=raw)
     moco.output_device = moco.strategy.device
-    return moco, reference
+    return moco
 
 
 def _shift_mask(shifts, shape: tuple[int, int], border: int) -> np.ndarray:
@@ -355,9 +344,10 @@ def clamp_background_downsampling(cfg, ly: int, lx: int, logger=None):
 
 def _demix(pmd, cfg, runtime, device: str, fs, logger):
     """``DemixingResults`` of ``pmd``: filtered passes seed the unfiltered ones."""
-    import masknmf
     import torch
     from masknmf.demixing import NoSignalsDetectedError
+
+    import masknmf
 
     detrender = _spline_detrender(
         int(pmd.shape[0]), fs, 20, 20, device, logger, "demixing"
@@ -499,8 +489,8 @@ def run_plane(
     ``channel`` is 1-based; ``progress_callback(step=, message=)``.
     """
     import masknmf
-
     from mbo_utilities import imread
+    from mbo_utilities.arrays._inverted_view import InvertedDeflectionView
     from mbo_utilities.arrays.features import apply_read_features
     from mbo_utilities.arrays.features._slicing import index_window
     from mbo_utilities.metadata import get_param
@@ -529,7 +519,9 @@ def run_plane(
     nz = int(arr._shape5d()[2]) if hasattr(arr, "_shape5d") else 1
     z = plane - 1 if nz > 1 else 0
     c = int(channel) - 1 if channel is not None else 0
-    raw = PlaneMovie(arr, z=z, c=c).select(frame_indices)
+    inverted = isinstance(arr, InvertedDeflectionView)
+    # 2 * mean - x holds a still mean against a moving frame: register first, invert after
+    raw = PlaneMovie(arr.source if inverted else arr, z=z, c=c).select(frame_indices)
     window = index_window(frame_indices)
     fs = get_param(dict(metadata or {}), "fs") or get_param(
         dict(getattr(arr, "metadata", None) or {}), "fs"
@@ -549,6 +541,8 @@ def run_plane(
         else [int(t) for t in frame_indices],
         "fs": fs,
     }
+    if inverted:
+        movie["registered_before_inversion"] = True
 
     name = f"masknmf_{generate_plane_dirname(plane, frame_indices)}"
     earlier = sorted(p for p in save_path.glob(f"*_{name}") if (p / RESULTS_FILE).is_file())
@@ -578,19 +572,23 @@ def run_plane(
             if action == "reuse":
                 logger.info(f"masknmf: reusing the registration of {previous.name}")
                 _copy_groups(previous, results_path, [cls.__name__, cls._strategy_cls.__name__])
-                if (previous / ALIGN_FILE).is_file():
-                    shutil.copyfile(previous / ALIGN_FILE, run / ALIGN_FILE)
                 moco = cls.from_hdf5(results_path, input_movie=raw, device=device)
             else:
-                moco, reference = _register(raw, reg, runtime, device, logger)
+                moco = _register(raw, reg, runtime, device, logger)
                 moco.export(results_path)
                 _stamp(results_path, cls.__name__, reg_prov)
-                if reference is not raw:
-                    reference.export(run / ALIGN_FILE)
             shifts = _to_np(moco.shifts)
             template = getattr(moco.strategy, "template", None)
             template = None if template is None else _to_np(template)
         timings["registration"] = {"seconds": round(time.time() - t0, 2), "action": action}
+        if inverted:
+            moco = masknmf.OphysArray(
+                moco,
+                negative_indicator=True,
+                include_mean=True,
+                device=device,
+                batch_size=runtime.frame_batch_size,
+            )
 
         progress(step="compression", message=f"Compressing plane {plane}")
         t0 = time.time()

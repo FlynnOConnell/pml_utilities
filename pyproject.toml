@@ -71,7 +71,7 @@ Documentation = "https://millerbrainobservatory.github.io/mbo_utilities/index.ht
 Repository = "https://github.com/FlynnOConnell/pml_utilities"
 Issues = "https://github.com/MillerBrainObservatory/mbo_utilities/issues"
 
-# masknmf is not pinned yet; the MaskNMF and Voltage Preprocessing pipelines need its ui/launcher-pages branch:
+# masknmf is not pinned yet; the MaskNMF pipeline and mbo reg-denoise need its ui/launcher-pages branch:
 # uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"
 [project.optional-dependencies]
 hpc = ["submitit>=1.5.0"]

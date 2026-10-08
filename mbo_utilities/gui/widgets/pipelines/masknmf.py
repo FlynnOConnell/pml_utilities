@@ -678,25 +678,6 @@ class MaskNMFPipelineWidget(PipelineWidget):
             )
             self._f_int2(reg, "overlaps", "Overlaps", lo=0)
             self._f_int2(reg, "max_deviation_rigid", "Max deviation", lo=0)
-        self._f_check(
-            reg,
-            "denoised_reference",
-            "Register on a denoised copy",
-            tooltip="Estimate the shifts on a quick denoised copy of the movie "
-            "and apply them to the raw frames. Steadier shifts on noisy or "
-            "fast recordings; the copy is saved as alignment.hdf5.",
-        )
-        if reg.denoised_reference:
-            self._f_int2(
-                reg,
-                "reference_block_sizes",
-                "Copy block sizes",
-                lo=2,
-                tooltip="Patch size in px of the denoised copy; small blocks keep fine detail.",
-            )
-            self._f_int(reg, "reference_max_components", "Copy components")
-            self._f_int(reg, "reference_spatial_avg_factor", "Copy spatial avg")
-            self._f_int(reg, "reference_temporal_avg_factor", "Copy temporal avg")
 
     def _draw_compression_params(self) -> None:
         comp = self.settings.compression

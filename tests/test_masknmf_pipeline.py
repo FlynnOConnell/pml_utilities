@@ -355,19 +355,6 @@ class TestSplineDetrender:
         assert det is not None and det.window == int(40 * 429.93)
 
 
-def test_reference_kwargs_make_the_denoised_copy():
-    reg = MasknmfSettings().registration
-    assert reg.denoised_reference is False
-    reg.reference_block_sizes = [6, 6]
-    assert reg.reference_kwargs() == {
-        "block_sizes": (6, 6),
-        "max_components": 20,
-        "max_consecutive_failures": 1,
-        "spatial_avg_factor": 4,
-        "temporal_avg_factor": 2,
-    }
-
-
 @pytest.fixture
 def shaking_movie():
     """(T, 1, 1, Y, X) int16: two blobs moved by known integer shifts plus noise."""
@@ -395,9 +382,8 @@ def shaking_tif(tmp_path, shaking_movie):
 
 
 @pytest.fixture
-def denoised_registration():
+def registration_settings():
     s = MasknmfSettings()
-    s.registration.denoised_reference = True
     s.registration.max_shifts = (6, 6)
     s.compression.denoise = False
     s.compression.block_sizes = (16, 16)
@@ -408,11 +394,10 @@ def denoised_registration():
 
 @pytest.mark.slow
 def test_a_run_folder_holds_no_movie_and_registers_the_raw_one(
-    tmp_path, shaking_tif, shaking_movie, denoised_registration
+    tmp_path, shaking_tif, shaking_movie, registration_settings
 ):
     pytest.importorskip("masknmf")
     import h5py
-
     from mbo_utilities import imread
     from mbo_utilities.arrays.masknmf_run import MasknmfRunArray
     from mbo_utilities.masknmf import run_plane
@@ -421,19 +406,20 @@ def test_a_run_folder_holds_no_movie_and_registers_the_raw_one(
     run = run_plane(
         str(shaking_tif),
         tmp_path / "out",
-        settings=denoised_registration,
+        settings=registration_settings,
         writer_kwargs={"invert_deflection": True},
         replot=False,
     )
     assert run.parent == tmp_path / "out" and run.name.endswith("_masknmf_zplane01")
     names = {p.name for p in run.iterdir()}
-    assert {"results.hdf5", "config.json", "alignment.hdf5", f"{run.name}.log"} <= names
+    assert {"results.hdf5", "config.json", f"{run.name}.log"} <= names
     assert not names & {"data.bin", "data_raw.bin", "ops.npy", "stat.npy"}
     with h5py.File(run / "results.hdf5") as f:
         assert {"RigidRegistrationArray", "RigidMotionCorrector", "CompressionArray"} <= set(f)
         est = f["RigidRegistrationArray"]["shifts"][()]
-    assert np.corrcoef(est[:, 0], shifts[:, 0])[0, 1] > 0.9
-    assert np.corrcoef(est[:, 1], shifts[:, 1])[0, 1] > 0.9
+    # the shifts that undo a roll by s are -s
+    assert np.corrcoef(est[:, 0], shifts[:, 0])[0, 1] < -0.9
+    assert np.corrcoef(est[:, 1], shifts[:, 1])[0, 1] < -0.9
     config = json.loads((run / "config.json").read_text())
     assert config["pipeline"] == "mbo_utilities.masknmf" and config["run"]["status"] == "completed"
     assert config["inputs"]["movie"]["read_features"] == {"invert_deflection": True}
@@ -449,37 +435,16 @@ def test_a_run_folder_holds_no_movie_and_registers_the_raw_one(
 
 
 @pytest.mark.slow
-def test_the_viewer_shows_raw_registered_and_both_as_pmd(
-    tmp_path, shaking_tif, denoised_registration
-):
-    masknmf = pytest.importorskip("masknmf")
-    from mbo_utilities.gui.registration_viewer import registration_movies
-    from mbo_utilities.masknmf import run_plane
-
-    run = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
-    movies = registration_movies(run)
-    assert list(movies) == ["raw", "registered", "raw (pmd)", "registered (pmd)"]
-    pmd = masknmf.CompressionArray.from_hdf5(run / "alignment.hdf5")
-    replayed = masknmf.RigidRegistrationArray.from_hdf5(
-        run / "results.hdf5", input_movie=pmd, device="cpu"
-    )
-    expected = np.asarray(replayed[list(range(10))])
-    expected = expected.cpu().numpy() if hasattr(expected, "cpu") else expected
-    np.testing.assert_allclose(movies["registered (pmd)"][:10], expected, rtol=1e-4, atol=1e-3)
-    np.testing.assert_allclose(movies["raw (pmd)"][:10], np.asarray(pmd[:10]), rtol=1e-4, atol=1e-3)
-
-
-@pytest.mark.slow
 def test_a_later_run_copies_the_stages_whose_provenance_matches(
-    tmp_path, shaking_tif, denoised_registration
+    tmp_path, shaking_tif, registration_settings
 ):
     pytest.importorskip("masknmf")
     from mbo_utilities.masknmf import run_plane
 
-    first = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
-    second = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
-    denoised_registration.compression.block_sizes = (12, 12)
-    third = run_plane(str(shaking_tif), tmp_path, settings=denoised_registration, replot=False)
+    first = run_plane(str(shaking_tif), tmp_path, settings=registration_settings, replot=False)
+    second = run_plane(str(shaking_tif), tmp_path, settings=registration_settings, replot=False)
+    registration_settings.compression.block_sizes = (12, 12)
+    third = run_plane(str(shaking_tif), tmp_path, settings=registration_settings, replot=False)
     assert len({first, second, third}) == 3
     actions = [
         {k: v["action"] for k, v in json.loads((r / "config.json").read_text())["timings"].items()}
@@ -488,7 +453,6 @@ def test_a_later_run_copies_the_stages_whose_provenance_matches(
     assert actions[0]["registration"] == actions[0]["compression"] == "compute"
     assert actions[1]["registration"] == actions[1]["compression"] == "reuse"
     assert actions[2] == {"registration": "reuse", "compression": "compute", "demixing": "skip"}
-    assert (third / "alignment.hdf5").exists()
 
 
 @pytest.mark.slow
@@ -501,7 +465,6 @@ def test_task_masknmf_registers_the_inverted_movie(tmp_path, shaking_tif, shakin
 
     movie, _ = shaking_movie
     s = MasknmfSettings()
-    s.registration.denoised_reference = True
     s.compression.do_compression = STAGE_SKIP
     s.demixing.do_demixing = STAGE_SKIP
     s.runtime.device = "cpu"
@@ -519,7 +482,6 @@ def test_task_masknmf_registers_the_inverted_movie(tmp_path, shaking_tif, shakin
     run = next((tmp_path / "out").glob("*_masknmf_zplane01"))
     data = movie[:, 0, 0].astype(np.float32)
     np.testing.assert_allclose(run_raw_movie(run)[:], 2 * data.mean(axis=0) - data, rtol=1e-5)
-    assert (run / "alignment.hdf5").exists()
 
 
 @pytest.fixture

@@ -1687,6 +1687,7 @@ def demix_rois(
     from mbo_utilities.masknmf import MasknmfSettings
     from mbo_utilities.masknmf import outputs as _outputs
     from mbo_utilities.masknmf import runner as _runner
+    from mbo_utilities.masknmf.params import DEMIX_FILE
     from mbo_utilities.metadata import get_param
 
     s = (
@@ -1794,7 +1795,7 @@ def demix_rois(
         "input": pmd_key,
         "fs": fs,
     }
-    _runner._export_atomic(results, out_dir / _runner.DEMIX_FILE, info)
+    _runner._export_atomic(results, out_dir / DEMIX_FILE, info)
     coo_idx, values, baseline = _runner._extract_footprints(results)
     cc = np.asarray(results.signals_array.export_temporal_demixed(), dtype=np.float32)
     counts = _outputs.write_plane_outputs(
@@ -1939,6 +1940,7 @@ def discover_rois(
         from mbo_utilities.masknmf import MasknmfSettings
         from mbo_utilities.masknmf import outputs as _outputs
         from mbo_utilities.masknmf import runner as _runner
+        from mbo_utilities.masknmf.params import DEMIX_FILE
         from mbo_utilities.metadata import get_param
 
         s = (
@@ -2005,7 +2007,7 @@ def discover_rois(
         info.update(
             settings=_runner._stage_hash(cfg, "do_demixing"), input=pmd_key, fs=fs
         )
-        _runner._export_atomic(results, out_dir / _runner.DEMIX_FILE, info)
+        _runner._export_atomic(results, out_dir / DEMIX_FILE, info)
         coo_idx, values, baseline = _runner._extract_footprints(results)
         cc = np.asarray(
             results.signals_array.export_temporal_demixed(), dtype=np.float32
