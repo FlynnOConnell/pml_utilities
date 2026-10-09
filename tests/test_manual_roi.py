@@ -233,7 +233,7 @@ class TestMasks:
         assert widget.selected == -1
 
     def test_masks_render_feathered(self, widget):
-        """masknmf's feathered masks: soft edges, nothing past the mask."""
+        """Masknmf's feathered masks: soft edges, nothing past the mask."""
         widget.add_roi(square(10, 10, 9))
         widget.selected = -1
         widget.refresh_overlay()
@@ -632,7 +632,7 @@ class TestMaskAppearance:
         assert row[9] == round(255 * widget.opacity)
 
     def test_a_weak_trace_draws_its_mask_faint(self, widget):
-        """masknmf's signal-peak weighting: a mask's opacity follows its trace's peak."""
+        """Masknmf's signal-peak weighting: a mask's opacity follows its trace's peak."""
         widget.add_roi(square(4, 4, 20))
         widget.add_roi(square(34, 34, 20))
         uids = [r.uid for r in widget.store.rois]
@@ -796,7 +796,17 @@ class TestImguiWindows:
 
         errors = draw_frames(widget, 3)
         assert not errors, errors[0]
-        for key in ("up_arrow", "down_arrow", "left_arrow", "right_arrow", "m", "c", "p", "h", "k"):
+        for key in (
+            "up_arrow",
+            "down_arrow",
+            "left_arrow",
+            "right_arrow",
+            "m",
+            "c",
+            "p",
+            "h",
+            "k",
+        ):
             assert _keyboard._claimed(key), key
 
     def test_close_takes_everything_off_the_figure(self, widget):
@@ -1614,7 +1624,7 @@ class TestTracesTab:
         assert not errors, errors[0]
 
     def test_arrows_step_the_roi_table_and_the_traces_follow(self, widget):
-        """masknmf's up / down walk the ROIs table; the plot shows the row landed on."""
+        """Masknmf's up / down walk the ROIs table; the plot shows the row landed on."""
         for i in range(3):
             widget.add_roi(square(4 + 12 * i, 4, 9))
             widget.quick_trace(i)
@@ -1675,7 +1685,14 @@ class TestTracesTab:
         """
         from mbo_utilities.gui.manual_roi import TRACE_COLUMNS
 
-        assert [c[0] for c in TRACE_COLUMNS] == ["z", "c", "source", "engine", "frames", "peak"]
+        assert [c[0] for c in TRACE_COLUMNS] == [
+            "z",
+            "c",
+            "source",
+            "engine",
+            "frames",
+            "peak",
+        ]
         assert [c[0] for c in TRACE_COLUMNS if c[2]] == ["source", "engine", "frames"]
 
     def test_trace_sort_keys_line_up_with_the_columns(self, widget):
@@ -2832,7 +2849,7 @@ class TestPipelineParams:
         assert seen.get("settings") == {"runtime": {"device": "cpu"}}
 
     def test_the_selection_row_carries_masknmfs_buttons(self, widget):
-        """masknmf's SELECTION row: center, draw, add ROI, delete, then this
+        """Masknmf's SELECTION row: center, draw, add ROI, delete, then this
         tool's promote, accept and save; the traces row carries trace on draw.
         """
         from imgui_bundle import imgui
@@ -2854,7 +2871,15 @@ class TestPipelineParams:
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
         ids = [label.split("##")[-1] for label in seen[: len(seen) // 3]]
-        row = ["roi_center", "roi_draw", "roi_add", "roi_delete", "roi_promote", "roi_accept", "roi_save"]
+        row = [
+            "roi_center",
+            "roi_draw",
+            "roi_add",
+            "roi_delete",
+            "roi_promote",
+            "roi_accept",
+            "roi_save",
+        ]
         assert [i for i in ids if i in row] == row
         assert "roi_traces_3" in ids  # trace on draw
 

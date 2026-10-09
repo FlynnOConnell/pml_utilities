@@ -286,9 +286,7 @@ def handle_arrow_keys(parent: Any):
             parent.image_widget.indices = current_indices
             return
 
-    if not _claimed("right_arrow") and imgui.is_key_pressed(
-        imgui.Key.right_arrow
-    ):
+    if not _claimed("right_arrow") and imgui.is_key_pressed(imgui.Key.right_arrow):
         new_t = min(t_max, current_t + step)
         if new_t != current_t:
             current_indices[0] = new_t
@@ -307,9 +305,7 @@ def handle_arrow_keys(parent: Any):
         z_max = shape[z_pos] - 1
         current_z = current_indices[z_pos]
 
-        if not _claimed("down_arrow") and imgui.is_key_pressed(
-            imgui.Key.down_arrow
-        ):
+        if not _claimed("down_arrow") and imgui.is_key_pressed(imgui.Key.down_arrow):
             new_z = max(0, current_z - step)
             if new_z != current_z:
                 current_indices[z_pos] = new_z

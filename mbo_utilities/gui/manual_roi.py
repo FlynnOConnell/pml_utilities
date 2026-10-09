@@ -300,10 +300,17 @@ ROI_KEYS: Mapping[str, Bind] = {
         "on an ROI: select it, again to deselect; on an empty pixel with pixel traces on: add its 5x5 average to the "
         "plot",
     ),
-    "ctrl_click": Bind("ctrl + click", "toggle an ROI or pixel average in the group, in the image or the table"),
+    "ctrl_click": Bind(
+        "ctrl + click",
+        "toggle an ROI or pixel average in the group, in the image or the table",
+    ),
     "masks": Bind("m", "toggle every ROI's mask", imgui.Key.m),
     "contours": Bind("c", "toggle every other ROI's contour", imgui.Key.c),
-    "follow": Bind("f", "center the image on the selection and keep following it; labeling then advances", imgui.Key.f),
+    "follow": Bind(
+        "f",
+        "center the image on the selection and keep following it; labeling then advances",
+        imgui.Key.f,
+    ),
     "poly": Bind(
         "a",
         "draw: click a polygon on the image, the first point again to close it; it selects the ROIs it holds. Again or "
@@ -316,31 +323,69 @@ ROI_KEYS: Mapping[str, Bind] = {
         "pixel averages",
         imgui.Key.escape,
     ),
-    "select_all": Bind("ctrl + a", "group every ROI the table shows", imgui.Key.a, ctrl=True),
-    "help": Bind("h", "this tool's guide", imgui.Key.h),
-    "shift_click": Bind("shift + click", "add an ROI to the group; in the table, every row up to it"),
-    "pixel_trace": Bind(
-        "p", "toggle quick pixel trace: a click on an empty pixel adds the movie's 5x5 average to the plot", imgui.Key.p
+    "select_all": Bind(
+        "ctrl + a", "group every ROI the table shows", imgui.Key.a, ctrl=True
     ),
-    "roi": Bind("r", "add an ROI: keep the drawn region as a drawn ROI; with none drawn, start drawing", imgui.Key.r),
+    "help": Bind("h", "this tool's guide", imgui.Key.h),
+    "shift_click": Bind(
+        "shift + click", "add an ROI to the group; in the table, every row up to it"
+    ),
+    "pixel_trace": Bind(
+        "p",
+        "toggle quick pixel trace: a click on an empty pixel adds the movie's 5x5 average to the plot",
+        imgui.Key.p,
+    ),
+    "roi": Bind(
+        "r",
+        "add an ROI: keep the drawn region as a drawn ROI; with none drawn, start drawing",
+        imgui.Key.r,
+    ),
     "delete": Bind(
         "d / delete",
         "delete the selected drawn ROI, drop the active pixel average, or mark the selected algo ROIs for deletion "
         "(unmark when all are)",
         (imgui.Key.d, imgui.Key.delete),
     ),
-    "undo": Bind("ctrl + z", "undo the last drawn or deleted ROI, mark, pixel average or deselect", imgui.Key.z, ctrl=True),
-    "label": Bind("1-9", "assign that label to the selection or the group; with center on, step to the next"),
+    "undo": Bind(
+        "ctrl + z",
+        "undo the last drawn or deleted ROI, mark, pixel average or deselect",
+        imgui.Key.z,
+        ctrl=True,
+    ),
+    "label": Bind(
+        "1-9",
+        "assign that label to the selection or the group; with center on, step to the next",
+    ),
     "clear": CLASSIFICATION["clear"],
     "unlabeled": CLASSIFICATION["unlabeled"],
-    "promote": Bind("y", "promote the selected algo ROI into the drawn ROIs", imgui.Key.y),
-    "discard": Bind("n", "mark the selected algo ROI for deletion and step to the next", imgui.Key.n),
+    "promote": Bind(
+        "y", "promote the selected algo ROI into the drawn ROIs", imgui.Key.y
+    ),
+    "discard": Bind(
+        "n", "mark the selected algo ROI for deletion and step to the next", imgui.Key.n
+    ),
     "accept": Bind("x", "accept / reject the selected algo ROI", imgui.Key.x),
     "rings": Bind("o", "contours: each ROI's border, or a ring around it", imgui.Key.o),
-    "run": Bind("shift + t", "run the selection through the RUN section's engine", imgui.Key.t, shift=True),
+    "run": Bind(
+        "shift + t",
+        "run the selection through the RUN section's engine",
+        imgui.Key.t,
+        shift=True,
+    ),
 }
 # the keys the viewer's global shortcuts leave alone while the tool is on
-_CLAIMED_KEYS = ("up_arrow", "down_arrow", "left_arrow", "right_arrow", "m", "c", "p", "h", "k", "o")
+_CLAIMED_KEYS = (
+    "up_arrow",
+    "down_arrow",
+    "left_arrow",
+    "right_arrow",
+    "m",
+    "c",
+    "p",
+    "h",
+    "k",
+    "o",
+)
 # the menu bar's keybinds cheat sheet lists the same rows
 KEYBINDS = tuple((bind.label, bind.action) for bind in ROI_KEYS.values())
 
@@ -481,7 +526,10 @@ class _PlaneOrder(RoiOrder):
     def hidden_by(self, item: int) -> list:
         """Names of the filters that keep ``item`` out of the current view."""
         out = []
-        if self.filter_label != FILTER_ALL and int(self.labels[item]) != self.filter_label:
+        if (
+            self.filter_label != FILTER_ALL
+            and int(self.labels[item]) != self.filter_label
+        ):
             out.append("label")
         if self.hidden(item):
             out.append(self.range_column)
@@ -798,7 +846,9 @@ class ManualRoiWidget:
         self.strip = TopStrip(iw.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
         # kept so the panel can ask for more height once the motion panel shows
-        self._traces_panel = TopPanel("traces", "Traces", self.draw_traces, PANEL_HEIGHT, 11)
+        self._traces_panel = TopPanel(
+            "traces", "Traces", self.draw_traces, PANEL_HEIGHT, 11
+        )
         self.strip.register(self._traces_panel)
 
         self._closed = False
@@ -1197,7 +1247,9 @@ class ManualRoiWidget:
             span, limits = order.range_span, order.range_limits
             order.set_range_column(order.range_column)
             lo, hi = order.range_span
-            if tuple(limits) != tuple(span) and max(limits[0], lo) <= min(limits[1], hi):
+            if tuple(limits) != tuple(span) and max(limits[0], lo) <= min(
+                limits[1], hi
+            ):
                 order.range_limits = (max(limits[0], lo), min(limits[1], hi))
         order.rebuild()
         self._footprints = None
@@ -1265,7 +1317,7 @@ class ManualRoiWidget:
         self.region = None
 
     def _pick(self, row: int, col: int, mods: frozenset = frozenset()):
-        """masknmf's click: a drawn ROI under the cursor, else an algo one.
+        """Masknmf's click: a drawn ROI under the cursor, else an algo one.
         Ctrl toggles it in the group, shift adds it; a plain click selects it
         alone, or deselects it when it is already the selection. An empty
         pixel adds its 5x5 average with pixel traces on, else deselects.
@@ -1469,10 +1521,14 @@ class ManualRoiWidget:
 
     def _after_buffer_change(self, si: int, k: int):
         n = len(self.buffer)
-        self.filter_select = self.filter_select and set(self.buffer) == self._filter_pairs()
+        self.filter_select = (
+            self.filter_select and set(self.buffer) == self._filter_pairs()
+        )
         self.select_pair(si, k)
         if n > 1:
-            self.status = f"{n} in group · their traces share the plot, labels apply to all"
+            self.status = (
+                f"{n} in group · their traces share the plot, labels apply to all"
+            )
 
     def _refresh_group_view(self):
         self._plot_lines_key = None
@@ -1616,7 +1672,7 @@ class ManualRoiWidget:
         self.status = f"deleted ROI {index}"
 
     def delete_selected(self):
-        """masknmf's Delete: the selected drawn ROI goes, the active pixel
+        """Masknmf's Delete: the selected drawn ROI goes, the active pixel
         average is dropped, else the selected algo ROIs are marked for
         deletion (unmarked when all are); marking one steps to the next row.
         """
@@ -1740,7 +1796,7 @@ class ManualRoiWidget:
         return got
 
     def refresh_overlay(self):
-        """masknmf's masks and contours over the plane on screen, drawn and
+        """Masknmf's masks and contours over the plane on screen, drawn and
         algo ROIs alike: every mask at the masks opacity (weighted by its
         trace's peak, or its own), the selection and the group at the sel
         masks opacity with a white rim, marked rows red; every other ROI's
@@ -1753,12 +1809,12 @@ class ManualRoiWidget:
             self._footprints = (key, rows, footprints)
         _key, rows, footprints = self._footprints
         footprints.colors = (
-            np.array([self._row_rgb(row) for row in rows], np.float32)
-            if rows
-            else None
+            np.array([self._row_rgb(row) for row in rows], np.float32) if rows else None
         )
         peaks = np.asarray(self.order.columns.get("peak", np.zeros(0)), np.float64)
-        peaks = peaks[rows] if len(peaks) == len(self.rows) else np.full(len(rows), np.nan)
+        peaks = (
+            peaks[rows] if len(peaks) == len(self.rows) else np.full(len(rows), np.nan)
+        )
         finite = np.isfinite(peaks) & (peaks > 0)
         top = float(peaks[finite].max()) if finite.any() else 1.0
         # a row without a trace draws as if at the field's peak
@@ -1786,11 +1842,24 @@ class ManualRoiWidget:
         comps = []
         for i, row in enumerate(rows):
             on = i in highlighted
-            if on and not self.show_selected_contours or not on and not self.show_contours:
+            if (
+                on
+                and not self.show_selected_contours
+                or not on
+                and not self.show_contours
+            ):
                 continue
             ypix, xpix, lam = footprints.footprints[i]
             if on:
-                comps.append((ypix, xpix, lam, footprints.color(i), self.selected_contour_opacity))
+                comps.append(
+                    (
+                        ypix,
+                        xpix,
+                        lam,
+                        footprints.color(i),
+                        self.selected_contour_opacity,
+                    )
+                )
             else:
                 comps.append((ypix, xpix, lam, (1.0, 1.0, 1.0), self.contour_opacity))
         positions, colors = outline_data(comps, self.contour_shape)
@@ -3127,7 +3196,11 @@ class ManualRoiWidget:
             self.traces.add(trace)
             if trace.stands_for_roi:
                 self.trace_uid = trace.uid
-            elif trace.source == FULL_IMAGE and self._selection_pair() is None and not self.trace_picked:
+            elif (
+                trace.source == FULL_IMAGE
+                and self._selection_pair() is None
+                and not self.trace_picked
+            ):
                 # nothing else on the plot: a whole-frame read shows itself
                 self.trace_sel = {trace.key}
                 self.trace_picked = True
@@ -3241,7 +3314,7 @@ class ManualRoiWidget:
                 )
 
     def handle_keys(self):
-        """masknmf's DEMIXING keys with its labeling keys and this tool's own (``ROI_KEYS``)."""
+        """Masknmf's DEMIXING keys with its labeling keys and this tool's own (``ROI_KEYS``)."""
         io = imgui.get_io()
         if io.want_text_input:
             return
@@ -3320,7 +3393,9 @@ class ManualRoiWidget:
         self._poll_jobs()
         self._poll_region()
         self.handle_keys()
-        self.keybinds_open = draw_keybinds_popup(ROI_KEYS, self.keybinds_open, "ROI keybinds")
+        self.keybinds_open = draw_keybinds_popup(
+            ROI_KEYS, self.keybinds_open, "ROI keybinds"
+        )
         self.summary.draw()
 
     def draw_rois(self):
@@ -3330,13 +3405,19 @@ class ManualRoiWidget:
         """
         if imgui.button(f"{fa.ICON_FA_IMAGE} Full FOV"):
             self.open_full_fov()
-        tooltip("the frame on screen and the ROI labels at full size: zoom, colormap, contrast, pixel values")
+        tooltip(
+            "the frame on screen and the ROI labels at full size: zoom, colormap, contrast, pixel values"
+        )
         buttons_w = help_buttons_width("ROI Guide")
         imgui.same_line()
         if imgui.get_content_region_avail().x < buttons_w + em(0.6):
             imgui.new_line()
-        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - buttons_w)
-        guide, self.keybinds_open = draw_help_buttons(False, self.keybinds_open, "ROI Guide")
+        imgui.set_cursor_pos_x(
+            imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - buttons_w
+        )
+        guide, self.keybinds_open = draw_help_buttons(
+            False, self.keybinds_open, "ROI Guide"
+        )
         if guide:
             self.open_guide()
         if imgui.begin_tab_bar("##roi_tools"):
@@ -3355,7 +3436,9 @@ class ManualRoiWidget:
     def _draw_labels(self, g):
         section("LABELS")
         g.row("new label")
-        self.new_label, changed = draw_label_editor(self.classes, self.new_label, "_roi")
+        self.new_label, changed = draw_label_editor(
+            self.classes, self.new_label, "_roi"
+        )
         if changed:
             self._sync_store_from_classes()
             self._resync()
@@ -3398,9 +3481,13 @@ class ManualRoiWidget:
             min(n, 3, int((imgui.get_content_region_avail().x + gap) // (em(8) + gap))),
         )
         per_col = -(-n // ncols)
-        col_w = max((imgui.get_content_region_avail().x - gap * (ncols - 1)) / ncols, em(5))
+        col_w = max(
+            (imgui.get_content_region_avail().x - gap * (ncols - 1)) / ncols, em(5)
+        )
         size = imgui.ImVec2(max(col_w - hint - em(0.7), em(3.0)), 0)
-        count_w = max(imgui.calc_text_size(self._count_text(i)).x for i in range(n)) + em(0.5)
+        count_w = max(
+            imgui.calc_text_size(self._count_text(i)).x for i in range(n)
+        ) + em(0.5)
         for c0 in range(0, n, per_col):
             if c0:
                 imgui.same_line(0, gap)
@@ -3481,7 +3568,7 @@ class ManualRoiWidget:
         return THEME.text_dim, self.status
 
     def draw_tab(self):
-        """masknmf's Signals tab for ROIs: the filter, then the drawn, algo
+        """Masknmf's Signals tab for ROIs: the filter, then the drawn, algo
         and pixel-average rows in one sortable table, the selection under it.
         """
         if self.order.range_column is not None:
@@ -3490,7 +3577,9 @@ class ManualRoiWidget:
         if imgui.begin_child("##roi_table", imgui.ImVec2(0, -footer)):
             if self.rows or self.pixels:
                 columns = self.columns
-                formatters = {name: partial(self._format_cell, name) for name in columns[1:]}
+                formatters = {
+                    name: partial(self._format_cell, name) for name in columns[1:]
+                }
                 self.scroll_to_selection = draw_roi_table(
                     self.order,
                     columns,
@@ -3504,7 +3593,9 @@ class ManualRoiWidget:
                     on_ctrl_select=self._table_ctrl,
                     on_shift_select=self._table_shift,
                     row_color=self._table_color,
-                    prefix_rows=[(("px", *pid), f"px {pid[1]},{pid[2]}") for pid in self.pixels],
+                    prefix_rows=[
+                        (("px", *pid), f"px {pid[1]},{pid[2]}") for pid in self.pixels
+                    ],
                 )
             else:
                 imgui.text_disabled("no ROIs yet: draw (a) a region and add it (r)")
@@ -3756,7 +3847,11 @@ class ManualRoiWidget:
                     if trace.stands_for_roi
                     else f"{trace.source} · {shown}"
                 )
-                rgb = GROUP_COLORS[i % len(GROUP_COLORS)] if len(keys) > 1 else self._trace_color(key)
+                rgb = (
+                    GROUP_COLORS[i % len(GROUP_COLORS)]
+                    if len(keys) > 1
+                    else self._trace_color(key)
+                )
                 lines.append((label, key, rgb))
             return (f"{len(lines)} selected", lines) if lines else None
         members = [*self.buffer, *self.pixel_group]
@@ -3815,7 +3910,9 @@ class ManualRoiWidget:
         )
         imgui.same_line(0, em(0.8))
         imgui.begin_disabled(behavior is None)
-        changed, on = imgui.checkbox("Behavior", self.show_behavior and behavior is not None)
+        changed, on = imgui.checkbox(
+            "Behavior", self.show_behavior and behavior is not None
+        )
         if changed:
             self.show_behavior = on
         imgui.end_disabled()
@@ -3827,14 +3924,20 @@ class ManualRoiWidget:
             else "No behavior log was found for this recording: a file named after its subject and day, beside it or "
             "in a behavior folder."
         )
-        rows = [] if target is None else [self.traces.get(key) for _label, key, _rgb in target[1]]
+        rows = (
+            []
+            if target is None
+            else [self.traces.get(key) for _label, key, _rgb in target[1]]
+        )
         kinds = self.kind_options(rows)
         if kinds:
             imgui.same_line(0, em(0.8))
             shown = [displayed_kind(t, self.kind) for t in rows]
             current = self.kind if self.kind in kinds else shown[0]
             imgui.set_next_item_width(em(9))
-            changed, sel = imgui.combo("##trace_kind", kinds.index(current), list(kinds))
+            changed, sel = imgui.combo(
+                "##trace_kind", kinds.index(current), list(kinds)
+            )
             tooltip(
                 "What each row shows, one line per row: dff (its pipeline's dF/F, or one computed here), raw (F "
                 "alone), neuropil (Fneu alone), raw - neuropil (F minus the pipeline's share of Fneu), spikes, "
@@ -3874,13 +3977,18 @@ class ManualRoiWidget:
         elif self.pending_traces is not None:
             self.pending_traces()
         else:
-            imgui.text_disabled("No traces shown. Click an ROI with traces, or draw one (a, r) with trace on draw.")
+            imgui.text_disabled(
+                "No traces shown. Click an ROI with traces, or draw one (a, r) with trace on draw."
+            )
         show_motion = motion is not None and self.show_motion
         show_behavior = behavior is not None and self.show_behavior
         if target is None and not show_motion and not show_behavior:
             # nothing to plot: the panel is its row of controls, the plot empty for when it comes back
             self._traces_panel.height = int(imgui.get_frame_height_with_spacing())
-            if self.trace_plot is not None and self.trace_plot._lines[self.trace_plot.panels[-1]]:
+            if (
+                self.trace_plot is not None
+                and self.trace_plot._lines[self.trace_plot.panels[-1]]
+            ):
                 self._plot_lines_key = None
                 self.trace_plot.set(self.trace_plot.panels[-1], [])
                 self._plot_mode([])
@@ -3896,7 +4004,9 @@ class ManualRoiWidget:
         plot = self.trace_plot
         nt = len(plot.x)
         lines_key = (
-            None if target is None else tuple((label, key, rgb) for label, key, rgb in target[1]),
+            None
+            if target is None
+            else tuple((label, key, rgb) for label, key, rgb in target[1]),
             self.kind,
             repr(self.dff),
             self.deflection(),
@@ -4074,7 +4184,9 @@ class ManualRoiWidget:
         imgui.same_line(0, em(0.4))
         if imgui.small_button(f"{fa.ICON_FA_ERASER}##unplot"):
             self._sync_trace_sel()
-        tooltip("Unpick every trace: the plot goes back to the selection; the rows stay")
+        tooltip(
+            "Unpick every trace: the plot goes back to the selection; the rows stay"
+        )
         imgui.same_line(0, em(0.4))
         picked = [key for key in rows if key in self.trace_sel]
         imgui.begin_disabled(not picked)
@@ -4090,13 +4202,21 @@ class ManualRoiWidget:
             changed, every = imgui.checkbox("all slices", not self.traces_this_slice)
             if changed:
                 self.traces_this_slice = not every
-            tooltip("List the rows of every channel and z-plane, not only the slice on screen")
-        columns = ("id", *(self._trace_header(name) for name, _sortable, _hidden in TRACE_COLUMNS))
-        hidden = {self._trace_header(name) for name, _sortable, hide in TRACE_COLUMNS if hide}
+            tooltip(
+                "List the rows of every channel and z-plane, not only the slice on screen"
+            )
+        columns = (
+            "id",
+            *(self._trace_header(name) for name, _sortable, _hidden in TRACE_COLUMNS),
+        )
+        hidden = {
+            self._trace_header(name) for name, _sortable, hide in TRACE_COLUMNS if hide
+        }
         if self.store.axis_size("z") <= 1:
             hidden.add(self._trace_header("z"))
         formatters = {
-            self._trace_header(name): partial(self._trace_cell, name) for name, _sortable, _hidden in TRACE_COLUMNS
+            self._trace_header(name): partial(self._trace_cell, name)
+            for name, _sortable, _hidden in TRACE_COLUMNS
         }
         draw_roi_table(
             self.trace_order,
@@ -4121,7 +4241,11 @@ class ManualRoiWidget:
                 (x0, y0), (x1, y1) = pos["start_um"][:2], pos["end_um"][:2]
                 imgui.text_disabled(
                     f"line ({x0:.0f}, {y0:.0f}) -> ({x1:.0f}, {y1:.0f}) um, {pos['length_um']:.1f} um long"
-                    + (f", {pos['sample_um']:.2f} um per sample" if pos.get("sample_um") else "")
+                    + (
+                        f", {pos['sample_um']:.2f} um per sample"
+                        if pos.get("sample_um")
+                        else ""
+                    )
                 )
         if delete:
             for key in picked:
@@ -4161,7 +4285,9 @@ class ManualRoiWidget:
             trace = self.traces.get(self.pixels.get(item))
             peak = "" if trace is None else f"{self._trace_stat(trace.key)[2]:.3g}"
             side = 2 * PIXEL_RADIUS + 1
-            return {"source": "pixel", "area": f"{side * side}", "peak": peak}.get(name, "")
+            return {"source": "pixel", "area": f"{side * side}", "peak": peak}.get(
+                name, ""
+            )
         si, k = self.rows[item]
         if name == "label":
             return self.classes.name_of(item) if self.classes.labels[item] >= 0 else ""
@@ -4229,7 +4355,11 @@ class ManualRoiWidget:
             int(np.clip(x0, 0, self.nx - 1)),
             int(np.clip(x1, 1, self.nx)),
         )
-        if self._region_hits is not None and not moving and self.buffer != self._region_hits:
+        if (
+            self._region_hits is not None
+            and not moving
+            and self.buffer != self._region_hits
+        ):
             self._drop_region()
             return
         key = (polygon.tobytes(), self.region_outside, self.order.range_limits, moving)
@@ -4237,13 +4367,9 @@ class ManualRoiWidget:
             return
         self._region_key = key
         view = [
-            int(row)
-            for row in self.order.order
-            if self._row_plane(int(row)) == self.z
+            int(row) for row in self.order.order if self._row_plane(int(row)) == self.z
         ]
-        inside = [
-            point_in_polygon(self._row_center(row), polygon) for row in view
-        ]
+        inside = [point_in_polygon(self._row_center(row), polygon) for row in view]
         hits = [
             self.rows[row]
             for row, hit in zip(view, inside)
@@ -4262,9 +4388,7 @@ class ManualRoiWidget:
                     self.selected_derived = (si, k)
                 self.order.goto(self._row_index[hits[-1]])
             where = "outside" if self.region_outside else "inside"
-            self.status = (
-                f"region: {len(hits)} ROI(s) {where}; add it as an ROI (r), esc drops it"
-            )
+            self.status = f"region: {len(hits)} ROI(s) {where}; add it as an ROI (r), esc drops it"
             self.refresh_overlay()
 
     def _drop_region(self):
@@ -4352,7 +4476,10 @@ class ManualRoiWidget:
             return
         if abs(ev.x - press[0]) + abs(ev.y - press[1]) > CLICK_SLOP or self._drawing():
             return
-        if imgui.get_current_context() is not None and imgui.get_io().want_capture_mouse:
+        if (
+            imgui.get_current_context() is not None
+            and imgui.get_io().want_capture_mouse
+        ):
             return
         pos = self.subplot.map_screen_to_world((ev.x, ev.y))
         if pos is None:
@@ -4424,7 +4551,10 @@ class ManualRoiWidget:
         )
         job = get_process_manager().start_job("roi_trace", f"pixel average {label}")
         thread = threading.Thread(
-            target=self._run_pixel, args=(movie, mask, trace, job), name="roi-trace-pixel", daemon=True
+            target=self._run_pixel,
+            args=(movie, mask, trace, job),
+            name="roi-trace-pixel",
+            daemon=True,
         )
         self._trace_threads.append(thread)
         thread.start()
@@ -4573,10 +4703,14 @@ class ManualRoiWidget:
             if pid not in state["pixels"]:
                 self.drop_pixel(pid)
         self.pixels = OrderedDict(
-            (pid, key) for pid, key in state["pixels"].items() if key in self.traces or pid in self.pixels
+            (pid, key)
+            for pid, key in state["pixels"].items()
+            if key in self.traces or pid in self.pixels
         )
         self.pixel_group = [pid for pid in state["pixel_group"] if pid in self.pixels]
-        self.active_pixel = state["active_pixel"] if state["active_pixel"] in self.pixels else None
+        self.active_pixel = (
+            state["active_pixel"] if state["active_pixel"] in self.pixels else None
+        )
         self.buffer = [pair for pair in state["buffer"] if pair in self._row_index]
         if state["selected_derived"] in self._row_index:
             self.select_derived(*state["selected_derived"])
@@ -4616,7 +4750,7 @@ class ManualRoiWidget:
         host._show_help_popup = True
 
     def _draw_curation(self):
-        """masknmf's Curation tab: OVERLAY, SELECTION, then this tool's LABELS and RUN."""
+        """Masknmf's Curation tab: OVERLAY, SELECTION, then this tool's LABELS and RUN."""
         g = grid(_CAPTIONS)
         # sliders: seven tenths of the panel, or what their row has left before the (?) mark
         right = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x
@@ -4668,7 +4802,9 @@ class ManualRoiWidget:
                 self.refresh_overlay()
             g.cell(0)
             imgui.set_next_item_width(slider_w)
-            changed, value = imgui.slider_float(f"##{opacity}", getattr(self, opacity), 0.05, 1.0, "%.2f")
+            changed, value = imgui.slider_float(
+                f"##{opacity}", getattr(self, opacity), 0.05, 1.0, "%.2f"
+            )
             if changed:
                 setattr(self, opacity, value)
                 self.refresh_overlay()
@@ -4676,7 +4812,11 @@ class ManualRoiWidget:
             if caption == "masks":
                 g.row("weighting")
                 flipped, self.masks_by_peak = draw_switch(
-                    "roi_weighting", self.masks_by_peak, "own peak", "signal peak", self.show_masks
+                    "roi_weighting",
+                    self.masks_by_peak,
+                    "own peak",
+                    "signal peak",
+                    self.show_masks,
                 )
                 if flipped:
                     self.refresh_overlay()
@@ -4686,13 +4826,17 @@ class ManualRoiWidget:
                 )
         g.row("color by")
         imgui.set_next_item_width(g.w)
-        changed, index = imgui.combo("##color_by", COLOR_BY.index(self.color_by), list(COLOR_BY))
+        changed, index = imgui.combo(
+            "##color_by", COLOR_BY.index(self.color_by), list(COLOR_BY)
+        )
         if changed:
             self.set_color_by(COLOR_BY[index])
         g.cell(1)
         imgui.begin_disabled(self.color_by == COLOR_BY[0])
         imgui.set_next_item_width(g.w)
-        changed, index = imgui.combo("##color_cmap", COLORMAPS.index(self.color_cmap), list(COLORMAPS))
+        changed, index = imgui.combo(
+            "##color_cmap", COLORMAPS.index(self.color_cmap), list(COLORMAPS)
+        )
         if changed:
             self.set_color_by(self.color_by, COLORMAPS[index])
         imgui.end_disabled()
@@ -4734,7 +4878,9 @@ class ManualRoiWidget:
             if i:
                 imgui.same_line(0, g.gap)
             with button_colors(MTHEME.accent, MTHEME.accent, (0.05, 0.05, 0.05), on=on):
-                clicked = imgui.button(f"{icon}##roi_traces_{i}", imgui.ImVec2(em(3.2), 0))
+                clicked = imgui.button(
+                    f"{icon}##roi_traces_{i}", imgui.ImVec2(em(3.2), 0)
+                )
             tooltip(tip)
             if not clicked:
                 continue
@@ -4749,7 +4895,7 @@ class ManualRoiWidget:
                 self.auto_trace = not self.auto_trace
 
     def _draw_selection(self):
-        """masknmf's SELECTION: one centered row of icon buttons, the region's side switch under it."""
+        """Masknmf's SELECTION: one centered row of icon buttons, the region's side switch under it."""
         section("SELECTION")
         drawing = self.region_selector is not None
         settled = drawing and not self._drawing()
@@ -4768,13 +4914,21 @@ class ManualRoiWidget:
         w = min((avail - 6 * gap) / 7, em(3.2))
         size = imgui.ImVec2(w, imgui.get_frame_height() * 1.2)
         imgui.dummy(imgui.ImVec2(0, em(0.4)))
-        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + max((avail - 7 * w - 6 * gap) / 2, 0))
-        with button_colors(MTHEME.accent, MTHEME.accent, (0.05, 0.05, 0.05), on=self.follow):
+        imgui.set_cursor_pos_x(
+            imgui.get_cursor_pos_x() + max((avail - 7 * w - 6 * gap) / 2, 0)
+        )
+        with button_colors(
+            MTHEME.accent, MTHEME.accent, (0.05, 0.05, 0.05), on=self.follow
+        ):
             if imgui.button(f"{fa.ICON_FA_LOCATION_CROSSHAIRS}##roi_center", size):
                 self.toggle_follow()
-        tooltip("Center: the image on the selected ROI, following it as the selection moves; labeling then advances (f)")
+        tooltip(
+            "Center: the image on the selected ROI, following it as the selection moves; labeling then advances (f)"
+        )
         imgui.same_line(0, gap)
-        with button_colors(MTHEME.emphasis, MTHEME.emphasis_hover, (0.05, 0.05, 0.05), on=drawing):
+        with button_colors(
+            MTHEME.emphasis, MTHEME.emphasis_hover, (0.05, 0.05, 0.05), on=drawing
+        ):
             if imgui.button(f"{fa.ICON_FA_DRAW_POLYGON}##roi_draw", size):
                 self._start_region()
         tooltip(
@@ -4806,18 +4960,25 @@ class ManualRoiWidget:
             f"pixel average is dropped ({key})"
         )
         imgui.same_line(0, gap)
-        promotable = self.selected_derived is not None and self.promoted_index(*self.selected_derived) is None
+        promotable = (
+            self.selected_derived is not None
+            and self.promoted_index(*self.selected_derived) is None
+        )
         imgui.begin_disabled(not promotable)
         if imgui.button(f"{fa.ICON_FA_ARROW_UP}##roi_promote", size):
             self.promote_derived(*self.selected_derived)
         imgui.end_disabled()
-        tooltip("Promote: copy the selected algo ROI into the drawn ROIs, then step to the next (y)")
+        tooltip(
+            "Promote: copy the selected algo ROI into the drawn ROIs, then step to the next (y)"
+        )
         imgui.same_line(0, gap)
         imgui.begin_disabled(self.selected_derived is None)
         if imgui.button(f"{fa.ICON_FA_CHECK}##roi_accept", size):
             self.set_accepted(*self.selected_derived)
         imgui.end_disabled()
-        tooltip("Accept / reject the selected algo ROI, written to its run's iscell (x)")
+        tooltip(
+            "Accept / reject the selected algo ROI, written to its run's iscell (x)"
+        )
         imgui.same_line(0, gap)
         if imgui.button(f"{fa.ICON_FA_FLOPPY_DISK}##roi_save", size):
             self.save()
@@ -4827,15 +4988,26 @@ class ManualRoiWidget:
             else "Save: the drawn ROIs are kept in memory only; open a file to autosave beside it"
         )
         imgui.dummy(imgui.ImVec2(0, em(0.4)))
-        row_w = switch_width("inside", "outside") + em(0.3) + imgui.calc_text_size("(?)").x
-        imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + max((imgui.get_content_region_avail().x - row_w) / 2, 0))
-        flipped, self.region_outside = draw_switch("roi_region", self.region_outside, "inside", "outside", drawing)
+        row_w = (
+            switch_width("inside", "outside") + em(0.3) + imgui.calc_text_size("(?)").x
+        )
+        imgui.set_cursor_pos_x(
+            imgui.get_cursor_pos_x()
+            + max((imgui.get_content_region_avail().x - row_w) / 2, 0)
+        )
+        flipped, self.region_outside = draw_switch(
+            "roi_region", self.region_outside, "inside", "outside", drawing
+        )
         if flipped:
             self._region_key = None
-        help_mark("which side of the region is selected, lit while it drives the selection")
+        help_mark(
+            "which side of the region is selected, lit while it drives the selection"
+        )
         if self.selected >= 0 and len(self.buffer) <= 1:
             imgui.set_next_item_width(-1)
-            changed, self._note_buf = imgui.input_text_with_hint("##roi_note", "note", self._note_buf)
+            changed, self._note_buf = imgui.input_text_with_hint(
+                "##roi_note", "note", self._note_buf
+            )
             if changed:
                 self.store.set_note(self.selected, self._note_buf)
             if imgui.is_item_deactivated_after_edit():
@@ -4846,13 +5018,17 @@ class ManualRoiWidget:
         section("RUN")
         g.row("engine")
         imgui.set_next_item_width(g.w)
-        changed, index = imgui.combo("##roi_engine", ENGINES.index(self.engine), list(ENGINES))
+        changed, index = imgui.combo(
+            "##roi_engine", ENGINES.index(self.engine), list(ENGINES)
+        )
         if changed:
             self.engine = ENGINES[index]
         g.cell(1)
         imgui.set_next_item_width(g.w)
         where = self.run_where if self.run_where in RUN_WHERE else RUN_WHERE[0]
-        changed, index = imgui.combo("##roi_where", RUN_WHERE.index(where), ["as drawn", "on screen"])
+        changed, index = imgui.combo(
+            "##roi_where", RUN_WHERE.index(where), ["as drawn", "on screen"]
+        )
         if changed:
             self.run_where = RUN_WHERE[index]
         help_mark(f"{ENGINE_HELP[self.engine]}\nReads each mask {self._where_label()}.")
@@ -4878,24 +5054,31 @@ class ManualRoiWidget:
         if imgui.button(f"{fa.ICON_FA_FORWARD}##roi_run_all", imgui.ImVec2(w, 0)):
             self.run_in_view()
         imgui.end_disabled()
-        tooltip(f"Run all {len(listed)} drawn ROIs the table lists through {self.engine}")
+        tooltip(
+            f"Run all {len(listed)} drawn ROIs the table lists through {self.engine}"
+        )
         imgui.same_line(0, g.gap)
         why = "no drawn ROIs listed" if not listed else self.trace_disabled(listed[0])
         imgui.begin_disabled(why is not None)
         if imgui.button(f"{fa.ICON_FA_CHART_LINE}##roi_trace_all", imgui.ImVec2(w, 0)):
             self.trace_in_view()
         imgui.end_disabled()
-        tooltip(why or f"Quick trace all {len(listed)} listed ROIs: their means ({self._where_label()})")
+        tooltip(
+            why
+            or f"Quick trace all {len(listed)} listed ROIs: their means ({self._where_label()})"
+        )
         imgui.same_line(0, g.gap)
         marked = sum(len(s.discarded) for s in self.derived)
         right_aligned_text(f"{self.n_rois} drawn, {marked} marked")
         g.row("options")
         imgui.set_next_item_width(g.w)
-        _changed, self.run_tag = imgui.input_text_with_hint("##roi_run_tag", DEFAULT_RUN_TAG, self.run_tag)
+        _changed, self.run_tag = imgui.input_text_with_hint(
+            "##roi_run_tag", DEFAULT_RUN_TAG, self.run_tag
+        )
         help_mark(f"the run's tag: it writes {self.run_prefix}<tag>/ beside the data")
 
     def _selection_status(self) -> str:
-        """masknmf's footer: what is grouped or selected, else how to start."""
+        """Masknmf's footer: what is grouped or selected, else how to start."""
         if len(self.buffer) > 1 or self.pixel_group:
             drawn = sorted(k for si, k in self.buffer if si < 0)
             algo = [self._row_index[p] for p in self.buffer if p[0] >= 0]
@@ -4907,7 +5090,9 @@ class ManualRoiWidget:
         if self.selected_derived is not None:
             si, k = self.selected_derived
             s = self.derived[si]
-            return f"{s.name} row {k} selected" + (" (marked for deletion)" if k in s.discarded else "")
+            return f"{s.name} row {k} selected" + (
+                " (marked for deletion)" if k in s.discarded else ""
+            )
         return "click an ROI to see its traces; draw (a) a region and add it (r) for a new one"
 
     def _table_color(self, item):
@@ -4924,7 +5109,7 @@ class ManualRoiWidget:
         return {self.rows[int(row)] for row in np.flatnonzero(side)}
 
     def _draw_filter(self):
-        """masknmf's filter over the table: its column, apply with its side
+        """Masknmf's filter over the table: its column, apply with its side
         switch, the range, then this tool's label, source and slice filters.
         """
         order = self.order
@@ -4957,7 +5142,9 @@ class ManualRoiWidget:
             order.set_range_column(picked)
             changed = True
             self.filter_select = False
-        tooltip("Filter column: the range below spans it (del is 0 or 1); picking one puts the range back at its full span")
+        tooltip(
+            "Filter column: the range below spans it (del is 0 or 1); picking one puts the range back at its full span"
+        )
         imgui.same_line(0, g.gap)
         inner = imgui.get_style().item_inner_spacing.x
         need = (
@@ -4985,12 +5172,16 @@ class ManualRoiWidget:
         flipped, self.filter_outside = draw_switch(
             "roi_filter", self.filter_outside, "inside", "outside", self.filter_select
         )
-        help_mark("which side of the range the filter selects, lit while it drives the selection")
+        help_mark(
+            "which side of the range the filter selects, lit while it drives the selection"
+        )
         imgui.same_line(0, g.gap)
         right_aligned_text(f"{len(order.order)} / {order.n_items}")
         g.row("range")
         moved = draw_range_filter(order, "_roi", slider_w)
-        tooltip("Range: drag a line to move it, double-click for the full span; the table shows what is inside")
+        tooltip(
+            "Range: drag a line to move it, double-click for the full span; the table shows what is inside"
+        )
         changed |= moved
         g.row("label")
         names = ["all", "unlabeled", *self.classes.names]
@@ -5003,15 +5194,21 @@ class ManualRoiWidget:
         sources = ["all", "drawn", *(s.name for s in self.derived)]
         current = 0 if order.source is None else order.source + 1
         imgui.set_next_item_width(g.w)
-        picked, index = imgui.combo("##roi_source_filter", min(current, len(sources) - 1), sources)
+        picked, index = imgui.combo(
+            "##roi_source_filter", min(current, len(sources) - 1), sources
+        )
         if picked:
             order.source = None if index == 0 else index - 1
             changed = True
-        help_mark("only the rows with this label, and from this source: drawn by hand, or a loaded run")
+        help_mark(
+            "only the rows with this label, and from this source: drawn by hand, or a loaded run"
+        )
         if self.store.nz > 1:
             g.row("slice")
             on = order.plane is not None
-            picked, on = imgui.checkbox(f"this plane ({self._plane_label(self.z)} of {self.store.nz})", on)
+            picked, on = imgui.checkbox(
+                f"this plane ({self._plane_label(self.z)} of {self.store.nz})", on
+            )
             if picked:
                 order.plane = self.z if on else None
                 changed = True
@@ -5019,7 +5216,11 @@ class ManualRoiWidget:
             order.rebuild()
         if self.filter_select and (toggled or moved or flipped or changed):
             pairs = self._filter_pairs()
-            self.buffer = [self.rows[int(row)] for row in order.order if self.rows[int(row)] in pairs]
+            self.buffer = [
+                self.rows[int(row)]
+                for row in order.order
+                if self.rows[int(row)] in pairs
+            ]
             self._refresh_group_view()
         imgui.dummy(imgui.ImVec2(0, em(0.2)))
 
@@ -5030,9 +5231,11 @@ class ManualRoiWidget:
         if len(member) == 3:
             return self.pixels.get(member)
         si, k = member
-        keys = self._member_keys(si, k) if si >= 0 else [
-            t.key for t in self.traces.for_roi(self.store.rois[k].uid)
-        ]
+        keys = (
+            self._member_keys(si, k)
+            if si >= 0
+            else [t.key for t in self.traces.for_roi(self.store.rois[k].uid)]
+        )
         return keys[-1] if keys else None
 
     def _plot_axis(self) -> tuple[int, np.ndarray | None]:
@@ -5059,7 +5262,9 @@ class ManualRoiWidget:
             return y
         xs = np.arange(len(y), dtype=np.float64) / src.per_second + src.offset
         at = np.arange(nt, dtype=np.float64) / dst.per_second + dst.offset
-        return np.interp(at, xs, y.astype(np.float64), left=np.nan, right=np.nan).astype(np.float32)
+        return np.interp(
+            at, xs, y.astype(np.float64), left=np.nan, right=np.nan
+        ).astype(np.float32)
 
     def _motion_lines(self, nt: int) -> list:
         """The recording's motion shifts on the plane on screen, on the viewer's frames."""
@@ -5071,8 +5276,20 @@ class ManualRoiWidget:
         for label, (t, shift) in motion.traces.items():
             if motion.planes.get(label, self.slice.z) != self.slice.z:
                 continue
-            y = np.interp(at, np.asarray(t, np.float64), np.asarray(shift, np.float64), left=np.nan, right=np.nan)
-            lines.append((label, y.astype(np.float32), MOTION_COLORS.get(label[0], (0.8, 0.8, 0.8))))
+            y = np.interp(
+                at,
+                np.asarray(t, np.float64),
+                np.asarray(shift, np.float64),
+                left=np.nan,
+                right=np.nan,
+            )
+            lines.append(
+                (
+                    label,
+                    y.astype(np.float32),
+                    MOTION_COLORS.get(label[0], (0.8, 0.8, 0.8)),
+                )
+            )
         return lines
 
     def _sync_plot(self, rows) -> None:
@@ -5081,7 +5298,12 @@ class ManualRoiWidget:
         motion = bool(self.motion) and self.show_motion
         traces_panel = self.plot_y_label(rows) if rows else "traces"
         panels = ((self.motion.y_label,) if motion else ()) + (traces_panel,)
-        key = (nt, None if timings is None else float(timings[-1]), panels, self.show_behavior)
+        key = (
+            nt,
+            None if timings is None else float(timings[-1]),
+            panels,
+            self.show_behavior,
+        )
         if self.trace_plot is None:
             # no autofit, as in masknmf: the zoom set on one ROI's traces is kept while selecting others
             self.trace_plot = TracePlot(panels, nt, timings, autofit=False)
@@ -5090,7 +5312,11 @@ class ManualRoiWidget:
         elif key != self._plot_frames:
             self.trace_plot.reset(panels, nt, timings)
             # a rate that stays keeps the unit picked
-            if timings is None or self._plot_frames is None or self._plot_frames[1] is None:
+            if (
+                timings is None
+                or self._plot_frames is None
+                or self._plot_frames[1] is None
+            ):
                 self.trace_plot._use_time = self.trace_plot._time is not None
         if key != self._plot_frames:
             self._plot_frames = key
@@ -5098,12 +5324,19 @@ class ManualRoiWidget:
             self._plot_lines_key = None
             if self.behavior and self.show_behavior:
                 axis = self.viewer_axis()
-                for i, (name, spans) in enumerate((self.behavior.behavior.epochs or {}).items()):
+                for i, (name, spans) in enumerate(
+                    (self.behavior.behavior.epochs or {}).items()
+                ):
                     spans = np.asarray(spans, np.float64)
                     if not len(spans):
                         continue
                     frames = np.rint(spans * axis.per_second).astype(np.int64)
-                    self.trace_plot.span(name, frames[:, 0], frames[:, 1], EPOCH_COLORS[i % len(EPOCH_COLORS)])
+                    self.trace_plot.span(
+                        name,
+                        frames[:, 0],
+                        frames[:, 1],
+                        EPOCH_COLORS[i % len(EPOCH_COLORS)],
+                    )
         if motion and self._motion_key != self.slice.z:
             self._motion_key = self.slice.z
             self.trace_plot.set(panels[0], self._motion_lines(nt))
@@ -5115,7 +5348,9 @@ class ManualRoiWidget:
         """The behavior raster over the trace panels, its x range the traces'."""
         plot = self.trace_plot
         axis = self.viewer_axis()
-        x_per_second = 1.0 if plot._use_time and plot._time is not None else axis.per_second
+        x_per_second = (
+            1.0 if plot._use_time and plot._time is not None else axis.per_second
+        )
         span = plot._x_span
         moved, held = behavior.draw(
             "##roi_behavior_plot",
@@ -5138,8 +5373,12 @@ class ManualRoiWidget:
         stats = [self._trace_stat(key) for key in keys]
         cells = [self._trace_cells(key) for key in keys]
         columns = {
-            self._trace_header("z"): np.array([float(c[1]) if c[1] else np.nan for c in cells]),
-            self._trace_header("c"): np.array([float(c[2]) if c[2] else np.nan for c in cells]),
+            self._trace_header("z"): np.array(
+                [float(c[1]) if c[1] else np.nan for c in cells]
+            ),
+            self._trace_header("c"): np.array(
+                [float(c[2]) if c[2] else np.nan for c in cells]
+            ),
             "frames": np.array([s[0] for s in stats], np.float64),
             "peak": np.array([s[2] for s in stats], np.float64),
         }
@@ -5177,7 +5416,11 @@ class ManualRoiWidget:
     def _trace_table_shift(self, item: int):
         """Every row between the last picked one and ``item``, in the order shown."""
         view = [int(i) for i in self.trace_order.order]
-        picked = [view.index(i) for i, key in enumerate(self._trace_keys) if key in self.trace_sel and i in view]
+        picked = [
+            view.index(i)
+            for i, key in enumerate(self._trace_keys)
+            if key in self.trace_sel and i in view
+        ]
         if item not in view:
             return
         to = view.index(item)

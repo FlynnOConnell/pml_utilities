@@ -113,7 +113,9 @@ def test_line_traces_are_one_external_set_following_the_roi_slider(viewer):
         parent.image_widget.figure.canvas.draw()
     assert not draw.errors, draw.errors[0]
     header, lines = roi._plot_lines()
-    assert [(label, key) for label, key, _rgb in lines] == [(f"{name} · ROI 5", ("member", name, 5))]
+    assert [(label, key) for label, key, _rgb in lines] == [
+        (f"{name} · ROI 5", ("member", name, 5))
+    ]
 
     traces.close()
     assert name not in roi.traces.sources() and roi.pending_traces is None
