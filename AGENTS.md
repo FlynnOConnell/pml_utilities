@@ -694,6 +694,13 @@ the launcher's **Registration QC (MaskNMF run)** entry is the same switch;
 without `--qc` a run folder opens in the Studio (`MasknmfRunArray`), or in
 masknmf's demixing viewer when its `results.hdf5` holds a `DemixingResults`
 (`arrays.masknmf_run.run_demixing`).
+`mbo spike-average <run folder>` (`analysis/spike_average.py`,
+`MasknmfUnit.from_run`; `gui/spike_average_viewer`) averages the registered and
+compressed movies, the mean fluorescence, the RTMC and masknmf's shifts around
+the peaks of one demixed trace over a threshold that drags, or around the
+events a curation file accepts: activity shows in the movies and leaves the
+motion flat. A run made elsewhere opens from its `.mesc`, unit and
+`results.hdf5` (`MasknmfUnit.open`).
 
 `mbo reg-denoise` (`masknmf/reg_denoise.py`) is pre-registration denoising for
 one channel: the raw movie's PMD (`raw/CompressionArray`), the rigid

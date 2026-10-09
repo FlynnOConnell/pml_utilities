@@ -345,6 +345,29 @@ There is no login: leave `--host` on localhost and tunnel
 (`ssh -L 60649:localhost:60649 server`), or front it with an authenticating
 proxy; `--host 0.0.0.0` opens it to the network as is.
 
+To check that a unit's spikes are activity and not motion, run
+`mbo spike-average <run folder>` on a MaskNMF run that demixed: one window on
+the run, which reads the recording, plane, channel and frames from the
+folder's `config.json`. A run made elsewhere (masknmf's own notebooks) opens
+as `mbo spike-average scan.mesc --unit MUnit_14 --masknmf run/results.hdf5`. The spikes are the peaks of one demixed
+trace (`--signal`, 0 to start) over a threshold, at least `--distance` frames
+apart: the trace is plotted whole with its peaks marked, the threshold is the
+line on it and drags (`--threshold`, in the trace's units, three standard
+deviations over its mean to start), and the combo beside the transport picks
+another signal. On top, the registered and the compressed movie averaged over
+`--window` frames before and after each spike (10 and 10), playing through
+the window, each about its own mean unless `subtract mean` is off. Under the
+trace, on one lag axis, the patch's mean fluorescence, the AOD's real-time
+motion correction and masknmf's shifts, each about the window's mean with its
+standard error as a band; the cursor is the frame on screen and drags. With a
+`.mesc`, the run's shifts are replayed on the unit's frames, flipped about
+their mean as its input was (`--positive` leaves them); a run handed a movie
+that was already cut needs `--first-frame`, the unit's frame it starts on. `--labels`
+averages around the events a curation file accepts instead (`mbo curate`;
+`--recording` for another id than `<stem>/<unit>/roi=<roi>`).
+`MasknmfUnit.from_run(run).average(spikes)` (or `MasknmfUnit.open(...)`, in `mbo_utilities.analysis.spike_average`)
+returns the same averages without a window.
+
 To scrub the lines on the stack instead, run `mbo linescan scan.mesc --view`
 (or `mbo linescan <expt> --view`): three panels on top (the
 line-scan itself, the snapshot the lines were drawn on, the paired Z-stack)
