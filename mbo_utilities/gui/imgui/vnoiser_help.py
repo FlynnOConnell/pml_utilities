@@ -1,6 +1,6 @@
-"""The vnoiser guide (h): the voltage pipeline from a scan's lines to curated events.
+"""The vnoiser guide (h): the vnoiser pipeline from a scan's lines to curated events.
 
-The steps, what each stage does to a trace, the Voltage window and its domain
+The steps, what each stage does to a trace, the vnoiser window and its domain
 table, the curation window and its four rules, and the files, as diagrams and
 tables, with the curation window's keybinds behind a button.
 ``python -m mbo_utilities.gui.imgui.vnoiser_help`` opens it in a window of its own.
@@ -29,7 +29,7 @@ TEXT = imgui.ImVec4(0.92, 0.92, 0.94, 1.0)
 CARD = imgui.ImVec4(0.17, 0.18, 0.21, 1.0)
 EDGE = imgui.ImVec4(0.35, 0.35, 0.37, 1.0)
 PLOT = imgui.ImVec4(0.06, 0.06, 0.08, 1.0)
-# the Run Voltage button's green
+# the Run vnoiser button's green
 RUN = imgui.ImVec4(0.18, 0.65, 0.18, 1.0)
 # one trace on its way through the pipeline: counts, z-score, denoised
 RAW = imgui.ImVec4(0.85, 0.85, 0.85, 1.0)
@@ -60,7 +60,7 @@ WINDOW_SIZE = (760, 1000)
 
 TITLE = "vnoiser"
 TOOLTIP = (
-    "the steps, what each stage does to a trace, the Voltage window and its domains, the curation "
+    "the steps, what each stage does to a trace, the vnoiser window and its domains, the curation "
     "window and its rules, the files, the keybinds"
 )
 # the curation window's keys; its handler and its popup read this table
@@ -90,7 +90,7 @@ STEPS = (
     (fa.ICON_FA_OBJECT_GROUP, "Domains", "group ROIs: a soma, a branch"),
     (fa.ICON_FA_PLAY, "Run", "one ROI and channel, or all"),
     (fa.ICON_FA_CHECK_DOUBLE, "Curate", "yes / no every candidate"),
-    (fa.ICON_FA_FLOPPY_DISK, "Results", "one .voltage.zarr per run"),
+    (fa.ICON_FA_FLOPPY_DISK, "Results", "one .vnoiser.zarr per run"),
 )
 # the stages in order, each in the colour of the trace it leaves
 FLOW = (
@@ -162,7 +162,7 @@ STAGES = (
 WINDOW = (
     ("block", "holds"),
     (
-        "Voltage on MUnit_n",
+        "vnoiser on MUnit_n",
         "the MESc tab's button: opens this window set to the scan on screen and to the ROI and channel its "
         "sliders are on",
     ),
@@ -194,7 +194,7 @@ WINDOW = (
         "parameters, Defaults puts them back",
     ),
     (
-        "Run Voltage",
+        "Run vnoiser",
         "starts the run in the background; the process console follows it, every ROI read and every domain "
         "denoised",
     ),
@@ -236,7 +236,7 @@ DOMAIN_RULES = (
     (
         "Load, Save",
         "domains.json beside the file: the domains, the ticked scans and the new-environment ticks; "
-        "mbo voltage reads the same file",
+        "mbo vnoiser reads the same file",
     ),
 )
 PANELS = (
@@ -327,7 +327,7 @@ FILES = (
     ("scan<n>/members", "raw: each line's or patch's own mean counts"),
     ("scan<n>/events", "the detected peaks, per domain"),
     (
-        "voltage/",
+        "vnoiser/",
         "the run's own record",
         (
             "pipeline.json: the source file and scans, the channel, frames and ROIs, the domain table, "
@@ -347,7 +347,7 @@ FILES = (
     ),
     (
         "terminal",
-        "mbo voltage file.mesc runs it, mbo curate file.mesc opens the curation window",
+        "mbo vnoiser file.mesc runs it, mbo curate file.mesc opens the curation window",
     ),
 )
 
@@ -418,7 +418,7 @@ WINDOWS = tuple(
     for row in RESPONSE
 )
 
-# the Voltage window sketch: the file's scans as (unit, length, ticked), the domain table as
+# the vnoiser window sketch: the file's scans as (unit, length, ticked), the domain table as
 # (name, text, ROIs) and the seven lines on their picture as (x0, y0, x1, y1) fractions of the card
 SCANS = (
     ("MUnit_30 (on screen)", "300 s", True),
@@ -762,7 +762,7 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     )
     table("stages", STAGES)
 
-    heading(fa.ICON_FA_WINDOW_RESTORE, "The Voltage window")
+    heading(fa.ICON_FA_WINDOW_RESTORE, "The vnoiser window")
     held = OWNER[roi]
     p = imgui.get_cursor_screen_pos()
     ch = 7.2 * em
@@ -835,11 +835,11 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
         f"runs   {DOMAINS[held][0]}  [{roi}]"
     )
     box(dl, p.x, y, w - run_w - gap, 1.6 * em, strip, DIM)
-    box(dl, p.x + w - run_w, y, run_w, 1.6 * em, "Run Voltage", RUN, 0.3)
+    box(dl, p.x + w - run_w, y, run_w, 1.6 * em, "Run vnoiser", RUN, 0.3)
     imgui.dummy(imgui.ImVec2(w, ch + gap + 1.6 * em))
     imgui.text_colored(
         DIM,
-        "opened from the MESc tab's Voltage on MUnit_30 button, the window is set to the scan on screen and "
+        "opened from the MESc tab's vnoiser on MUnit_30 button, the window is set to the scan on screen and "
         "the ROI and channel its sliders are on: only that ROI is read, and the domain holding it is cut "
         "down to it. Set slice back to every ROI and the whole table runs.",
     )
@@ -999,9 +999,9 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     x = p.x
     box(dl, x, y, 8 * em, bh, "session1.mesc", TEXT)
     x += 8 * em
-    noted_arrow(dl, x, y, 8 * em, bh, "Run Voltage", "a new file per run")
+    noted_arrow(dl, x, y, 8 * em, bh, "Run vnoiser", "a new file per run")
     x += 8 * em
-    box(dl, x, y, 15 * em, bh, "session1.<time>.voltage.zarr", KEY)
+    box(dl, x, y, 15 * em, bh, "session1.<time>.vnoiser.zarr", KEY)
     x += 15 * em
     noted_arrow(dl, x, y, 7.5 * em, bh, "curate", "saved as you go")
     x += 7.5 * em
@@ -1022,7 +1022,7 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
 
 
 def draw_window(state: dict) -> None:
-    """One frame of the standalone window: the ? as it sits in the Voltage window, then the page."""
+    """One frame of the standalone window: the ? as it sits in the vnoiser window, then the page."""
     state["frames"] += 1
     if state["max_frames"] is not None and state["frames"] >= state["max_frames"]:
         hello_imgui.get_runner_params().app_shall_exit = True

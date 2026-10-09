@@ -2188,12 +2188,12 @@ main.add_command(_hpc_group)
     help="Channel averaged for a raw line scan's traces.",
 )
 def curate(path, serve, host, port, channel):
-    """Vnoiser event curation of PATH: a PF folder the voltage pipeline
+    """Vnoiser event curation of PATH: a PF folder the vnoiser pipeline
     wrote (or the experiment folder holding it), or a line-scan .mesc, with
     a PF folder beside it or raw (default: the last data path).
 
     Opens the desktop window, the one the viewer's Curate button opens
-    (the Voltage pipeline, or the MESc tab once a run is beside the file). With --serve the
+    (the vnoiser pipeline, or the MESc tab once a run is beside the file). With --serve the
     dashboard is rendered here and streamed to any browser that opens the
     printed URL: run it on the machine that holds the data and a GPU, and
     curate from a laptop. No login: keep --host on localhost and tunnel
@@ -2272,12 +2272,12 @@ def spike_average(
     correction (masknmf's shifts, the AOD's RTMC), averaged around its spikes,
     in one window. ROI, trace and spikes are picked there; the threshold drags.
 
-    PATH is any run with results: a MaskNMF run folder that demixed, a voltage
+    PATH is any run with results: a MaskNMF run folder that demixed, a vnoiser
     or other results file, a PF folder, a suite2p plane dir.
 
     
       mbo spike-average D:/data/20261007T183740_masknmf_zplane03_tp00001-20000
-      mbo spike-average session1.2026-09-21-14-30-22.voltage.zarr --unit scan35 --roi soma
+      mbo spike-average session1.2026-09-21-14-30-22.vnoiser.zarr --unit scan35 --roi soma
     """
     from mbo_utilities.gui.spike_average_viewer import open_spike_average_viewer
 
@@ -2295,7 +2295,7 @@ def spike_average(
     )
 
 
-@main.command("voltage")
+@main.command("vnoiser")
 @click.argument("mesc_path", type=click.Path(exists=True))
 @click.option(
     "--domains",
@@ -2375,7 +2375,7 @@ def spike_average(
     default=False,
     help="Write a domains.json template beside the file (one domain per ROI) and exit.",
 )
-def voltage(
+def vnoiser(
     mesc_path,
     domains_path,
     units,
@@ -2389,10 +2389,10 @@ def voltage(
     planes,
     init,
 ):
-    """The spatial JEDI voltage pipeline on a .mesc with AOD ROI units (line
+    """The vnoiser pipeline on a .mesc with AOD ROI units (line
     scans, chessboard or ribbon patches): per-ROI traces, domain dF/F and
     z-score, wavelet denoising, peaks, written as one
-    `<input>.<timestamp>.voltage.zarr` beside the input that `mbo curate`
+    `<input>.<timestamp>.vnoiser.zarr` beside the input that `mbo curate`
     opens.
 
     Each unit is one scan (its MUnit number is the scan id). The domains
@@ -2403,9 +2403,9 @@ def voltage(
     rate the traces match its PF folders.
 
     \b
-      mbo voltage stan112_expt12.mesc --init
-      mbo voltage stan112_expt12.mesc --unit MUnit_35 --unit MUnit_38
-      mbo voltage stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl -o PF_new
+      mbo vnoiser stan112_expt12.mesc --init
+      mbo vnoiser stan112_expt12.mesc --unit MUnit_35 --unit MUnit_38
+      mbo vnoiser stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl -o PF_new
       mbo curate X:/data/asako/stan112/stan112_expt12
     """
     from mbo_utilities.gui._availability import HAS_VNOISER
@@ -2413,11 +2413,11 @@ def voltage(
 
     if not HAS_VNOISER:
         raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
-    from mbo_utilities.vnoiser.params import VoltageSettings
+    from mbo_utilities.vnoiser.params import VnoiserSettings
     from mbo_utilities.vnoiser.pipeline import (
         DOMAINS_FILE,
         read_domains,
-        run_voltage_pipeline,
+        run_vnoiser_pipeline,
         write_domains_template,
     )
 
@@ -2435,7 +2435,7 @@ def voltage(
     if init:
         path = write_domains_template(mesc_path, units=list(units) or None)
         click.echo(
-            f"wrote {path}; name the domains and group the ROIs, then run `mbo voltage` again"
+            f"wrote {path}; name the domains and group the ROIs, then run `mbo vnoiser` again"
         )
         return
     domains_path = (
@@ -2443,11 +2443,11 @@ def voltage(
     )
     if not domains_path.exists():
         raise click.BadParameter(
-            f"{domains_path} not found; write one with `mbo voltage {mesc_path.name} --init`",
+            f"{domains_path} not found; write one with `mbo vnoiser {mesc_path.name} --init`",
             param_hint="--domains",
         )
     spec = read_domains(domains_path)
-    settings = VoltageSettings()
+    settings = VnoiserSettings()
     if events:
         try:
             lo, hi, bp_sd, amp_sd, dur = (float(v) for v in events.split(","))
@@ -2469,7 +2469,7 @@ def voltage(
             logging.Formatter("%(asctime)s | %(message)s", datefmt="%H:%M:%S")
         )
     try:
-        paths = run_voltage_pipeline(
+        paths = run_vnoiser_pipeline(
             mesc_path,
             domains=spec["domains"],
             units=chosen,
@@ -2511,14 +2511,14 @@ def results(path, out, overwrite):
     """Write a pipeline's output folder as one results zarr.
 
     PATH is a suite2p or masknmf output folder (one plane dir, or a folder
-    of zplaneNN dirs) or the voltage pipeline's PF folder. The file holds
+    of zplaneNN dirs) or the vnoiser pipeline's PF folder. The file holds
     every plane or scan as a group of (roi, t) traces, ROI membership,
     events and summary images; `mbo_utilities.results.Results.read` reads
     it back.
 
     \b
       mbo results run/zplane01_tp00001-01574
-      mbo results stan112_expt12/PF -o stan112_expt12/stan112_expt12.voltage.zarr
+      mbo results stan112_expt12/PF -o stan112_expt12/stan112_expt12.vnoiser.zarr
     """
     from mbo_utilities.results import TRACES_PKL, Results, results_name
 

@@ -37,12 +37,12 @@ def test_display_kinds_are_the_results_trace_kinds_and_the_one_computed_here():
 
 def test_profiles_say_who_measured_a_neuropil():
     # suite2p measured a real Fneu, the mean engine reads a neuropil ring;
-    # masknmf's Fneu is zeros and the voltage pipeline has none
+    # masknmf's Fneu is zeros and the vnoiser pipeline has none
     assert [p for p, prof in TRACE_PROFILES.items() if SUBTRACTED in prof.kinds] == [
         "suite2p",
         "mean",
     ]
-    assert trace_profile("voltage").default == "denoised"
+    assert trace_profile("vnoiser").default == "denoised"
     assert trace_profile("computed from channel 0") is DEFAULT_TRACE_PROFILE
 
 
@@ -103,11 +103,11 @@ def test_the_raw_trace_its_neuropil_and_their_difference_are_three_kinds():
     assert y_label(spikes, "spikes") == "spikes (a.u.)"
 
 
-def test_voltage_rows_show_the_curated_trace_first_and_dff_in_percent():
+def test_vnoiser_rows_show_the_curated_trace_first_and_dff_in_percent():
     denoised = np.array([0.0, 1.0, 2.0, 1.0], np.float32)
     dff = np.array([0.0, 0.1, 0.5, 0.0], np.float32)
     row = RoiTrace(
-        uid=0, member=0, engine="voltage", norm=dff, kinds={"denoised": denoised}
+        uid=0, member=0, engine="vnoiser", norm=dff, kinds={"denoised": denoised}
     )
     assert available_kinds(row) == ("denoised", "dff")
     np.testing.assert_array_equal(display_trace(row), denoised)
@@ -120,12 +120,12 @@ def test_voltage_rows_show_the_curated_trace_first_and_dff_in_percent():
         and y_label(row, "zscore") == "denoised"
     )
     # a line's raw means: counts, and a dF/F computed over the rolling baseline
-    line = RoiTrace(uid=0, member=1, engine="voltage", F=F, fs=1000.0)
+    line = RoiTrace(uid=0, member=1, engine="vnoiser", F=F, fs=1000.0)
     assert available_kinds(line) == ("dff", "raw")
     assert y_label(line, "raw") == "F (counts)"
     expected = dfof_maxmin(F[None, :], 1000.0, 5.0, 0.05)[0] * 100.0
     np.testing.assert_allclose(display_trace(line, "dff"), expected)
-    assert display_trace(RoiTrace(uid=0, member=2, engine="voltage")) is None
+    assert display_trace(RoiTrace(uid=0, member=2, engine="vnoiser")) is None
 
 
 def test_mean_rows_use_the_rolling_baseline_when_they_know_their_rate():

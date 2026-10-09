@@ -1780,7 +1780,7 @@ class TestTracesTab:
             attrs={"member_ids": [4, 5, 7]},
         )
         path = Results(
-            pipeline="voltage", units={unit.name: unit}, source={"channel": 1}
+            pipeline="vnoiser", units={unit.name: unit}, source={"channel": 1}
         ).write(tmp_path / "2026-09-16_session01.zarr")
         assert widget.load_results(path)
         rows = {
@@ -1800,7 +1800,7 @@ class TestTracesTab:
             4,
             7,
         )
-        assert all(t.c == 1 and t.engine == "voltage" for t in rows.values())
+        assert all(t.c == 1 and t.engine == "vnoiser" for t in rows.values())
         assert rows["roi0"].extra["line"] == 4 and "line" not in rows["roi1"].extra
         # each ROI row names its unit and ROI, which the spike-average window opens it by
         assert rows["roi1"].extra["roi"] == "roi1" and "roi" not in rows["roi0 (raw)"].extra
@@ -2645,7 +2645,7 @@ class TestTracePlotView:
             uid=0,
             member=1,
             source="res",
-            engine="voltage",
+            engine="vnoiser",
             norm=np.ones(6, np.float32),
             kinds={"denoised": np.ones(6, np.float32)},
         )

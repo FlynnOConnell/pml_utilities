@@ -1,6 +1,6 @@
 """The results zarr (AGENTS.md §7.5): naming from filename tags, the write/read
-round trip, and reading suite2p-shaped folders into it. The voltage
-pipeline's PF conversion is in ``test_voltage_pipeline.py``.
+round trip, and reading suite2p-shaped folders into it. The vnoiser
+pipeline's PF conversion is in ``test_vnoiser_pipeline.py``.
 """
 
 from datetime import datetime
@@ -46,8 +46,8 @@ def test_filename_tags_follow_the_dim_tag_vocabulary():
 def test_results_name_is_the_input_then_a_stamp_then_the_pipeline():
     when = datetime(2026, 9, 16, 14, 30, 22)
     assert (
-        results_name("d/session1.mesc", when, pipeline="voltage")
-        == "session1.2026-09-16-14-30-22.voltage.zarr"
+        results_name("d/session1.mesc", when, pipeline="vnoiser")
+        == "session1.2026-09-16-14-30-22.vnoiser.zarr"
     )
     assert results_name("run/zplane01_tp00001-01574", when, pipeline="suite2p") == (
         "zplane01_tp00001-01574.2026-09-16-14-30-22.suite2p.zarr"
@@ -65,9 +65,9 @@ def test_results_name_is_the_input_then_a_stamp_then_the_pipeline():
 def test_results_stamp_reads_the_timestamp_back():
     when = datetime(2026, 9, 16, 14, 30, 22)
     assert (
-        results_stamp(results_name("session1.mesc", when, pipeline="voltage")) == when
+        results_stamp(results_name("session1.mesc", when, pipeline="vnoiser")) == when
     )
-    assert results_stamp("d/session1.2026-09-16-14-30-22.voltage.zarr") == when
+    assert results_stamp("d/session1.2026-09-16-14-30-22.vnoiser.zarr") == when
     # a name from before the convention, and one whose stem is not a stamp
     assert results_stamp("2026-09-16_session01.zarr") is None
     assert results_stamp("session1.zarr") is None
@@ -85,8 +85,8 @@ def test_newest_results_picks_the_latest_run_of_a_pipeline(tmp_path):
     )
     made = {}
     for stamp, pipeline in (
-        (datetime(2026, 9, 16, 9, 0, 0), "voltage"),
-        (datetime(2026, 9, 16, 17, 5, 0), "voltage"),
+        (datetime(2026, 9, 16, 9, 0, 0), "vnoiser"),
+        (datetime(2026, 9, 16, 17, 5, 0), "vnoiser"),
         (datetime(2026, 9, 17, 8, 0, 0), "suite2p"),
     ):
         name = results_name("session1.mesc", stamp, pipeline=pipeline)
@@ -94,8 +94,8 @@ def test_newest_results_picks_the_latest_run_of_a_pipeline(tmp_path):
             tmp_path / name
         )
     assert (
-        newest_results(tmp_path, "voltage").name
-        == "session1.2026-09-16-17-05-00.voltage.zarr"
+        newest_results(tmp_path, "vnoiser").name
+        == "session1.2026-09-16-17-05-00.vnoiser.zarr"
     )
     assert (
         newest_results(tmp_path, "suite2p").name
@@ -107,8 +107,8 @@ def test_newest_results_picks_the_latest_run_of_a_pipeline(tmp_path):
     # a plain zarr in the folder is not a results file and never wins
     zarr.open_group(str(tmp_path / "plain.zarr"), mode="w", zarr_format=3)
     assert (
-        newest_results(tmp_path, "voltage").name
-        == "session1.2026-09-16-17-05-00.voltage.zarr"
+        newest_results(tmp_path, "vnoiser").name
+        == "session1.2026-09-16-17-05-00.vnoiser.zarr"
     )
 
 
@@ -437,7 +437,7 @@ def test_results_files_are_run_dirs_to_the_roi_widget(tmp_path):
         members=[np.array([0, 1]), np.array([2])],
     )
     (tmp_path / "PF").mkdir()
-    pf = Results(pipeline="voltage", units={scan.name: scan}).write(
+    pf = Results(pipeline="vnoiser", units={scan.name: scan}).write(
         tmp_path / "PF" / "2026-09-16_stan1.zarr"
     )
     assert results_summary(beside) == {
@@ -458,7 +458,7 @@ def test_results_files_are_run_dirs_to_the_roi_widget(tmp_path):
     rows = {r["path"]: r for r in rr.scan_run_dirs(tmp_path / "raw.tif")}
     assert set(rows) == {run, beside, pf}
     assert rows[beside]["kind"] == "suite2p" and rows[beside]["n_rois"] == 2
-    assert rows[pf]["kind"] == "voltage" and rows[pf]["n_rois"] == 2
+    assert rows[pf]["kind"] == "vnoiser" and rows[pf]["n_rois"] == 2
 
 
 def test_imread_does_not_open_a_results_file_as_an_image(tmp_path):

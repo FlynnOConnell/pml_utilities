@@ -81,7 +81,7 @@ def test_denoising_before_registration_starts_off(widget):
     assert widget.settings.registration.denoised_reference is False
 
 
-def test_the_process_tab_lists_masknmf_and_not_rois_or_voltage_preprocessing():
+def test_the_process_tab_lists_masknmf_and_not_rois_or_vnoiser_preprocessing():
     from mbo_utilities.gui.widgets.pipelines import (
         _PIPELINE_CLASSES,
         _register_pipelines_sync,

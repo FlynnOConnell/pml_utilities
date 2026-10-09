@@ -310,11 +310,11 @@ chance. `--flip-y` remains for a rig that saves the other way round.
 
 `mbo scan.mesc` opens the image viewer on the file's first line-scan unit
 with no unit prompt. The viewer has no curation panel of its own: with
-vnoiser installed, the Voltage pipeline's **Curate** button (and File >
+vnoiser installed, the vnoiser pipeline's **Curate** button (and File >
 Curate) opens the curation window below in its own process, on the
 experiment's `PF` folder when one sits beside the file, else on the file
 itself with every line of its line-scan units as a raw recording that the
-wavelet denoiser runs on when clicked. The Voltage pipeline is on the
+wavelet denoiser runs on when clicked. The vnoiser pipeline is on the
 Process tab. `mbo <expt>`
 or `mbo <expt>/PF` opens the folder the same way: `imread` returns a
 `ResultsArray` for any run's output, like a suite2p output folder, whose
@@ -330,8 +330,8 @@ table beside it. Labels are keyed `scan=<id>/domain=<name>` in
 `PF/.curation/<mode>_template_curation.json`.
 
 The window's `guide` button (`h`), and the `vnoiser guide` button at the top of
-the Voltage pipeline, open the vnoiser guide: one page of diagrams and tables on
-what each stage does to a trace, the Voltage window and its domain table, the
+the vnoiser pipeline, open the vnoiser guide: one page of diagrams and tables on
+what each stage does to a trace, the vnoiser window and its domain table, the
 curation window's panels and four rules, and the files a run leaves.
 `python -m mbo_utilities.gui.imgui.vnoiser_help` opens it on its own.
 
@@ -376,7 +376,7 @@ and defaults to the paired one; a stack holding none of the lines is
 refused. `--dry-run` prints the choice and placement without a window,
 `--screenshot out.png` renders the window offscreen.
 
-## Voltage
+## vnoiser
 
 The spatial JEDI pipeline (Noguchi & Terada) on a `.mesc` with AOD ROI units,
 producing the `PF` folder the curation window reads. A unit's ROIs are the
@@ -390,12 +390,17 @@ samples are scaled to each scan's frame rate and the peak band-pass is capped
 below Nyquist, so a 200 Hz chessboard scan keeps the same baseline durations.
 One run takes scans of one frame rate.
 
+Until 2026-10-09 this pipeline was called `voltage` (`mbo voltage`, the
+**Voltage** tab, `*.voltage.zarr`). `python scripts/convert_vnoiser_results.py
+<folder>` lists the results files and ROI-widget registries under a folder
+that still say so, and `--write` renames them.
+
 ```bash
-mbo voltage stan112_expt12.mesc --init                      # domains.json template beside the file
-mbo voltage stan112_expt12.mesc                             # every scan in domains.json
-mbo voltage stan112_expt12.mesc --unit MUnit_35 -o PF_new   # one scan, elsewhere
-mbo voltage stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl --overwrite
-mbo voltage stan112_expt12.mesc -p 1 -p 2 -p 3              # only ROIs 1-3 (the unit's Z axis); domains are cut down to them
+mbo vnoiser stan112_expt12.mesc --init                      # domains.json template beside the file
+mbo vnoiser stan112_expt12.mesc                             # every scan in domains.json
+mbo vnoiser stan112_expt12.mesc --unit MUnit_35 -o PF_new   # one scan, elsewhere
+mbo vnoiser stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl --overwrite
+mbo vnoiser stan112_expt12.mesc -p 1 -p 2 -p 3              # only ROIs 1-3 (the unit's Z axis); domains are cut down to them
 mbo curate X:/data/asako/stan112/stan112_expt12             # then curate it
 ```
 
@@ -418,7 +423,7 @@ Written to `<expt>/PF` for the archive layout
 | `detected_events_peaks.pkl`, `param_spike_detect.pkl` | peaks per domain and the thresholds (`--events LO,HI,BP_SD,AMP_SD,DUR_MS`) |
 | `denoised_trace_components.pkl`, `test.h5` | the masked sum, 1 Hz / 100 Hz baselines and envelope; per-domain dF/F and z |
 | `cwts.h5` | the wavelet coefficients, only with `--save-cwt` (large) |
-| `pipeline.json` | provenance: source file and units, every parameter, versions, ROI pixel weights, the run's `timing` (below) and its `processing_history` (one `voltage_<step>` entry per step with `duration_seconds`, CPU seconds and memory, the shape suite2p's `ops.npy` uses) |
+| `pipeline.json` | provenance: source file and units, every parameter, versions, ROI pixel weights, the run's `timing` (below) and its `processing_history` (one `vnoiser_<step>` entry per step with `duration_seconds`, CPU seconds and memory, the shape suite2p's `ops.npy` uses) |
 | `timings.json` | the run's timing on its own: wall and CPU seconds, peak process memory, `totals` per step, `denoise_stages` (the denoiser's `cwt`, `cluster`, `reduce`, `mask`, `baseline`, `baseline_100hz` and `peaks` summed over domains), per scan the read and each domain's dF/F and denoising, and one flat row per step (`steps`; a denoise row carries its stages as `<stage>_s`) |
 | `traces/` | the same results as plain files, see below |
 
@@ -431,30 +436,30 @@ with the totals per step and per denoiser stage. On a 476k-frame line scan at
 1587 Hz a domain's wavelet transform takes about 4 s and its whole denoising
 about 10 s; the dF/F baselines take about 12 s per domain and the read about
 20 s per 15 ROIs. `mbo
-voltage` prints them with a clock; the Run tab's worker writes them to the
+vnoiser` prints them with a clock; the Run tab's worker writes them to the
 process console's log, where its progress bar follows every ROI read and every
 domain denoised. The same record is the `timing` in `pipeline.json`, the
 results zarr's `provenance` and `ResultsArray.metadata`, so a notebook can
 compare runs without the log.
 
 `--zarr` (the Run tab's **Output format**, the default) writes the results as
-one `<stem>.<stamp>.voltage.zarr` file beside the input instead of a PF folder
+one `<stem>.<stamp>.vnoiser.zarr` file beside the input instead of a PF folder
 of pickles, the shape every pipeline's results share
 (`mbo_utilities.results`). One group per scan holds the `denoised`, `dff` and
 `zscore` traces `(ROI, frame)`, the lines of each ROI, the lines' `raw` traces
 and the detected events; `Results.read(path)` reads it back and `imread` opens
 it as a `ResultsArray`. `test.h5`, `traces/`, `pipeline.json` and
-`timings.json` are written either way: inside the results file in a `voltage/`
+`timings.json` are written either way: inside the results file in a `vnoiser/`
 folder named after the pipeline, or loose in the PF folder with `--pkl`.
 The curation window opens either. `mbo results PATH` converts an
 existing PF, suite2p or masknmf folder the same way. In the viewer, "Load
-into Traces" on the Voltage tab (or loading the file as a run in Manual ROI
+into Traces" on the vnoiser tab (or loading the file as a run in Manual ROI
 Labeling) puts every scan's denoised and line traces in the Traces tab; a
 finished zarr-format run started from the Process tab is picked up there on
 its own.
 
 `PF/traces/` needs only numpy and pandas to read
-(`demos/voltage_results.ipynb` walks through it). Row `i` of every
+(`demos/vnoiser_results.ipynb` walks through it). Row `i` of every
 `(domain, frame)` array is row `i` of `domains.csv`:
 
 | file | contents |
@@ -475,7 +480,7 @@ output reproduces the archive's PF traces to float precision (the peaks on 7 of
 conversion is left off (`--convert` applies the file's offset so zero means no
 photons, which the archive never did).
 
-The same pipeline is the **Voltage** entry of the viewer's Process tab (`mbo
+The same pipeline is the **vnoiser** entry of the viewer's Process tab (`mbo
 scan.mesc`, or `mbo <expt>/PF` to run it again on a folder's source scan): the dataset block, output folder, slice popup
 (a frame window and the channel; every line is used), a Scans block ticking
 which units become scans, a Domains table naming which lines make each domain

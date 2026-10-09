@@ -452,7 +452,7 @@ column. The plot shows the checked rows the way their pipeline says: the **kind*
 combo picks `raw`, the pipeline's own `dF/F` (or one computed here over a rolling
 max-min baseline sized in seconds; the **dF/F** button sets its window and smoothing
 or switches to a percentile baseline), `denoised` or `z-score`, and a row without
-that kind shows its pipeline's default (the voltage pipeline's curated trace, dF/F
+that kind shows its pipeline's default (the vnoiser pipeline's curated trace, dF/F
 elsewhere); the y axis is labelled from what is on it. **neuropil corrected** appears
 only when a plotted row's pipeline measured a neuropil (suite2p, or the mean engine's
 ring). The x axis opens in seconds whenever the data has a sampling rate. Running

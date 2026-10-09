@@ -357,7 +357,7 @@ class MescTabWidget(Widget):
         self._reference: ReferenceView | None = None
         # a unit the popup's button asked for, applied once it has drawn
         self._pending: tuple[dict, int | None] | None = None
-        # the voltage run beside the open file the curation window can take,
+        # the vnoiser run beside the open file the curation window can take,
         # looked up once per file: (file, PF folder or results file, or None)
         self._curation: tuple[str, Path | None] | None = None
         parent.reference_view = self.open_reference
@@ -549,11 +549,11 @@ class MescTabWidget(Widget):
                 )
             path = Path(mesc.filenames[0])
             if self._curation is None or self._curation[0] != str(path):
-                # this file's newest voltage results file, else a PF folder beside it
+                # this file's newest vnoiser results file, else a PF folder beside it
                 runs = [
                     p
                     for p in path.parent.glob(f"{glob.escape(path.stem)}.*.zarr")
-                    if results_pipeline(p) == "voltage"
+                    if results_pipeline(p) == "vnoiser"
                 ]
                 pf = path.parent / "PF"
                 found = (

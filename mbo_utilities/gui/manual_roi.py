@@ -2059,7 +2059,7 @@ class ManualRoiWidget:
     def load_results(self, path, discarded=(), classes=None, colors=None) -> bool:
         """Read a results file (AGENTS.md §7.5) into the widget. Pixel units
         (suite2p, masknmf) load as derived sets exactly like a run dir; line
-        units (the voltage pipeline's scans) go straight to the Traces tab,
+        units (the vnoiser pipeline's scans) go straight to the Traces tab,
         one row per ROI plotting its denoised trace and one per member line
         plotting the line's raw trace. Every row is named by its ROI
         (``roi3``, ``roi3 (raw)``; a line of a multi-line ROI adds itself,
@@ -3284,7 +3284,7 @@ class ManualRoiWidget:
                 info.pid in mine
                 or info.pid in self._adopted
                 or info.status != "completed"
-                or info.task_type not in ("suite2p", "masknmf", "voltage")
+                or info.task_type not in ("suite2p", "masknmf", "vnoiser")
             ):
                 continue
             self._adopted.add(info.pid)
@@ -3295,11 +3295,11 @@ class ManualRoiWidget:
             out = Path(out)
             if root not in (out, *out.parents) and out not in root.parents:
                 continue  # another dataset's run
-            if info.task_type == "voltage":
-                # a zarr-format voltage run leaves one results file in the PF folder
+            if info.task_type == "vnoiser":
+                # a zarr-format vnoiser run leaves one results file in the PF folder
                 from mbo_utilities.results import newest_results
 
-                found = newest_results(out, "voltage")
+                found = newest_results(out, "vnoiser")
                 dirs = [found] if found is not None and str(found) not in loaded else []
             else:
                 dirs = [

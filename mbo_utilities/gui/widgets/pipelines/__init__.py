@@ -78,11 +78,11 @@ def _register_pipelines_sync() -> None:
             pass
 
         try:
-            from mbo_utilities.gui.widgets.pipelines.voltage import (
-                VoltagePipelineWidget,
+            from mbo_utilities.gui.widgets.pipelines.vnoiser import (
+                VnoiserPipelineWidget,
             )
 
-            _PIPELINE_CLASSES.append(VoltagePipelineWidget)
+            _PIPELINE_CLASSES.append(VnoiserPipelineWidget)
         except Exception:
             pass
 

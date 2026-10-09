@@ -2,7 +2,7 @@
 ``<input stem>.<yyyy-mm-dd-HH-MM-SS>.<pipeline>.zarr``.
 
 A pipeline's native outputs (suite2p's ``F.npy`` and ``stat.npy``, masknmf's
-suite2p-shaped plane dirs, the voltage pipeline's ``PF`` pickles) differ in
+suite2p-shaped plane dirs, the vnoiser pipeline's ``PF`` pickles) differ in
 every detail; this module fixes one shape they all take so a reader,
 a viewer or a notebook opens any of them the same way. The contract is
 AGENTS.md §7.5; the schema is::
@@ -29,7 +29,7 @@ AGENTS.md §7.5; the schema is::
                                         native h5 and npy); :func:`pipeline_files`
 
 :meth:`Results.from_suite2p` reads suite2p and masknmf output folders into
-that shape without writing anything, :meth:`Results.from_pf` the voltage
+that shape without writing anything, :meth:`Results.from_pf` the vnoiser
 pipeline's ``PF`` folder, :meth:`Results.read` a results file and
 :meth:`Results.open` any of them; a new pipeline builds :class:`ResultUnit`
 objects and calls :meth:`Results.write`. :class:`ResultsArray` opens any of
@@ -91,7 +91,7 @@ logger = log.get("results")
 
 RESULTS_VERSION = 1
 RESULTS_ATTR = "mbo_results"
-# the voltage pipeline's native traces; the file that marks a PF folder
+# the vnoiser pipeline's native traces; the file that marks a PF folder
 TRACES_PKL = "denoised_trace_scans.pkl"
 # the rest of a PF folder, and what every pipeline writes beside its results
 DFOF_H5 = "test.h5"
@@ -111,9 +111,9 @@ TRACE_KINDS = {
     "raw": "fluorescence in the recording's units (suite2p F; a line's mean counts)",
     "neuropil": "neuropil fluorescence (suite2p Fneu)",
     "dff": "dF/F (masknmf norm_traces in percent; lbm_suite2p_python's and the "
-    "voltage pipeline's dfof_raw as a fraction)",
+    "vnoiser pipeline's dfof_raw as a fraction)",
     "zscore": "z-scored trace (lbm_suite2p_python norm_traces with norm_method zscore)",
-    "denoised": "denoised trace (the voltage pipeline's curated trace)",
+    "denoised": "denoised trace (the vnoiser pipeline's curated trace)",
     "spikes": "deconvolved activity (suite2p spks)",
 }
 IMAGE_KINDS = {
@@ -219,7 +219,7 @@ class Results:
     @classmethod
     def open(cls, path) -> Results:
         """Any run's output: a results file read back, the newest one in a
-        folder, else the pipeline's native folder (the voltage pipeline's
+        folder, else the pipeline's native folder (the vnoiser pipeline's
         ``PF`` pickles, suite2p or masknmf plane dirs) in the same shape.
         The one door onto a run.
         """
@@ -454,7 +454,7 @@ class Results:
 
     @classmethod
     def from_pf(cls, pf_dir) -> Results:
-        """The voltage pipeline's ``PF`` folder of pickles as results, one scan per unit.
+        """The vnoiser pipeline's ``PF`` folder of pickles as results, one scan per unit.
 
         The domains are the ROIs (``roi_names``), their lines the members, the
         curated trace is ``denoised``, ``test.h5`` gives ``dff`` and ``zscore``,
@@ -551,7 +551,7 @@ class Results:
                 )
             )
         return cls(
-            pipeline="voltage",
+            pipeline="vnoiser",
             units={u.name: u for u in units},
             source=source,
             settings=dict(provenance.get("settings") or {}),
@@ -790,7 +790,7 @@ def results_name(
 
     The stem is the source filename's, so the file sits beside its input
     under the input's own name (``session1.mesc`` ->
-    ``session1.2026-09-21-14-30-22.voltage.zarr``); ``extra_tags`` follow it.
+    ``session1.2026-09-21-14-30-22.vnoiser.zarr``); ``extra_tags`` follow it.
     The timestamp is local time to the second, so two runs in a day are two
     files and a listing sorts chronologically; :func:`results_stamp` reads it
     back with ``datetime.strptime``.
@@ -926,7 +926,7 @@ def results_source(path) -> str:
 
 def results_dir_of(path) -> Path | None:
     """What a run left, from anything naming it: a results file itself, the
-    voltage pipeline's ``PF`` folder of pickles, or a folder holding either
+    vnoiser pipeline's ``PF`` folder of pickles, or a folder holding either
     (its own results file, or a ``PF`` beside it). None for anything else.
 
     Suite2p and masknmf plane dirs are not claimed here: they open as a
@@ -969,15 +969,15 @@ def unit_for_source(results: Results, source_unit: str) -> str | None:
     return None
 
 
-# AGENTS.md 7.2 puts a pipeline's info on its widget; the voltage widget needs
+# AGENTS.md 7.2 puts a pipeline's info on its widget; the vnoiser widget needs
 # imgui, and `mbo info` and the file dialogs must know the format without it
 register_pipeline(
     PipelineInfo(
-        name="voltage",
-        description="Spatial JEDI voltage pipeline: AOD ROI traces, dF/F, wavelet denoising, peaks",
+        name="vnoiser",
+        description="vnoiser pipeline: AOD ROI traces, dF/F, wavelet denoising, peaks",
         input_patterns=["**/*.mesc"],
         output_patterns=[
-            "**/*.voltage.zarr",
+            "**/*.vnoiser.zarr",
             f"**/PF/{TRACES_PKL}",
             f"**/PF/{PROVENANCE_FILE}",
             "**/PF/test.h5",
@@ -1027,7 +1027,7 @@ class ResultsArray(ReductionMixin, LazyArray):
     Parameters
     ----------
     filenames : path
-        A results file, the voltage pipeline's ``PF`` folder or its
+        A results file, the vnoiser pipeline's ``PF`` folder or its
         ``denoised_trace_scans.pkl``, or a folder holding either.
     unit : str, optional
         The unit the image and ``fs`` follow, by its results name

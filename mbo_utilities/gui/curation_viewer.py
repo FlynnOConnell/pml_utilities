@@ -18,7 +18,7 @@ Two hosts draw the same layout:
 
 What opens:
 
-- a ``PF`` folder the voltage pipeline wrote (the folder, its traces file,
+- a ``PF`` folder the vnoiser pipeline wrote (the folder, its traces file,
   or the experiment folder holding it): every scan / domain trace in it is
   listed and loaded; the source line scan named in its ``pipeline.json``
   (or laid out beside it) brings the scan's RTMC traces;
@@ -37,7 +37,7 @@ Usage:
                                         in the cell; vis.widget is the dashboard
 
 The image viewer (``mbo scan.mesc``, ``mbo <expt>/PF``) has no curation of
-its own: its Curate button (the Voltage pipeline, or the MESc tab once a run is beside the file) runs
+its own: its Curate button (the vnoiser pipeline, or the MESc tab once a run is beside the file) runs
 :func:`launch_curation_window`, this window in a second process, since one
 imgui loop cannot host a second hello_imgui runner. The line-scan + Z-stack
 viewer that draws the lines on the stack is ``mbo linescan scan.mesc --view``
@@ -192,14 +192,14 @@ class _Dashboard:
 
     def open(self, path) -> None:
         """Point the dashboard at ``path``."""
-        from mbo_utilities.vnoiser import voltage_run_for_mesc
+        from mbo_utilities.vnoiser import vnoiser_run_for_mesc
 
         path = Path(path).expanduser()
         self.source = path
         if (
             path.is_file()
             and path.suffix.lower() == ".mesc"
-            and voltage_run_for_mesc(path) is None
+            and vnoiser_run_for_mesc(path) is None
         ):
             self.open_raw_mesc(path)
         else:

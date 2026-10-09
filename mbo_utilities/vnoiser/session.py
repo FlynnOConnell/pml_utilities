@@ -40,8 +40,8 @@ __all__ = [
     "PC1_SIDES",
     "CurationSession",
     "hex_rgba",
-    "voltage_run_for_mesc",
-    "voltage_unit_for_mesc",
+    "vnoiser_run_for_mesc",
+    "vnoiser_unit_for_mesc",
     "recording_id",
     "trace_label",
 ]
@@ -624,15 +624,15 @@ class CurationSession:
         return 500.0 if self.mode == "slow" else 100.0
 
 
-def voltage_run_for_mesc(mesc_path) -> Path | None:
-    """What the voltage pipeline last left for a line scan: the newest results
+def vnoiser_run_for_mesc(mesc_path) -> Path | None:
+    """What the vnoiser pipeline last left for a line scan: the newest results
     file beside it that was made from it, else a ``PF`` folder of pickles
     beside it or one folder up (the ``<expt>/<expt>/<expt>.mesc`` layout keeps
     ``<expt>/PF``); None when there is none. Another recording's run in the
     same folder is never this one's.
     """
     mesc_path = Path(mesc_path)
-    found = newest_results(mesc_path.parent, "voltage", source=mesc_path)
+    found = newest_results(mesc_path.parent, "vnoiser", source=mesc_path)
     if found is not None:
         return found
     for parent in (mesc_path.parent.parent, mesc_path.parent):
@@ -643,12 +643,12 @@ def voltage_run_for_mesc(mesc_path) -> Path | None:
     return None
 
 
-def voltage_unit_for_mesc(mesc_path, unit_key: str) -> ResultsArray | None:
-    """The line scan's last voltage run opened on that recording unit (the
+def vnoiser_unit_for_mesc(mesc_path, unit_key: str) -> ResultsArray | None:
+    """The line scan's last vnoiser run opened on that recording unit (the
     image is left closed), or None when there is no run or the pipeline never
     processed the unit.
     """
-    run = voltage_run_for_mesc(mesc_path)
+    run = vnoiser_run_for_mesc(mesc_path)
     if run is None:
         return None
     try:

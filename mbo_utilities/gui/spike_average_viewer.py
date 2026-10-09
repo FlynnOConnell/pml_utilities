@@ -10,7 +10,7 @@ threshold that drags. ROI, trace and spikes are picked there.
 
 The Studio opens it in its own process (:func:`launch_spike_average`:
 ``python -m mbo_utilities.gui.spike_average_viewer <run> --unit --roi``),
-from the Traces tab, the MaskNMF and Voltage tabs and the launcher;
+from the Traces tab, the MaskNMF and vnoiser tabs and the launcher;
 ``mbo spike-average <run>`` from a terminal.
 """
 

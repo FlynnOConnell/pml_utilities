@@ -1230,7 +1230,7 @@ def _is_linescan_unit(path, unit) -> bool:
 def _first_linescan_unit(path) -> str | None:
     """The key of the first AOD ROI unit (a line scan, chessboard or ribbon
     scan: ``ROI_LAYOUTS``) in a ``.mesc``, or None. With a PF folder beside
-    the file (the voltage pipeline's output) the unit of its first scan wins,
+    the file (the vnoiser pipeline's output) the unit of its first scan wins,
     so the viewer opens on a processed scan.
     """
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
@@ -1242,7 +1242,7 @@ def _first_linescan_unit(path) -> str | None:
         return None
     path = Path(path)
     for parent in (path.parent.parent, path.parent):
-        found = newest_results(parent, "voltage", source=path) or results_dir_of(
+        found = newest_results(parent, "vnoiser", source=path) or results_dir_of(
             parent / "PF"
         )
         if found is None:

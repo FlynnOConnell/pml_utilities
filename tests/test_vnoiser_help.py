@@ -80,15 +80,15 @@ def test_the_sketches_agree_with_their_own_counts():
 
 
 def test_the_numbers_are_the_pipelines_defaults():
-    """Every number the stage table quotes is a default of ``VoltageSettings``; the colours are
+    """Every number the stage table quotes is a default of ``VnoiserSettings``; the colours are
     the curation window's.
     """
     pytest.importorskip("vnoiser")
     from mbo_utilities.gui import event_curation
     from mbo_utilities.vnoiser import LABEL_RGBA
-    from mbo_utilities.vnoiser.params import VoltageSettings
+    from mbo_utilities.vnoiser.params import VnoiserSettings
 
-    settings = VoltageSettings()
+    settings = VnoiserSettings()
     dfof, den, events = settings.dfof, settings.denoiser, settings.events
     levels = [f"{v:g}" for v in den.soft_levels]
     text = " ".join(str(part) for row in vnoiser_help.STAGES for part in row)

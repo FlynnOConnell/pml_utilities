@@ -197,7 +197,7 @@ class SpikeSource:
         if results is None or not results.units:
             raise ValueError(
                 f"{Path(arr.source_path).name} has no results: run a pipeline that "
-                "writes them (MaskNMF with demixing, Voltage, suite2p) first"
+                "writes them (MaskNMF with demixing, vnoiser, suite2p) first"
             )
         base = base_array(arr)
         name = unit or getattr(base, "unit", None) or next(iter(results.units))
