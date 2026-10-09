@@ -13,6 +13,7 @@ NOTEBOOKS = (
     "mbo_user_guide.ipynb",
     "lsp_user_guide.ipynb",
     "asap7_spine_pipeline.ipynb",
+    "asap7_spine_pipeline.py",
 )
 
 

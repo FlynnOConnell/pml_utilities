@@ -20,6 +20,7 @@ from imgui_notebooks import (
     NotebookMenuConfig,
     Store,
 )
+from imgui_notebooks.model import backend_of_name
 
 from mbo_utilities import log
 from mbo_utilities.arrays.mesc import MescArray
@@ -76,6 +77,8 @@ def template_notebooks(parent: Any) -> list[Notebook]:
     return [
         Notebook(
             str(notebook_path(t, dest)),
+            # named from the template: the copy is not written until it is first picked
+            backend=backend_of_name(t.filename),
             label=t.title,
             group=TEMPLATE_GROUP,
             root=str(dest),

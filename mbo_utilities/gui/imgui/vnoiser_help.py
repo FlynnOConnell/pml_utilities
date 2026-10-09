@@ -104,7 +104,7 @@ FLOW = (
     ("peaks", KEY),
 )
 STAGES = (
-    ("stage", "does"),
+    ("stage", "description"),
     (
         "ROI means",
         "each line's or patch's mean brightness per frame, in one channel: the counts as MESc stored them",

@@ -20,11 +20,13 @@ from mbo_utilities.notebook_templates import (
 )
 
 SPINE = next(t for t in TEMPLATES if t.filename == "asap7_spine_pipeline.ipynb")
+SPINE_MARIMO = next(t for t in TEMPLATES if t.filename == "asap7_spine_pipeline.py")
 
 
 def test_templates_for_a_mesc_include_the_spine_pipeline():
     names = [t.filename for t in templates_for("/data/scan.MESC")]
     assert "asap7_spine_pipeline.ipynb" in names
+    assert "asap7_spine_pipeline.py" in names
     assert "mbo_user_guide.ipynb" in names
     assert "asap7_spine_pipeline.ipynb" not in [
         t.filename for t in templates_for("/data/raw")
@@ -39,6 +41,13 @@ def test_shipped_spine_template_is_clean_and_carries_its_tokens():
     assert "pip install" not in text
     nb = json.loads(text)
     assert all(cell.get("outputs", []) == [] for cell in nb["cells"])
+
+
+def test_shipped_marimo_spine_template_carries_its_tokens():
+    text = (template_dir() / SPINE_MARIMO.filename).read_text(encoding="utf-8")
+    assert f'MESC_PATH = Path("{SPINE_MARIMO.path_token}")' in text
+    assert f'UNIT = "{SPINE_MARIMO.unit_token}"' in text
+    assert "app = marimo.App(" in text
 
 
 def test_scripts_dir_sits_beside_the_file_or_the_raw_folder(tmp_path):
@@ -92,7 +101,10 @@ def test_template_entries_point_beside_the_data(tmp_path):
     assert [n.label for n in found] == [t.title for t in templates_for(mesc)]
     assert all(n.group == notebooks.TEMPLATE_GROUP for n in found)
     assert all(Path(n.path).parent == scripts_dir(mesc) for n in found)
-    assert all(n.backend == "jupyter" for n in found)
+    assert [n.backend for n in found] == [
+        "marimo" if t.filename.endswith(".py") else "jupyter"
+        for t in templates_for(mesc)
+    ]
     assert notebooks.template_notebooks(Host(None)) == []
     assert notebooks.template_notebooks(Host([str(mesc)]))[0].root == str(
         scripts_dir(mesc)

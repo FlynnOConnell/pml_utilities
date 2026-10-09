@@ -37,6 +37,13 @@ TEMPLATES = (
         ".mesc",
         "MSession_0/MUnit_0",
     ),
+    Template(
+        "asap7_spine_pipeline.py",
+        "ASAP7 spine pipeline, stage by stage (masknmf, marimo)",
+        "D:/demo/scan.mesc",
+        ".mesc",
+        "MSession_0/MUnit_0",
+    ),
 )
 
 
