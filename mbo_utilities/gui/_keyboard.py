@@ -28,6 +28,7 @@ def handle_keyboard_shortcuts(parent: Any):
     if (
         not io.key_ctrl
         and not io.key_shift
+        and not _claimed("o")
         and imgui.is_key_pressed(imgui.Key.o, False)
     ):
         if parent._file_dialog is None and parent._folder_dialog is None:
@@ -53,6 +54,7 @@ def handle_keyboard_shortcuts(parent: Any):
     if (
         not io.key_ctrl
         and not io.key_shift
+        and not _claimed("m")
         and imgui.is_key_pressed(imgui.Key.m, False)
     ):
         parent.logger.info("Shortcut: 'm' (Metadata Viewer)")
@@ -69,7 +71,7 @@ def handle_keyboard_shortcuts(parent: Any):
         and not io.key_shift
         and (
             imgui.is_key_pressed(imgui.Key.enter, False)
-            or imgui.is_key_pressed(imgui.Key.p, False)
+            or (not _claimed("p") and imgui.is_key_pressed(imgui.Key.p, False))
         )
     ):
         toggle_side_panel(parent)
@@ -100,6 +102,7 @@ def handle_keyboard_shortcuts(parent: Any):
     if (
         not io.key_ctrl
         and not io.key_shift
+        and not _claimed("c")
         and imgui.is_key_pressed(imgui.Key.c, False)
     ):
         if hasattr(parent, "fix_phase"):
@@ -124,6 +127,7 @@ def handle_keyboard_shortcuts(parent: Any):
     if (
         not io.key_ctrl
         and not io.key_shift
+        and not _claimed("k")
         and imgui.is_key_pressed(imgui.Key.k, False)
     ):
         parent._show_keybinds_popup = not getattr(parent, "_show_keybinds_popup", False)
@@ -135,6 +139,7 @@ def handle_keyboard_shortcuts(parent: Any):
     if (
         not io.key_ctrl
         and not io.key_shift
+        and not _claimed("h")
         and imgui.is_key_pressed(imgui.Key.h, False)
     ):
         parent.logger.info("Shortcut: 'h' (Help)")
@@ -227,22 +232,22 @@ def rebind_space_to_playback(parent: Any) -> None:
         parent._space_rebound = True
 
 
-# frame on which a widget used each arrow key for itself (see claim_arrow_keys);
-# the viewer leaves that direction alone on that frame and the next, whatever
+# frame on which a widget used each key for itself (see claim_keys); the
+# global shortcuts leave that key alone on that frame and the next, whatever
 # the draw order
 _ARROW_KEYS = ("left_arrow", "right_arrow", "up_arrow", "down_arrow")
-_arrow_claims: dict[str, int] = dict.fromkeys(_ARROW_KEYS, -2)
+_claims: dict[str, int] = {}
 
 
-def claim_arrow_keys(keys: tuple[str, ...] = _ARROW_KEYS):
-    """Keep the viewer from also stepping T / Z on this frame's presses of ``keys``."""
+def claim_keys(keys: tuple[str, ...] = _ARROW_KEYS):
+    """Keep the global shortcuts off this frame's presses of ``keys`` (``imgui.Key`` names)."""
     frame = imgui.get_frame_count()
     for key in keys:
-        _arrow_claims[key] = frame
+        _claims[key] = frame
 
 
-def _arrow_claimed(key: str) -> bool:
-    return imgui.get_frame_count() - _arrow_claims[key] <= 1
+def _claimed(key: str) -> bool:
+    return imgui.get_frame_count() - _claims.get(key, -2) <= 1
 
 
 def handle_arrow_keys(parent: Any):
@@ -274,14 +279,14 @@ def handle_arrow_keys(parent: Any):
     t_max = shape[0] - 1
     current_t = current_indices[0]
 
-    if not _arrow_claimed("left_arrow") and imgui.is_key_pressed(imgui.Key.left_arrow):
+    if not _claimed("left_arrow") and imgui.is_key_pressed(imgui.Key.left_arrow):
         new_t = max(0, current_t - step)
         if new_t != current_t:
             current_indices[0] = new_t
             parent.image_widget.indices = current_indices
             return
 
-    if not _arrow_claimed("right_arrow") and imgui.is_key_pressed(
+    if not _claimed("right_arrow") and imgui.is_key_pressed(
         imgui.Key.right_arrow
     ):
         new_t = min(t_max, current_t + step)
@@ -302,7 +307,7 @@ def handle_arrow_keys(parent: Any):
         z_max = shape[z_pos] - 1
         current_z = current_indices[z_pos]
 
-        if not _arrow_claimed("down_arrow") and imgui.is_key_pressed(
+        if not _claimed("down_arrow") and imgui.is_key_pressed(
             imgui.Key.down_arrow
         ):
             new_z = max(0, current_z - step)
@@ -311,7 +316,7 @@ def handle_arrow_keys(parent: Any):
                 parent.image_widget.indices = current_indices
                 return
 
-        if not _arrow_claimed("up_arrow") and imgui.is_key_pressed(imgui.Key.up_arrow):
+        if not _claimed("up_arrow") and imgui.is_key_pressed(imgui.Key.up_arrow):
             new_z = min(z_max, current_z + step)
             if new_z != current_z:
                 current_indices[z_pos] = new_z
