@@ -1,13 +1,11 @@
 """Shared imgui widgets for the ROI viewers.
 
 Ported from ``masknmf.visualization.imgui`` so the viewer keeps working
-against any masknmf branch: the label set, the sortable ROI table, stroke
-capture, the label/progress panels and the summary image popup all live
-here now. Styling comes from ``mbo_utilities.gui._theme``.
+against any masknmf branch: the label set, the sortable ROI table, the
+label/progress panels and the summary image popup all live here now. Styling comes from ``mbo_utilities.gui._theme``.
 """
 
 from mbo_utilities.gui.imgui.crop import context_crop, crop_origin, crop_slices
-from mbo_utilities.gui.imgui.draw import StrokeDrawer
 from mbo_utilities.gui.imgui.labels import (
     LABEL_COLORS,
     LABEL_KEYS,
@@ -41,7 +39,6 @@ __all__ = [
     "MoviePlayer",
     "RoiOrder",
     "RowAction",
-    "StrokeDrawer",
     "SummaryImageViewer",
     "UNLABELED",
     "UNLABEL_ALL",

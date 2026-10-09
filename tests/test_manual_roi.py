@@ -99,21 +99,18 @@ def label(widget, index, class_index):
 
 
 def drawn_showing(widget) -> bool:
-    """Whether this plane's drawn ROIs are on screen, whichever mask mode is
-    up: pixels in the fill overlay, a live path in the vector one.
-    """
-    if widget.mask_mode == "fill":
-        return widget.overlay.visible and bool(widget.overlay.data.value[..., 3].any())
-    return widget.outline.visible
+    """Whether this plane's ROIs, drawn or algo, are on screen as masks."""
+    return widget.overlay.visible and bool(widget.overlay.data.value[..., 3].any())
 
 
-def derived_showing(widget) -> bool:
-    """The same question for the algo overlay."""
-    if widget.mask_mode == "fill":
-        return widget.derived_overlay.visible and bool(
-            widget.derived_overlay.data.value[..., 3].any()
-        )
-    return widget.derived_outline.visible
+def polygon(widget, points):
+    """Close a region with these ``(x, y)`` vertices, as clicking them would."""
+    widget.set_drawing(True)
+    vertices = np.zeros((len(points), 3), np.float32)
+    vertices[:, :2] = points
+    widget.region_selector.selection = vertices
+    widget.region_selector._end_move_mode()
+    widget._poll_region()
 
 
 def paths(line) -> list:
@@ -195,7 +192,7 @@ class TestMasks:
     def test_short_stroke_rejected(self, widget):
         widget.add_roi([(1.0, 1.0), (2.0, 2.0)])
         assert widget.counts == []
-        assert "too short" in widget.status
+        assert "three points" in widget.status
 
     def test_tiny_roi_rejected(self, widget):
         widget.add_roi(square(10, 10, 1))
@@ -236,8 +233,7 @@ class TestMasks:
         assert widget.selected == -1
 
     def test_masks_render_feathered(self, widget):
-        """The lbm_suite2p_python look: soft edges, nothing past the mask."""
-        widget.set_mask_mode("fill")
+        """masknmf's feathered masks: soft edges, nothing past the mask."""
         widget.add_roi(square(10, 10, 9))
         widget.selected = -1
         widget.refresh_overlay()
@@ -249,7 +245,6 @@ class TestMasks:
     def test_only_the_selected_roi_gets_a_white_rim(self, widget):
         from mbo_utilities.gui.roi_runs import _rim
 
-        widget.set_mask_mode("fill")
         widget.add_roi(square(2, 2, 9))
         widget.add_roi(square(20, 20, 9))
         widget.selected = 0
@@ -259,19 +254,24 @@ class TestMasks:
         assert (rgb[rims[0]] == 255).all(axis=1).any()
         assert not (rgb[rims[1]] == 255).all(axis=1).any()
 
-    @pytest.mark.parametrize("mode", ["circle", "outline", "fill"])
-    def test_hiding_masks_hides_the_overlay(self, widget, mode):
-        widget.set_mask_mode(mode)
+    def test_hiding_masks_hides_the_overlay(self, widget):
         widget.add_roi(square(10, 10, 9))
         widget.show_masks = False
+        widget.show_selected_masks = False
         widget.refresh_overlay()
-        assert not widget.overlay.visible and not widget.outline.visible
-        widget.show_masks = True
-        widget.refresh_overlay()
+        assert not widget.overlay.visible
+        widget.set_masks(True)
         assert drawn_showing(widget)
 
+    def test_the_selected_mask_shows_with_the_rest_hidden(self, widget):
+        widget.add_roi(square(4, 4, 9))
+        widget.add_roi(square(30, 30, 9))
+        widget.set_masks(False)
+        alpha = widget.overlay.data.value[..., 3]
+        assert alpha[35, 35] > 0  # ROI 1, just added, is the selection
+        assert alpha[8, 8] == 0
+
     def test_touching_rois_keep_distinct_colors(self, widget):
-        widget.set_mask_mode("fill")
         widget.add_roi(square(10, 10, 9))
         widget.add_roi(square(20, 10, 9))
         widget.selected = -1
@@ -304,15 +304,12 @@ class TestSelection:
         assert widget.selected == -1
 
     def test_selected_fill_is_more_opaque(self, widget):
-        from mbo_utilities.gui.manual_roi import SELECTED_OPACITY
-
-        widget.set_mask_mode("fill")
         widget.add_roi(square(4, 4, 20))
         widget.add_roi(square(34, 34, 20))
         widget.select_roi(0)
         alpha = widget.overlay.data.value[..., 3]
         # interiors, well clear of both rims
-        assert alpha[14, 14] == round(255 * SELECTED_OPACITY)
+        assert alpha[14, 14] == round(255 * widget.selected_opacity)
         assert alpha[44, 44] == round(255 * widget.opacity)
 
     def test_clicking_an_roi_selects_it(self, widget):
@@ -336,7 +333,6 @@ class TestSelection:
         assert widget.selected == -1
 
     def test_opacity_changes_pixels(self, widget):
-        widget.set_mask_mode("fill")
         widget.add_roi(square(10, 10, 12))
         widget.select_roi(-1)
         before = widget.overlay.data.value.copy()
@@ -364,6 +360,7 @@ class TestSelection:
 
     def test_clicking_a_drawn_roi_clears_the_source_filter(self, widget):
         widget.add_roi(square(10, 10, 20))
+        widget.select_roi(-1)
         widget._add_derived(make_result(widget, [disc(45, 45)]))
         widget.order.source = 1  # the derived set only
         widget.order.rebuild()
@@ -396,12 +393,9 @@ class TestSelection:
 
     def test_overlays_are_not_pickable(self, widget):
         """The tooltip must keep reporting the image intensity, not our rgba"""
-        for overlay in (widget.overlay, widget.derived_overlay):
-            tiles = overlay.world_object.children
-            assert tiles and not any(t.material.pick_write for t in tiles)
-        for line in (widget.outline, widget.derived_outline):
-            assert not line.world_object.material.pick_write
-        assert not widget.stroke_line.world_object.material.pick_write
+        tiles = widget.overlay.world_object.children
+        assert tiles and not any(t.material.pick_write for t in tiles)
+        assert not widget.outline.world_object.material.pick_write
         widget.add_roi(square(10, 10, 9))
         assert not any(
             t.material.pick_write for t in widget.overlay.world_object.children
@@ -429,76 +423,74 @@ class TestSelection:
 
 
 class TestDrawMode:
-    def test_arming_lifts_the_pan_binding(self, widget):
-        controls = widget.subplot.controller.controls
-        assert "mouse1" in controls
+    """masknmf's draw: a polygon on the image selects what it holds, Add ROI keeps it."""
+
+    def test_arming_starts_a_polygon_that_holds_the_pointer(self, widget):
+        assert widget.subplot.controller.enabled
         widget.set_drawing(True)
-        assert "mouse1" not in controls
-        assert "wheel" in controls
+        assert widget.drawing and widget.region_selector is not None
+        # the polygon's create mode takes the drag from the pan
+        assert not widget.subplot.controller.enabled
         widget.set_drawing(False)
-        assert controls["mouse1"] == ("pan", "drag", (1.0, 1.0))
+        assert widget.region_selector is None
+        assert widget.subplot.controller.enabled
 
     def test_pointer_events_ignored_while_disarmed(self, widget):
         drag(widget)
         assert widget.counts == []
 
-    def test_drag_adds_an_roi(self, widget):
-        widget.set_drawing(True)
-        drag(widget)
-        assert len(widget.counts) == 1
-        assert widget.counts[0] > 0
-        assert not widget.stroke
-        assert not widget.stroke_line.visible
+    def test_add_roi_keeps_the_region(self, widget):
+        polygon(widget, square(10, 10, 9))
+        widget._commit_region()
+        assert widget.counts == [100]
+        assert widget.selected == 0
+        assert widget.region_selector is None
 
-    def test_stroke_line_tracks_the_drag(self, widget):
+    def test_the_region_selects_the_rois_inside(self, widget):
+        widget.add_roi(square(4, 4, 9))
+        widget.add_roi(square(40, 40, 9))
+        widget.select_roi(-1)
+        polygon(widget, square(0, 0, 20))
+        assert widget.buffer == [(-1, 0)]
+        assert widget.selected == 0
+        widget.region_outside = True
+        widget._poll_region()
+        assert widget.buffer == [(-1, 1)]
+
+    def test_dropping_the_region_keeps_the_selection(self, widget):
+        widget.add_roi(square(4, 4, 9))
+        widget.add_roi(square(40, 40, 9))
+        polygon(widget, square(0, 0, 60))
+        assert widget.buffer == [(-1, 0), (-1, 1)]
+        widget.set_drawing(False)
+        assert widget.region_selector is None
+        assert widget.buffer == [(-1, 0), (-1, 1)]
+
+    def test_a_region_under_three_points_drops_itself(self, widget):
         widget.set_drawing(True)
-        x, y, w, h = widget.subplot.viewport.rect
-        cx, cy = x + w / 2, y + h / 2
-        send(widget, "pointer_down", cx, cy)
-        for dx in (20, 40, 60):
-            send(widget, "pointer_move", cx + dx, cy + dx)
-        assert len(widget.stroke) == 4
-        assert widget.stroke_line.visible
-        assert widget.stroke_line.data.value.shape == (4, 3)
-        send(widget, "pointer_up", cx, cy)
-        assert not widget.stroke_line.visible
+        widget.region_selector.selection = np.zeros((2, 3), np.float32)
+        widget.region_selector._end_move_mode()
+        widget._poll_region()
+        assert widget.region_selector is None
 
 
 class TestRegionMode:
-    def test_region_drag_sets_the_box_not_an_roi(self, widget):
-        widget.set_region_mode(True)
-        assert widget.drawer.armed and widget.region_mode
-        assert not widget.drawing
-        drag(widget)
+    def test_the_region_box_is_where_find_looks(self, widget):
+        polygon(widget, [(10.0, 20.0), (40.0, 20.0), (40.0, 50.0)])
         assert widget.counts == []
-        assert widget.region is not None
-        y0, y1, x0, x1 = widget.region
-        assert 0 <= y0 < y1 <= widget.ny and 0 <= x0 < x1 <= widget.nx
-        assert widget.region_line.visible
-        assert np.allclose(tuple(widget.region_line.offset), (0, 0, 1.75))
-        assert f"region {y1 - y0}x{x1 - x0}" in widget.status
+        assert widget.region == (20, 50, 10, 40)
 
     def test_clear_region(self, widget):
-        widget.set_region_mode(True)
-        drag(widget)
+        polygon(widget, square(10, 10, 20))
         widget.clear_region()
         assert widget.region is None
-        assert not widget.region_line.visible
+        assert widget.region_selector is None
 
-    def test_modes_are_exclusive(self, widget):
+    def test_region_mode_is_the_same_polygon(self, widget):
         widget.set_region_mode(True)
-        widget.set_drawing(True)
-        assert widget.drawing and not widget.region_mode
-        widget.set_region_mode(True)
-        assert widget.region_mode and not widget.drawing
+        assert widget.drawing
         widget.set_region_mode(False)
-        assert not widget.drawer.armed
-
-    def test_tiny_region_ignored(self, widget):
-        widget.set_region_mode(True)
-        widget._on_stroke([(10.0, 10.0), (11.0, 11.0)])
-        assert widget.region is None
-        assert "ignored" in widget.status
+        assert widget.region_selector is None
 
     def test_discover_without_a_region_is_refused(self, widget):
         widget.discover_region("masknmf")
@@ -510,7 +502,6 @@ class TestClassLabels:
     def test_assign_class_recolors_and_counts(self, widget):
         from mbo_utilities.annotation import class_color
 
-        widget.set_mask_mode("fill")
         widget.add_roi(square(10, 10, 9))
         widget.store.add_label_name("soma")
         widget.assign_class(0)
@@ -631,10 +622,8 @@ class TestMaskAppearance:
         out white and only hues with a zero channel survive.
         """
         assert (widget.overlay.vmin, widget.overlay.vmax) == (0, 255)
-        assert (widget.derived_overlay.vmin, widget.derived_overlay.vmax) == (0, 255)
 
     def test_feather_ramps_toward_the_edge(self, widget):
-        widget.set_mask_mode("fill")
         widget.add_roi(square(10, 10, 20))
         widget.select_roi(-1)
         alpha = widget.overlay.data.value[..., 3].astype(int)
@@ -642,142 +631,107 @@ class TestMaskAppearance:
         assert row[0] < row[1] < row[2]  # the 3 px ramp
         assert row[9] == round(255 * widget.opacity)
 
+    def test_a_weak_trace_draws_its_mask_faint(self, widget):
+        """masknmf's signal-peak weighting: a mask's opacity follows its trace's peak."""
+        widget.add_roi(square(4, 4, 20))
+        widget.add_roi(square(34, 34, 20))
+        uids = [r.uid for r in widget.store.rois]
+        for uid, peak in zip(uids, (10.0, 2.0)):
+            F = np.ones(6, np.float32)
+            F[-1] = peak
+            widget.traces.add(RoiTrace(uid=uid, F=F))
+        widget.select_roi(-1)
+        alpha = widget.overlay.data.value[..., 3].astype(int)
+        assert alpha[44, 44] < alpha[14, 14]
+        widget.masks_by_peak = False
+        widget.refresh_overlay()
+        alpha = widget.overlay.data.value[..., 3].astype(int)
+        assert alpha[44, 44] == alpha[14, 14]
 
-class TestMaskModes:
-    """Fill is the default, so a drawn ROI shows at once; circle and outline
-    draw the masks as line geometry, so the pixels under an ROI stay readable.
-    """
 
-    def test_fill_is_the_default(self, widget):
+class TestContours:
+    """masknmf's contours: every other ROI outlined in white, the selection in its own color."""
+
+    def test_off_by_default_and_c_turns_them_on(self, widget):
         widget.add_roi(square(10, 10, 9))
-        assert widget.mask_mode == "fill"
-        assert widget.overlay.visible and not widget.outline.visible
-        assert widget.overlay.data.value[..., 3].any()
-
-    def test_circles_leave_the_fill_off(self, widget):
-        widget.set_mask_mode("circle")
-        widget.add_roi(square(10, 10, 9))
-        assert widget.outline.visible and not widget.overlay.visible
+        widget.select_roi(-1)
+        assert not widget.show_contours and not widget.outline.visible
+        widget.set_contours(True)
+        assert widget.outline.visible
         # thin, and thin on screen: a hairline however far in you zoom
-        assert widget.line_width == 1.0
         assert widget.outline.thickness == 1.0
         assert widget.outline.size_space == "screen"
 
-    def test_the_circle_rings_the_mask_it_stands_in_for(self, widget):
-        widget.set_mask_mode("circle")
-        widget.add_roi(square(10, 10, 9))  # pixels 10..19, centre (15, 15)
-        widget.select_roi(-1)
-        (ring,) = paths(widget.outline)
-        assert np.allclose(ring[0], ring[-1])  # closed
-        centre = ring[:-1].mean(axis=0)  # the closing point is the first one
-        assert np.allclose(centre, (15.0, 15.0), atol=0.1)
-        radius = np.linalg.norm(ring - centre, axis=1)
-        # the equal-area circle of a 100 px mask, a touch outside its edge
-        assert np.allclose(radius, radius[0], atol=0.01)
-        assert 5.0 < radius[0] < 7.0
-
-    def test_the_ring_size_slider_scales_it(self, widget):
-        widget.set_mask_mode("circle")
-        widget.add_roi(square(10, 10, 9))
-        widget.select_roi(-1)
-        before = np.ptp(paths(widget.outline)[0], axis=0)
-        widget.ring_scale *= 2
-        widget.refresh_overlay()
-        after = np.ptp(paths(widget.outline)[0], axis=0)
-        assert np.allclose(after, before * 2, rtol=0.01)
-
-    def test_a_tiny_mask_still_gets_a_ring(self, widget):
-        """The case the modes exist for: a few pixels per cell."""
-        widget.set_mask_mode("circle")
-        widget.add_roi(square(20, 20, 2))  # 3x3, the smallest ROI allowed
-        widget.select_roi(-1)
-        (ring,) = paths(widget.outline)
-        radius = np.linalg.norm(ring[:-1] - ring[:-1].mean(axis=0), axis=1)
-        # its equal-area circle is under 2 px across, so the floor holds it
-        assert np.allclose(radius, 2.0, atol=0.01)
-
-    def test_outline_mode_traces_the_mask_border(self, widget):
-        widget.set_mask_mode("outline")
+    def test_the_outline_traces_the_mask_border(self, widget):
         widget.add_roi(square(10, 10, 9))  # pixels 10..19
         widget.select_roi(-1)
+        widget.set_contours(True)
         points = np.concatenate(paths(widget.outline))
         # the border of the pixels themselves, not half a pixel inside it
         assert np.allclose(points.min(axis=0), (10.0, 10.0))
         assert np.allclose(points.max(axis=0), (20.0, 20.0))
 
-    def test_each_roi_keeps_its_own_color(self, widget):
-        widget.set_mask_mode("circle")
+    def test_other_rois_are_white_the_selection_its_own_color(self, widget):
         widget.add_roi(square(10, 10, 9))
         widget.add_roi(square(30, 30, 9))
-        widget.select_roi(-1)
+        widget.set_contours(True)
+        widget.select_roi(1)
         colors = widget.outline.colors.value
         finite = ~np.isnan(widget.outline.data.value[:, 0])
-        shown = {tuple(np.round(c, 3)) for c in colors[finite]}
-        assert len(shown) == 2
-        for i in (0, 1):
-            rgb = tuple(round(c / 255.0, 3) for c in widget.store.roi_rgb(i))
-            assert any(np.allclose(s[:3], rgb, atol=0.01) for s in shown)
-        # opaque: a hairline at the fill overlay's opacity is invisible
-        assert (colors[finite][:, 3] == 1.0).all()
+        shown = {tuple(np.round(c[:3], 3)) for c in colors[finite]}
+        own = tuple(round(c / 255.0, 3) for c in widget.store.roi_rgb(1))
+        assert (1.0, 1.0, 1.0) in shown
+        assert any(np.allclose(s, own, atol=0.01) for s in shown)
 
-    def test_the_selection_gets_a_white_ring_outside_its_own(self, widget):
-        widget.set_mask_mode("circle")
+    def test_the_selections_contour_shows_with_the_rest_off(self, widget):
         widget.add_roi(square(10, 10, 9))
-        widget.select_roi(0)
-        rings = paths(widget.outline)
-        assert len(rings) == 2
-        spans = sorted(np.ptp(r[:, 0]) for r in rings)
-        assert spans[1] > spans[0]  # the halo sits outside the ROI's ring
-        white = np.array([1.0, 1.0, 1.0, 1.0])
-        assert np.allclose(widget.outline.colors.value[-1], white)
+        widget.add_roi(square(30, 30, 9))
+        assert widget.selected == 1
+        points = np.concatenate(paths(widget.outline))
+        # ROI 1's border alone: pixels 30..39
+        assert np.allclose(points.min(axis=0), (30.0, 30.0))
+        widget.show_selected_contours = False
+        widget.refresh_overlay()
+        assert not widget.outline.visible
 
-    def test_switching_modes_swaps_which_graphic_draws(self, widget):
-        widget.add_roi(square(10, 10, 9))
-        widget.set_mask_mode("fill")
-        assert widget.overlay.visible and not widget.outline.visible
-        assert widget.overlay.data.value[..., 3].any()
-        widget.set_mask_mode("outline")
-        assert widget.outline.visible and not widget.overlay.visible
-        widget.cycle_mask_mode()
-        assert widget.mask_mode == "fill"
-        widget.cycle_mask_mode()
-        assert widget.mask_mode == "circle"
+    def test_rings_stand_in_for_the_border(self, widget):
+        widget.add_roi(square(10, 10, 9))  # pixels 10..19, centre (15, 15)
+        widget.select_roi(-1)
+        widget.set_contours(True)
+        widget.cycle_contour_shape()
+        assert widget.contour_shape == "circle"
+        (ring,) = paths(widget.outline)
+        assert np.allclose(ring[0], ring[-1])  # closed
+        centre = ring[:-1].mean(axis=0)
+        assert np.allclose(centre, (15.0, 15.0), atol=0.1)
+        widget.cycle_contour_shape()
+        assert widget.contour_shape == "outline"
 
     def test_deleting_the_last_roi_empties_the_overlay(self, widget):
-        widget.set_mask_mode("circle")
         widget.add_roi(square(10, 10, 9))
+        widget.set_contours(True)
         assert widget.outline.visible
         widget.delete_roi(0)
         assert not widget.outline.visible
+        assert not drawn_showing(widget)
 
-    def test_derived_sets_draw_as_paths_too(self, widget):
-        widget.set_mask_mode("circle")
+    def test_algo_rows_draw_in_the_same_overlay(self, widget):
         widget._add_derived(make_result(widget, [disc(40, 40), disc(52, 52)]))
-        assert widget.derived_outline.visible
-        assert not widget.derived_overlay.visible
-        assert len(paths(widget.derived_outline)) == 2
-        widget.discard_derived(0, 0)
-        assert len(paths(widget.derived_outline)) == 1
-        widget.toggle_derived_overlay()
-        assert not widget.derived_outline.visible
+        widget.set_contours(True)
+        assert drawn_showing(widget)
+        points = np.concatenate(paths(widget.outline))
+        # both discs' borders: rows 37..43 and 49..55
+        assert np.allclose(points.min(axis=0), (37.0, 37.0))
+        assert np.allclose(points.max(axis=0), (55.0, 55.0))
 
-    def test_a_rejected_component_draws_dimmer(self, widget):
-        widget.set_mask_mode("circle")
-        widget._add_derived(make_result(widget, [disc(40, 40)]))
-        opaque = widget.derived_outline.colors.value[0, 3]
-        widget.set_accepted(0, 0)
-        assert not widget.derived[0].accepted[0]
-        assert widget.derived_outline.colors.value[0, 3] < opaque
+    def test_a_marked_row_draws_red(self, widget):
+        from masknmf.visualization.rois import MARKED_COLOR
 
-    def test_the_width_slider_reaches_both_lines(self, widget):
-        widget.set_mask_mode("circle")
-        widget.add_roi(square(10, 10, 9))
         widget._add_derived(make_result(widget, [disc(40, 40)]))
-        widget.line_width = 2.5
-        widget.refresh_overlay()
-        widget.refresh_derived_overlay()
-        assert widget.outline.thickness == 2.5
-        assert widget.derived_outline.thickness == 2.5
+        widget.select_roi(-1)
+        widget.mark([(0, 0)], True)
+        expected = tuple(int(round(c * 255)) for c in MARKED_COLOR)
+        assert tuple(widget.overlay.data.value[40, 40, :3]) == expected
 
 
 class TestImguiWindows:
@@ -807,66 +761,62 @@ class TestImguiWindows:
         label(widget, 0, 0)
         widget.select_roi(1)
         widget._add_derived(make_result(widget, [disc(40, 40)], with_traces=True))
-        widget.set_region_mode(True)
-        widget._on_stroke([(30.0, 30.0), (50.0, 50.0)])
+        polygon(widget, square(30, 30, 20))
+        widget.keybinds_open = True
 
         seen = []
-        real = imgui.begin_child
-        real_header = imgui.separator_text
+        real_child = imgui.begin_child
+        real_text = imgui.text_colored
 
         def spy(name, *args, **kwargs):
             if isinstance(name, str):
                 seen.append(name)
-            return real(name, *args, **kwargs)
+            return real_child(name, *args, **kwargs)
 
-        def spy_header(label, *args, **kwargs):
-            seen.append(label)
-            return real_header(label, *args, **kwargs)
+        def spy_text(color, text, *args, **kwargs):
+            seen.append(text)
+            return real_text(color, text, *args, **kwargs)
 
         set_widget_enabled("manual_roi", True, persist=False)
         imgui.begin_child = spy
-        imgui.separator_text = spy_header
+        imgui.text_colored = spy_text
         try:
             errors = draw_frames(widget, 4)
         finally:
-            imgui.begin_child = real
-            imgui.separator_text = real_header
+            imgui.begin_child = real_child
+            imgui.text_colored = real_text
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
-        assert {"NAVIGATE", "DRAW", "VIEW", "LABELS"} <= set(seen)
-        assert "##process" not in seen, "running ROIs is the Process tab's business now"
-        assert "##roi_counts" in seen  # the status row's right-aligned counts
+        # masknmf's Curation tab sections, then this tool's
+        assert {"OVERLAY", "SELECTION", "LABELS", "RUN"} <= set(seen)
+        assert "##roi_curation_tab" in seen
 
-    def test_up_down_arrows_are_claimed_for_the_widget(self, widget):
+    def test_the_roi_keys_are_taken_from_the_viewer(self, widget):
         from mbo_utilities.gui import _keyboard
 
         errors = draw_frames(widget, 3)
         assert not errors, errors[0]
-        claims = _keyboard._arrow_claims
-        assert claims["up_arrow"] == claims["down_arrow"] > 0
-        # left/right stay with the viewer's T scrub
-        assert claims["left_arrow"] < claims["up_arrow"]
+        for key in ("up_arrow", "down_arrow", "left_arrow", "right_arrow", "m", "c", "p", "h", "k"):
+            assert _keyboard._claimed(key), key
 
     def test_close_takes_everything_off_the_figure(self, widget):
         widget.add_roi(square(10, 10, 9))
+        widget.set_contours(True)
         widget.set_drawing(True)
         names = lambda: {g.name for g in widget.subplot.graphics}  # noqa: E731
-        drawn = {
-            "manual_roi_overlay",
-            "manual_roi_derived",
-            "manual_roi_outline",
-            "manual_roi_derived_outline",
-            "stroke",
-        }
+        drawn = {"manual_roi_overlay", "manual_roi_outline"}
         assert drawn <= names()
+        selectors = len(widget.subplot.selectors)
+        assert selectors == 1
         widget.close()
         assert widget.iw.figure.imgui_windows.get("top") is None
         assert not (drawn & names())
-        # pan is handed back and a stroke no longer lands anywhere
-        assert "mouse1" in widget.subplot.controller.controls
-        before = widget.counts[:]
-        drag(widget)
-        assert widget.counts == before
+        assert not widget.subplot.selectors
+        # pan is handed back and a click no longer picks anything
+        assert widget.subplot.controller.enabled
+        before = widget.selected
+        click(widget, 15, 15)
+        assert widget.selected == before
         widget.close()  # idempotent
 
 
@@ -934,14 +884,6 @@ class TestPersistence:
             assert w2.n_rois == 2
         finally:
             iw.close()
-
-    def test_a_raising_stroke_is_surfaced_not_swallowed(self, widget):
-        def boom(*a, **k):
-            raise RuntimeError("no")
-
-        widget.store.add_roi = boom
-        widget._on_stroke(square(10, 10, 9))  # must not raise
-        assert "stroke failed: RuntimeError: no" in widget.status
 
     def test_shape_mismatch_starts_fresh(self, tmp_path):
         from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
@@ -1024,21 +966,17 @@ class TestZPlanes:
         click(zwidget, 20, 20)
         assert zwidget.selected == 0
 
-    def test_z_jump_drops_an_in_progress_stroke(self, zwidget):
+    def test_z_jump_drops_an_in_progress_region(self, zwidget):
         zwidget.set_drawing(True)
-        x, y, w, h = zwidget.subplot.viewport.rect
-        send(zwidget, "pointer_down", x + w / 2, y + h / 2)
-        send(zwidget, "pointer_move", x + w / 2 + 20, y + h / 2 + 20)
-        assert zwidget.stroke
+        assert zwidget.region_selector is not None
         zwidget.iw.indices["z"] = 1
-        assert not zwidget.stroke
-        assert not zwidget.stroke_line.visible
+        assert zwidget.region_selector is None
 
     def test_derived_overlay_follows_z(self, zwidget):
         zwidget._add_derived(make_result(zwidget, [disc(40, 40)], z=2))
-        assert not derived_showing(zwidget)  # the set lives on z 2
+        assert not drawn_showing(zwidget)  # the set lives on z 2
         zwidget.iw.indices["z"] = 2
-        assert derived_showing(zwidget)
+        assert drawn_showing(zwidget)
 
     def test_selecting_a_derived_row_jumps_z(self, zwidget):
         zwidget._add_derived(make_result(zwidget, [disc(40, 40)], z=2))
@@ -1063,19 +1001,6 @@ class TestTraces:
     """Quick traces and run outputs land in uid-keyed trace sets, for the
     Traces tab; quick traces run off the draw thread as process-manager jobs.
     """
-
-    def test_row_actions_are_icon_only(self, widget):
-        from mbo_utilities.gui.manual_roi import (
-            REMOVE_ICON,
-            RUN_ICON,
-            TRACE_ICON,
-        )
-
-        actions = widget.row_actions
-        assert [a.icon for a in actions] == [RUN_ICON, TRACE_ICON, REMOVE_ICON]
-        assert all(len(a.icon) <= 2 for a in actions)
-        assert actions[0].tooltip.startswith("Run")
-        assert actions[1].tooltip.startswith("Quick trace")
 
     def test_quick_trace_is_the_roi_mean(self, widget):
         widget.add_roi(square(10, 10, 9))
@@ -1310,10 +1235,10 @@ class TestDerived:
         self._set(widget)
         assert widget.rows == [(-1, 0), (0, 0), (0, 1)]
         assert widget.order.sources.tolist() == [0, 1, 1]
-        fmt = widget._formatters()
-        assert fmt["source"](0) == "drawn"
-        assert fmt["source"](1) == "find01"
-        assert fmt["ok"](0) == "" and fmt["ok"](1) == "yes"
+        cell = widget._format_cell
+        assert cell("source", 0) == "drawn"
+        assert cell("source", 1) == "find01"
+        assert cell("ok", 0) == "" and cell("ok", 1) == "yes"
         assert len(widget.classes.labels) == 3
 
     def test_source_filter(self, widget):
@@ -1332,24 +1257,27 @@ class TestDerived:
     def test_source_column_sorts(self, widget):
         self._set(widget)
         widget.add_roi(square(10, 10, 9))
-        widget.order.sort_column = 2  # the "source" column
+        widget.order.sort_by = "source"
         widget.order.ascending = False
         widget.order.rebuild()
         codes = widget.order.sources[widget.order.order]
         assert codes.tolist() == sorted(codes, reverse=True)  # derived first
 
-    def test_invisible_or_discarded_rows_are_not_listed(self, widget):
+    def test_marked_rows_stay_listed_on_top_and_hidden_sets_go(self, widget):
         s = self._set(widget)
         assert len(widget.rows) == 2
-        widget.discard_derived(0, 0)
-        assert widget.rows == [(0, 1)]
-        widget.undiscard_derived(0, 0)
-        assert len(widget.rows) == 2
+        widget.discard_derived(0, 1)
+        assert widget.rows == [(0, 0), (0, 1)]
+        # masknmf pins the rows marked for deletion first
+        assert widget.rows[int(widget.order.order[0])] == (0, 1)
+        assert widget._format_cell("del", widget._row_index[(0, 1)]) == "x"
+        widget.undiscard_derived(0, 1)
+        assert widget.order.columns["del"].tolist() == [0, 0]
         s.visible = False
         widget._resync()
         assert widget.rows == []
 
-    def test_pick_prefers_the_derived_overlay(self, widget):
+    def test_pick_routes_by_what_is_under_the_cursor(self, widget):
         widget.add_roi(square(10, 10, 9))
         self._set(widget)
         widget._pick(40, 40)
@@ -1361,27 +1289,24 @@ class TestDerived:
         widget._pick(2, 2)
         assert widget.selected == -1 and widget.selected_derived is None
 
-    def test_pick_ignores_hidden_derived(self, widget):
-        self._set(widget)
-        widget.show_derived = False
-        widget._pick(40, 40)
-        assert widget.selected_derived is None
-        widget.show_derived = True
+    def test_pick_ignores_hidden_sets_and_finds_marked_rows(self, widget):
+        s = self._set(widget)
         widget.discard_derived(0, 0)
+        widget._pick(40, 40)
+        assert widget.selected_derived == (0, 0)
+        widget._pick(2, 2)
+        s.visible = False
+        widget._resync()
         widget._pick(40, 40)
         assert widget.selected_derived is None
 
     def test_derived_overlay_draws_the_footprints(self, widget):
-        widget.set_mask_mode("fill")
         self._set(widget)
-        assert widget.derived_overlay.visible
-        assert np.allclose(tuple(widget.derived_overlay.offset), (0, 0, 1.5))
-        alpha = widget.derived_overlay.data.value[..., 3]
+        assert widget.overlay.visible
+        alpha = widget.overlay.data.value[..., 3]
         assert alpha[40, 40] > 0 and alpha[52, 52] > 0 and alpha[0, 0] == 0
-        widget.discard_derived(0, 0)
-        assert widget.derived_overlay.data.value[40, 40, 3] == 0
-        widget.toggle_derived_overlay()
-        assert not widget.derived_overlay.visible
+        widget.set_masks(False)
+        assert widget.overlay.data.value[52, 52, 3] == 0
 
     def test_promote_copies_the_footprint(self, widget):
         self._set(widget, with_traces=True)
@@ -1413,7 +1338,7 @@ class TestDerived:
         assert widget.promoted_index(0, 0) == 0
         widget.delete_roi(0)
         assert widget.promoted_index(0, 0) is None
-        assert widget._formatters()["source"](widget._row_index[(0, 0)]) == "find01"
+        assert widget._format_cell("source", widget._row_index[(0, 0)]) == "find01"
 
     def test_promote_with_no_free_pixels_is_refused(self, widget):
         widget.add_roi(square(34, 34, 14))  # covers disc(40, 40) completely
@@ -1434,7 +1359,7 @@ class TestDerived:
         widget.select_derived(0, 0)
         widget.discard_derived(0, 0, advance=True)
         assert widget.selected_derived == (0, 1)
-        assert (0, 0) not in widget._row_index
+        assert 0 in widget.derived[0].discarded and (0, 0) in widget._row_index
 
     def test_delete_key_routes_by_selection_kind(self, widget):
         widget.add_roi(square(10, 10, 9))
@@ -1515,7 +1440,7 @@ class TestDerived:
         assert not s.accepted[1]
         iscell = np.load(d / "iscell.npy")
         assert iscell[1, 0] == 0.0 and iscell[0, 0] == 1.0
-        assert widget._formatters()["ok"](widget._row_index[(0, 1)]) == "no"
+        assert widget._format_cell("ok", widget._row_index[(0, 1)]) == "no"
         widget.set_accepted(0, 1)
         assert np.load(d / "iscell.npy")[1, 0] == 1.0
 
@@ -1573,29 +1498,6 @@ class TestDerived:
         self._set(widget, with_traces=True)  # same path: replaces the set
         assert widget.promoted_index(0, 0) == 0
         assert widget.traces.for_roi(uid)
-
-    def test_row_actions_defer_until_after_the_table_draw(self, widget):
-        import traceback
-
-        self._set(widget)
-        row = widget.rows.index((0, 0))
-        widget._act_remove(row)
-        # recorded only: the table may still be iterating the old rows
-        assert widget._pending_row_action == ("remove", 0, 0)
-        assert 0 not in widget.derived[0].discarded
-        errors = []
-
-        def body(*_args):
-            try:
-                widget.draw_tab()
-            except Exception:
-                errors.append(traceback.format_exc())
-
-        widget.strip._update_calls[:] = [body]
-        widget.iw.figure.canvas.draw()
-        assert not errors, errors[0]
-        assert 0 in widget.derived[0].discarded
-        assert widget._pending_row_action is None
 
 
 class TestTracesTab:
@@ -1664,9 +1566,8 @@ class TestTracesTab:
         assert ("member", "find01", 0) in rows and ("member", "find01", 1) in rows
         n, _mean, _peak, _snr = widget._trace_stat(("member", "find01", 1))
         assert n == 6
+        # a row marked for deletion keeps its trace until it is gone, as in masknmf
         widget.discard_derived(0, 1)
-        assert ("member", "find01", 1) not in widget._trace_rows()
-        widget.undiscard_derived(0, 1)
         assert ("member", "find01", 1) in widget._trace_rows()
 
     def test_multi_select_plots_every_selected_trace(self, widget):
@@ -1678,6 +1579,7 @@ class TestTracesTab:
         widget.quick_trace(1)
         pump(widget)
         widget.trace_sel = set(widget._trace_rows())
+        widget.trace_picked = True
         plotted = []
         real = implot.plot_line
 
@@ -1711,31 +1613,23 @@ class TestTracesTab:
         widget.iw.figure.canvas.draw()
         assert not errors, errors[0]
 
-    def test_arrows_step_traces_while_the_traces_panel_is_up(self, widget):
-        """Up / down walk the trace table while the Traces panel is the one
-        the strip shows, and the ROI order otherwise.
-        """
+    def test_arrows_step_the_roi_table_and_the_traces_follow(self, widget):
+        """masknmf's up / down walk the ROIs table; the plot shows the row landed on."""
         for i in range(3):
             widget.add_roi(square(4 + 12 * i, 4, 9))
             widget.quick_trace(i)
         pump(widget)
         rows = widget._sorted_trace_rows()
         assert len(rows) == 3
-
-        widget.strip.active = "traces"
-        widget.select_trace(rows[0])
-        widget.step(1)
-        assert widget.trace_sel == {rows[1]}
-        assert widget.selected == 1, "the image follows the trace"
-        widget.step(-1)
-        assert widget.trace_sel == {rows[0]} and widget.selected == 0
-        widget.step(-1)  # clamps at the top
-        assert widget.trace_sel == {rows[0]}
-
-        widget.strip.active = "zstats"
         widget.select_roi(0)
         widget.step(1)
         assert widget.selected == 1
+        assert widget.trace_sel == {rows[1]}
+        widget.step(-10)  # clamps at the top
+        assert widget.selected == 0 and widget.trace_sel == {rows[0]}
+        # the trace table steps on its own
+        assert widget.step_trace(1)
+        assert widget.trace_sel == {rows[1]} and widget.selected == 1
 
     def test_selecting_an_roi_shows_its_trace(self, widget):
         for i in range(2):
@@ -1748,7 +1642,10 @@ class TestTracesTab:
         widget.select_roi(1)
         header, lines = widget._plot_lines()
         assert header == "ROI 1", "the plot must follow the image"
-        assert widget.trace_sel == {key for _label, key in lines}
+        assert widget.trace_sel == {key for _label, key, _rgb in lines}
+        # one trace takes its mask's color, as masknmf's single selection does
+        ((_label, _key, rgb),) = lines
+        assert np.allclose(rgb, np.array(widget.store.roi_rgb(1)) / 255.0)
 
     def test_a_traceless_roi_plots_nothing_rather_than_a_stale_trace(self, widget):
         widget.add_roi(square(4, 4, 9))
@@ -1758,7 +1655,7 @@ class TestTracesTab:
         widget.select_roi(1)
         assert widget._plot_lines() is None
 
-    def test_ctrl_click_multi_selection_survives_reselecting_a_member(self, widget):
+    def test_picked_rows_plot_until_an_roi_is_selected(self, widget):
         for i in range(2):
             widget.add_roi(square(4 + 20 * i, 4, 9))
             widget.quick_trace(i)
@@ -1767,45 +1664,39 @@ class TestTracesTab:
         widget.select_trace(rows[0])
         widget.toggle_trace(rows[1])
         assert widget.trace_sel == set(rows)
+        header, lines = widget._plot_lines()
+        assert header == "2 selected" and len(lines) == 2
         widget.select_roi(0)
-        assert widget.trace_sel == set(rows), "selection already covers ROI 0"
+        assert widget.trace_sel == {rows[0]}
 
     def test_trace_columns_fit_the_narrow_tab(self, widget):
-        """The tab is a ~250px column, so the table stretches to it and the
-        two least useful columns start hidden instead of running off the
-        right edge. The last column is the delete button, not a stat.
+        """The tab is a ~250px column: after masknmf's id column, the least
+        useful columns start hidden instead of running off the right edge.
         """
         from mbo_utilities.gui.manual_roi import TRACE_COLUMNS
 
-        # "id", not "roi": beside an axis called ROI that reads as two of the same thing.
-        # the extraction engine is not a column: it reads the same on every row of a
-        # session, so it lives in the row's tooltip
-        assert [c[0] for c in TRACE_COLUMNS] == [
-            "id",
-            "z",
-            "c",
-            "source",
-            "frames",
-            "peak",
-            "",
-        ]
-        assert [c[0] for c in TRACE_COLUMNS if c[2]] == ["source", "frames", "peak"]
+        assert [c[0] for c in TRACE_COLUMNS] == ["z", "c", "source", "engine", "frames", "peak"]
+        assert [c[0] for c in TRACE_COLUMNS if c[2]] == ["source", "engine", "frames"]
 
     def test_trace_sort_keys_line_up_with_the_columns(self, widget):
-        """Every column sorts by its own name, the trailing button column
-        included without a key of its own.
-        """
+        """Every sortable column sorts by its own name, under the data's own axis words."""
         from mbo_utilities.gui.manual_roi import TRACE_COLUMNS
 
         widget.add_roi(square(10, 10, 9))
+        widget.add_roi(square(35, 35, 9))
         widget.quick_trace(0)
+        widget.quick_trace(1)
         pump(widget)
         key = widget._trace_rows()[0]
         # the channel cell is the channel index itself, z is 1-based
         assert widget._trace_cells(key) == ("0", "1", "0", "mean", "quick")
-        for col in range(len(TRACE_COLUMNS)):
-            widget._trace_sort = (col, True)
-            assert widget._sorted_trace_rows() == [key]
+        keys = widget._sorted_trace_rows()
+        for name, sortable, _hidden in TRACE_COLUMNS:
+            if not sortable:
+                continue
+            widget.trace_order.sort_by = widget._trace_header(name)
+            widget.trace_order.rebuild()
+            assert set(widget._sorted_trace_rows()) == set(keys)
 
     def test_curating_a_results_file_writes_where_it_reloads_from(
         self, widget, tmp_path
@@ -1913,8 +1804,7 @@ class TestTracesTab:
         widget.quick_trace(0)
         pump(widget)
         assert len(widget.model.traced(0)) == 1 and widget.model.traced(1) == []
-        # the row buttons stay live: a re-run replaces the row
-        assert widget._trace_row_disabled(widget._row_index[(-1, 0)]) is None
+        # a re-run replaces the row
         widget.trace_in_view()
         pump(widget)
         assert len(widget._trace_rows()) == 2
@@ -1931,17 +1821,17 @@ class TestTracesTab:
         )
         assert len(widget.model.traced(0)) == 3
         assert [t.engine for t in widget.model.traced(0, c=0)] == ["mean", "suite2p"]
-        header, lines = widget._lines_for_uid(uid)
+        widget.select_roi(0)
+        header, lines = widget._plot_lines()
         assert header == "ROI 0"
-        assert [label for label, _key in lines] == ["mean", "mean c2", "suite2p"]
+        assert [label for label, _key, _rgb in lines] == ["mean", "mean c2", "suite2p"]
 
-    def test_deleting_a_derived_trace_row_discards_the_component(self, widget):
+    def test_deleting_a_derived_trace_row_marks_the_component(self, widget):
         widget._add_derived(
             make_result(widget, [disc(40, 40), disc(20, 20)], with_traces=True)
         )
         widget.delete_trace_row(("member", "find01", 1))
         assert 1 in widget.derived[0].discarded
-        assert ("member", "find01", 1) not in widget._trace_rows()
 
 
 class TestPipelineTraceExtraction:
@@ -2008,7 +1898,7 @@ class TestSorting:
 
     def test_sorting_by_label_groups_the_rois(self, widget):
         order = self._order(widget)
-        order.sort_column = 1  # the "label" column
+        order.sort_by = "label"
         order.rebuild()
         labels = widget.classes.labels[order.order]
         assert list(labels) == sorted(labels)
@@ -2016,7 +1906,7 @@ class TestSorting:
     def test_sorting_by_source_groups_the_sets(self, widget):
         widget._add_derived(make_result(widget, [disc(40, 40)]))
         order = self._order(widget)
-        order.sort_column = 2  # the "source" column
+        order.sort_by = "source"
         order.rebuild()
         codes = widget.order.sources[order.order]
         assert list(codes) == sorted(codes)
@@ -2024,7 +1914,7 @@ class TestSorting:
     def test_descending_reverses(self, widget):
         widget._add_derived(make_result(widget, [disc(40, 40)]))
         order = self._order(widget)
-        order.sort_column = 2
+        order.sort_by = "source"
         order.ascending = False
         order.rebuild()
         codes = widget.order.sources[order.order]
@@ -2154,6 +2044,8 @@ class TestOverlaySurvivesGraphicRebuild:
         iw.show()
         roi = ManualRoiWidget(iw, fpath=None, auto_trace=False)
         roi.add_roi(square(10, 10, 20))
+        # unselected, so the mask is opaque: the selection's opacity lets the image through
+        roi.select_roi(-1)
         roi.opacity = 1.0
         roi.refresh_overlay()
         for _ in range(2):
@@ -2386,7 +2278,7 @@ class TestWidgetAttach:
         roi.focus_tab = True
 
         # focus_tab selects the ROI tab on the first frame, so its body
-        # (draw_tab) actually runs; a draw error inside the imgui update is
+        # (draw_rois) actually runs; a draw error inside the imgui update is
         # swallowed by rendercanvas, so capture it here
         seen, errors = [], []
         real = imgui.begin_tab_item
@@ -2395,7 +2287,7 @@ class TestWidgetAttach:
             seen.append(label)
             return real(label, *args, **kwargs)
 
-        original_draw_tab = roi.draw_tab
+        original_draw_tab = roi.draw_rois
         ran = []
 
         def guarded():
@@ -2407,7 +2299,7 @@ class TestWidgetAttach:
                 raise
 
         ts.imgui.begin_tab_item = spy
-        roi.draw_tab = guarded
+        roi.draw_rois = guarded
         try:
             panel_errors = draw_frames(roi, 4, tabs=False)
         finally:
@@ -2609,20 +2501,13 @@ class TestGroupBuffer:
 
 
 class TestTracePlotView:
-    """The trace plot's autofit toggle and x axis units."""
+    """masknmf's TracePlot on the viewer's frames, the motion as a panel of it, the behavior over it."""
 
-    def _fits(self, widget, frames=1):
-        """Times the plot asked implot to refit while drawing."""
+    def _draw(self, widget, frames=1):
+        """Draw the Traces panel ``frames`` times; raises what it raised."""
         import traceback
 
-        from imgui_bundle import implot
-
-        calls, errors = [], []
-        real = implot.set_next_axes_to_fit
-
-        def spy():
-            calls.append(1)
-            return real()
+        errors = []
 
         def body(*_args):
             try:
@@ -2631,14 +2516,9 @@ class TestTracePlotView:
                 errors.append(traceback.format_exc())
 
         widget.strip._update_calls[:] = [body]
-        implot.set_next_axes_to_fit = spy
-        try:
-            for _ in range(frames):
-                widget.iw.figure.canvas.draw()
-        finally:
-            implot.set_next_axes_to_fit = real
+        for _ in range(frames):
+            widget.iw.figure.canvas.draw()
         assert not errors, errors[0]
-        return len(calls)
 
     def _two_traces(self, widget):
         for i in range(2):
@@ -2648,15 +2528,76 @@ class TestTracePlotView:
         pump(widget)
         return widget._sorted_trace_rows()
 
-    def test_autofit_starts_on_in_frames(self, widget):
-        assert widget.autofit is True
-        assert widget.x_unit == "frames"
+    def test_the_selection_plots_on_masknmfs_trace_plot(self, widget):
+        from masknmf.visualization.imgui import TracePlot
 
-    def test_x_unit_opens_in_seconds_when_the_data_has_a_rate(self, widget):
-        widget._fs_read, widget._fs_value = True, 10.0
-        assert widget.x_unit == "seconds"
-        widget.x_unit = "frames"
-        assert widget.x_unit == "frames"
+        rows = self._two_traces(widget)
+        widget.select_trace(rows[0])
+        self._draw(widget, 2)
+        plot = widget.trace_plot
+        assert isinstance(plot, TracePlot)
+        # no autofit, as in masknmf: the zoom holds while selecting others
+        assert plot._autofit is False
+        assert plot.panels == ("dF/F (%)",)
+        ((label, y, _rgb),) = plot._lines[plot.panels[-1]]
+        assert y.shape == (6,)
+        widget.select_roi(-1)
+        self._draw(widget)
+        assert plot._lines[plot.panels[-1]] == []
+
+    def test_a_group_plots_one_line_per_member_in_its_group_color(self, widget):
+        from masknmf.visualization.imgui import GROUP_COLORS
+
+        self._two_traces(widget)
+        widget.select_roi(0)
+        widget.buffer_add(-1, 1)
+        self._draw(widget)
+        lines = widget.trace_plot._lines[widget.trace_plot.panels[-1]]
+        assert [label for label, _y, _rgb in lines] == ["ROI 0", "ROI 1"]
+        assert [rgb for _label, _y, rgb in lines] == list(GROUP_COLORS[:2])
+        # the masks take the same colors
+        expected = tuple(int(round(c * 255)) for c in GROUP_COLORS[1])
+        assert tuple(widget.overlay.data.value[6, 20, :3]) == expected
+
+    def test_show_traces_off_only_highlights(self, widget):
+        rows = self._two_traces(widget)
+        widget.select_trace(rows[0])
+        self._draw(widget)
+        assert widget.trace_plot._lines[widget.trace_plot.panels[-1]]
+        widget.show_traces = False
+        self._draw(widget)
+        assert widget.trace_plot._lines[widget.trace_plot.panels[-1]] == []
+        # the panel is its row of controls
+        assert widget._traces_panel.height < 50
+
+    def test_the_time_axis_needs_a_sampling_rate(self, widget):
+        rows = self._two_traces(widget)
+        widget.select_trace(rows[0])
+        widget._fs_read, widget._fs_value = True, None
+        self._draw(widget)
+        assert widget.trace_plot._time is None
+        widget._fs_value = 10.0
+        self._draw(widget)
+        np.testing.assert_allclose(widget.trace_plot._time, np.arange(6) / 10.0)
+        assert widget.trace_plot._use_time
+
+    def test_rows_land_on_the_viewers_frames(self, widget):
+        widget.add_roi(square(10, 10, 9))
+        widget.quick_trace(0)
+        pump(widget)
+        key = widget._sorted_trace_rows()[0]
+        trace = widget.traces.get(key)
+        y = np.arange(6, dtype=np.float32)
+        np.testing.assert_array_equal(widget._on_frames(key, y, 6), y)
+        # a row read from frame 2 to 5 sits where it was recorded, NaN around it
+        trace.frames = (2, 5, 1)
+        shown = widget._on_frames(key, np.array([7, 8, 9], np.float32), 6)
+        assert np.isnan(shown[:2]).all() and np.isnan(shown[5])
+        np.testing.assert_array_equal(shown[2:5], [7, 8, 9])
+        # a row binned 2x holds one sample per two frames
+        trace.frames, trace.frame_average = None, 2
+        shown = widget._on_frames(key, np.array([0, 2, 4], np.float32), 6)
+        np.testing.assert_allclose(shown[:5], [0, 1, 2, 3, 4])
 
     def test_the_plotted_rows_pipelines_decide_the_panels_offer(self, widget):
         """The kind combo and the y label come from the rows' trace profiles
@@ -2722,150 +2663,55 @@ class TestTracePlotView:
             widget.kind = kind
             np.testing.assert_allclose(widget._display(s2p.key), y, rtol=1e-6)
             assert widget.plot_y_label([s2p]) == labels[kind]
-            self._fits(widget)
+            self._draw(widget)
+            # the panel is named after what it shows, its y axis label
+            assert widget.trace_plot.panels[-1] == labels[kind]
 
-    def test_time_units_need_a_sampling_rate(self, widget):
-        widget._fs_read, widget._fs_value = True, None
-        assert widget.x_units() == ("frames",)
-        widget._fs_value = 10.0
-        assert widget.x_units() == ("frames", "seconds", "ms")
-
-    def test_x_scale_follows_the_unit_and_the_traces_binning(self, widget):
-        widget.add_roi(square(10, 10, 9))
-        widget.quick_trace(0)
-        pump(widget)
-        trace = widget.traces.get(widget._sorted_trace_rows()[0])
-        widget._fs_read, widget._fs_value = True, 10.0
-        widget.x_unit = "frames"
-        assert widget.trace_axis(trace).on(widget.plot_axis()) == (1.0, 0.0)
-        widget.x_unit = "seconds"
-        assert widget.trace_axis(trace).on(widget.plot_axis())[0] == pytest.approx(0.1)
-        widget.x_unit = "ms"
-        assert widget.trace_axis(trace).on(widget.plot_axis())[0] == pytest.approx(
-            100.0
-        )
-        # a trace binned 4x holds one sample per 4 acquired frames
-        trace.frame_average = 4
-        widget.x_unit = "seconds"
-        assert widget.trace_axis(trace).on(widget.plot_axis())[0] == pytest.approx(0.4)
-        # and a trace read from frame 8 on starts 0.8 s in on the seconds axis
-        trace.frames = (8, 20, 1)
-        assert widget.trace_axis(trace).on(widget.plot_axis()) == (
-            pytest.approx(0.4),
-            pytest.approx(0.8),
-        )
-        widget.x_unit = "frames"
-        assert widget.trace_axis(trace).on(widget.plot_axis()) == (
-            pytest.approx(4.0),
-            pytest.approx(8.0),
-        )
-
-    def test_x_scale_stays_in_frames_without_a_rate(self, widget):
-        widget.add_roi(square(10, 10, 9))
-        widget.quick_trace(0)
-        pump(widget)
-        trace = widget.traces.get(widget._sorted_trace_rows()[0])
-        widget._fs_read, widget._fs_value = True, None
-        widget.x_unit = "seconds"
-        assert widget.trace_axis(trace).on(widget.plot_axis()) == (1.0, 0.0)
-
-    def test_autofit_off_holds_the_view_across_trace_switches(self, widget):
-        rows = self._two_traces(widget)
-        widget.select_trace(rows[0])
-        assert self._fits(widget) >= 1, "the first draw fits"
-
-        widget.autofit = False
-        widget.select_trace(rows[1])
-        assert self._fits(widget) == 0, "switching traces must hold the view"
-
-        widget.autofit = True
-        widget.select_trace(rows[0])
-        assert self._fits(widget) >= 1
-
-    def test_a_forced_fit_overrides_autofit_off(self, widget):
-        rows = self._two_traces(widget)
-        widget.select_trace(rows[0])
-        widget.autofit = False
-        self._fits(widget)  # settle
-        widget._force_fit = True
-        assert self._fits(widget) >= 1
-
-    def test_changing_units_refits_even_with_autofit_off(self, widget):
-        rows = self._two_traces(widget)
-        widget.select_trace(rows[0])
-        widget._fs_read, widget._fs_value = True, 10.0
-        widget.autofit = False
-        self._fits(widget)  # settle
-
-        # what the units combo does on a change
-        widget.x_unit = "seconds"
-        widget._force_fit = True
-        assert self._fits(widget) >= 1
-
-    def test_an_unavailable_unit_falls_back_to_frames(self, widget):
-        rows = self._two_traces(widget)
-        widget.select_trace(rows[0])
-        widget._fs_read, widget._fs_value = True, None
-        widget.x_unit = "seconds"
-        self._fits(widget)
-        assert widget.x_unit == "frames"
-
-    def test_a_recordings_motion_correction_draws_under_the_trace(self, widget):
+    def test_a_recordings_motion_correction_is_a_panel_over_the_traces(self, widget):
         from mbo_utilities.arrays.features import MotionCorrection
         from mbo_utilities.gui.imgui.motion import MotionPlot
         from mbo_utilities.gui.manual_roi import MOTION_PANEL_HEIGHT, PANEL_HEIGHT
 
-        # a movie without one: no MC checkbox, the panel keeps its height
+        # a movie without one: no MC panel, the strip keeps its height
         assert not widget.motion
         rows = self._two_traces(widget)
         widget.select_trace(rows[0])
-        self._fits(widget)
+        self._draw(widget)
         assert widget._traces_panel.height == PANEL_HEIGHT
+        assert len(widget.trace_plot.panels) == 1
 
         t = np.arange(600) / 100.0
         widget.motion = MotionPlot(
             MotionCorrection("RTMC", "um", {"X": (t, np.sin(t)), "Z": (t, t)})
         )
         widget._fs_read, widget._fs_value = True, 10.0
-        # trace and motion in linked subplots, in frames, seconds and ms
-        for unit in ("frames", "seconds", "ms"):
-            widget.x_unit = unit
-            widget._force_fit = True
-            assert self._fits(widget) >= 1
-            assert widget._traces_panel.height == MOTION_PANEL_HEIGHT
-        # either plot alone, then neither
-        widget.show_trace = False
-        self._fits(widget)
+        self._draw(widget)
         assert widget._traces_panel.height == MOTION_PANEL_HEIGHT
-        widget.show_trace, widget.show_motion = True, False
-        self._fits(widget)
+        assert widget.trace_plot.panels == ("RTMC shift (um)", "dF/F (%)")
+        lines = widget.trace_plot._lines["RTMC shift (um)"]
+        assert [label for label, _y, _rgb in lines] == ["X", "Z"]
+        # the shifts land on the frames: frame k at k / 10 s
+        np.testing.assert_allclose(lines[1][1], np.arange(6) / 10.0, atol=1e-6)
+        # the motion needs no trace at all
+        widget.select_roi(-1)
+        self._draw(widget)
+        assert widget.trace_plot._lines["RTMC shift (um)"]
+        widget.show_motion = False
+        widget.select_trace(rows[0])
+        self._draw(widget)
         assert widget._traces_panel.height == PANEL_HEIGHT
-        widget.show_trace = False
-        self._fits(widget)
-        # the motion plot needs no trace at all
-        widget.show_motion = True
-        widget.trace_sel.clear()
-        widget.traces.clear()
-        widget.selected = -1
-        self._fits(widget)
-        assert widget._traces_panel.height == MOTION_PANEL_HEIGHT
+        assert widget.trace_plot.panels == ("dF/F (%)",)
 
-    def test_a_recordings_behavior_stacks_under_the_trace(self, widget):
-        from mbo_utilities.arrays.features import MotionCorrection
+    def test_a_recordings_behavior_rides_over_the_traces(self, widget):
         from mbo_utilities.behavior import Behavior, BehaviorSignal
         from mbo_utilities.gui.imgui.behavior import BehaviorPlot
-        from mbo_utilities.gui.imgui.motion import MotionPlot
-        from mbo_utilities.gui.manual_roi import (
-            BEHAVIOR_PLOT_HEIGHT,
-            MOTION_PANEL_HEIGHT,
-            PANEL_HEIGHT,
-        )
+        from mbo_utilities.gui.manual_roi import BEHAVIOR_PLOT_HEIGHT, PANEL_HEIGHT
 
         # a movie with no log: the facet finds none, the panel keeps its height
         assert not widget.behavior
         rows = self._two_traces(widget)
         widget.select_trace(rows[0])
-        self._fits(widget)
+        self._draw(widget)
         assert widget._traces_panel.height == PANEL_HEIGHT
 
         t = np.arange(600) / 100.0
@@ -2877,30 +2723,19 @@ class TestTracePlotView:
                     "speed": BehaviorSignal(t, np.full_like(t, 500.0), "mm/s"),
                 },
                 events={"lick": np.array([1.0, 2.5]), "reward": np.array([3.0])},
-                epochs={"reward": np.array([[2.8, 3.4]])},
+                epochs={"reward": np.array([[0.2, 0.4]])},
             )
         )
         widget._fs_read, widget._fs_value = True, 10.0
-        # trace and behavior in linked subplots, in every unit
-        for unit in ("frames", "seconds", "ms"):
-            widget.x_unit = unit
-            widget._force_fit = True
-            assert self._fits(widget) >= 1
-            assert widget._traces_panel.height == PANEL_HEIGHT + BEHAVIOR_PLOT_HEIGHT
-        # all three stacked: each plot under the trace adds its own height
-        widget.motion = MotionPlot(MotionCorrection("RTMC", "um", {"X": (t, t)}))
-        self._fits(widget)
-        assert widget._traces_panel.height == MOTION_PANEL_HEIGHT + BEHAVIOR_PLOT_HEIGHT
-        assert widget._stack == ("behavior", "motion", "trace")
-        # the behavior plot alone, then nothing
-        widget.show_trace, widget.show_motion = False, False
-        self._fits(widget)
-        assert widget._stack == ("behavior",)
+        self._draw(widget, 2)
         assert widget._traces_panel.height == PANEL_HEIGHT + BEHAVIOR_PLOT_HEIGHT
+        # the epochs shade the trace panels, in frames
+        ((name, starts, stops, _rgb),) = widget.trace_plot._spans
+        assert name == "reward" and starts.tolist() == [2] and stops.tolist() == [4]
         widget.show_behavior = False
-        self._fits(widget)
-        assert widget._stack == ()
+        self._draw(widget)
         assert widget._traces_panel.height == PANEL_HEIGHT
+        assert widget.trace_plot._spans == []
 
 
 class _StubSettings:
@@ -2996,67 +2831,32 @@ class TestPipelineParams:
         pump(widget)
         assert seen.get("settings") == {"runtime": {"device": "cpu"}}
 
-    def test_the_draw_card_carries_the_region_tool(self, widget):
-        """The region tool sits with the other drawing tools; nothing on
-        the strip runs a pipeline any more - that is the Process tab's ROIs
-        pipeline.
+    def test_the_selection_row_carries_masknmfs_buttons(self, widget):
+        """masknmf's SELECTION row: center, draw, add ROI, delete, then this
+        tool's promote, accept and save; the traces row carries trace on draw.
         """
         from imgui_bundle import imgui
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        def _draw():
-            seen = []
-            real_button = imgui.button
-
-            def button_spy(label, *args, **kwargs):
-                seen.append(label)
-                return real_button(label, *args, **kwargs)
-
-            set_widget_enabled("manual_roi", True, persist=False)
-            imgui.button = button_spy
-            try:
-                errors = draw_frames(widget, 3)
-            finally:
-                imgui.button = real_button
-                set_widget_enabled("manual_roi", False, persist=False)
-            assert not errors, errors[0]
-            return seen
-
-        seen = _draw()
-        one_frame = seen[: len(seen) // 3]
-        assert one_frame.count("Draw region") == 1, one_frame
-        assert "Add ROI" in one_frame and "Undo" in one_frame, one_frame
-        assert not [
-            b for b in one_frame if b.endswith("##find") or b.endswith("##plane")
-        ], one_frame
-        assert "Extract" not in one_frame
-
-        widget.set_region_mode(True)
-        widget._on_stroke([(10.0, 10.0), (40.0, 40.0)])
-        assert widget.region is not None
-        seen = _draw()
-        assert "Region" in seen, "the button names the region once one exists"
-
-    def test_the_draw_card_has_the_auto_trace_switch(self, widget):
-        from imgui_bundle import imgui
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
         seen = []
-        real = imgui.checkbox
+        real_button = imgui.button
 
-        def spy(label, *args, **kwargs):
+        def button_spy(label, *args, **kwargs):
             seen.append(label)
-            return real(label, *args, **kwargs)
+            return real_button(label, *args, **kwargs)
 
         set_widget_enabled("manual_roi", True, persist=False)
-        imgui.checkbox = spy
+        imgui.button = button_spy
         try:
-            errors = draw_frames(widget, 2)
+            errors = draw_frames(widget, 3)
         finally:
-            imgui.checkbox = real
+            imgui.button = real_button
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
-        assert "trace on draw" in seen
+        ids = [label.split("##")[-1] for label in seen[: len(seen) // 3]]
+        row = ["roi_center", "roi_draw", "roi_add", "roi_delete", "roi_promote", "roi_accept", "roi_save"]
+        assert [i for i in ids if i in row] == row
+        assert "roi_traces_3" in ids  # trace on draw
 
 
 class TestAutoTrace:
@@ -3374,19 +3174,17 @@ class TestAdoptingRunsStartedElsewhere:
         finally:
             pm._processes.pop(info.pid, None)
 
-    def test_the_trace_rows_delete_button_can_be_clicked(self, widget):
-        """The row selectable spans every column, so the delete button in the
-        last one needs allow_overlap or the row eats its clicks.
-        """
+    def test_the_trace_table_is_masknmfs_table(self, widget):
+        """One masknmf table row per trace, the id cell in its trace's color."""
         from imgui_bundle import imgui
 
         widget._add_derived(make_result(widget, [disc(40, 40)], with_traces=True))
-        flags = []
+        labels = []
         real = imgui.selectable
 
         def spy(label, *args, **kwargs):
-            if "##tr_" in label:
-                flags.append(args[1] if len(args) > 1 else 0)
+            if "##row" in label:
+                labels.append(label)
             return real(label, *args, **kwargs)
 
         import traceback
@@ -3407,9 +3205,8 @@ class TestAdoptingRunsStartedElsewhere:
         finally:
             imgui.selectable = real
         assert not errors, errors[0]
-        assert flags, "no trace rows drawn"
-        for f in flags:
-            assert f & imgui.SelectableFlags_.allow_overlap
+        assert labels, "no trace rows drawn"
+        assert widget._trace_keys == [("member", "find01", 0)]
 
 
 class TestFollowModeAdvances:
@@ -3730,7 +3527,7 @@ class TestRoiPipelineTab:
         assert widget.run_tp == [1, 2, 3]
         widget.engine = "suite2p"
         assert widget.pipeline_for() == "suite2p"
-        assert widget.row_actions[0].tooltip.startswith("Run - suite2p")
+        assert "frames 2-4" in widget._where_label()
 
 
 class TestPlayheadWiring:
@@ -3802,7 +3599,6 @@ class TestPlayheadWiring:
             iw.close()
 
     def test_the_plots_draw_on_the_playhead(self, widget):
-        from imgui_bundle import implot
         from mbo_utilities.arrays.features import MotionCorrection
         from mbo_utilities.gui.imgui.motion import MotionPlot
 
@@ -3815,25 +3611,16 @@ class TestPlayheadWiring:
             MotionCorrection("RTMC", "um", {"X": (t, np.sin(t))})
         )
         widget._fs_read, widget._fs_value = True, 10.0
-        widget.x_unit = "seconds"
+        widget.select_roi(0)
         widget.set_frame(3)
-        starts = []
-        real = implot.plot_line
-
-        def spy(name, *a, **k):
-            starts.append((name, k.get("xscale"), k.get("xstart")))
-            return real(name, *a, **k)
-
-        implot.plot_line = spy
-        try:
-            errors = draw_frames(widget, 3)
-        finally:
-            implot.plot_line = real
+        errors = draw_frames(widget, 3)
         assert not errors, errors[0]
-        rows = [(x, s) for name, x, s in starts if name.startswith("mean")]
-        assert rows and rows[0] == (pytest.approx(0.1), pytest.approx(0.2)), (
-            "the window starts 0.2 s in"
-        )
+        plot = widget.trace_plot
+        assert plot.frame == 3, "the playhead sits on the viewer's frame"
+        (_label, y, _rgb) = plot._lines[plot.panels[-1]][0]
+        # the window read from frame 2 sits there, nothing drawn before it
+        assert np.isnan(y[:2]).all() and np.isfinite(y[2:]).all()
+        assert plot._lines["RTMC shift (um)"]
 
 
 class TestColorBy:
@@ -3859,7 +3646,7 @@ class TestColorBy:
             RoiTrace(uid=zwidget.store.rois[0].uid, F=np.ones(5, np.float32))
         ).key
         assert zwidget._trace_color(key) == tuple(v / 255.0 for v in after[0])
-        zwidget.set_color_by("none")
+        zwidget.set_color_by("roi id")
         assert zwidget.store.tint == {}
         assert [zwidget.store.roi_rgb(i) for i in range(2)] == before
 
@@ -4105,10 +3892,10 @@ class TestTraceDeflection:
         pump(widget)
         (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
         widget._display(trace.key)
-        widget._trace_fit = False
+        widget._plot_lines_key = "drawn"
         widget.host.invert_deflection = True
         widget._display(trace.key)
-        assert widget._trace_fit
+        assert widget._plot_lines_key is None, "the lines are redrawn"
 
     def test_no_host_shows_the_rows_as_measured(self, widget):
         assert widget.deflection() == (False, False)
@@ -4159,14 +3946,14 @@ class TestArrayResults:
             assert [s.result.kind for s in roi.derived] == ["suite2p", "suite2p"]
             # the ROI table opens on the plane on screen, with the classifier's probability
             assert roi.order.plane == 0 and "prob" in roi.columns
-            assert roi._formatters()["prob"](roi._row_index[(0, 0)]) == "0.90"
+            assert roi._format_cell("prob", roi._row_index[(0, 0)]) == "0.9"
             # the overlay and the trace table show the plane on screen
-            assert derived_showing(roi)
+            assert drawn_showing(roi)
             rows = roi._trace_rows()
             assert len(rows) == 1 and roi.traces.get(rows[0]).z == 0
             assert "spikes" in available_kinds(roi.traces.get(rows[0]))
             iw.indices["z"] = 1
-            assert gui.slice.z == 1 and roi.z == 1 and derived_showing(roi)
+            assert gui.slice.z == 1 and roi.z == 1 and drawn_showing(roi)
             rows = roi._trace_rows()
             assert len(rows) == 1 and roi.traces.get(rows[0]).z == 1
             assert roi.order.plane == 1
@@ -4193,7 +3980,7 @@ class TestArrayResults:
             w = ManualRoiWidget(iw, fpath=arr.source_path, auto_trace=False)
             assert len(w.derived) == 1 and w.derived[0].result.z == 0
             assert w.derived[0].result.path == tmp_path / "zplane02_tp00001-00006"
-            assert derived_showing(w) and len(w._trace_rows()) == 1
+            assert drawn_showing(w) and len(w._trace_rows()) == 1
             # the widget on a bare viewer feeds a slice of its own
             assert w._own_slice and w.slice.z == 0
         finally:
