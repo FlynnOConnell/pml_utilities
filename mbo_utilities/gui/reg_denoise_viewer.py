@@ -15,6 +15,7 @@ from pathlib import Path
 
 from mbo_utilities import log
 from mbo_utilities.gpu import compute_gpu
+from mbo_utilities.gui.run_gui import _figure_kwargs_for_here, _hold_min_size
 from mbo_utilities.masknmf.reg_denoise import RegDenoiseRun, on_frames
 
 logger = log.get("gui.reg_denoise_viewer")
@@ -63,13 +64,17 @@ class RegDenoiseViewer:
         ref_range, timings = resolve_time_reference(len(times), times)
         names = list(movies)
 
+        figure_kwargs = _figure_kwargs_for_here(size=(1200, 1100))
+        figure_kwargs["canvas_kwargs"] = {
+            **figure_kwargs.get("canvas_kwargs", {}),
+            "title": TITLE,
+        }
         self.ndw = fpl.NDWidget(
             ref_range,
             shape=(2, 2) if len(names) == 4 else (1, len(names)),
             names=names,
             controller_ids=[tuple(names)],
-            size=(1200, 1100),
-            canvas_kwargs={"title": TITLE},
+            **figure_kwargs,
         )
         self.images = {}
         for name, movie in movies.items():
@@ -157,7 +162,9 @@ class RegDenoiseViewer:
         self.set_roi(value)
 
     def show(self):
-        return self.ndw.show()
+        output = self.ndw.show()
+        _hold_min_size(self.ndw.figure)
+        return output
 
 
 if __name__ == "__main__":
