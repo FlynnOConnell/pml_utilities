@@ -1039,6 +1039,12 @@ def _run_gui_impl(
         from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_demixing
         from mbo_utilities.masknmf.reg_denoise import is_reg_denoise
 
+        if mode == "Spike-triggered average (run with results)":
+            from mbo_utilities.gui.spike_average_viewer import (
+                open_spike_average_viewer,
+            )
+
+            return open_spike_average_viewer(data_in)
         qc = qc or mode == "Registration QC (MaskNMF run)"
         if (
             qc

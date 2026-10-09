@@ -2217,21 +2217,31 @@ def curate(path, serve, host, port, channel):
 @main.command("spike-average")
 @click.argument("path", type=click.Path(exists=True))
 @click.option(
-    "--unit", default=None, help="With a .mesc: the unit to average, e.g. MUnit_14."
-)
-@click.option(
-    "--masknmf",
-    "masknmf_path",
-    type=click.Path(exists=True),
+    "--unit",
     default=None,
-    help="With a .mesc: the unit's masknmf results hdf5 (demixed traces, shifts, compressed movie).",
+    help="The results unit, e.g. zplane01 or scan35 (default: the first).",
 )
 @click.option(
-    "--signal",
+    "--roi", default=None, help="The ROI, by its results name (default: the first)."
+)
+@click.option(
+    "--channel",
     type=int,
-    default=0,
-    show_default=True,
-    help="The demixed trace the spikes are found on, as masknmf numbers them.",
+    default=None,
+    help="The movie's channel, 0-based (default: the run's own).",
+)
+@click.option(
+    "--trace",
+    "kind",
+    default=None,
+    help="The trace spikes are found on: denoised, dff, raw... (default: the most processed).",
+)
+@click.option(
+    "--spikes",
+    "spikes_from",
+    default=None,
+    help="Where spikes come from: events, 'curated <mode>' or threshold "
+    "(default: events, else a curation, else threshold).",
 )
 @click.option(
     "--threshold",
@@ -2244,35 +2254,7 @@ def curate(path, serve, host, port, channel):
     type=int,
     default=5,
     show_default=True,
-    help="Fewest frames between two spikes.",
-)
-@click.option(
-    "--labels",
-    "label_path",
-    type=click.Path(exists=True),
-    default=None,
-    help="A curation file: average around the events it accepts instead of thresholded peaks.",
-)
-@click.option(
-    "--recording",
-    default=None,
-    help="With --labels: the id the events are saved under (default: <file stem>/<unit>/roi=<roi>).",
-)
-@click.option(
-    "--channel", type=int, default=0, show_default=True, help="With a .mesc: the channel averaged."
-)
-@click.option(
-    "--roi",
-    type=int,
-    default=0,
-    show_default=True,
-    help="With a .mesc: the unit's ROI, as the curation window numbers it.",
-)
-@click.option(
-    "--first-frame",
-    type=int,
-    default=None,
-    help="With a .mesc: the unit's frame the masknmf run starts on (default: the run's retained_frames).",
+    help="Fewest frames between two thresholded spikes.",
 )
 @click.option(
     "--window",
@@ -2282,66 +2264,34 @@ def curate(path, serve, host, port, channel):
     show_default=True,
     help="Frames averaged before and after each spike.",
 )
-@click.option(
-    "--positive",
-    is_flag=True,
-    default=False,
-    help="With a .mesc: the indicator brightens on a spike, the frames are not flipped.",
-)
 def spike_average(
-    path,
-    unit,
-    masknmf_path,
-    signal,
-    threshold,
-    distance,
-    label_path,
-    recording,
-    channel,
-    roi,
-    first_frame,
-    window,
-    positive,
+    path, unit, roi, channel, kind, spikes_from, threshold, distance, window
 ):
-    """Spike-triggered averages of a masknmf run: the registered and the
-    compressed movie, and the motion traces (the AOD's real-time correction,
-    masknmf's shifts), averaged around the peaks of one demixed trace, in one
-    window. The threshold drags on the trace and the signal is picked there.
+    """Spike-triggered averages of one ROI of a run: the movie it was measured
+    on (and a MaskNMF run's compressed movie), its trace and every motion
+    correction (masknmf's shifts, the AOD's RTMC), averaged around its spikes,
+    in one window. ROI, trace and spikes are picked there; the threshold drags.
 
-    PATH is a run folder the MaskNMF pipeline wrote, or a .mesc with --unit
-    and --masknmf for a run made elsewhere (masknmf's own notebooks).
+    PATH is any run with results: a MaskNMF run folder that demixed, a voltage
+    or other results file, a PF folder, a suite2p plane dir.
 
     
       mbo spike-average D:/data/20261007T183740_masknmf_zplane03_tp00001-20000
-      mbo spike-average scan.mesc --unit MUnit_14 --masknmf run/results.hdf5
-      mbo spike-average scan.mesc --unit MUnit_14 --masknmf run/results.hdf5 --signal 2
+      mbo spike-average session1.2026-09-21-14-30-22.voltage.zarr --unit scan35 --roi soma
     """
     from mbo_utilities.gui.spike_average_viewer import open_spike_average_viewer
 
-    if (unit is None) != (masknmf_path is None):
-        raise click.UsageError("--unit and --masknmf go together, with a .mesc")
-    kwargs = (
-        {}
-        if masknmf_path is None
-        else {
-            "channel": channel,
-            "roi": roi,
-            "first_frame": first_frame,
-            "negative": not positive,
-        }
-    )
     open_spike_average_viewer(
         path,
         unit,
-        masknmf_path,
-        label_path=label_path,
-        recording=recording,
-        signal=signal,
+        roi,
+        channel,
+        kind=kind,
+        spikes=spikes_from,
         threshold=threshold,
         distance=distance,
         before=window[0],
         after=window[1],
-        **kwargs,
     )
 
 

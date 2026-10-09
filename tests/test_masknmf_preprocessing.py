@@ -147,41 +147,64 @@ def test_view_movies_opens_the_newest_run_folder(widget, tmp_path, monkeypatch):
 def test_a_viewer_that_crashes_puts_its_error_in_the_status_line(
     widget, tmp_path, monkeypatch
 ):
+    from mbo_utilities.gui.launch import LaunchedWindow
+
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "20261008_150000_movies_run1.log").write_text(
         "Traceback (most recent call last):\n  ...\nValueError: no raw movie\n"
     )
-    monkeypatch.setattr(
-        "mbo_utilities.gui.widgets.pipelines.masknmf.get_mbo_dirs",
-        lambda: {"logs": logs},
-    )
-    monkeypatch.setattr(
-        "mbo_utilities.gui.widgets.pipelines.masknmf.psutil.Process", gone_process
-    )
-    widget._viewer_launch = (999999, "movies_run1")
+    monkeypatch.setattr("mbo_utilities.gui.launch.get_mbo_dirs", lambda: {"logs": logs})
+    monkeypatch.setattr("mbo_utilities.gui.launch.psutil.Process", gone_process)
+    widget._windows = [LaunchedWindow(999999, "movies_run1", "QC viewer")]
     frames(widget.draw_config, n=1)
-    assert widget._viewer_launch is None
+    assert widget._windows == []
     assert widget._last_status.startswith("QC viewer failed: ValueError: no raw movie")
 
 
 def test_a_viewer_closed_normally_leaves_the_status_alone(
     widget, tmp_path, monkeypatch
 ):
+    from mbo_utilities.gui.launch import LaunchedWindow
+
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "20261008_150000_movies_run1.log").write_text("opening viewer\n")
-    monkeypatch.setattr(
-        "mbo_utilities.gui.widgets.pipelines.masknmf.get_mbo_dirs",
-        lambda: {"logs": logs},
-    )
-    monkeypatch.setattr(
-        "mbo_utilities.gui.widgets.pipelines.masknmf.psutil.Process", gone_process
-    )
-    widget._viewer_launch = (999999, "movies_run1")
+    monkeypatch.setattr("mbo_utilities.gui.launch.get_mbo_dirs", lambda: {"logs": logs})
+    monkeypatch.setattr("mbo_utilities.gui.launch.psutil.Process", gone_process)
+    widget._windows = [LaunchedWindow(999999, "movies_run1", "QC viewer")]
     widget._last_status = "Opening run1"
     frames(widget.draw_config, n=1)
-    assert widget._viewer_launch is None and widget._last_status == "Opening run1"
+    assert widget._windows == [] and widget._last_status == "Opening run1"
+
+
+def test_spike_average_opens_the_newest_run_that_demixed(widget, tmp_path, monkeypatch):
+    import os
+
+    import h5py
+
+    monkeypatch.setattr(
+        "mbo_utilities.gui.spike_average_viewer.launch_window", fake_launch
+    )
+    monkeypatch.setattr(imgui, "button", press)
+    PRESSED.clear()
+    PRESSED.add("Spike average")
+    out = tmp_path / "out"
+    names = ("20261007T120000_masknmf_zplane01", "20261007T130000_masknmf_zplane01")
+    for i, name in enumerate(names):
+        (out / name).mkdir(parents=True)
+        (out / name / "config.json").write_text("{}")
+        with h5py.File(out / name / "results.hdf5", "w") as f:
+            if i == 0:
+                f.create_group("DemixingResults")
+        os.utime(out / name / "config.json", (i, i))
+    widget._outdir = str(out)
+    VIEWED.clear()
+    frames(widget.draw_config, n=1)
+    # the newer run only registered, so the one that demixed opens
+    run = out / names[0]
+    assert VIEWED == [("mbo_utilities.gui.spike_average_viewer", [str(run)])]
+    assert "4243" in widget._last_status
 
 
 def test_a_run_folder_that_demixed_names_its_results_file(tmp_path):

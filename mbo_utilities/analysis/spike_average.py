@@ -1,12 +1,13 @@
 """Spike-triggered averages: what a recording does, on average, in the frames
 around each spike.
 
-The spikes are the peaks of one of masknmf's demixed traces over a threshold
-(or the events the curation window accepted), the movies are masknmf's
-registered and compressed movies of the same recording, and the traces are
-the motion each stage measured: the AOD's real-time motion correction and
-masknmf's rigid shifts. Activity that is real shows in the movies and leaves
-the motion averages flat.
+One ROI of a run's results (any pipeline that writes the results file,
+AGENTS.md §7.5) over the movie it was measured on. The spikes are the run's
+detected events for that ROI, the events a curation file beside the run
+accepts, or the peaks of one of its traces over a threshold. Around them: the
+movie (and a MaskNMF run's compressed movie), the ROI's trace and every motion
+correction the movie went through (masknmf's shifts, the AOD's RTMC).
+Activity that is real shows in the movies and leaves the motion flat.
 """
 
 from __future__ import annotations
@@ -14,33 +15,58 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import h5py
 import numpy as np
 from scipy.signal import find_peaks
 
+from mbo_utilities.arrays.masknmf_run import (
+    RESULTS_FILE,
+    MasknmfRunArray,
+    is_masknmf_run,
+)
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.reader import imread
+from mbo_utilities.results import (
+    CURATION_DIR,
+    ResultUnit,
+    recording_id,
+    results_dir_of,
+)
+from mbo_utilities.roi_workflow import PlaneMovie
 
 __all__ = [
-    "MasknmfUnit",
+    "EVENTS",
+    "MEAN_F",
+    "THRESHOLD",
     "SpikeAverage",
+    "SpikeSource",
     "accepted_events",
     "threshold_peaks",
     "triggered_average",
 ]
 
+# where spikes come from besides a source's own: the peaks of the trace over a line
+THRESHOLD = "threshold"
+# the run's detected events, as the results file holds them
+EVENTS = "events"
+MEAN_F = "mean F (a.u.)"
+# the trace spikes are found on, most processed first
+TRACE_ORDER = ("denoised", "dff", "zscore", "raw")
+
 
 @dataclass
 class SpikeAverage:
-    """One recording averaged over its spikes.
+    """One ROI averaged over its spikes.
 
     ``movies`` maps a name to ``(lags, Y, X)``. ``traces`` maps a y label to
-    ``{line: (mean, sem)}``, each ``(lags,)`` about the window's own mean.
+    ``{line: (mean, sem)}``, each ``(lags,)``; the trace and motion lines are
+    about each window's own mean.
     """
 
     lags: np.ndarray
-    fs: float
+    fs: float | None
     n_spikes: int
     movies: dict[str, np.ndarray]
     traces: dict[str, dict[str, tuple[np.ndarray, np.ndarray]]]
@@ -103,9 +129,9 @@ def triggered_average(
     for start in range(0, frames.size, step):
         windows = frames[start : start + step, None] + np.arange(-before, after + 1)
         unique, inverse = np.unique(windows, return_inverse=True)
-        data = np.asarray(source[unique], dtype=np.float64)[
-            inverse.reshape(windows.shape)
-        ]
+        data = source[unique]
+        data = data.cpu().numpy() if hasattr(data, "cpu") else data
+        data = np.asarray(data, dtype=np.float64)[inverse.reshape(windows.shape)]
         if center:
             data = data - data.mean(axis=1, keepdims=True)
         total = total + data.sum(axis=0)
@@ -116,185 +142,184 @@ def triggered_average(
 
 
 @dataclass
-class MasknmfUnit:
-    """One ``.mesc`` unit with its masknmf run, read once so any set of
-    spikes can be averaged over it.
+class SpikeSource:
+    """One ROI of a run's results over the movie it was measured on.
 
-    Every array counts frames from ``first_frame`` of the unit. ``movies``
-    maps a name to a ``(frames, Y, X)`` movie, ``traces`` a y label to
-    ``{line: (frames,)}`` and ``signals`` is the run's ``temporal_demixed``
-    as ``(frames, signals)``. ``recording`` is the id the curation window
-    saves this ROI's events under.
+    Every array counts the frames of the ROI's traces. ``movies`` maps a name
+    to a ``(T, Y, X)`` movie, ``traces`` a trace kind to the ROI's ``(T,)``
+    trace, ``spikes`` where spikes come from (``events``, ``curated fast``)
+    to their frames, and ``motion`` a y label to ``{line: (T,)}``. ``arr`` is
+    the array the run was opened as, so another ROI of it opens without
+    reading it again (:meth:`with_roi`).
     """
 
+    arr: Any
+    unit: ResultUnit
+    roi: str
+    c: int
     label: str
-    recording: str
-    fs: float
-    first_frame: int
+    fs: float | None
     movies: dict
-    traces: dict[str, dict[str, np.ndarray]]
-    signals: np.ndarray
+    traces: dict[str, np.ndarray]
+    spikes: dict[str, np.ndarray]
+    motion: dict[str, dict[str, np.ndarray]]
 
     @classmethod
     def open(
-        cls,
-        mesc_path,
-        unit: str,
-        masknmf_path,
-        channel: int = 0,
-        roi: int = 0,
-        first_frame: int | None = None,
-        negative: bool = True,
-    ) -> MasknmfUnit:
-        """Read one ROI of a unit and a masknmf results hdf5 run on it,
-        registered rigidly.
+        cls, path, unit: str | None = None, roi=None, c: int | None = None
+    ) -> SpikeSource:
+        """One ROI of the run at ``path``: a MaskNMF run folder, a results file
+        or a folder holding one, a suite2p plane dir, anything ``imread``
+        opens with ``results``.
 
-        The run's shifts are replayed on the unit's frames for the registered
-        movie and its compressed movie is read as stored. ``channel`` and
-        ``roi`` are 0-based. ``first_frame`` is the unit's frame the run
-        starts on: the file's ``retained_frames[0]`` when None, so a run
-        handed a movie that was already cut needs it given. ``negative``
-        flips the frames about their mean, as the run's input was for an
-        indicator that dims on a spike. A run folder the MaskNMF pipeline
-        wrote knows all of this: open it with :meth:`from_run`.
+        ``unit`` and ``roi`` are the results file's names (``zplane01``,
+        ``scan35``; ``roi3``), the first of each by default. ``c`` is the
+        movie's channel, 0-based; the run's own by default.
         """
-        import masknmf
+        path = Path(path)
+        # a results file a MaskNMF run wrote is read through its run folder,
+        # whose movie is the registered one the traces came from
+        if is_masknmf_run(path.parent):
+            path = path.parent
+        kwargs = (
+            {"unit": unit}
+            if unit and results_dir_of(path) is not None and not is_masknmf_run(path)
+            else {}
+        )
+        return cls.of(imread(path, **kwargs), unit, roi, c)
 
-        arr = imread(mesc_path, unit=unit)
-        with h5py.File(masknmf_path, "r") as f:
-            signals = f["DemixingResults/temporal_demixed"][()]
-            if first_frame is None:
-                first_frame = (
-                    int(f["retained_frames"][0]) if "retained_frames" in f else 0
-                )
-        n_frames = signals.shape[0]
-        raw = arr[first_frame : first_frame + n_frames, channel, roi]
-        if raw.shape[0] != n_frames:
+    @classmethod
+    def of(
+        cls, arr, unit: str | None = None, roi=None, c: int | None = None
+    ) -> SpikeSource:
+        """One ROI of ``arr.results`` over ``arr``'s movie; see :meth:`open`."""
+        results = arr.results
+        if results is None or not results.units:
             raise ValueError(
-                f"{Path(masknmf_path).name} holds {n_frames} frames, "
-                f"{Path(mesc_path).name} {unit} has {raw.shape[0]} from frame {first_frame}"
+                f"{Path(arr.source_path).name} has no results: run a pipeline that "
+                "writes them (MaskNMF with demixing, Voltage, suite2p) first"
             )
-        registered = masknmf.RigidRegistrationArray.from_hdf5(
-            masknmf_path,
-            input_movie=masknmf.OphysArray(
-                raw, negative_indicator=negative, include_mean=True, device="cpu"
-            ),
+        base = base_array(arr)
+        name = unit or getattr(base, "unit", None) or next(iter(results.units))
+        if name not in results.units:
+            raise KeyError(f"no unit {name!r}; the results hold {list(results.units)}")
+        found = results.units[name]
+        roi = found.roi_names[0] if roi is None else str(roi)
+        if roi not in found.roi_names:
+            raise KeyError(f"{name} has no ROI {roi!r}; it has {found.roi_names}")
+        k = found.roi_names.index(roi)
+        c = int(results.source.get("channel") or 0) if c is None else int(c)
+        # a line scan's ROI is read on its first line, the recording's Z
+        z = (
+            int(found.members[k][0])
+            if found.member_kind == "line"
+            else int(found.attrs.get("z") or 0)
         )
-        return cls._read(
-            arr,
-            roi,
-            first_frame + np.arange(n_frames),
-            registered,
-            registered.shifts.cpu().numpy(),
-            masknmf_path,
-            signals,
-        )
+        n = found.n_timepoints
+        first = int((results.source.get("frames") or [0])[0])
+        movie = PlaneMovie(arr, z=z, c=c)
+        if movie.shape[0] < first + n:
+            raise ValueError(
+                f"{name} has {n} frames from frame {first}, the movie {movie.shape[0]}"
+            )
+        if (first, n) != (0, movie.shape[0]):
+            movie = movie.window(first, first + n)
 
-    @classmethod
-    def from_run(cls, run) -> MasknmfUnit:
-        """Read a run folder the MaskNMF pipeline wrote, demixing included.
+        movies = {"movie": movie}
+        if isinstance(base, MasknmfRunArray):
+            movies = {"registered": movie}
+            with h5py.File(base.run_folder / RESULTS_FILE, "r") as f:
+                compressed = "CompressionArray" in f
+            if compressed:
+                import masknmf
 
-        The recording, its plane, channel, frames and whether it was inverted
-        are the ones ``config.json`` records; the registered movie is
-        :class:`~mbo_utilities.arrays.masknmf_run.MasknmfRunArray`'s.
-        """
-        from mbo_utilities.arrays.masknmf_run import RESULTS_FILE, MasknmfRunArray
-
-        run_arr = MasknmfRunArray(run)
-        results_path = run_arr.run_folder / RESULTS_FILE
-        with h5py.File(results_path, "r") as f:
-            if "DemixingResults" not in f:
-                raise ValueError(f"{run_arr.run_folder.name} did not demix: no spikes to find")
-            signals = f["DemixingResults/temporal_demixed"][()]
-        movie = run_arr.config["inputs"]["movie"]
-        if movie.get("frames") is not None:
-            frames = np.arange(*movie["frames"])
-        elif movie.get("tp_indices") is not None:
-            frames = np.asarray(movie["tp_indices"])
-        else:
-            frames = np.arange(signals.shape[0])
-        shifts = run_arr.shifts
-        shifts = (
-            np.zeros((signals.shape[0], 2), np.float32)
-            if shifts is None
-            else shifts.reshape(shifts.shape[0], -1, 2).mean(axis=1)
-        )
-        return cls._read(
-            run_arr.raw.arr,
-            int(movie["z"]),
-            frames,
-            run_arr.registered,
-            shifts,
-            results_path,
-            signals,
-        )
-
-    @classmethod
-    def _read(cls, arr, roi, frames, registered, shifts, results_path, signals):
-        """The movies and traces of ``registered`` and the compressed movie in
-        ``results_path``, on the frames of ``arr`` the run read.
-        """
-        import masknmf
-
-        n_frames = signals.shape[0]
-        movies = {
-            "registered": registered,
-            "compressed": masknmf.CompressionArray.from_hdf5(results_path),
-        }
-        traces = {
-            "mean F (a.u.)": {
-                name: np.concatenate(
-                    [
-                        np.asarray(movie[start : min(start + 4096, n_frames)]).mean(
-                            axis=(1, 2)
-                        )
-                        for start in range(0, n_frames, 4096)
-                    ]
+                movies["compressed"] = masknmf.CompressionArray.from_hdf5(
+                    base.run_folder / RESULTS_FILE
                 )
-                for name, movie in movies.items()
+
+        spikes = {}
+        if len(found.events.get(roi, ())):
+            spikes[EVENTS] = np.asarray(found.events[roi], np.int64)
+        curation = Path(results.path or "") / CURATION_DIR
+        for label_path in sorted(curation.glob("*_template_curation.json")):
+            accepted = accepted_events(label_path).get(recording_id(found, roi))
+            if accepted is not None and accepted.size:
+                mode = label_path.name.removesuffix("_template_curation.json")
+                spikes[f"curated {mode}"] = accepted
+
+        # each stage's shifts on its own clock: a run's on its frames, its
+        # recording's on the recording frames the run read
+        clocks = [(arr, first + np.arange(n))]
+        if isinstance(base, MasknmfRunArray):
+            clocks.append((base.recording, base.frames[:n]))
+        motion = {}
+        for owner, frames in clocks:
+            mc = base_array(owner).motion_correction
+            if not mc:
+                continue
+            t = frames / owner.fs if owner.fs else frames.astype(np.float64)
+            lines = {
+                line: shift
+                for line, shift in mc.at(t).items()
+                if mc.planes.get(line, z) == z
             }
-        }
-        motion = base_array(arr).motion_correction
-        if motion is not None:
-            frame_times = np.asarray(frames, dtype=np.float64) / arr.fs
-            traces[f"{motion.source} shift ({motion.unit})"] = {
-                line: np.interp(frame_times, t, shift)
-                for line, (t, shift) in motion.traces.items()
-            }
-        traces["masknmf shift (px)"] = {"Y": shifts[:, 0], "X": shifts[:, 1]}
-        source = Path(base_array(arr).source_path)
-        # the curation window's id: <stem>/<MUnit>/roi=<roi> for a .mesc unit
-        munit = base_array(arr).metadata.get("mesc_unit", "").split("/")[-1]
-        name = "/".join(filter(None, (source.stem, munit)))
+            if lines:
+                motion[f"{mc.source} shift ({mc.unit})"] = lines
+
         return cls(
-            label=" ".join(filter(None, (source.name, munit, f"ROI {roi}"))),
-            recording=f"{name}/roi={roi}",
-            fs=float(arr.fs),
-            first_frame=int(frames[0]),
+            arr=arr,
+            unit=found,
+            roi=roi,
+            c=c,
+            label=f"{Path(arr.source_path).name}  {name}  {roi}",
+            fs=float(found.fs or arr.fs) if (found.fs or arr.fs) else None,
             movies=movies,
-            traces=traces,
-            signals=signals,
+            traces={
+                kind: np.asarray(found.traces[kind][k], np.float64)
+                for kind in sorted(
+                    found.traces,
+                    key=lambda kind: TRACE_ORDER.index(kind)
+                    if kind in TRACE_ORDER
+                    else len(TRACE_ORDER),
+                )
+            },
+            spikes=spikes,
+            motion=motion,
         )
 
-    def average(self, spikes, before: int = 10, after: int = 10) -> SpikeAverage:
-        """The movies and traces averaged around ``spikes``, frames counted
-        from ``first_frame``.
+    def with_roi(self, roi) -> SpikeSource:
+        """Another ROI of the same unit, on the array already open."""
+        return SpikeSource.of(self.arr, self.unit.name, roi, self.c)
+
+    def average(
+        self, spikes, kind: str, before: int = 10, after: int = 10
+    ) -> SpikeAverage:
+        """The movies, the ROI's ``kind`` trace and the motion averaged around
+        ``spikes``, frames of the ROI's traces.
         """
         movies = {}
         for name, movie in self.movies.items():
             mean, _sem, n_spikes = triggered_average(movie, spikes, before, after)
             movies[name] = mean.astype(np.float32)
+        lines = {MEAN_F: {name: (m.mean(axis=(1, 2)), None) for name, m in movies.items()}}
+        traces = {
+            f"{self.roi} {kind}": {
+                kind: triggered_average(self.traces[kind], spikes, before, after, True)[
+                    :2
+                ]
+            },
+            **lines,
+        }
+        for y_label, motion in self.motion.items():
+            traces[y_label] = {
+                line: triggered_average(shift, spikes, before, after, True)[:2]
+                for line, shift in motion.items()
+            }
         return SpikeAverage(
             lags=np.arange(-before, after + 1),
             fs=self.fs,
             n_spikes=n_spikes,
             movies=movies,
-            traces={
-                y_label: {
-                    line: triggered_average(trace, spikes, before, after, True)[:2]
-                    for line, trace in lines.items()
-                }
-                for y_label, lines in self.traces.items()
-            },
+            traces=traces,
             label=self.label,
         )

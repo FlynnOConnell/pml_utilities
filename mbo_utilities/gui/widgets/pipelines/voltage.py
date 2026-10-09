@@ -162,6 +162,8 @@ class VoltagePipelineWidget(PipelineWidget):
         self._outdir_dialog = None
         self._last_status = ""
         self._status_color = _DIM_COLOR
+        # the spike-average windows this tab started, until they exit
+        self._windows: list = []
         self._show_settings_popup = False
         self._settings_sizer: PopupAutoSize | None = None
         self._show_slice_popup = False
@@ -1364,6 +1366,24 @@ class VoltagePipelineWidget(PipelineWidget):
                 imgui.set_tooltip(
                     "Load every scan's denoised and line traces into the Traces tab (Manual ROI Labeling)."
                 )
+            imgui.same_line()
+            if imgui.button(
+                "Spike average##voltage_sta",
+                imgui.ImVec2(hello_imgui.em_size(11), 0),
+            ):
+                self._spike_average(results)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    "The ROI on screen averaged around its detected events (or the "
+                    "events its curation accepts, or a threshold): the line's movie, "
+                    "its trace and RTMC. Its own window."
+                )
+        for window in list(self._windows):
+            state = window.poll()
+            if state is not None:
+                self._windows.remove(window)
+                if state:
+                    self._set_status(state, error=True)
         if mesc is None:
             return
         # the curation window on the folder once it is written (pickles or
@@ -1433,6 +1453,31 @@ class VoltagePipelineWidget(PipelineWidget):
             self._set_status(
                 widget._run_error or f"Could not load {results.name}.", error=True
             )
+
+    def _spike_average(self, results: Path) -> None:
+        """Open the spike-triggered average on the scan and ROI on screen:
+        the results unit that processed the shown recording unit, and the ROI
+        whose lines hold the line on the ROI slider.
+        """
+        from mbo_utilities.gui.launch import LaunchedWindow
+        from mbo_utilities.gui.spike_average_viewer import launch_spike_average
+        from mbo_utilities.results import Results, unit_for_source
+
+        found = Results.read(results)
+        iw = getattr(self.parent, "image_widget", None)
+        shown = base_array(iw.data[0]) if iw is not None else None
+        unit = unit_for_source(found, str(getattr(shown, "unit_key", "") or ""))
+        roi = None
+        view = getattr(self.parent, "slice", None)
+        if unit is not None and view is not None:
+            k = found.units[unit].member_roi(view.z)
+            roi = None if k is None else found.units[unit].roi_names[k]
+        pid, log_name = launch_spike_average(results, unit, roi, self._channel())
+        self._windows.append(LaunchedWindow(pid, log_name, "Spike average"))
+        self._set_status(
+            f"Spike average of {unit or 'the first scan'}{f' {roi}' if roi else ''} "
+            f"opened in its own window (PID {pid})."
+        )
 
     def _curate(self, path: str) -> None:
         # the window module brings hello_imgui and fastplotlib's edge windows

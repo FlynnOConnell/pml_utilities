@@ -345,28 +345,26 @@ There is no login: leave `--host` on localhost and tunnel
 (`ssh -L 60649:localhost:60649 server`), or front it with an authenticating
 proxy; `--host 0.0.0.0` opens it to the network as is.
 
-To check that a unit's spikes are activity and not motion, run
-`mbo spike-average <run folder>` on a MaskNMF run that demixed: one window on
-the run, which reads the recording, plane, channel and frames from the
-folder's `config.json`. A run made elsewhere (masknmf's own notebooks) opens
-as `mbo spike-average scan.mesc --unit MUnit_14 --masknmf run/results.hdf5`. The spikes are the peaks of one demixed
-trace (`--signal`, 0 to start) over a threshold, at least `--distance` frames
-apart: the trace is plotted whole with its peaks marked, the threshold is the
-line on it and drags (`--threshold`, in the trace's units, three standard
-deviations over its mean to start), and the combo beside the transport picks
-another signal. On top, the registered and the compressed movie averaged over
-`--window` frames before and after each spike (10 and 10), playing through
-the window, each about its own mean unless `subtract mean` is off. Under the
-trace, on one lag axis, the patch's mean fluorescence, the AOD's real-time
-motion correction and masknmf's shifts, each about the window's mean with its
-standard error as a band; the cursor is the frame on screen and drags. With a
-`.mesc`, the run's shifts are replayed on the unit's frames, flipped about
-their mean as its input was (`--positive` leaves them); a run handed a movie
-that was already cut needs `--first-frame`, the unit's frame it starts on. `--labels`
-averages around the events a curation file accepts instead (`mbo curate`;
-`--recording` for another id than `<stem>/<unit>/roi=<roi>`).
-`MasknmfUnit.from_run(run).average(spikes)` (or `MasknmfUnit.open(...)`, in `mbo_utilities.analysis.spike_average`)
-returns the same averages without a window.
+To check that an ROI's spikes are activity and not motion, run
+`mbo spike-average <run>` on any run with results: a MaskNMF run folder that
+demixed, a results file or the folder holding one, a PF folder, a suite2p
+plane dir. `--unit` and `--roi` pick the ROI by the results' names (the first
+of each to start), `--channel` the movie's channel. On top, the movie the
+ROI was measured on (a MaskNMF run's registered and compressed movies)
+averaged over `--window` frames before and after each spike (10 and 10),
+each about its own mean unless `subtract mean` is off, on one slider over
+the lag. Above them, on the same lag, the ROI's trace, each movie's mean and
+every motion correction the movie went through (masknmf's shifts, the AOD's
+RTMC), each about the window's mean, its standard error as two faint lines.
+Over those, the ROI's whole trace with its spikes marked. The spikes come
+from the run's detected events, the events a curation file beside the run
+accepts (`curated fast`), or the trace's peaks over a threshold that drags
+(`--spikes`, `--threshold`, `--distance`); the ROI, the trace (`--trace`)
+and the spikes are picked in the window. The Studio opens the same window
+from the Traces tab, the MaskNMF and vnoiser tabs and the launcher.
+`SpikeSource.open(run, unit, roi).average(spikes, kind)` (in
+`mbo_utilities.analysis.spike_average`) returns the same averages without a
+window.
 
 To scrub the lines on the stack instead, run `mbo linescan scan.mesc --view`
 (or `mbo linescan <expt> --view`): three panels on top (the

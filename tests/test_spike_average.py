@@ -1,5 +1,6 @@
-"""Spike-triggered averages: the windows, the spikes a threshold or a
-curation file gives, and the window that shows them, drawn offscreen.
+"""Spike-triggered averages: the windows, where the spikes come from, one ROI
+of a run's results over its movie, and the window that shows them, drawn
+offscreen.
 """
 
 from __future__ import annotations
@@ -8,42 +9,77 @@ import json
 
 import numpy as np
 import pytest
+import tifffile
 from mbo_utilities.analysis.spike_average import (
-    MasknmfUnit,
+    EVENTS,
+    MEAN_F,
+    THRESHOLD,
+    SpikeSource,
     accepted_events,
     threshold_peaks,
     triggered_average,
+)
+from mbo_utilities.results import (
+    CURATION_DIR,
+    Results,
+    ResultUnit,
+    recording_id,
+    results_name,
 )
 
 from tests.test_manual_roi import _offscreen_selected
 
 WAVE = np.array([0.0, 1.0, 3.0, 1.0, 0.0])
 SPIKES = np.arange(100, 4900, 97)
+T, Y, X = 600, 12, 16
+FLASHES = np.arange(40, 560, 40)
+# the run read the recording from this frame on
+FIRST = 20
 
 
-def _unit() -> MasknmfUnit:
-    """5000 frames of noise, two demixed traces: the first spikes at
-    ``SPIKES``, the second at every other one, and the movie's top left
-    pixel brightens with the first.
+@pytest.fixture
+def run(tmp_path):
+    """A tif recording whose top-left 4x4 brightens at ``FLASHES``, and a
+    results file of two ROIs over frames ``FIRST`` on: roi0's dff peaks at
+    the flashes, its events every other flash; roi1 is noise.
     """
-    rng = np.random.default_rng(2)
-    signals = rng.normal(0, 0.05, (5000, 2))
-    signals[SPIKES[:, None] + np.arange(-2, 3), 0] += WAVE
-    signals[SPIKES[::2, None] + np.arange(-2, 3), 1] += WAVE
-    movie = rng.normal(0, 0.01, (5000, 6, 8)).astype(np.float32)
-    movie[SPIKES, 0, 0] += 1.0
-    return MasknmfUnit(
-        label="synthetic",
-        recording="synthetic/MUnit_0/roi=0",
-        fs=1000.0,
-        first_frame=0,
-        movies={"registered": movie, "compressed": 2 * movie},
-        traces={
-            "mean F (a.u.)": {"registered": movie.mean(axis=(1, 2))},
-            "RTMC shift (um)": {"X": rng.normal(size=5000), "Z": rng.normal(size=5000)},
-        },
-        signals=signals,
+    rng = np.random.default_rng(0)
+    movie = (100 + rng.normal(0, 2, (T, Y, X))).astype(np.float32)
+    movie[FLASHES, :4, :4] += 50
+    tifffile.imwrite(tmp_path / "rec.tif", movie)
+    n = T - FIRST
+    dff = rng.normal(0, 0.05, (2, n)).astype(np.float32)
+    dff[0, FLASHES - FIRST] += 3.0
+    unit = ResultUnit(
+        name="zplane01",
+        kind="plane",
+        index=1,
+        fs=30.0,
+        roi_names=["roi0", "roi1"],
+        traces={"dff": dff, "raw": 100 + dff},
+        members=[np.arange(4), np.arange(100, 104)],
+        image_shape=(Y, X),
+        events={"roi0": FLASHES[::2] - FIRST},
+        attrs={"z": 0},
     )
+    path = Results(
+        pipeline="test",
+        units={unit.name: unit},
+        source={"path": str(tmp_path / "rec.tif"), "frames": [FIRST, T]},
+    ).write(tmp_path / results_name("rec.tif", pipeline="test"))
+    curated = {
+        f"a|{s}": {
+            "label": "yes",
+            "recording": recording_id(unit, "roi0"),
+            "source_aligned_index": int(s),
+        }
+        for s in FLASHES[1:4] - FIRST
+    }
+    (path / CURATION_DIR).mkdir()
+    (path / CURATION_DIR / "fast_template_curation.json").write_text(
+        json.dumps({"version": 5, "events": curated}), encoding="utf-8"
+    )
+    return path, movie
 
 
 def test_average_recovers_the_waveform_under_every_spike():
@@ -110,80 +146,105 @@ def test_accepted_events_are_the_yes_labels_of_each_recording(tmp_path):
     np.testing.assert_array_equal(found["b"], [5])
 
 
-def test_a_unit_averages_its_movies_and_traces_around_the_spikes():
-    average = _unit().average(SPIKES, before=4, after=6)
-    np.testing.assert_array_equal(average.lags, np.arange(-4, 7))
-    assert average.n_spikes == len(SPIKES)
-    assert average.movies["registered"].shape == (11, 6, 8)
-    assert average.movies["registered"][:, 0, 0].argmax() == 4
-    assert average.movies["compressed"][4, 0, 0] == pytest.approx(2.0, abs=0.01)
-    mean, sem = average.traces["mean F (a.u.)"]["registered"]
-    assert mean.shape == sem.shape == (11,)
-    assert mean.argmax() == 4
-    assert sorted(average.traces["RTMC shift (um)"]) == ["X", "Z"]
+def test_a_results_file_opens_one_roi_over_the_frames_the_run_read(run):
+    path, movie = run
+    source = SpikeSource.open(path)
+    assert (source.unit.name, source.roi, source.c, source.fs) == (
+        "zplane01",
+        "roi0",
+        0,
+        30.0,
+    )
+    assert list(source.traces) == ["dff", "raw"]
+    assert list(source.movies) == ["movie"]
+    assert source.movies["movie"].shape == (T - FIRST, Y, X)
+    np.testing.assert_allclose(source.movies["movie"][5], movie[FIRST + 5])
+    assert source.motion == {}
+
+
+def test_spikes_come_from_the_runs_events_and_its_curation(run):
+    path, _movie = run
+    source = SpikeSource.open(path)
+    assert list(source.spikes) == [EVENTS, "curated fast"]
+    np.testing.assert_array_equal(source.spikes[EVENTS], FLASHES[::2] - FIRST)
+    np.testing.assert_array_equal(source.spikes["curated fast"], FLASHES[1:4] - FIRST)
+    assert SpikeSource.open(path, roi="roi1").spikes == {}
+
+
+def test_a_roi_averages_its_movie_and_trace_around_its_spikes(run):
+    path, _movie = run
+    source = SpikeSource.open(path)
+    average = source.average(source.spikes[EVENTS], "dff", before=3, after=4)
+    np.testing.assert_array_equal(average.lags, np.arange(-3, 5))
+    assert average.n_spikes == len(FLASHES[::2])
+    assert average.movies["movie"].shape == (8, Y, X)
+    assert average.movies["movie"][:, 0, 0].argmax() == 3
+    assert list(average.traces) == ["roi0 dff", MEAN_F]
+    mean, sem = average.traces["roi0 dff"]["dff"]
+    assert mean.argmax() == 3 and sem.shape == (8,)
+    flat, none = average.traces[MEAN_F]["movie"]
+    assert flat.shape == (8,) and none is None
+
+
+def test_another_roi_opens_on_the_same_array(run):
+    path, _movie = run
+    source = SpikeSource.open(path)
+    other = source.with_roi("roi1")
+    assert other.arr is source.arr and other.roi == "roi1"
+    with pytest.raises(KeyError, match="no ROI 'roi9'"):
+        source.with_roi("roi9")
 
 
 @pytest.mark.skipif(
     not _offscreen_selected(), reason="needs the offscreen rendercanvas"
 )
-def test_the_window_finds_spikes_on_a_signal_and_follows_its_controls():
-    from mbo_utilities.gui.spike_average_viewer import SpikeAverageVis
+def test_the_window_follows_its_roi_trace_and_spike_choices(run):
+    from fastplotlib.widgets.nd_widget._async import run_sync
+    from mbo_utilities.gui.spike_average_viewer import SpikeAverageViewer
 
-    vis = SpikeAverageVis(_unit(), before=4, after=6, size=(900, 900))
+    path, _movie = run
+    viewer = SpikeAverageViewer(
+        SpikeSource.open(path), before=3, after=4, size=(900, 900)
+    )
     try:
-        vis.show()
-        vis.figure.canvas.draw()
-        np.testing.assert_array_equal(vis.spikes, SPIKES)
-        assert vis.player.t == 4
-        vis.seek(2)
-        vis.figure.canvas.draw()
-        for name, movie in vis.average.movies.items():
-            np.testing.assert_allclose(
-                np.asarray(vis.graphics[name].data.value),
-                (movie - movie.mean(axis=0))[2],
-                rtol=1e-5,
-                atol=1e-7,
-            )
-        vis.set_subtract_mean(False)
-        assert vis.graphics["registered"].vmax == pytest.approx(
-            float(vis.average.movies["registered"].max())
+        viewer.show()
+        viewer.ndw.figure.canvas.draw()
+        assert (viewer.kind, viewer.spikes_from) == ("dff", EVENTS)
+        np.testing.assert_array_equal(viewer.spikes, FLASHES[::2] - FIRST)
+        assert viewer.lag_index == 3
+        viewer.seek(1)
+        # the NDWidget fetches a slice on its event loop, which a test does not run
+        run_sync(viewer.images["movie"]._set_indices_())
+        viewer.ndw.figure.canvas.draw()
+        assert viewer.lag_index == 1
+        shown = viewer.average.movies["movie"]
+        np.testing.assert_allclose(
+            np.asarray(viewer.images["movie"].graphic.data.value),
+            (shown - shown.mean(axis=0))[1],
+            rtol=1e-5,
+            atol=1e-5,
         )
-        vis.set_signal(1)
-        vis.figure.canvas.draw()
-        np.testing.assert_array_equal(vis.spikes, SPIKES[::2])
-        assert vis.average.n_spikes == len(SPIKES[::2])
-        vis.set_threshold(100.0)
-        vis.figure.canvas.draw()
-        assert "none of 0 spikes" in vis.status
-        np.testing.assert_array_equal(vis.spikes, SPIKES[::2])
-        vis.set_threshold(2.0)
-        assert vis.status == ""
+        viewer.set_subtract_mean(False)
+        assert viewer.images["movie"].graphic.vmax == pytest.approx(float(shown.max()))
+        viewer.set_spikes_from("curated fast")
+        assert viewer.average.n_spikes == 3
+        viewer.set_spikes_from(THRESHOLD)
+        np.testing.assert_array_equal(viewer.spikes, FLASHES - FIRST)
+        viewer.set_threshold(100.0)
+        assert "none of 0 spikes" in viewer.status
+        np.testing.assert_array_equal(viewer.spikes, FLASHES - FIRST)
+        viewer.set_kind("raw")
+        assert viewer.status == "" and "roi0 raw" in viewer.traces.panels
+        viewer.set_roi("roi1")
+        viewer.ndw.figure.canvas.draw()
+        assert viewer.source.roi == "roi1" and viewer.spikes_from == THRESHOLD
     finally:
-        vis.close()
-
-
-@pytest.mark.skipif(
-    not _offscreen_selected(), reason="needs the offscreen rendercanvas"
-)
-def test_the_window_takes_curated_spikes_in_place_of_a_threshold():
-    from mbo_utilities.gui.spike_average_viewer import SpikeAverageVis
-
-    vis = SpikeAverageVis(_unit(), spikes=SPIKES[:10], size=(900, 900))
-    try:
-        vis.show()
-        vis.figure.canvas.draw()
-        assert vis.average.n_spikes == 10
-        vis.set_threshold(0.5)
-        np.testing.assert_array_equal(vis.spikes, SPIKES[:10])
-    finally:
-        vis.close()
+        viewer.close()
 
 
 @pytest.mark.slow
-def test_a_run_folder_averages_on_the_frames_it_read(tmp_path):
+def test_a_masknmf_run_averages_its_registered_and_compressed_movies(tmp_path):
     pytest.importorskip("masknmf")
-    import h5py
-    import tifffile
     from mbo_utilities.masknmf import run_plane
     from mbo_utilities.masknmf.params import STAGE_SKIP, MasknmfSettings
 
@@ -205,19 +266,30 @@ def test_a_run_folder_averages_on_the_frames_it_read(tmp_path):
         frame_indices=list(range(10, 290)),
         replot=False,
     )
-    # masknmf demixes on cuda only: the demixed traces are written here
-    signals = np.zeros((280, 2))
-    signals[flashes - 10, 0] = 5.0
-    with h5py.File(run / "results.hdf5", "a") as f:
-        f["DemixingResults/temporal_demixed"] = signals
+    # masknmf demixes on cuda only: the results file demixing writes is made here
+    dff = np.zeros((1, 280), np.float32)
+    dff[0, flashes - 10] = 5.0
+    unit = ResultUnit(
+        name="zplane01",
+        kind="plane",
+        index=1,
+        fs=30.0,
+        roi_names=["0"],
+        traces={"dff": dff},
+        members=[np.arange(20 * 48 + 20, 20 * 48 + 28)],
+        image_shape=(48, 48),
+    )
+    Results(pipeline="masknmf", units={unit.name: unit}).write(
+        run / results_name("movie.tif", pipeline="masknmf")
+    )
 
-    unit = MasknmfUnit.from_run(run)
-    assert unit.first_frame == 10
-    assert unit.recording == "movie/roi=0"
-    assert sorted(unit.traces) == ["masknmf shift (px)", "mean F (a.u.)"]
-    spikes = threshold_peaks(unit.signals[:, 0], 1.0)
+    source = SpikeSource.open(run)
+    assert list(source.movies) == ["registered", "compressed"]
+    assert list(source.motion) == ["masknmf shift (px)"]
+    spikes = threshold_peaks(source.traces["dff"], 1.0)
     np.testing.assert_array_equal(spikes, flashes - 10)
-    average = unit.average(spikes, 3, 3)
+    average = source.average(spikes, "dff", 3, 3)
     assert average.n_spikes == len(flashes)
     for movie in average.movies.values():
         assert movie[:, 24, 24].argmax() == 3
+    assert sorted(average.traces["masknmf shift (px)"]) == ["X", "Y"]

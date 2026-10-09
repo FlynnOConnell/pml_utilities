@@ -694,13 +694,23 @@ the launcher's **Registration QC (MaskNMF run)** entry is the same switch;
 without `--qc` a run folder opens in the Studio (`MasknmfRunArray`), or in
 masknmf's demixing viewer when its `results.hdf5` holds a `DemixingResults`
 (`arrays.masknmf_run.run_demixing`).
-`mbo spike-average <run folder>` (`analysis/spike_average.py`,
-`MasknmfUnit.from_run`; `gui/spike_average_viewer`) averages the registered and
-compressed movies, the mean fluorescence, the RTMC and masknmf's shifts around
-the peaks of one demixed trace over a threshold that drags, or around the
-events a curation file accepts: activity shows in the movies and leaves the
-motion flat. A run made elsewhere opens from its `.mesc`, unit and
-`results.hdf5` (`MasknmfUnit.open`).
+The spike-triggered average is one ROI of any run's `results` (§7.5) over the
+movie it was measured on (`analysis/spike_average.SpikeSource`: the run
+array's own movie at the unit's z, or a line unit's first line, cut to the
+frames its source block names; a MaskNMF run adds its compressed movie). Its
+spikes are the unit's `events`, the events a `.curation` file beside the run
+accepts for `results.recording_id(unit, roi)`, or a threshold on one of its
+traces; its motion is every `motion_correction` the movie went through, each
+on its own clock (`MotionCorrection.at`): the run array's, and for a
+`MasknmfRunArray` its `recording`'s at the recording `frames` it read.
+`gui/spike_average_viewer` draws it like Registration QC (an `NDWidget` over
+the lag, masknmf's `TracePlot` linked to it) and only ever runs in its own
+process (`launch_spike_average`, watched by `gui.launch.LaunchedWindow`):
+from the Traces tab's **Spike average** (the selected algo row's run dir or
+`<file>.zarr/<unit>`, or a results row's `extra["unit"]` / `extra["roi"]`),
+the MaskNMF tab (the newest run that demixed), the vnoiser tab (the scan and
+ROI on screen), the launcher's **Spike-triggered average** entry and
+`mbo spike-average <run>`.
 
 `mbo reg-denoise` (`masknmf/reg_denoise.py`) is pre-registration denoising for
 one channel: the raw movie's PMD (`raw/CompressionArray`), the rigid

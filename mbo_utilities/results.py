@@ -76,6 +76,7 @@ __all__ = [
     "ResultsArray",
     "newest_results",
     "pipeline_files",
+    "recording_id",
     "results_dir_of",
     "results_name",
     "results_pipeline",
@@ -104,6 +105,8 @@ RASTER_WIDTH = 4096
 RASTER_KINDS = ("denoised", "dff", "zscore", "raw")
 # strftime both ways; results_stamp parses it, nothing matches it by pattern
 RESULTS_STAMP = "%Y-%m-%d-%H-%M-%S"
+# the curation window's labels, beside the run: <run>/.curation/<mode>_template_curation.json
+CURATION_DIR = ".curation"
 TRACE_KINDS = {
     "raw": "fluorescence in the recording's units (suite2p F; a line's mean counts)",
     "neuropil": "neuropil fluorescence (suite2p Fneu)",
@@ -987,6 +990,16 @@ register_pipeline(
 )
 
 
+def recording_id(unit: ResultUnit, roi: str) -> str:
+    """The curation's id of one ROI trace, ``scan=<id>/domain=<name>``: what its
+    labels are keyed by under ``<run>/.curation``.
+
+    The words are the archive's and stay whatever the results file calls the
+    unit, so a trace curated before the run was a results file still matches.
+    """
+    return f"scan={unit.attrs.get('scan_id', unit.index)}/domain={roi}"
+
+
 def _read_pickle(path):
     """A PF folder's pickle, or None when it is not there."""
     path = Path(path)
@@ -1138,6 +1151,11 @@ class ResultsArray(ReductionMixin, LazyArray):
     @property
     def source_path(self) -> Path:
         return self.path
+
+    @property
+    def motion_correction(self):
+        """The recording's motion correction, when the recording is the image."""
+        return None if self._source is None else self._source.motion_correction
 
     @property
     def reader_kwargs(self) -> dict:

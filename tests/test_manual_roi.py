@@ -1754,6 +1754,11 @@ class TestTracesTab:
         np.testing.assert_allclose(
             Results.read(path).units["zplane02"].iscell, [[1, 0.9], [0, 0.4]]
         )
+        # an algo row opens its run: the plane dir it was read from, or the file and unit
+        widget.select_derived(by_path[plane_dir], 1)
+        assert widget._spike_target([]) == (plane_dir, None, "1", None)
+        widget.select_derived(by_path[path / "zplane02"], 0)
+        assert widget._spike_target([]) == (path, "zplane02", "0", None)
 
     def test_results_rows_are_named_by_their_roi(self, widget, tmp_path):
         """A line unit's rows read as the ROI: ``roi0`` for its denoised trace,
@@ -1796,7 +1801,11 @@ class TestTracesTab:
             7,
         )
         assert all(t.c == 1 and t.engine == "voltage" for t in rows.values())
-        assert rows["roi0"].extra == {"line": 4} and "line" not in rows["roi1"].extra
+        assert rows["roi0"].extra["line"] == 4 and "line" not in rows["roi1"].extra
+        # each ROI row names its unit and ROI, which the spike-average window opens it by
+        assert rows["roi1"].extra["roi"] == "roi1" and "roi" not in rows["roi0 (raw)"].extra
+        assert widget._spike_target([rows["roi1"]]) == (path, "scan3", "roi1", 1)
+        assert widget._spike_target([rows["roi1 line 5 (raw)"]]) is None
         # the table's ROI column shows the line (1-based), as for any placed row
         assert widget._trace_cells(rows["roi0 (raw)"].key)[1:3] == ("5", "1")
 

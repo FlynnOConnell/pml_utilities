@@ -26,8 +26,10 @@ from vnoiser.curation import (
 from vnoiser.dataset import RecordingSample
 
 from mbo_utilities.results import (
+    CURATION_DIR,
     ResultsArray,
     newest_results,
+    recording_id,
     results_dir_of,
     results_source,
 )
@@ -49,16 +51,6 @@ LABELS = ("yes", "no", "auto_yes", "auto_no", "unlabeled")
 VIEW_FILTERS = ("all", "yes", "no", "unlabeled")
 
 _TAGS = re.compile(r"<[^>]+>")
-
-
-def recording_id(unit, roi: str) -> str:
-    """The curation's id of one ROI trace, ``scan=<id>/domain=<name>``: what its
-    labels are keyed by under ``<run>/.curation``.
-
-    The words are the archive's and stay whatever the results file calls the
-    unit, so a trace curated before the run was a results file still matches.
-    """
-    return f"scan={unit.attrs.get('scan_id', unit.index)}/domain={roi}"
 
 
 def trace_label(unit, roi: str) -> str:
@@ -139,7 +131,7 @@ class CurationSession:
             recording_id=recording_id(found, roi),
             label=trace_label(found, roi),
             source_path=arr.path,
-            curation_dir=arr.path / ".curation",
+            curation_dir=arr.path / CURATION_DIR,
             pre_denoised=True,
         )
 
@@ -170,7 +162,7 @@ class CurationSession:
         curation_dir = (
             Path(curation_dir)
             if curation_dir is not None
-            else source_path.parent / ".curation"
+            else source_path.parent / CURATION_DIR
         )
         t = np.arange(trace.size, dtype=float) / float(fs_hz)
         full = RecordingSample(

@@ -8,17 +8,16 @@ green centered Run button. Run spawns the "masknmf" worker task; each plane
 lands in a masknmf run folder (``masknmf.runner``) with a results zarr.
 Denoise before registration estimates the shifts on a quick denoised copy
 (``alignment.hdf5``); View movies opens the last run in the
-Registration-Denoising Quality Control viewer.
+Registration-Denoising Quality Control viewer, Spike average the last run
+that demixed in the spike-triggered average window.
 """
 
 import dataclasses
 import math
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import psutil
 from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
@@ -39,7 +38,7 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
     _draw_md_field,
     _format_size,
 )
-from mbo_utilities.preferences import get_last_dir, get_mbo_dirs, set_last_dir
+from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
 
 # palette matched to the Suite2p settings panel
@@ -205,9 +204,8 @@ class MaskNMFPipelineWidget(PipelineWidget):
         self._settings_sizer: PopupAutoSize | None = None
         self._show_slice_popup = False
         self._last_fpath = None
-        # (pid, log name) of the QC viewer View movies started, until it exits
-        self._viewer_launch = None
-        self._viewer_checked = 0.0
+        # the windows View movies and Spike average started, until they exit
+        self._windows: list = []
 
     def default_settings(self):
         """The settings Defaults resets to."""
@@ -940,53 +938,60 @@ class MaskNMFPipelineWidget(PipelineWidget):
         if not self._outdir:
             imgui.begin_disabled()
         view = imgui.button("View movies##masknmf_view", imgui.ImVec2(_BTN_W * 1.5, 0))
-        if not self._outdir:
-            imgui.end_disabled()
         set_tooltip(
             "The run folder last written under the output folder: raw and "
             "registered over the same two as PMD, with RTMC, masknmf shifts, "
             "frame means and the mean inside a box you move on any movie.",
             show_mark=False,
         )
-        if (
-            self._viewer_launch is not None
-            and time.monotonic() - self._viewer_checked > 1.0
-        ):
-            self._viewer_checked = time.monotonic()
-            pid, log_name = self._viewer_launch
-            try:
-                alive = psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
-            except psutil.NoSuchProcess:
-                alive = False
-            if not alive:
-                self._viewer_launch = None
-                logs = sorted(get_mbo_dirs()["logs"].glob(f"*_{log_name}.log"))
-                text = (
-                    logs[-1].read_text(encoding="utf-8", errors="replace")
-                    if logs
-                    else ""
-                )
-                if "Traceback" in text:
-                    last = [line for line in text.splitlines() if line.strip()][-1]
-                    self._last_status = f"QC viewer failed: {last} (log: {logs[-1]})"
-        if not view:
+        imgui.same_line()
+        sta = imgui.button("Spike average##masknmf_sta", imgui.ImVec2(_BTN_W * 1.5, 0))
+        set_tooltip(
+            "The last run that demixed, averaged around the spikes of one of its "
+            "components: the registered and compressed movies, the component's "
+            "trace, RTMC and masknmf shifts. Its own window.",
+            show_mark=False,
+        )
+        if not self._outdir:
+            imgui.end_disabled()
+        for window in list(self._windows):
+            state = window.poll()
+            if state is not None:
+                self._windows.remove(window)
+                if state:
+                    self._last_status = state
+        if not (view or sta):
             return
-        written = [
+        written = sorted(
             (p.stat().st_mtime, p.parent)
             for p in Path(self._outdir).glob("**/config.json")
-        ]
-        if not written:
-            self._last_status = f"No run folder in {self._outdir} yet."
-            return
-        from mbo_utilities.gui.launch import launch_window
-
-        run = max(written)[1]
-        # its own process: a second figure built inside this imgui frame crashes imgui
-        log_name = f"movies_{run.name}"
-        pid = launch_window(
-            "mbo_utilities.gui.reg_denoise_viewer", [str(run)], log_name
         )
-        self._viewer_launch = (pid, log_name)
+        if sta:
+            from mbo_utilities.arrays.masknmf_run import run_demixing
+
+            written = [(t, run) for t, run in written if run_demixing(run)]
+        if not written:
+            self._last_status = (
+                f"No run folder that demixed in {self._outdir} yet."
+                if sta
+                else f"No run folder in {self._outdir} yet."
+            )
+            return
+        from mbo_utilities.gui.launch import LaunchedWindow, launch_window
+
+        run = written[-1][1]
+        # its own process: a second figure built inside this imgui frame crashes imgui
+        if sta:
+            from mbo_utilities.gui.spike_average_viewer import launch_spike_average
+
+            pid, log_name = launch_spike_average(run)
+            self._windows.append(LaunchedWindow(pid, log_name, "Spike average"))
+        else:
+            log_name = f"movies_{run.name}"
+            pid = launch_window(
+                "mbo_utilities.gui.reg_denoise_viewer", [str(run)], log_name
+            )
+            self._windows.append(LaunchedWindow(pid, log_name, "QC viewer"))
         self._last_status = f"Opening {run.name} in its own window (PID {pid})."
 
     def _submit(self, planes: list[int]) -> None:
