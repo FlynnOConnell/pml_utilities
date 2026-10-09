@@ -782,9 +782,9 @@ class SummaryImageViewer(Widget):
             imgui.is_window_focused(imgui.FocusedFlags_.root_and_child_windows)
             and not imgui.get_io().want_text_input
         ):
-            from mbo_utilities.gui._keyboard import claim_arrow_keys
+            from mbo_utilities.gui._keyboard import claim_keys
 
-            claim_arrow_keys()
+            claim_keys()
             step = int(imgui.is_key_pressed(imgui.Key.right_arrow)) - int(
                 imgui.is_key_pressed(imgui.Key.left_arrow)
             )

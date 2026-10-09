@@ -374,15 +374,28 @@ The save dialog includes a metadata editor:
 
 **Widgets > Manual ROI Labeling** (or `mbo <path> --widget manualroi`) adds the
 **ROIs** and **Traces** tabs to the right bar and the **Traces** panel to the strip
-over the image: the ROIs tab holds the NAVIGATE, DRAW, VIEW and LABELS sections
-(captioned settings rows like the Process tab's) over the ROI table, the Traces tab lists every trace,
-and the panel plots the selected ones under its controls. Nothing switches tabs or
-panels for you. Arm **Add ROI** (`a`), drag a closed stroke around a cell, release:
-the enclosed pixels become a mask on the exact slice on screen (z-plane, channel,
-any extra slider) and, with **trace on draw** ticked, its mean trace appears on the
-Traces panel at once. Masks autosave beside the data as `manual_labels.zarr`; a
-`.mesc` gets one per unit (`manual_labels_MSession_0_MUnit_3.zarr`), and the ROIs and
-traces on screen are always the shown unit's.
+over the image. The tool works like masknmf's curation viewer, with its buttons,
+keys and look: the ROIs tab has **Full FOV**, the **ROI Guide** (`h`) and
+**Keybinds** (`k`) buttons, then a **Curation** tab (OVERLAY, SELECTION, LABELS,
+RUN) and an **ROIs** tab (the filter over the table of drawn and algo ROIs); the
+Traces tab lists every trace, and the panel plots them on masknmf's trace plot.
+Nothing switches tabs or panels for you. While the tool is on its keys win over the
+viewer's own: `m`, `c`, `p`, `h`, `k`, `o` and the arrows are the tool's.
+
+**Draw** (`a`) and click a polygon's corners on the image, then the first corner
+again to close it: while it is there it selects every ROI in view whose center it
+holds (or the ones outside it, per its switch). **Add ROI** (`r`) keeps it as a mask
+on the exact slice on screen (z-plane, channel, any extra slider) and, with **trace
+on draw** on, its mean trace appears on the Traces panel at once. Click an ROI to
+plot its traces, again to deselect; ctrl / shift + click (on the image or in the
+table) group several, and their traces share the plot, each in the color its mask
+and table row take. With **pixel traces** (`p`) a click on an empty pixel adds the
+movie's 5x5 average there. **Delete** (`d`) removes a drawn ROI and marks an algo
+one for deletion: it stays listed at the top of the table and red on the image
+until you unmark it. `ctrl+z` undoes. Masks autosave beside the data as
+`manual_labels.zarr`; a `.mesc` gets one per unit
+(`manual_labels_MSession_0_MUnit_3.zarr`), and the ROIs and traces on screen are
+always the shown unit's.
 
 Running ROIs is the **Process tab > ROIs** pipeline:
 
@@ -403,9 +416,9 @@ Running ROIs is the **Process tab > ROIs** pipeline:
 - **Run** writes suite2p-shaped outputs (`F.npy`, `Fneu.npy`, `stat.npy`,
   `rois.json`, `ops.npy` with `roi_workflow` recording `z`, `c`, `frames` and
   `engine`); **Trace** computes an in-memory mean without writing.
-- **Find cells in a region**: draw a region (`r`) and let suite2p or masknmf look
-  for cells inside it. Results arrive as algo overlays: promote (`y`) or discard
-  (`n`) each component.
+- **Find cells in a region**: draw a region (`a`) and let suite2p or masknmf look
+  for cells inside its bounding box. Results arrive as algo rows: promote (`y`) or
+  mark for deletion (`n`) each component.
 
 The sliders are the array's axes whatever they are called: a MESc AOD unit's
 **ROI** slider or an IsoView **View** slider keys masks and runs like any z-plane
@@ -420,13 +433,15 @@ the line's ends, length and sample spacing, from the scan's own geometry.
 drawn on, with them drawn and the slider's one thick; click a line there to select
 its ROI.
 
-**VIEW > color by** tints every ROI by a value through a colormap: its class,
-z-plane or channel (one color per level), its area, or the peak of its traces (a
-gradient). The overlay, the ROI table and the trace legend all follow; **none**
-restores the class / group colors. The time cursor on the trace and motion plots is
-one playhead: drag either, scrub the T slider, and every plot and the image land on
-the same instant, each trace drawn where it was recorded (its own frame window and
-binning).
+The Curation tab's **color by** tints every drawn ROI by a value through a
+colormap: its class, z-plane or channel (one color per level), its area, or the peak
+of its traces (a gradient). The overlay, the ROI table and the trace plot all follow;
+**roi id** restores the class / hue colors. The trace plot stacks the recording's
+motion correction (**MC**) over the traces, its behavior log (**Behavior**) rides
+over both, and its time cursor is one playhead: drag it, scrub the T slider, and
+every plot and the image land on the same instant, each trace drawn where it was
+recorded (its own frame window and binning). Right-click the plot for autofit and
+frames / time; `t` keeps the cursor centered as the movie plays.
 
 Every measurement is one row of the **Traces** tab: which ROI, on which z-plane and
 channel, with which engine (the **pipeline** column: `mean`, `suite2p`, `masknmf`, or

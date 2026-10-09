@@ -37,6 +37,7 @@ dependencies = [
 	"imgui-bundle>=1.92.801,<1.92.900",
 	"imgui_debugger @ git+https://github.com/FlynnOConnell/imgui_debugger@ad9986a59b19428c4fa42f0b64891f8e03bac592",
 	"imgui_notebooks @ git+https://github.com/FlynnOConnell/imgui_notebooks@82c33f18f6def75383daa9ad39e78972293f3777",
+	"masknmf @ git+https://github.com/apasarkar/masknmf-toolbox@3e3507a244364ba3cfdded9214df1f9f785c1155",
 ]
 
 [project.scripts]
@@ -68,8 +69,6 @@ Documentation = "https://millerbrainobservatory.github.io/mbo_utilities/index.ht
 Repository = "https://github.com/FlynnOConnell/pml_utilities"
 Issues = "https://github.com/MillerBrainObservatory/mbo_utilities/issues"
 
-# masknmf is not pinned yet; the MaskNMF pipeline and mbo reg-denoise need its ui/launcher-pages branch:
-# uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"
 [project.optional-dependencies]
 hpc = ["submitit>=1.5.0"]
 server = ["uvicorn>=0.30", "websockets>=13"]

@@ -223,8 +223,11 @@ class BehaviorPlot:
         x_per_second: float = 1.0,
         x_label: str = "time (s)",
         x_axis: bool = True,
+        x_limits: tuple[float, float] | None = None,
     ) -> tuple[float | None, bool]:
         """The behavior on one plot; inside subplots ``height`` is the cell's.
+        ``x_limits`` holds the x axis on another plot's range, which then
+        owns the zoom.
         The x axis is time in the host's units, ``x_per_second`` of them per
         second; ``x_axis`` False hides it, for a row stacked over another
         plot's. The first draw fits the signals over the part of the height
@@ -252,8 +255,13 @@ class BehaviorPlot:
                 return cursor, False
             # the lane names sit bottom left, so the legend goes top right
             implot.setup_legend(implot.Location_.north_east)
-            implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, x_max)
-            if fit:
+            if x_limits is not None:
+                implot.setup_axis_limits(
+                    implot.ImAxis_.x1, *x_limits, implot.Cond_.always
+                )
+            else:
+                implot.setup_axis_limits_constraints(implot.ImAxis_.x1, 0.0, x_max)
+            if fit and x_limits is None:
                 implot.setup_axis_limits(
                     implot.ImAxis_.x1, 0.0, x_max, implot.Cond_.always
                 )

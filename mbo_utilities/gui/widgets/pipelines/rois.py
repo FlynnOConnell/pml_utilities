@@ -467,18 +467,19 @@ class RoiPipelineWidget(PipelineWidget):
 
     def _draw_find_row(self, roi) -> None:
         have_region = roi.region is not None
-        with selected_button_style(roi.region_mode):
+        drawing = roi.region_selector is not None
+        with selected_button_style(drawing):
             if imgui.button(
                 ("Region" if have_region else "Draw region") + "##rois_region",
                 imgui.ImVec2(_em(7), 0),
             ):
-                roi.set_region_mode(not roi.region_mode)
+                roi.set_region_mode(not drawing)
         if imgui.is_item_hovered():
             y0, y1, x0, x1 = roi.region if have_region else (0, 0, 0, 0)
             imgui.set_tooltip(
-                f"Region {y1 - y0}x{x1 - x0} px - drag again to replace it (r)"
+                f"Region {y1 - y0}x{x1 - x0} px - draw again to replace it (a)"
                 if have_region
-                else "Drag a box on the image to mark where to look (r)"
+                else "Click a polygon on the image around where to look (a)"
             )
         for kind in ("suite2p", "masknmf"):
             imgui.same_line(0, _em(0.6))

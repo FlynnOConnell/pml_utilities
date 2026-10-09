@@ -54,10 +54,11 @@ pml_utilities/
 `override-dependencies` removes for a checkout and nothing can remove for a consumer.
 Every base dependency is imported somewhere under `mbo_utilities/`; a package a
 single optional command needs is an extra, with the install hint in its `ImportError`.
-masknmf is not pinned yet: the MaskNMF pipeline and `mbo reg-denoise` need its
-`ui/launcher-pages` branch, `uv pip install "masknmf @
-git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"`; to test
-against a local checkout, `uv pip install ~/repos/masknmf-toolbox`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers) and
+masknmf is a base dependency, pinned to a commit of its `ui/launcher-pages`
+branch: the ROI tool is drawn with its imgui widgets (§7.6), and the MaskNMF
+pipeline and `mbo reg-denoise` run it. Bump the pin when that branch moves; to
+test against a local checkout, `uv pip install -e ~/repos/masknmf-toolbox`.
+`import mbo_utilities` never imports it: only GUI modules and runners do. Entry-point groups: `mbo_utilities.lazy_arrays` (readers) and
 `mbo_utilities.pipelines` (pipelines).
 
 ## 2. Layer responsibilities
@@ -288,12 +289,13 @@ applied as `arr.motion_correction`, a `features.MotionCorrection` or `None`
   (`X zplane03_tp00001-01574`) and listed in `planes`, and the Traces tab draws
   only the plane on screen (`MotionPlot.draw(z=slice.z)`, y refit on a plane
   change). The nonrigid block offsets (`xoff1` / `yoff1`) are not shown.
-- One GUI consumer: `gui/imgui/motion.MotionPlot`, drawn in linked subplots
-  with the trace by the Traces tab (over it, §7.6 the stack,
-  `manual_roi.draw_traces`), the line-scan viewer's `LineTracesPanel` and the
-  curation dashboard (under it), behind one `MC`
-  checkbox. The plot never clamps its x axis to the traces on disk: a pipeline
-  run on a frame window leaves shorter traces than the recording.
+- GUI consumers: the Traces tab draws the shifts as a panel of masknmf's
+  `TracePlot` over the traces (§7.6 the stack, `manual_roi._motion_lines`,
+  interpolated onto the viewer's frames); `gui/imgui/motion.MotionPlot` draws
+  them for the line-scan viewer's `LineTracesPanel` and the curation dashboard
+  (under it). Both sit behind one `MC` checkbox. Neither clamps its x axis to
+  the traces on disk: a pipeline run on a frame window leaves shorter traces
+  than the recording.
 - Adding a source means overriding `motion_correction` on the reader; nothing in
   `gui` names a source.
 
@@ -326,20 +328,21 @@ parts are the ones NWB and Neo use, under plain names:
   not, so a jump above `MAX_SPEED_MM_S` is NaN in the speed). The reward valves are
   every valve but `sync_pin`; each context id is one epoch kind. A new logger is a
   function in `READERS`, nothing else.
-- One GUI consumer: `gui/imgui/behavior.BehaviorPlot`, drawn over the trace by the
-  Traces tab in the same linked subplots as `MotionPlot`, behind a `Behavior`
-  checkbox. Three layers: epochs as translucent bands over the full height, the
+- One GUI consumer: `gui/imgui/behavior.BehaviorPlot`, drawn over the trace
+  panels by the Traces tab, its x range held on theirs (`x_limits`), behind a
+  `Behavior` checkbox. Three layers: epochs as translucent bands over the full height, the
   first signal on the left axis and the second on the right over the upper part,
   and the events as a raster strip along the bottom (`LANE_SHARE`): one lane per
   kind, a tick per event, the kind's name at the left edge. Bands and lanes sit on
   a third, hidden axis locked to lane units, so zooming the signals never moves
   them; every layer is a legend entry. Never draw events as full-height lines: a
   few thousand licks bury everything. `shade_into` puts the same bands behind
-  another plot on the time axis; the trace plot calls it, so a reward zone shows
-  behind the traces. It seeks the playhead like the motion plot.
+  another implot plot on the time axis; the Traces tab gives masknmf's
+  `TracePlot` the epochs as its `span`s instead, so a reward zone shows behind
+  the traces. It seeks the playhead like the motion plot.
 
 Pinned by `tests/test_behavior.py`, `tests/test_manual_roi.py`
-(`TestTracePlotView::test_a_recordings_behavior_stacks_under_the_trace`).
+(`TestTracePlotView::test_a_recordings_behavior_rides_over_the_traces`).
 
 ## 6. Metadata: the canonical vocabulary
 
@@ -881,13 +884,12 @@ the other.
   and `SUBTRACTED` are shown `y - m`, `2m - y` or `m - y`, a dF/F computed here
   is taken of the inverted trace, and a pipeline's own kinds keep the sign it
   wrote.
-  The plot has no box of its own: `imgui/lines.plot_style` makes implot's frame,
-  plot background and border transparent, its grid lines invisible (by colour,
-  so one scope covers the subplots too) and its ticks and legend dim, so the
-  traces sit on the panel. implot takes its frame colour from imgui's, which
-  `style_imgui_opaque` makes a blue-grey, so a plot drawn without that scope
-  sits in a blue box. One scope wraps the trace and motion plots together,
-  a frame around either being a box around half the panel.
+  The plot is masknmf's `TracePlot` (§7.6 the stack): one line per row, put on
+  the viewer's frames by `_on_frames` (interpolated from the row's own
+  `trace_axis`, NaN outside the stretch it covers), decimated to a min/max
+  band when it has more samples than the panel has pixels; its background says
+  what the lines are (`_TRACE_MODES`: near-black for nothing, green for a
+  selection).
 - **Run coordinates.** `RoiModel.targets(indices, z=, c=)` says where each ROI is
   read: the mask always from the plane it was drawn on, the pixels from `z` / `c`
   when given, else from where it was drawn. The widget's `run_where` is `drawn`,
@@ -899,20 +901,45 @@ the other.
   `plane` / `z` / `c` per row in `rois.json`; `RunResult.read_z` / `read_c` /
   `frames` / `engine` read them back and `roi_runs.result_traces` turns a result
   into table rows.
+- **masknmf's curation viewer.** The ROI tool is laid out, keyed and styled as
+  masknmf's `SingleSessionDemixingVis`, drawn with its imgui widgets
+  (`masknmf.visualization.imgui`: `TracePlot`, `draw_roi_table`, `RoiOrder`,
+  `grid`, `section`, `draw_switch`, `help_mark`, the keybinds popup and buttons)
+  and its footprint overlay (`masknmf.visualization.rois.FootprintSet`). The
+  keys are one table, `ROI_KEYS`: masknmf's `DEMIXING` binds worded for drawn
+  and algo ROIs, its `1-9` / `0` / `u` labeling keys and this tool's own `y`
+  `n` `x` `o` `shift+t`; while the tool is on it claims `m` `c` `p` `h` `k` `o`
+  and the arrows from the viewer's global shortcuts (`_keyboard.claim_keys`).
+  Draw (`a`) arms a fastplotlib `PolygonSelector` on the image that selects the
+  ROIs in view whose centers it holds (or not, per its inside / outside
+  switch); Add ROI (`r`) fills it into the store (`add_roi`). A click picks a
+  drawn ROI before an algo one; the selection again deselects; ctrl toggles a
+  row in the group (`buffer`), shift adds it. A group of two or more plots one
+  line per member, each in its `GROUP_COLORS` color, which its mask and table
+  row take too; a single selection plots every trace of that ROI. Pixel
+  traces (`p`) add the movie's 5x5 mean at a clicked empty pixel as a group
+  member (`add_pixel`, a `"pixel"` row of the trace table). Delete (`d`)
+  removes a drawn ROI and marks an algo row (`DerivedSet.discarded`): marked
+  rows stay listed, pinned first (`del`), red on the image, until unmarked.
+  Ctrl+z undoes a drawn or deleted ROI, a mark, a pixel average or a deselect
+  (`_undo`). The ROIs tab is masknmf's Tools panel: Full FOV, the guide (`h`,
+  this tool's page of the help viewer) and keybinds (`k`) buttons, then a
+  Curation tab (OVERLAY, SELECTION, LABELS, RUN) and an ROIs tab (masknmf's
+  filter, then the table); the Traces tab is the trace table in
+  `draw_roi_table`.
 - **Draw -> run.** `ManualRoiWidget(auto_trace=True)` traces every ROI the moment it
-  is drawn (its mean at the run coordinates); no tab is selected for the user. The row
-  buttons on the ROIs tab, the `t` key and the Process tab all run one ROI the way
-  the Process tab is set (`engine`, `run_where`, `run_frames`, `run_tag`).
+  is added (its mean at the run coordinates); no tab is selected for the user. The
+  RUN section, `shift+t` and the Process tab run ROIs the way the widget is set
+  (`engine`, `run_where`, `run_frames`, `run_tag`).
 - **The ROIs pipeline** (`RoiPipelineWidget`, name `ROIs`; not listed in the
   Process tab until it is reworked, neither hardcoded nor an entry point; `axes_consumed`
   `T: range, Z: select-one, C: select-one`) applies to any array with a time axis.
   It picks which ROIs (selected / group, listed, this slice, all), where they are
   read, the engine and tag, runs them, and shows the trace table cut down to those
   ROIs (`ManualRoiWidget.draw_trace_table(keys=...)`). Region and full-plane
-  detection live there too. It turns Manual ROI Labeling on when it is off. The
-  ROIs tab keeps only NAVIGATE, DRAW (with the region tool and the trace-on-draw
-  switch), VIEW and LABELS, as sections over its table; the trace plot and its
-  controls stay a panel on the top strip.
+  detection live there too: the region is the drawn polygon's bounding box
+  (`region`). It turns Manual ROI Labeling on when it is off. The trace plot
+  and its controls stay a panel on the top strip.
 - **Any slice.** The viewer's sliders are the array's T, C, Z axes by position
   (`manual_roi.slider_roles`), whatever the array labels them (`Timepoint` /
   `Channel` / `ROI` for a MESc AOD unit, `Tile` / `View` for IsoView); the widget
@@ -1005,18 +1032,19 @@ the other.
   of that z-plane and channel (`run_full_plane`, whose worker args carry `channel`
   1-based and `tp_indices` for a frame window). No store mask is involved, so it
   never claims pixels.
-- **The stack.** The Traces panel stacks up to three plots in linked subplots,
-  each behind its own checkbox, top to bottom: the recording's behavior
-  (`Behavior`, §5.9), its motion correction (`MC`, §5.8), then the traces. The
-  bottom row carries the one x axis they share; every row above it hides its
-  own (`lines.X_AXIS_HIDDEN`, the plot's `x_axis=False`) and the plot padding
-  is cut to 2 px inside the subplots, so the rows sit tight and read as one
-  plot. `draw_traces` builds the stack from what the recording has and what is
-  ticked, refits every plot when the stack changes (they are new plots to
-  implot) and grows the panel by each plot's own height
-  (`MOTION_PANEL_HEIGHT - PANEL_HEIGHT`, `BEHAVIOR_PLOT_HEIGHT`); `_draw_plot`
-  draws one by name. A new facet with a time axis is another row in that
-  stack, above the traces, not a panel of its own.
+- **The stack.** The Traces panel is masknmf's `TracePlot` over the viewer's
+  frames (its timings in seconds when the data has a rate; its right-click
+  menu picks frames or time, autofit, fit now), with no autofit so a zoom
+  holds while selecting others; `t` keeps the playhead centered. Its panels,
+  top to bottom: the recording's motion correction (`MC`, §5.8, named after
+  its `y_label`), then the traces (named after their y label). The behavior
+  raster (`Behavior`, §5.9) is a plot of its own over them, its x range held
+  on the trace panels'; its epochs shade the trace panels (`TracePlot.span`).
+  `_sync_plot` resets the plot when the frames or panels change and the panel
+  grows by each part's height (`MOTION_PANEL_HEIGHT - PANEL_HEIGHT`,
+  `BEHAVIOR_PLOT_HEIGHT`). A new facet sampled on the recording's clock is
+  another `TracePlot` panel; one that is not (events, epochs) rides over it
+  like the behavior.
 - **Playhead.** `gui/playhead.Playhead` is the one time on screen, in seconds on the
   recording's clock (raw frames when `fs` is unknown); it emits `time` with its
   `source`. Every view keeps a `TimeAxis` (`per_second`, `offset`) and converts
@@ -1048,8 +1076,8 @@ the other.
 - **Color by.** `RoiModel.column(name)` gives one number per uid (`plane`, `z`, `c`,
   `area`, `class`); `RoiModel.colorize(values, cmap, categorical)` maps them through
   a `cmap` colormap into `RoiLabelStore.tint`, a display-only color per uid that
-  `roi_rgb` prefers while set (never saved; `set_tint(None)` clears). VIEW > color
-  by drives it (`ManualRoiWidget.set_color_by`; `peak` uses the trace table) and
+  `roi_rgb` prefers while set (never saved; `set_tint(None)` clears). The Curation
+  tab's color by drives it (`ManualRoiWidget.set_color_by`; `peak` uses the trace table) and
   reapplies it as ROIs, labels or traces change, so the overlay, the table and the
   trace legend agree without any view knowing why.
 - **Shared vocabularies.** Nothing in the ROI work spells a name or a selection
