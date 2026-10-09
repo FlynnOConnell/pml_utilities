@@ -5,12 +5,25 @@ This package uses lazy imports to minimize startup time. Heavy dependencies
 like numpy, dask, and tifffile are only loaded when actually needed.
 """
 
+import importlib.util
+import os
+import sys
 import warnings
+from pathlib import Path
 
 # Suppress annoying CuPy warning about CUDA path (usually harmless if CUDA works)
 warnings.filterwarnings(
     "ignore", category=UserWarning, message="CUDA path could not be detected"
 )
+
+if sys.platform == "darwin":
+    # pyglfw must load imgui_bundle's libglfw: two copies in one process clash in cocoa
+    _glfw_lib = (
+        Path(importlib.util.find_spec("imgui_bundle").submodule_search_locations[0])
+        / "libglfw.3.dylib"
+    )
+    if _glfw_lib.exists():
+        os.environ.setdefault("PYGLFW_LIBRARY", str(_glfw_lib))
 
 
 # Define what's available for lazy loading

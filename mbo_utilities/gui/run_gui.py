@@ -671,20 +671,22 @@ def _figure_kwargs_for_here(
     return {"size": tuple(size)}
 
 
-# the smallest render viewport a subplot keeps, per side, when the window is
-# dragged narrow; below this the window stops shrinking
-_MIN_VIEWPORT = 24
+# the smallest image a subplot keeps, per side, in logical px; the window
+# stops shrinking there
+_MIN_VIEWPORT = 150
 
 
 def _clamp_window_to_layout(figure, event=None) -> None:
-    """Keep the Qt window at least as big as its edge windows, docks and
-    per-subplot imgui windows need.
+    """Keep the window at least as big as its edge windows, docks, per-subplot
+    imgui windows and a ``_MIN_VIEWPORT`` image need.
 
     The figure clamps its render area to 1 px, then each subplot subtracts
     its histogram window, docks and spacing from its share, so a canvas
     narrower than the panels gives pygfx a negative viewport and a
     validation error every frame. Registered on the canvas ``resize``
-    event so it follows whatever the edges are sized to at the time.
+    event so it follows whatever the edges are sized to at the time. Qt and
+    glfw windows get a minimum size; a notebook canvas has none, so one
+    dragged smaller is set back to it.
     """
     canvas = figure.canvas
     area_w, area_h = figure.get_pygfx_render_area()[2:]
@@ -703,9 +705,45 @@ def _clamp_window_to_layout(figure, event=None) -> None:
     for side in ("top", "bottom"):
         need_h += edges[side].size if edges[side] is not None else 0
     min_w, min_h = int(math.ceil(need_w)), int(math.ceil(need_h))
-    current = canvas.minimumSize()
-    if (current.width(), current.height()) != (min_w, min_h):
-        canvas.setMinimumSize(min_w, min_h)
+    if hasattr(canvas, "setMinimumSize"):
+        current = canvas.minimumSize()
+        if (current.width(), current.height()) != (min_w, min_h):
+            canvas.setMinimumSize(min_w, min_h)
+    elif type(canvas).__name__ == "GlfwRenderCanvas":
+        import glfw
+
+        # glfw window sizes are logical on macOS and physical on Windows and X11
+        scale = 1.0 if canvas._screen_size_is_logical else canvas.get_pixel_ratio()
+        glfw.set_window_size_limits(
+            canvas._window,
+            int(math.ceil(min_w * scale)),
+            int(math.ceil(min_h * scale)),
+            glfw.DONT_CARE,
+            glfw.DONT_CARE,
+        )
+    elif event is not None:
+        # a notebook canvas is 1x1 until the browser reports its first resize
+        w, h = canvas.get_logical_size()
+        if w < min_w or h < min_h:
+            # the css size trait still holds the pre-drag value, so an unchanged
+            # value would never reach the browser
+            canvas.set_logical_size(0, 0)
+            canvas.set_logical_size(max(w, min_w), max(h, min_h))
+
+
+def _hold_min_size(figure) -> None:
+    """Keep a Qt, glfw or notebook canvas from shrinking below its layout."""
+    canvas = figure.canvas
+    if not (
+        hasattr(canvas, "setMinimumSize")
+        or type(canvas).__name__
+        in ("GlfwRenderCanvas", "JupyterRenderCanvas", "AnywidgetRenderCanvas")
+    ):
+        return
+    canvas.add_event_handler(
+        functools.partial(_clamp_window_to_layout, figure), "resize"
+    )
+    _clamp_window_to_layout(figure)
 
 
 def _after_show(iw) -> None:
@@ -718,11 +756,7 @@ def _after_show(iw) -> None:
     if hasattr(canvas, "set_title"):
         canvas.set_title(f"Miller Brain Studio v{__version__}")
     _set_qt_icon()
-    if hasattr(canvas, "setMinimumSize"):
-        canvas.add_event_handler(
-            functools.partial(_clamp_window_to_layout, iw.figure), "resize"
-        )
-        _clamp_window_to_layout(iw.figure)
+    _hold_min_size(iw.figure)
 
 
 def _create_image_widget(
