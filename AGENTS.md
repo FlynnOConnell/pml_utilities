@@ -683,8 +683,17 @@ mean against a moving frame, so registering it leaves motion behind);
 shifts the same way. The MaskNMF widget's **Denoise before registration**
 (`registration.denoised_reference`) estimates the shifts on a quick PMD copy of
 the movie as recorded and applies them to the raw frames; **View movies** opens
-`gui/registration_viewer` on the newest run folder (raw, registered, and both
-as PMD: `alignment.hdf5`, and `MasknmfRunArray(run, on_alignment_copy=True)`).
+`gui/reg_denoise_viewer` on the newest run folder in its own process:
+`RegDenoiseRun.open` takes a run folder or its `results.hdf5`
+(`from_run_folder`: raw and registered from `MasknmfRunArray`, `pmd(raw)` the
+alignment copy, `pmd(registered)` the compression stage, the recording's RTMC)
+as well as a reg-denoise file. A viewer that dies leaves its traceback in
+`~/.mbo/logs/<stamp>_movies_<run>.log` and its last line in the widget's
+status. From a terminal, `mbo <run folder> --qc` opens the same viewer, and
+the launcher's **Registration QC (MaskNMF run)** entry is the same switch;
+without `--qc` a run folder opens in the Studio (`MasknmfRunArray`), or in
+masknmf's demixing viewer when its `results.hdf5` holds a `DemixingResults`
+(`arrays.masknmf_run.run_demixing`).
 
 `mbo reg-denoise` (`masknmf/reg_denoise.py`) is pre-registration denoising for
 one channel: the raw movie's PMD (`raw/CompressionArray`), the rigid

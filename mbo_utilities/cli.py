@@ -393,6 +393,14 @@ def main(
     "Omitted: the registration in a run folder's results.hdf5, else motion_correction.hdf5 beside the result, if any.",
 )
 @click.option(
+    "--qc",
+    is_flag=True,
+    help="For a MaskNMF run folder (or its results.hdf5): open Registration-Denoising "
+    "Quality Control, raw | registered over both as PMD with RTMC, masknmf shifts, frame "
+    "means and a box you drag. Omitted: a demixed run opens masknmf's demixing viewer, "
+    "any other run the Studio.",
+)
+@click.option(
     "--debug/--no-debug",
     default=None,
     help="Debug logging for this run (sets MBO_DEBUG): verbose logs, the "
@@ -411,6 +419,7 @@ def view(
     vis=None,
     raw_path=None,
     motion_correction_path=None,
+    qc=False,
     debug=None,
 ):
     r"""
@@ -426,6 +435,7 @@ def view(
       mbo view /data/scan.mesc --unit 2   Open one MESc measurement unit
       mbo view /data/scan.mesc --unit MUnit_35   A line-scan unit opens the line-scan viewer
       mbo view run/demixing_results.hdf5 --vis classification   masknmf's classification viewer
+      mbo out/20261008T143623_masknmf_zplane01 --qc   raw, registered, PMD, RTMC and shifts
       mbo view --list-gpus           Show available GPU adapters
       mbo view /data/raw --gpu 0     Force GPU index 0
     """
@@ -468,10 +478,11 @@ def view(
 
     # a masknmf demixing result opens in one of masknmf's viewers: ask which
     # before anything heavy loads
-    if vis is None and data_in and not metadata:
+    if vis is None and data_in and not metadata and not qc:
         from mbo_utilities.arrays.demixing import has_demixing_results
+        from mbo_utilities.arrays.masknmf_run import run_demixing
 
-        if has_demixing_results(data_in):
+        if has_demixing_results(run_demixing(data_in) or data_in):
             vis = "demixing"
             if sys.stdin.isatty():
                 vis = click.prompt(
@@ -513,6 +524,7 @@ def view(
         vis=vis,
         raw_path=raw_path,
         motion_correction_path=motion_correction_path,
+        qc=qc,
     )
 
 

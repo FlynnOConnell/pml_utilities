@@ -933,6 +933,7 @@ def _run_gui_impl(
     vis: str = "demixing",
     raw_path: str | Path | None = None,
     motion_correction_path: str | Path | None = None,
+    qc: bool = False,
 ):
     """Internal implementation of run_gui with all heavy imports."""
     # Apply persisted Options (GPU adapter, debug logging) before any
@@ -1001,12 +1002,27 @@ def _run_gui_impl(
         # the file dialog hands back a list even for one file
         if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
             data_in = data_in[0]
+        from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_demixing
         from mbo_utilities.masknmf.reg_denoise import is_reg_denoise
 
+        qc = qc or mode == "Registration QC (MaskNMF run)"
+        if (
+            qc
+            and isinstance(data_in, (str, Path))
+            and not (
+                is_reg_denoise(data_in)
+                or is_masknmf_run(data_in)
+                or is_masknmf_run(Path(data_in).parent)
+            )
+        ):
+            raise click.ClickException(
+                f"{Path(data_in).name} is not a MaskNMF run folder, its results.hdf5 or a "
+                "reg-denoise result; Registration QC (--qc) opens only those"
+            )
         if (
             not metadata_only
             and isinstance(data_in, (str, Path))
-            and is_reg_denoise(data_in)
+            and (qc or is_reg_denoise(data_in))
         ):
             from mbo_utilities.gui.reg_denoise_viewer import RegDenoiseViewer
 
@@ -1019,8 +1035,11 @@ def _run_gui_impl(
 
             fpl.loop.run()
             return None
-        # a masknmf demixing result opens in masknmf's own viewers
+        # a masknmf demixing result, or a run folder that demixed, opens in masknmf's own viewers
         from mbo_utilities.arrays.demixing import has_demixing_results
+
+        if isinstance(data_in, (str, Path)):
+            data_in = run_demixing(data_in) or data_in
 
         if (
             not metadata_only
@@ -1672,9 +1691,15 @@ def run_gui(
     vis: str = "demixing",
     raw_path: str | Path | None = None,
     motion_correction_path: str | Path | None = None,
+    qc: bool = False,
 ):
     """
     Open a GUI to preview data of any supported type.
+
+    ``qc`` opens Registration-Denoising Quality Control on a MaskNMF run
+    folder (or its ``results.hdf5``) or a ``mbo reg-denoise`` result, which
+    opens there without it. A run folder whose run demixed opens in masknmf's
+    demixing viewer; one that did not opens in the Studio.
 
     A masknmf demixing result opens in masknmf's own viewer instead:
     ``vis`` picks ``demixing`` (default) or ``classification`` before launch;
@@ -1763,6 +1788,7 @@ def run_gui(
         vis=vis,
         raw_path=raw_path,
         motion_correction_path=motion_correction_path,
+        qc=qc,
     )
 
 

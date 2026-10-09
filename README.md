@@ -1,35 +1,3 @@
-## Repo status (2026-10-07)
-
-**Fork of mbo_utilities: done**
-- Since 2026-10-04, `FlynnOConnell/pml_utilities` has been a real GitHub fork of `MillerBrainObservatory/mbo_utilities`, and the two share history. `main` branches off upstream at `dce6b1a9`.
-- Remotes: `origin` is the fork; `upstream` is the lab repo, which is set to `no_push`.
-- `main` is 240 commits ahead of `upstream/master`. Nothing has gone upstream yet.
-- The pre-fork repo is archived as `FlynnOConnell/pml_utilities-old`.
-
-**`up/fastplotlib-0.7` (moves mbo_utilities to official fastplotlib 0.7.0): built, not submitted**
-- Worktree `~/repos/pml_utilities-fastplotlib` with its own `.venv`; 4 commits on `upstream/master`, pushed to origin, no PR to `MillerBrainObservatory:master` yet.
-- 459 tests pass offscreen. A real window, the pollen viewer, the IsoView widgets and the Run tab have not been exercised.
-- Uncommitted: `scripts/install.ps1` and `scripts/install.sh` (removal of the unneeded uninstall step).
-- To finish: check it in a real window, commit the install scripts, then `gh pr create -R MillerBrainObservatory/mbo_utilities --base master`.
-
-**Branches**
-
-| Branch | State | Action |
-|---|---|---|
-| `main` | level with `origin/main` | keep |
-| `suite2p-results` | 1 commit ahead of main ("remove app, install deps") | merge into main |
-| `notebooks` (`-notebooks` worktree) | 1 ahead, 6 behind; PR #1 open | rebase onto main, merge |
-| `up/fastplotlib-0.7` | see above | keep until upstream merges, then delete |
-| `voltage/spike-average` (`-spike-average` worktree) | no commits of its own; spike-average work uncommitted | keep |
-| tags `archive/app`, `archive/true-5d` | dropped work | delete if never revisiting |
-
-**Where to edit**
-- `~/repos/pml_utilities` on `main` is the pml_utilities checkout; other environments install it as an editable path, so it stays on `main`.
-- `~/repos/pml_utilities-fastplotlib` is only for the upstream fastplotlib PR.
-- For pml PRs, pass `-R FlynnOConnell/pml_utilities --base main`; because the repo is a fork, `gh` defaults to the lab repo.
-
----
-
 > **A fork of [mbo_utilities](https://github.com/MillerBrainObservatory/mbo_utilities) for Program in Memory Longevity (PML)**
 
 <p align="center">

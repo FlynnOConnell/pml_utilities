@@ -7,16 +7,18 @@ tinting against dataclass defaults, a modified-parameters table, and a
 green centered Run button. Run spawns the "masknmf" worker task; each plane
 lands in a masknmf run folder (``masknmf.runner``) with a results zarr.
 Denoise before registration estimates the shifts on a quick denoised copy
-(``alignment.hdf5``); View movies opens the last run's raw and registered
-movies over the same two as PMD.
+(``alignment.hdf5``); View movies opens the last run in the
+Registration-Denoising Quality Control viewer.
 """
 
 import dataclasses
 import math
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import psutil
 from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
@@ -37,7 +39,7 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
     _draw_md_field,
     _format_size,
 )
-from mbo_utilities.preferences import get_last_dir, set_last_dir
+from mbo_utilities.preferences import get_last_dir, get_mbo_dirs, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
 
 # palette matched to the Suite2p settings panel
@@ -203,6 +205,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
         self._settings_sizer: PopupAutoSize | None = None
         self._show_slice_popup = False
         self._last_fpath = None
+        # (pid, log name) of the QC viewer View movies started, until it exits
+        self._viewer_launch = None
+        self._viewer_checked = 0.0
 
     def default_settings(self):
         """The settings Defaults resets to."""
@@ -938,10 +943,32 @@ class MaskNMFPipelineWidget(PipelineWidget):
         if not self._outdir:
             imgui.end_disabled()
         set_tooltip(
-            "Raw and registered over raw (pmd) and registered (pmd), from the run "
-            "folder last written under the output folder.",
+            "The run folder last written under the output folder: raw and "
+            "registered over the same two as PMD, with RTMC, masknmf shifts, "
+            "frame means and the mean inside a box you move on any movie.",
             show_mark=False,
         )
+        if (
+            self._viewer_launch is not None
+            and time.monotonic() - self._viewer_checked > 1.0
+        ):
+            self._viewer_checked = time.monotonic()
+            pid, log_name = self._viewer_launch
+            try:
+                alive = psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+            except psutil.NoSuchProcess:
+                alive = False
+            if not alive:
+                self._viewer_launch = None
+                logs = sorted(get_mbo_dirs()["logs"].glob(f"*_{log_name}.log"))
+                text = (
+                    logs[-1].read_text(encoding="utf-8", errors="replace")
+                    if logs
+                    else ""
+                )
+                if "Traceback" in text:
+                    last = [line for line in text.splitlines() if line.strip()][-1]
+                    self._last_status = f"QC viewer failed: {last} (log: {logs[-1]})"
         if not view:
             return
         written = [
@@ -955,10 +982,12 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
         run = max(written)[1]
         # its own process: a second figure built inside this imgui frame crashes imgui
+        log_name = f"movies_{run.name}"
         pid = launch_window(
-            "mbo_utilities.gui.registration_viewer", [str(run)], f"movies_{run.name}"
+            "mbo_utilities.gui.reg_denoise_viewer", [str(run)], log_name
         )
-        self._last_status = f"Opened {run.name} in its own window (PID {pid})."
+        self._viewer_launch = (pid, log_name)
+        self._last_status = f"Opening {run.name} in its own window (PID {pid})."
 
     def _submit(self, planes: list[int]) -> None:
         from mbo_utilities.gui.widgets.process_manager import get_process_manager

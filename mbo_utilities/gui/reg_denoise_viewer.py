@@ -1,12 +1,16 @@
-"""Registration-Denoising Quality Control: the four movies of a pre-registration denoising run.
+"""Registration-Denoising Quality Control: the movies of a pre-registration denoising run.
 
 ``mbo run/results.hdf5`` lands here when the file is a ``run_reg_denoise``
-result (``is_reg_denoise``). The movies share one time slider and one camera;
-masknmf's ``TracePlot`` is docked above them and linked to the same time.
+result (``is_reg_denoise``), and the MaskNMF widget's View movies opens a run
+folder here in its own process (``python -m
+mbo_utilities.gui.reg_denoise_viewer <results.hdf5 | run folder>``). The
+movies share one time slider and one camera; masknmf's ``TracePlot`` is docked
+above them and linked to the same time.
 """
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 from mbo_utilities import log
@@ -61,7 +65,7 @@ class RegDenoiseViewer:
 
         self.ndw = fpl.NDWidget(
             ref_range,
-            shape=(2, 2),
+            shape=(2, 2) if len(names) == 4 else (1, len(names)),
             names=names,
             controller_ids=[tuple(names)],
             size=(1200, 1100),
@@ -82,7 +86,12 @@ class RegDenoiseViewer:
             subplot.tooltip.enabled = False
 
         rtmc = on_frames(self.run.rtmc, times)
-        panels = ((RTMC_PANEL,) if rtmc else ()) + (SHIFT_PANEL, FOV_PANEL, ROI_PANEL)
+        shifts = on_frames(self.run.shifts, times)
+        panels = (
+            ((RTMC_PANEL,) if rtmc else ())
+            + ((SHIFT_PANEL,) if shifts else ())
+            + (FOV_PANEL, ROI_PANEL)
+        )
         self.traces = TracePlot(panels, len(times), timings, autofit=False)
         self.traces.dock(self.ndw.figure, size=560, title="traces")
         self.traces.link(self.ndw.indices)
@@ -91,13 +100,11 @@ class RegDenoiseViewer:
                 RTMC_PANEL,
                 [(f"RTMC {k}", v, AXIS_COLORS.get(k[0])) for k, v in rtmc.items()],
             )
-        self.traces.set(
-            SHIFT_PANEL,
-            [
-                (f"masknmf {k}", v, AXIS_COLORS.get(k[0]))
-                for k, v in on_frames(self.run.shifts, times).items()
-            ],
-        )
+        if shifts:
+            self.traces.set(
+                SHIFT_PANEL,
+                [(f"masknmf {k}", v, AXIS_COLORS.get(k[0])) for k, v in shifts.items()],
+            )
         self.traces.set(
             FOV_PANEL,
             [(n, m.mean(axis=(1, 2)), MOVIE_COLORS[n]) for n, m in movies.items()],
@@ -151,3 +158,14 @@ class RegDenoiseViewer:
 
     def show(self):
         return self.ndw.show()
+
+
+if __name__ == "__main__":
+    import fastplotlib as fpl
+
+    parser = argparse.ArgumentParser(description=TITLE)
+    parser.add_argument(
+        "path", type=Path, help="a reg-denoise results.hdf5 or a MaskNMF run folder"
+    )
+    RegDenoiseViewer(parser.parse_args().path).show()
+    fpl.loop.run()
