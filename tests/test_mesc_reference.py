@@ -216,7 +216,7 @@ def test_trace_rows_on_a_line_scan_know_their_line(mesc_path):
                 uid=0,
                 member=1,
                 source="results",
-                engine="voltage",
+                engine="vnoiser",
                 label="roi1",
                 F=np.zeros(6, np.float32),
                 z=1,
@@ -230,7 +230,7 @@ def test_trace_rows_on_a_line_scan_know_their_line(mesc_path):
         assert widget._line_position(results_row)["start_um"] == [120.0, 204.0, -46.0]
         assert widget._line_position(drawn_row)["start_um"] == [105.0, 220.0, -53.9]
         assert widget._line_position(results_row)["slice"] == 7
-        assert widget._trace_cells(results_row.key)[1:4] == ("2", "0", "voltage")
+        assert widget._trace_cells(results_row.key)[1:4] == ("2", "0", "vnoiser")
         assert len(widget._trace_cells(drawn_row.key)) == 5
         # a row's own record wins over the recording's
         results_row.extra["length_um"] = 2.5

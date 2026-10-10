@@ -26,8 +26,10 @@ from vnoiser.curation import (
 from vnoiser.dataset import RecordingSample
 
 from mbo_utilities.results import (
+    CURATION_DIR,
     ResultsArray,
     newest_results,
+    recording_id,
     results_dir_of,
     results_source,
 )
@@ -38,8 +40,8 @@ __all__ = [
     "PC1_SIDES",
     "CurationSession",
     "hex_rgba",
-    "voltage_run_for_mesc",
-    "voltage_unit_for_mesc",
+    "vnoiser_run_for_mesc",
+    "vnoiser_unit_for_mesc",
     "recording_id",
     "trace_label",
 ]
@@ -49,16 +51,6 @@ LABELS = ("yes", "no", "auto_yes", "auto_no", "unlabeled")
 VIEW_FILTERS = ("all", "yes", "no", "unlabeled")
 
 _TAGS = re.compile(r"<[^>]+>")
-
-
-def recording_id(unit, roi: str) -> str:
-    """The curation's id of one ROI trace, ``scan=<id>/domain=<name>``: what its
-    labels are keyed by under ``<run>/.curation``.
-
-    The words are the archive's and stay whatever the results file calls the
-    unit, so a trace curated before the run was a results file still matches.
-    """
-    return f"scan={unit.attrs.get('scan_id', unit.index)}/domain={roi}"
 
 
 def trace_label(unit, roi: str) -> str:
@@ -139,7 +131,7 @@ class CurationSession:
             recording_id=recording_id(found, roi),
             label=trace_label(found, roi),
             source_path=arr.path,
-            curation_dir=arr.path / ".curation",
+            curation_dir=arr.path / CURATION_DIR,
             pre_denoised=True,
         )
 
@@ -170,7 +162,7 @@ class CurationSession:
         curation_dir = (
             Path(curation_dir)
             if curation_dir is not None
-            else source_path.parent / ".curation"
+            else source_path.parent / CURATION_DIR
         )
         t = np.arange(trace.size, dtype=float) / float(fs_hz)
         full = RecordingSample(
@@ -632,15 +624,15 @@ class CurationSession:
         return 500.0 if self.mode == "slow" else 100.0
 
 
-def voltage_run_for_mesc(mesc_path) -> Path | None:
-    """What the voltage pipeline last left for a line scan: the newest results
+def vnoiser_run_for_mesc(mesc_path) -> Path | None:
+    """What the vnoiser pipeline last left for a line scan: the newest results
     file beside it that was made from it, else a ``PF`` folder of pickles
     beside it or one folder up (the ``<expt>/<expt>/<expt>.mesc`` layout keeps
     ``<expt>/PF``); None when there is none. Another recording's run in the
     same folder is never this one's.
     """
     mesc_path = Path(mesc_path)
-    found = newest_results(mesc_path.parent, "voltage", source=mesc_path)
+    found = newest_results(mesc_path.parent, "vnoiser", source=mesc_path)
     if found is not None:
         return found
     for parent in (mesc_path.parent.parent, mesc_path.parent):
@@ -651,12 +643,12 @@ def voltage_run_for_mesc(mesc_path) -> Path | None:
     return None
 
 
-def voltage_unit_for_mesc(mesc_path, unit_key: str) -> ResultsArray | None:
-    """The line scan's last voltage run opened on that recording unit (the
+def vnoiser_unit_for_mesc(mesc_path, unit_key: str) -> ResultsArray | None:
+    """The line scan's last vnoiser run opened on that recording unit (the
     image is left closed), or None when there is no run or the pipeline never
     processed the unit.
     """
-    run = voltage_run_for_mesc(mesc_path)
+    run = vnoiser_run_for_mesc(mesc_path)
     if run is None:
         return None
     try:

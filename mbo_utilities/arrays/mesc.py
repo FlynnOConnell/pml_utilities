@@ -124,7 +124,7 @@ _PACKED_MODALITIES = frozenset({6, 7})
 _VOLUME_MODALITIES = frozenset({11})
 # Layouts whose Z axis holds AOD ROIs scanned within one frame period: the
 # lines of a line scan, the patches of a chessboard, the boxes of a ribbon
-# scan. The voltage pipeline and the curation widget take any of them.
+# scan. The vnoiser pipeline and the curation widget take any of them.
 ROI_LAYOUTS = frozenset({"packed", "tiled", "boxes"})
 
 # Y is flipped on read for these, matching lab4.convert. The flip corrects

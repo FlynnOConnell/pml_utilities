@@ -203,6 +203,21 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
         return self._registered
 
     @property
+    def frames(self) -> np.ndarray:
+        """The recording's frame under each of the run's, 0-based."""
+        movie = self.config["inputs"]["movie"]
+        if movie.get("frames") is not None:
+            return np.arange(*movie["frames"])
+        if movie.get("tp_indices") is not None:
+            return np.asarray(movie["tp_indices"])
+        return np.arange(self.raw.shape[0])
+
+    @property
+    def recording(self):
+        """The recording the run read, as ``imread`` opened it (read features applied)."""
+        return self.raw.arr
+
+    @property
     def shifts(self) -> np.ndarray | None:
         """The stored shifts, ``(T, 2)`` (y, x) in px, or blockwise for piecewise rigid."""
         if self._group is None:

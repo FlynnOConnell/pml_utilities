@@ -164,7 +164,7 @@ from mbo_utilities.gui.roi_runs import (
 from mbo_utilities.gui.slice import Slice, viewer_positions, viewer_roles
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.lazy_array import base_array
-from mbo_utilities.results import unit_name
+from mbo_utilities.results import results_pipeline, unit_name
 from mbo_utilities.roi_workflow import (
     OUT_PREFIX,
     SAVE_NAME,
@@ -668,6 +668,8 @@ class ManualRoiWidget:
 
         self.selected = -1
         self.selected_derived: tuple[int, int] | None = None
+        # the spike-average windows the Traces panel started, until they exit
+        self._windows: list = []
         # ctrl / shift click builds a group here; its traces share the plot
         # and label actions apply to every member. Entries are (si, k), si -1 = drawn.
         self.buffer: list[tuple[int, int]] = []
@@ -2057,7 +2059,7 @@ class ManualRoiWidget:
     def load_results(self, path, discarded=(), classes=None, colors=None) -> bool:
         """Read a results file (AGENTS.md §7.5) into the widget. Pixel units
         (suite2p, masknmf) load as derived sets exactly like a run dir; line
-        units (the voltage pipeline's scans) go straight to the Traces tab,
+        units (the vnoiser pipeline's scans) go straight to the Traces tab,
         one row per ROI plotting its denoised trace and one per member line
         plotting the line's raw trace. Every row is named by its ROI
         (``roi3``, ``roi3 (raw)``; a line of a multi-line ROI adds itself,
@@ -2116,11 +2118,18 @@ class ManualRoiWidget:
                 else None
             ) or []
             for k, roi in enumerate(unit.roi_names):
-                entry = {"label": str(roi), "fs": unit.fs, "c": channel, "kinds": {}}
+                # the run's own names, which the spike-average window opens the ROI by
+                entry = {
+                    "label": str(roi),
+                    "fs": unit.fs,
+                    "c": channel,
+                    "kinds": {},
+                    "extra": {"unit": unit.name, "roi": str(roi)},
+                }
                 members = unit.members[k] if k < len(unit.members) else ()
                 if lines and len(members) == 1:
                     entry["z"] = int(members[0])
-                    entry["extra"] = {"line": int(members[0])}
+                    entry["extra"]["line"] = int(members[0])
                     if int(members[0]) < len(positions):
                         entry["extra"].update(positions[int(members[0])])
                 # every kind the unit wrote, under the row's field for it
@@ -3275,7 +3284,7 @@ class ManualRoiWidget:
                 info.pid in mine
                 or info.pid in self._adopted
                 or info.status != "completed"
-                or info.task_type not in ("suite2p", "masknmf", "voltage")
+                or info.task_type not in ("suite2p", "masknmf", "vnoiser")
             ):
                 continue
             self._adopted.add(info.pid)
@@ -3286,11 +3295,11 @@ class ManualRoiWidget:
             out = Path(out)
             if root not in (out, *out.parents) and out not in root.parents:
                 continue  # another dataset's run
-            if info.task_type == "voltage":
-                # a zarr-format voltage run leaves one results file in the PF folder
+            if info.task_type == "vnoiser":
+                # a zarr-format vnoiser run leaves one results file in the PF folder
                 from mbo_utilities.results import newest_results
 
-                found = newest_results(out, "voltage")
+                found = newest_results(out, "vnoiser")
                 dirs = [found] if found is not None and str(found) not in loaded else []
             else:
                 dirs = [
@@ -3890,6 +3899,33 @@ class ManualRoiWidget:
             header = f"{self.derived[si].name} row {k}"
         return header, lines
 
+    def _spike_target(self, rows) -> tuple | None:
+        """``(path, unit, roi, c)`` of the run behind the one ROI plotted,
+        when that ROI came from a run's results; None otherwise.
+
+        An algo row is ROI ``k`` of the unit its set was read from (a run
+        folder or plane dir, or ``<file>.zarr/<unit>``); a results row of the
+        trace table carries its file, unit and ROI.
+        """
+        if self.selected < 0 and self.selected_derived is not None and not self.buffer:
+            si, k = self.selected_derived
+            path = Path(self.derived[si].result.path)
+            if results_pipeline(path.parent) is not None:
+                return (path.parent, path.name, str(k), None)
+            return (path, None, str(k), None) if path.is_dir() else None
+        if len(rows) == 1 and rows[0] is not None and "roi" in (rows[0].extra or {}):
+            row = rows[0]
+            return (row.path, row.extra["unit"], row.extra["roi"], row.c)
+        return None
+
+    def _open_spike_average(self, path, unit, roi, c) -> None:
+        from mbo_utilities.gui.launch import LaunchedWindow
+        from mbo_utilities.gui.spike_average_viewer import launch_spike_average
+
+        pid, log_name = launch_spike_average(path, unit, roi, c)
+        self._windows.append(LaunchedWindow(pid, log_name, "Spike average"))
+        self.status = f"spike average of {roi} in its own window (PID {pid})"
+
     def draw_traces(self):
         """The Traces panel: a row of controls, the behavior raster, then
         masknmf's stacked trace panels (the motion correction over the
@@ -3962,6 +3998,22 @@ class ManualRoiWidget:
                 "The picture this recording's lines or patches were drawn on, with them drawn and the slider's ROI "
                 "thick. Click one there to select it."
             )
+        spike_target = self._spike_target(rows)
+        if spike_target is not None:
+            imgui.same_line(0, em(0.8))
+            if imgui.small_button("Spike average##traces"):
+                self._open_spike_average(*spike_target)
+            tooltip(
+                "This ROI averaged around its spikes (its run's detected events, the events its curation accepts, "
+                "or its trace over a threshold): the movie, the trace and every motion correction, in a window "
+                "of its own"
+            )
+        for window in list(self._windows):
+            state = window.poll()
+            if state is not None:
+                self._windows.remove(window)
+                if state:
+                    self.status = state
         imgui.same_line(0, em(0.8))
         if target is not None:
             proj, size = self._window_spec()

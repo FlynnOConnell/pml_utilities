@@ -746,7 +746,7 @@ class TestWidget:
         curation.scan(empty)
         assert curation.catalog == []
         assert curation.session is None
-        assert "no voltage run" in curation.status
+        assert "no vnoiser run" in curation.status
         _frames(curation)
 
     def test_load_runs_off_the_frame_and_draws_every_panel(self, curation, data_root):
@@ -866,7 +866,7 @@ class TestWidget:
 
 class TestViewerIntegration:
     """The viewer has no curation panel of its own: the Curate button (the
-    Voltage pipeline's, or the MESc tab's) opens the curation window in a
+    vnoiser pipeline's, or the MESc tab's) opens the curation window in a
     second process, what `mbo curate` runs.
     """
 
@@ -928,13 +928,13 @@ class TestViewerIntegration:
         logs = list(tmp_path.glob("*_curate_PF.log"))
         assert len(logs) == 1 and Path(kwargs["stdout"].name) == logs[0]
 
-    def test_the_voltage_widgets_curate_button_launches_the_window(
+    def test_the_vnoiser_widgets_curate_button_launches_the_window(
         self, tmp_path, monkeypatch
     ):
         from types import SimpleNamespace
 
         from mbo_utilities.gui import curation_viewer
-        from mbo_utilities.gui.widgets.pipelines import voltage
+        from mbo_utilities.gui.widgets.pipelines import vnoiser
 
         calls = []
         monkeypatch.setattr(
@@ -942,10 +942,10 @@ class TestViewerIntegration:
             "launch_curation_window",
             lambda path, channel=0: calls.append((path, channel)) or 7,
         )
-        widget = voltage.VoltagePipelineWidget(
+        widget = vnoiser.VnoiserPipelineWidget(
             SimpleNamespace(image_widget=None, fpath=None)
         )
-        widget._voltage_c_selection = "2"
+        widget._vnoiser_c_selection = "2"
         widget._curate(str(tmp_path / "PF"))
         assert calls == [(str(tmp_path / "PF"), 1)]
         assert "PID 7" in widget._last_status
@@ -1208,13 +1208,13 @@ class TestPfForMesc:
     def test_pf_folder_and_scan_are_found_beside_the_mesc(self, tmp_path):
         from mbo_utilities.vnoiser import (
             recording_id,
-            voltage_run_for_mesc,
-            voltage_unit_for_mesc,
+            vnoiser_run_for_mesc,
+            vnoiser_unit_for_mesc,
         )
 
         mesc, pf_dir = _mesc_beside_pf(tmp_path)
-        assert voltage_run_for_mesc(mesc) == pf_dir
-        run = voltage_unit_for_mesc(mesc, "MSession_0/MUnit_10")
+        assert vnoiser_run_for_mesc(mesc) == pf_dir
+        run = vnoiser_unit_for_mesc(mesc, "MSession_0/MUnit_10")
         assert run is not None and run.path == pf_dir
         unit = run.results.units[run.unit]
         assert run.unit == "scan10" and unit.roi_names == ["soma"]
@@ -1223,21 +1223,21 @@ class TestPfForMesc:
         assert recording_id(unit, "soma") == "scan=10/domain=soma"
 
     def test_unprocessed_scan_or_missing_pf_gives_none(self, tmp_path):
-        from mbo_utilities.vnoiser import voltage_run_for_mesc, voltage_unit_for_mesc
+        from mbo_utilities.vnoiser import vnoiser_run_for_mesc, vnoiser_unit_for_mesc
 
         mesc, _pf_dir = _mesc_beside_pf(tmp_path)
-        assert voltage_unit_for_mesc(mesc, "MUnit_99") is None
+        assert vnoiser_unit_for_mesc(mesc, "MUnit_99") is None
         lone = tmp_path / "elsewhere" / "scan.mesc"
         lone.parent.mkdir()
         lone.write_bytes(b"x")
-        assert voltage_run_for_mesc(lone) is None
-        assert voltage_unit_for_mesc(lone, "MUnit_10") is None
+        assert vnoiser_run_for_mesc(lone) is None
+        assert vnoiser_unit_for_mesc(lone, "MUnit_10") is None
 
     def test_domain_trace_loads_by_its_recording_id(self, tmp_path):
-        from mbo_utilities.vnoiser import CurationSession, voltage_unit_for_mesc
+        from mbo_utilities.vnoiser import CurationSession, vnoiser_unit_for_mesc
 
         mesc, pf_dir = _mesc_beside_pf(tmp_path)
-        run = voltage_unit_for_mesc(mesc, "MUnit_10")
+        run = vnoiser_unit_for_mesc(mesc, "MUnit_10")
         session = CurationSession(pf_dir, mode="fast")
         session.load_run(run, run.unit, "soma")
         assert session.loaded and session.n == 3
@@ -1254,7 +1254,7 @@ class TestPfForMesc:
         mesc.write_bytes(b"x")
         curation.scan(mesc)
         assert curation.data_path == str(pf_dir)
-        assert "voltage run of" in curation.status
+        assert "vnoiser run of" in curation.status
         assert curation.catalog
         curation.wait(60)
         lone = tmp_path / "elsewhere" / "scan.mesc"
@@ -1269,7 +1269,7 @@ class TestPfForMesc:
 class TestMboOpensTheLineScanViewer:
     """``mbo scan.mesc`` opens the image viewer on the file's first line-scan
     unit with no prompt (or on the line-scan unit picked); the curation and
-    the Voltage pipeline follow the unit on screen. Other units and files
+    the vnoiser pipeline follow the unit on screen. Other units and files
     still prompt once and go to the image viewer.
     """
 
@@ -1506,10 +1506,10 @@ class TestCurationWindow:
             assert app.title.endswith("expt1")
         finally:
             app.widget.close()
-        # a folder with no voltage run in it lists nothing and says so
+        # a folder with no vnoiser run in it lists nothing and says so
         app = open_curation_viewer(data_root, run=False)
         try:
-            assert app.widget.catalog == [] and "no voltage run" in app.widget.status
+            assert app.widget.catalog == [] and "no vnoiser run" in app.widget.status
         finally:
             app.widget.close()
 
@@ -1674,7 +1674,7 @@ def _mesc_with_rtmc(path, munit=10):
 
 
 def _name_source(pf_dir, mesc, scan="10"):
-    """The provenance the voltage pipeline writes beside its traces."""
+    """The provenance the vnoiser pipeline writes beside its traces."""
     units = {scan: f"MSession_0/MUnit_{scan}"}
     (pf_dir / "pipeline.json").write_text(
         json.dumps({"source": {"mesc": str(mesc), "units": units}})

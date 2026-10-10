@@ -130,7 +130,7 @@ def test_imread_opens_a_pf_folder_as_a_trace_raster(tmp_path):
     pf = write_pf(experiment / "PF")
     arr = imread(experiment)
     assert isinstance(arr, ResultsArray)
-    assert arr.pipeline == "voltage"
+    assert arr.pipeline == "vnoiser"
     assert list(arr.results.units) == ["scan35", "scan38"] and arr.unit == "scan35"
     scan35 = arr.results.units["scan35"]
     assert (
@@ -153,7 +153,7 @@ def test_imread_opens_a_pf_folder_as_a_trace_raster(tmp_path):
     assert arr.metadata["fs"] == FS
     assert arr.metadata["results_path"] == str(pf)
     assert arr.metadata["results_units"] == ["scan35", "scan38"]
-    assert arr.metadata["voltage_settings"] == {"dfof": {"sigma_dfof": 1500}}
+    assert arr.metadata["vnoiser_settings"] == {"dfof": {"sigma_dfof": 1500}}
     assert arr.metadata["source_recording"] is None and arr.source_recording is None
     assert arr.reader_kwargs == {"unit": "scan35"} and arr.source_path == pf
     assert (
@@ -239,18 +239,18 @@ def test_a_missing_unit_falls_back_to_the_raster(tmp_path):
 def test_the_pipeline_registers_its_output_marker():
     from mbo_utilities.pipeline_registry import get_pipeline_info
 
-    info = get_pipeline_info("voltage")
+    info = get_pipeline_info("vnoiser")
     assert info is not None and info.marker_files == [TRACES_PKL]
 
 
-def test_the_voltage_widget_runs_from_a_run(tmp_path):
+def test_the_vnoiser_widget_runs_from_a_run(tmp_path):
     pytest.importorskip("imgui_bundle")
-    from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
 
     mesc = write_mesc(tmp_path / "scan.mesc")
     with_source = ResultsArray(
         write_pf(tmp_path / "a" / "PF", source=mesc), source=False
     )
     without = ResultsArray(write_pf(tmp_path / "b" / "PF"))
-    assert VoltagePipelineWidget.applies_to(with_source)
-    assert not VoltagePipelineWidget.applies_to(without)
+    assert VnoiserPipelineWidget.applies_to(with_source)
+    assert not VnoiserPipelineWidget.applies_to(without)

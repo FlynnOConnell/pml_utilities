@@ -214,17 +214,6 @@ def run_reg_denoise(
     return out
 
 
-def on_frames(motion: MotionCorrection | None, t: np.ndarray) -> dict[str, np.ndarray]:
-    """Each trace of ``motion`` at the times ``t``, holding its last sample (RTMC is run-length encoded)."""
-    if not motion:
-        return {}
-    out = {}
-    for label, (ts, values) in motion.traces.items():
-        idx = np.clip(np.searchsorted(ts, t, side="right") - 1, 0, len(ts) - 1)
-        out[label] = np.asarray(values, dtype=np.float32)[idx]
-    return out
-
-
 @dataclass
 class RegDenoiseRun:
     """One ``run_reg_denoise`` result or MaskNMF run folder with its movies.
@@ -351,15 +340,9 @@ class RegDenoiseRun:
         run = Path(run)
         movie_array = MasknmfRunArray(run, device=device)
         movie = movie_array.config["inputs"]["movie"]
-        n = movie_array.raw.shape[0]
-        if movie.get("frames") is not None:
-            frames = np.arange(*movie["frames"])
-        elif movie.get("tp_indices") is not None:
-            frames = np.asarray(movie["tp_indices"])
-        else:
-            frames = np.arange(n)
         source = movie_array.raw.arr
         fs = source.fs
+        frames = movie_array.frames
         t = frames / fs if fs else frames.astype(np.float64)
 
         pmds = {}

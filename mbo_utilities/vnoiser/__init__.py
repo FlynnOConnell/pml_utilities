@@ -13,8 +13,8 @@ from mbo_utilities.vnoiser.session import (
     hex_rgba,
     recording_id,
     trace_label,
-    voltage_run_for_mesc,
-    voltage_unit_for_mesc,
+    vnoiser_run_for_mesc,
+    vnoiser_unit_for_mesc,
 )
 
 __all__ = [
@@ -25,6 +25,6 @@ __all__ = [
     "hex_rgba",
     "recording_id",
     "trace_label",
-    "voltage_run_for_mesc",
-    "voltage_unit_for_mesc",
+    "vnoiser_run_for_mesc",
+    "vnoiser_unit_for_mesc",
 ]

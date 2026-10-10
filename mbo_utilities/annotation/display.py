@@ -107,10 +107,10 @@ TRACE_PROFILES: dict[str, TraceProfile] = {
         default="dff",
         dff=DffSettings(method="percentile"),
     ),
-    # voltage: the curated (denoised) trace first, then the pipeline's own
+    # vnoiser: the curated (denoised) trace first, then the pipeline's own
     # dfof_raw (a fraction), the z-score and the lines' raw means in counts
-    "voltage": TraceProfile(
-        pipeline="voltage",
+    "vnoiser": TraceProfile(
+        pipeline="vnoiser",
         kinds=("denoised", "dff", "zscore", "raw"),
         default="denoised",
         dff_percent=False,

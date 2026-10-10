@@ -3,7 +3,7 @@
 The curation notebook's dashboard as one panel, over every recording a
 ``PF`` folder holds. Scanning a path finds the folder (the folder itself,
 its traces file, the experiment folder holding it, or a line scan with one
-beside it), lists every scan / domain trace the voltage pipeline wrote and
+beside it), lists every scan / domain trace the vnoiser pipeline wrote and
 loads them in the background; a line scan without a folder lists its raw
 ROIs for the denoiser instead. The ``Curation`` panel shows one recording
 at a time in the notebook's grid: the
@@ -64,7 +64,7 @@ from mbo_utilities.gui.imgui.vnoiser_help import (
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.results import TRACES_PKL, ResultsArray, results_dir_of
-from mbo_utilities.vnoiser import MODES, CurationSession, voltage_run_for_mesc
+from mbo_utilities.vnoiser import MODES, CurationSession, vnoiser_run_for_mesc
 
 __all__ = [
     "KEYBINDS",
@@ -372,7 +372,7 @@ class EventCurationWidget:
         return out
 
     def scan(self, path) -> None:
-        """Catalog every ROI trace of a voltage run and start loading them.
+        """Catalog every ROI trace of a vnoiser run and start loading them.
         ``path`` is the run (a results file or a ``PF`` folder of pickles),
         its traces file, the folder holding it, or a line scan with one
         beside it.
@@ -385,22 +385,22 @@ class EventCurationWidget:
         path = Path(path).expanduser()
         note = ""
         if path.suffix.lower() == ".mesc":
-            run = voltage_run_for_mesc(path)
+            run = vnoiser_run_for_mesc(path)
             if run is None:
                 self.data_path = ""
                 self.status = (
-                    f"{path.name} is a raw line scan with no voltage run beside it. Open it "
+                    f"{path.name} is a raw line scan with no vnoiser run beside it. Open it "
                     "with 'mbo curate <file>.mesc' and curate its lines there, or point at "
                     "a run."
                 )
                 return
-            note = f" (voltage run of {path.name})"
+            note = f" (vnoiser run of {path.name})"
             path = run
         run_dir = results_dir_of(path)
         if run_dir is None:
             self.data_path = ""
             self.status = (
-                f"no voltage run at {path}: expected what the pipeline wrote (a results "
+                f"no vnoiser run at {path}: expected what the pipeline wrote (a results "
                 f"file or a PF folder of {TRACES_PKL}), the folder holding it, or a line "
                 "scan with one beside it."
             )

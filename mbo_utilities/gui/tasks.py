@@ -1534,11 +1534,11 @@ def task_roi_workflow(args: dict, logger: logging.Logger) -> None:
         raise
 
 
-def task_voltage(args: dict, logger: logging.Logger) -> None:
+def task_vnoiser(args: dict, logger: logging.Logger) -> None:
     """
-    Voltage pipeline task: AOD ROI units of a .mesc to a PF folder.
+    vnoiser pipeline task: AOD ROI units of a .mesc to a PF folder.
 
-    Runs mbo_utilities.vnoiser.pipeline.run_voltage_pipeline with the Run
+    Runs mbo_utilities.vnoiser.pipeline.run_vnoiser_pipeline with the Run
     tab's settings (scaled there to the scans' frame rate); every ticked
     unit is one scan, the domain table says which ROIs make each domain.
     The runner logs every step (each ROI read, each domain denoised, the
@@ -1546,12 +1546,12 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
     progress sidecar through ``monitor.update``.
     """
     from mbo_utilities.metadata import strip_for_export
-    from mbo_utilities.vnoiser.params import VoltageSettings
-    from mbo_utilities.vnoiser.pipeline import run_voltage_pipeline
+    from mbo_utilities.vnoiser.params import VnoiserSettings
+    from mbo_utilities.vnoiser.pipeline import run_vnoiser_pipeline
 
     monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
     monitor.update(0.01, "Opening the source...")
-    settings = VoltageSettings.from_dict(args.get("settings"))
+    settings = VnoiserSettings.from_dict(args.get("settings"))
     units = list(args.get("units") or [])
     domains = {
         str(k): [int(v) for v in rois]
@@ -1564,13 +1564,13 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
         metadata.update(args.get("custom_metadata") or {})
     except Exception as e:
         monitor.fail(str(e), details={"traceback": traceback.format_exc()})
-        logger.exception(f"voltage: cannot open input {args.get('input_path')!r}: {e}")
+        logger.exception(f"vnoiser: cannot open input {args.get('input_path')!r}: {e}")
         raise
     logger.info(f"Input: {args['input_path']}  units: {units}")
     logger.info(f"Output: {args['output_dir']}")
     logger.info(f"Domains: {domains}")
     try:
-        paths = run_voltage_pipeline(
+        paths = run_vnoiser_pipeline(
             args["input_path"],
             domains=domains,
             units=units or None,
@@ -1592,12 +1592,12 @@ def task_voltage(args: dict, logger: logging.Logger) -> None:
             logger=logger,
         )
         monitor.finish(
-            f"Voltage pipeline wrote {len(paths)} files to {args['output_dir']}"
+            f"vnoiser pipeline wrote {len(paths)} files to {args['output_dir']}"
         )
-        logger.info(f"voltage completed: {sorted(paths)}")
+        logger.info(f"vnoiser completed: {sorted(paths)}")
     except Exception as e:
         monitor.fail(str(e), details={"traceback": traceback.format_exc()})
-        logger.exception(f"voltage failed: {e}")
+        logger.exception(f"vnoiser failed: {e}")
         raise
 
 
@@ -1605,7 +1605,7 @@ TASKS = {
     "save_as": task_save_as,
     "suite2p": task_suite2p,
     "masknmf": task_masknmf,
-    "voltage": task_voltage,
+    "vnoiser": task_vnoiser,
     "roi_workflow": task_roi_workflow,
     "isoview": task_isoview,
     "isoview_correct": task_correct_stack,

@@ -1,4 +1,4 @@
-"""`mbo voltage` and the Run-tab widget: the spatial JEDI pipeline from a raw line-scan .mesc.
+"""`mbo vnoiser` and the Run-tab widget: the spatial JEDI pipeline from a raw line-scan .mesc.
 
 The parity tests need the archive experiment on X: (or the vnoiser data
 folder) and skip without it; the end-to-end one is marked slow (about 15
@@ -15,12 +15,12 @@ import pytest
 
 pytest.importorskip("vnoiser")
 
-from mbo_utilities.vnoiser.params import VoltageSettings  # noqa: E402
+from mbo_utilities.vnoiser.params import VnoiserSettings  # noqa: E402
 from mbo_utilities.vnoiser.pipeline import (  # noqa: E402
     DOMAINS_FILE,
     default_pf_dir,
     read_domains,
-    run_voltage_pipeline,
+    run_vnoiser_pipeline,
     scan_traces_from_mesc,
     write_domains_template,
 )
@@ -39,9 +39,9 @@ ARCHIVE = next(
 archive = pytest.mark.skipif(ARCHIVE is None, reason="archive experiment not reachable")
 
 
-def pkl_settings() -> VoltageSettings:
+def pkl_settings() -> VnoiserSettings:
     """The archive's PF folder of pickles; the default output is the results zarr."""
-    settings = VoltageSettings()
+    settings = VnoiserSettings()
     settings.runtime.output_format = "pkl"
     return settings
 
@@ -80,22 +80,22 @@ def test_default_pf_dir_follows_the_archive_layout(tmp_path):
 
 
 def test_settings_roundtrip_and_defaults_are_the_archives():
-    settings = VoltageSettings()
+    settings = VnoiserSettings()
     settings.denoiser.soft_levels = (0.7, 0.5, 0.2, 0.05)
     settings.events.detect = False
-    back = VoltageSettings.from_dict(json.loads(json.dumps(settings.to_dict())))
+    back = VnoiserSettings.from_dict(json.loads(json.dumps(settings.to_dict())))
     assert back == settings
     assert isinstance(back.denoiser.soft_levels, tuple)
     assert (
-        VoltageSettings.from_dict(
+        VnoiserSettings.from_dict(
             {"dfof": {"sigma_dfof": 10, "bogus": 1}}
         ).dfof.sigma_dfof
         == 10
     )
-    model = VoltageSettings().denoiser.factory(1000.0)
+    model = VnoiserSettings().denoiser.factory(1000.0)
     upstream = model.upstream(1000.0)
     assert model.describe() == upstream.describe()
-    assert VoltageSettings().events.config().distance_samples == 3
+    assert VnoiserSettings().events.config().distance_samples == 3
 
 
 def test_settings_from_provenance_of_a_written_folder(tmp_path):
@@ -105,7 +105,7 @@ def test_settings_from_provenance_of_a_written_folder(tmp_path):
     n = 4000
     traces = {0: 1700 + rng.normal(0, 20, n), 1: 1700 + rng.normal(0, 20, n)}
     scan = ScanTraces("7", 1000.0, traces, {0: 10.0, 1: 10.0})
-    settings = VoltageSettings()
+    settings = VnoiserSettings()
     settings.denoiser.n_scales = 32
     settings.events.thres_bp_sd = 3.0
     run_pipeline(
@@ -118,18 +118,18 @@ def test_settings_from_provenance_of_a_written_folder(tmp_path):
         provenance={"settings": settings.to_dict()},
     )
     files = read_pf(tmp_path / "PF")
-    assert VoltageSettings.from_provenance(files.provenance) == settings
+    assert VnoiserSettings.from_provenance(files.provenance) == settings
     # a folder made without the settings block still maps back from the denoiser description
     prov = dict(files.provenance)
     del prov["settings"]
-    again = VoltageSettings.from_provenance(prov)
+    again = VnoiserSettings.from_provenance(prov)
     assert again.denoiser.n_scales == 32 and again.events.thres_bp_sd == 3.0
     assert again.denoiser.thres_type == "soft" and again.denoiser.complex_bands is True
 
 
 def test_settings_scale_to_the_frame_rate():
     """The sample-count parameters keep the archive's durations at another frame rate."""
-    settings = VoltageSettings()
+    settings = VnoiserSettings()
     assert settings.at_fs(1075.2688) == settings
     fast = settings.at_fs(1000 / 4.8)
     k = (1000 / 4.8) / 1075.2688
@@ -233,14 +233,14 @@ def test_chessboard_patches_run_as_scans(tmp_path):
         "roi2": [2],
     }
     with pytest.raises(ValueError, match="frame rate"):
-        run_voltage_pipeline(
+        run_vnoiser_pipeline(
             mesc,
             domains=doc["domains"],
             units=["MUnit_1", "MUnit_2"],
             out=tmp_path / "PF_mixed",
             settings=pkl_settings(),
         )
-    paths = run_voltage_pipeline(
+    paths = run_vnoiser_pipeline(
         mesc,
         domains=doc["domains"],
         units=["MUnit_1"],
@@ -297,7 +297,7 @@ def test_the_viewer_opens_a_mesc_on_a_scan_its_pf_folder_holds(tmp_path):
     _chessboard_mesc(mesc, extra_unit=True)
     assert _first_linescan_unit(mesc) == "MSession_0/MUnit_1"
     doc = json.loads(write_domains_template(mesc, tmp_path / DOMAINS_FILE).read_text())
-    run_voltage_pipeline(
+    run_vnoiser_pipeline(
         mesc,
         domains=doc["domains"],
         units=["MUnit_2"],
@@ -330,7 +330,7 @@ def test_planes_pick_the_rois_and_cut_the_domains(tmp_path):
     assert np.array_equal(scan.traces[2], full[2])
     domains = {"roi0": [0], "roi1": [1], "roi2": [2], "pair": [1, 2]}
     with pytest.raises(ValueError, match="outside 1..3"):
-        run_voltage_pipeline(
+        run_vnoiser_pipeline(
             mesc,
             domains=domains,
             units=["MUnit_1"],
@@ -339,7 +339,7 @@ def test_planes_pick_the_rois_and_cut_the_domains(tmp_path):
             settings=pkl_settings(),
         )
     with pytest.raises(ValueError, match="no domain"):
-        run_voltage_pipeline(
+        run_vnoiser_pipeline(
             mesc,
             domains={"roi1": [1]},
             units=["MUnit_1"],
@@ -347,7 +347,7 @@ def test_planes_pick_the_rois_and_cut_the_domains(tmp_path):
             out=tmp_path / "PF_none",
             settings=pkl_settings(),
         )
-    paths = run_voltage_pipeline(
+    paths = run_vnoiser_pipeline(
         mesc,
         domains=domains,
         units=["MUnit_1"],
@@ -379,15 +379,15 @@ def test_one_roi_of_one_channel_runs_and_belongs_to_its_file(tmp_path):
     pytest.importorskip("imgui_bundle")
     from types import SimpleNamespace
 
-    from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
     from mbo_utilities.results import Results, newest_results
-    from mbo_utilities.vnoiser import voltage_run_for_mesc, voltage_unit_for_mesc
+    from mbo_utilities.vnoiser import vnoiser_run_for_mesc, vnoiser_unit_for_mesc
 
     mesc, other = tmp_path / "a.mesc", tmp_path / "b.mesc"
     page = _chessboard_mesc(mesc)
     _chessboard_mesc(other)
     domains = {"roi0": [0], "roi1": [1], "roi2": [2]}
-    paths = run_voltage_pipeline(
+    paths = run_vnoiser_pipeline(
         mesc, domains=domains, units=["MSession_0/MUnit_1"], planes=[2], channel=1
     )
     run = next(p for name, p in paths.items() if name.endswith(".zarr"))
@@ -401,18 +401,18 @@ def test_one_roi_of_one_channel_runs_and_belongs_to_its_file(tmp_path):
     )
     assert results.source["channel"] == 1 and results.source["planes"] == [2]
     assert results.source["domains"] == domains
-    assert voltage_run_for_mesc(mesc) == run
-    assert voltage_unit_for_mesc(mesc, "MUnit_1").unit == "scan1"
-    assert voltage_run_for_mesc(other) is None
-    assert voltage_unit_for_mesc(other, "MUnit_1") is None
-    assert newest_results(tmp_path, "voltage") == run
-    assert newest_results(tmp_path, "voltage", source=other) is None
+    assert vnoiser_run_for_mesc(mesc) == run
+    assert vnoiser_unit_for_mesc(mesc, "MUnit_1").unit == "scan1"
+    assert vnoiser_run_for_mesc(other) is None
+    assert vnoiser_unit_for_mesc(other, "MUnit_1") is None
+    assert newest_results(tmp_path, "vnoiser") == run
+    assert newest_results(tmp_path, "vnoiser", source=other) is None
 
-    widget = VoltagePipelineWidget(SimpleNamespace(fpath=mesc, image_widget=None))
+    widget = VnoiserPipelineWidget(SimpleNamespace(fpath=mesc, image_widget=None))
     widget._ensure_state()
     assert widget._last_status.startswith("Loaded the previous run")
     assert widget._domain_rows == [["roi0", "0"], ["roi1", "1"], ["roi2", "2"]]
-    widget = VoltagePipelineWidget(SimpleNamespace(fpath=other, image_widget=None))
+    widget = VnoiserPipelineWidget(SimpleNamespace(fpath=other, image_widget=None))
     widget._ensure_state()
     assert widget._last_status == ""
     assert widget._domain_rows == [["roi0", "0"], ["roi1", "1"], ["roi2", "2"]]
@@ -420,8 +420,8 @@ def test_one_roi_of_one_channel_runs_and_belongs_to_its_file(tmp_path):
 
 def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     """The default ``output_format="zarr"`` writes one
-    ``<input>.<stamp>.voltage.zarr`` beside the input, no pickles and no PF
-    folder, with everything else the run made in a ``voltage/`` folder inside
+    ``<input>.<stamp>.vnoiser.zarr`` beside the input, no pickles and no PF
+    folder, with everything else the run made in a ``vnoiser/`` folder inside
     it; ResultsArray, imread and the mesc lookups open it the same way.
     """
     from mbo_utilities import imread
@@ -432,14 +432,14 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
         pipeline_files,
         results_stamp,
     )
-    from mbo_utilities.vnoiser import voltage_run_for_mesc, voltage_unit_for_mesc
+    from mbo_utilities.vnoiser import vnoiser_run_for_mesc, vnoiser_unit_for_mesc
 
     mesc = tmp_path / "chess_session1.mesc"
     _chessboard_mesc(mesc)
     doc = json.loads(write_domains_template(mesc, tmp_path / DOMAINS_FILE).read_text())
-    settings = VoltageSettings()
+    settings = VnoiserSettings()
     assert settings.runtime.output_format == "zarr"
-    paths = run_voltage_pipeline(
+    paths = run_vnoiser_pipeline(
         mesc,
         domains=doc["domains"],
         units=["MUnit_1"],
@@ -447,24 +447,24 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
         settings=settings,
         provenance={"settings": settings.to_dict()},
     )
-    zarr_path = newest_results(tmp_path, "voltage")
+    zarr_path = newest_results(tmp_path, "vnoiser")
     zarr_name = zarr_path.name
     # named after its input, stamped to the second, beside the file and nowhere else
     assert zarr_name.startswith("chess_session1.") and zarr_name.endswith(
-        ".voltage.zarr"
+        ".vnoiser.zarr"
     )
     assert results_stamp(zarr_path) is not None and paths[zarr_name] == zarr_path
     assert not (tmp_path / "PF").exists() and not any(
         p.suffix == ".work" for p in tmp_path.iterdir()
     )
     assert not any(k.endswith(".pkl") for k in paths)
-    own, traces = pipeline_files(zarr_path), zarr_path / "voltage" / "traces"
-    assert own == zarr_path / "voltage"
+    own, traces = pipeline_files(zarr_path), zarr_path / "vnoiser" / "traces"
+    assert own == zarr_path / "vnoiser"
     assert (own / "test.h5").is_file() and (own / "pipeline.json").is_file()
-    assert (traces / "scan1_denoised.npy").is_file() and "voltage/test.h5" in paths
+    assert (traces / "scan1_denoised.npy").is_file() and "vnoiser/test.h5" in paths
     results = Results.read(paths[zarr_name])
     assert (
-        results.pipeline == "voltage"
+        results.pipeline == "vnoiser"
         and list(results.units) == ["scan1"]
         and results.tags == ["session01"]
     )
@@ -499,7 +499,7 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     run = ResultsArray(zarr_path, source=False)
     assert (
         run.path == paths[zarr_name]
-        and run.pipeline == "voltage"
+        and run.pipeline == "vnoiser"
         and run.unit == "scan1"
     )
     assert list(run.results.units) == ["scan1"] and run.results.units[
@@ -514,11 +514,11 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     assert isinstance(imread(zarr_path), ResultsArray) and isinstance(
         imread(tmp_path), ResultsArray
     )
-    assert voltage_run_for_mesc(mesc) == zarr_path
-    assert voltage_unit_for_mesc(mesc, "MSession_0/MUnit_1").unit == "scan1"
-    assert voltage_unit_for_mesc(mesc, "MUnit_2") is None
+    assert vnoiser_run_for_mesc(mesc) == zarr_path
+    assert vnoiser_unit_for_mesc(mesc, "MSession_0/MUnit_1").unit == "scan1"
+    assert vnoiser_unit_for_mesc(mesc, "MUnit_2") is None
     # a rerun writes its own file; the stamp orders them and the newest wins
-    again = run_voltage_pipeline(
+    again = run_vnoiser_pipeline(
         mesc,
         domains=doc["domains"],
         units=["MUnit_1"],
@@ -527,7 +527,7 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     )
     second = next(p for k, p in again.items() if k.endswith(".zarr"))
     assert results_stamp(second) >= results_stamp(zarr_path)
-    assert newest_results(tmp_path, "voltage") == second and list(
+    assert newest_results(tmp_path, "vnoiser") == second and list(
         Results.read(second).units
     ) == ["scan1"]
 
@@ -545,14 +545,14 @@ def test_every_step_is_timed_and_logged(tmp_path):
     mesc = tmp_path / "chess_session2.mesc"
     _chessboard_mesc(mesc)
     doc = json.loads(write_domains_template(mesc, tmp_path / DOMAINS_FILE).read_text())
-    settings = VoltageSettings()
+    settings = VnoiserSettings()
     settings.runtime.output_format = "zarr"
-    logger = log.get("tests.voltage")
+    logger = log.get("tests.vnoiser")
     records = BufferingHandler(10_000)
     logger.addHandler(records)
     progress = _Progress()
     try:
-        paths = run_voltage_pipeline(
+        paths = run_vnoiser_pipeline(
             mesc,
             domains=doc["domains"],
             units=["MUnit_1"],
@@ -564,11 +564,11 @@ def test_every_step_is_timed_and_logged(tmp_path):
         logger.removeHandler(records)
     from mbo_utilities.results import ResultsArray, newest_results, pipeline_files
 
-    zarr_path = newest_results(tmp_path, "voltage")
+    zarr_path = newest_results(tmp_path, "vnoiser")
     own = pipeline_files(zarr_path)
     messages = [r.getMessage() for r in records.buffer]
     assert any(
-        m.startswith("voltage: 1 scan(s) x 3 domain(s)") and "cpus" in m
+        m.startswith("vnoiser: 1 scan(s) x 3 domain(s)") and "cpus" in m
         for m in messages
     )
     assert any(m.startswith("scan 1: read ROI 3/3") for m in messages)
@@ -590,7 +590,7 @@ def test_every_step_is_timed_and_logged(tmp_path):
     )
     assert any(m.startswith("wrote traces/ for 1 scan(s) in ") for m in messages)
     assert any(
-        m.startswith("voltage done in ")
+        m.startswith("vnoiser done in ")
         and "peak process memory" in m
         and "timings.json" in m
         for m in messages
@@ -633,10 +633,10 @@ def test_every_step_is_timed_and_logged(tmp_path):
     )
     assert timing["denoise_stages"]["cwt"] <= timing["totals"]["denoise"]
     assert [h["step"] for h in history[:2]] == [
-        "voltage_read",
-        "voltage_dfof",
-    ] and history[-1]["step"] == "voltage_results"
-    denoise = [h for h in history if h["step"] == "voltage_denoise"]
+        "vnoiser_read",
+        "vnoiser_dfof",
+    ] and history[-1]["step"] == "vnoiser_results"
+    denoise = [h for h in history if h["step"] == "vnoiser_denoise"]
     assert [h["domain"] for h in denoise] == ["roi0", "roi1", "roi2"] and all(
         h["scan"] == "1" for h in denoise
     )
@@ -659,14 +659,14 @@ def test_every_step_is_timed_and_logged(tmp_path):
         and history[0]["n_frames"] == 1200
     )
 
-    assert paths[f"voltage/{TIMINGS_FILE}"] == own / TIMINGS_FILE
+    assert paths[f"vnoiser/{TIMINGS_FILE}"] == own / TIMINGS_FILE
     timings = json.loads((own / TIMINGS_FILE).read_text())
     assert (
         timings["totals"] == timing["totals"]
         and timings["wall_seconds"] == timing["wall_seconds"]
     )
     assert [s["step"] for s in timings["steps"]] == [
-        h["step"].removeprefix("voltage_") for h in history
+        h["step"].removeprefix("vnoiser_") for h in history
     ]
     assert sum(
         s["seconds"] for s in timings["steps"] if s["step"] == "denoise"
@@ -699,43 +699,43 @@ def test_task_and_widget_are_registered():
     from types import SimpleNamespace
 
     from mbo_utilities.gui.tasks import TASKS
-    from mbo_utilities.gui.widgets.pipelines.voltage import (
-        VoltagePipelineWidget,
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import (
+        VnoiserPipelineWidget,
         parse_roi_text,
     )
 
-    assert "voltage" in TASKS
-    import mbo_utilities.results  # noqa: F401  registers the voltage pipeline and its output
+    assert "vnoiser" in TASKS
+    import mbo_utilities.results  # noqa: F401  registers the vnoiser pipeline and its output
     from mbo_utilities.pipeline_registry import get_pipeline_info
 
-    assert get_pipeline_info("voltage").marker_files == ["denoised_trace_scans.pkl"]
+    assert get_pipeline_info("vnoiser").marker_files == ["denoised_trace_scans.pkl"]
     assert (
-        VoltagePipelineWidget.axis_mode("Z") == "range"
+        VnoiserPipelineWidget.axis_mode("Z") == "range"
     )  # Z is the ROI index on an AOD unit
-    assert VoltagePipelineWidget.applies_to(
+    assert VnoiserPipelineWidget.applies_to(
         SimpleNamespace(metadata={"mesc_layout": "packed"})
     )
     # chessboard patches and ribbon boxes are ROIs too
-    assert VoltagePipelineWidget.applies_to(
+    assert VnoiserPipelineWidget.applies_to(
         SimpleNamespace(metadata={"mesc_layout": "tiled"})
     )
-    assert VoltagePipelineWidget.applies_to(
+    assert VnoiserPipelineWidget.applies_to(
         SimpleNamespace(metadata={"mesc_layout": "boxes"}, filenames=["a.tif"])
     )
-    assert not VoltagePipelineWidget.applies_to(
+    assert not VnoiserPipelineWidget.applies_to(
         SimpleNamespace(metadata={"mesc_layout": "frames"}, filenames=["a.tif"])
     )
-    assert not VoltagePipelineWidget.applies_to(None)
+    assert not VnoiserPipelineWidget.applies_to(None)
     if ARCHIVE is not None:
         zstack = SimpleNamespace(
             metadata={"mesc_layout": "multicube"},
             filenames=[str(ARCHIVE / "stan112_expt12_zstack.mesc")],
         )
-        assert not VoltagePipelineWidget.applies_to(zstack)
+        assert not VnoiserPipelineWidget.applies_to(zstack)
         other_unit = SimpleNamespace(
             metadata={"mesc_layout": "multicube"}, filenames=[str(MESC)]
         )
-        assert VoltagePipelineWidget.applies_to(other_unit)
+        assert VnoiserPipelineWidget.applies_to(other_unit)
     assert parse_roi_text("0, 2:4, 1", 8) == [0, 1, 2, 3, 4]
     with pytest.raises(ValueError):
         parse_roi_text("0, 9", 8)
@@ -802,7 +802,7 @@ def test_scan_35_from_the_mesc_reproduces_the_archive_pf(tmp_path):
     spec = read_domains(ARCHIVE / "PF" / "scanIDs_ROIs.pkl")
     params = _restricted_pickle_load(ARCHIVE / "PF" / "param_spike_detect.pkl")
     out = tmp_path / "stan112" / "stan112_expt12" / "PF"
-    paths = run_voltage_pipeline(
+    paths = run_vnoiser_pipeline(
         MESC,
         domains=spec["domains"],
         units=["MUnit_35"],
@@ -838,7 +838,7 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
 
     import h5py
     from mbo_utilities.gui.widgets.pipelines.settings import _MISSING_COLOR
-    from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
     from mbo_utilities.results import (
         Results,
         ResultUnit,
@@ -887,8 +887,8 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
         members=[np.array([0, 1]), np.array([2])],
         attrs={"scan_id": "3", "first_env": True},
     )
-    results = Results(pipeline="voltage", units={scan.name: scan}).write(
-        out / results_name(mesc, pipeline="voltage")
+    results = Results(pipeline="vnoiser", units={scan.name: scan}).write(
+        out / results_name(mesc, pipeline="vnoiser")
     )
     if layout == "legacy":
         own = out
@@ -908,7 +908,7 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
         )
     )
 
-    widget = VoltagePipelineWidget(SimpleNamespace(fpath=mesc, image_widget=None))
+    widget = VnoiserPipelineWidget(SimpleNamespace(fpath=mesc, image_widget=None))
     widget._ensure_state()
     assert widget._status_color is not _MISSING_COLOR, widget._last_status
     assert widget._last_status.startswith("Loaded the previous run")
@@ -927,7 +927,7 @@ def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     from types import SimpleNamespace
 
     import h5py
-    from mbo_utilities.gui.widgets.pipelines.voltage import VoltagePipelineWidget
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
 
     mesc = tmp_path / "session1.mesc"
     with h5py.File(mesc, "w") as f:
@@ -964,7 +964,7 @@ def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
 
     shown = SimpleNamespace(unit_key="MSession_0/MUnit_5")
     parent = SimpleNamespace(fpath=mesc, image_widget=SimpleNamespace(data=[shown]))
-    widget = VoltagePipelineWidget(parent)
+    widget = VnoiserPipelineWidget(parent)
     widget._ensure_state()
     assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}
     assert widget._first_env == {"MSession_0/MUnit_5": True}

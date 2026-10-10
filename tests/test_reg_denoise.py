@@ -2,7 +2,7 @@ import h5py
 import numpy as np
 from mbo_utilities.arrays.features import MotionCorrection
 from mbo_utilities.masknmf.params import REG_DENOISE_PIPELINE, RegDenoiseSettings
-from mbo_utilities.masknmf.reg_denoise import alignment, is_reg_denoise, on_frames
+from mbo_utilities.masknmf.reg_denoise import alignment, is_reg_denoise
 
 
 class TestRegDenoiseSettings:
@@ -47,20 +47,17 @@ class TestIsRegDenoise:
         assert not is_reg_denoise(tmp_path / "missing.hdf5")
 
 
-class TestOnFrames:
+class TestMotionAt:
     def test_holds_last_sample(self):
         mc = MotionCorrection(
             "RTMC", "um", {"X": (np.array([0.0, 1.0, 2.0]), np.array([5.0, 6.0, 7.0]))}
         )
-        out = on_frames(mc, np.array([0.0, 0.5, 1.0, 1.9, 2.5]))
+        out = mc.at(np.array([0.0, 0.5, 1.0, 1.9, 2.5]))
         np.testing.assert_array_equal(out["X"], [5, 5, 6, 6, 7])
 
     def test_before_first_sample_uses_first(self):
         mc = MotionCorrection("RTMC", "um", {"Y": (np.array([1.0]), np.array([3.0]))})
-        np.testing.assert_array_equal(on_frames(mc, np.array([0.0, 2.0]))["Y"], [3, 3])
-
-    def test_no_motion(self):
-        assert on_frames(None, np.arange(3.0)) == {}
+        np.testing.assert_array_equal(mc.at(np.array([0.0, 2.0]))["Y"], [3, 3])
 
 
 class TestAlignment:

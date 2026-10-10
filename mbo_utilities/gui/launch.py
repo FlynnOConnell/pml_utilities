@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
+
+import psutil
 
 from mbo_utilities.preferences import get_mbo_dirs
 
@@ -43,3 +46,33 @@ def launch_window(module: str, args: list[str], log_name: str) -> int:
                 stderr=out,
             )
     return proc.pid
+
+
+class LaunchedWindow:
+    """A window :func:`launch_window` started, watched from a draw loop.
+
+    ``what`` names it in the message a crash leaves (``QC viewer``).
+    """
+
+    def __init__(self, pid: int, log_name: str, what: str):
+        self.pid, self.log_name, self.what = pid, log_name, what
+        self._checked = 0.0
+
+    def poll(self) -> str | None:
+        """None while the window runs; once it has exited, ``""`` or, when it
+        died on a traceback, its last line and log. Looks at most once a second.
+        """
+        if time.monotonic() - self._checked < 1.0:
+            return None
+        self._checked = time.monotonic()
+        try:
+            if psutil.Process(self.pid).status() != psutil.STATUS_ZOMBIE:
+                return None
+        except psutil.NoSuchProcess:
+            pass
+        logs = sorted(get_mbo_dirs()["logs"].glob(f"*_{self.log_name}.log"))
+        text = logs[-1].read_text(encoding="utf-8", errors="replace") if logs else ""
+        if "Traceback" not in text:
+            return ""
+        last = [line for line in text.splitlines() if line.strip()][-1]
+        return f"{self.what} failed: {last} (log: {logs[-1]})"

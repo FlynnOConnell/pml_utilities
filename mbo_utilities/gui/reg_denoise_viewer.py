@@ -16,7 +16,7 @@ from pathlib import Path
 from mbo_utilities import log
 from mbo_utilities.gpu import compute_gpu
 from mbo_utilities.gui.run_gui import _figure_kwargs_for_here, _hold_min_size
-from mbo_utilities.masknmf.reg_denoise import RegDenoiseRun, on_frames
+from mbo_utilities.masknmf.reg_denoise import RegDenoiseRun
 
 logger = log.get("gui.reg_denoise_viewer")
 
@@ -90,8 +90,8 @@ class RegDenoiseViewer:
         for subplot in self.ndw.figure:
             subplot.tooltip.enabled = False
 
-        rtmc = on_frames(self.run.rtmc, times)
-        shifts = on_frames(self.run.shifts, times)
+        rtmc = self.run.rtmc.at(times) if self.run.rtmc else {}
+        shifts = self.run.shifts.at(times) if self.run.shifts else {}
         panels = (
             ((RTMC_PANEL,) if rtmc else ())
             + ((SHIFT_PANEL,) if shifts else ())

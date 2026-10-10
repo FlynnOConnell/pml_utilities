@@ -1,10 +1,10 @@
-"""Voltage pipeline settings: what the Run tab edits and the worker rebuilds.
+"""vnoiser pipeline settings: what the Run tab edits and the worker rebuilds.
 
 GUI-free and JSON round-trippable, like ``masknmf.params``. The defaults are
 the archive's (``Denoiser.upstream``), so an untouched run reproduces a PF
 folder; ``from_provenance`` reads them back out of a folder's ``pipeline.json``.
 The parameters counted in samples are written for the archive's frame rate
-(``runtime.reference_fs``); ``VoltageSettings.at_fs`` scales them to a scan's.
+(``runtime.reference_fs``); ``VnoiserSettings.at_fs`` scales them to a scan's.
 """
 
 from __future__ import annotations
@@ -19,16 +19,16 @@ from vnoiser.denoiser import ClusteringConfig, cwtReducerConfig, thresConfig
 from vnoiser import Denoiser, DfofConfig, SpikeDetectConfig
 
 __all__ = [
-    "VoltageDfofSettings",
-    "VoltageDenoiserSettings",
-    "VoltageEventSettings",
-    "VoltageRuntimeSettings",
-    "VoltageSettings",
+    "VnoiserDfofSettings",
+    "VnoiserDenoiserSettings",
+    "VnoiserEventSettings",
+    "VnoiserRuntimeSettings",
+    "VnoiserSettings",
 ]
 
 
 @dataclass
-class VoltageDfofSettings:
+class VnoiserDfofSettings:
     sigma_dfof: float = 1500.0
     sigma_baseline: float = 5000.0
     n_startup: int = 1000
@@ -44,7 +44,7 @@ class VoltageDfofSettings:
 
 
 @dataclass
-class VoltageDenoiserSettings:
+class VnoiserDenoiserSettings:
     thres_type: str = "soft"
     soft_levels: tuple = (0.7, 0.5, 0.2, 0.01)
     hard_floor: float = 0.05
@@ -93,7 +93,7 @@ class VoltageDenoiserSettings:
 
 
 @dataclass
-class VoltageEventSettings:
+class VnoiserEventSettings:
     detect: bool = True
     bp_low: float = 2.0
     bp_high: float = 400.0
@@ -113,13 +113,13 @@ class VoltageEventSettings:
 
 
 @dataclass
-class VoltageRuntimeSettings:
+class VnoiserRuntimeSettings:
     convert: bool = False
     save_cwt: bool = False
     overwrite: bool = True
     reference_fs: float = 1075.2688
-    # "zarr": one <stem>.<stamp>.voltage.zarr results file (mbo_utilities.results),
-    # its own files in a voltage/ folder inside it; "pkl": the archive's PF folder of pickles
+    # "zarr": one <stem>.<stamp>.vnoiser.zarr results file (mbo_utilities.results),
+    # its own files in a vnoiser/ folder inside it; "pkl": the archive's PF folder of pickles
     output_format: str = "zarr"
 
 
@@ -141,15 +141,15 @@ def _section(cls, d):
 
 
 @dataclass
-class VoltageSettings:
-    """One worker-args payload for the voltage pipeline."""
+class VnoiserSettings:
+    """One worker-args payload for the vnoiser pipeline."""
 
-    dfof: VoltageDfofSettings = field(default_factory=VoltageDfofSettings)
-    denoiser: VoltageDenoiserSettings = field(default_factory=VoltageDenoiserSettings)
-    events: VoltageEventSettings = field(default_factory=VoltageEventSettings)
-    runtime: VoltageRuntimeSettings = field(default_factory=VoltageRuntimeSettings)
+    dfof: VnoiserDfofSettings = field(default_factory=VnoiserDfofSettings)
+    denoiser: VnoiserDenoiserSettings = field(default_factory=VnoiserDenoiserSettings)
+    events: VnoiserEventSettings = field(default_factory=VnoiserEventSettings)
+    runtime: VnoiserRuntimeSettings = field(default_factory=VnoiserRuntimeSettings)
 
-    def at_fs(self, fs: float) -> VoltageSettings:
+    def at_fs(self, fs: float) -> VnoiserSettings:
         """A copy for scans at ``fs`` Hz: the parameters counted in samples
         (the dF/F sigmas, start-up samples, wavelet scales and peak spacing)
         are scaled by ``fs / runtime.reference_fs`` so they keep the
@@ -184,23 +184,23 @@ class VoltageSettings:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict | None) -> VoltageSettings:
+    def from_dict(cls, d: dict | None) -> VnoiserSettings:
         d = d or {}
         return cls(
-            dfof=_section(VoltageDfofSettings, d.get("dfof")),
-            denoiser=_section(VoltageDenoiserSettings, d.get("denoiser")),
-            events=_section(VoltageEventSettings, d.get("events")),
-            runtime=_section(VoltageRuntimeSettings, d.get("runtime")),
+            dfof=_section(VnoiserDfofSettings, d.get("dfof")),
+            denoiser=_section(VnoiserDenoiserSettings, d.get("denoiser")),
+            events=_section(VnoiserEventSettings, d.get("events")),
+            runtime=_section(VnoiserRuntimeSettings, d.get("runtime")),
         )
 
     @classmethod
-    def from_provenance(cls, provenance: dict | None) -> VoltageSettings:
+    def from_provenance(cls, provenance: dict | None) -> VnoiserSettings:
         """From a PF folder's ``pipeline.json`` (``vnoiser.run_pipeline`` output); defaults without one."""
         if not provenance:
             return cls()
         if isinstance(provenance.get("settings"), dict):
             return cls.from_dict(provenance["settings"])
-        out = cls(dfof=_section(VoltageDfofSettings, provenance.get("dfof")))
+        out = cls(dfof=_section(VnoiserDfofSettings, provenance.get("dfof")))
         den = provenance.get("denoiser") or {}
         scales = den.get("freq_scales") or {}
         clustering, reducer, threshold = (
@@ -209,7 +209,7 @@ class VoltageSettings:
             den.get("threshold") or {},
         )
         out.denoiser = _section(
-            VoltageDenoiserSettings,
+            VnoiserDenoiserSettings,
             {
                 "thres_type": threshold.get("thres_type"),
                 "soft_levels": threshold.get("soft_levels"),
@@ -231,11 +231,11 @@ class VoltageSettings:
         )
         events = provenance.get("events")
         if events is None:
-            out.events = VoltageEventSettings(detect=False)
+            out.events = VnoiserEventSettings(detect=False)
         else:
             bp = events.get("bp") or (2.0, 400.0)
             out.events = _section(
-                VoltageEventSettings,
+                VnoiserEventSettings,
                 {
                     "detect": True,
                     "bp_low": bp[0],

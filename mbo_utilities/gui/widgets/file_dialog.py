@@ -235,6 +235,7 @@ class FileDialog:
             "Fastplotlib viewer (default)",
             "Napari viewer",
             "Registration QC (MaskNMF run)",
+            "Spike-triggered average (run with results)",
         ]
         self.selected_mode_index = 0
 

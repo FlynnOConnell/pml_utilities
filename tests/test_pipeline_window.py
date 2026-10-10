@@ -28,7 +28,7 @@ REAL_BUTTON = imgui.button
 
 
 def press_run(label, *a, **k):
-    return REAL_BUTTON(label, *a, **k) or label == "Run Voltage"
+    return REAL_BUTTON(label, *a, **k) or label == "Run vnoiser"
 
 
 class FakeProcessManager:
@@ -147,26 +147,26 @@ def test_open_seeds_the_unit_and_slice_on_screen(roi_mesc):
     from mbo_utilities.gui.widgets.pipelines import draw_run_tab, open_pipeline
 
     host = fake_host(roi_mesc, "MSession_0/MUnit_5", roi=2)
-    widget = open_pipeline(host, "Voltage", seed=True)
+    widget = open_pipeline(host, "vnoiser", seed=True)
     assert widget is not None
-    assert host._pipeline_instances["Voltage"] is widget
+    assert host._pipeline_instances["vnoiser"] is widget
     assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}
-    assert widget._voltage_z_selection == "3"
-    assert widget._voltage_c_selection == "1"
-    assert widget._voltage_tp_selection == "1:20"
+    assert widget._vnoiser_z_selection == "3"
+    assert widget._vnoiser_c_selection == "1"
+    assert widget._vnoiser_tp_selection == "1:20"
     # the same widget again, nothing rebuilt
-    assert open_pipeline(host, "Voltage") is widget
+    assert open_pipeline(host, "vnoiser") is widget
     frames(lambda: (imgui.begin("host"), draw_run_tab(host), imgui.end()))
-    assert host._pipeline_instances == {"Voltage": widget}
+    assert host._pipeline_instances == {"vnoiser": widget}
 
 
 def test_open_in_the_tab_selects_it_there(roi_mesc):
     from mbo_utilities.gui.widgets.pipelines import open_pipeline
 
     host = fake_host(roi_mesc, "MSession_0/MUnit_3")
-    widget = open_pipeline(host, "Voltage")
-    assert widget is host._pipeline_instances["Voltage"]
-    assert host._selected_pipeline_name == "Voltage"
+    widget = open_pipeline(host, "vnoiser")
+    assert widget is host._pipeline_instances["vnoiser"]
+    assert host._selected_pipeline_name == "vnoiser"
     assert host._force_run_tab is True
     assert open_pipeline(host, "No such pipeline") is None
 
@@ -175,9 +175,9 @@ def test_a_picture_on_screen_leaves_the_scans_as_seeded(roi_mesc):
     from mbo_utilities.gui.widgets.pipelines import open_pipeline
 
     host = fake_host(roi_mesc, "MSession_0/MUnit_9", roi=1)
-    widget = open_pipeline(host, "Voltage", seed=True)
+    widget = open_pipeline(host, "vnoiser", seed=True)
     assert widget._scans == {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": True}
-    assert widget._voltage_z_selection == "1:4"
+    assert widget._vnoiser_z_selection == "1:4"
 
 
 def test_the_domain_table_follows_the_scan_on_screen(uneven_mesc):
@@ -189,24 +189,24 @@ def test_the_domain_table_follows_the_scan_on_screen(uneven_mesc):
     from mbo_utilities.gui.widgets.pipelines import open_pipeline
 
     host = fake_host(uneven_mesc, "MSession_0/MUnit_3", roi=1)
-    widget = open_pipeline(host, "Voltage", seed=True)
+    widget = open_pipeline(host, "vnoiser", seed=True)
     assert widget._domain_rows == [[f"roi{i}", str(i)] for i in range(4)]
     host.image_widget = fake_host(
         uneven_mesc, "MSession_0/MUnit_5", roi=5, channel=1
     ).image_widget
-    open_pipeline(host, "Voltage", seed=True)
+    open_pipeline(host, "vnoiser", seed=True)
     assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}
     assert widget._domain_rows == [[f"roi{i}", str(i)] for i in range(6)]
-    assert widget._voltage_z_selection == "6" and widget._voltage_c_selection == "2"
+    assert widget._vnoiser_z_selection == "6" and widget._vnoiser_c_selection == "2"
     widget._domain_rows = [["soma", "0,1"], ["dend", "2:3"]]
-    open_pipeline(host, "Voltage", seed=True)
+    open_pipeline(host, "vnoiser", seed=True)
     assert widget._domain_rows == [["soma", "0,1"], ["dend", "2:3"], ["roi5", "5"]]
     assert widget._domains() == {"soma": [0, 1], "dend": [2, 3], "roi5": [5]}
     # four lines again: the table names a line this scan lacks
     host.image_widget = fake_host(uneven_mesc, "MSession_0/MUnit_3", roi=2).image_widget
-    open_pipeline(host, "Voltage", seed=True)
+    open_pipeline(host, "vnoiser", seed=True)
     assert widget._domain_rows == [[f"roi{i}", str(i)] for i in range(4)]
-    assert widget._voltage_z_selection == "3" and widget._voltage_c_selection == "1"
+    assert widget._vnoiser_z_selection == "3" and widget._vnoiser_c_selection == "1"
 
 
 def test_a_run_of_a_scan_with_other_rois_does_not_seed_the_domains(tmp_path):
@@ -239,8 +239,8 @@ def test_a_run_of_a_scan_with_other_rois_does_not_seed_the_domains(tmp_path):
         members=[np.array([0, 1])],
         attrs={"scan_id": "3"},
     )
-    run = Results(pipeline="voltage", units={scan.name: scan}, source=source).write(
-        tmp_path / results_name(mesc, pipeline="voltage")
+    run = Results(pipeline="vnoiser", units={scan.name: scan}, source=source).write(
+        tmp_path / results_name(mesc, pipeline="vnoiser")
     )
     pipeline_files(run).mkdir()
     (pipeline_files(run) / "pipeline.json").write_text(
@@ -254,11 +254,11 @@ def test_a_run_of_a_scan_with_other_rois_does_not_seed_the_domains(tmp_path):
         )
     )
     same = fake_host(mesc, "MSession_0/MUnit_4")
-    widget = open_pipeline(same, "Voltage", seed=True)
+    widget = open_pipeline(same, "vnoiser", seed=True)
     assert widget._domain_rows == [["soma", "0,1"]]
     assert widget._last_status.startswith("Loaded the previous run's scans and domains")
     other = fake_host(mesc, "MSession_0/MUnit_5")
-    widget = open_pipeline(other, "Voltage", seed=True)
+    widget = open_pipeline(other, "vnoiser", seed=True)
     assert widget._domain_rows == [[f"roi{i}", str(i)] for i in range(6)]
     assert widget._last_status.startswith("Loaded the previous run's settings")
 
@@ -275,15 +275,15 @@ def test_run_submits_the_scan_roi_and_channel_on_screen(uneven_mesc, monkeypatch
         fake_process_manager,
     )
     host = fake_host(uneven_mesc, "MSession_0/MUnit_3", roi=1)
-    open_pipeline(host, "Voltage", seed=True)
+    open_pipeline(host, "vnoiser", seed=True)
     host.image_widget = fake_host(
         uneven_mesc, "MSession_0/MUnit_5", roi=5, channel=1
     ).image_widget
-    widget = open_pipeline(host, "Voltage", seed=True)
+    widget = open_pipeline(host, "vnoiser", seed=True)
     SPAWNED.clear()
     monkeypatch.setattr(imgui, "button", press_run)
     frames(lambda: (imgui.begin("host"), draw_run_tab(host), imgui.end()), n=1)
-    assert len(SPAWNED) == 1 and SPAWNED[0]["task_type"] == "voltage"
+    assert len(SPAWNED) == 1 and SPAWNED[0]["task_type"] == "vnoiser"
     args = SPAWNED[0]["args"]
     assert args["input_path"] == str(uneven_mesc)
     assert args["units"] == ["MSession_0/MUnit_5"]
@@ -293,14 +293,14 @@ def test_run_submits_the_scan_roi_and_channel_on_screen(uneven_mesc, monkeypatch
     assert widget._last_status.startswith("Started (PID 4242)")
 
 
-def test_the_voltage_window_opens_the_vnoiser_guide(roi_mesc, monkeypatch):
+def test_the_vnoiser_window_opens_the_vnoiser_guide(roi_mesc, monkeypatch):
     """Its button toggles the guide, drawn once a frame."""
     from mbo_utilities.gui.widgets.pipelines import open_pipeline
 
     monkeypatch.setattr(
-        "mbo_utilities.gui.widgets.pipelines.voltage.draw_vnoiser_help", count_guide
+        "mbo_utilities.gui.widgets.pipelines.vnoiser.draw_vnoiser_help", count_guide
     )
-    widget = open_pipeline(fake_host(roi_mesc, "MSession_0/MUnit_5"), "Voltage")
+    widget = open_pipeline(fake_host(roi_mesc, "MSession_0/MUnit_5"), "vnoiser")
     GUIDE_DRAWS.clear()
     frames(lambda: (imgui.begin("host"), widget.draw_config(), imgui.end()))
     assert GUIDE_DRAWS == [False, False]
@@ -328,7 +328,7 @@ def test_quick_pipelines_are_the_view_seeded_ones_that_apply(roi_mesc, tmp_path)
 
     _register_pipelines()
     host = fake_host(roi_mesc, "MSession_0/MUnit_3")
-    assert [cls.name for cls in quick_pipelines(host)] == ["Voltage"]
+    assert [cls.name for cls in quick_pipelines(host)] == ["vnoiser"]
     other = SimpleNamespace(
         fpath=tmp_path / "x.tif",
         image_widget=FakeImageWidget(
@@ -359,4 +359,4 @@ def test_the_mesc_tab_offers_the_button(roi_mesc):
     finally:
         imgui.small_button = REAL_SMALL_BUTTON
         arr.close()
-    assert "Voltage on MUnit_5" in BUTTONS
+    assert "vnoiser on MUnit_5" in BUTTONS

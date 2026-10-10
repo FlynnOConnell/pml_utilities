@@ -1,4 +1,4 @@
-"""The spatial JEDI voltage pipeline on a raw AOD ``.mesc``.
+"""The vnoiser pipeline on a raw AOD ``.mesc``.
 
 Each unit with AOD ROIs (:data:`mbo_utilities.arrays.mesc.ROI_LAYOUTS`: the
 lines of a line scan, the patches of a chessboard, the boxes of a ribbon
@@ -16,12 +16,12 @@ memory, and recorded per step in ``pipeline.json`` (``timing`` and
 patch is which cell) come from a ``domains.json`` beside the file, or an
 archive's ``scanIDs_ROIs.pkl``. Settings are written for the archive's
 frame rate and scaled to the scans'
-(:meth:`~mbo_utilities.vnoiser.params.VoltageSettings.at_fs`).
+(:meth:`~mbo_utilities.vnoiser.params.VnoiserSettings.at_fs`).
 
 Reproduces the archive: ``stan112_expt12/stan112_expt12/stan112_expt12.mesc``
 units 35 and 38, read this way with ``convert=False``, give the per-ROI
 traces the lab's ``VI_2025-07-24.pkl`` holds to float precision, and the
-traces of its ``PF`` folder follow (see ``tests/test_voltage_pipeline.py``).
+traces of its ``PF`` folder follow (see ``tests/test_vnoiser_pipeline.py``).
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from vnoiser.preprocess import DomainTraces, domain_names, domain_zscore
 from mbo_utilities import log
 from mbo_utilities._sysmem import MemoryMonitor, mem_snapshot
 from mbo_utilities._writers import add_processing_step
-from mbo_utilities.vnoiser.params import OUTPUT_FORMATS, VoltageSettings
+from mbo_utilities.vnoiser.params import OUTPUT_FORMATS, VnoiserSettings
 from vnoiser import DfofConfig, ScanTraces, SpikeDetectConfig, read_pf
 from vnoiser.pipeline import load_scan_rois, process_domain
 
@@ -59,7 +59,7 @@ __all__ = [
     "read_domains",
     "write_domains_template",
     "default_pf_dir",
-    "run_voltage_pipeline",
+    "run_vnoiser_pipeline",
     "TRACES_DIR",
 ]
 
@@ -77,7 +77,7 @@ class _RunUsage:
 
     ``begin(step, **fields)`` then ``end(message, **fields)`` around each
     step: one INFO line, one ``processing_history`` entry
-    (:func:`~mbo_utilities._writers.add_processing_step`, ``voltage_<step>``)
+    (:func:`~mbo_utilities._writers.add_processing_step`, ``vnoiser_<step>``)
     and one flat row in ``steps``. A :class:`~mbo_utilities._sysmem.MemoryMonitor`
     samples the process tree every two seconds while the run lasts, so a
     step's ``peak_rss_gb`` is what it really used (the wavelet transform
@@ -135,7 +135,7 @@ class _RunUsage:
         self.steps.append(row)
         add_processing_step(
             self.history,
-            f"voltage_{step}",
+            f"vnoiser_{step}",
             duration_seconds=wall,
             extra={k: v for k, v in row.items() if k not in ("step", "seconds")},
         )
@@ -366,7 +366,7 @@ def default_results_path(mesc_path, out=None) -> Path:
     fresh name inside ``out`` when it names a folder, else beside the file.
 
     Named after its input (:func:`mbo_utilities.results.results_name`), so a
-    run lands as ``session1.2026-09-21-14-30-22.voltage.zarr`` next to
+    run lands as ``session1.2026-09-21-14-30-22.vnoiser.zarr`` next to
     ``session1.mesc`` and never overwrites an earlier one.
     """
     from mbo_utilities.results import results_name
@@ -375,10 +375,10 @@ def default_results_path(mesc_path, out=None) -> Path:
     out = mesc_path.parent if out is None else Path(out)
     if out.suffix == ".zarr":
         return out
-    return out / results_name(mesc_path, pipeline="voltage")
+    return out / results_name(mesc_path, pipeline="vnoiser")
 
 
-def run_voltage_pipeline(
+def run_vnoiser_pipeline(
     mesc_path,
     *,
     domains,
@@ -394,7 +394,7 @@ def run_voltage_pipeline(
     detect: bool = True,
     dfof_cfg: DfofConfig | None = None,
     denoiser_factory=None,
-    settings: VoltageSettings | None = None,
+    settings: VnoiserSettings | None = None,
     overwrite: bool = False,
     provenance: dict | None = None,
     progress_callback=None,
@@ -419,8 +419,8 @@ def run_voltage_pipeline(
         unit Z is the ROI index, so these are the ROIs (lines, patches) to
         process: only they are read, every domain is cut down to them and a
         domain left with no ROI is dropped. Default every ROI.
-    settings : VoltageSettings, optional
-        The Run tab's settings (default :class:`VoltageSettings`), scaled to
+    settings : VnoiserSettings, optional
+        The Run tab's settings (default :class:`VnoiserSettings`), scaled to
         the scans' frame rate with ``at_fs``; a ``dfof_cfg``,
         ``denoiser_factory`` or ``spike_cfg`` given explicitly is used as
         it is instead.
@@ -446,7 +446,7 @@ def run_voltage_pipeline(
     memory, totals per step, per scan and per domain, and the denoiser's
     stages ``cwt`` / ``cluster`` / ``reduce`` / ``mask`` / ``baseline`` /
     ``baseline_100hz`` / ``peaks`` summed over domains) and its
-    ``processing_history`` (one ``voltage_<step>`` entry per step, the shape
+    ``processing_history`` (one ``vnoiser_<step>`` entry per step, the shape
     suite2p's ``ops.npy`` uses); ``timings.json`` beside it is the same with
     one flat row per step, a denoise row carrying its stages as ``<stage>_s``. With ``settings.runtime.output_format == "zarr"`` the pickles are
     replaced by one ``<yyyy-mm-dd>_<tags>.zarr`` results file in the folder
@@ -488,7 +488,7 @@ def run_voltage_pipeline(
         raise ValueError(
             f"the chosen scans differ in frame rate ({listed} Hz); run them separately"
         )
-    settings = (settings or VoltageSettings()).at_fs(float(chosen[0]["fs"]))
+    settings = (settings or VnoiserSettings()).at_fs(float(chosen[0]["fs"]))
     if settings.runtime.output_format not in OUTPUT_FORMATS:
         raise ValueError(
             f"output_format must be one of {OUTPUT_FORMATS}, got {settings.runtime.output_format!r}"
@@ -515,7 +515,7 @@ def run_voltage_pipeline(
             )
         if dropped:
             logger.info(
-                f"voltage: planes {[r + 1 for r in rois]} leave no ROI in domain(s) {dropped}; dropped"
+                f"vnoiser: planes {[r + 1 for r in rois]} leave no ROI in domain(s) {dropped}; dropped"
             )
     names = domain_names(domains)
     # a zarr run works in a scratch folder the pipeline's own writers need and
@@ -545,7 +545,7 @@ def run_voltage_pipeline(
     usage = _RunUsage(logger)
     system = mem_snapshot(usage.proc)
     logger.info(
-        f"voltage: {len(chosen)} scan(s) x {len(names)} domain(s) -> {results_path or pf_dir} "
+        f"vnoiser: {len(chosen)} scan(s) x {len(names)} domain(s) -> {results_path or pf_dir} "
         f"({settings.runtime.output_format}); {os.cpu_count()} cpus, {system['total_gb']:.0f} GB RAM "
         f"({system['sys_pct']:.0f}% in use); vnoiser {versions['vnoiser']}, mbo_utilities {mbo_version}"
     )
@@ -577,7 +577,7 @@ def run_voltage_pipeline(
 
         example = denoiser_factory(scans[0].fs_hz)
         info = {
-            "pipeline": "mbo_utilities.vnoiser.pipeline.run_voltage_pipeline",
+            "pipeline": "mbo_utilities.vnoiser.pipeline.run_vnoiser_pipeline",
             "versions": versions,
             "dfof": asdict(dfof_cfg),
             "denoiser": example.describe(),
@@ -829,7 +829,7 @@ def run_voltage_pipeline(
             for stage, seconds in timing["denoise_stages"].items()
         )
         logger.info(
-            f"voltage done in {int(wall // 60)}m {wall % 60:04.1f}s (cpu {cpu:.0f} s, {cpu / max(wall, 1e-9):.1f} cores); "
+            f"vnoiser done in {int(wall // 60)}m {wall % 60:04.1f}s (cpu {cpu:.0f} s, {cpu / max(wall, 1e-9):.1f} cores); "
             f"peak process memory {timing['peak_rss_gb']:.2f} GB; {totals}; denoise stages: {stages}; "
             f"timings in {timings_at}"
         )

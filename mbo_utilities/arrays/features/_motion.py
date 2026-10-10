@@ -39,3 +39,11 @@ class MotionCorrection:
         return max(
             (float(t[-1]) for t, _ in self.traces.values() if len(t)), default=0.0
         )
+
+    def at(self, t) -> dict[str, np.ndarray]:
+        """Each trace at the times ``t`` (s), holding its last sample (RTMC is run-length encoded)."""
+        out = {}
+        for label, (ts, values) in self.traces.items():
+            idx = np.clip(np.searchsorted(ts, t, side="right") - 1, 0, len(ts) - 1)
+            out[label] = np.asarray(values, dtype=np.float32)[idx]
+        return out

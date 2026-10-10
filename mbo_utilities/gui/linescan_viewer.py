@@ -209,7 +209,7 @@ def _limits(sample) -> tuple[float, float]:
 def run_roi_traces(
     mesc_path, unit_key: str, n_rois: int
 ) -> tuple[np.ndarray, str] | None:
-    """``(K, T)`` traces for a line-scan unit from the experiment's voltage run:
+    """``(K, T)`` traces for a line-scan unit from the experiment's vnoiser run:
     each line carries the denoised trace of the ROI that averages it, lines
     outside every ROI (the pipeline's background lines) are zero. Returns the
     array and a description, or None when there is no run or the pipeline
@@ -396,11 +396,11 @@ def default_linescan_unit(mesc_path, units: list[dict]) -> str:
     """
     packed = [u for u in units if u.get("kind") == "packed"] or list(units)
     try:
-        from mbo_utilities.vnoiser import voltage_unit_for_mesc
+        from mbo_utilities.vnoiser import vnoiser_unit_for_mesc
     except ImportError:
         return packed[0]["key"]
     for u in packed:
-        if voltage_unit_for_mesc(mesc_path, u["key"]) is not None:
+        if vnoiser_unit_for_mesc(mesc_path, u["key"]) is not None:
             return u["key"]
     return packed[0]["key"]
 

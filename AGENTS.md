@@ -496,7 +496,7 @@ namespaces. The metadata editor writes canonical keys only.
 
 ## 7. Pipelines
 
-A pipeline is a processing workflow (suite2p, MaskNMF, voltage, isoview, ROI
+A pipeline is a processing workflow (suite2p, MaskNMF, vnoiser, isoview, ROI
 workflow) that reads a `LazyArray` selection and writes an output directory. Every
 pipeline touches five surfaces; the registration contract below is what makes them
 one thing.
@@ -534,7 +534,7 @@ mbo_utilities/<name>/
   time and process memory, one `processing_history` entry
   (`add_processing_step`, `duration_seconds`) and a `timing` summary (totals per
   step, per unit, peak memory) in the provenance; `timings.json` beside the outputs
-  holds the same with one flat row per step. The voltage runner
+  holds the same with one flat row per step. The vnoiser runner
   (`vnoiser/pipeline.py::_RunUsage`) is the model; suite2p's `plane_times` and
   `hpc.write_timing_report` are the same record. Progress goes through
   `progress_callback(fraction, message)`, never a heartbeat line.
@@ -544,14 +544,14 @@ mbo_utilities/<name>/
 One class registers the whole pipeline. Subclass `PipelineWidget` and declare:
 
 ```python
-class VoltagePipelineWidget(PipelineWidget):
-    name = "Voltage"                       # selector label; unique
+class VnoiserPipelineWidget(PipelineWidget):
+    name = "vnoiser"                       # selector label; unique
     is_available = HAS_VNOISER             # bool or property; cheap
     install_command = "uv pip install vnoiser"
-    info = PipelineInfo(name="voltage", category="processor", ...)  # patterns + marker files
+    info = PipelineInfo(name="vnoiser", category="processor", ...)  # patterns + marker files
     axes_consumed = {"T": "range", "Z": "all", "C": "select-one"}  # see AXIS_MODES
-    task_type = "voltage"                  # key in gui.tasks.TASKS
-    task_func = staticmethod(task_voltage) # task_<name>(args, logger)
+    task_type = "vnoiser"                  # key in gui.tasks.TASKS
+    task_func = staticmethod(task_vnoiser) # task_<name>(args, logger)
 
     @classmethod
     def applies_to(cls, arr) -> bool: ...  # safe before instantiation; arr may be None
@@ -562,7 +562,7 @@ and list it in `pyproject.toml`:
 
 ```toml
 [project.entry-points."mbo_utilities.pipelines"]
-voltage = "mbo_utilities.gui.widgets.pipelines.voltage:VoltagePipelineWidget"
+vnoiser = "mbo_utilities.gui.widgets.pipelines.vnoiser:VnoiserPipelineWidget"
 ```
 
 `load_entry_point_pipelines()` registers `info`; `load_plugin_tasks()` registers
@@ -586,7 +586,7 @@ pipelines use the same path; nothing is hardcoded by name.
   what the viewer shows (the recording on screen, the slice its sliders are on);
   `open_pipeline(..., seed=True)` calls it first, and `quick_pipelines(host)`
   lists the pipelines that apply and set it, which is how the MESc tab header,
-  the Process menu and `Shift+P` offer "Voltage on MUnit_3" without naming a
+  the Process menu and `Shift+P` offer "vnoiser on MUnit_3" without naming a
   pipeline.
 
 ### 7.3 Input contract
@@ -607,13 +607,13 @@ was looking at:
 The selection keys keep the 5D names whatever the axis means for the source; the
 runner translates through the array's metadata, never the widget. On a MESc AOD unit
 Z is the ROI index (`mesc_z_axis_meaning == "roi_index"`), so `planes` are the lines or
-patches to process: the voltage runner reads only those ROIs
+patches to process: the vnoiser runner reads only those ROIs
 (`linescan_roi_read(rois=...)`), cuts every domain down to them, drops a domain left
 empty, and records `planes` and the domain table as it was given (`domains`) in the
-provenance source block. The Voltage tab's slice popup labels the row "ROIs" but
+provenance source block. The vnoiser tab's slice popup labels the row "ROIs" but
 still sends `planes`.
 
-The Voltage widget's domain table belongs to the scans ticked from the screen
+The vnoiser widget's domain table belongs to the scans ticked from the screen
 (`_fit_domains`): one domain per ROI, unless a table was loaded or edited and names
 only ROIs those scans have. A previous run's table (its source block's `domains`,
 the uncut one) seeds a scan on screen only when the scans that run processed have as
@@ -624,14 +624,14 @@ something else.
 The pipeline's one help page is the vnoiser guide
 (`gui/imgui/vnoiser_help.draw_vnoiser_help(is_open, keys_open)`), drawn diagrams and
 tables after masknmf's curation and classification pages: the steps, a made-up trace
-through every stage, the Voltage window and its domain table, the curation window
-and its four rules, the files. The Voltage window's `vnoiser guide` button and the
+through every stage, the vnoiser window and its domain table, the curation window
+and its four rules, the files. The vnoiser window's `vnoiser guide` button and the
 curation window's `guide` button (`h`) open it; `python -m
 mbo_utilities.gui.imgui.vnoiser_help` opens it alone (`--frames N --screenshot
 out.png` for a look without a window left open). It holds the curation window's
 `KEYBINDS`, imports neither vnoiser nor `gui._setup`, and gives itself an opaque
 window whatever the host's style. Every number its stage table quotes is a
-`VoltageSettings` default and every colour is the curation window's: change one and
+`VnoiserSettings` default and every colour is the curation window's: change one and
 `tests/test_vnoiser_help.py` says which line of the guide to change with it.
 
 The worker does `arr = imread(input_path, **reader_kwargs)`, then
@@ -694,6 +694,23 @@ the launcher's **Registration QC (MaskNMF run)** entry is the same switch;
 without `--qc` a run folder opens in the Studio (`MasknmfRunArray`), or in
 masknmf's demixing viewer when its `results.hdf5` holds a `DemixingResults`
 (`arrays.masknmf_run.run_demixing`).
+The spike-triggered average is one ROI of any run's `results` (§7.5) over the
+movie it was measured on (`analysis/spike_average.SpikeSource`: the run
+array's own movie at the unit's z, or a line unit's first line, cut to the
+frames its source block names; a MaskNMF run adds its compressed movie). Its
+spikes are the unit's `events`, the events a `.curation` file beside the run
+accepts for `results.recording_id(unit, roi)`, or a threshold on one of its
+traces; its motion is every `motion_correction` the movie went through, each
+on its own clock (`MotionCorrection.at`): the run array's, and for a
+`MasknmfRunArray` its `recording`'s at the recording `frames` it read.
+`gui/spike_average_viewer` draws it like Registration QC (an `NDWidget` over
+the lag, masknmf's `TracePlot` linked to it) and only ever runs in its own
+process (`launch_spike_average`, watched by `gui.launch.LaunchedWindow`):
+from the Traces tab's **Spike average** (the selected algo row's run dir or
+`<file>.zarr/<unit>`, or a results row's `extra["unit"]` / `extra["roi"]`),
+the MaskNMF tab (the newest run that demixed), the vnoiser tab (the scan and
+ROI on screen), the launcher's **Spike-triggered average** entry and
+`mbo spike-average <run>`.
 
 `mbo reg-denoise` (`masknmf/reg_denoise.py`) is pre-registration denoising for
 one channel: the raw movie's PMD (`raw/CompressionArray`), the rigid
@@ -713,7 +730,7 @@ key in the config.
 
 ### 7.5 The results zarr
 
-Native outputs differ per pipeline (§7.4's suite2p files, the voltage pipeline's `PF`
+Native outputs differ per pipeline (§7.4's suite2p files, the vnoiser pipeline's `PF`
 pickles). `mbo_utilities/results.py` fixes the one shape they all mold into: a zarr
 v3 group, `<input stem>.<yyyy-mm-dd-HH-MM-SS>.<pipeline>.zarr`, that a reader, a
 viewer or a notebook opens the same way whichever pipeline wrote it. It is the standard output format; a
@@ -745,13 +762,13 @@ pipeline's native files stay its cache and its compatibility layer.
 
 - **Naming.** `results_name(source, when, extra_tags, pipeline)` is the source
   filename's stem, then `extra_tags`, then the timestamp, then the pipeline, dot
-  separated: `session1.mesc` → `session1.2026-09-21-14-30-22.voltage.zarr`, written
+  separated: `session1.mesc` → `session1.2026-09-21-14-30-22.vnoiser.zarr`, written
   beside its input. The stamp is local time to the second (`RESULTS_STAMP`), so a
   rerun is a new file and a listing sorts chronologically. Nothing matches a
   results name by pattern: `results_stamp(path)` reads the stamp back with
   `datetime.strptime` and `newest_results(folder, pipeline)` picks the latest run.
   A run belongs to the recording its source block names (`results_source(path)`,
-  the file name): `newest_results(..., source=file)` and `voltage_run_for_mesc`
+  the file name): `newest_results(..., source=file)` and `vnoiser_run_for_mesc`
   never hand one `.mesc` the run of another in the same folder; a run naming no
   recording (the archive's PF folders) counts for any.
   Unit groups keep the §5.6 vocabulary (`unit_name("plane", 1)` is `zplane01`;
@@ -767,23 +784,23 @@ pipeline's native files stay its cache and its compatibility layer.
   plane-number order (`zplaneNN` is 1-based, vanilla `planeN` 0-based), or the dirs
   given in the order their planes stack, a dir without `stat.npy` + `F.npy` giving no
   unit; every unit records `attrs["plane_dir"]` and `attrs["z"]`, its position in
-  that order. `Results.from_pf(dir)` reads the voltage pipeline's `PF` folder
+  that order. `Results.from_pf(dir)` reads the vnoiser pipeline's `PF` folder
   (domains are the ROIs, their lines the members with `members/raw`, `test.h5` gives
   `dff` and `zscore`, peaks are the events). Copy one of them for a new pipeline;
   never invent a trace or image kind, add it to the registry.
-- **Writing.** It is the voltage pipeline's default
-  (`VoltageSettings.runtime.output_format == "zarr"`, the Run tab's Output format):
+- **Writing.** It is the vnoiser pipeline's default
+  (`VnoiserSettings.runtime.output_format == "zarr"`, the Run tab's Output format):
   the run works in a `<name>.work` scratch folder, writes the results file beside the
   input, moves `test.h5`, `traces/`, `pipeline.json` and `timings.json` into its
-  `voltage/` (`pipeline_files`) and deletes the scratch folder, so one path is the
-  whole output and no `PF` folder is left. `mbo voltage --pkl` (`output_format ==
+  `vnoiser/` (`pipeline_files`) and deletes the scratch folder, so one path is the
+  whole output and no `PF` folder is left. `mbo vnoiser --pkl` (`output_format ==
   "pkl"`) writes the archive's PF folder of pickles instead. `mbo results <dir>`
   converts an existing suite2p, MaskNMF or PF folder.
 - **Reading.** There is one reader and it is generic. `Results.read(path)` reads a
   results file back (`.units[name]` → `ResultUnit`, every array in memory) and
   `Results.open(path)` is the one door that takes a file, a folder holding one, or
   a pipeline's native folder. `imread` returns a `ResultsArray` (`results.py`,
-  `PRIORITY` 70) for a results file, a voltage `PF` folder, or a folder holding one;
+  `PRIORITY` 70) for a results file, a vnoiser `PF` folder, or a folder holding one;
   `results_dir_of(path)` is what it resolves with. No pipeline gets an array class
   of its own: a run's units, traces, ROIs, events and images are on `arr.results`
   (`LazyArray.results`, a settable property, None by default). `ResultsArray` sets
@@ -812,12 +829,12 @@ pipeline's native files stay its cache and its compatibility layer.
   from on `z` (`extra["line"]`) and the pipeline's channel on `c`.
   `roi_runs.run_dir_complete` and
   `scan_run_dirs` treat results files as run dirs, `roi_runs.json` restores them, a
-  finished `voltage` worker is adopted like a suite2p one, and the Voltage tab's
+  finished `vnoiser` worker is adopted like a suite2p one, and the vnoiser tab's
   "Load into Traces" button does it on demand. A new pipeline that writes the results
   zarr therefore reaches the Traces tab with no GUI code.
 
 Pinned by `tests/test_results.py`, `tests/test_suite2p_results.py`,
-`tests/test_voltage_pipeline.py`.
+`tests/test_vnoiser_pipeline.py`.
 
 ### 7.6 Manual ROIs
 
@@ -856,10 +873,10 @@ the other.
   anything else gets `DEFAULT_TRACE_PROFILE`) declares the kinds its rows can show
   (`DISPLAY_KINDS`: the results zarr's `TRACE_KINDS` plus `SUBTRACTED`,
   `raw - neuropil`, the one kind computed here and stored nowhere), the one shown
-  first (`voltage` opens on `denoised`, the rest on `dff`), the `DffSettings` for a
+  first (`vnoiser` opens on `denoised`, the rest on `dff`), the `DffSettings` for a
   dF/F computed from a raw row (`analysis/dff.py`: a rolling max-min baseline sized
   in seconds, the percentile when the row has no `fs`), whether a stored dF/F is
-  percent (`masknmf`) or a fraction (`voltage`, and `suite2p`, whose
+  percent (`masknmf`) or a fraction (`vnoiser`, and `suite2p`, whose
   `norm_traces` lbm_suite2p_python writes as `(F - F0) / F0`; the plot is always
   percent), and the `unit` its raw traces are in. A pipeline that
   measured a real `Fneu` (`suite2p`, and `mean`'s ring; never `masknmf`, whose
@@ -1023,7 +1040,7 @@ the other.
   Z-stack opens on the tissue the ROIs were scanned in. Every header carries its
   meaning (`COLUMN_HELP`) and `?` opens `assets/docs/mesc.md`, the plain-words
   page on what a `.mesc` holds. The header line, not a row, carries one button
-  per `quick_pipelines` entry (`Voltage on MUnit_3`): it opens that pipeline in
+  per `quick_pipelines` entry (`vnoiser on MUnit_3`): it opens that pipeline in
   the Process tab seeded from the unit and sliders on screen (§7.2).
 - **Full image.** The ROIs pipeline's `full image` target is the whole frame as
   one mask at the run coordinates: with `mean` a `FULL_IMAGE` row of the trace
@@ -1179,7 +1196,7 @@ through Python's `lastResort` handler.
   `_worker.main` writes the same sidecar as a backstop (`completed` on return,
   `error` with the traceback on an exception, after logging memory at failure).
 - A single blocking call that cannot report progress runs a heartbeat thread
-  (`task_masknmf._heartbeat`, `_voltage_heartbeat`) so the watchdog sees activity.
+  (`task_masknmf._heartbeat`, `_vnoiser_heartbeat`) so the watchdog sees activity.
   The watchdog terminates a worker after 120 minutes with no progress change and no
   log-file mtime change.
 - Work on a GUI thread (ROI traces) has no pid or log file; it registers a
@@ -1301,7 +1318,7 @@ Environment: `MBO_DEBUG`, `MBO_DIR` / `MBO_USER` (relocate `~/.mbo`),
 5. `mbo <name>` in `cli.py` calling the runner.
 6. Tests without the optional package installed: settings round-trip, stage gating,
    output conversion (`tests/test_masknmf_pipeline.py` is the model). Real runs are
-   `@pytest.mark.slow` and skip without data (`tests/test_voltage_pipeline.py`).
+   `@pytest.mark.slow` and skip without data (`tests/test_vnoiser_pipeline.py`).
 7. Docs: a section in `docs/usage/gui_guide.md` and, when the pipeline has a CLI
    command, `docs/usage/cli.md`.
 

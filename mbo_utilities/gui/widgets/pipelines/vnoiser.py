@@ -1,9 +1,9 @@
-"""Voltage pipeline widget: the spatial JEDI pipeline from the Run tab.
+"""vnoiser pipeline widget: the spatial JEDI pipeline from the Run tab.
 
 Same run experience as Suite2p and MaskNMF: current-dataset block, output
 folder, the slicing popup, a settings popup with (?) hints and
 modified-orange tinting, the modified table and a green Run button that
-spawns the "voltage" worker. What is new is the scans-and-domains block:
+spawns the "vnoiser" worker. What is new is the scans-and-domains block:
 which AOD ROI units of the file (line scans, chessboard or ribbon patches)
 become scans and which ROIs make each domain. Settings are written for the
 archive's frame rate and scaled to the scans'. Results are the run's
@@ -120,10 +120,10 @@ def _is_default(obj, name: str) -> bool:
     return cur == default
 
 
-class VoltagePipelineWidget(PipelineWidget):
-    """AOD ROI .mesc units (line scans, chessboard or ribbon patches) to a voltage results file with vnoiser."""
+class VnoiserPipelineWidget(PipelineWidget):
+    """AOD ROI .mesc units (line scans, chessboard or ribbon patches) to a vnoiser results file with vnoiser."""
 
-    name = "Voltage"
+    name = "vnoiser"
     is_available = HAS_VNOISER
     install_command = VNOISER_HINT
     # frames are a window; Z is the unit's ROI index (mesc_z_axis_meaning "roi_index"), so the
@@ -138,7 +138,7 @@ class VoltagePipelineWidget(PipelineWidget):
         """
         arr = base_array(arr)
         if isinstance(arr, ResultsArray):
-            return arr.pipeline == "voltage" and arr.source_recording is not None
+            return arr.pipeline == "vnoiser" and arr.source_recording is not None
         if (getattr(arr, "metadata", None) or {}).get("mesc_layout") in ROI_LAYOUTS:
             return True
         filenames = getattr(arr, "filenames", None) or []
@@ -155,13 +155,15 @@ class VoltagePipelineWidget(PipelineWidget):
 
     def __init__(self, parent: Any):
         super().__init__(parent)
-        from mbo_utilities.vnoiser.params import VoltageSettings
+        from mbo_utilities.vnoiser.params import VnoiserSettings
 
-        self.settings = VoltageSettings()
+        self.settings = VnoiserSettings()
         self._outdir = ""
         self._outdir_dialog = None
         self._last_status = ""
         self._status_color = _DIM_COLOR
+        # the spike-average windows this tab started, until they exit
+        self._windows: list = []
         self._show_settings_popup = False
         self._settings_sizer: PopupAutoSize | None = None
         self._show_slice_popup = False
@@ -214,8 +216,8 @@ class VoltagePipelineWidget(PipelineWidget):
     def _ensure_state(self) -> None:
         """Seed units, scans, domains, output folder and slicing when the dataset changes."""
         from mbo_utilities.arrays.mesc import list_mesc_units
-        from mbo_utilities.vnoiser import voltage_run_for_mesc
-        from mbo_utilities.vnoiser.params import VoltageSettings
+        from mbo_utilities.vnoiser import vnoiser_run_for_mesc
+        from mbo_utilities.vnoiser.params import VnoiserSettings
         from mbo_utilities.vnoiser.pipeline import read_domains
 
         fpath = getattr(self.parent, "fpath", None)
@@ -252,7 +254,7 @@ class VoltagePipelineWidget(PipelineWidget):
             self._first_env[shown if on_screen else self._units[0]["key"]] = True
         self._seed_slicing()
         arr = self._array()
-        run = arr.path if isinstance(arr, ResultsArray) else voltage_run_for_mesc(mesc)
+        run = arr.path if isinstance(arr, ResultsArray) else vnoiser_run_for_mesc(mesc)
         domains, scan_ids, first_env = {}, [], []
         if run is not None:
             prov_file = pipeline_files(run) / PROVENANCE_FILE
@@ -271,7 +273,7 @@ class VoltagePipelineWidget(PipelineWidget):
                     first_env = [str(s) for s in files.rois.get("scanID_1st_env", [])]
                 # the table the run was given; its own is cut down to the ROIs it read
                 domains = (prov.get("source") or {}).get("domains") or domains
-                self.settings = VoltageSettings.from_provenance(prov)
+                self.settings = VnoiserSettings.from_provenance(prov)
                 domains = {
                     k: v for k, v in domains.items() if k not in EXCLUDED_DOMAINS
                 }
@@ -329,13 +331,13 @@ class VoltagePipelineWidget(PipelineWidget):
     def _seed_slicing(self) -> None:
         """Every frame, every ROI, the first channel of the ticked scans."""
         max_frames, n_lines, _ = self._dims()
-        self._voltage_tp_selection = f"1:{max_frames}"
-        self._voltage_tp_parsed = None
-        self._voltage_tp_error = ""
-        self._voltage_z_selection = f"1:{n_lines}"
-        self._voltage_z_error = ""
-        self._voltage_c_selection = "1"
-        self._voltage_c_error = ""
+        self._vnoiser_tp_selection = f"1:{max_frames}"
+        self._vnoiser_tp_parsed = None
+        self._vnoiser_tp_error = ""
+        self._vnoiser_z_selection = f"1:{n_lines}"
+        self._vnoiser_z_error = ""
+        self._vnoiser_c_selection = "1"
+        self._vnoiser_c_error = ""
 
     def seed_from_view(self) -> None:
         """Tick only the recording on screen and select the ROI and channel
@@ -358,11 +360,11 @@ class VoltagePipelineWidget(PipelineWidget):
         roles = {role: name for name, role in slider_roles(names).items()}
         if roles.get("z") is not None:
             roi = int(iw.indices[roles["z"]])
-            self._voltage_z_selection = str(roi + 1)
+            self._vnoiser_z_selection = str(roi + 1)
             if not any(roi in rois for rois in self._domains().values()):
                 self._domain_rows.append([f"roi{roi}", str(roi)])
         if roles.get("c") is not None:
-            self._voltage_c_selection = str(int(iw.indices[roles["c"]]) + 1)
+            self._vnoiser_c_selection = str(int(iw.indices[roles["c"]]) + 1)
 
     def _domains(self) -> dict[str, list[int]]:
         """The domain table as ``{name: lines}``; sets ``_domain_error`` and returns {} when invalid."""
@@ -389,7 +391,7 @@ class VoltagePipelineWidget(PipelineWidget):
 
     def _frame_window(self) -> tuple[int, int] | None:
         """``(start, stop)`` of the frame selection; None means every frame; raises on a stride."""
-        parsed = getattr(self, "_voltage_tp_parsed", None)
+        parsed = getattr(self, "_vnoiser_tp_parsed", None)
         idx = (
             list(getattr(parsed, "final_indices", []) or [])
             if parsed is not None
@@ -409,7 +411,7 @@ class VoltagePipelineWidget(PipelineWidget):
         from mbo_utilities.gui._selection_ui import _parse_z_selection
 
         _, n_lines, _ = self._dims()
-        text = str(getattr(self, "_voltage_z_selection", "") or f"1:{n_lines}")
+        text = str(getattr(self, "_vnoiser_z_selection", "") or f"1:{n_lines}")
         start, stop, step, error = _parse_z_selection(text, n_lines)
         if error:
             raise ValueError(f"ROIs: {error}")
@@ -417,7 +419,7 @@ class VoltagePipelineWidget(PipelineWidget):
         return None if planes == list(range(1, n_lines + 1)) else planes
 
     def _channel(self) -> int:
-        text = str(getattr(self, "_voltage_c_selection", "1")).split(":")[0].strip()
+        text = str(getattr(self, "_vnoiser_c_selection", "1")).split(":")[0].strip()
         return max(int(text) - 1, 0) if text.isdigit() else 0
 
     def draw_config(self) -> None:
@@ -428,7 +430,7 @@ class VoltagePipelineWidget(PipelineWidget):
         ):
             imgui.spacing()
             if imgui.small_button(
-                f"{fa.ICON_FA_CIRCLE_QUESTION} vnoiser guide##voltage_help"
+                f"{fa.ICON_FA_CIRCLE_QUESTION} vnoiser guide##vnoiser_help"
             ):
                 self._help_open = not self._help_open
             set_tooltip(TOOLTIP, show_mark=False)
@@ -442,7 +444,7 @@ class VoltagePipelineWidget(PipelineWidget):
             self._draw_domains_block()
             imgui.spacing()
             if imgui.button(
-                "Pipeline Settings##voltage_settings",
+                "Pipeline Settings##vnoiser_settings",
                 imgui.ImVec2(hello_imgui.em_size(11), 0),
             ):
                 self._show_settings_popup = True
@@ -522,7 +524,7 @@ class VoltagePipelineWidget(PipelineWidget):
             result = self._outdir_dialog.result()
             if result:
                 self._outdir = result
-                set_last_dir("voltage_outdir", result)
+                set_last_dir("vnoiser_outdir", result)
             self._outdir_dialog = None
         zarr_out = self.settings.runtime.output_format == "zarr"
         imgui.text_colored(
@@ -543,18 +545,18 @@ class VoltagePipelineWidget(PipelineWidget):
                 hello_imgui.em_size(6),
             )
         )
-        _, self._outdir = imgui.input_text("##voltage_outdir", self._outdir)
+        _, self._outdir = imgui.input_text("##vnoiser_outdir", self._outdir)
         if self._outdir and imgui.is_item_hovered():
             imgui.set_tooltip(self._outdir)
         imgui.same_line()
-        if imgui.button("Browse##voltage_outdir_btn", imgui.ImVec2(btn_w, 0)):
-            start = str(get_last_dir("voltage_outdir") or Path.home())
+        if imgui.button("Browse##vnoiser_outdir_btn", imgui.ImVec2(btn_w, 0)):
+            start = str(get_last_dir("vnoiser_outdir") or Path.home())
             self._outdir_dialog = pfd.select_folder("Select output folder", start)
 
     def _draw_slice_row(self) -> None:
         max_frames, n_lines, num_channels = self._dims()
         if imgui.button(
-            "Set slice##voltage_slice", imgui.ImVec2(hello_imgui.em_size(6), 0)
+            "Set slice##vnoiser_slice", imgui.ImVec2(hello_imgui.em_size(6), 0)
         ):
             self._show_slice_popup = True
         set_tooltip(
@@ -575,22 +577,22 @@ class VoltagePipelineWidget(PipelineWidget):
         except ValueError as e:
             imgui.text_colored(_MISSING_COLOR, str(e))
         if self._show_slice_popup:
-            imgui.open_popup("Frames & Channel##voltage_slice")
+            imgui.open_popup("Frames & Channel##vnoiser_slice")
             self._show_slice_popup = False
         imgui.set_next_window_size(
             imgui.ImVec2(hello_imgui.em_size(36), 0), imgui.Cond_.first_use_ever
         )
-        if imgui.begin_popup("Frames & Channel##voltage_slice"):
+        if imgui.begin_popup("Frames & Channel##vnoiser_slice"):
             tp_label, _z_label, c_label = resolve_dim_labels(self.parent)
             draw_selection_table(
                 self,
                 max_frames,
                 n_lines,
-                tp_attr="_voltage_tp",
-                z_attr="_voltage_z",
-                id_suffix="_voltage",
+                tp_attr="_vnoiser_tp",
+                z_attr="_vnoiser_z",
+                id_suffix="_vnoiser",
                 num_channels=num_channels,
-                c_attr="_voltage_c",
+                c_attr="_vnoiser_c",
                 tp_label=tp_label,
                 z_label="ROIs",
                 c_label=c_label,
@@ -598,7 +600,7 @@ class VoltagePipelineWidget(PipelineWidget):
             )
             imgui.spacing()
             if imgui.button(
-                "Close##voltage_slice_close", imgui.ImVec2(hello_imgui.em_size(6), 0)
+                "Close##vnoiser_slice_close", imgui.ImVec2(hello_imgui.em_size(6), 0)
             ):
                 imgui.close_current_popup()
             imgui.end_popup()
@@ -619,7 +621,7 @@ class VoltagePipelineWidget(PipelineWidget):
             | imgui.TableFlags_.borders_inner_h
             | imgui.TableFlags_.sizing_fixed_fit
         )
-        if imgui.begin_table("##voltage_scans", 4, flags):
+        if imgui.begin_table("##vnoiser_scans", 4, flags):
             imgui.table_setup_column("Unit", imgui.TableColumnFlags_.width_stretch)
             imgui.table_setup_column("ROIs")
             imgui.table_setup_column("Length")
@@ -640,7 +642,7 @@ class VoltagePipelineWidget(PipelineWidget):
                 imgui.table_set_column_index(0)
                 label = f"{munit} (on screen)" if key == shown else munit
                 _, self._scans[key] = imgui.checkbox(
-                    f"{label}##voltage_scan_{key}", self._scans.get(key, False)
+                    f"{label}##vnoiser_scan_{key}", self._scans.get(key, False)
                 )
                 if imgui.is_item_hovered():
                     imgui.set_tooltip(key)
@@ -653,15 +655,15 @@ class VoltagePipelineWidget(PipelineWidget):
                 if not self._scans[key]:
                     imgui.begin_disabled()
                 _, self._first_env[key] = imgui.checkbox(
-                    f"##voltage_env_{key}", self._first_env.get(key, False)
+                    f"##vnoiser_env_{key}", self._first_env.get(key, False)
                 )
                 if not self._scans[key]:
                     imgui.end_disabled()
             imgui.end_table()
-        if imgui.small_button("On screen only##voltage_scans_shown"):
+        if imgui.small_button("On screen only##vnoiser_scans_shown"):
             self._scans = {u["key"]: u["key"] == shown for u in self._units}
         imgui.same_line()
-        if imgui.small_button("All##voltage_scans_all"):
+        if imgui.small_button("All##vnoiser_scans_all"):
             self._scans = {u["key"]: True for u in self._units}
 
     def _draw_domains_block(self) -> None:
@@ -681,7 +683,7 @@ class VoltagePipelineWidget(PipelineWidget):
             | imgui.TableFlags_.sizing_stretch_prop
         )
         remove = None
-        if imgui.begin_table("##voltage_domains", 3, flags):
+        if imgui.begin_table("##vnoiser_domains", 3, flags):
             imgui.table_setup_column(
                 "Domain", imgui.TableColumnFlags_.width_stretch, 2.0
             )
@@ -694,7 +696,7 @@ class VoltagePipelineWidget(PipelineWidget):
                 imgui.table_next_row()
                 imgui.table_set_column_index(0)
                 imgui.set_next_item_width(-1)
-                _, row[0] = imgui.input_text(f"##voltage_dom_name_{i}", row[0])
+                _, row[0] = imgui.input_text(f"##vnoiser_dom_name_{i}", row[0])
                 imgui.table_set_column_index(1)
                 try:
                     parse_roi_text(row[1], n_lines)
@@ -704,11 +706,11 @@ class VoltagePipelineWidget(PipelineWidget):
                 if bad:
                     imgui.push_style_color(imgui.Col_.text, _MISSING_COLOR)
                 imgui.set_next_item_width(-1)
-                _, row[1] = imgui.input_text(f"##voltage_dom_rois_{i}", row[1])
+                _, row[1] = imgui.input_text(f"##vnoiser_dom_rois_{i}", row[1])
                 if bad:
                     imgui.pop_style_color()
                 imgui.table_set_column_index(2)
-                if imgui.small_button(f"x##voltage_dom_rm_{i}"):
+                if imgui.small_button(f"x##vnoiser_dom_rm_{i}"):
                     remove = i
                 if imgui.is_item_hovered():
                     imgui.set_tooltip("Remove this domain.")
@@ -718,19 +720,19 @@ class VoltagePipelineWidget(PipelineWidget):
         # the three buttons wrap to a second line when the panel is too narrow for one
         right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
         spacing = imgui.get_style().item_spacing.x
-        if imgui.button("Add##voltage_dom_add"):
+        if imgui.button("Add##vnoiser_dom_add"):
             self._domain_rows.append([f"domain{len(self._domain_rows) + 1}", ""])
         if imgui.is_item_hovered():
             imgui.set_tooltip("Add a domain row.")
         if imgui.get_item_rect_max().x + spacing + button_width("Load") <= right:
             imgui.same_line()
-        if imgui.button("Load##voltage_dom_load"):
+        if imgui.button("Load##vnoiser_dom_load"):
             self._load_domains_file()
         if imgui.is_item_hovered():
             imgui.set_tooltip(f"Load {DOMAINS_FILE} from beside the file.")
         if imgui.get_item_rect_max().x + spacing + button_width("Save") <= right:
             imgui.same_line()
-        if imgui.button("Save##voltage_dom_save"):
+        if imgui.button("Save##vnoiser_dom_save"):
             self._save_domains_file()
         if imgui.is_item_hovered():
             imgui.set_tooltip(
@@ -823,7 +825,7 @@ class VoltagePipelineWidget(PipelineWidget):
     def _f_int(self, obj, field: str, label: str, tooltip: str, lo=0) -> None:
         pushed = self._mod_push(obj, field)
         imgui.set_next_item_width(hello_imgui.em_size(6))
-        _, val = imgui.input_int(f"##voltage_{field}", int(getattr(obj, field)))
+        _, val = imgui.input_int(f"##vnoiser_{field}", int(getattr(obj, field)))
         if pushed:
             imgui.pop_style_color()
         setattr(obj, field, max(lo, val))
@@ -835,7 +837,7 @@ class VoltagePipelineWidget(PipelineWidget):
         pushed = self._mod_push(obj, field)
         imgui.set_next_item_width(hello_imgui.em_size(6))
         _, val = imgui.input_float(
-            f"##voltage_{field}", float(getattr(obj, field)), step, step * 10, fmt
+            f"##vnoiser_{field}", float(getattr(obj, field)), step, step * 10, fmt
         )
         if pushed:
             imgui.pop_style_color()
@@ -845,14 +847,14 @@ class VoltagePipelineWidget(PipelineWidget):
     def _f_check(self, obj, field: str, label: str, tooltip: str) -> None:
         pushed = self._mod_push(obj, field)
         val = checkbox_with_tooltip(
-            f"{label}##voltage_{field}", bool(getattr(obj, field)), tooltip
+            f"{label}##vnoiser_{field}", bool(getattr(obj, field)), tooltip
         )
         if pushed:
             imgui.pop_style_color()
         setattr(obj, field, bool(val))
 
     def _draw_settings_popup(self) -> None:
-        popup_title = "Voltage Pipeline Settings##voltage_settings_popup"
+        popup_title = "vnoiser Settings##vnoiser_settings_popup"
         if self._settings_sizer is None:
             self._settings_sizer = PopupAutoSize(popup_title)
         if self._show_settings_popup:
@@ -914,7 +916,7 @@ class VoltagePipelineWidget(PipelineWidget):
                     else 0
                 )
                 changed, chosen = imgui.combo(
-                    "##voltage_output_format", current, list(OUTPUT_FORMATS)
+                    "##vnoiser_output_format", current, list(OUTPUT_FORMATS)
                 )
                 if pushed:
                     imgui.pop_style_color()
@@ -928,8 +930,8 @@ class VoltagePipelineWidget(PipelineWidget):
                     rt,
                     "output_format",
                     "Output format",
-                    "zarr: one <input>.<timestamp>.voltage.zarr results file beside the input (the shape "
-                    "every pipeline's results share), the run's own files in a voltage/ folder inside it. "
+                    "zarr: one <input>.<timestamp>.vnoiser.zarr results file beside the input (the shape "
+                    "every pipeline's results share), the run's own files in a vnoiser/ folder inside it. "
                     "pkl: the archive's PF folder of pickles.",
                 )
                 imgui.spacing()
@@ -944,10 +946,10 @@ class VoltagePipelineWidget(PipelineWidget):
                 imgui.push_style_color(
                     imgui.Col_.button_active, imgui.ImVec4(0.50, 0.28, 0.08, 1.0)
                 )
-                if imgui.button("Defaults##voltage_defaults", imgui.ImVec2(btn_w, 0)):
-                    from mbo_utilities.vnoiser.params import VoltageSettings
+                if imgui.button("Defaults##vnoiser_defaults", imgui.ImVec2(btn_w, 0)):
+                    from mbo_utilities.vnoiser.params import VnoiserSettings
 
-                    self.settings = VoltageSettings()
+                    self.settings = VnoiserSettings()
                 imgui.pop_style_color(3)
                 set_tooltip(
                     "Reset every parameter to the archive's settings (Noguchi & Terada).",
@@ -969,7 +971,7 @@ class VoltagePipelineWidget(PipelineWidget):
                     imgui.Col_.button_active, imgui.ImVec4(0.45, 0.10, 0.10, 1.0)
                 )
                 if imgui.button(
-                    "Close##voltage_settings_close", imgui.ImVec2(btn_w, 0)
+                    "Close##vnoiser_settings_close", imgui.ImVec2(btn_w, 0)
                 ):
                     imgui.close_current_popup()
                 imgui.pop_style_color(3)
@@ -991,7 +993,7 @@ class VoltagePipelineWidget(PipelineWidget):
             if i:
                 imgui.same_line()
             imgui.begin_child(
-                f"##voltage_col_{key}",
+                f"##vnoiser_col_{key}",
                 imgui.ImVec2(col_w, 0),
                 imgui.ChildFlags_.borders | imgui.ChildFlags_.auto_resize_y,
             )
@@ -1039,7 +1041,7 @@ class VoltagePipelineWidget(PipelineWidget):
         pushed = self._mod_push(den, "thres_type")
         idx = 0 if den.thres_type == "soft" else 1
         imgui.set_next_item_width(hello_imgui.em_size(6))
-        changed, idx = imgui.combo("##voltage_thres_type", idx, ["Soft", "Hard"])
+        changed, idx = imgui.combo("##vnoiser_thres_type", idx, ["Soft", "Hard"])
         if pushed:
             imgui.pop_style_color()
         if changed:
@@ -1053,7 +1055,7 @@ class VoltagePipelineWidget(PipelineWidget):
         pushed = self._mod_push(den, "soft_levels")
         imgui.set_next_item_width(hello_imgui.em_size(12))
         _, levels = imgui.input_float4(
-            "##voltage_soft_levels", list(den.soft_levels), "%.2f"
+            "##vnoiser_soft_levels", list(den.soft_levels), "%.2f"
         )
         if pushed:
             imgui.pop_style_color()
@@ -1123,7 +1125,7 @@ class VoltagePipelineWidget(PipelineWidget):
             "Trim the tap count to odd. Off reproduces the archive.",
         )
         imgui.set_next_item_open(False, imgui.Cond_.appearing)
-        if imgui.collapsing_header("Clustering and windows##voltage_adv"):
+        if imgui.collapsing_header("Clustering and windows##vnoiser_adv"):
             self._f_int(
                 den,
                 "n_components",
@@ -1248,14 +1250,14 @@ class VoltagePipelineWidget(PipelineWidget):
             imgui.get_frame_height_with_spacing() * (len(mods) + 2),
         )
         if imgui.begin_child(
-            "##voltage_mod_params", imgui.ImVec2(-1, mod_h), imgui.ChildFlags_.borders
+            "##vnoiser_mod_params", imgui.ImVec2(-1, mod_h), imgui.ChildFlags_.borders
         ):
             flags = (
                 imgui.TableFlags_.row_bg
                 | imgui.TableFlags_.borders_inner_h
                 | imgui.TableFlags_.sizing_stretch_prop
             )
-            if imgui.begin_table("##voltage_mod_tbl", 3, flags):
+            if imgui.begin_table("##vnoiser_mod_tbl", 3, flags):
                 imgui.table_setup_column(
                     "Parameter", imgui.TableColumnFlags_.width_stretch, 4.0
                 )
@@ -1331,7 +1333,7 @@ class VoltagePipelineWidget(PipelineWidget):
         run_avail = imgui.get_content_region_avail().x
         if run_avail > run_w:
             imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + (run_avail - run_w) * 0.5)
-        clicked = imgui.button("Run Voltage", imgui.ImVec2(run_w, 0))
+        clicked = imgui.button("Run vnoiser", imgui.ImVec2(run_w, 0))
         if not ready:
             imgui.end_disabled()
         imgui.pop_style_color(3)
@@ -1349,14 +1351,14 @@ class VoltagePipelineWidget(PipelineWidget):
             and (Path(self._outdir) / "denoised_trace_scans.pkl").exists()
         )
         results = (
-            newest_results(self._outdir, "voltage", source=mesc)
+            newest_results(self._outdir, "vnoiser", source=mesc)
             if self._outdir and not pf_done
             else None
         )
         if results is not None:
             imgui.text_disabled(f"Results: {results.name}")
             if imgui.button(
-                "Load into Traces##voltage_load_traces",
+                "Load into Traces##vnoiser_load_traces",
                 imgui.ImVec2(hello_imgui.em_size(11), 0),
             ):
                 self._load_traces(results)
@@ -1364,13 +1366,31 @@ class VoltagePipelineWidget(PipelineWidget):
                 imgui.set_tooltip(
                     "Load every scan's denoised and line traces into the Traces tab (Manual ROI Labeling)."
                 )
+            imgui.same_line()
+            if imgui.button(
+                "Spike average##vnoiser_sta",
+                imgui.ImVec2(hello_imgui.em_size(11), 0),
+            ):
+                self._spike_average(results)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    "The ROI on screen averaged around its detected events (or the "
+                    "events its curation accepts, or a threshold): the line's movie, "
+                    "its trace and RTMC. Its own window."
+                )
+        for window in list(self._windows):
+            state = window.poll()
+            if state is not None:
+                self._windows.remove(window)
+                if state:
+                    self._set_status(state, error=True)
         if mesc is None:
             return
         # the curation window on the folder once it is written (pickles or
         # zarr), else on the file itself (every line raw, denoised when clicked)
         written = pf_done or results is not None
         if imgui.button(
-            "Curate##voltage_curate", imgui.ImVec2(hello_imgui.em_size(11), 0)
+            "Curate##vnoiser_curate", imgui.ImVec2(hello_imgui.em_size(11), 0)
         ):
             self._curate(self._outdir if written else str(mesc))
         if imgui.is_item_hovered():
@@ -1401,9 +1421,9 @@ class VoltagePipelineWidget(PipelineWidget):
             "custom_metadata": dict(getattr(self.parent, "_custom_metadata", {}) or {}),
         }
         rois = "" if planes is None else f", {len(planes)} ROI(s)"
-        description = f"Voltage: {len(scans)} scan(s), {len(domains)} domain(s){rois}"
+        description = f"vnoiser: {len(scans)} scan(s), {len(domains)} domain(s){rois}"
         pid = get_process_manager().spawn(
-            task_type="voltage",
+            task_type="vnoiser",
             args=args,
             description=description,
             output_path=self._outdir,
@@ -1433,6 +1453,31 @@ class VoltagePipelineWidget(PipelineWidget):
             self._set_status(
                 widget._run_error or f"Could not load {results.name}.", error=True
             )
+
+    def _spike_average(self, results: Path) -> None:
+        """Open the spike-triggered average on the scan and ROI on screen:
+        the results unit that processed the shown recording unit, and the ROI
+        whose lines hold the line on the ROI slider.
+        """
+        from mbo_utilities.gui.launch import LaunchedWindow
+        from mbo_utilities.gui.spike_average_viewer import launch_spike_average
+        from mbo_utilities.results import Results, unit_for_source
+
+        found = Results.read(results)
+        iw = getattr(self.parent, "image_widget", None)
+        shown = base_array(iw.data[0]) if iw is not None else None
+        unit = unit_for_source(found, str(getattr(shown, "unit_key", "") or ""))
+        roi = None
+        view = getattr(self.parent, "slice", None)
+        if unit is not None and view is not None:
+            k = found.units[unit].member_roi(view.z)
+            roi = None if k is None else found.units[unit].roi_names[k]
+        pid, log_name = launch_spike_average(results, unit, roi, self._channel())
+        self._windows.append(LaunchedWindow(pid, log_name, "Spike average"))
+        self._set_status(
+            f"Spike average of {unit or 'the first scan'}{f' {roi}' if roi else ''} "
+            f"opened in its own window (PID {pid})."
+        )
 
     def _curate(self, path: str) -> None:
         # the window module brings hello_imgui and fastplotlib's edge windows
