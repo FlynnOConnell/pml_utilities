@@ -1803,7 +1803,10 @@ class TestTracesTab:
         assert all(t.c == 1 and t.engine == "vnoiser" for t in rows.values())
         assert rows["roi0"].extra["line"] == 4 and "line" not in rows["roi1"].extra
         # each ROI row names its unit and ROI, which the spike-average window opens it by
-        assert rows["roi1"].extra["roi"] == "roi1" and "roi" not in rows["roi0 (raw)"].extra
+        assert (
+            rows["roi1"].extra["roi"] == "roi1"
+            and "roi" not in rows["roi0 (raw)"].extra
+        )
         assert widget._spike_target([rows["roi1"]]) == (path, "scan3", "roi1", 1)
         assert widget._spike_target([rows["roi1 line 5 (raw)"]]) is None
         # the table's ROI column shows the line (1-based), as for any placed row

@@ -9,7 +9,6 @@ from mbo_utilities.results import (
     pipeline_files,
     results_pipeline,
 )
-
 from scripts.convert_vnoiser_results import main
 
 

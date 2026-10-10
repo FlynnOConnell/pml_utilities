@@ -301,7 +301,9 @@ class SpikeSource:
         for name, movie in self.movies.items():
             mean, _sem, n_spikes = triggered_average(movie, spikes, before, after)
             movies[name] = mean.astype(np.float32)
-        lines = {MEAN_F: {name: (m.mean(axis=(1, 2)), None) for name, m in movies.items()}}
+        lines = {
+            MEAN_F: {name: (m.mean(axis=(1, 2)), None) for name, m in movies.items()}
+        }
         traces = {
             f"{self.roi} {kind}": {
                 kind: triggered_average(self.traces[kind], spikes, before, after, True)[

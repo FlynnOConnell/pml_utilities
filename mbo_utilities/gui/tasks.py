@@ -1536,7 +1536,7 @@ def task_roi_workflow(args: dict, logger: logging.Logger) -> None:
 
 def task_vnoiser(args: dict, logger: logging.Logger) -> None:
     """
-    vnoiser pipeline task: AOD ROI units of a .mesc to a PF folder.
+    Vnoiser pipeline task: AOD ROI units of a .mesc to a PF folder.
 
     Runs mbo_utilities.vnoiser.pipeline.run_vnoiser_pipeline with the Run
     tab's settings (scaled there to the scans' frame rate); every ticked

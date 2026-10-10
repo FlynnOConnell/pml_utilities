@@ -29,7 +29,6 @@ from masknmf.visualization.imgui.theme import em, opaque_popups
 
 from mbo_utilities import log
 from mbo_utilities.analysis.spike_average import (
-    MEAN_F,
     THRESHOLD,
     SpikeSource,
     threshold_peaks,
@@ -215,7 +214,10 @@ class SpikeAverageViewer:
                 peak = float(np.abs(shown).max()) or 1.0
                 nd.graphic.vmin, nd.graphic.vmax = -peak, peak
             else:
-                nd.graphic.vmin, nd.graphic.vmax = float(movie.min()), float(movie.max())
+                nd.graphic.vmin, nd.graphic.vmax = (
+                    float(movie.min()),
+                    float(movie.max()),
+                )
         panels = list(average.traces)
         if tuple(panels) != self.traces.panels:
             self.traces.reset(panels, len(self.lag), self.lag)
@@ -229,7 +231,9 @@ class SpikeAverageViewer:
                 )
                 drawn.append((label, mean, color))
                 if sem is not None and np.any(sem):
-                    faint = None if color is None else tuple(SEM_SHADE * v for v in color)
+                    faint = (
+                        None if color is None else tuple(SEM_SHADE * v for v in color)
+                    )
                     drawn.append((f"{label} sem", mean + sem, faint))
                     drawn.append((f"{label} sem", mean - sem, faint))
             self.traces.set(panel, drawn, fit=True)
@@ -388,7 +392,9 @@ def launch_spike_average(
         if value is not None:
             args += [flag, str(value)]
     log_name = f"spike_average_{Path(path).name}"
-    return launch_window("mbo_utilities.gui.spike_average_viewer", args, log_name), log_name
+    return launch_window(
+        "mbo_utilities.gui.spike_average_viewer", args, log_name
+    ), log_name
 
 
 if __name__ == "__main__":
