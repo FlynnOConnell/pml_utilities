@@ -259,6 +259,44 @@ def load_npy(path):
                 pathlib.WindowsPath = _original_windows
 
 
+def has_plane_ops(plane_dir) -> bool:
+    """True when a suite2p plane dir carries its ops, as ``ops.npy`` or suite2p 1.0's ``settings.npy``."""
+    plane_dir = Path(plane_dir)
+    return (plane_dir / "ops.npy").is_file() or (plane_dir / "settings.npy").is_file()
+
+
+def load_plane_ops(plane_dir) -> dict:
+    """One suite2p plane's ops as a flat dict.
+
+    suite2p 1.0 writes no ``ops.npy``: it splits it into ``settings.npy``
+    (nested by stage, flattened here one level, top-level keys winning),
+    ``reg_outputs.npy`` and ``detect_outputs.npy``, and stores no ``Ly`` /
+    ``Lx`` / ``nframes``, which come from the reference image and the shifts.
+    """
+    plane_dir = Path(plane_dir)
+    if (plane_dir / "ops.npy").is_file():
+        return load_npy(plane_dir / "ops.npy").item()
+    if not (plane_dir / "settings.npy").is_file():
+        raise FileNotFoundError(f"no ops.npy or settings.npy in {plane_dir}")
+    settings = load_npy(plane_dir / "settings.npy").item()
+    ops = {}
+    for value in settings.values():
+        if isinstance(value, dict):
+            ops.update(value)
+    ops.update({k: v for k, v in settings.items() if not isinstance(v, dict)})
+    for name in ("reg_outputs.npy", "detect_outputs.npy"):
+        if (plane_dir / name).is_file():
+            ops.update(load_npy(plane_dir / name).item())
+    if "Ly" not in ops:
+        for key in ("refImg", "meanImg"):
+            if isinstance(ops.get(key), np.ndarray) and ops[key].ndim == 2:
+                ops["Ly"], ops["Lx"] = ops[key].shape
+                break
+    if "nframes" not in ops and "yoff" in ops:
+        ops["nframes"] = len(ops["yoff"])
+    return ops
+
+
 def get_last_savedir_path() -> Path:
     """Return path to settings file tracking last saved folder.
 

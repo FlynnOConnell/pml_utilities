@@ -148,7 +148,7 @@ Format-specific labels win over the rank guess:
 | OME-TIFF | `SizeT`, `SizeZ`, `SizeC`; page order from `DimensionOrder`. |
 | ScanImage TIFF | `stack_type` from `si`: LBM (>2 saved channels) puts beamlets on Z and color ports on C; piezo puts slices on Z and volumes on T; single_plane has Z=1. |
 | Multi-file TIFF | `planeNN` in the filename groups files onto Z; otherwise files concatenate along T; `roiN` yields one array per ROI. |
-| Suite2p dir | `ops.npy` per plane dir; plane dirs stack onto Z; T is derived from the binary's file size, not `ops["nframes"]`. |
+| Suite2p dir | `ops.npy` per plane dir, or suite2p 1.0's `settings.npy` + `reg_outputs.npy` + `detect_outputs.npy` read as one ops dict (`file_io.load_plane_ops`; `ops.npy` wins when both exist, raw binary `data_raw.bin` or `raw_data.bin`); plane dirs stack onto Z; T is derived from the binary's file size, not `ops["nframes"]`. |
 | MESc | `MethodType`: 1 timeseries `(T, C, 1, Y, X)`; 2 z-stack `(1, C, Z, Y, X)`; 6/7 linescan `(T, C, R, n_lines, width)`; 8 chessboard and 9/10 ribbon `(T, C, R, Y, X)`; 11 multicube has real depth on Z. `metadata["mesc_z_axis_meaning"]` says whether Z is `roi_index`, `depth` or `none`. |
 | Bruker HDF5 | the dataset's HDF5 dimension labels (`t z y x c`); `element_size_um` in the stored order of the spatial axes. |
 | lab4 H5 | `/imaging/data` is `TZYXC` (`TRYXC` for an AOD scan, ROIs on Z), unless HDF5 dimension labels say otherwise; claimed when `/imaging` carries `frame_rate_hz` (`Lab4H5Array`) |
@@ -290,6 +290,9 @@ applied as `arr.motion_correction`, a `features.MotionCorrection` or `None`
   (`X zplane03_tp00001-01574`) and listed in `planes`, and the Traces tab draws
   only the plane on screen (`MotionPlot.draw(z=slice.z)`, y refit on a plane
   change). The nonrigid block offsets (`xoff1` / `yoff1`) are not shown.
+  `suite2p.registration_shifts` builds it, for `Suite2pArray` and for
+  `Lab4H5Array`, whose `motion_correction` is the newest suite2p run beside its
+  H5 (`<params uuid>/suite2p/plane<N>/`, `lab4.suite2p_run_planes`).
 - GUI consumers: the Traces tab draws the shifts as a panel of masknmf's
   `TracePlot` over the traces (§7.6 the stack, `manual_roi._motion_lines`,
   interpolated onto the viewer's frames); `gui/imgui/motion.MotionPlot` draws
@@ -781,7 +784,10 @@ pipeline's native files stay its cache and its compatibility layer.
   `Fneu` → `neuropil`, `spks` → `spikes`, `norm_traces` → `dff`, or `zscore` when
   the plane's ops say `norm_method = "zscore"` (`norm_traces_kind`, which
   `roi_workflow.load_run_dir` reads the same file through), `stat` → pixel
-  members, `meanImg`/`max_proj`/`Vcorr`/`refImg` → images): plane dirs in
+  members, `meanImg`/`max_proj`/`Vcorr`/`refImg` → images, the cropped `max_proj`
+  and `Vcorr` put back into the full frame at `yrange`/`xrange` so every image
+  shares the ROIs' pixel coordinates; ops through `load_plane_ops`, and ROIs with
+  no frame size to place them in raise): plane dirs in
   plane-number order (`zplaneNN` is 1-based, vanilla `planeN` 0-based), or the dirs
   given in the order their planes stack, a dir without `stat.npy` + `F.npy` giving no
   unit; every unit records `attrs["plane_dir"]` and `attrs["z"]`, its position in
@@ -808,6 +814,7 @@ pipeline's native files stay its cache and its compatibility layer.
   it to what it opened; `Suite2pArray` answers `Results.from_suite2p` of its own
   plane dirs, read once on first use, so a suite2p volume's planes arrive in the
   array's z order with `attrs["z"]` the 5D z (None for a registration-only run).
+  `Lab4H5Array` answers the same for the newest suite2p run beside its H5.
   The recording a `ResultsArray` processed is its image when `results.source` names
   a reachable file, else a trace raster. `results_pipeline(path)` and
   `results_summary(path)` read only `zarr.json` files and are what `can_open` and

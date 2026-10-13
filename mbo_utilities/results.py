@@ -59,6 +59,7 @@ from mbo_utilities import log
 from mbo_utilities._writers import _make_json_serializable
 from mbo_utilities.arrays._base import ReductionMixin, _imwrite_base
 from mbo_utilities.arrays.features._dim_tags import TAG_REGISTRY, filename_tags
+from mbo_utilities.file_io import has_plane_ops, load_plane_ops
 from mbo_utilities.lazy_array import LazyArray
 from mbo_utilities.metadata.base import strip_for_export
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
@@ -353,11 +354,7 @@ class Results:
                 (plane_dir / "stat.npy").is_file() and (plane_dir / "F.npy").is_file()
             ):
                 continue
-            ops = (
-                np.load(plane_dir / "ops.npy", allow_pickle=True).item()
-                if (plane_dir / "ops.npy").is_file()
-                else {}
-            )
+            ops = load_plane_ops(plane_dir) if has_plane_ops(plane_dir) else {}
             stat = np.load(plane_dir / "stat.npy", allow_pickle=True)
             F = np.load(plane_dir / "F.npy")
             vanilla = re.fullmatch(r"plane(\d+)", plane_dir.name, re.IGNORECASE)
@@ -378,6 +375,11 @@ class Results:
                     if isinstance(ops.get(key), np.ndarray) and ops[key].ndim == 2:
                         ly, lx = ops[key].shape
                         break
+            if len(stat) and not lx:
+                raise ValueError(
+                    f"{plane_dir}: no Ly/Lx or image in its ops, so the ROI pixels "
+                    "cannot be placed in the frame"
+                )
             members, weights = [], []
             for s in stat:
                 ypix, xpix = (
@@ -398,16 +400,24 @@ class Results:
             ):
                 if (plane_dir / file).is_file():
                     traces[kind] = np.load(plane_dir / file)
-            images = {
-                kind: np.asarray(ops[key])
-                for key, kind in (
-                    ("meanImg", "mean"),
-                    ("max_proj", "max"),
-                    ("Vcorr", "corr"),
-                    ("refImg", "ref"),
-                )
-                if isinstance(ops.get(key), np.ndarray) and ops[key].ndim == 2
-            }
+            images = {}
+            for key, kind in (
+                ("meanImg", "mean"),
+                ("max_proj", "max"),
+                ("Vcorr", "corr"),
+                ("refImg", "ref"),
+            ):
+                image = ops.get(key)
+                if not (isinstance(image, np.ndarray) and image.ndim == 2):
+                    continue
+                # suite2p crops max_proj and Vcorr to yrange/xrange; ROI pixels are full-frame
+                if ly and lx and image.shape != (ly, lx) and "yrange" in ops:
+                    (y0, y1), (x0, x1) = ops["yrange"][:2], ops["xrange"][:2]
+                    if image.shape == (y1 - y0, x1 - x0):
+                        full = np.zeros((ly, lx), image.dtype)
+                        full[y0:y1, x0:x1] = image
+                        image = full
+                images[kind] = image
             units.append(
                 ResultUnit(
                     name=unit_name("plane", index),

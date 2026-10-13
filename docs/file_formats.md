@@ -275,6 +275,13 @@ HDF5 dimension labels win when the writer set them. The `/imaging` group's
 as they are. A `z_step_um` of 0 and an empty `start_time` are placeholders and
 are dropped.
 
+lab4 writes each pipeline run beside the recording as
+`<params uuid>/<pipeline>/plane<N>/`. The newest suite2p run there (suite2p
+1.0's split `settings.npy` / `reg_outputs.npy` / `detect_outputs.npy`, or a
+classic `ops.npy`) gives `arr.motion_correction` (its rigid shifts) and
+`arr.results` (its ROIs, traces and images), so the viewer shows both with the
+recording.
+
 ```python
 arr = mbo.imread("/path/to/MSession_0_MUnit_3.h5")
 arr.shape                   # (T, C, R, Y, X)

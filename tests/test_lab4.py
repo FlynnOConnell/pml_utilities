@@ -3,16 +3,66 @@
 from __future__ import annotations
 
 import json
+import os
 
 import h5py
 import numpy as np
 import pytest
 from mbo_utilities import imread, imwrite
-from mbo_utilities.arrays import H5Array, Lab4H5Array
+from mbo_utilities.arrays import H5Array, Lab4H5Array, Suite2pArray
+from mbo_utilities.file_io import load_plane_ops
 from mbo_utilities.reader import source_reader_kwargs
+from mbo_utilities.results import Results
 
 # (T, Z, Y, X, C), as lab4/convert/mini2p and bruker write it
 SHAPE = (12, 3, 16, 20, 2)
+
+
+def write_suite2p_v1_plane(plane_dir, nt, ly, lx, shift):
+    """A suite2p 1.0 plane as lab4 runs it: no ops.npy, its parts split three ways."""
+    plane_dir.mkdir(parents=True)
+    rng = np.random.default_rng(3)
+    rng.integers(0, 100, (nt, ly, lx), dtype=np.int16).tofile(plane_dir / "data.bin")
+    rng.integers(0, 100, (nt, ly, lx), dtype=np.int16).tofile(plane_dir / "raw_data.bin")
+    settings = {
+        "fs": 9.5,
+        "tau": 1.0,
+        "nplanes": 1,
+        "registration": {"nonrigid": True, "block_size": (8, 8), "batch_size": 100},
+        "extraction": {"neuropil_coefficient": 0.7, "batch_size": 500},
+    }
+    reg = {
+        "refImg": np.ones((ly, lx), np.float32),
+        "meanImg": np.full((ly, lx), 2.0, np.float32),
+        "xoff": np.full(nt, shift, np.int32),
+        "yoff": -np.full(nt, shift, np.int32),
+        "yrange": [1, ly - 1],
+        "xrange": [1, lx - 1],
+    }
+    detect = {"Vcorr": np.zeros((ly - 2, lx - 2), np.float32)}
+    for name, value in (("settings", settings), ("reg_outputs", reg), ("detect_outputs", detect)):
+        np.save(plane_dir / f"{name}.npy", value, allow_pickle=True)
+    stat = np.array(
+        [{"ypix": np.array([1, 2]), "xpix": np.array([3, 3]), "lam": np.ones(2)}],
+        dtype=object,
+    )
+    np.save(plane_dir / "stat.npy", stat, allow_pickle=True)
+    for name in ("F", "Fneu", "spks"):
+        np.save(plane_dir / f"{name}.npy", rng.random((1, nt)).astype(np.float32))
+    np.save(plane_dir / "iscell.npy", np.array([[1.0, 0.9]], np.float32))
+
+
+@pytest.fixture
+def lab4_session(mini2p_h5):
+    """A recording with two suite2p runs beside it, the second one newer."""
+    path, data = mini2p_h5
+    nt, _, ly, lx, _ = data.shape
+    old = path.parent / "aaaa" / "suite2p" / "plane0"
+    new = path.parent / "bbbb" / "suite2p" / "plane0"
+    write_suite2p_v1_plane(old, nt, ly, lx, shift=1)
+    write_suite2p_v1_plane(new, nt, ly, lx, shift=3)
+    os.utime(old, (1_000_000, 1_000_000))
+    return path, new
 
 
 @pytest.fixture
@@ -159,3 +209,77 @@ class TestRoundTrip:
         np.testing.assert_array_equal(back[:], arr[:])
         assert back.dx == pytest.approx(arr.dx)
         assert back.fs == pytest.approx(arr.fs)
+
+
+class TestSuite2pV1:
+    def test_ops_are_rebuilt_from_the_split_files(self, lab4_session):
+        _, plane = lab4_session
+        ops = load_plane_ops(plane)
+        assert ops["fs"] == 9.5
+        assert ops["nonrigid"] is True and tuple(ops["block_size"]) == (8, 8)
+        assert (ops["Ly"], ops["Lx"], ops["nframes"]) == (16, 20, 12)
+        assert ops["Vcorr"].shape == (14, 18)
+
+    def test_ops_npy_wins_over_settings(self, lab4_session):
+        _, plane = lab4_session
+        np.save(plane / "ops.npy", {"fs": 30.0, "Ly": 16, "Lx": 20}, allow_pickle=True)
+        assert load_plane_ops(plane)["fs"] == 30.0
+
+    def test_plane_opens_as_suite2p(self, lab4_session):
+        _, plane = lab4_session
+        arr = imread(plane)
+        assert isinstance(arr, Suite2pArray)
+        assert arr.shape == (12, 1, 1, 16, 20)
+        assert arr.fs == pytest.approx(9.5)
+        assert np.all(arr.motion_correction.traces["X"][1] == 3)
+        assert arr.results.units["zplane01"].n_rois == 1
+
+    def test_raw_binary_is_found(self, lab4_session):
+        _, plane = lab4_session
+        arr = Suite2pArray(plane, use_raw=True)
+        assert arr.filenames == [plane / "raw_data.bin"]
+
+    def test_results_place_rois_and_carry_fs_and_images(self, lab4_session):
+        _, plane = lab4_session
+        unit = Results.from_suite2p(plane).units["zplane01"]
+        assert unit.fs == pytest.approx(9.5)
+        assert unit.image_shape == (16, 20)
+        np.testing.assert_array_equal(unit.members[0], [1 * 20 + 3, 2 * 20 + 3])
+        assert set(unit.images) == {"mean", "ref", "corr"}
+        assert unit.images["corr"].shape == (16, 20)
+        assert set(unit.traces) == {"raw", "neuropil", "spikes"}
+
+    def test_cropped_images_sit_in_the_full_frame(self, lab4_session):
+        _, plane = lab4_session
+        detect = {"Vcorr": np.ones((14, 18), np.float32)}
+        np.save(plane / "detect_outputs.npy", detect, allow_pickle=True)
+        corr = Results.from_suite2p(plane).units["zplane01"].images["corr"]
+        assert corr[1:15, 1:19].all()
+        assert not corr[0].any() and not corr[:, 0].any()
+
+    def test_rois_without_a_frame_size_are_refused(self, lab4_session):
+        _, plane = lab4_session
+        for name in ("settings", "reg_outputs", "detect_outputs"):
+            (plane / f"{name}.npy").unlink()
+        with pytest.raises(ValueError, match="cannot be placed"):
+            Results.from_suite2p(plane)
+
+
+class TestLab4Runs:
+    def test_newest_run_gives_results_and_shifts(self, lab4_session):
+        path, plane = lab4_session
+        arr = imread(path)
+        assert arr.suite2p_planes == [plane]
+        mc = arr.motion_correction
+        assert (mc.source, mc.unit) == ("suite2p", "px")
+        np.testing.assert_array_equal(mc.traces["X"][1], 3)
+        np.testing.assert_array_equal(mc.traces["Y"][1], -3)
+        assert mc.traces["X"][0][-1] == pytest.approx(11 / 9.5)
+        unit = arr.results.units["zplane01"]
+        assert unit.attrs["plane_dir"] == str(plane)
+
+    def test_no_run_gives_nothing(self, aod_h5):
+        arr = imread(aod_h5[0])
+        assert arr.suite2p_planes == []
+        assert arr.motion_correction is None
+        assert arr.results is None
