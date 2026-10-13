@@ -20,11 +20,12 @@ import os
 import sys
 from pathlib import Path
 
-import masknmf
 import mbo_utilities as mbo
 import torch
 from masknmf.compression.preprocessing import MaximinSplineDetrend
 from mbo_utilities.arrays.mesc import list_mesc_units
+
+import masknmf
 
 
 @dataclasses.dataclass
@@ -41,14 +42,31 @@ class Asap7Config:
 
 def parse_args() -> Asap7Config:
     defaults = Asap7Config(path_mesc="", unit="", dir_save="")
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--path_mesc", required=True, help="the .mesc file")
-    parser.add_argument("--unit", required=True, help="the unit's full key, e.g. MSession_0/MUnit_14")
-    parser.add_argument("--dir_save", required=True, help="run folder; made when missing")
+    parser.add_argument(
+        "--unit", required=True, help="the unit's full key, e.g. MSession_0/MUnit_14"
+    )
+    parser.add_argument(
+        "--dir_save", required=True, help="run folder; made when missing"
+    )
     parser.add_argument("--channel", type=int, default=defaults.channel)
-    parser.add_argument("--exclude_initial_frames", type=int, default=defaults.exclude_initial_frames)
-    parser.add_argument("--mad_correlation_threshold", type=float, default=defaults.mad_correlation_threshold)
-    parser.add_argument("--detrend_window_s", type=float, default=defaults.detrend_window_s, help="maximin spline window, seconds")
+    parser.add_argument(
+        "--exclude_initial_frames", type=int, default=defaults.exclude_initial_frames
+    )
+    parser.add_argument(
+        "--mad_correlation_threshold",
+        type=float,
+        default=defaults.mad_correlation_threshold,
+    )
+    parser.add_argument(
+        "--detrend_window_s",
+        type=float,
+        default=defaults.detrend_window_s,
+        help="maximin spline window, seconds",
+    )
     parser.add_argument("--device", choices=["cuda", "cpu"], default=defaults.device)
     return Asap7Config(**vars(parser.parse_args()))
 
@@ -63,7 +81,10 @@ def setup_logging(dir_save: Path) -> logging.Logger:
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    for handler in (logging.FileHandler(dir_save / "logs" / "run.log"), logging.StreamHandler(sys.stdout)):
+    for handler in (
+        logging.FileHandler(dir_save / "logs" / "run.log"),
+        logging.StreamHandler(sys.stdout),
+    ):
         handler.setFormatter(formatter)
         root.addHandler(handler)
     return logging.getLogger("asap7_spine")
@@ -89,23 +110,37 @@ def check_inputs(config: Asap7Config) -> dict:
         raise ValueError(f"{config.path_mesc} is not a file")
     units = {u["key"]: u for u in list_mesc_units(config.path_mesc)}
     if config.unit not in units:
-        raise ValueError(f"{config.path_mesc} has no unit {config.unit}; it has {', '.join(units)}")
+        raise ValueError(
+            f"{config.path_mesc} has no unit {config.unit}; it has {', '.join(units)}"
+        )
     unit = units[config.unit]
     if not 0 <= config.channel < unit["nchannels"]:
-        raise ValueError(f"{config.unit} has {unit['nchannels']} channel(s); channel {config.channel} is not one")
+        raise ValueError(
+            f"{config.unit} has {unit['nchannels']} channel(s); channel {config.channel} is not one"
+        )
     if not unit["fs"]:
         raise ValueError(f"{config.unit} declares no frame rate (TStepInMs)")
     if unit["nframes"] <= config.exclude_initial_frames:
-        raise ValueError(f"{config.unit} has {unit['nframes']} frames, not more than the {config.exclude_initial_frames} excluded")
+        raise ValueError(
+            f"{config.unit} has {unit['nframes']} frames, not more than the {config.exclude_initial_frames} excluded"
+        )
     if config.device == "cuda" and not torch.cuda.is_available():
-        raise ValueError("--device cuda but torch sees no GPU; request one from SLURM or pass --device cpu")
+        raise ValueError(
+            "--device cuda but torch sees no GPU; request one from SLURM or pass --device cpu"
+        )
     return unit
 
 
-def build_demixing_config(mad_correlation_threshold: float) -> masknmf.MultipassDemixingConfig:
+def build_demixing_config(
+    mad_correlation_threshold: float,
+) -> masknmf.MultipassDemixingConfig:
     passes = []
     for _ in range(2):
-        init_config = masknmf.SuperpixelInitConfig(mad_correlation_threshold=mad_correlation_threshold, residual_threshold=0.1, sign="positive")
+        init_config = masknmf.SuperpixelInitConfig(
+            mad_correlation_threshold=mad_correlation_threshold,
+            residual_threshold=0.1,
+            sign="positive",
+        )
         nmf_config = masknmf.NMFConfig(
             support_threshold=(0.95, 0.7),
             ring_model_start_pt=41,
@@ -119,13 +154,19 @@ def build_demixing_config(mad_correlation_threshold: float) -> masknmf.Multipass
 
 def run_pipeline(config: Asap7Config, dir_save: Path, logger: logging.Logger) -> Path:
     unit = check_inputs(config)
-    logger.info(f"{config.unit}: {unit['nframes']} frames at {unit['fs']:.1f} Hz, {unit['nchannels']} channel(s), role {unit['role'] or 'unset'}")
+    logger.info(
+        f"{config.unit}: {unit['nframes']} frames at {unit['fs']:.1f} Hz, {unit['nchannels']} channel(s), role {unit['role'] or 'unset'}"
+    )
 
     arr = mbo.imread(config.path_mesc, unit=config.unit)
     fs = arr.metadata["fs"]
     raw = arr[config.exclude_initial_frames :, config.channel, 0]
-    movie = masknmf.OphysArray(raw, negative_indicator=True, include_mean=True, device=config.device)
-    logger.info(f"movie {tuple(movie.shape)}, first {config.exclude_initial_frames} frames dropped, inverted")
+    movie = masknmf.OphysArray(
+        raw, negative_indicator=True, include_mean=True, device=config.device
+    )
+    logger.info(
+        f"movie {tuple(movie.shape)}, first {config.exclude_initial_frames} frames dropped, inverted"
+    )
 
     compressor = masknmf.CompressStrategy(
         block_sizes=[4, 4],
@@ -150,7 +191,9 @@ def run_pipeline(config: Asap7Config, dir_save: Path, logger: logging.Logger) ->
 
     corrector = masknmf.RigidMotionCorrector(max_shifts=[40, 40])
     corrector.compute_template(raw_compressed)
-    registered = corrector.motion_correct(reference_movie=raw_compressed, target_movie=movie)
+    registered = corrector.motion_correct(
+        reference_movie=raw_compressed, target_movie=movie
+    )
     logger.info("registered the raw movie with shifts estimated on its compression")
 
     denoiser = masknmf.CompressDenoiseStrategy(
@@ -164,16 +207,26 @@ def run_pipeline(config: Asap7Config, dir_save: Path, logger: logging.Logger) ->
     )
     denoised = denoiser.compress(registered)
     denoised.to(config.device)
-    logger.info(f"detrended ({config.detrend_window_s} s window) and denoised the registered movie")
+    logger.info(
+        f"detrended ({config.detrend_window_s} s window) and denoised the registered movie"
+    )
 
-    compress_config = masknmf.CompressDenoiseConfig(block_sizes=(10, 10), temporal_avg_factor=10, detrender=detrender)
+    compress_config = masknmf.CompressDenoiseConfig(
+        block_sizes=(10, 10), temporal_avg_factor=10, detrender=detrender
+    )
     pipeline = masknmf.GlutamateCalciumSpinePipeline(
         output_folder=dir_save,
         compress_config=compress_config,
-        demixing_config=build_demixing_config(mad_correlation_threshold=config.mad_correlation_threshold),
+        demixing_config=build_demixing_config(
+            mad_correlation_threshold=config.mad_correlation_threshold
+        ),
         device=config.device,
     )
-    dir_run = Path(pipeline.run(glutamate_channel=denoised, calcium_channel=None, exclude_initial_frames=0))
+    dir_run = Path(
+        pipeline.run(
+            glutamate_channel=denoised, calcium_channel=None, exclude_initial_frames=0
+        )
+    )
     logger.info(f"run folder {dir_run}")
     logger.info(f"open it with: masknmf view {dir_run / 'results.glutamate.hdf5'}")
     return dir_run
