@@ -2596,5 +2596,97 @@ def reg_denoise(path, unit, channel, first_frame, max_shift, out, overwrite):
     click.echo(f"wrote {written}\nview with: mbo {written}")
 
 
+
+@main.command("asap7")
+@click.argument("path", type=click.Path(exists=True))
+@click.option(
+    "--unit",
+    default=None,
+    help="The .mesc unit, e.g. MUnit_10 or MSession_0/MUnit_10; left out, the units are listed.",
+)
+@click.option(
+    "--channel", type=int, default=1, show_default=True, help="Channel, 1-based."
+)
+@click.option(
+    "--first-frame",
+    type=int,
+    default=200,
+    show_default=True,
+    help="0-based frame the run starts at; earlier frames are left out.",
+)
+@click.option(
+    "--max-shift",
+    type=int,
+    default=40,
+    show_default=True,
+    help="Largest rigid shift allowed, px.",
+)
+@click.option(
+    "--detrend-window",
+    type=float,
+    default=0.3,
+    show_default=True,
+    help="Maximin spline detrend window, s.",
+)
+@click.option(
+    "--mad-threshold",
+    type=float,
+    default=0.6,
+    show_default=True,
+    help="Superpixel MAD correlation threshold for the spine demixing.",
+)
+@click.option(
+    "--device",
+    type=click.Choice(["cuda", "cpu"]),
+    default="cuda",
+    show_default=True,
+)
+@click.option(
+    "-o",
+    "--out",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="Folder the run folder goes in. Default: masknmf_asap7/<unit>_detrend beside PATH.",
+)
+def asap7(path, unit, channel, first_frame, max_shift, detrend_window, mad_threshold, device, out):
+    """ASAP7 spine run: compress, register to the compression, compress and denoise
+    with a detrender, demix spines and the dendrite.
+
+    The raw movie is inverted (ASAP7 dims on depolarisation), compressed, and
+    registered with shifts estimated on that compression; the registered raw
+    movie is compressed and denoised with a maximin spline detrender and demixed
+    by masknmf's glutamate spine pipeline. Defaults are
+    asap7_spine_pipeline_detrend.ipynb's.
+
+    \b
+      mbo asap7 scan.mesc                      # list the units
+      mbo asap7 scan.mesc --unit MUnit_10
+      masknmf view <run folder>/results.glutamate.hdf5
+    """
+    from mbo_utilities.masknmf.params import Asap7Settings
+
+    is_mesc = Path(path).suffix.lower() == ".mesc"
+    if is_mesc and unit is None:
+        _echo_mesc_units(path, None)
+        click.echo("\nchoose one with --unit, e.g. --unit MUnit_10", err=True)
+        raise click.Abort
+    from mbo_utilities.masknmf.asap7 import run_asap7
+
+    settings = Asap7Settings(
+        channel=channel,
+        first_frame=first_frame,
+        detrend_window_seconds=detrend_window,
+        mad_correlation_threshold=mad_threshold,
+    )
+    settings.registration.max_shifts = (max_shift, max_shift)
+    settings.runtime.device = device
+    try:
+        run = run_asap7(path, unit=_parse_unit(unit), save_path=out, settings=settings)
+    except ValueError as e:
+        click.echo(f"error: {e}", err=True)
+        raise click.Abort
+    click.echo(f"wrote {run}\nview with: masknmf view {run / 'results.glutamate.hdf5'}")
+
+
 if __name__ == "__main__":
     main()

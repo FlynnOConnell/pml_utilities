@@ -23,7 +23,9 @@ _LAZY = {
         "mbo_utilities.masknmf.params",
         "MasknmfRuntimeSettings",
     ),
+    "Asap7Settings": ("mbo_utilities.masknmf.params", "Asap7Settings"),
     "stage_action": ("mbo_utilities.masknmf.params", "stage_action"),
+    "run_asap7": ("mbo_utilities.masknmf.asap7", "run_asap7"),
     "run_plane": ("mbo_utilities.masknmf.runner", "run_plane"),
     "run_volume": ("mbo_utilities.masknmf.runner", "run_volume"),
 }

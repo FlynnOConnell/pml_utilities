@@ -28,6 +28,11 @@ ALIGN_FILE = "alignment.hdf5"
 REG_DENOISE_FILE = "results.hdf5"
 REG_DENOISE_PIPELINE = "reg_denoise"
 
+ASAP7_FOLDER = "masknmf_asap7"
+ASAP7_SETTINGS_FILE = "asap7.json"
+ASAP7_REGISTRATION_FILE = "registration.hdf5"
+ASAP7_RESULTS_FILE = "results.glutamate.hdf5"
+
 
 @dataclass
 class MasknmfRegistrationSettings:
@@ -252,6 +257,78 @@ class RegDenoiseSettings:
                 MasknmfCompressionSettings,
                 {**asdict(default.compression), **(d.get("compression") or {})},
             ),
+            runtime=_load_section(MasknmfRuntimeSettings, d.get("runtime")),
+        )
+
+
+@dataclass
+class Asap7Settings:
+    """The ASAP7 spine run: compress the inverted raw movie, register the raw movie to
+    that compression, then compress and denoise the registered movie with a maximin
+    spline detrender and demix it with masknmf's glutamate spine pipeline.
+
+    Defaults are asap7_spine_pipeline_detrend.ipynb's. ``channel`` is 1-based;
+    ``first_frame`` is the 0-based frame the run starts at.
+    """
+
+    channel: int = 1
+    first_frame: int = 200
+    reference: MasknmfCompressionSettings = field(
+        default_factory=partial(
+            MasknmfCompressionSettings,
+            denoise=False,
+            block_sizes=(4, 4),
+            spatial_avg_factor=4,
+            temporal_avg_factor=2,
+            detrend=False,
+        )
+    )
+    registration: MasknmfRegistrationSettings = field(
+        default_factory=partial(MasknmfRegistrationSettings, max_shifts=(40, 40))
+    )
+    compression: MasknmfCompressionSettings = field(
+        default_factory=partial(
+            MasknmfCompressionSettings,
+            denoise=True,
+            block_sizes=(10, 10),
+            temporal_avg_factor=10,
+            detrend=True,
+        )
+    )
+    detrend_window_seconds: float = 0.3
+    mad_correlation_threshold: float = 0.6
+    demixing_passes: int = 2
+    runtime: MasknmfRuntimeSettings = field(default_factory=MasknmfRuntimeSettings)
+
+    def to_dict(self) -> dict:
+        return _tuples_to_lists(asdict(self))
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "Asap7Settings":
+        d = d or {}
+        default = cls()
+        return cls(
+            channel=int(d.get("channel", default.channel)),
+            first_frame=int(d.get("first_frame", default.first_frame)),
+            reference=_load_section(
+                MasknmfCompressionSettings,
+                {**asdict(default.reference), **(d.get("reference") or {})},
+            ),
+            registration=_load_section(
+                MasknmfRegistrationSettings,
+                {**asdict(default.registration), **(d.get("registration") or {})},
+            ),
+            compression=_load_section(
+                MasknmfCompressionSettings,
+                {**asdict(default.compression), **(d.get("compression") or {})},
+            ),
+            detrend_window_seconds=float(
+                d.get("detrend_window_seconds", default.detrend_window_seconds)
+            ),
+            mad_correlation_threshold=float(
+                d.get("mad_correlation_threshold", default.mad_correlation_threshold)
+            ),
+            demixing_passes=int(d.get("demixing_passes", default.demixing_passes)),
             runtime=_load_section(MasknmfRuntimeSettings, d.get("runtime")),
         )
 

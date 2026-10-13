@@ -20,10 +20,20 @@ import numpy as np
 from mbo_utilities import log
 from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_config, run_raw_movie
 from mbo_utilities.gpu import compute_gpu
+from mbo_utilities.masknmf.asap7 import (
+    is_asap7_run,
+    run_frame_times,
+    run_provenance,
+    run_registration,
+    run_rtmc,
+)
+from mbo_utilities.masknmf.asap7 import run_raw_movie as asap7_raw_movie
 
 logger = log.get("gui.masknmf_vis")
 
 KINDS = ("demixing", "classification")
+RTMC_PANEL = "RTMC (um)"
+AXIS_COLORS = {"X": (0.4, 0.7, 1.0), "Y": (1.0, 0.6, 0.2), "Z": (0.6, 0.9, 0.5)}
 
 
 def run_files(path: Path | str) -> dict[str, Path | None]:
@@ -49,7 +59,8 @@ class MasknmfViewers:
     run folder read, the plane binary beside the result, else ``raw_path``),
     the registration a run's ``results.hdf5`` holds, and the shifts of
     ``motion_correction_path`` (or the motion export beside the result) as a
-    trace panel.
+    trace panel. An ``mbo asap7`` run folder gives the inverted raw movie, its
+    ``registration.hdf5`` shifts, and the scan's RTMC as a panel of its own.
     """
 
     def __init__(
@@ -66,6 +77,10 @@ class MasknmfViewers:
             None if motion_correction_path is None else Path(motion_correction_path)
         )
         self._vis: dict[str, object] = {}
+        self._rtmc_plot = None
+        self.asap7 = is_asap7_run(self.path.parent)
+        if self.asap7 and self.motion_correction_path is None:
+            self.motion_correction_path = run_registration(self.path.parent)
         with h5py.File(self.path, "r") as f:
             prov = (
                 json.loads(f.attrs["mbo_provenance"])
@@ -74,6 +89,8 @@ class MasknmfViewers:
             )
             self._nframes = int(f["DemixingResults"]["shape"][0])
         self._fs = float(prov["fs"]) if prov.get("fs") else None
+        if self._fs is None and self.asap7:
+            self._fs = float(run_provenance(self.path.parent)["fs"])
         if self._fs is None and is_masknmf_run(self.path.parent):
             self._fs = run_config(self.path.parent)["inputs"]["movie"].get("fs")
         if device is None:
@@ -92,6 +109,8 @@ class MasknmfViewers:
         """The raw movie: the recording a masknmf run folder read, else the
         plane binary beside the result, else ``raw_path``, else None.
         """
+        if self.asap7:
+            return asap7_raw_movie(self.path.parent)
         if is_masknmf_run(self.path.parent):
             return run_raw_movie(self.path.parent)
         if self.files["raw"] is not None and self.files["ops"] is not None:
@@ -111,6 +130,21 @@ class MasknmfViewers:
                 f"{self.raw_path.name} is not a single-plane movie: shape {raw.shape}"
             )
         return raw
+
+    def _dock_rtmc(self, vis):
+        """The scan's RTMC, sampled at the run's frames, docked under the viewer and following its frame."""
+        from masknmf.visualization.imgui import TracePlot
+
+        rtmc = run_rtmc(self.path.parent)
+        if rtmc is None:
+            click.echo("no RTMC: the scan's real-time motion correction never moved")
+            return None
+        values = rtmc.at(run_frame_times(self.path.parent))
+        plot = TracePlot((RTMC_PANEL,), self._nframes, self.timings, autofit=False)
+        plot.set(RTMC_PANEL, [(f"RTMC {k}", v, AXIS_COLORS.get(k[0])) for k, v in values.items()], fit=True)
+        plot.dock(vis.fov_widget.figure, size=220, title="RTMC")
+        plot.link(vis.reference_index)
+        return plot
 
     def open(self, kind: str):
         """Show masknmf's ``kind`` viewer, building it on first use."""
@@ -144,6 +178,8 @@ class MasknmfViewers:
                 click.echo(
                     "no motion shifts: `mbo view ... --motion-correction <hdf5>` adds the shift traces"
                 )
+            if self.asap7:
+                self._rtmc_plot = self._dock_rtmc(vis)
         else:
             vis = ClassificationVis.from_masknmf([str(self.path)])
         self._vis[kind] = vis

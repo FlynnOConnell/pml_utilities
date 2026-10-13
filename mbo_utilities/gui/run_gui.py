@@ -1080,6 +1080,11 @@ def _run_gui_impl(
 
         if isinstance(data_in, (str, Path)):
             data_in = run_demixing(data_in) or data_in
+            from mbo_utilities.masknmf.asap7 import is_asap7_run
+            from mbo_utilities.masknmf.params import ASAP7_RESULTS_FILE
+
+            if is_asap7_run(data_in):
+                data_in = Path(data_in) / ASAP7_RESULTS_FILE
 
         if (
             not metadata_only
