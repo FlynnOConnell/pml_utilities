@@ -117,7 +117,11 @@ def run_asap7(
     fs = arr.fs
     if not fs:
         raise ValueError(f"{src.name} {reader_kwargs} declares no frame rate")
-    save_path = Path(save_path) if save_path else default_save_path(src, reader_kwargs.get("unit"))
+    save_path = (
+        Path(save_path)
+        if save_path
+        else default_save_path(src, reader_kwargs.get("unit"))
+    )
     device = settings.runtime.device
     batch = settings.runtime.frame_batch_size
     timings = {}
@@ -129,7 +133,9 @@ def run_asap7(
         if settings.compression.detrend
         else None
     )
-    movie = masknmf.OphysArray(raw, negative_indicator=True, include_mean=True, device=device)
+    movie = masknmf.OphysArray(
+        raw, negative_indicator=True, include_mean=True, device=device
+    )
     timings["read"] = time.time() - t0
     logger.info(
         f"asap7: {src.name} {reader_kwargs} channel {settings.channel} frames "
@@ -142,20 +148,28 @@ def run_asap7(
     ).compress(movie)
     reference.to(device)
     timings["reference compression"] = time.time() - t0
-    logger.info(f"asap7: compressed the raw movie in {timings['reference compression']:.1f}s")
+    logger.info(
+        f"asap7: compressed the raw movie in {timings['reference compression']:.1f}s"
+    )
 
     t0 = time.time()
     corrector = masknmf.RigidMotionCorrector(
         device=device, batch_size=batch, **settings.registration.strategy_kwargs()
     )
     corrector.compute_template(reference)
-    registration = corrector.motion_correct(reference_movie=reference, target_movie=movie)
+    registration = corrector.motion_correct(
+        reference_movie=reference, target_movie=movie
+    )
     registered = dense(registration, batch)
     timings["registration"] = time.time() - t0
-    logger.info(f"asap7: registered the raw movie to its compression in {timings['registration']:.1f}s")
+    logger.info(
+        f"asap7: registered the raw movie to its compression in {timings['registration']:.1f}s"
+    )
 
     comp = settings.compression
-    config_cls = masknmf.CompressDenoiseConfig if comp.denoise else masknmf.CompressConfig
+    config_cls = (
+        masknmf.CompressDenoiseConfig if comp.denoise else masknmf.CompressConfig
+    )
     pipeline = masknmf.GlutamateCalciumSpinePipeline(
         output_folder=save_path,
         motion_correct_config="skip",
@@ -165,7 +179,11 @@ def run_asap7(
         device=device,
     )
     t0 = time.time()
-    run = Path(pipeline.run(glutamate_channel=registered, calcium_channel=None, exclude_initial_frames=0))
+    run = Path(
+        pipeline.run(
+            glutamate_channel=registered, calcium_channel=None, exclude_initial_frames=0
+        )
+    )
     timings["compression and demixing"] = time.time() - t0
 
     registration.export(str(run / ASAP7_REGISTRATION_FILE))
@@ -183,7 +201,9 @@ def run_asap7(
         "timing": timings,
         "masknmf_version": getattr(masknmf, "__version__", None),
     }
-    (run / ASAP7_SETTINGS_FILE).write_text(json.dumps(provenance, indent=2, default=str))
+    (run / ASAP7_SETTINGS_FILE).write_text(
+        json.dumps(provenance, indent=2, default=str)
+    )
     logger.info(f"asap7: wrote {run}")
     return run
 

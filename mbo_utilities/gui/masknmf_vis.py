@@ -141,7 +141,11 @@ class MasknmfViewers:
             return None
         values = rtmc.at(run_frame_times(self.path.parent))
         plot = TracePlot((RTMC_PANEL,), self._nframes, self.timings, autofit=False)
-        plot.set(RTMC_PANEL, [(f"RTMC {k}", v, AXIS_COLORS.get(k[0])) for k, v in values.items()], fit=True)
+        plot.set(
+            RTMC_PANEL,
+            [(f"RTMC {k}", v, AXIS_COLORS.get(k[0])) for k, v in values.items()],
+            fit=True,
+        )
         plot.dock(vis.fov_widget.figure, size=220, title="RTMC")
         plot.link(vis.reference_index)
         return plot

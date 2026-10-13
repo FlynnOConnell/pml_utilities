@@ -2596,7 +2596,6 @@ def reg_denoise(path, unit, channel, first_frame, max_shift, out, overwrite):
     click.echo(f"wrote {written}\nview with: mbo {written}")
 
 
-
 @main.command("asap7")
 @click.argument("path", type=click.Path(exists=True))
 @click.option(
@@ -2648,7 +2647,17 @@ def reg_denoise(path, unit, channel, first_frame, max_shift, out, overwrite):
     default=None,
     help="Folder the run folder goes in. Default: masknmf_asap7/<unit>_detrend beside PATH.",
 )
-def asap7(path, unit, channel, first_frame, max_shift, detrend_window, mad_threshold, device, out):
+def asap7(
+    path,
+    unit,
+    channel,
+    first_frame,
+    max_shift,
+    detrend_window,
+    mad_threshold,
+    device,
+    out,
+):
     """ASAP7 spine run: compress, register to the compression, compress and denoise
     with a detrender, demix spines and the dendrite.
 
