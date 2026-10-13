@@ -151,6 +151,7 @@ Format-specific labels win over the rank guess:
 | Suite2p dir | `ops.npy` per plane dir; plane dirs stack onto Z; T is derived from the binary's file size, not `ops["nframes"]`. |
 | MESc | `MethodType`: 1 timeseries `(T, C, 1, Y, X)`; 2 z-stack `(1, C, Z, Y, X)`; 6/7 linescan `(T, C, R, n_lines, width)`; 8 chessboard and 9/10 ribbon `(T, C, R, Y, X)`; 11 multicube has real depth on Z. `metadata["mesc_z_axis_meaning"]` says whether Z is `roi_index`, `depth` or `none`. |
 | Bruker HDF5 | the dataset's HDF5 dimension labels (`t z y x c`); `element_size_um` in the stored order of the spatial axes. |
+| lab4 H5 | `/imaging/data` is `TZYXC` (`TRYXC` for an AOD scan, ROIs on Z), unless HDF5 dimension labels say otherwise; claimed when `/imaging` carries `frame_rate_hz` (`Lab4H5Array`) |
 | H5 | dataset rank per the table; `imaging/data` 5D is `TZYXC` (Mini2P); a 4D dataset with `scan_mode` + `n_channel == shape[-1]` is `TYXC`. |
 | Zarr | array rank per the table; a directory of `.zarr` stores stacks them onto Z. |
 | IsoView | tree layout: TM folders → T, cameras/views → C, volume → Z. |
@@ -202,7 +203,7 @@ never branch on rank.
 3. Every class in the `mbo_utilities.lazy_arrays` entry-point group (plus
    `register_array_class` calls) is asked `can_open(path)` in descending
    `PRIORITY`; ties keep entry-point order. First `True` wins. Priorities today:
-   `IsoviewArray` 90, `MasknmfRunArray` 75, `ResultsArray` 70, `MescArray` 60, `BrukerArray` 60, everything else 50.
+   `IsoviewArray` 90, `MasknmfRunArray` 75, `ResultsArray` 70, `Lab4H5Array` 65, `MescArray` 60, `BrukerArray` 60, everything else 50.
 4. Inputs no class claims (file lists, `.bin`, `.klb`, `.mp4`, `reg_tif/`, mixed
    directories) fall through to the legacy chain in `reader._imread_impl`.
 5. A directory or list of files a class above 50 claims (a Bruker h5, a MESc:
@@ -398,7 +399,7 @@ display only.
 What each platform stores, and which canonical key it resolves to. A reader deposits
 the left-hand keys; the registry does the rest.
 
-| Quantity | canonical | ScanImage (`si.*`) | Femtonics MESc | ImageJ / Fiji TIFF | OME (TIFF XML, NGFF) | Suite2p `ops` | IsoView XML | h5 converters (Mini2P, AOD mesc2h5) | PrairieView / Bruker |
+| Quantity | canonical | ScanImage (`si.*`) | Femtonics MESc | ImageJ / Fiji TIFF | OME (TIFF XML, NGFF) | Suite2p `ops` | IsoView XML | lab4 H5 (`/imaging` attrs) | PrairieView / Bruker |
 |---|---|---|---|---|---|---|---|---|---|
 | pixel size | `dx` `dy` | `objectiveResolution × scanfields.sizeXY / pixelResolutionXY` → `pixel_resolution` tuple | scan pattern `pixelSize` / `pixelSizeL` | `XResolution` `YResolution` (px per unit, needs `unit`) | `PhysicalSizeX/Y` + `*Unit`; NGFF scale[y], scale[x] | `dx` `dy` (`umPerPixX/Y` legacy) | `camera_pixel_pitch_um / magnification` → `pixel_resolution_um` | `pixel_size_um` | `micronsPerPixel` XAxis / YAxis |
 | z-step | `dz` | `hStackManager.actualStackZStepSize` else `stackZStepSize`; never for LBM | multicube `voxelSizeZ`; else `None` (ROI slots are not depths) | `spacing` | `PhysicalSizeZ`; NGFF scale[z] | `dz` (`umPerPixZ`, `z_step`) | `z_step` / `axial_step` | | ZSeries `positionCurrent` ZAxis step |
@@ -410,8 +411,8 @@ the left-hand keys; the registry does the rest.
 | dtype | `dtype` | page dtype | `Channel_N.dtype` | page dtype | `Type` | `int16` | volume dtype | dataset dtype | `bitDepth` |
 
 PrairieView has no reader yet; the column is the deposit contract for when one lands
-(register those keys as aliases at the same time). "h5 converters" are external
-scripts whose attribute names are already registered aliases.
+(register those keys as aliases at the same time). lab4 H5 is the file every
+`lab4.convert` device writes; its attribute names are registered aliases.
 
 ### 6.4 Inbound: readers
 

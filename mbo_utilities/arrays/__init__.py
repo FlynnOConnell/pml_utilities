@@ -113,6 +113,7 @@ if TYPE_CHECKING:
     )
     from mbo_utilities.arrays.bin import BinArray as BinArray
     from mbo_utilities.arrays.bruker import BrukerArray as BrukerArray
+    from mbo_utilities.arrays.lab4 import Lab4H5Array as Lab4H5Array
     from mbo_utilities.arrays.h5 import (
         H5Array as H5Array,
     )
@@ -169,6 +170,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "Suite2pArray": (".suite2p", "Suite2pArray"),
     "H5Array": (".h5", "H5Array"),
     "BrukerArray": (".bruker", "BrukerArray"),
+    "Lab4H5Array": (".lab4", "Lab4H5Array"),
     "list_h5_datasets": (".h5", "list_h5_datasets"),
     "MescArray": (".mesc", "MescArray"),
     "list_mesc_units": (".mesc", "list_mesc_units"),
@@ -256,6 +258,7 @@ __all__ = [
     "CHUNKS_4D",
     "BinArray",
     "BrukerArray",
+    "Lab4H5Array",
     "CompressedMovieArray",
     "DemixingArray",
     "MasknmfRunArray",
