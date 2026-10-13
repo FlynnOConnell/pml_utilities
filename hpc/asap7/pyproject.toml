@@ -1,0 +1,28 @@
+[project]
+name = "asap7-env"
+version = "0.1.0"
+requires-python = ">=3.12.7,<3.14"
+dependencies = [
+    "pml_utilities",
+    "masknmf",
+    "torch",
+    "torchvision",
+]
+
+[tool.uv]
+package = false
+override-dependencies = [
+    "scipy>=1.18.1",
+    "fastplotlib[imgui,notebook] @ git+https://github.com/fastplotlib/fastplotlib@26a5aab1fad48115b2ee96890b3b99f662e08933",
+]
+
+[tool.uv.sources]
+pml_utilities = { path = "../../repos/pml_utilities", editable = true }
+masknmf = { git = "https://github.com/apasarkar/masknmf-toolbox", rev = "c5c5b74480999e889875f42dc1a58026faabc4d0" }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
