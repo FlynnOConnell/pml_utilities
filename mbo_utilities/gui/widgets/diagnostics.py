@@ -101,15 +101,10 @@ class DiagnosticsWidget:
         its ROIs, accept flags and traces, with ``ops.npy`` from the plane
         dir it was read from, where ``iscell.npy`` is written back.
         """
-        from mbo_utilities.file_io import load_npy
+        from mbo_utilities.file_io import has_plane_ops, load_plane_ops
 
         plane_dir = Path(plane_dir)
-        ops_path = plane_dir / "ops.npy"
-        if ops_path.exists():
-            ops_arr = load_npy(ops_path)
-            self.ops = ops_arr.item() if ops_arr.ndim == 0 else ops_arr
-        else:
-            self.ops = None
+        self.ops = load_plane_ops(plane_dir) if has_plane_ops(plane_dir) else None
         ly, lx = unit.image_shape
         stat = np.empty(unit.n_rois, dtype=object)
         weights = unit.weights if unit.weights is not None else [None] * unit.n_rois
@@ -145,15 +140,13 @@ class DiagnosticsWidget:
 
     def load_results(self, plane_dir: Path):
         """Load suite2p results from a plane directory."""
-        from mbo_utilities.file_io import load_npy
+        from mbo_utilities.file_io import has_plane_ops, load_npy, load_plane_ops
 
         plane_dir = Path(plane_dir)
 
         # Load ops.npy first to get save_path (may differ from plane_dir)
-        ops_path = plane_dir / "ops.npy"
-        if ops_path.exists():
-            ops_arr = load_npy(ops_path)
-            self.ops = ops_arr.item() if ops_arr.ndim == 0 else ops_arr
+        if has_plane_ops(plane_dir):
+            self.ops = load_plane_ops(plane_dir)
             # Use save_path from ops if available, otherwise use plane_dir
             save_path = Path(self.ops.get("save_path", plane_dir))
             # Handle cross-platform path issues - if save_path doesn't exist, use plane_dir
