@@ -1,4 +1,4 @@
-"""Shared Options popup (render GPU adapter + debug logging).
+"""Shared Options popup (GPU adapters, logging, line-scan and ROI-tool options).
 
 Used by both the launch FileDialog and the main PreviewDataWidget's File
 menu so the same widget configures both. Styled to match the Help /
@@ -11,10 +11,12 @@ Live GPU usage lives in the Process Console's System panel; the compute
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from imgui_bundle import hello_imgui, imgui
 from imgui_bundle import icons_fontawesome_6 as fa
+from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities import log as _mbo_log
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
@@ -27,6 +29,8 @@ from mbo_utilities.preferences import (
     get_mem_monitor,
     get_mem_monitor_interval,
     get_mem_warn_pct,
+    get_roi_autosave,
+    get_roi_folder,
     set_compute_gpu,
     set_debug_logging,
     set_gpu_index,
@@ -35,6 +39,8 @@ from mbo_utilities.preferences import (
     set_mem_monitor,
     set_mem_monitor_interval,
     set_mem_warn_pct,
+    set_roi_autosave,
+    set_roi_folder,
 )
 
 _COL_ACCENT = imgui.ImVec4(0.20, 0.50, 0.85, 1.0)
@@ -284,6 +290,70 @@ def draw_linescan_options(parent: Any, tooltip=None) -> None:
         set_linescan_auto_traces(value)
 
 
+def sync_roi_save_options(parent: Any) -> None:
+    """Re-read the ROI tool's save options into ``parent``'s cache."""
+    parent._options_roi_autosave = get_roi_autosave()
+    parent._options_roi_folder = get_roi_folder()
+
+
+def draw_roi_save_options(parent: Any, tooltip=None) -> None:
+    """Whether the ROI tool autosaves and the folder it saves under; shared
+    by both options popups. A live ROI widget on ``parent`` takes the change
+    at once, otherwise it applies to the next one.
+    """
+    if not hasattr(parent, "_options_roi_autosave"):
+        sync_roi_save_options(parent)
+    tip = tooltip or imgui.set_tooltip
+    widget = getattr(parent, "manual_roi", None)
+    dialog = getattr(parent, "_options_roi_dialog", None)
+    if dialog is not None and dialog.ready():
+        parent._options_roi_dialog = None
+        picked = dialog.result()
+        if picked:
+            parent._options_roi_folder = str(picked)
+            if widget is not None:
+                widget.set_folder(picked)
+            else:
+                set_roi_folder(picked)
+
+    imgui.text_colored(_COL_DIM, "ROI tool")
+    changed, value = imgui.checkbox(
+        "Autosave ROIs and runs", parent._options_roi_autosave
+    )
+    if imgui.is_item_hovered():
+        tip(
+            "Write drawn ROIs and loaded runs as they change. Off: nothing is "
+            "written until Save in the ROIs tab."
+        )
+    if changed:
+        parent._options_roi_autosave = value
+        if widget is not None:
+            widget.set_autosave(value)
+        else:
+            set_roi_autosave(value)
+
+    folder = parent._options_roi_folder
+    imgui.text("Save under:")
+    imgui.same_line()
+    imgui.text_colored(_COL_DIM, folder or "beside the data")
+    if imgui.is_item_hovered():
+        tip(
+            "ROIs, the run list and ROI runs go to a folder per dataset "
+            "under this one (<name>_<hash>), or beside the data."
+        )
+    if imgui.button("Browse##roi_folder") and dialog is None:
+        start = folder or str(Path.home())
+        parent._options_roi_dialog = pfd.select_folder("Save ROIs under", start)
+    if folder:
+        imgui.same_line()
+        if imgui.button("Beside the data##roi_folder"):
+            parent._options_roi_folder = ""
+            if widget is not None:
+                widget.set_folder(None)
+            else:
+                set_roi_folder("")
+
+
 def draw_options_popup(parent: Any) -> None:
     """Draw the Options popup. Open with ``parent._show_options_popup = True``.
 
@@ -306,6 +376,7 @@ def draw_options_popup(parent: Any) -> None:
         parent._options_gpu_idx = get_gpu_index()
         parent._options_debug = get_debug_logging()
         parent._options_linescan_auto = get_linescan_auto_traces()
+        sync_roi_save_options(parent)
         sync_memory_options(parent)
         # nvidia-smi is a subprocess; refresh the compute-device list once per
         # open, not per frame.
@@ -393,6 +464,8 @@ def draw_options_popup(parent: Any) -> None:
 
         draw_memory_options(parent)
         draw_linescan_options(parent)
+        imgui.dummy(imgui.ImVec2(0, 4))
+        draw_roi_save_options(parent)
 
         imgui.dummy(imgui.ImVec2(0, 8))
         btn_w = hello_imgui.em_size(6)

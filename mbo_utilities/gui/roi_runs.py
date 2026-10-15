@@ -3,7 +3,7 @@
 ``RoiRunManager`` tracks the widget's background work: in-process runs
 (extract / demix / discover on a thread, shown as process-manager jobs)
 and full-plane suite2p / masknmf spawns (detached subprocesses polled
-through their sidecars). GPU-heavy runs serialize on one lock so two
+through their progress files). GPU-heavy runs serialize on one lock so two
 demixes never fight over the device.
 
 ``DerivedSet`` wraps a loaded :class:`~mbo_utilities.roi_workflow.RunResult`
@@ -27,7 +27,7 @@ import numpy as np
 from mbo_utilities import log
 from mbo_utilities.annotation import ROI_COLORS, RoiTrace, class_color
 from mbo_utilities.gui.widgets.process_manager import LocalJob, get_process_manager
-from mbo_utilities.roi_workflow import OUT_PREFIX, RunResult, labels_path
+from mbo_utilities.roi_workflow import OUT_PREFIX, RunResult, roi_folder
 
 __all__ = [
     "DerivedSet",
@@ -656,8 +656,9 @@ def finished_dirs(out_root, planes=None) -> list[Path]:
     return out
 
 
-def scan_run_dirs(fpath) -> list[dict]:
-    """Loadable run dirs beside ``fpath``, newest first.
+def scan_run_dirs(fpath, root=None) -> list[dict]:
+    """Loadable run dirs beside ``fpath`` and in its ROI folder under
+    ``root`` (``roi_folder``), newest first.
 
     Covers ``rois_<tag>/`` dirs (and their per-plane ``zNN/`` children) and
     sibling ``zplane*`` trees and masknmf ``*_zplane*`` run folders from full-plane pipelines (including their own
@@ -666,24 +667,26 @@ def scan_run_dirs(fpath) -> list[dict]:
     dir without ``stat.npy`` + ``ops.npy`` (still being written, say) is
     not listed.
     """
-    base = labels_path(fpath).parent
-    if not base.is_dir():
-        return []
+    bases = [roi_folder(fpath)]
+    if root is not None:
+        bases.append(roi_folder(fpath, root))
+    bases = [b for b in bases if b.is_dir()]
     dirs: list[Path] = []
 
     def add(d: Path):
         if (d / "stat.npy").exists() and (d / "ops.npy").exists():
             dirs.append(d)
 
-    add(base)  # the opened data may itself sit in a result dir
-    for d in sorted(base.glob(f"{OUT_PREFIX}*")):
+    if bases:
+        add(bases[0])  # the opened data may itself sit in a result dir
+    for d in sorted(d for b in bases for d in b.glob(f"{OUT_PREFIX}*")):
         if not d.is_dir():
             continue
         add(d)
         for child in sorted(d.glob("z[0-9]*")):
             if child.is_dir():
                 add(child)
-    for d in sorted(base.glob("*zplane*")):
+    for d in sorted(d for b in bases for d in b.glob("*zplane*")):
         if not d.is_dir():
             continue
         add(d)
@@ -691,7 +694,7 @@ def scan_run_dirs(fpath) -> list[dict]:
             if sub.is_dir():
                 add(sub)
     for pattern in ("plane[0-9]*", "suite2p/plane[0-9]*"):
-        for d in sorted(base.glob(pattern)):
+        for d in sorted(d for b in bases for d in b.glob(pattern)):
             if d.is_dir():
                 add(d)
 
@@ -719,7 +722,7 @@ def scan_run_dirs(fpath) -> list[dict]:
     from mbo_utilities.results import results_summary
 
     for pattern in ("*.zarr", f"{OUT_PREFIX}*/*.zarr", "*zplane*/*.zarr", "PF/*.zarr"):
-        for z in sorted(base.glob(pattern)):
+        for z in sorted(z for b in bases for z in b.glob(pattern)):
             summary = results_summary(z)
             if summary is None:
                 continue
@@ -743,6 +746,7 @@ def full_plane_args(
     host=None,
     channel: int | None = None,
     tp_indices=None,
+    root=None,
 ) -> dict:
     """``task_suite2p`` / ``task_masknmf`` worker args for one plane.
 
@@ -751,7 +755,8 @@ def full_plane_args(
     kind : {"suite2p", "masknmf"}
         Which pipeline to run.
     fpath : path-like
-        The data to run on; outputs are written beside it.
+        The data to run on; outputs go to its ``roi_folder`` under ``root``
+        (beside it when None).
     plane_1based : int
         The z-plane to run, 1-based.
     iw : MboNDViewer
@@ -779,7 +784,7 @@ def full_plane_args(
 
     args = {
         "input_path": str(fpath),
-        "output_dir": str(labels_path(fpath).parent),
+        "output_dir": str(roi_folder(fpath, root)),
         "planes": [int(plane_1based)],
         "reader_kwargs": widget_reader_kwargs(iw),
     }
@@ -834,16 +839,16 @@ def masknmf_settings(host) -> dict | None:
         return None
 
 
-def registry_path(fpath, tag: str = "") -> Path:
+def registry_path(fpath, tag: str = "", root=None) -> Path:
     """``roi_runs.json`` beside ``manual_labels.zarr``; ``roi_runs_<tag>.json``
     for one recording of a file holding several (``labels_path``).
     """
     name = f"{REGISTRY_NAME[:-5]}_{tag}.json" if tag else REGISTRY_NAME
-    return labels_path(fpath).parent / name
+    return roi_folder(fpath, root) / name
 
 
 def load_run_registry(path) -> list[dict]:
-    """The sidecar's run entries; unreadable or absent files are ``[]``.
+    """The run list's entries; unreadable or absent files are ``[]``.
 
     Entries are kept whether or not their dir still exists - a spawned run
     may still be writing when the GUI comes back.
@@ -876,7 +881,7 @@ def load_run_registry(path) -> list[dict]:
 
 
 def save_run_registry(path, entries: list[dict]) -> None:
-    """Write the sidecar: ``{"runs": [{"path", "kind", "discarded", "classes",
+    """Write the run list: ``{"runs": [{"path", "kind", "discarded", "classes",
     "colors"}]}``.
     """
     path = Path(path)

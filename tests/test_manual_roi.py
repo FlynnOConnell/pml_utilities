@@ -831,10 +831,87 @@ class TestImguiWindows:
 
 
 class TestPersistence:
-    def test_autosave_and_restore(self, tmp_path):
+    def test_nothing_is_written_until_save(self, tmp_path):
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
 
+        fpath = tmp_path / "movie.tif"
+        data = np.zeros((4, 64, 64), np.float32)
+        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
+        iw.show()
+        try:
+            w = ManualRoiWidget(iw, fpath=fpath, auto_trace=False)
+            w.add_roi(square(10, 10, 9))
+            w.store.add_label_name("soma")
+            w.assign_class(0)
+            assert list(tmp_path.iterdir()) == []
+            w.save()
+        finally:
+            iw.close()
+        assert (tmp_path / "manual_labels.zarr").exists()
+        assert (tmp_path / "roi_runs.json").exists()
+
+    def test_a_chosen_folder_holds_the_rois(self, tmp_path, options):
+        from mbo_utilities.gui._ndviewer import MboNDViewer
+        from mbo_utilities.gui.manual_roi import ManualRoiWidget
+        from mbo_utilities.roi_workflow import roi_folder
+
+        data_dir = tmp_path / "rig"
+        data_dir.mkdir()
+        fpath = data_dir / "movie.tif"
+        root = tmp_path / "mine"
+        data = np.zeros((4, 64, 64), np.float32)
+        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
+        iw.show()
+        try:
+            w = ManualRoiWidget(iw, fpath=fpath, auto_trace=False)
+            w.set_folder(root)
+            w.set_autosave(True)
+            w.add_roi(square(10, 10, 9))
+            assert options == {"roi_folder": str(root), "roi_autosave": True}
+            assert w.folder == roi_folder(fpath, root)
+            assert w.folder.parent == root
+            assert w.folder.name.startswith("movie.tif_")
+            assert (w.folder / "manual_labels.zarr").exists()
+            assert list(data_dir.iterdir()) == []
+            assert w._run_out_dir("roi01").parent == w.folder
+        finally:
+            iw.close()
+
+        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
+        iw.show()
+        try:
+            assert ManualRoiWidget(iw, fpath=fpath, auto_trace=False).n_rois == 1
+        finally:
+            iw.close()
+
+    def test_rois_saved_beside_the_data_restore_under_a_folder(
+        self, tmp_path, options
+    ):
+        from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
+        from mbo_utilities.gui._ndviewer import MboNDViewer
+        from mbo_utilities.gui.manual_roi import ManualRoiWidget
+
+        fpath = tmp_path / "movie.tif"
+        store = RoiLabelStore(1, 64, 64)
+        mask = np.zeros((64, 64), bool)
+        mask[10:20, 10:20] = True
+        store.add_roi(0, mask)
+        LabelsZarr(tmp_path / "manual_labels.zarr").save(store)
+        options["roi_folder"] = str(tmp_path / "mine")
+
+        iw = MboNDViewer(data=np.zeros((4, 64, 64), np.float32))
+        iw.show()
+        try:
+            assert ManualRoiWidget(iw, fpath=fpath, auto_trace=False).n_rois == 1
+        finally:
+            iw.close()
+
+    def test_autosave_and_restore(self, tmp_path, options):
+        from mbo_utilities.gui._ndviewer import MboNDViewer
+        from mbo_utilities.gui.manual_roi import ManualRoiWidget
+
+        options["roi_autosave"] = True
         fpath = tmp_path / "movie.tif"
         data = np.random.default_rng(1).random((4, 64, 64)).astype(np.float32)
 
@@ -863,13 +940,14 @@ class TestPersistence:
         finally:
             iw.close()
 
-    def test_toggle_survives_a_failed_autosave(self, tmp_path):
+    def test_toggle_survives_a_failed_autosave(self, tmp_path, options):
         # an adopted parked store is the in-session truth: the zarr on disk
         # can be behind it when an autosave failed, and restoring it over
         # the parked store silently dropped ROIs
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
 
+        options["roi_autosave"] = True
         fpath = tmp_path / "movie.tif"
         data = np.zeros((4, 64, 64), np.float32)
         iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
@@ -1123,9 +1201,11 @@ class TestTraces:
 
 
 class TestRuns:
-    def test_run_outputs_land_beside_the_data_and_in_traces(self, tmp_path):
+    def test_run_outputs_land_beside_the_data_and_in_traces(self, tmp_path, options):
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
+
+        options["roi_autosave"] = True
         from mbo_utilities.gui.roi_runs import load_run_registry, registry_path
 
         data = np.random.default_rng(1).random((6, 64, 64)).astype(np.float32)
@@ -1166,9 +1246,11 @@ class TestRuns:
         finally:
             iw.close()
 
-    def test_registry_restores_run_traces(self, tmp_path):
+    def test_registry_restores_run_traces(self, tmp_path, options):
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
+
+        options["roi_autosave"] = True
 
         data = np.random.default_rng(2).random((6, 64, 64)).astype(np.float32)
         iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})

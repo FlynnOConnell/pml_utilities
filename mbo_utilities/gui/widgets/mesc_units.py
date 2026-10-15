@@ -432,7 +432,7 @@ class MescTabWidget(Widget):
         Each unit is an unrelated recording, so the Manual ROI widget is
         rebuilt for it: the outgoing unit's ROIs, runs and traces are parked
         under its key (``detach_roi_widget``) and the incoming unit's, parked
-        earlier or autosaved beside the file under its name, are adopted
+        earlier or saved under its name, are adopted
         (``attach_roi_widget``); a line-scan unit's own traces follow the
         same way.
         """

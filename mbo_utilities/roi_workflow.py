@@ -48,6 +48,7 @@ where used.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -81,6 +82,7 @@ __all__ = [
     "plane_index",
     "plane_store",
     "labels_path",
+    "roi_folder",
     "register",
     "extract_rois",
     "demix_rois",
@@ -104,15 +106,26 @@ SAVE_NAME = "manual_labels.zarr"
 _Z_RE = re.compile(r"z(\d+)")
 
 
-def labels_path(fpath, tag: str = "") -> Path:
-    """Where ``fpath``'s annotations live: ``manual_labels.zarr`` beside a
-    file, or inside a directory; with a ``tag`` (one recording of a file
-    holding several: a MESc unit's ``MSession_0_MUnit_3``)
-    ``manual_labels_<tag>.zarr``, so each recording keeps its own ROIs.
+def roi_folder(fpath, root=None) -> Path:
+    """Where ``fpath``'s ROI work is saved: beside a file or inside a
+    directory, or, with a ``root``, a folder under it named after the data
+    (``<name>_<hash of its full path>``, so two ``data_raw.bin`` never meet).
     """
     base = Path.cwd() if fpath is None else Path(fpath)
+    if root is None:
+        return base.parent if base.suffix else base
+    digest = hashlib.sha1(str(base.resolve()).encode()).hexdigest()[:8]
+    return Path(root) / f"{base.name}_{digest}"
+
+
+def labels_path(fpath, tag: str = "", root=None) -> Path:
+    """Where ``fpath``'s annotations live: ``manual_labels.zarr`` in its
+    ``roi_folder``; with a ``tag`` (one recording of a file holding several:
+    a MESc unit's ``MSession_0_MUnit_3``) ``manual_labels_<tag>.zarr``, so
+    each recording keeps its own ROIs.
+    """
     name = f"{SAVE_NAME[:-5]}_{tag}.zarr" if tag else SAVE_NAME
-    return (base.parent if base.suffix else base) / name
+    return roi_folder(fpath, root) / name
 
 
 def _index_len(key, n: int) -> int | None:
