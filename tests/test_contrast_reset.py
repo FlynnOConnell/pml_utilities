@@ -19,6 +19,7 @@ import pytest
 from mbo_utilities.gui._ndviewer import (
     VMINMAX_SAMPLE_COUNTS,
     MboNDViewer,
+    _histogram,
     _sample_array,
 )
 
@@ -124,7 +125,7 @@ class FakeNDG:
 
     def apply(self, block):
         # _set_contrast only touches the ndg passed in, never self/viewer
-        MboNDViewer._set_contrast(object.__new__(MboNDViewer), self, block)
+        MboNDViewer._set_contrast(object.__new__(MboNDViewer), self, _histogram(block))
 
 
 class TestSetContrast:
