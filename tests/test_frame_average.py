@@ -240,6 +240,17 @@ class TestViewerLock:
         finally:
             iw.close()
 
+    def test_the_binning_readout_sits_in_window_functions(self):
+        iw, gui = self._gui()
+        try:
+            gui.frame_average = 10
+            iw.figure.canvas.draw()
+            names = [w.name for w in gui._widgets]
+            assert "Window Functions" in names
+            assert "Frame Averaging" not in names, "piezo data only"
+        finally:
+            iw.close()
+
     def test_unlocking_restores_the_source(self):
         iw, gui = self._gui()
         try:
