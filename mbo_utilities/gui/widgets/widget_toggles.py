@@ -54,6 +54,13 @@ def _toggle_manual_roi(parent: Any, enabled: bool) -> None:
         sync(enabled)
 
 
+def _toggle_signal_quality(parent: Any, enabled: bool) -> None:
+    """Start the stats when Signal Quality is turned on."""
+    start = getattr(parent, "start_zstats", None)
+    if enabled and start is not None:
+        start()
+
+
 WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
     WidgetEntry(
         key="preview",
@@ -70,8 +77,10 @@ WIDGET_REGISTRY: tuple[WidgetEntry, ...] = (
     WidgetEntry(
         key="signal_quality",
         label="Signal Quality",
-        tooltip="Per-plane z-stats and signal-quality plots.",
+        tooltip="Per-plane z-stats and signal-quality plots. Off, nothing is "
+        "read for them.",
         default=False,
+        on_toggle=_toggle_signal_quality,
     ),
     WidgetEntry(
         key="run",
@@ -128,11 +137,17 @@ def widget_enabled(key: str) -> bool:
     return bool(_load().get(key, _default(key)))
 
 
-def set_widget_enabled(key: str, value: bool, persist: bool = True) -> None:
-    """Turn widget ``key`` on or off."""
+def set_widget_enabled(
+    key: str, value: bool, persist: bool = True, parent: Any = None
+) -> None:
+    """Turn widget ``key`` on or off; with ``parent``, run its toggle callback."""
+    was_on = widget_enabled(key)
     _load()[key] = bool(value)
     if persist:
         _persist()
+    entry = _BY_KEY.get(key)
+    if entry is not None and was_on != bool(value):
+        _fire(parent, entry.on_toggle, key, bool(value))
 
 
 def _fire(parent: Any, on_toggle, key: str, value: bool) -> None:
@@ -180,8 +195,7 @@ def draw_widgets_menu(parent: Any) -> None:
         if entry.tooltip and imgui.is_item_hovered():
             imgui.set_tooltip(entry.tooltip)
         if clicked and new_value != enabled:
-            set_widget_enabled(entry.key, new_value)
-            _fire(parent, entry.on_toggle, entry.key, new_value)
+            set_widget_enabled(entry.key, new_value, parent=parent)
 
     imgui.separator()
     if imgui.menu_item("Enable All", "", False, True)[0]:
