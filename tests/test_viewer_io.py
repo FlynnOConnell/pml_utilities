@@ -120,6 +120,11 @@ def test_the_contrast_opens_on_the_frame_on_screen(viewer):
     assert (g.vmin, g.vmax) == (float(frame.min()), float(frame.max()))
 
 
+def test_a_file_without_a_rate_plays_at_the_default_fps(viewer):
+    iw, _ = viewer
+    assert iw._sliders._fps["t"] == 20
+
+
 @pytest.mark.parametrize("viewer", [True], indirect=True)
 def test_signal_quality_reads_its_budget_per_plane(viewer, reads):
     iw, panel = viewer
