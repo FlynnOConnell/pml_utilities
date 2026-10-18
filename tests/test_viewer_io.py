@@ -112,6 +112,14 @@ def test_opening_a_file_reads_one_frame_and_one_sample(viewer, reads):
     assert of(reads, "stats") == []
 
 
+def test_the_contrast_opens_on_the_frame_on_screen(viewer):
+    iw, panel = viewer
+    settle(iw, panel)
+    g = iw.graphics[0]
+    frame = np.asarray(g.data.value)
+    assert (g.vmin, g.vmax) == (float(frame.min()), float(frame.max()))
+
+
 @pytest.mark.parametrize("viewer", [True], indirect=True)
 def test_signal_quality_reads_its_budget_per_plane(viewer, reads):
     iw, panel = viewer

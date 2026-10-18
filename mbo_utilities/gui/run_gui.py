@@ -796,12 +796,9 @@ def _create_image_widget(
         """IsoviewArray has a `kind` attribute set to raw/corrected/fused."""
         return getattr(arr, "kind", None) in {"raw", "corrected", "fused", "clusterpt"}
 
-    # Isoview fluorescence sits in the 0..few-hundred-counts range; the
-    # generic (-100, 4000) default washes it out completely.
-    if _is_isoview(data_array):
-        graphic_kwargs = {"vmin": 0, "vmax": 1000}
-    else:
-        graphic_kwargs = {"vmin": -100, "vmax": 4000}
+    # isoview fluorescence sits in the 0..few-hundred-counts range; anything
+    # else starts at the first frame's min and max
+    graphic_kwargs = {"vmin": 0, "vmax": 1000} if _is_isoview(data_array) else {}
 
     # Handle multi-ROI data (duck typing: check for roi_mode attribute)
     if hasattr(data_array, "roi_mode") and hasattr(data_array, "iter_rois"):
