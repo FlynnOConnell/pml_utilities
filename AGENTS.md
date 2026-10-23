@@ -1114,12 +1114,20 @@ the other.
   the same table the viewer names its sliders from), which `resolve_dim_labels`
   and the ROI widget both use, so every slice popup and the ROI tool call an AOD
   unit's Z axis `ROI`.
-- **Persistence.** The store autosaves to `manual_labels.zarr` (`plane` per ROI;
-  older stores wrote `z` and load unchanged). Run rows reload from `rois_<tag>/`
-  dirs through `roi_runs.json`; quick traces, full-image rows and tints live for
-  the session. A file holding several recordings (a `.mesc`) keeps all of it per
+- **Persistence.** Nothing is written beside the data unasked: data is often
+  opened where the user cannot or should not write. The store is saved to
+  `manual_labels.zarr` (`plane` per ROI; older stores wrote `z` and load
+  unchanged) and the loaded runs to `roi_runs.json` on Save, or as they change
+  when the `roi_autosave` option is on (off by default). Both, and every
+  `rois_<tag>/` run and full-plane run, go to the dataset's ROI folder
+  (`roi_workflow.roi_folder(fpath, root)`): beside the data, or
+  `<root>/<name>_<hash of the path>/` when the user picks a folder (the
+  `roi_folder` option). Both options live in `preferences` and are set from
+  the ROIs tab's OVERLAY > on disk row. A restore reads the ROI folder, then
+  beside the data. Quick traces, full-image rows and tints live for the
+  session. A file holding several recordings (a `.mesc`) keeps all of it per
   recording: the widget's `unit_key` (`manual_roi.unit_key`, the base array's)
-  names the sidecars `manual_labels_<tag>.zarr`, `roi_runs_<tag>.json` and
+  names the files `manual_labels_<tag>.zarr`, `roi_runs_<tag>.json` and
   `rois_<tag>_<run>/` (`labels_path(fpath, tag)`, `registry_path`, `run_prefix`,
   tag `MSession_0_MUnit_3`), and a unit switch (`MescTabWidget._install`) parks
   the outgoing widget's store and runs under its unit and rebuilds the widget for

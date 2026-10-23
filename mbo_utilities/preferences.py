@@ -541,6 +541,30 @@ def set_linescan_auto_traces(value: bool) -> None:
     _set_option("linescan_auto_traces", bool(value))
 
 
+def get_roi_autosave() -> bool:
+    """Whether the ROI tool writes drawn ROIs and loaded runs to disk as they
+    change (default False: they stay in memory until Save).
+    """
+    return bool(_get_options().get("roi_autosave", False))
+
+
+def set_roi_autosave(value: bool) -> None:
+    """Persist whether the ROI tool autosaves."""
+    _set_option("roi_autosave", bool(value))
+
+
+def get_roi_folder() -> str:
+    """Folder the ROI tool saves into, one subfolder per dataset; "" saves
+    beside the data.
+    """
+    return str(_get_options().get("roi_folder", ""))
+
+
+def set_roi_folder(path: str | Path) -> None:
+    """Persist the ROI tool's save folder ("" for beside the data)."""
+    _set_option("roi_folder", str(path))
+
+
 def get_s2p_torch_device() -> str:
     """Return the persisted suite2p torch device ('cuda'/'cpu'/'mps'/'cuda:N')."""
     return str(_get_options().get("s2p_torch_device", "cuda"))

@@ -668,7 +668,7 @@ def load_new_data(parent: Any, path: str):
         parent.logger.debug(f"Viewer switched to: {parent._viewer.name}")
 
         # rebuild the ROI widget against the new data (fresh store, or the
-        # new file's own manual_labels.zarr)
+        # new file's saved manual_labels.zarr)
         if roi_was_on:
             from mbo_utilities.gui.manual_roi import attach_roi_widget
 

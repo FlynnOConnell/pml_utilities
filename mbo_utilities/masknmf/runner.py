@@ -148,7 +148,7 @@ def _resolve_device(device: str, logger=None) -> str:
                 "Install a torch build for this GPU, e.g.: uv pip install "
                 "torch torchvision --index-url "
                 "https://download.pytorch.org/whl/cu126 "
-                "(pre-Turing GPUs need cu126 or cu118, not cu13x)"
+                "(pre-Turing GPUs need cu126 or cu118)"
             )
     return "cpu"
 

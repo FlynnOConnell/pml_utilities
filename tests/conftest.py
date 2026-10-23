@@ -35,6 +35,20 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "slow: slow tests (real suite2p runs)")
 
 
+@pytest.fixture(autouse=True)
+def options(monkeypatch):
+    """The persisted GUI options (``preferences._get_options``) as an
+    in-memory dict: tests start from the defaults, never read the user's
+    ``~/.mbo`` and never write it. Set a key to change one for a test.
+    """
+    from mbo_utilities import preferences
+
+    store = {}
+    monkeypatch.setattr(preferences, "_get_options", lambda: dict(store))
+    monkeypatch.setattr(preferences, "_set_option", store.__setitem__)
+    return store
+
+
 @pytest.fixture(scope="session")
 def test_data_root():
     """Root directory for test data."""

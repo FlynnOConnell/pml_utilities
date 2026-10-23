@@ -763,9 +763,11 @@ def _create_image_widget(
         from mbo_utilities.gui.roi_runs import run_dir_complete
         from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
         from mbo_utilities.lazy_array import base_array
+        from mbo_utilities.preferences import get_roi_folder
 
         src = data_array.source_path
         results = getattr(base_array(data_array), "results", None)
+        root = get_roi_folder() or None
         manual_roi = (
             widget == "manualroi"
             or widget_enabled("manual_roi")
@@ -777,6 +779,7 @@ def _create_image_widget(
                 src is not None
                 and (
                     labels_path(src).exists()
+                    or labels_path(src, root=root).exists()
                     or run_dir_complete(labels_path(src).parent)
                 )
             )

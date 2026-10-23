@@ -334,6 +334,7 @@ class FileDialog:
                 compute_gpu_options,
                 draw_linescan_options,
                 draw_memory_options,
+                draw_roi_save_options,
             )
 
             imgui.text_colored(COL_TEXT_DIM, "Compute GPU (suite2p / cellpose)")
@@ -369,6 +370,8 @@ class FileDialog:
 
             draw_memory_options(self, tooltip=wrapped_tooltip)
             draw_linescan_options(self, tooltip=wrapped_tooltip)
+            imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))
+            draw_roi_save_options(self, tooltip=wrapped_tooltip)
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.3))
             if imgui.button("Close", imgui.ImVec2(hello_imgui.em_size(6), 0)):

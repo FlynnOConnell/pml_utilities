@@ -29,23 +29,27 @@ slice whose center is inside it (or outside, per its switch), live as it is
 drawn and dragged. Add ROI (r) fills it into the store as a drawn ROI on
 the exact slice the viewer shows (every scrolling dim except time keys its
 own plane of masks); with ``auto_trace`` on its mean trace is computed at
-once. Annotations autosave next to the data as an OME-NGFF-style labels
-zarr (``manual_labels.zarr``, see ``mbo_utilities.annotation``) and are
-restored from it on relaunch. A file holding several recordings (a
+once. Annotations stay in memory until Save, or as they change with
+autosave on (off by default: data is often opened where nothing should be
+written), as an OME-NGFF-style labels zarr (``manual_labels.zarr``, see
+``mbo_utilities.annotation``) in the dataset's ROI folder: beside the data,
+or a folder the user picks (``roi_folder``). They are restored from there,
+or from beside the data, on relaunch. A file holding several recordings (a
 ``.mesc``) gets one per recording (``manual_labels_MSession_0_MUnit_3.zarr``;
 the run registry and run dirs likewise), and switching recordings swaps the
 whole widget, so the ROIs, runs and traces on screen are the shown one's.
 
 Runs read an ROI's mask where it was drawn and its pixels wherever the RUN
 section points them (``run_z`` / ``run_c`` / ``run_tp``, "as drawn" by
-default), through :meth:`run_rois`, writing ``rois_<tag>/`` beside the
-data; a run of the same ROI at the same coordinates with the same engine
+default), through :meth:`run_rois`, writing ``rois_<tag>/`` into the ROI
+folder; a run of the same ROI at the same coordinates with the same engine
 replaces its row. Region detection and full-plane suite2p / masknmf runs
 load their outputs as derived sets, rows of the table, whose components can
 be promoted into the drawn store (y). Delete (d) removes a drawn ROI and
 marks an algo one for deletion: it stays listed at the top of the table and
-red on the image until it is unmarked. Loaded runs are remembered in a
-``roi_runs.json`` sidecar and restored on relaunch.
+red on the image until it is unmarked. Loaded runs are remembered in
+``roi_runs.json`` beside the labels zarr, saved with it, and restored on
+relaunch.
 
 Masks draw as masknmf's feathered footprints: every ROI at the masks
 opacity, the selection and its group at their own with a white rim, each
@@ -103,6 +107,7 @@ from masknmf.visualization.imgui import (
 from masknmf.visualization.imgui import THEME as MTHEME
 from masknmf.visualization.imgui.keybinds import CLASSIFICATION, DEMIXING, Bind, pressed
 from masknmf.visualization.rois import MARKED_COLOR, SELECTED_ALPHA, FootprintSet
+from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities import log
 from mbo_utilities.annotation import (
@@ -164,6 +169,12 @@ from mbo_utilities.gui.roi_runs import (
 from mbo_utilities.gui.slice import Slice, viewer_positions, viewer_roles
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.lazy_array import base_array
+from mbo_utilities.preferences import (
+    get_roi_autosave,
+    get_roi_folder,
+    set_roi_autosave,
+    set_roi_folder,
+)
 from mbo_utilities.results import results_pipeline, unit_name
 from mbo_utilities.roi_workflow import (
     OUT_PREFIX,
@@ -176,6 +187,7 @@ from mbo_utilities.roi_workflow import (
     feather_mask,
     labels_path,
     load_run_dir,
+    roi_folder,
     roi_trace,
     run_result_from_unit,
 )
@@ -202,7 +214,7 @@ MOTION_PANEL_HEIGHT = 300
 BEHAVIOR_PLOT_HEIGHT = 140
 
 # how often to look for finished pipeline runs started outside this widget;
-# the check reads one sidecar per tracked process, so not every frame
+# the check reads one progress file per tracked process, so not every frame
 ADOPT_INTERVAL_S = 1.0
 
 # the trace table's columns after its id: (name, sortable, hidden by default)
@@ -410,7 +422,7 @@ _HELP_STEPS = (
     "empty pixel adds its 5x5 average.",
 )
 _HELP_FILES = (
-    "manual_labels.zarr  the drawn ROIs, autosaved\n"
+    "manual_labels.zarr  the drawn ROIs, on Save or with autosave on\n"
     "                    (mbo_utilities.annotation.LabelsZarr.load)\n"
     "rois_<tag>/         one run's outputs: stat.npy, F.npy, Fneu.npy,\n"
     "                    iscell.npy, ops.npy, rois.json\n"
@@ -585,9 +597,11 @@ class ManualRoiWidget:
     iw : MboNDViewer
         The viewer to draw on. Only its first subplot is drawable.
     fpath : path-like, optional
-        The data path; annotations autosave to ``manual_labels.zarr`` beside
-        it, loaded runs are remembered in ``roi_runs.json``, and both are
-        restored from there on construction.
+        The data path. Annotations are saved to ``manual_labels.zarr`` and
+        loaded runs to ``roi_runs.json`` in its ROI folder (``roi_folder``
+        under the ``roi_folder`` preference, beside the data when unset) on
+        Save, or as they change when the ``roi_autosave`` preference is on;
+        both are restored on construction.
     label_names : iterable of str
         Class labels to seed the label set with.
     store : RoiLabelStore, optional
@@ -622,8 +636,13 @@ class ManualRoiWidget:
         self.host = host
         self.figure = iw.figure
         self.fpath = Path(fpath) if fpath is not None else None
+        # where ROI work is saved (None = beside the data) and whether it is
+        # written as it changes; both are the user's, nothing is written unasked
+        self.root = Path(get_roi_folder()) if get_roi_folder() else None
+        self.autosave = get_roi_autosave()
+        self._folder_dialog = None
         # a file holding several recordings (a .mesc) keeps ROIs, runs and
-        # traces per recording: every sidecar is named after the one shown
+        # traces per recording: every saved file is named after the one shown
         self.unit_key = unit_key(iw)
         self.tag = self.unit_key.strip("/").replace("/", "_")
         self.unit = self.unit_key.rsplit("/", 1)[-1]
@@ -2042,7 +2061,7 @@ class ManualRoiWidget:
             self.store.nz == 1
             and res.z != 0
             and self.fpath is not None
-            and path == labels_path(self.fpath).parent
+            and path == roi_folder(self.fpath)
         ):
             # the movie on screen IS this plane, whatever z the run recorded
             res = replace(res, z=0)
@@ -2096,7 +2115,7 @@ class ManualRoiWidget:
                     self.store.nz == 1
                     and res.z != 0
                     and self.fpath is not None
-                    and file.parent == labels_path(self.fpath).parent
+                    and file.parent == roi_folder(self.fpath)
                 ):
                     # the movie on screen IS this plane, whatever plane the file recorded
                     res = replace(res, z=0)
@@ -2336,19 +2355,29 @@ class ManualRoiWidget:
         s = self.derived[si]
         self.mark([(si, k) for k in sorted(s.discarded)], False)
 
+    @property
+    def folder(self) -> Path | None:
+        """Where this dataset's ROI work is saved (``roi_folder``)."""
+        return None if self.fpath is None else roi_folder(self.fpath, self.root)
+
     def _save_target(self) -> Path:
-        return labels_path(self.fpath, self.tag)
+        return labels_path(self.fpath, self.tag, self.root)
 
     def _restore(self):
-        """Adopt a previously saved labels zarr next to the data, if any."""
+        """Adopt a previously saved labels zarr from the ROI folder, else
+        from beside the data, if any.
+        """
         if self.fpath is None:
             return
         target = self._save_target()
-        self._writer = LabelsZarr(target)
+        if self.autosave:
+            self._writer = LabelsZarr(target)
         if self._adopted_store:
             # the parked store is the in-session truth; the zarr can be
             # behind it when an autosave failed
             return
+        if not target.exists():
+            target = labels_path(self.fpath, self.tag)
         if not target.exists():
             return
         try:
@@ -2419,12 +2448,18 @@ class ManualRoiWidget:
             # store; fall through to this data's own registry
         self._restoring = True
         try:
-            entries = (
-                load_run_registry(registry_path(self.fpath, self.tag))
+            paths = (
+                dict.fromkeys(
+                    (
+                        registry_path(self.fpath, self.tag, self.root),
+                        registry_path(self.fpath, self.tag),
+                    )
+                )
                 if self.fpath is not None
-                else []
+                else {}
             )
-            for entry in entries:
+            entries = [e for p in paths for e in load_run_registry(p)]
+            for entry in {str(e["path"]): e for e in entries}.values():
                 path = Path(entry["path"])
                 if not run_dir_complete(path):
                     # a spawned pipeline may have suffixed the dir name
@@ -2460,7 +2495,7 @@ class ManualRoiWidget:
         if results is None:
             if self.fpath is None:
                 return
-            own = labels_path(self.fpath).parent
+            own = roi_folder(self.fpath)
             if run_dir_complete(own) and not any(
                 s.result.path == own for s in self.derived
             ):
@@ -2486,8 +2521,10 @@ class ManualRoiWidget:
             self._add_derived(res)
 
     def _autosave(self):
-        if self._writer is None:
+        if not self.autosave or self.fpath is None:
             return
+        if self._writer is None:
+            self._writer = LabelsZarr(self._save_target())
         try:
             self._writer.save_dirty(self.store, source_path=self.fpath)
             self._save_error = None
@@ -2497,24 +2534,52 @@ class ManualRoiWidget:
             self._save_error = f"autosave failed: {e}"
 
     def save(self):
-        """Write the full store to ``manual_labels.zarr`` next to the data."""
+        """Write the full store to ``manual_labels.zarr`` and the loaded runs
+        to ``roi_runs.json`` in the ROI folder.
+        """
+        if self.fpath is None:
+            self.status = "no data path to save for"
+            return
         target = self._save_target()
         if self._writer is None or self._writer.path != target:
             self._writer = LabelsZarr(target)
         try:
             self._writer.save(self.store, source_path=self.fpath)
         except OSError as e:
-            self._save_error = f"save failed: {e}"
+            self._save_error = f"save failed: {e}; pick another folder"
             return
         self._save_error = None
-        self.status = f"saved to {target.name}"
+        self._save_registry(force=True)
+        self.status = f"saved to {target}"
         self.logger.info(f"saved {self.n_rois} ROIs to {target}")
 
-    def _save_registry(self):
-        """Mirror the loaded sets (plus not-yet-loadable entries) into the
-        ``roi_runs.json`` sidecar.
+    def set_autosave(self, on: bool):
+        """Turn autosave on or off, remembered for every dataset; turning it
+        on saves everything now.
         """
-        if self.fpath is None or self._restoring:
+        self.autosave = bool(on)
+        set_roi_autosave(self.autosave)
+        if self.autosave:
+            self.save()
+
+    def set_folder(self, root):
+        """Save into ``root`` (one folder per dataset under it), or beside the
+        data when None; remembered for every dataset. Saves there now when
+        autosave is on.
+        """
+        self.root = Path(root) if root else None
+        set_roi_folder(self.root or "")
+        self._writer = None
+        if self.autosave:
+            self.save()
+        else:
+            self.status = f"ROIs will be saved to {self.folder}"
+
+    def _save_registry(self, force: bool = False):
+        """Mirror the loaded sets (plus not-yet-loadable entries) into
+        ``roi_runs.json``, when autosaving or on Save (``force``).
+        """
+        if self.fpath is None or self._restoring or not (self.autosave or force):
             return
         loaded = {str(s.result.path) for s in self.derived}
         entries = [
@@ -2529,7 +2594,7 @@ class ManualRoiWidget:
         ]
         entries += [e for e in self._registry_extra if str(e["path"]) not in loaded]
         try:
-            save_run_registry(registry_path(self.fpath, self.tag), entries)
+            save_run_registry(registry_path(self.fpath, self.tag, self.root), entries)
         except OSError as e:
             self._save_error = f"run registry save failed: {e}"
 
@@ -2925,10 +2990,10 @@ class ManualRoiWidget:
         ):
             self.status = f"{self.run_prefix}{tag} is still being written"
             return None
-        return labels_path(self.fpath).parent / f"{self.run_prefix}{tag}"
+        return self.folder / f"{self.run_prefix}{tag}"
 
     def _next_find_tag(self) -> str:
-        base = labels_path(self.fpath).parent if self.fpath is not None else None
+        base = self.folder
         used = {r.tag for r in self.manager.runs}
         n = 1
         while True:
@@ -3168,6 +3233,7 @@ class ManualRoiWidget:
                 host=self.host,
                 channel=channel,
                 tp_indices=tp_indices,
+                root=self.root,
             )
         except ValueError as e:
             self.status = str(e)
@@ -3276,7 +3342,7 @@ class ManualRoiWidget:
         self._adopt_checked = now
         if self.fpath is None:
             return
-        root = labels_path(self.fpath).parent
+        roots = {roi_folder(self.fpath), self.folder}
         mine = {r.pid for r in self.manager.runs if r.pid is not None}
         loaded = {str(s.result.path) for s in self.derived} | self._results_loaded
         for info in get_process_manager().get_running():
@@ -3293,7 +3359,9 @@ class ManualRoiWidget:
             if not out:
                 continue
             out = Path(out)
-            if root not in (out, *out.parents) and out not in root.parents:
+            if not any(
+                root in (out, *out.parents) or out in root.parents for root in roots
+            ):
                 continue  # another dataset's run
             if info.task_type == "vnoiser":
                 # a zarr-format vnoiser run leaves one results file in the PF folder
@@ -3401,6 +3469,7 @@ class ManualRoiWidget:
         """
         self._poll_jobs()
         self._poll_region()
+        self._poll_folder_dialog()
         self.handle_keys()
         self.keybinds_open = draw_keybinds_popup(
             ROI_KEYS, self.keybinds_open, "ROI keybinds"
@@ -3575,6 +3644,61 @@ class ManualRoiWidget:
             )
             return THEME.warn, f"{len(active)} running: {names}"
         return THEME.text_dim, self.status
+
+    def _draw_save_controls(self, g):
+        """The on disk row: autosave, and the folder Save and autosave write to."""
+        g.row("on disk")
+        imgui.begin_disabled(self.fpath is None)
+        changed, on = imgui.checkbox("autosave##roi_autosave", self.autosave)
+        if changed:
+            self.set_autosave(on)
+        tooltip(
+            "Write ROIs and loaded runs as they change. Off: nothing is "
+            "written until Save. Applies to every dataset."
+        )
+        imgui.same_line(0, g.gap)
+        if imgui.button(f"{fa.ICON_FA_FOLDER_OPEN}##roi_folder"):
+            start = str(self.root or roi_folder(self.fpath))
+            self._folder_dialog = pfd.select_folder("Save ROIs under", start)
+        tooltip(
+            "Pick a folder to save ROIs and runs under, one folder per dataset "
+            "inside it, instead of beside the data"
+        )
+        if self.root is not None:
+            imgui.same_line(0, g.gap)
+            if imgui.button("beside data##roi_folder"):
+                self.set_folder(None)
+            tooltip("Save beside the data again")
+        imgui.end_disabled()
+        if self.fpath is None:
+            imgui.text_disabled("in memory only: no data path")
+            return
+        imgui.text_disabled(f"to {self.folder}")
+        if not imgui.is_item_hovered():
+            return
+        imgui.begin_tooltip()
+        imgui.text(f"labels zarr: {self._save_target()}")
+        imgui.text(
+            f"runs:        {registry_path(self.fpath, self.tag, self.root)}, "
+            f"{self.run_prefix}<tag>/"
+        )
+        imgui.text_colored(
+            to_vec4(THEME.code),
+            "from mbo_utilities.annotation import LabelsZarr\n"
+            f'store = LabelsZarr.load(r"{self._save_target()}")\n'
+            "store.labels        # (Z, Y, X) uint16; 0 = bg, ROI i = i + 1\n"
+            "store.rois          # per-ROI plane, area, class, note, uid, source",
+        )
+        imgui.end_tooltip()
+
+    def _poll_folder_dialog(self):
+        dialog = self._folder_dialog
+        if dialog is None or not dialog.ready():
+            return
+        self._folder_dialog = None
+        picked = dialog.result()
+        if picked:
+            self.set_folder(picked)
 
     def draw_tab(self):
         """Masknmf's Signals tab for ROIs: the filter, then the drawn, algo
@@ -4945,6 +5069,7 @@ class ManualRoiWidget:
                 self._plot_lines_key = None
             elif action == "auto_trace":
                 self.auto_trace = not self.auto_trace
+        self._draw_save_controls(g)
 
     def _draw_selection(self):
         """Masknmf's SELECTION: one centered row of icon buttons, the region's side switch under it."""
@@ -5035,9 +5160,10 @@ class ManualRoiWidget:
         if imgui.button(f"{fa.ICON_FA_FLOPPY_DISK}##roi_save", size):
             self.save()
         tooltip(
-            f"Save: the drawn ROIs to {self._save_target()} now; they autosave there after every change"
-            if self._writer is not None
-            else "Save: the drawn ROIs are kept in memory only; open a file to autosave beside it"
+            "Save: the drawn ROIs are kept in memory only; there is no data path to save beside"
+            if self.fpath is None
+            else f"Save: the drawn ROIs and loaded runs to {self.folder} now"
+            + ("; they autosave there after every change" if self.autosave else "")
         )
         imgui.dummy(imgui.ImVec2(0, em(0.4)))
         row_w = (

@@ -500,11 +500,12 @@ def test_sidecars_are_named_after_the_unit(tmp_path):
     )
 
 
-def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path):
+def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
     """Each unit is its own recording: its ROIs and traces leave the screen
-    with it and come back when it is shown again, and each autosaves under
-    its own name beside the file.
+    with it and come back when it is shown again, and with autosave on each
+    saves under its own name beside the file.
     """
+    options["roi_autosave"] = True
     pytest.importorskip("fastplotlib.widgets.nd_widget")
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui.run_gui import _create_image_widget
