@@ -150,6 +150,7 @@ def imread(
     - .tif/.tiff: TIFF files (BigTIFF, OME-TIFF and raw ScanImage TIFFs)
     - .h5: HDF5 files
     - .h5 with an ``imaging_system = bruker`` dataset: Bruker exports, axes from its dimension labels
+    - .h5 with ``/imaging/data`` and ``frame_rate_hz``: lab4 converter output, stored (T, Z, Y, X, C)
     - .hdf5 with a DemixingResults group: masknmf demixing results, C = view (the GUI opens these in masknmf's viewers)
       (PMD movie, demixed signals, residual)
     - .hdf5 with a CompressionArray group: a masknmf compressed movie (compression.hdf5, alignment.hdf5)

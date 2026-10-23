@@ -24,7 +24,7 @@ from mbo_utilities.arrays._base import (
     _normalize_key,
 )
 from mbo_utilities.arrays.features import MotionCorrection
-from mbo_utilities.file_io import load_npy
+from mbo_utilities.file_io import has_plane_ops, load_npy, load_plane_ops
 from mbo_utilities.lazy_array import register_array_class
 from mbo_utilities.metadata import get_param, normalize_ops_arrays
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
@@ -92,7 +92,8 @@ def find_suite2p_plane_dirs(directory: Path) -> list[Path]:
     """
     Find Suite2p plane directories in a parent directory.
 
-    Looks for subdirectories containing ops.npy files, sorted by plane number.
+    Looks for subdirectories carrying their ops (``ops.npy``, or suite2p 1.0's
+    ``settings.npy``) and a movie, sorted by plane number.
 
     Parameters
     ----------
@@ -107,15 +108,14 @@ def find_suite2p_plane_dirs(directory: Path) -> list[Path]:
     plane_dirs = []
     for subdir in directory.iterdir():
         if subdir.is_dir():
-            ops_file = subdir / "ops.npy"
             # an ops.npy alone is not a plane: ROI-subset outputs
             # (roi_workflow's rois_<tag>/) carry one without a movie
             has_movie = (
                 (subdir / "data.bin").exists()
-                or (subdir / "data_raw.bin").exists()
+                or _raw_bin(subdir).exists()
                 or (subdir / "reg_tif").is_dir()
             )
-            if ops_file.exists() and has_movie:
+            if has_plane_ops(subdir) and has_movie:
                 plane_dirs.append(subdir)
 
     # Sort by plane number extracted from directory name
@@ -126,6 +126,37 @@ def find_suite2p_plane_dirs(directory: Path) -> list[Path]:
     return sorted(plane_dirs, key=sort_key)
 
 
+def _raw_bin(plane_dir: Path) -> Path:
+    """The unregistered binary: ``data_raw.bin``, or ``raw_data.bin`` as suite2p 1.0 names it."""
+    v1 = plane_dir / "raw_data.bin"
+    return v1 if v1.exists() and not (plane_dir / "data_raw.bin").exists() else plane_dir / "data_raw.bin"
+
+
+def registration_shifts(planes, fs, volume: bool) -> MotionCorrection | None:
+    """Suite2p's rigid ``xoff`` / ``yoff`` as a ``MotionCorrection`` in px.
+
+    ``planes`` is ``(plane dir name, ops)`` in z order; a volume's traces are
+    named after their plane dir and listed in ``planes``. A plane with no
+    shifts, or all-zero ones, gives no trace; no trace at all is None.
+    """
+    fs = fs or 1.0
+    traces, by_plane = {}, {}
+    for z, (name, ops) in enumerate(planes):
+        xoff, yoff = ops.get("xoff"), ops.get("yoff")
+        if xoff is None or yoff is None or not (np.any(xoff) or np.any(yoff)):
+            continue
+        for axis, shift in (("X", xoff), ("Y", yoff)):
+            label = axis
+            if volume:
+                label = f"{axis} {name}"
+                by_plane[label] = z
+            traces[label] = (
+                np.arange(len(shift)) / fs,
+                np.asarray(shift, dtype=np.float64),
+            )
+    return MotionCorrection("suite2p", "px", traces, by_plane) if traces else None
+
+
 class _SinglePlaneReader:
     """Internal reader for a single Suite2p plane."""
 
@@ -134,10 +165,10 @@ class _SinglePlaneReader:
         # an ops.npy written before the images were normalized holds them as
         # JSON lists; everything downstream (the summary-image widget,
         # suite2p's own plotting) indexes them as arrays
-        self.metadata = normalize_ops_arrays(load_npy(ops_path).item())
+        self.metadata = normalize_ops_arrays(load_plane_ops(ops_path.parent))
 
         ops_dir = ops_path.parent
-        self.raw_file = ops_dir / "data_raw.bin"
+        self.raw_file = _raw_bin(ops_dir)
         self.reg_file = ops_dir / "data.bin"
 
         # choose which file to use
@@ -214,7 +245,7 @@ class _Suite2pRegTifPlaneReader:
         from mbo_utilities.arrays.tiff import _SingleTiffPlaneReader
 
         self.ops_path = ops_path
-        self.metadata = normalize_ops_arrays(load_npy(ops_path).item())
+        self.metadata = normalize_ops_arrays(load_plane_ops(ops_path.parent))
         plane_dir = ops_path.parent
         self.reg_tif_dir = plane_dir / "reg_tif"
         self._channel = channel
@@ -443,7 +474,7 @@ class _Suite2pReconstructReader:
     def __init__(self, ops_path: Path):
         self.ops_path = Path(ops_path)
         plane_dir = self.ops_path.parent
-        self.metadata = normalize_ops_arrays(load_npy(self.ops_path).item())
+        self.metadata = normalize_ops_arrays(load_plane_ops(plane_dir))
 
         reg_file = plane_dir / "reg_outputs.npy"
         reg = load_npy(reg_file).item()
@@ -650,9 +681,9 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         if p.name == "ops.npy":
             return True
         if p.is_dir():
-            if (p / "ops.npy").exists():
+            if has_plane_ops(p):
                 return True
-            return any((d / "ops.npy").exists() for d in p.iterdir() if d.is_dir())
+            return any(has_plane_ops(d) for d in p.iterdir() if d.is_dir())
         return False
 
     def __init__(
@@ -680,10 +711,9 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
             if plane_dirs:
                 self._init_volume(plane_dirs, use_raw)
             else:
-                # maybe directory contains ops.npy directly
-                ops_file = path / "ops.npy"
-                if ops_file.exists():
-                    self._init_single_plane(ops_file, use_raw)
+                # maybe directory is a plane itself
+                if has_plane_ops(path):
+                    self._init_single_plane(path / "ops.npy", use_raw)
                 else:
                     raise ValueError(
                         f"Directory {path} has no plane subdirectories or ops.npy"
@@ -698,10 +728,9 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
                 self._init_single_plane(path, use_raw)
         elif path.suffix == ".bin":
             # user explicitly selected a .bin file - load only that plane
-            ops_path = path.with_name("ops.npy")
-            if not ops_path.exists():
+            if not has_plane_ops(path.parent):
                 raise FileNotFoundError(f"Missing ops.npy near {path}")
-            self._init_single_plane(ops_path, use_raw)
+            self._init_single_plane(path.with_name("ops.npy"), use_raw)
         else:
             raise ValueError(f"Unsupported input: {path}")
 
@@ -719,9 +748,7 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         disk and the use_raw / use_reg_tif flags.
         """
         plane_dir = ops_path.parent
-        has_bin = (plane_dir / "data.bin").exists() or (
-            plane_dir / "data_raw.bin"
-        ).exists()
+        has_bin = (plane_dir / "data.bin").exists() or _raw_bin(plane_dir).exists()
         has_reg_tif = bool(find_suite2p_reg_tif_files(plane_dir, channel=0))
 
         if self._use_reg_tif:
@@ -854,22 +881,11 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         its traces are named after their plane dir and listed in ``planes``.
         The nonrigid block offsets (``xoff1`` / ``yoff1``) are left out.
         """
-        fs = self.fs or 1.0
-        traces, planes = {}, {}
-        for z, plane in enumerate(self._planes):
-            xoff, yoff = plane.metadata.get("xoff"), plane.metadata.get("yoff")
-            if xoff is None or yoff is None or not (np.any(xoff) or np.any(yoff)):
-                continue
-            for axis, shift in (("X", xoff), ("Y", yoff)):
-                label = axis
-                if self._is_volumetric:
-                    label = f"{axis} {plane.ops_path.parent.name}"
-                    planes[label] = z
-                traces[label] = (
-                    np.arange(len(shift)) / fs,
-                    np.asarray(shift, dtype=np.float64),
-                )
-        return MotionCorrection("suite2p", "px", traces, planes) if traces else None
+        return registration_shifts(
+            [(p.ops_path.parent.name, p.metadata) for p in self._planes],
+            self.fs,
+            self._is_volumetric,
+        )
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
         return (self._nframes, 1, self._nz, self._ly, self._lx)

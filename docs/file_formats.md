@@ -57,6 +57,7 @@ the 5D array underneath for writers and the viewer.
 | **`.bin`** | `BinArray` | as-passed, e.g. `(T, Y, X)` | Suite2p binary (requires shape) |
 | **`.h5`** | `H5Array` | `(T, C, Z, Y, X)` | HDF5 datasets |
 | ↳ `imaging_system = bruker` dataset | `BrukerArray` | `(T, C, Z, Y, X)` | Bruker HDF5 export; axes from its dimension labels |
+| ↳ `/imaging/data` + `frame_rate_hz` | `Lab4H5Array` | `(T, C, Z, Y, X)` | lab4 converter output (`python -m lab4.convert`); an AOD scan's ROIs on Z |
 | ↳ `DemixingResults` group | `DemixingArray` | `(T, 3, 1, Y, X)` | masknmf demixing results; C = PMD / demixed / residual |
 | ↳ `CompressionArray` group | `CompressedMovieArray` | `(T, 1, 1, Y, X)` | masknmf compressed movie (`compression.hdf5`, `results.hdf5`, `alignment.hdf5`) |
 | **`.mesc`** | `MescArray` | `(T, C, Z, Y, X)` | Femtonics MESc, one measurement unit |
@@ -78,6 +79,7 @@ imread(path)
 ├── np.ndarray ───────────────────────────► NumpyArray (in-memory)
 ├── .npy ─────────────────────────────────► NumpyArray (mmap)
 ├── .h5 / .hdf5
+│   ├── /imaging/data + frame_rate_hz ────► Lab4H5Array
 │   ├── imaging_system = bruker ──────────► BrukerArray
 │   ├── DemixingResults group ────────────► DemixingArray (masknmf)
 │   ├── CompressionArray group ───────────► CompressedMovieArray (masknmf)
@@ -259,6 +261,32 @@ is more than one plane) and `frame_period` gives `fs`.
 arr = mbo.imread("/path/to/u005a04_20260915_FamfDay1_FOV1-002.h5")
 arr.shape             # (29803, 1, 1, 512, 512)
 arr.dx, arr.fs        # 1.102, 30.02
+```
+
+(lab4h5array)=
+### Lab4H5Array
+
+The standardized H5 every lab4 converter (`aod`, `bruker`, `mini2p`, `slm`)
+writes: one recording per file, `/imaging/data` stored `(T, Z, Y, X, C)`, or
+`(T, R, Y, X, C)` for an AOD scan, whose ROIs land on Z as in `MescArray`.
+HDF5 dimension labels win when the writer set them. The `/imaging` group's
+`frame_rate_hz`, `pixel_size_um` and `z_step_um` give `fs`, `dx`/`dy` and
+`dz`; `channel_names`, `start_time` and the parsed `device_specifics` are kept
+as they are. A `z_step_um` of 0 and an empty `start_time` are placeholders and
+are dropped.
+
+lab4 writes each pipeline run beside the recording as
+`<params uuid>/<pipeline>/plane<N>/`. The newest suite2p run there (suite2p
+1.0's split `settings.npy` / `reg_outputs.npy` / `detect_outputs.npy`, or a
+classic `ops.npy`) gives `arr.motion_correction` (its rigid shifts) and
+`arr.results` (its ROIs, traces and images), so the viewer shows both with the
+recording.
+
+```python
+arr = mbo.imread("/path/to/MSession_0_MUnit_3.h5")
+arr.shape                   # (T, C, R, Y, X)
+arr.slider_dim_labels       # ("Timepoint", "ROI")
+arr.metadata["device_specifics"]["modality_name"]   # "chessboard"
 ```
 
 (h5array)=
