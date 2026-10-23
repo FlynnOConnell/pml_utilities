@@ -67,6 +67,7 @@ from mbo_utilities.gui._stats import (
     draw_stats_section,
     hydrate_zstats,
     refresh_zstats,
+    signal_quality_enabled,
 )
 from mbo_utilities.gui.playhead import Playhead, TimeAxis
 from mbo_utilities.gui.slice import Slice, viewer_positions
@@ -319,20 +320,26 @@ class PreviewDataWidget(EdgeWindow):
         # Initialize viewer
         self._init_viewer()
 
-        # Hydrate cached stats from disk first; only compute the arrays that
-        # had no valid cache (recompute on shape/dims/series mismatch).
-        # compute_zstats runs its own single background worker, so call it
-        # directly (no extra wrapper thread).
         if threading_enabled:
-            hydrated = hydrate_zstats(self)
-            pending = [i for i in range(self.num_graphics) if not hydrated[i]]
-            if pending:
-                self.logger.debug(
-                    f"Starting zstats computation for {len(pending)} array(s)..."
-                )
-                for i in pending:
-                    self._zstats_running[i] = True
-                compute_zstats(self, only=pending)
+            self.start_zstats()
+
+    def start_zstats(self) -> None:
+        """Load cached z-stats and compute the rest, when Signal Quality is on."""
+        if not signal_quality_enabled():
+            return
+        hydrated = hydrate_zstats(self)
+        pending = [
+            i
+            for i in range(self.num_graphics)
+            if not hydrated[i] and not self._zstats_running[i]
+        ]
+        if pending:
+            self.logger.debug(
+                f"Starting zstats computation for {len(pending)} array(s)..."
+            )
+            for i in pending:
+                self._zstats_running[i] = True
+            compute_zstats(self, only=pending)
 
     def _init_logging(self):
         """Initialize logging system."""
@@ -820,12 +827,12 @@ class PreviewDataWidget(EdgeWindow):
         slider's [1, 50] range and never overrides a user-typed fps.
         """
         try:
-            arr = self.image_widget.data[0]
-            fs = getattr(arr, "fs", None)
-            if fs is None:
-                from mbo_utilities.metadata import get_param
+            from mbo_utilities.metadata import get_param
 
-                fs = get_param(getattr(arr, "metadata", None), "fs")
+            arr = self.image_widget.data[0]
+            md = getattr(arr, "metadata", None)
+            # a LazyArray's fs answers 1.0 when no rate is stored; that would play at 1 fps
+            fs = get_param(md, "fs") if md is not None else getattr(arr, "fs", None)
             from mbo_utilities.gui._keyboard import _get_sliders_ui
 
             sliders = _get_sliders_ui(self)

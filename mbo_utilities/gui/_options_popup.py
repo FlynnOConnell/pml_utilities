@@ -18,6 +18,7 @@ from imgui_bundle import icons_fontawesome_6 as fa
 
 from mbo_utilities import log as _mbo_log
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
+from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled, widget_enabled
 from mbo_utilities.preferences import (
     get_compute_gpu,
     get_debug_logging,
@@ -390,6 +391,15 @@ def draw_options_popup(parent: Any) -> None:
             parent._options_debug = new_debug
             set_debug_logging(new_debug)
             _mbo_log.set_debug(new_debug)
+
+        changed, on = imgui.checkbox("Signal Quality", widget_enabled("signal_quality"))
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Per-plane signal-quality stats, read from up to 30 frames per "
+                "plane when a file opens. Off, nothing is read for them."
+            )
+        if changed:
+            set_widget_enabled("signal_quality", on, parent=parent)
 
         draw_memory_options(parent)
         draw_linescan_options(parent)

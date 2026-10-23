@@ -28,6 +28,7 @@ from mbo_utilities.gui._imgui_helpers import (
     style_seaborn_dark,
 )
 from mbo_utilities.gui.widgets.progress_bar import reset_progress_state
+from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
 
 # accent color for the currently-active z-plane in tables and plots.
 # matches the idle "Run" button green so the highlight is consistent with
@@ -352,6 +353,11 @@ def hydrate_zstats(parent: Any) -> list[bool]:
     return out
 
 
+def signal_quality_enabled() -> bool:
+    """Whether Signal Quality is on; off, its stats are never read."""
+    return widget_enabled("signal_quality")
+
+
 def compute_zstats(parent: Any, only: list[int] | None = None):
     """Compute z-stats for all graphics (or only the given 0-based indices).
 
@@ -360,6 +366,8 @@ def compute_zstats(parent: Any, only: list[int] | None = None):
     main render/event loop low so the UI stays responsive during compute.
     Non-blocking: returns immediately, safe to call from the main thread.
     """
+    if not signal_quality_enabled():
+        return
     if not parent.image_widget or not parent.image_widget.data:
         return
 
@@ -430,11 +438,10 @@ def refresh_zstats(parent: Any):
 
     parent.logger.debug(f"Refreshing z-stats for {n} arrays, nz={parent.nz}")
 
-    # Mark all as running before starting
+    if not signal_quality_enabled():
+        return
     for i in range(n):
         parent._zstats_running[i] = True
-
-    # Recompute z-stats
     compute_zstats(parent)
 
 

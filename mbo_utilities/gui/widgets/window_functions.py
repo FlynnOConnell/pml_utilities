@@ -110,12 +110,24 @@ class WindowFunctionsWidget(Widget):
                 parent.frame_average = parent.window_size
             else:
                 parent.frame_average = 1
-        if locked:
-            imgui.same_line(0, hello_imgui.em_size(0.5))
-            imgui.text_colored(
-                imgui.ImVec4(0.6, 0.8, 0.6, 1.0), f"{averaged} frames averaged"
+        if not locked:
+            return
+        imgui.same_line(0, hello_imgui.em_size(0.5))
+        imgui.text_colored(
+            imgui.ImVec4(0.6, 0.8, 0.6, 1.0), f"{averaged} frames averaged"
+        )
+        set_tooltip("Untick to get the raw frames back.")
+        source = getattr(parent, "_frame_average_source", None)
+        nt = int(parent.shape[0]) if getattr(parent, "shape", None) else 0
+        was = int(source.shape[0]) if source is not None else nt * averaged
+        imgui.text(f"Frames: {was} -> {nt}")
+        arrays = parent._get_data_arrays()
+        fs = getattr(arrays[0], "fs", None) if arrays else None
+        if fs:
+            imgui.text(f"Rate: {fs * averaged:.4g} -> {fs:.4g} Hz")
+            set_tooltip(
+                "Downstream code reads the binned rate, so windows stay in seconds."
             )
-            set_tooltip("Untick to get the raw frames back.")
 
 
 class SpatialFunctionsWidget(Widget):
