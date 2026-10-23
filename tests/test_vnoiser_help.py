@@ -114,7 +114,7 @@ def test_the_numbers_are_the_pipelines_defaults():
     ):
         assert want in text, want
     assert dfof.negative and settings.runtime.output_format == "zarr"
-    assert not settings.runtime.convert
+    assert not settings.traces.convert
     for mine, theirs in (
         (vnoiser_help.THRESHOLD, event_curation.THRESHOLD_COLOR),
         (vnoiser_help.AUTO_PASS, event_curation.AUTO_PASS_COLOR),

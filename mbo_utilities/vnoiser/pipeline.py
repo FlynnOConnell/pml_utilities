@@ -1,25 +1,29 @@
-"""The vnoiser pipeline on a raw AOD ``.mesc``.
+"""The vnoiser pipeline on a raw ``.mesc``.
 
-Each unit with AOD ROIs (:data:`mbo_utilities.arrays.mesc.ROI_LAYOUTS`: the
-lines of a line scan, the patches of a chessboard, the boxes of a ribbon
-scan) is one scan; each ROI's mean fluorescence per frame
-(``roi_workflow.linescan_roi_read``, the same read ``mbo linescan`` does)
-goes through vnoiser's stages 0-5: domains are pixel-weighted means of
-their ROIs, dF/F and z-score (:func:`vnoiser.preprocess.domain_zscore`),
-wavelet denoising and peaks (:func:`vnoiser.pipeline.process_domain`), and
-a ``PF`` folder that ``mbo curate`` opens (:class:`vnoiser.pf.PfWriter`).
-The runner owns that loop so every step (each scan's read, its dF/F, each
-domain's denoising, the writes) is logged with its wall time, CPU time and
-memory, and recorded per step in ``pipeline.json`` (``timing`` and
+Each recording unit traces come from (:func:`~mbo_utilities.arrays.mesc.is_trace_unit`:
+the lines of a line scan, the patches of a chessboard, the boxes of a ribbon
+scan, or a single patch or raster whose whole frame is the ROI) is one scan.
+Each domain (the lines of a soma, a patch, the part of a patch the cell
+covers) is read with :func:`~mbo_utilities.analysis.roi_traces.extract_traces`:
+its pixels (every pixel, a scored top fraction or a drawn mask), the file's
+conversion offset, a background, a reference channel and the inversion, as
+``settings.traces`` says. dF/F and the z-score follow ``settings.dfof``
+(:func:`~mbo_utilities.analysis.dff.dfof_zscore`; the archive's Gaussian by
+default), then vnoiser's wavelet denoising and peaks
+(:func:`vnoiser.pipeline.process_domain`) unless ``settings.runtime.denoise``
+is off, and the results zarr (or the archive's ``PF`` folder,
+:class:`vnoiser.pf.PfWriter`) that ``mbo curate`` opens. The runner owns
+that loop so every step (each scan's read, its dF/F, each domain's
+denoising, the writes) is logged with its wall time, CPU time and memory,
+and recorded per step in ``pipeline.json`` (``timing`` and
 ``processing_history``) and ``timings.json`` beside the results
-(:class:`_RunUsage`). Domains (which ROIs make the soma, each branch; which
-patch is which cell) come from a ``domains.json`` beside the file, or an
-archive's ``scanIDs_ROIs.pkl``. Settings are written for the archive's
-frame rate and scaled to the scans'
+(:class:`_RunUsage`). Domains come from a ``domains.json`` beside the file,
+an archive's ``scanIDs_ROIs.pkl``, or the Run tab. Settings are written for
+the archive's frame rate and scaled to the scans'
 (:meth:`~mbo_utilities.vnoiser.params.VnoiserSettings.at_fs`).
 
 Reproduces the archive: ``stan112_expt12/stan112_expt12/stan112_expt12.mesc``
-units 35 and 38, read this way with ``convert=False``, give the per-ROI
+units 35 and 38, read this way with the default settings, give the per-ROI
 traces the lab's ``VI_2025-07-24.pkl`` holds to float precision, and the
 traces of its ``PF`` folder follow (see ``tests/test_vnoiser_pipeline.py``).
 """
@@ -43,19 +47,30 @@ import numpy as np
 import psutil
 import zarr
 from vnoiser.pf import DFOF_FILE, PROVENANCE_FILE, PfWriter, final_domain_name
-from vnoiser.preprocess import DomainTraces, domain_names, domain_zscore
 
 from mbo_utilities import log
 from mbo_utilities._sysmem import MemoryMonitor, mem_snapshot
 from mbo_utilities._writers import add_processing_step
-from mbo_utilities.vnoiser.params import OUTPUT_FORMATS, VnoiserSettings
-from vnoiser import DfofConfig, ScanTraces, SpikeDetectConfig, read_pf
+from mbo_utilities.analysis.roi_traces import (
+    Domain,
+    TraceSettings,
+    domains_from_json,
+    extract_traces,
+    roi_geometry,
+)
+from mbo_utilities.vnoiser.params import (
+    OUTPUT_FORMATS,
+    VnoiserDfofSettings,
+    VnoiserSettings,
+)
+from vnoiser import DfofConfig, ScanTraces, SpikeDetectConfig
 from vnoiser.pipeline import load_scan_rois, process_domain
 
 __all__ = [
     "DOMAINS_FILE",
     "TIMINGS_FILE",
     "scan_traces_from_mesc",
+    "scan_units",
     "read_domains",
     "write_domains_template",
     "default_pf_dir",
@@ -212,6 +227,41 @@ def _read_progress(
         )
 
 
+def scan_units(mesc_path, units=None) -> list[dict]:
+    """The recordings of ``mesc_path`` traces come from
+    (:func:`~mbo_utilities.arrays.mesc.is_trace_unit`), as
+    :func:`~mbo_utilities.arrays.mesc.list_mesc_units` rows in file order, or
+    the ``units`` named (``MUnit_n`` or ``MSession_s/MUnit_n``) in that
+    order. Naming a unit that holds no trace (a picture, a Z-stack) raises.
+    """
+    from mbo_utilities.arrays.mesc import is_trace_unit, list_mesc_units
+
+    mesc_path = Path(mesc_path)
+    every = list_mesc_units(mesc_path)
+    traced = [u for u in every if is_trace_unit(u)]
+    if not units:
+        return traced
+    traced_munits = {u["munit"] for u in traced}
+    chosen = []
+    for name in units:
+        match = [u for u in traced if u["key"] == name or u["munit"] == name]
+        if not match:
+            other = [
+                u
+                for u in every
+                if u["key"] == name
+                or (u["munit"] == name and name not in traced_munits)
+            ]
+            if other:
+                raise ValueError(
+                    f"{name} is a {other[0]['modality_name']} unit ({other[0]['role'] or 'no role'}, "
+                    f"{other[0]['nframes']} frame(s)) with no trace to take"
+                )
+            raise ValueError(f"{name} is not in {mesc_path.name}")
+        chosen.append(match[0])
+    return chosen
+
+
 def scan_traces_from_mesc(
     mesc_path,
     unit_key: str,
@@ -223,56 +273,42 @@ def scan_traces_from_mesc(
     batch_size: int = 20000,
     progress=None,
 ) -> ScanTraces:
-    """One AOD ROI unit (line scan, chessboard, ribbon) as vnoiser's :class:`ScanTraces`.
+    """One recording unit's whole-ROI means as vnoiser's :class:`ScanTraces`.
 
-    ``convert=False`` keeps MESc's raw counts, as the archive's converter
-    did; ``True`` applies the file's linear conversion so zero means no
-    photons (the dF/F then differs from the archive's by a slowly varying
-    factor; the z-score is nearly unaffected). ``frames=(start, stop)``
-    keeps that half-open window of the recording. ``rois`` (0-based ROI
-    indices: the unit's Z axis, ``mesc_z_axis_meaning == "roi_index"``)
-    reads only those ROIs; the traces stay keyed by the ROI's own index.
-    ``progress(i, K, seconds)`` is called after each ROI when given.
+    The ROIs are the unit's lines, patches or boxes, or its one frame for a
+    single-patch scan or a raster. ``convert=False`` keeps MESc's raw counts,
+    as the archive's converter did; ``True`` applies the file's linear
+    conversion so zero means no photons (the dF/F then differs from the
+    archive's by a slowly varying factor; the z-score is nearly unaffected).
+    ``frames=(start, stop)`` keeps that half-open window of the recording.
+    ``rois`` (0-based ROI indices: the unit's Z axis) reads only those ROIs;
+    the traces stay keyed by the ROI's own index. ``progress(i, K, seconds)``
+    is called after each ROI when given.
     """
-    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray
-    from mbo_utilities.roi_workflow import linescan_roi_read
+    from mbo_utilities.arrays.mesc import MescArray
 
     arr = MescArray(mesc_path, unit=unit_key)
     md = arr.metadata
-    if md.get("mesc_layout") not in ROI_LAYOUTS:
-        raise ValueError(
-            f"{unit_key} is a {md.get('mesc_modality_name')} unit with no AOD ROIs"
-        )
+    geometry = roi_geometry(arr)
     if rois is not None and md.get("mesc_z_axis_meaning") != "roi_index":
         raise ValueError(
             f"{unit_key}: Z means {md.get('mesc_z_axis_meaning')!r} here, not ROIs"
         )
-    F, _ = linescan_roi_read(
+    rois = sorted(geometry) if rois is None else [int(r) for r in rois]
+    found = extract_traces(
         arr,
+        [Domain(f"roi{r}", [r]) for r in rois],
+        TraceSettings(convert=convert),
         channel=channel,
-        convert=convert,
+        frames=frames,
         batch_size=batch_size,
-        dtype=np.float64,
         progress=progress,
-        rois=rois,
     )
-    if frames is not None:
-        start, stop = int(frames[0]), int(frames[1])
-        if not 0 <= start < stop <= F.shape[1]:
-            raise ValueError(f"frames {frames} outside 0..{F.shape[1]}")
-        F = F[:, start:stop]
-    extents = md["mesc_roi_extents"]
-    if rois is not None:
-        extents = [extents[int(r)] for r in rois]
-    traces = {int(e["index"]): F[i] for i, e in enumerate(extents)}
-    weights = {
-        int(e["index"]): float(int(e["height"]) * int(e["width"])) for e in extents
-    }
     return ScanTraces(
         _munit_number(md.get("mesc_unit", unit_key)),
         float(md["fs"]),
-        traces,
-        weights,
+        {r: found.roi_mean[r] for r in rois},
+        {r: float(geometry[r][1] * geometry[r][2]) for r in rois},
         comment=str(md.get("comment", "") or ""),
     )
 
@@ -281,8 +317,12 @@ def read_domains(path) -> dict:
     """``{"domains", "scan_ids", "first_env"}`` from a ``domains.json`` or an
     archive ``scanIDs_ROIs.pkl``.
 
-    The JSON holds ``{"domains": {"soma1": [0, 1, 2], ...}, "scans": ["35",
-    "38"], "first_env": ["35"]}``; ``scans`` and ``first_env`` are optional.
+    The JSON holds ``{"domains": {"soma1": [0, 1, 2], "cell": {"rois": [3],
+    "pixels": "correlated", "fraction": 0.3}, ...}, "scans": ["35", "38"],
+    "first_env": ["35"]}``: a domain is an ROI list (every pixel of those
+    ROIs) or a :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json`
+    entry; ``scans`` and ``first_env`` are optional. ``domains`` comes back
+    as given, checked.
     """
     path = Path(path)
     if path.suffix.lower() == ".pkl":
@@ -293,55 +333,60 @@ def read_domains(path) -> dict:
             "first_env": rois["first_env"],
         }
     doc = json.loads(path.read_text())
-    domains = {str(k): [int(v) for v in rois] for k, rois in doc["domains"].items()}
-    if not domains:
+    found = domains_from_json(doc.get("domains") or {})
+    if not found:
         raise ValueError(f"{path} defines no domains")
     return {
-        "domains": domains,
+        "domains": {d.name: d.to_json() for d in found},
         "scan_ids": [str(s) for s in doc.get("scans", [])],
         "first_env": [str(s) for s in doc.get("first_env", [])],
     }
 
 
+def comment_names(comment: str, n_rois: int) -> list[str] | None:
+    """One name per ROI from a unit comment that lists as many
+    (``"soma, bas1, api1"``), else None: ``"soma,bas1-3,api1-5"`` names
+    groups, not ROIs, and a free comment names nothing.
+    """
+    names = [n.strip() for n in str(comment or "").split(",") if n.strip()]
+    if len(names) != n_rois or len(set(names)) != len(names):
+        return None
+    if any(not n.replace("_", "").replace("-", "").isalnum() for n in names):
+        return None
+    return names
+
+
 def write_domains_template(
     mesc_path, path=None, *, units=None, per_domain: int = 1
 ) -> Path:
-    """Write a ``domains.json`` to edit: the file's AOD ROI units as
+    """Write a ``domains.json`` to edit: the file's recordings as
     ``scans`` and one domain per ROI (``roi0: [0]``, ...; ``per_domain``
     groups consecutive ROIs instead, the archive's three lines per
     domain), named from the unit comment when it lists as many names
     (``'soma,bas1-3,api1-5'`` does not). Returns the path.
     """
-    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
-
     mesc_path = Path(mesc_path)
     path = Path(path) if path is not None else mesc_path.parent / DOMAINS_FILE
-    scans = [u for u in list_mesc_units(mesc_path) if u.get("kind") in ROI_LAYOUTS]
-    if units:
-        wanted = {str(u) for u in units}
-        scans = [u for u in scans if u["key"] in wanted or u["munit"] in wanted]
+    scans = scan_units(mesc_path, units)
     if not scans:
-        raise ValueError(f"no AOD ROI units in {mesc_path}")
+        raise ValueError(f"no recording with traces in {mesc_path}")
     n_rois = int(scans[0]["nrois"])
-    names = [
-        n.strip() for n in str(scans[0].get("comment") or "").split(",") if n.strip()
-    ]
     groups = [
         list(range(i, min(i + per_domain, n_rois)))
         for i in range(0, n_rois, per_domain)
     ]
-    if len(names) != len(groups):
-        names = [
-            f"roi{g[0]}" if len(g) == 1 else f"domain{i + 1}"
-            for i, g in enumerate(groups)
-        ]
+    names = comment_names(scans[0].get("comment"), len(groups)) or [
+        f"roi{g[0]}" if len(g) == 1 else f"domain{i + 1}" for i, g in enumerate(groups)
+    ]
     doc = {
         "mesc": mesc_path.name,
         "scans": [_munit_number(u["key"]) for u in scans],
         "first_env": [_munit_number(scans[0]["key"])],
         "domains": {name: rois for name, rois in zip(names, groups, strict=True)},
-        "note": "domains: name -> ROI indices (0-based, the order the lines or patches were drawn); "
-        "scans: MUnit numbers in order; first_env: the first scan of each environment",
+        "note": "domains: name -> ROI indices (0-based, the order the lines or patches were drawn), "
+        'or {"rois": [...], "pixels": "all|bright|active|correlated|mask", "fraction": 0.3, '
+        '"mask": {"<roi>": [flat pixel indices]}}; scans: MUnit numbers in order; '
+        "first_env: the first scan of each environment",
     }
     path.write_text(json.dumps(doc, indent=2))
     return path
@@ -378,6 +423,38 @@ def default_results_path(mesc_path, out=None) -> Path:
     return out / results_name(mesc_path, pipeline="vnoiser")
 
 
+def _cut_domains(
+    domains: list[Domain], rois: set[int]
+) -> tuple[list[Domain], list[str]]:
+    """Every domain cut down to ``rois``; one left with none is dropped (named in the second list)."""
+    kept, dropped = [], []
+    for d in domains:
+        mine = [r for r in d.rois if r in rois]
+        if not mine:
+            dropped.append(d.name)
+            continue
+        mask = None if d.mask is None else {r: d.mask[r] for r in mine}
+        kept.append(Domain(d.name, mine, d.pixels, d.fraction, mask))
+    return kept, dropped
+
+
+def _versions() -> tuple[str | None, dict]:
+    mbo_version = None
+    for dist in ("pml_utilities", "mbo_utilities"):
+        try:
+            mbo_version = version(dist)
+            break
+        except PackageNotFoundError:
+            continue
+    versions = {"python": platform.python_version()}
+    for name in ("vnoiser", "numpy", "scipy", "scikit-learn", "PyWavelets", "h5py"):
+        try:
+            versions[name] = version(name)
+        except PackageNotFoundError:
+            versions[name] = None
+    return mbo_version, versions
+
+
 def run_vnoiser_pipeline(
     mesc_path,
     *,
@@ -386,7 +463,7 @@ def run_vnoiser_pipeline(
     first_env=(),
     out=None,
     channel: int = 0,
-    convert: bool = False,
+    convert: bool | None = None,
     frames=None,
     planes=None,
     save_cwt: bool = False,
@@ -400,30 +477,40 @@ def run_vnoiser_pipeline(
     progress_callback=None,
     logger: logging.Logger | None = None,
 ) -> dict:
-    """Every AOD ROI unit of ``mesc_path`` (or ``units``) into a PF folder.
+    """Every recording of ``mesc_path`` (or ``units``) into a results file or PF folder.
 
     Parameters
     ----------
     mesc_path : path
-    domains : mapping of domain -> ROI indices
+    domains : mapping of domain -> entry, or sequence of Domain
+        An entry is an ROI list or a
+        :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json` dict
+        (pixels, fraction, mask). ``All_domains`` is ignored, and ``bg``
+        gets no trace unless it is the background domain.
     units : sequence of str, optional
         ``MUnit_n`` or ``MSession_s/MUnit_n`` keys, in scan order; default
-        every AOD ROI unit in file order. One run takes scans of one frame
-        rate.
+        every recording traces come from (:func:`scan_units`). One run takes
+        scans of one frame rate.
     first_env : sequence of scan ids
     out : path, optional
         The PF folder; default :func:`default_pf_dir`.
-    channel, convert, frames : see :func:`scan_traces_from_mesc`
+    channel : int
+        0-based channel the indicator is on.
+    convert : bool, optional
+        Overrides ``settings.traces.convert`` when given.
+    frames : (start, stop), optional
+        The half-open window of frames read.
     planes : sequence of int, optional
         The pipeline input contract's 1-based Z selection. On an AOD ROI
         unit Z is the ROI index, so these are the ROIs (lines, patches) to
         process: only they are read, every domain is cut down to them and a
-        domain left with no ROI is dropped. Default every ROI.
+        domain left with no ROI is dropped. Default every ROI the domains use.
     settings : VnoiserSettings, optional
         The Run tab's settings (default :class:`VnoiserSettings`), scaled to
-        the scans' frame rate with ``at_fs``; a ``dfof_cfg``,
-        ``denoiser_factory`` or ``spike_cfg`` given explicitly is used as
-        it is instead.
+        the scans' frame rate with ``at_fs``: ``traces`` (pixels in,
+        background, reference, inversion), ``dfof``, the denoiser, peaks and
+        runtime. A ``dfof_cfg``, ``denoiser_factory`` or ``spike_cfg`` given
+        explicitly is used as it is instead.
     save_cwt, spike_cfg, detect, dfof_cfg, denoiser_factory, overwrite :
         see :func:`vnoiser.run_pipeline`
     provenance : dict, optional
@@ -438,7 +525,12 @@ def run_vnoiser_pipeline(
 
     Returns ``{file name: path}`` of the written folder. Beside the archive
     format a ``traces`` subfolder holds plain files: ``scans.csv``,
-    ``domains.csv``, and per scan ``scan<id>_rois.npy`` (ROI, frame),
+    ``domains.csv``, and per scan ``scan<id>_rois.npy`` (ROI, frame: each
+    whole ROI's mean), ``scan<id>_f.npy`` (domain, frame: the trace dF/F was
+    taken of, before any inversion), ``scan<id>_background.npy`` /
+    ``_reference.npy`` when there was one, ``scan<id>_masks.json`` (each
+    domain's pixels per ROI) and ``scan<id>_images.npz`` (each ROI's mean,
+    SD and correlation images when a pixel rule scored them),
     ``scan<id>_dfof.npy`` / ``_zscore.npy`` / ``_denoised.npy`` (domain,
     frame) in ``domains.csv`` row order, ``scan<id>_peaks.csv``, and
     ``scan<id>_denoised.png`` / ``scan<id>_rois.png`` figures.
@@ -448,40 +540,21 @@ def run_vnoiser_pipeline(
     ``baseline_100hz`` / ``peaks`` summed over domains) and its
     ``processing_history`` (one ``vnoiser_<step>`` entry per step, the shape
     suite2p's ``ops.npy`` uses); ``timings.json`` beside it is the same with
-    one flat row per step, a denoise row carrying its stages as ``<stage>_s``. With ``settings.runtime.output_format == "zarr"`` the pickles are
-    replaced by one ``<yyyy-mm-dd>_<tags>.zarr`` results file in the folder
+    one flat row per step, a denoise row carrying its stages as ``<stage>_s``.
+    With ``settings.runtime.output_format == "zarr"`` the pickles are
+    replaced by one ``<stem>.<stamp>.vnoiser.zarr`` results file
     (:mod:`mbo_utilities.results`; ``test.h5``, ``traces``, ``pipeline.json``
-    and ``timings.json`` stay) whose ``provenance`` attr holds the same
-    timing.
+    and ``timings.json`` move into its ``vnoiser/`` folder) whose
+    ``provenance`` attr holds the same timing. With ``settings.runtime.denoise``
+    off the run stops after the z-score: no denoised trace, no peaks, zarr only.
     """
-    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
+    from mbo_utilities.arrays.mesc import MescArray
 
     logger = logger or log.get()
     mesc_path = Path(mesc_path)
-    all_units = list_mesc_units(mesc_path)
-    roi_units = [u for u in all_units if u.get("kind") in ROI_LAYOUTS]
-    roi_munits = {u["munit"] for u in roi_units}
-    if units:
-        chosen = []
-        for name in units:
-            match = [u for u in roi_units if u["key"] == name or u["munit"] == name]
-            if not match:
-                other = [
-                    u
-                    for u in all_units
-                    if u["key"] == name
-                    or (u["munit"] == name and name not in roi_munits)
-                ]
-                if other:
-                    raise ValueError(
-                        f"{name} is a {other[0]['modality_name']} unit with no AOD ROIs"
-                    )
-                raise ValueError(f"{name} is not in {mesc_path.name}")
-            chosen.append(match[0])
-    else:
-        chosen = roi_units
+    chosen = scan_units(mesc_path, units)
     if not chosen:
-        raise ValueError(f"no AOD ROI units in {mesc_path}")
+        raise ValueError(f"no recording with traces in {mesc_path}")
     rates = sorted({round(float(u["fs"] or 0), 3) for u in chosen})
     if len(rates) > 1:
         listed = ", ".join(f"{r:g}" for r in rates)
@@ -489,14 +562,44 @@ def run_vnoiser_pipeline(
             f"the chosen scans differ in frame rate ({listed} Hz); run them separately"
         )
     settings = (settings or VnoiserSettings()).at_fs(float(chosen[0]["fs"]))
+    if convert is not None:
+        settings.traces.convert = bool(convert)
     if settings.runtime.output_format not in OUTPUT_FORMATS:
         raise ValueError(
             f"output_format must be one of {OUTPUT_FORMATS}, got {settings.runtime.output_format!r}"
         )
-    dfof_cfg = dfof_cfg or settings.dfof.config()
+    denoise = bool(settings.runtime.denoise)
+    if not denoise and settings.runtime.output_format != "zarr":
+        raise ValueError(
+            "a run without denoising writes the results zarr, not a PF folder"
+        )
+    if dfof_cfg is not None:
+        settings.dfof = VnoiserDfofSettings(
+            sigma_dfof=float(dfof_cfg.sigma_dfof),
+            sigma_baseline=float(dfof_cfg.sigma_baseline),
+            n_startup=int(dfof_cfg.n_startup),
+            negative=bool(dfof_cfg.negative),
+        )
+    polarity = settings.polarity
+    detect = bool(detect) and denoise
     spike_cfg = spike_cfg or settings.events.config()
     denoiser_factory = denoiser_factory or settings.denoiser.factory
-    given = {str(name): [int(r) for r in rs] for name, rs in domains.items()}
+    if isinstance(domains, dict):
+        given = {str(k): v for k, v in domains.items()}
+        found = domains_from_json(given)
+    else:
+        found = list(domains)
+        given = {d.name: d.to_json() for d in found}
+    background = (
+        settings.traces.background_domain
+        if settings.traces.background == "domain"
+        else None
+    )
+    found = [
+        d
+        for d in found
+        if d.name != "All_domains" and (d.name != "bg" or d.name == background)
+    ]
     rois = None
     if planes is not None:
         rois = sorted({int(p) - 1 for p in planes})
@@ -504,12 +607,8 @@ def run_vnoiser_pipeline(
         bad = [r + 1 for r in rois if not 0 <= r < n_rois]
         if bad:
             raise ValueError(f"planes {bad} are outside 1..{n_rois}, the scans' ROIs")
-        kept = {
-            name: [int(r) for r in rs if int(r) in rois] for name, rs in domains.items()
-        }
-        dropped = [name for name in domain_names(domains) if not kept[name]]
-        domains = {name: rs for name, rs in kept.items() if rs}
-        if not domain_names(domains):
+        found, dropped = _cut_domains(found, set(rois))
+        if not [d for d in found if d.name != background]:
             raise ValueError(
                 f"no domain has an ROI among planes {[r + 1 for r in rois]}"
             )
@@ -517,7 +616,15 @@ def run_vnoiser_pipeline(
             logger.info(
                 f"vnoiser: planes {[r + 1 for r in rois]} leave no ROI in domain(s) {dropped}; dropped"
             )
-    names = domain_names(domains)
+    if background is not None and not any(d.name == background for d in found):
+        raise ValueError(
+            f"the background domain {background!r} is not among the domains"
+        )
+    traced = [d for d in found if d.name != background]
+    if not traced:
+        raise ValueError("no domains to process")
+    names = [d.name for d in traced]
+    domain_rois = {d.name: list(d.rois) for d in found}
     # a zarr run works in a scratch folder the pipeline's own writers need and
     # folds it into the results file at the end; a pkl run works in PF itself
     as_zarr = settings.runtime.output_format == "zarr"
@@ -527,20 +634,7 @@ def run_vnoiser_pipeline(
         if as_zarr
         else (Path(out) if out is not None else default_pf_dir(mesc_path))
     )
-
-    mbo_version = None
-    for dist in ("pml_utilities", "mbo_utilities"):
-        try:
-            mbo_version = version(dist)
-            break
-        except PackageNotFoundError:
-            continue
-    versions = {"python": platform.python_version()}
-    for name in ("vnoiser", "numpy", "scipy", "scikit-learn", "PyWavelets", "h5py"):
-        try:
-            versions[name] = version(name)
-        except PackageNotFoundError:
-            versions[name] = None
+    mbo_version, versions = _versions()
 
     usage = _RunUsage(logger)
     system = mem_snapshot(usage.proc)
@@ -549,26 +643,42 @@ def run_vnoiser_pipeline(
         f"({settings.runtime.output_format}); {os.cpu_count()} cpus, {system['total_gb']:.0f} GB RAM "
         f"({system['sys_pct']:.0f}% in use); vnoiser {versions['vnoiser']}, mbo_utilities {mbo_version}"
     )
+    logger.info(
+        f"vnoiser: polarity {polarity}, pixels "
+        + ", ".join(f"{d.name}={d.pixels}" for d in traced)
+        + f", background {settings.traces.background}, reference {settings.traces.reference}, "
+        f"conversion {'on' if settings.traces.convert else 'off'}, dF/F {settings.dfof.method}, "
+        f"z noise {settings.dfof.noise}{'' if denoise else ', no denoising'}"
+    )
     try:
-        scans = []
+        scans, extracted = [], {}
         for k, u in enumerate(chosen):
             sid = _munit_number(u["key"])
             logger.info(
                 f"scan {sid}: reading {u['key']} ({u['nrois']} ROIs x {u['nframes']} frames at {u['fs']:.2f} Hz)"
             )
             usage.begin("read", scan=sid, unit=u["key"])
-            scan = scan_traces_from_mesc(
-                mesc_path,
-                u["key"],
+            arr = MescArray(mesc_path, unit=u["key"])
+            ex = extract_traces(
+                arr,
+                found,
+                settings.traces,
                 channel=channel,
-                convert=convert,
                 frames=frames,
-                rois=rois,
                 progress=partial(
                     _read_progress, logger, progress_callback, sid, k, len(chosen)
                 ),
             )
+            geometry = roi_geometry(arr)
+            scan = ScanTraces(
+                sid,
+                float(arr.metadata["fs"]),
+                ex.roi_mean,
+                {r: float(geometry[r][1] * geometry[r][2]) for r in ex.roi_mean},
+                comment=str(arr.metadata.get("comment", "") or u.get("comment") or ""),
+            )
             scans.append(scan)
+            extracted[sid] = ex
             usage.end(
                 f"scan {sid}: read {len(scan.traces)} ROIs x {scan.n_frames} frames",
                 n_rois=len(scan.traces),
@@ -579,8 +689,10 @@ def run_vnoiser_pipeline(
         info = {
             "pipeline": "mbo_utilities.vnoiser.pipeline.run_vnoiser_pipeline",
             "versions": versions,
-            "dfof": asdict(dfof_cfg),
-            "denoiser": example.describe(),
+            "traces": settings.traces.to_dict(),
+            "polarity": polarity,
+            "dfof": asdict(settings.dfof),
+            "denoiser": example.describe() if denoise else None,
             "events": asdict(spike_cfg) if detect else None,
             "comments": {s.scan_id: s.comment for s in scans if s.comment},
             "roi_weights": {
@@ -593,7 +705,7 @@ def run_vnoiser_pipeline(
                     s.scan_id: u["key"] for s, u in zip(scans, chosen, strict=True)
                 },
                 "channel": int(channel),
-                "convert": bool(convert),
+                "convert": bool(settings.traces.convert),
                 "frames": None if frames is None else [int(frames[0]), int(frames[1])],
                 "planes": None if planes is None else [int(p) for p in planes],
                 # the table as given; `planes` cuts the one the run works on
@@ -604,21 +716,28 @@ def run_vnoiser_pipeline(
         info.update(provenance or {})
         processed = {s.scan_id for s in scans}
         first_env = [str(s) for s in first_env if str(s) in processed]
-        writer = PfWriter(
-            pf_dir,
-            domains=domains,
-            scan_ids=[s.scan_id for s in scans],
-            first_env=first_env,
-            roi_list={s.scan_id: s.rois for s in scans},
-            spike_params=spike_cfg.to_param_pickle() if detect else None,
-            save_cwt=save_cwt,
-            freq_scales=example.freq_scales,
-            provenance=info,
-            overwrite=overwrite,
-        )
+        writer = None
+        if denoise:
+            writer = PfWriter(
+                pf_dir,
+                domains={n: domain_rois[n] for n in names}
+                | ({"bg": domain_rois["bg"]} if background == "bg" else {}),
+                scan_ids=[s.scan_id for s in scans],
+                first_env=first_env,
+                roi_list={s.scan_id: s.rois for s in scans},
+                spike_params=spike_cfg.to_param_pickle() if detect else None,
+                save_cwt=save_cwt,
+                freq_scales=example.freq_scales,
+                provenance=info,
+                overwrite=overwrite,
+            )
+        else:
+            pf_dir.mkdir(parents=True, exist_ok=True)
         n_domains = max(len(names), 1)
+        normalized, denoised_rows, peaks = {}, {}, {}
         for k, scan in enumerate(scans):
             sid = scan.scan_id
+            ex = extracted[sid]
             # one domain at a time: each row of dF/F and z is independent of the others, and the
             # baseline filters take about ten seconds per domain on a five-minute scan
             dfof_rows, z_rows = [], []
@@ -630,19 +749,19 @@ def run_vnoiser_pipeline(
                         fraction, f"scan {sid}: dF/F of {name} ({row + 1}/{len(names)})"
                     )
                 usage.begin("dfof", scan=sid, domain=name)
-                one = domain_zscore(
-                    scan.traces, {name: domains[name]}, scan.weights, dfof_cfg
-                )
-                dfof_rows.append(one.dfof_raw[0])
-                z_rows.append(one.z[0])
+                dfof, z = settings.dfof.apply(ex.F[[ex.row(name)]], scan.fs_hz)
+                dfof_rows.append(dfof[0])
+                z_rows.append(z[0])
                 usage.end(
                     f"scan {sid}: dF/F and z-score of {name} ({row + 1}/{len(names)})"
                 )
-            traces = DomainTraces(
-                names=list(names), dfof_raw=np.stack(dfof_rows), z=np.stack(z_rows)
-            )
-            writer.add_scan(sid, scan.fs_hz, traces.dfof_raw, traces.z)
-            for row, name in enumerate(traces.names):
+            normalized[sid] = (np.stack(dfof_rows), np.stack(z_rows))
+            if writer is not None:
+                writer.add_scan(sid, scan.fs_hz, *normalized[sid])
+            if not denoise:
+                continue
+            rows = []
+            for row, name in enumerate(names):
                 if progress_callback is not None:
                     # the denoising is the next 40 %
                     fraction = 0.5 + 0.4 * min(1.0, (k + row / n_domains) / len(scans))
@@ -653,7 +772,7 @@ def run_vnoiser_pipeline(
                 logger.info(f"scan {sid}: denoising {name} ({row + 1}/{len(names)})")
                 usage.begin("denoise", scan=sid, domain=name)
                 result = process_domain(
-                    traces.z[row],
+                    normalized[sid][1][row],
                     scan.fs_hz,
                     denoiser=denoiser_factory(scan.fs_hz),
                     spike_cfg=spike_cfg,
@@ -661,6 +780,11 @@ def run_vnoiser_pipeline(
                     keep_cwt=save_cwt,
                 )
                 writer.add_domain(sid, name, result)
+                rows.append(result.trace)
+                if result.peaks is not None:
+                    peaks.setdefault(sid, {})[final_domain_name(name)] = np.asarray(
+                        result.peaks, dtype=np.int64
+                    )
                 result.cwt = None
                 n_events = None if result.peaks is None else int(len(result.peaks))
                 events = "" if n_events is None else f", {n_events} events"
@@ -679,13 +803,20 @@ def run_vnoiser_pipeline(
                         for stage, seconds in stages.items()
                     },
                 )
+            denoised_rows[sid] = np.stack(rows)
 
         if progress_callback is not None:
             progress_callback(0.9, f"writing {pf_dir.name}")
-        usage.begin("write_pf")
-        paths = writer.finish()
-        usage.end(f"wrote {len(paths)} PF files to {pf_dir}")
-        files = read_pf(pf_dir)
+        if writer is not None:
+            usage.begin("write_pf")
+            paths = writer.finish()
+            usage.end(f"wrote {len(paths)} PF files to {pf_dir}")
+        else:
+            usage.begin("write_pf")
+            paths = _write_traces_only(
+                pf_dir, info, scans, names, domain_rois, first_env, normalized
+            )
+            usage.end(f"wrote dF/F and z of {len(scans)} scan(s) to {pf_dir}")
         traces_dir = pf_dir / TRACES_DIR
         traces_dir.mkdir(exist_ok=True)
         usage.begin("traces")
@@ -702,37 +833,66 @@ def run_vnoiser_pipeline(
                     [
                         i,
                         final_domain_name(name),
-                        " ".join(str(r) for r in domains[name]),
+                        " ".join(str(r) for r in domain_rois[name]),
                     ]
                 )
-        with h5py.File(pf_dir / DFOF_FILE, "r") as f:
-            for s in scans:
-                sid = s.scan_id
-                rois = np.stack([np.asarray(s.traces[r]) for r in sorted(s.traces)])
-                np.save(traces_dir / f"scan{sid}_rois.npy", rois.astype(np.float32))
+        for s in scans:
+            sid = s.scan_id
+            ex = extracted[sid]
+            order = [ex.row(n) for n in names]
+            rois = np.stack([np.asarray(s.traces[r]) for r in sorted(s.traces)])
+            np.save(traces_dir / f"scan{sid}_rois.npy", rois.astype(np.float32))
+            np.save(
+                traces_dir / f"scan{sid}_f.npy", ex.measured[order].astype(np.float32)
+            )
+            if ex.background is not None:
                 np.save(
-                    traces_dir / f"scan{sid}_dfof.npy",
-                    f[sid]["dfof_raw"][:].astype(np.float32),
+                    traces_dir / f"scan{sid}_background.npy",
+                    ex.background[order].astype(np.float32),
                 )
+            if ex.reference is not None:
                 np.save(
-                    traces_dir / f"scan{sid}_zscore.npy",
-                    f[sid]["dfof_zscore"][:].astype(np.float32),
+                    traces_dir / f"scan{sid}_reference.npy",
+                    ex.reference[order].astype(np.float32),
                 )
-                denoised = np.stack(
-                    [files.traces[sid][final_domain_name(n)] for n in names]
+            (traces_dir / f"scan{sid}_masks.json").write_text(
+                json.dumps(
+                    {
+                        "shapes": {str(r): list(hw) for r, hw in ex.shapes.items()},
+                        "domains": {
+                            d: {str(r): v.tolist() for r, v in m.items()}
+                            for d, m in ex.masks.items()
+                        },
+                    }
                 )
+            )
+            if ex.images:
+                np.savez_compressed(
+                    traces_dir / f"scan{sid}_images.npz",
+                    **{
+                        f"roi{r}_{kind}": img.astype(np.float32)
+                        for r, imgs in ex.images.items()
+                        for kind, img in imgs.items()
+                    },
+                )
+            np.save(
+                traces_dir / f"scan{sid}_dfof.npy",
+                normalized[sid][0].astype(np.float32),
+            )
+            np.save(
+                traces_dir / f"scan{sid}_zscore.npy",
+                normalized[sid][1].astype(np.float32),
+            )
+            if denoise:
                 np.save(
-                    traces_dir / f"scan{sid}_denoised.npy", denoised.astype(np.float32)
+                    traces_dir / f"scan{sid}_denoised.npy",
+                    denoised_rows[sid].astype(np.float32),
                 )
                 with (traces_dir / f"scan{sid}_peaks.csv").open("w", newline="") as fh:
                     rows = csv.writer(fh)
                     rows.writerow(["domain", "frame", "time_s"])
                     for n in names:
-                        for frame in (
-                            (files.peaks or {})
-                            .get(sid, {})
-                            .get(final_domain_name(n), ())
-                        ):
+                        for frame in peaks.get(sid, {}).get(final_domain_name(n), ()):
                             rows.writerow(
                                 [
                                     final_domain_name(n),
@@ -750,7 +910,7 @@ def run_vnoiser_pipeline(
         for s in scans:
             sid = s.scan_id
             t = np.arange(s.n_frames) / s.fs_hz
-            denoised = np.load(traces_dir / f"scan{sid}_denoised.npy")
+            shown = denoised_rows[sid] if denoise else normalized[sid][1]
             fig, axes = plt.subplots(
                 len(names),
                 1,
@@ -758,24 +918,27 @@ def run_vnoiser_pipeline(
                 sharex=True,
                 squeeze=False,
             )
-            for ax, n, trace in zip(axes[:, 0], names, denoised, strict=True):
+            for ax, n, trace in zip(axes[:, 0], names, shown, strict=True):
                 ax.plot(t, trace, lw=0.5, color="k")
-                frames = (files.peaks or {}).get(sid, {}).get(final_domain_name(n), ())
-                if len(frames):
-                    ax.plot(t[frames], trace[frames], ".", color="r", ms=4)
+                found_peaks = peaks.get(sid, {}).get(final_domain_name(n), ())
+                if len(found_peaks):
+                    ax.plot(t[found_peaks], trace[found_peaks], ".", color="r", ms=4)
                 ax.set_ylabel(final_domain_name(n), rotation=0, ha="right", va="center")
                 ax.spines[["top", "right"]].set_visible(False)
             axes[-1, 0].set_xlabel("s")
-            axes[0, 0].set_title(f"scan {sid} denoised")
+            axes[0, 0].set_title(f"scan {sid} {'denoised' if denoise else 'z-score'}")
             fig.tight_layout()
-            fig.savefig(traces_dir / f"scan{sid}_denoised.png", dpi=120)
+            fig.savefig(
+                traces_dir / f"scan{sid}_{'denoised' if denoise else 'zscore'}.png",
+                dpi=120,
+            )
             plt.close(fig)
             rois = np.load(traces_dir / f"scan{sid}_rois.npy")
             fig, ax = plt.subplots(figsize=(12, 0.5 * len(rois) + 1.2))
             for i, trace in enumerate(rois):
                 span = np.ptp(trace) or 1.0
                 ax.plot(t, (trace - trace.mean()) / span - i, lw=0.4, color="k")
-            ax.set_yticks(-np.arange(len(rois)), [str(i) for i in range(len(rois))])
+            ax.set_yticks(-np.arange(len(rois)), [str(r) for r in sorted(s.traces)])
             ax.set_ylabel("ROI")
             ax.set_xlabel("s")
             ax.set_title(f"scan {sid} raw ROIs")
@@ -830,7 +993,7 @@ def run_vnoiser_pipeline(
         )
         logger.info(
             f"vnoiser done in {int(wall // 60)}m {wall % 60:04.1f}s (cpu {cpu:.0f} s, {cpu / max(wall, 1e-9):.1f} cores); "
-            f"peak process memory {timing['peak_rss_gb']:.2f} GB; {totals}; denoise stages: {stages}; "
+            f"peak process memory {timing['peak_rss_gb']:.2f} GB; {totals}; denoise stages: {stages or 'none'}; "
             f"timings in {timings_at}"
         )
         if progress_callback is not None:
@@ -840,3 +1003,32 @@ def run_vnoiser_pipeline(
         return paths
     finally:
         usage.close()
+
+
+def _write_traces_only(
+    pf_dir, info, scans, names, domain_rois, first_env, normalized
+) -> dict:
+    """What a run without denoising leaves for ``Results.from_pf``: ``test.h5``
+    (dF/F and z per scan) and the ``pipeline.json`` PfWriter would write,
+    with no pickles.
+    """
+    with h5py.File(pf_dir / DFOF_FILE, "w") as f:
+        for s in scans:
+            grp = f.create_group(s.scan_id)
+            grp.create_dataset("dfof_raw", data=normalized[s.scan_id][0])
+            grp.create_dataset("dfof_zscore", data=normalized[s.scan_id][1])
+    every = sorted({r for s in scans for r in s.rois})
+    provenance = {
+        "created_utc": datetime.now().astimezone().isoformat(),
+        "scan_ids": [s.scan_id for s in scans],
+        "first_env": list(first_env),
+        "domains": {"All_domains": list(range(max(every) + 1)) if every else []}
+        | {n: domain_rois[n] for n in names},
+        "roi_list": {s.scan_id: s.rois for s in scans},
+        "fs_hz": {s.scan_id: s.fs_hz for s in scans},
+        "n_frames": {s.scan_id: s.n_frames for s in scans},
+        "files": [DFOF_FILE],
+        **info,
+    }
+    (pf_dir / PROVENANCE_FILE).write_text(json.dumps(provenance, indent=2))
+    return {DFOF_FILE: pf_dir / DFOF_FILE, PROVENANCE_FILE: pf_dir / PROVENANCE_FILE}
