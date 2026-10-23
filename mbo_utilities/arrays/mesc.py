@@ -126,6 +126,28 @@ _VOLUME_MODALITIES = frozenset({11})
 # lines of a line scan, the patches of a chessboard, the boxes of a ribbon
 # scan. The vnoiser pipeline and the curation widget take any of them.
 ROI_LAYOUTS = frozenset({"packed", "tiled", "boxes"})
+# shortest single-frame-ROI recording (a one-patch chessboard, a raster) the
+# voltage pipeline takes; a snapshot or a 4-frame calibration is not a trace
+MIN_TRACE_FRAMES = 100
+
+
+def is_trace_unit(unit: dict) -> bool:
+    """Whether a :func:`list_mesc_units` row is a recording traces come
+    from: a measurement (not a picture or RTMC reference, which MEScan files
+    under their own roles) whose ROIs are AOD lines, patches or boxes
+    (``ROI_LAYOUTS``), or whose one frame is the ROI (a single-patch
+    chessboard or ribbon, a raster time series) over at least
+    ``MIN_TRACE_FRAMES`` frames.
+    """
+    if unit.get("role", "") not in ("measurement", ""):
+        return False
+    if unit.get("kind") in ROI_LAYOUTS:
+        return int(unit.get("nframes") or 0) > 1
+    return (
+        unit.get("kind") == "frames"
+        and int(unit.get("nframes") or 0) >= MIN_TRACE_FRAMES
+    )
+
 
 # Y is flipped on read for these, matching lab4.convert. The flip corrects
 # MEScan's save orientation; whether it also belongs on linescan/multiline is

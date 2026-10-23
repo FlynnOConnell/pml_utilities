@@ -2151,6 +2151,10 @@ class ManualRoiWidget:
                     entry["extra"]["line"] = int(members[0])
                     if int(members[0]) < len(positions):
                         entry["extra"].update(positions[int(members[0])])
+                elif lines and len(members):
+                    # a domain of several lines or patches is listed on its first
+                    entry["z"] = int(members[0])
+                    entry["extra"]["lines"] = [int(m) for m in members]
                 # every kind the unit wrote, under the row's field for it
                 for kind, arr in unit.traces.items():
                     row = np.asarray(arr[k], np.float32)

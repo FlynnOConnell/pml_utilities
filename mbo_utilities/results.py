@@ -75,6 +75,7 @@ __all__ = [
     "Results",
     "ResultsArray",
     "newest_results",
+    "vnoiser_run_for_mesc",
     "pipeline_files",
     "recording_id",
     "results_dir_of",
@@ -458,9 +459,11 @@ class Results:
 
         The domains are the ROIs (``roi_names``), their lines the members, the
         curated trace is ``denoised``, ``test.h5`` gives ``dff`` and ``zscore``,
-        the peaks are the events and ``traces/scan<id>_rois.npy`` (when the
-        folder has it) the members' ``raw`` traces. The folder's
-        ``pipeline.json`` is the ``provenance``.
+        the peaks are the events, ``traces/scan<id>_f.npy`` each domain's
+        ``raw`` trace and ``traces/scan<id>_rois.npy`` the members' (when the
+        folder has them). The folder's ``pipeline.json`` is the
+        ``provenance``; a run without denoising, which writes no pickles,
+        takes its scan and domain tables from it.
         """
         import h5py
 
@@ -479,6 +482,14 @@ class Results:
             str(s): {str(d): np.asarray(t) for d, t in v.items()}
             for s, v in (traces_pkl or {}).items()
         }
+        if not rois and provenance.get("scan_ids"):
+            # a run without denoising writes no pickles; its pipeline.json has the table
+            rois = {
+                "scanID_spatial": provenance["scan_ids"],
+                "scanID_1st_env": provenance.get("first_env") or [],
+                "domain_ROInumber": provenance.get("domains") or {},
+                "roi_list": provenance.get("roi_list") or {},
+            }
         scan_ids = [str(s) for s in rois.get("scanID_spatial", list(traces))]
         first_env = {str(s) for s in rois.get("scanID_1st_env", [])}
         roi_list = {
@@ -498,6 +509,8 @@ class Results:
             if str(k) not in EXCLUDED_DOMAINS
         }
         traced = list(dict.fromkeys(d for v in traces.values() for d in v))
+        if not traced:
+            traced = list(domains)
         names = [d for d in domains if d in traced] + [
             d for d in traced if d not in domains
         ]
@@ -507,13 +520,15 @@ class Results:
         }
         units = []
         for scan in scan_ids:
-            rows = [d for d in names if d in traces.get(scan, {})]
-            denoised = (
-                np.stack([traces[scan][d] for d in rows])
-                if rows
-                else np.zeros((0, 0), np.float32)
-            )
-            kinds = {"denoised": denoised}
+            if traces:
+                rows = [d for d in names if d in traces.get(scan, {})]
+                kinds = {
+                    "denoised": np.stack([traces[scan][d] for d in rows])
+                    if rows
+                    else np.zeros((0, 0), np.float32)
+                }
+            else:
+                rows, kinds = list(names), {}
             if (files / DFOF_H5).is_file():
                 with h5py.File(files / DFOF_H5, "r") as f:
                     if scan in f:
@@ -523,6 +538,10 @@ class Results:
             raw_file = files / "traces" / f"scan{scan}_rois.npy"
             if raw_file.is_file():
                 member_traces["raw"] = np.load(raw_file)
+            # each domain's F (pixels, background, reference; never inverted)
+            f_file = files / "traces" / f"scan{scan}_f.npy"
+            if f_file.is_file():
+                kinds["raw"] = np.load(f_file)
             rate = declared.get(scan, rates.get(scan))
             found = {
                 str(d): np.asarray(v, dtype=np.int64)
@@ -947,6 +966,25 @@ def results_dir_of(path) -> Path | None:
             # a folder holding a results file and the run's own files loose beside
             # it is itself the run, as a version before the files moved inside left
             return folder if (folder / PROVENANCE_FILE).is_file() else found
+    return None
+
+
+def vnoiser_run_for_mesc(mesc_path) -> Path | None:
+    """What the vnoiser pipeline last left for a line scan: the newest results
+    file beside it that was made from it, else a ``PF`` folder of pickles
+    beside it or one folder up (the ``<expt>/<expt>/<expt>.mesc`` layout keeps
+    ``<expt>/PF``); None when there is none. Another recording's run in the
+    same folder is never this one's.
+    """
+    mesc_path = Path(mesc_path)
+    found = newest_results(mesc_path.parent, "vnoiser", source=mesc_path)
+    if found is not None:
+        return found
+    for parent in (mesc_path.parent.parent, mesc_path.parent):
+        found = results_dir_of(parent / "PF")
+        # the archive's PF folders name no recording
+        if found is not None and results_source(found) in ("", mesc_path.name):
+            return found
     return None
 
 

@@ -2375,6 +2375,109 @@ def spike_average(
     default=False,
     help="Write a domains.json template beside the file (one domain per ROI) and exit.",
 )
+@click.option(
+    "--recommended",
+    is_flag=True,
+    default=False,
+    help="Settings for new recordings: the conversion offset applied and a robust (MAD) "
+    "z-score. Without it the defaults are the archive's.",
+)
+@click.option(
+    "--pixels",
+    type=click.Choice(["all", "bright", "active", "correlated"]),
+    default=None,
+    help="Pixels of each ROI a domain given as a plain ROI list averages: every pixel "
+    "(default), or the top --fraction by brightness, fast fluctuation or correlation "
+    "with the ROI's mean. Domains that name their own pixels keep them.",
+)
+@click.option(
+    "--fraction",
+    type=float,
+    default=0.3,
+    show_default=True,
+    help="With --pixels: the share of each ROI's pixels kept.",
+)
+@click.option(
+    "--background",
+    type=click.Choice(["none", "dim", "outside", "domain"]),
+    default=None,
+    help="Subtracted from each domain: the dimmest pixels of its ROIs per frame, the "
+    "ROI pixels outside it, or the domain named by --background-domain. Default none.",
+)
+@click.option(
+    "--background-domain",
+    default="bg",
+    show_default=True,
+    help="With --background domain: the domain that is the background.",
+)
+@click.option(
+    "--background-percentile",
+    type=float,
+    default=10.0,
+    show_default=True,
+    help="With --background dim: the percentile of the ROI's pixels per frame.",
+)
+@click.option(
+    "--reference",
+    type=click.Choice(["none", "ratio", "regress"]),
+    default=None,
+    help="A structural channel recorded beside the indicator (mScarlet beside ASAP7): "
+    "divide by it, or remove the part of the trace it explains. Default none.",
+)
+@click.option(
+    "--reference-channel",
+    type=int,
+    default=None,
+    help="With --reference: its channel, 0-based. Default the other of two.",
+)
+@click.option(
+    "--polarity",
+    type=click.Choice(["flip_z", "invert_f", "none"]),
+    default=None,
+    help="Turning a dimming indicator's events upright: flip the z-score (vnoiser, the "
+    "archive's default), invert the trace about its mean before dF/F (pml_utilities' "
+    "Invert Deflection, so dF/F rises too), or neither (a brightening indicator).",
+)
+@click.option(
+    "--dfof",
+    "dfof_method",
+    type=click.Choice(
+        ["gaussian", "percentile", "maxmin", "exponential", "window", "none"]
+    ),
+    default=None,
+    help="dF/F baseline: the archive's Gaussian (default), a rolling percentile or max-min "
+    "over --dfof-window seconds, an exponential bleaching fit, the mean over --f0, or none.",
+)
+@click.option(
+    "--dfof-window",
+    type=float,
+    default=None,
+    help="Rolling baseline window, seconds (percentile, maxmin). Default 5.",
+)
+@click.option(
+    "--f0",
+    default=None,
+    metavar="START,STOP",
+    help="With --dfof window: the seconds F0 is the mean over. Default 0,1.",
+)
+@click.option(
+    "--noise",
+    type=click.Choice(["sd", "mad"]),
+    default=None,
+    help="What the z-score divides by: the SD of dF/F (the archive's) or the robust SD.",
+)
+@click.option(
+    "--no-denoise",
+    is_flag=True,
+    default=False,
+    help="Stop after dF/F and the z-score: no wavelet denoising, no peaks (zarr only).",
+)
+@click.option(
+    "--timepoints",
+    default=None,
+    metavar="START:STOP",
+    help="Frames to read, 1-based and inclusive, one contiguous window. Default every frame.",
+)
 def vnoiser(
     mesc_path,
     domains_path,
@@ -2388,21 +2491,42 @@ def vnoiser(
     as_pkl,
     planes,
     init,
+    recommended,
+    pixels,
+    fraction,
+    background,
+    background_domain,
+    background_percentile,
+    reference,
+    reference_channel,
+    polarity,
+    dfof_method,
+    dfof_window,
+    f0,
+    noise,
+    no_denoise,
+    timepoints,
 ):
-    """The vnoiser pipeline on a .mesc with AOD ROI units (line
-    scans, chessboard or ribbon patches): per-ROI traces, domain dF/F and
-    z-score, wavelet denoising, peaks, written as one
+    """The vnoiser pipeline on a .mesc: domain traces, dF/F and z-score,
+    wavelet denoising, peaks, written as one
     `<input>.<timestamp>.vnoiser.zarr` beside the input that `mbo curate`
     opens.
 
-    Each unit is one scan (its MUnit number is the scan id). The domains
-    file says which ROIs make each domain: the lines of a soma or branch,
-    the patch of a cell. Run with --init first to get a template, edit the
-    names and groups, then run again. Settings are the archive's, written
-    for its 1075 Hz and scaled to each scan's frame rate; at the archive's
-    rate the traces match its PF folders.
+    Each recording (a line scan, chessboard or ribbon scan, a single patch
+    or a raster) is one scan; its MUnit number is the scan id. A domain is
+    the pixels of one or more ROIs averaged into a trace: the lines of a
+    soma or branch, a patch, the brightest or most correlated part of a
+    patch, a mask drawn in the viewer. Without a domains file every ROI is
+    its own domain; --init writes one to edit. The trace options (pixels,
+    background, reference channel, polarity) and the dF/F options apply to
+    every scan. Defaults are the archive's, written for its 1075 Hz and
+    scaled to each scan's frame rate; at the archive's rate the traces
+    match its PF folders. --recommended is the setting for new recordings.
 
     \b
+      mbo vnoiser scan.mesc --recommended --unit MUnit_5
+      mbo vnoiser scan.mesc --recommended --pixels correlated --fraction 0.2 --background outside
+      mbo vnoiser scan.mesc --polarity invert_f --reference regress --dfof percentile --no-denoise
       mbo vnoiser stan112_expt12.mesc --init
       mbo vnoiser stan112_expt12.mesc --unit MUnit_35 --unit MUnit_38
       mbo vnoiser stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl -o PF_new
@@ -2418,6 +2542,7 @@ def vnoiser(
         DOMAINS_FILE,
         read_domains,
         run_vnoiser_pipeline,
+        scan_units,
         write_domains_template,
     )
 
@@ -2438,16 +2563,75 @@ def vnoiser(
             f"wrote {path}; name the domains and group the ROIs, then run `mbo vnoiser` again"
         )
         return
-    domains_path = (
-        Path(domains_path) if domains_path else mesc_path.parent / DOMAINS_FILE
-    )
-    if not domains_path.exists():
-        raise click.BadParameter(
-            f"{domains_path} not found; write one with `mbo vnoiser {mesc_path.name} --init`",
-            param_hint="--domains",
+    if domains_path is not None:
+        spec = read_domains(domains_path)
+    elif (mesc_path.parent / DOMAINS_FILE).exists():
+        spec = read_domains(mesc_path.parent / DOMAINS_FILE)
+        click.echo(f"domains: {mesc_path.parent / DOMAINS_FILE}")
+    else:
+        try:
+            first = scan_units(mesc_path, list(units) or None)
+        except ValueError as e:
+            raise click.BadParameter(str(e), param_hint="--unit")
+        if not first:
+            raise click.BadParameter(
+                f"no recording with traces in {mesc_path.name}", param_hint="MESC_PATH"
+            )
+        n_rois = int(first[0]["nrois"])
+        spec = {
+            "domains": {f"roi{r}": [r] for r in range(n_rois)},
+            "scan_ids": [],
+            "first_env": [],
+        }
+        click.echo(
+            f"no {DOMAINS_FILE}: one domain per ROI ({n_rois}); --init writes one to edit"
         )
-    spec = read_domains(domains_path)
-    settings = VnoiserSettings()
+    settings = VnoiserSettings.recommended() if recommended else VnoiserSettings()
+    if convert:
+        settings.traces.convert = True
+    if background is not None:
+        settings.traces.background = background
+    settings.traces.background_domain = background_domain
+    settings.traces.background_percentile = background_percentile
+    if reference is not None:
+        settings.traces.reference = reference
+    settings.traces.reference_channel = reference_channel
+    if polarity is not None:
+        settings.polarity = polarity
+    if dfof_method is not None:
+        settings.dfof.method = dfof_method
+    if dfof_window is not None:
+        settings.dfof.window_s = dfof_window
+    if f0:
+        try:
+            settings.dfof.f0_start_s, settings.dfof.f0_stop_s = (
+                float(v) for v in f0.split(",")
+            )
+        except ValueError:
+            raise click.BadParameter("expected START,STOP seconds", param_hint="--f0")
+    if noise is not None:
+        settings.dfof.noise = noise
+    if no_denoise:
+        settings.runtime.denoise = False
+    frames = None
+    if timepoints:
+        try:
+            start, stop = (int(v) for v in timepoints.split(":"))
+        except ValueError:
+            raise click.BadParameter("expected START:STOP", param_hint="--timepoints")
+        if not 1 <= start <= stop:
+            raise click.BadParameter(
+                "expected 1 <= START <= STOP", param_hint="--timepoints"
+            )
+        frames = (start - 1, stop)
+    domains = spec["domains"]
+    if pixels is not None:
+        domains = {
+            name: {"rois": list(value), "pixels": pixels, "fraction": fraction}
+            if isinstance(value, list)
+            else value
+            for name, value in domains.items()
+        }
     if events:
         try:
             lo, hi, bp_sd, amp_sd, dur = (float(v) for v in events.split(","))
@@ -2459,6 +2643,10 @@ def vnoiser(
         settings.events.thres_bp_sd, settings.events.thres_amp_sd = bp_sd, amp_sd
         settings.events.duration_thres_ms = dur
     if as_pkl:
+        if no_denoise:
+            raise click.BadParameter(
+                "a run without denoising writes the results zarr", param_hint="--pkl"
+            )
         settings.runtime.output_format = "pkl"
     as_zarr = settings.runtime.output_format == "zarr"
     chosen = list(units) or [f"MUnit_{s}" for s in spec["scan_ids"]] or None
@@ -2471,12 +2659,12 @@ def vnoiser(
     try:
         paths = run_vnoiser_pipeline(
             mesc_path,
-            domains=spec["domains"],
+            domains=domains,
             units=chosen,
             first_env=spec["first_env"],
             out=out,
             channel=channel,
-            convert=convert,
+            frames=frames,
             planes=list(planes) or None,
             save_cwt=save_cwt,
             settings=settings,

@@ -138,14 +138,19 @@ class UnitTraces:
 
     def load(self) -> np.ndarray:
         """``(rois, samples)``, read or computed once."""
+        from mbo_utilities.analysis.roi_traces import (
+            Domain,
+            TraceSettings,
+            extract_traces,
+            roi_geometry,
+        )
         from mbo_utilities.arrays.mesc import MescArray
         from mbo_utilities.gui.linescan_viewer import saved_roi_traces
-        from mbo_utilities.roi_workflow import linescan_roi_means
 
         if self.traces is not None:
             return self.traces
         arr = MescArray(self.mesc_path, unit=self.unit["key"])
-        saved = saved_roi_traces(arr, self.traces_dir)
+        saved = saved_roi_traces(arr, self.traces_dir, self.channel)
         if saved is not None:
             self.traces = np.asarray(saved[0])
             return self.traces
@@ -163,7 +168,15 @@ class UnitTraces:
                 ):
                     self.traces = np.asarray(saved["traces"])
                     return self.traces
-        self.traces = np.asarray(linescan_roi_means(arr, channel=self.channel))
+        # every ROI's whole mean in photon counts; a single patch is its frame
+        rois = sorted(roi_geometry(arr))
+        found = extract_traces(
+            arr,
+            [Domain(str(r), [r]) for r in rois],
+            TraceSettings(convert=True),
+            channel=self.channel,
+        )
+        self.traces = np.stack([found.roi_mean[r] for r in rois]).astype(np.float32)
         cache_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(
             cache, traces=self.traces, size=stat.st_size, mtime_ns=stat.st_mtime_ns
@@ -174,19 +187,29 @@ class UnitTraces:
         return self.load()[int(i)]
 
 
+def inverted_roi(traces, i: int) -> np.ndarray:
+    """ROI ``i`` of a unit's traces turned over about its mean (``2 * mean - F``),
+    pml_utilities' Invert Deflection: a dimming indicator's events point up.
+    """
+    from mbo_utilities.analysis.roi_traces import invert
+
+    return invert(traces.roi(i))
+
+
 def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[dict]:
-    """Every AOD ROI unit (line scan, chessboard or ribbon patches) in a
-    ``.mesc``: ``[{"key", "munit", "fs", "n_rois", "traces"}, ...]`` where
+    """Every recording traces come from in a ``.mesc`` (line scan,
+    chessboard or ribbon patches, a single patch or a raster:
+    ``is_trace_unit``): ``[{"key", "munit", "fs", "n_rois", "traces"}, ...]`` where
     ``traces`` is a :class:`UnitTraces`, read when first asked for. Nothing
     is read here beyond the units' metadata, so opening a file with many
     long scans costs nothing until a ROI is clicked.
     """
-    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
+    from mbo_utilities.arrays.mesc import is_trace_unit, list_mesc_units
 
     mesc_path = Path(mesc_path)
     out = []
     for unit in list_mesc_units(mesc_path):
-        if unit.get("kind") not in ROI_LAYOUTS:
+        if not is_trace_unit(unit):
             continue
         out.append(
             {
@@ -247,6 +270,10 @@ class EventCurationWidget:
         self.slow_cutoff_hz = 40.0
         self.catalog: list[Recording] = []
         self.sessions: dict[tuple[str, str], CurationSession] = {}
+        # raw traces of a .mesc are turned over before curation (JEDI and
+        # ASAP dim on depolarization); the file and channel they came from
+        self.raw_inverted = True
+        self._raw_scan: tuple[Path, int] | None = None
         self.current = ""
         # the run the catalog lists, its traces read once for every load
         self._run: ResultsArray | None = None
@@ -552,12 +579,20 @@ class EventCurationWidget:
         plot = self.motion.get(self._scan_keys.get(self.current))
         return plot if plot else None
 
-    def scan_raw_mesc(self, mesc_path, channel: int = 0) -> int:
-        """Every ROI of every AOD ROI unit of a ``.mesc`` (line scans,
-        chessboard or ribbon patches) as a raw recording the denoiser runs
-        on when clicked. Returns how many.
+    def scan_raw_mesc(self, mesc_path, channel: int = 0, inverted=None) -> int:
+        """Every ROI of every recording traces come from in a ``.mesc``
+        (line scans, chessboard or ribbon patches, single patches) as a raw
+        recording the denoiser runs on when clicked. ``inverted`` (default
+        ``raw_inverted``) turns each trace over about its mean first, so a
+        dimming indicator's events are the peaks curation looks for; the
+        recording id says so, so labels and caches of one polarity never
+        stand for the other. Returns how many.
         """
         mesc_path = Path(mesc_path)
+        if inverted is not None:
+            self.raw_inverted = bool(inverted)
+        self._raw_scan = (mesc_path, int(channel))
+        suffix = "/inverted" if self.raw_inverted else ""
         self.sessions.clear()
         self._trace_sources.clear()
         self.catalog = []
@@ -567,10 +602,15 @@ class EventCurationWidget:
         for unit in raw_linescan_traces(mesc_path, channel):
             for i in range(unit["n_rois"]):
                 # read on the worker when the recording is clicked
+                read = (
+                    partial(inverted_roi, unit["traces"], i)
+                    if self.raw_inverted
+                    else partial(unit["traces"].roi, i)
+                )
                 self.add_trace(
-                    partial(unit["traces"].roi, i),
+                    read,
                     unit["fs"],
-                    recording_id=f"{mesc_path.stem}/{unit['munit']}/roi={i}",
+                    recording_id=f"{mesc_path.stem}/{unit['munit']}/roi={i}{suffix}",
                     label=f"{unit['munit']} ROI {i}",
                     source_path=mesc_path,
                 )
@@ -584,6 +624,16 @@ class EventCurationWidget:
             else f"no AOD ROI units in {mesc_path.name}"
         )
         return n
+
+    def set_raw_inverted(self, inverted: bool) -> None:
+        """List the raw traces again the other way up, on the same ROI."""
+        if self._raw_scan is None or bool(inverted) == self.raw_inverted:
+            return
+        current = self.current.removesuffix("/inverted")
+        self.scan_raw_mesc(*self._raw_scan, inverted=inverted)
+        rid = f"{current}/inverted" if inverted else current
+        if self.recording(rid) is not None:
+            self.current = rid
 
     def _enqueue(self, rec: Recording, mode: str) -> None:
         key = (mode, rec.rid)
@@ -926,6 +976,20 @@ class EventCurationWidget:
         label = rec.label if rec is not None else "no recording"
         where = f"  ({pos + 1}/{len(rows)})" if pos >= 0 else ""
         imgui.text(f"{label}{where}")
+        if rec is not None and rec.rid in self._trace_sources and self._raw_scan:
+            imgui.same_line(0, em(0.8))
+            changed, inverted = imgui.checkbox(
+                "inverted##raw_inverted", self.raw_inverted
+            )
+            set_tooltip(
+                "Turn the raw traces over about their mean (2 x mean - F) before the "
+                "denoiser, so a dimming indicator's (JEDI, ASAP) events are the peaks "
+                "curation looks for. Off for an indicator that brightens. Each polarity "
+                "keeps its own labels.",
+                show_mark=False,
+            )
+            if changed:
+                self.set_raw_inverted(inverted)
         if (self.mode, self.current) in self._busy:
             imgui.same_line(0, em(0.6))
             imgui.text_disabled(self.loading_line() or "loading...")
@@ -1013,7 +1077,9 @@ class EventCurationWidget:
                 session.colors(visible),
                 focused=int(focused[0]) if focused.size else None,
                 label="candidates",
-                tooltip=lambda i: f"candidate {visible[i] + 1}: {xs[i]:.3f} s, {session.label(visible[i])}",
+                tooltip=lambda i: (
+                    f"candidate {visible[i] + 1}: {xs[i]:.3f} s, {session.label(visible[i])}"
+                ),
             )
             if picked is not None:
                 session.select(int(visible[picked]))

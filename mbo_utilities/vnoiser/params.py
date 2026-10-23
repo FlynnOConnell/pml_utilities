@@ -5,6 +5,10 @@ the archive's (``Denoiser.upstream``), so an untouched run reproduces a PF
 folder; ``from_provenance`` reads them back out of a folder's ``pipeline.json``.
 The parameters counted in samples are written for the archive's frame rate
 (``runtime.reference_fs``); ``VnoiserSettings.at_fs`` scales them to a scan's.
+``traces`` (:class:`~mbo_utilities.analysis.roi_traces.TraceSettings`) says
+what a domain's pixel mean goes through before dF/F; ``dfof`` how dF/F and
+the z-score are taken; ``polarity`` which of the two sign flips, if any,
+turns a dimming indicator's events upright.
 """
 
 from __future__ import annotations
@@ -16,9 +20,12 @@ from dataclasses import asdict, dataclass, field, fields
 import numpy as np
 from vnoiser.denoiser import ClusteringConfig, cwtReducerConfig, thresConfig
 
+from mbo_utilities.analysis.dff import BASELINES, NOISE_ESTIMATES, dfof_zscore
+from mbo_utilities.analysis.roi_traces import TraceSettings
 from vnoiser import Denoiser, DfofConfig, SpikeDetectConfig
 
 __all__ = [
+    "POLARITIES",
     "VnoiserDfofSettings",
     "VnoiserDenoiserSettings",
     "VnoiserEventSettings",
@@ -27,18 +34,65 @@ __all__ = [
 ]
 
 
+# which way a dimming indicator (JEDI, ASAP) is turned upright: vnoiser flips
+# the z-score (the archive's), pml_utilities inverts F about its mean before
+# dF/F (the viewer's Invert Deflection, so dF/F rises too), or neither
+POLARITIES = ("flip_z", "invert_f", "none")
+
+
 @dataclass
 class VnoiserDfofSettings:
+    """dF/F and z-score (:func:`mbo_utilities.analysis.dff.dfof_zscore`).
+
+    ``method`` picks the baseline (:data:`~mbo_utilities.analysis.dff.BASELINES`):
+    ``gaussian`` uses ``sigma_dfof`` samples (the archive's), ``percentile``
+    and ``maxmin`` a ``window_s`` second window (``percentile`` the rank),
+    ``window`` the mean over ``f0_start_s`` to ``f0_stop_s``. The z-score
+    removes a ``sigma_baseline`` sample Gaussian and divides by ``noise``.
+    """
+
+    method: str = "gaussian"
     sigma_dfof: float = 1500.0
+    window_s: float = 5.0
+    percentile: float = 20.0
+    f0_start_s: float = 0.0
+    f0_stop_s: float = 1.0
     sigma_baseline: float = 5000.0
     n_startup: int = 1000
+    noise: str = "sd"
     negative: bool = True
+
+    def __post_init__(self):
+        if self.method not in BASELINES:
+            raise ValueError(
+                f"dfof.method must be one of {BASELINES}, got {self.method!r}"
+            )
+        if self.noise not in NOISE_ESTIMATES:
+            raise ValueError(
+                f"dfof.noise must be one of {NOISE_ESTIMATES}, got {self.noise!r}"
+            )
 
     def config(self) -> DfofConfig:
         return DfofConfig(
             sigma_dfof=float(self.sigma_dfof),
             sigma_baseline=float(self.sigma_baseline),
             n_startup=int(self.n_startup),
+            negative=bool(self.negative),
+        )
+
+    def apply(self, F, fs: float) -> tuple[np.ndarray, np.ndarray]:
+        """``(dfof, z)`` of ``(D, T)`` traces at ``fs`` Hz with these settings."""
+        return dfof_zscore(
+            F,
+            fs,
+            method=self.method,
+            sigma=float(self.sigma_dfof),
+            window_s=float(self.window_s),
+            percentile=float(self.percentile),
+            f0_window_s=(float(self.f0_start_s), float(self.f0_stop_s)),
+            n_startup=int(self.n_startup),
+            sigma_baseline=float(self.sigma_baseline),
+            noise=self.noise,
             negative=bool(self.negative),
         )
 
@@ -114,7 +168,8 @@ class VnoiserEventSettings:
 
 @dataclass
 class VnoiserRuntimeSettings:
-    convert: bool = False
+    # off: stop after dF/F and the z-score, no wavelet denoising or peaks
+    denoise: bool = True
     save_cwt: bool = False
     overwrite: bool = True
     reference_fs: float = 1075.2688
@@ -144,10 +199,41 @@ def _section(cls, d):
 class VnoiserSettings:
     """One worker-args payload for the vnoiser pipeline."""
 
+    traces: TraceSettings = field(default_factory=TraceSettings)
     dfof: VnoiserDfofSettings = field(default_factory=VnoiserDfofSettings)
     denoiser: VnoiserDenoiserSettings = field(default_factory=VnoiserDenoiserSettings)
     events: VnoiserEventSettings = field(default_factory=VnoiserEventSettings)
     runtime: VnoiserRuntimeSettings = field(default_factory=VnoiserRuntimeSettings)
+
+    @property
+    def polarity(self) -> str:
+        """:data:`POLARITIES`: which flip ``traces.invert`` and ``dfof.negative`` make."""
+        if self.traces.invert and self.dfof.negative:
+            raise ValueError(
+                "the trace is inverted twice: traces.invert (pml_utilities) and "
+                "dfof.negative (vnoiser) each flip it; keep one"
+            )
+        if self.traces.invert:
+            return "invert_f"
+        return "flip_z" if self.dfof.negative else "none"
+
+    @polarity.setter
+    def polarity(self, value: str) -> None:
+        if value not in POLARITIES:
+            raise ValueError(f"polarity must be one of {POLARITIES}, got {value!r}")
+        self.traces.invert = value == "invert_f"
+        self.dfof.negative = value == "flip_z"
+
+    @classmethod
+    def recommended(cls) -> VnoiserSettings:
+        """For new recordings: the archive's denoiser on photon counts (the
+        file's conversion offset applied, so dF/F has its real size) with a
+        robust z-score. The archive's own settings stay ``VnoiserSettings()``.
+        """
+        out = cls()
+        out.traces.convert = True
+        out.dfof.noise = "mad"
+        return out
 
     def at_fs(self, fs: float) -> VnoiserSettings:
         """A copy for scans at ``fs`` Hz: the parameters counted in samples
@@ -186,7 +272,12 @@ class VnoiserSettings:
     @classmethod
     def from_dict(cls, d: dict | None) -> VnoiserSettings:
         d = d or {}
+        traces = dict(d.get("traces") or {})
+        # runs before the traces section kept the conversion under runtime
+        if "convert" not in traces and "convert" in (d.get("runtime") or {}):
+            traces["convert"] = d["runtime"]["convert"]
         return cls(
+            traces=_section(TraceSettings, traces),
             dfof=_section(VnoiserDfofSettings, d.get("dfof")),
             denoiser=_section(VnoiserDenoiserSettings, d.get("denoiser")),
             events=_section(VnoiserEventSettings, d.get("events")),
@@ -248,6 +339,6 @@ class VnoiserSettings:
             )
         source = provenance.get("source") or {}
         if "convert" in source:
-            out.runtime.convert = bool(source["convert"])
+            out.traces.convert = bool(source["convert"])
         out.runtime.save_cwt = "cwts.h5" in (provenance.get("files") or [])
         return out
