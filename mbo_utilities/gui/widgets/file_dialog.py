@@ -1,4 +1,3 @@
-import socket
 import threading
 from pathlib import Path
 
@@ -690,13 +689,6 @@ class FileDialog:
             _changed, self.selected_mode_index = imgui.combo(
                 "##mode", self.selected_mode_index, self.gui_modes
             )
-            if imgui.is_item_hovered():
-                wrapped_tooltip(
-                    f"Select Application: {self.gui_modes[self.selected_mode_index]}. "
-                    "Registration QC opens a MaskNMF run folder (or its results.hdf5) as "
-                    "raw | registered over both as PMD, with RTMC, masknmf shifts and a "
-                    "box you drag; the same as `mbo <run folder> --qc`."
-                )
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))
 
@@ -744,11 +736,6 @@ class FileDialog:
                 self._typed_path,
                 imgui.InputTextFlags_.enter_returns_true,
             )
-            if imgui.is_item_hovered():
-                wrapped_tooltip(
-                    f"A file or folder on {socket.gethostname()}, where this "
-                    "process runs. Enter opens it."
-                )
             imgui.same_line()
             if imgui.button("Open", imgui.ImVec2(hello_imgui.em_size(3), 0)) or entered:
                 self._open_typed_path()
