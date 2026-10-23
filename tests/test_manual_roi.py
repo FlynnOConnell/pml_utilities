@@ -885,9 +885,7 @@ class TestPersistence:
         finally:
             iw.close()
 
-    def test_rois_saved_beside_the_data_restore_under_a_folder(
-        self, tmp_path, options
-    ):
+    def test_rois_saved_beside_the_data_restore_under_a_folder(self, tmp_path, options):
         from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget

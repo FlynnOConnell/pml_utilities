@@ -85,6 +85,7 @@ from imgui_bundle import (
     icons_fontawesome_6 as fa,
 )
 from imgui_bundle import imgui
+from imgui_bundle import portable_file_dialogs as pfd
 from masknmf.visualization.imgui import (
     CLICK_SLOP,
     GROUP_COLORS,
@@ -107,7 +108,6 @@ from masknmf.visualization.imgui import (
 from masknmf.visualization.imgui import THEME as MTHEME
 from masknmf.visualization.imgui.keybinds import CLASSIFICATION, DEMIXING, Bind, pressed
 from masknmf.visualization.rois import MARKED_COLOR, SELECTED_ALPHA, FootprintSet
-from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities import log
 from mbo_utilities.annotation import (
