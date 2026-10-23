@@ -129,7 +129,11 @@ def find_suite2p_plane_dirs(directory: Path) -> list[Path]:
 def _raw_bin(plane_dir: Path) -> Path:
     """The unregistered binary: ``data_raw.bin``, or ``raw_data.bin`` as suite2p 1.0 names it."""
     v1 = plane_dir / "raw_data.bin"
-    return v1 if v1.exists() and not (plane_dir / "data_raw.bin").exists() else plane_dir / "data_raw.bin"
+    return (
+        v1
+        if v1.exists() and not (plane_dir / "data_raw.bin").exists()
+        else plane_dir / "data_raw.bin"
+    )
 
 
 def registration_shifts(planes, fs, volume: bool) -> MotionCorrection | None:

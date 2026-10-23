@@ -23,7 +23,9 @@ def write_suite2p_v1_plane(plane_dir, nt, ly, lx, shift):
     plane_dir.mkdir(parents=True)
     rng = np.random.default_rng(3)
     rng.integers(0, 100, (nt, ly, lx), dtype=np.int16).tofile(plane_dir / "data.bin")
-    rng.integers(0, 100, (nt, ly, lx), dtype=np.int16).tofile(plane_dir / "raw_data.bin")
+    rng.integers(0, 100, (nt, ly, lx), dtype=np.int16).tofile(
+        plane_dir / "raw_data.bin"
+    )
     settings = {
         "fs": 9.5,
         "tau": 1.0,
@@ -40,7 +42,11 @@ def write_suite2p_v1_plane(plane_dir, nt, ly, lx, shift):
         "xrange": [1, lx - 1],
     }
     detect = {"Vcorr": np.zeros((ly - 2, lx - 2), np.float32)}
-    for name, value in (("settings", settings), ("reg_outputs", reg), ("detect_outputs", detect)):
+    for name, value in (
+        ("settings", settings),
+        ("reg_outputs", reg),
+        ("detect_outputs", detect),
+    ):
         np.save(plane_dir / f"{name}.npy", value, allow_pickle=True)
     stat = np.array(
         [{"ypix": np.array([1, 2]), "xpix": np.array([3, 3]), "lam": np.ones(2)}],
@@ -94,7 +100,11 @@ def aod_h5(tmp_path):
         out["imaging"].attrs["channel_names"] = ["Green"]
         out["imaging"].attrs["start_time"] = "2026-09-14T09:00:00-05:00"
         out["imaging"].attrs["device_specifics"] = json.dumps(
-            {"modality": 8, "modality_name": "chessboard", "input_entry": "MSession_0/MUnit_3"}
+            {
+                "modality": 8,
+                "modality_name": "chessboard",
+                "input_entry": "MSession_0/MUnit_3",
+            }
         )
     return path, data
 

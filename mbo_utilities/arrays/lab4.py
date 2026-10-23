@@ -51,7 +51,9 @@ def suite2p_run_planes(recording: Path) -> list[Path]:
         planes = [
             d
             for d in root.iterdir()
-            if d.is_dir() and _extract_plane_number(d.name) is not None and has_plane_ops(d)
+            if d.is_dir()
+            and _extract_plane_number(d.name) is not None
+            and has_plane_ops(d)
         ]
         if planes:
             runs.append((max(d.stat().st_mtime for d in planes), planes))
@@ -64,7 +66,9 @@ def suite2p_run_planes(recording: Path) -> list[Path]:
             Path(recording).name,
             max(runs, key=lambda r: r[0])[1][0].parent.parent.name,
         )
-    return sorted(max(runs, key=lambda r: r[0])[1], key=lambda d: _extract_plane_number(d.name))
+    return sorted(
+        max(runs, key=lambda r: r[0])[1], key=lambda d: _extract_plane_number(d.name)
+    )
 
 
 def _is_lab4(f: h5py.File) -> bool:
@@ -171,7 +175,9 @@ class Lab4H5Array(ReductionMixin, LazyArray):
                 if (d / "stat.npy").is_file() and (d / "F.npy").is_file()
             ]
             if planes:
-                self._results = Results.from_suite2p(planes[0].parent, plane_dirs=planes)
+                self._results = Results.from_suite2p(
+                    planes[0].parent, plane_dirs=planes
+                )
         return self._results
 
     @results.setter

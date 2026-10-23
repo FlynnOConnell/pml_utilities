@@ -113,7 +113,6 @@ if TYPE_CHECKING:
     )
     from mbo_utilities.arrays.bin import BinArray as BinArray
     from mbo_utilities.arrays.bruker import BrukerArray as BrukerArray
-    from mbo_utilities.arrays.lab4 import Lab4H5Array as Lab4H5Array
     from mbo_utilities.arrays.h5 import (
         H5Array as H5Array,
     )
@@ -132,6 +131,7 @@ if TYPE_CHECKING:
     from mbo_utilities.arrays.isoview import (
         isoview_to_ome_zarr as isoview_to_ome_zarr,
     )
+    from mbo_utilities.arrays.lab4 import Lab4H5Array as Lab4H5Array
     from mbo_utilities.arrays.mesc import (
         MescArray as MescArray,
     )
