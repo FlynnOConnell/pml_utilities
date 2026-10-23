@@ -68,3 +68,12 @@ def test_squeezed_view_imwrite_delegates(tmp_path):
     out = tmp_path / "out"
     s._imwrite(out, ext=".tiff")  # writes via the canonical 5D base
     assert any(out.rglob("*.tif*"))
+
+
+def test_imread_channel_and_squeeze_reads_that_channel():
+    data = np.arange(5 * 2 * 8 * 6, dtype="uint16").reshape(5, 2, 1, 8, 6)
+    s = mbo_utilities.imread(data, channel=1, squeeze=True)
+    assert s.shape == (5, 8, 6)
+    assert s.dims == ("T", "Y", "X")
+    assert np.array_equal(np.asarray(s[:]), data[:, 1, 0])
+    assert np.array_equal(np.asarray(s[2]), data[2, 1, 0])
