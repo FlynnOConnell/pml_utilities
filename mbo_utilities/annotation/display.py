@@ -202,6 +202,7 @@ def display_trace(
     settings: DffSettings | None = None,
     subtract: bool = False,
     invert: bool = False,
+    flip: bool = False,
 ) -> np.ndarray | None:
     """The row's trace as the panel plots it, in the kind
     :func:`displayed_kind` picks, or None when the row carries nothing.
@@ -218,21 +219,27 @@ def display_trace(
     pixels: the ``MEASURED`` kinds, and the trace a ``dff`` is computed from
     here (invert only; a dF/F is already relative to its baseline). A
     pipeline's own kinds are shown as it wrote them, sign included.
+
+    ``flip`` turns whatever is shown over, the panel's own switch: a
+    measured trace (and one a dF/F is computed from) is inverted about its
+    mean, undoing the viewer's inversion when that is on; any other kind is
+    negated.
     """
     shown = displayed_kind(trace, kind)
     if shown is None:
         return None
     if shown in MEASURED:
-        return deflect(_measured(trace, shown), subtract, invert)
+        return deflect(_measured(trace, shown), subtract, invert != flip)
+    sign = np.float32(-1.0 if flip else 1.0)
     if shown != "dff":
-        return np.asarray(trace.array(shown), np.float32)
+        return sign * np.asarray(trace.array(shown), np.float32)
     profile = trace_profile(trace.engine)
     if trace.norm is not None:
         norm = np.asarray(trace.norm, np.float32)
-        return norm if profile.dff_percent else norm * 100.0
+        return sign * (norm if profile.dff_percent else norm * np.float32(100.0))
     base = SUBTRACTED if SUBTRACTED in available_kinds(trace) else "raw"
     settings = settings or profile.dff
-    f = deflect(_measured(trace, base), invert=invert)
+    f = deflect(_measured(trace, base), invert=invert != flip)
     if settings.method == "maxmin" and trace.fs:
         dff = dfof_maxmin(f[None, :], trace.fs, settings.window_s, settings.sigma_s)
     else:
@@ -241,16 +248,24 @@ def display_trace(
 
 
 def y_label(
-    trace, kind: str | None = None, subtract: bool = False, invert: bool = False
+    trace,
+    kind: str | None = None,
+    subtract: bool = False,
+    invert: bool = False,
+    flip: bool = False,
 ) -> str:
     """The y axis label of what :func:`display_trace` shows for the row. A
     ``MEASURED`` kind is named with the viewer's deflection and its profile's
     unit: ``F (a.u.)``, ``Fneu (a.u.)``, ``F - 0.7 Fneu (a.u.)``,
-    ``mean - F (a.u.)``.
+    ``mean - F (a.u.)``; any other kind ``flip`` negated is ``-z-score``.
     """
     shown = displayed_kind(trace, kind)
     if shown is None:
         return ""
+    if shown in MEASURED or (shown == "dff" and trace.norm is None):
+        invert = invert != flip
+    elif flip:
+        return f"-{DISPLAY_KINDS[shown]}"
     if shown in MEASURED:
         profile = trace_profile(trace.engine)
         name = DISPLAY_KINDS[shown]

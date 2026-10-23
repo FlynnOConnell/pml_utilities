@@ -1144,6 +1144,8 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         self._rtmc = _rtmc_traces(self._curves)
         self._line_positions: list[dict] | None = None
         self._line_positions_read = False
+        self._results = None
+        self._results_read = False
         if self._rtmc:
             logger.info(f"{self.unit_key}: RTMC traces {sorted(self._rtmc)}")
         else:
@@ -1525,6 +1527,31 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             )
             self._line_positions_read = True
         return self._line_positions
+
+    @property
+    def results(self):
+        """The newest vnoiser run of this recording (``vnoiser_run_for_mesc``)
+        as ``results.Results``, read once; None without one or when the run
+        never processed this unit (``unit_for_source``).
+        """
+        if not self._results_read:
+            from mbo_utilities.results import (
+                Results,
+                unit_for_source,
+                vnoiser_run_for_mesc,
+            )
+
+            self._results_read = True
+            run = vnoiser_run_for_mesc(self.filenames[0])
+            if run is not None:
+                found = Results.open(run)
+                if unit_for_source(found, self.unit_key) is not None:
+                    self._results = found
+        return self._results
+
+    @results.setter
+    def results(self, value) -> None:
+        self._results, self._results_read = value, True
 
     @property
     def metadata(self) -> dict:

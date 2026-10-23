@@ -661,6 +661,14 @@ domain's denoised trace. The curation window's raw recordings are turned over
 (`EventCurationWidget.raw_inverted`, default on, `/inverted` in the recording id)
 because vnoiser's dashboard looks for peaks.
 
+The run's domains reach the viewer through the recording: `MescArray.results` is
+the newest vnoiser run of the file (`vnoiser_run_for_mesc`) when it processed the
+unit on screen (`unit_for_source`), the run's output and never the container's.
+`ManualRoiWidget._load_array_results` loads that unit as one row per domain with
+every kind the run wrote (`_line_unit_rows`, without the member lines, which are
+the recording's own rows), and `StandardTraces` has the ROI slider pick the
+domain holding the line on screen, the line's own mean when no domain holds it.
+
 The pipeline's one help page is the vnoiser guide
 (`gui/imgui/vnoiser_help.draw_vnoiser_help(is_open, keys_open)`), drawn diagrams and
 tables after masknmf's curation and classification pages: the steps, a made-up trace
@@ -852,7 +860,8 @@ pipeline's native files stay its cache and its compatibility layer.
   it to what it opened; `Suite2pArray` answers `Results.from_suite2p` of its own
   plane dirs, read once on first use, so a suite2p volume's planes arrive in the
   array's z order with `attrs["z"]` the 5D z (None for a registration-only run).
-  `Lab4H5Array` answers the same for the newest suite2p run beside its H5.
+  `Lab4H5Array` answers the same for the newest suite2p run beside its H5, and
+  `MescArray` the newest vnoiser run of its file that processed its unit (§7.3).
   The recording a `ResultsArray` processed is its image when `results.source` names
   a reachable file, else a trace raster. `results_pipeline(path)` and
   `results_summary(path)` read only `zarr.json` files and are what `can_open` and
@@ -946,7 +955,10 @@ the other.
   over T, which is the mask mean of the transformed image): `raw`, `neuropil`
   and `SUBTRACTED` are shown `y - m`, `2m - y` or `m - y`, a dF/F computed here
   is taken of the inverted trace, and a pipeline's own kinds keep the sign it
-  wrote.
+  wrote. The panel's `flip` checkbox (`display_trace(..., flip=True)`) turns
+  whatever is shown over: a measured trace, and one a dF/F is computed from,
+  about its mean (undoing Invert Deflection when that is on), every other kind
+  negated, its label prefixed `-`.
   The plot is masknmf's `TracePlot` (§7.6 the stack): one line per row, put on
   the viewer's frames by `_on_frames` (interpolated from the row's own
   `trace_axis`, NaN outside the stretch it covers), decimated to a min/max

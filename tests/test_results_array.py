@@ -230,6 +230,27 @@ def test_the_archive_layout_finds_the_line_scan_without_provenance(tmp_path):
     assert Results.open(pf).source["mesc"] == str(mesc)
 
 
+def test_a_mesc_unit_answers_its_vnoiser_run_as_results(tmp_path):
+    from mbo_utilities.arrays.mesc import MescArray
+
+    mesc = write_mesc(tmp_path / "scan.mesc", munits=(35, 38, 40))
+    assert MescArray(mesc, unit="MSession_0/MUnit_35").results is None
+    write_pf(
+        tmp_path / "PF",
+        source=mesc,
+        units={"35": "MSession_0/MUnit_35", "38": "MSession_0/MUnit_38"},
+    )
+    found = MescArray(mesc, unit="MSession_0/MUnit_38").results
+    # the run's output, not the container's: the pipeline that wrote it, every unit it processed
+    assert found.pipeline == "vnoiser" and list(found.units) == ["scan35", "scan38"]
+    assert imread(mesc, unit="MSession_0/MUnit_35").results.pipeline == "vnoiser"
+    # a unit the run never processed has none
+    assert MescArray(mesc, unit="MSession_0/MUnit_40").results is None
+    # another recording in the same folder never takes this one's run
+    other = write_mesc(tmp_path / "other.mesc", munits=(35,))
+    assert MescArray(other, unit="MSession_0/MUnit_35").results is None
+
+
 def test_a_missing_unit_falls_back_to_the_raster(tmp_path):
     mesc = write_mesc(tmp_path / "scan.mesc", munits=(35,))
     pf = write_pf(tmp_path / "PF", source=mesc)
