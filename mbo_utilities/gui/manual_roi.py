@@ -2162,8 +2162,7 @@ class ManualRoiWidget:
         positions = (
             getattr(src, "line_positions", None)
             if lines
-            and unit.attrs.get("source_unit")
-            in (None, getattr(src, "unit_key", None))
+            and unit.attrs.get("source_unit") in (None, getattr(src, "unit_key", None))
             else None
         ) or []
         for k, roi in enumerate(unit.roi_names):
@@ -2218,13 +2217,9 @@ class ManualRoiWidget:
                 elif len(unit.members[k]) == 1:
                     label = f"{unit.roi_names[k]} ({kind})"
                 else:
-                    label = (
-                        f"{unit.roi_names[k]} {unit.member_kind} {member} ({kind})"
-                    )
+                    label = f"{unit.roi_names[k]} {unit.member_kind} {member} ({kind})"
                 where = (
-                    {"z": int(member), "extra": {"line": int(member)}}
-                    if lines
-                    else {}
+                    {"z": int(member), "extra": {"line": int(member)}} if lines else {}
                 )
                 if lines and int(member) < len(positions):
                     where["extra"].update(positions[int(member)])
