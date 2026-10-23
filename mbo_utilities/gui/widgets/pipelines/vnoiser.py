@@ -891,7 +891,7 @@ class VnoiserPipelineWidget(PipelineWidget):
 
                 rt = self.settings.runtime
                 self._f_check(
-                    rt,
+                    self.settings.traces,
                     "convert",
                     "Apply the file's conversion offset",
                     "Zero then means no photons. Off reproduces the archive, which worked on raw counts.",
@@ -1224,6 +1224,7 @@ class VnoiserPipelineWidget(PipelineWidget):
     def _draw_modified_table(self) -> None:
         mods = []
         for prefix, obj in (
+            ("traces", self.settings.traces),
             ("dfof", self.settings.dfof),
             ("denoiser", self.settings.denoiser),
             ("events", self.settings.events),
