@@ -411,11 +411,19 @@ def test_one_roi_of_one_channel_runs_and_belongs_to_its_file(tmp_path):
     widget = VnoiserPipelineWidget(SimpleNamespace(fpath=mesc, image_widget=None))
     widget._ensure_state()
     assert widget._last_status.startswith("Loaded the previous run")
-    assert widget._domain_rows == [["roi0", "0"], ["roi1", "1"], ["roi2", "2"]]
+    assert [(r.name, r.rois) for r in widget._domains] == [
+        ("roi0", [0]),
+        ("roi1", [1]),
+        ("roi2", [2]),
+    ]
     widget = VnoiserPipelineWidget(SimpleNamespace(fpath=other, image_widget=None))
     widget._ensure_state()
     assert widget._last_status == ""
-    assert widget._domain_rows == [["roi0", "0"], ["roi1", "1"], ["roi2", "2"]]
+    assert [(r.name, r.rois) for r in widget._domains] == [
+        ("roi0", [0]),
+        ("roi1", [1]),
+        ("roi2", [2]),
+    ]
 
 
 def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
@@ -709,9 +717,9 @@ def test_task_and_widget_are_registered():
     from mbo_utilities.pipeline_registry import get_pipeline_info
 
     assert get_pipeline_info("vnoiser").marker_files == ["denoised_trace_scans.pkl"]
-    assert (
-        VnoiserPipelineWidget.axis_mode("Z") == "range"
-    )  # Z is the ROI index on an AOD unit
+    # the domains say which ROIs (the unit's Z) are read, the Trace block which channel
+    assert VnoiserPipelineWidget.axis_mode("Z") == "none"
+    assert VnoiserPipelineWidget.axis_mode("C") == "none"
     assert VnoiserPipelineWidget.applies_to(
         SimpleNamespace(metadata={"mesc_layout": "packed"})
     )
@@ -912,7 +920,10 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
     widget._ensure_state()
     assert widget._status_color is not _MISSING_COLOR, widget._last_status
     assert widget._last_status.startswith("Loaded the previous run")
-    assert widget._domain_rows == [["soma", "0,1"], ["basal", "2"]]
+    assert [(r.name, r.rois) for r in widget._domains] == [
+        ("soma", [0, 1]),
+        ("basal", [2]),
+    ]
     assert widget._scans == {"MSession_0/MUnit_3": True}
     assert widget._first_env == {"MSession_0/MUnit_3": True}
     assert widget.settings.runtime.reference_fs == 1000.0
@@ -968,10 +979,10 @@ def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     widget._ensure_state()
     assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}
     assert widget._first_env == {"MSession_0/MUnit_5": True}
-    assert widget._domain_rows == [["a", "0"]]
+    assert [(r.name, r.rois) for r in widget._domains] == [("a", [0])]
 
     parent.image_widget.data = [SimpleNamespace(unit_key="MSession_0/MUnit_3")]
     widget._ensure_state()
     assert widget._scans == {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": False}
     assert widget._first_env == {"MSession_0/MUnit_3": True}
-    assert widget._domain_rows == [["a", "0"]]
+    assert [(r.name, r.rois) for r in widget._domains] == [("a", [0])]

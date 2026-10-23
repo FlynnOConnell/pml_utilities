@@ -99,6 +99,20 @@ class Domain:
         return out
 
     @classmethod
+    def from_frame_mask(cls, name, roi: int, mask, geometry) -> Domain:
+        """A ``mask`` domain from a boolean mask in the array's frame (one drawn
+        on the viewer, padding and all), cut to ROI ``roi``'s pixels;
+        ``geometry`` is :func:`roi_geometry`'s. Raises when nothing of the mask
+        falls on the ROI.
+        """
+        y0, h, w = geometry[int(roi)]
+        local = np.asarray(mask, bool)[y0 : y0 + h, :w]
+        pixels = np.flatnonzero(local)
+        if pixels.size == 0:
+            raise ValueError(f"{name}: the mask has no pixel on ROI {roi}")
+        return cls(name, [int(roi)], pixels="mask", mask={int(roi): pixels.tolist()})
+
+    @classmethod
     def from_json(cls, name, value) -> Domain:
         """From a ``domains.json`` entry: an ROI list, or ``{"rois", "pixels", "fraction" | "mask"}``."""
         if isinstance(value, dict):

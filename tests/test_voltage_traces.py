@@ -147,6 +147,21 @@ def test_ragged_boxes_on_a_flipped_layout_sit_at_the_bottom():
     assert roi_geometry(Unit()) == {0: (0, 8, 6), 1: (3, 5, 4)}
 
 
+def test_a_mask_drawn_on_the_frame_becomes_a_domain_of_its_roi():
+    """A mask drawn in the viewer's (padded, flipped) frame is cut to the ROI's own pixels."""
+    geometry = {0: (0, 8, 6), 1: (3, 5, 4)}
+    mask = np.zeros((8, 6), bool)
+    mask[3:5, 0:2] = True
+    mask[0, 5] = True  # padding above and beside box 1
+    d = Domain.from_frame_mask("spine", 1, mask, geometry)
+    assert d.rois == [1] and d.pixels == "mask" and d.mask == {1: [0, 1, 4, 5]}
+    assert Domain.from_json("spine", d.to_json()) == d
+    with pytest.raises(ValueError, match="no pixel on ROI 1"):
+        Domain.from_frame_mask(
+            "x", 1, np.eye(8, 6, dtype=bool)[:, ::-1] & False, geometry
+        )
+
+
 def test_pixel_rules_find_the_cell(patch):
     _, arr, green, _ = patch
     raw = _uint(green)
@@ -459,3 +474,122 @@ def test_cli_runs_a_single_patch_without_a_domains_file(patch):
     assert scan.traces["zscore"][0][1500] > 3
     bad = CliRunner().invoke(main, ["vnoiser", str(path), "--no-denoise", "--pkl"])
     assert bad.exit_code != 0 and "results zarr" in bad.output
+
+
+def _draw_frames(fn, n=2):
+    """Run ``fn`` for ``n`` frames on a bare imgui context."""
+    from imgui_bundle import imgui, implot
+
+    ctx = imgui.create_context()
+    plot_ctx = implot.create_context()
+    io = imgui.get_io()
+    io.display_size = imgui.ImVec2(1400, 1600)
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+    try:
+        for _ in range(n):
+            imgui.new_frame()
+            imgui.begin("host")
+            fn()
+            imgui.end()
+            imgui.end_frame()
+    finally:
+        implot.destroy_context(plot_ctx)
+        imgui.destroy_context(ctx)
+
+
+def _host(path, unit="MSession_0/MUnit_4", **extra):
+    from types import SimpleNamespace
+
+    shown = SimpleNamespace(unit_key=unit, filenames=[path], metadata={})
+    iw = SimpleNamespace(
+        data=[shown], dim_names=("Timepoint",), indices={"Timepoint": 0}
+    )
+    return SimpleNamespace(fpath=path, image_widget=iw, **extra)
+
+
+def test_the_run_tab_previews_the_domain_on_screen(patch):
+    """A single-patch file in the Run tab: the scan is listed, one domain of the patch, and the
+    preview reads the selected domain with the tab's settings and draws its pixels and traces.
+    """
+    pytest.importorskip("imgui_bundle")
+    from mbo_utilities.analysis.dff import BASELINES
+    from mbo_utilities.analysis.roi_traces import BACKGROUNDS, PIXEL_RULES, REFERENCES
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import (
+        BACKGROUND_LABELS,
+        BASELINE_LABELS,
+        PIXEL_LABELS,
+        POLARITY_LABELS,
+        REFERENCE_LABELS,
+        VnoiserPipelineWidget,
+    )
+    from mbo_utilities.vnoiser.params import POLARITIES
+
+    assert list(PIXEL_LABELS) == list(PIXEL_RULES)
+    assert list(BACKGROUND_LABELS) == list(BACKGROUNDS)
+    assert list(REFERENCE_LABELS) == list(REFERENCES)
+    assert list(BASELINE_LABELS) == list(BASELINES)
+    assert list(POLARITY_LABELS) == list(POLARITIES)
+
+    path, *_ = patch
+    widget = VnoiserPipelineWidget(_host(path, invert_deflection=True))
+    widget._ensure_state()
+    assert [u["key"] for u in widget._units] == ["MSession_0/MUnit_4"]
+    assert [(r.name, r.rois, r.pixels) for r in widget._domains] == [
+        ("roi0", [0], "all")
+    ]
+    # the viewer shows the movie inverted, so the run inverts the trace once, not the z-score too
+    assert widget.settings.polarity == "invert_f"
+    row = widget._domains[0]
+    row.pixels, row.fraction = "bright", 36 / 400
+    widget.settings.traces.background = "outside"
+    widget._preview_seconds = 5.0
+    _draw_frames(widget.draw_config, n=1)
+    widget._preview.wait()
+    result = widget._preview.result
+    assert widget._preview.error == "" and result is not None
+    assert result["t"].shape == (5000,) and result["polarity"] == "invert_f"
+    assert len(result["mask"][0]) == 36 and result["background"] is not None
+    assert result["z"][1500] > 3
+    _draw_frames(widget.draw_config, n=2)
+    # a changed setting is a new request; the same one is not
+    key = widget._preview.key
+    widget._request_preview()
+    assert widget._preview.key == key
+    widget.settings.dfof.method = "percentile"
+    widget._request_preview()
+    assert widget._preview.key != key
+    widget._preview.wait()
+    assert widget._domains_to_run() == {
+        "roi0": {"rois": [0], "pixels": "bright", "fraction": 0.09}
+    }
+
+
+def test_rois_drawn_in_the_roi_tool_become_domains(patch):
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.annotation.store import RoiLabelStore
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
+
+    path, arr, *_ = patch
+    store = RoiLabelStore(1, 20, 20)
+    mask = np.zeros((20, 20), bool)
+    mask[CELL] = True
+    store.add_roi(0, mask)
+    store.set_note(0, "soma")
+    corner = np.zeros((20, 20), bool)
+    corner[:2, :2] = True
+    store.add_roi(0, corner)
+    host = _host(path, manual_roi=SimpleNamespace(store=store))
+    host.image_widget.data = [arr]
+    widget = VnoiserPipelineWidget(host)
+    widget._ensure_state()
+    drawn = widget.drawn_domains()
+    assert [(r.name, r.rois, r.pixels) for r in drawn] == [
+        ("soma", [0], "mask"),
+        (f"drawn{store.rois[1].uid}", [0], "mask"),
+    ]
+    assert len(drawn[0].mask[0]) == 36 and drawn[1].mask == {0: [0, 1, 20, 21]}
+    # another recording on screen: its ROIs are not this scan's
+    widget._scans["MSession_0/MUnit_4"] = False
+    assert widget.drawn_domains() == []

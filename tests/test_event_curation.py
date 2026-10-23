@@ -910,8 +910,9 @@ class TestViewerIntegration:
         monkeypatch.setattr(
             launch.subprocess,
             "Popen",
-            lambda cmd, **kwargs: spawned.append((cmd, kwargs))
-            or SimpleNamespace(pid=4242),
+            lambda cmd, **kwargs: (
+                spawned.append((cmd, kwargs)) or SimpleNamespace(pid=4242)
+            ),
         )
         pf_dir = _write_spatial_recording(tmp_path)
         assert curation_viewer.launch_curation_window(pf_dir, channel=1) == 4242
@@ -945,7 +946,7 @@ class TestViewerIntegration:
         widget = vnoiser.VnoiserPipelineWidget(
             SimpleNamespace(image_widget=None, fpath=None)
         )
-        widget._vnoiser_c_selection = "2"
+        widget._channel_index = 1
         widget._curate(str(tmp_path / "PF"))
         assert calls == [(str(tmp_path / "PF"), 1)]
         assert "PID 7" in widget._last_status
@@ -1296,9 +1297,9 @@ class TestMboOpensTheLineScanViewer:
         monkeypatch.setattr(
             rg,
             "_resolve_mesc_unit",
-            lambda p, u: ({"unit": u}, True)
-            if u is not None
-            else pytest.fail("prompted"),
+            lambda p, u: (
+                ({"unit": u}, True) if u is not None else pytest.fail("prompted")
+            ),
         )
         monkeypatch.setattr(
             rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
@@ -1317,9 +1318,9 @@ class TestMboOpensTheLineScanViewer:
         monkeypatch.setattr(
             rg,
             "_resolve_mesc_unit",
-            lambda p, u: ({"unit": u}, True)
-            if u is not None
-            else pytest.fail("prompted"),
+            lambda p, u: (
+                ({"unit": u}, True) if u is not None else pytest.fail("prompted")
+            ),
         )
         monkeypatch.setattr(
             rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)

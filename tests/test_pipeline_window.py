@@ -11,6 +11,7 @@ import h5py
 import numpy as np
 import pytest
 from imgui_bundle import imgui
+from mbo_utilities.gui.widgets.pipelines.vnoiser import DomainRow
 
 pytest.importorskip("vnoiser")
 
@@ -128,6 +129,16 @@ def fake_host(mesc, unit_key, roi=0, channel=None):
     )
 
 
+def table(widget):
+    """The vnoiser widget's domain table as ``(name, rois)`` pairs."""
+    return [(r.name, r.rois) for r in widget._domains]
+
+
+def running(widget):
+    """The domains a run of the vnoiser widget takes."""
+    return [r.name for r in widget._domains if r.run]
+
+
 def frames(fn, n=2):
     """Run ``fn`` for ``n`` frames on a bare imgui context."""
     ctx = imgui.create_context()
@@ -151,8 +162,9 @@ def test_open_seeds_the_unit_and_slice_on_screen(roi_mesc):
     assert widget is not None
     assert host._pipeline_instances["vnoiser"] is widget
     assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}
-    assert widget._vnoiser_z_selection == "3"
-    assert widget._vnoiser_c_selection == "1"
+    # the ROI on screen is the domain the run takes, the channel the one on screen
+    assert running(widget) == ["roi2"] and widget._selected == 2
+    assert widget._channel_index == 0
     assert widget._vnoiser_tp_selection == "1:20"
     # the same widget again, nothing rebuilt
     assert open_pipeline(host, "vnoiser") is widget
@@ -177,7 +189,7 @@ def test_a_picture_on_screen_leaves_the_scans_as_seeded(roi_mesc):
     host = fake_host(roi_mesc, "MSession_0/MUnit_9", roi=1)
     widget = open_pipeline(host, "vnoiser", seed=True)
     assert widget._scans == {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": True}
-    assert widget._vnoiser_z_selection == "1:4"
+    assert running(widget) == [f"roi{i}" for i in range(4)]
 
 
 def test_the_domain_table_follows_the_scan_on_screen(uneven_mesc):
@@ -190,23 +202,26 @@ def test_the_domain_table_follows_the_scan_on_screen(uneven_mesc):
 
     host = fake_host(uneven_mesc, "MSession_0/MUnit_3", roi=1)
     widget = open_pipeline(host, "vnoiser", seed=True)
-    assert widget._domain_rows == [[f"roi{i}", str(i)] for i in range(4)]
+    assert table(widget) == [(f"roi{i}", [i]) for i in range(4)]
     host.image_widget = fake_host(
         uneven_mesc, "MSession_0/MUnit_5", roi=5, channel=1
     ).image_widget
     open_pipeline(host, "vnoiser", seed=True)
     assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}
-    assert widget._domain_rows == [[f"roi{i}", str(i)] for i in range(6)]
-    assert widget._vnoiser_z_selection == "6" and widget._vnoiser_c_selection == "2"
-    widget._domain_rows = [["soma", "0,1"], ["dend", "2:3"]]
+    assert table(widget) == [(f"roi{i}", [i]) for i in range(6)]
+    assert running(widget) == ["roi5"] and widget._channel_index == 1
+    widget._domains = [DomainRow("soma", [0, 1]), DomainRow("dend", [2, 3])]
     open_pipeline(host, "vnoiser", seed=True)
-    assert widget._domain_rows == [["soma", "0,1"], ["dend", "2:3"], ["roi5", "5"]]
-    assert widget._domains() == {"soma": [0, 1], "dend": [2, 3], "roi5": [5]}
+    assert table(widget) == [("soma", [0, 1]), ("dend", [2, 3]), ("roi5", [5])]
+    assert widget._domains_to_run() == {"roi5": [5]}
+    for row in widget._domains:
+        row.run = True
+    assert widget._domains_to_run() == {"soma": [0, 1], "dend": [2, 3], "roi5": [5]}
     # four lines again: the table names a line this scan lacks
     host.image_widget = fake_host(uneven_mesc, "MSession_0/MUnit_3", roi=2).image_widget
     open_pipeline(host, "vnoiser", seed=True)
-    assert widget._domain_rows == [[f"roi{i}", str(i)] for i in range(4)]
-    assert widget._vnoiser_z_selection == "3" and widget._vnoiser_c_selection == "1"
+    assert table(widget) == [(f"roi{i}", [i]) for i in range(4)]
+    assert running(widget) == ["roi2"] and widget._channel_index == 0
 
 
 def test_a_run_of_a_scan_with_other_rois_does_not_seed_the_domains(tmp_path):
@@ -255,17 +270,17 @@ def test_a_run_of_a_scan_with_other_rois_does_not_seed_the_domains(tmp_path):
     )
     same = fake_host(mesc, "MSession_0/MUnit_4")
     widget = open_pipeline(same, "vnoiser", seed=True)
-    assert widget._domain_rows == [["soma", "0,1"]]
+    assert table(widget) == [("soma", [0, 1])]
     assert widget._last_status.startswith("Loaded the previous run's scans and domains")
     other = fake_host(mesc, "MSession_0/MUnit_5")
     widget = open_pipeline(other, "vnoiser", seed=True)
-    assert widget._domain_rows == [[f"roi{i}", str(i)] for i in range(6)]
+    assert table(widget) == [(f"roi{i}", [i]) for i in range(6)]
     assert widget._last_status.startswith("Loaded the previous run's settings")
 
 
 def test_run_submits_the_scan_roi_and_channel_on_screen(uneven_mesc, monkeypatch):
     """Opened from the button and run untouched, the worker gets the scan on
-    screen, the ROI its slider is on as ``planes`` and the channel its slider
+    screen, the domain of the ROI its slider is on and the channel its slider
     is on, whatever scan the widget was last set to.
     """
     from mbo_utilities.gui.widgets.pipelines import draw_run_tab, open_pipeline
@@ -287,8 +302,11 @@ def test_run_submits_the_scan_roi_and_channel_on_screen(uneven_mesc, monkeypatch
     args = SPAWNED[0]["args"]
     assert args["input_path"] == str(uneven_mesc)
     assert args["units"] == ["MSession_0/MUnit_5"]
-    assert args["planes"] == [6] and args["channel"] == 1 and args["frames"] is None
-    assert args["domains"] == {f"roi{i}": [i] for i in range(6)}
+    assert "planes" not in args and args["channel"] == 1 and args["frames"] is None
+    assert args["domains"] == {"roi5": [5]}
+    assert (
+        args["settings"]["traces"]["invert"] is False and not args["invert_deflection"]
+    )
     assert args["output_dir"] == str(uneven_mesc.parent)
     assert widget._last_status.startswith("Started (PID 4242)")
 

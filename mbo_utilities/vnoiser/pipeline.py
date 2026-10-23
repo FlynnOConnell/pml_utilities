@@ -51,6 +51,7 @@ from vnoiser.pf import DFOF_FILE, PROVENANCE_FILE, PfWriter, final_domain_name
 from mbo_utilities import log
 from mbo_utilities._sysmem import MemoryMonitor, mem_snapshot
 from mbo_utilities._writers import add_processing_step
+from mbo_utilities.analysis.dff import baseline
 from mbo_utilities.analysis.roi_traces import (
     Domain,
     TraceSettings,
@@ -69,6 +70,7 @@ from vnoiser.pipeline import load_scan_rois, process_domain
 __all__ = [
     "DOMAINS_FILE",
     "TIMINGS_FILE",
+    "preview_domain",
     "scan_traces_from_mesc",
     "scan_units",
     "read_domains",
@@ -1032,3 +1034,77 @@ def _write_traces_only(
     }
     (pf_dir / PROVENANCE_FILE).write_text(json.dumps(provenance, indent=2))
     return {DFOF_FILE: pf_dir / DFOF_FILE, PROVENANCE_FILE: pf_dir / PROVENANCE_FILE}
+
+
+def preview_domain(
+    mesc_path,
+    unit: str,
+    domains,
+    name: str,
+    settings: VnoiserSettings | None = None,
+    *,
+    channel: int = 0,
+    frames=None,
+) -> dict:
+    """What a run would make of one domain on one scan, over ``frames``.
+
+    ``domains`` is the run's table (``{name: entry}``, so a background
+    domain is there too); only ``name`` and the background are read. The
+    settings are scaled to the scan's rate as the run does. Returns ``t``
+    (seconds), ``pixel_mean``, ``measured``, ``F`` (what dF/F is taken
+    of), ``f0`` (its baseline), ``background``, ``reference``, ``dfof``,
+    ``z`` (each ``(T,)`` or None), ``images`` / ``mask`` /
+    ``shape`` per ROI of the domain, ``rois``, ``fs`` and ``info``. The Run
+    tab draws it; it holds no pipeline rule of its own.
+    """
+    from mbo_utilities.arrays.mesc import MescArray
+
+    found = {d.name: d for d in domains_from_json(domains)}
+    if name not in found:
+        raise KeyError(f"no domain {name!r}")
+    arr = MescArray(mesc_path, unit=unit)
+    fs = float(arr.metadata["fs"])
+    settings = (settings or VnoiserSettings()).at_fs(fs)
+    wanted = [found[name]]
+    if settings.traces.background == "domain":
+        bg = found.get(settings.traces.background_domain)
+        if bg is None:
+            raise ValueError(
+                f"the background domain {settings.traces.background_domain!r} is not in the table"
+            )
+        if bg.name != name:
+            wanted.append(bg)
+    ex = extract_traces(
+        arr, wanted, settings.traces, channel=channel, frames=frames, images=True
+    )
+    row = ex.row(name)
+    dfof, z = settings.dfof.apply(ex.F[[row]], fs)
+    d = settings.dfof
+    f0 = baseline(
+        ex.F[[row]],
+        fs,
+        d.method,
+        sigma=float(d.sigma_dfof),
+        window_s=float(d.window_s),
+        percentile=float(d.percentile),
+        f0_window_s=(float(d.f0_start_s), float(d.f0_stop_s)),
+    )
+    t0 = ex.frames[0]
+    return {
+        "t": (np.arange(ex.F.shape[1]) + t0) / fs,
+        "fs": fs,
+        "pixel_mean": ex.pixel_mean[row],
+        "measured": ex.measured[row],
+        "F": ex.F[row],
+        "f0": None if f0 is None else f0[0],
+        "background": None if ex.background is None else ex.background[row],
+        "reference": None if ex.reference is None else ex.reference[row],
+        "dfof": dfof[0],
+        "z": z[0],
+        "rois": list(found[name].rois),
+        "images": {r: ex.images[r] for r in found[name].rois},
+        "mask": {r: ex.masks[name][r] for r in found[name].rois},
+        "shape": {r: ex.shapes[r] for r in found[name].rois},
+        "polarity": settings.polarity,
+        "info": ex.info,
+    }
