@@ -67,6 +67,31 @@ def viewer(tmp_path):
     iw.close()
 
 
+@pytest.fixture
+def run_viewer(tmp_path):
+    """The ``viewer`` unit with a vnoiser run of it beside the file."""
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui._ndviewer import MboNDViewer
+    from mbo_utilities.gui.manual_roi import ManualRoiWidget
+    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+
+    from tests.test_results_array import write_pf
+
+    mesc = write_mesc(tmp_path / "scan.mesc", munits=(35,), frames=40)
+    write_pf(tmp_path / "PF", source=mesc, units={"35": "MSession_0/MUnit_35"})
+    arr = MescArray(mesc, unit="MUnit_35")
+    iw = MboNDViewer(
+        data=display_wrap(arr),
+        slider_dim_names=arr.slider_dim_labels,
+        figure_kwargs={"size": FIGURE_SIZE},
+    )
+    iw.show()
+    roi = ManualRoiWidget(iw, fpath=None)
+    yield _Parent(iw, roi), arr
+    roi.close()
+    iw.close()
+
+
 def test_line_traces_are_one_external_set_following_the_roi_slider(viewer):
     from mbo_utilities.gui.linescan_viewer import attach_standard_traces
 
@@ -327,3 +352,48 @@ def test_lines_with_geometry_carry_their_position(tmp_path):
     # no geometry at all: None, so a caller draws nothing rather than guessing
     assert line_positions(path, "MSession_1/MUnit_35") is None
     assert line_positions(path, "MSession_0/MUnit_99") is None
+
+
+def test_a_vnoiser_run_of_the_unit_loads_its_domains_and_the_slider_picks_them(
+    run_viewer,
+):
+    """Opening a scan that vnoiser ran on shows the run's domains on the
+    Traces tab without a click: one row per domain carrying every kind the
+    run wrote, picked by the ROI slider for any line the domain holds, the
+    recording's own line mean for a line no domain holds.
+    """
+    from mbo_utilities.annotation import available_kinds, display_trace
+    from mbo_utilities.gui.linescan_viewer import attach_standard_traces
+
+    parent, arr = run_viewer
+    roi = parent.manual_roi
+    assert arr.results is not None and arr.results.pipeline == "vnoiser"
+    rows = roi.traces.from_source("PF/scan35")
+    # the domains alone: the lines' raw means are the recording's own rows
+    assert sorted(t.label for t in rows) == ["basal1", "soma"]
+    soma = next(t for t in rows if t.label == "soma")
+    assert soma.engine == "vnoiser" and soma.extra["lines"] == [0, 1, 2]
+    assert available_kinds(soma)[0] == "denoised"
+    np.testing.assert_allclose(
+        display_trace(soma, "denoised", flip=True), -display_trace(soma, "denoised")
+    )
+
+    traces = attach_standard_traces(parent)
+    if traces.job.idle:
+        traces.job.start()
+    traces.job.wait()
+    traces()
+    assert roi.trace_sel == {soma.key}
+    basal = next(t for t in rows if t.label == "basal1")
+    parent.image_widget.indices[traces.roi_dim] = 4
+    traces()
+    assert roi.trace_sel == {basal.key}
+    # line 6 is in no domain: its own mean
+    parent.image_widget.indices[traces.roi_dim] = 6
+    traces()
+    assert roi.trace_sel == {("member", "MUnit_35 lines", 6)}
+    # picking a domain in the table moves the slider to its first line
+    roi.select_trace(soma.key)
+    traces()
+    assert int(parent.image_widget.indices[traces.roi_dim]) == 0
+    traces.close()

@@ -815,6 +815,7 @@ class ManualRoiWidget:
         # what the plot shows of each row (a DISPLAY_KINDS name); None lets
         # every row's pipeline pick, and a kind a row lacks falls back the same way
         self._kind: str | None = None
+        self._flip = False
         # the panel's own dF/F baseline for rows that compute one; None keeps
         # each pipeline's
         self.dff: DffSettings | None = None
@@ -2122,94 +2123,7 @@ class ManualRoiWidget:
                 loaded += self._add_derived(res, discarded, classes, colors) is not None
                 continue
             name = f"{file.name}/{unit.name}"
-            rows: list[RoiTrace] = []
-            n = unit.n_rois
-            lines = unit.member_kind == "line"
-            channel = int(results.source.get("channel") or 0)
-            # a line's position comes from the reader's geometry, when the
-            # shown recording is the scan these results came from
-            src = base_array(self.iw.data[0])
-            positions = (
-                getattr(src, "line_positions", None)
-                if lines
-                and unit.attrs.get("source_unit")
-                in (None, getattr(src, "unit_key", None))
-                else None
-            ) or []
-            for k, roi in enumerate(unit.roi_names):
-                # the run's own names, which the spike-average window opens the ROI by
-                entry = {
-                    "label": str(roi),
-                    "fs": unit.fs,
-                    "c": channel,
-                    "kinds": {},
-                    "extra": {"unit": unit.name, "roi": str(roi)},
-                }
-                members = unit.members[k] if k < len(unit.members) else ()
-                if lines and len(members) == 1:
-                    entry["z"] = int(members[0])
-                    entry["extra"]["line"] = int(members[0])
-                    if int(members[0]) < len(positions):
-                        entry["extra"].update(positions[int(members[0])])
-                elif lines and len(members):
-                    # a domain of several lines or patches is listed on its first
-                    entry["z"] = int(members[0])
-                    entry["extra"]["lines"] = [int(m) for m in members]
-                # every kind the unit wrote, under the row's field for it
-                for kind, arr in unit.traces.items():
-                    row = np.asarray(arr[k], np.float32)
-                    if kind == "raw":
-                        entry["F"] = row
-                    elif kind == "neuropil":
-                        entry["Fneu"] = row
-                    elif kind == "dff":
-                        entry["norm"] = row
-                    else:
-                        entry["kinds"][kind] = row
-                rows.append(
-                    RoiTrace(
-                        uid=0,
-                        member=k,
-                        source=name,
-                        engine=results.pipeline,
-                        path=file,
-                        **entry,
-                    )
-                )
-            ids = list(unit.attrs.get("member_ids") or [])
-            for kind, arr in unit.member_traces.items():
-                for i, row in enumerate(np.asarray(arr, np.float32)):
-                    member = ids[i] if i < len(ids) else i
-                    k = unit.member_roi(member)
-                    if k is None:
-                        label = f"{unit.member_kind} {member} ({kind})"
-                    elif len(unit.members[k]) == 1:
-                        label = f"{unit.roi_names[k]} ({kind})"
-                    else:
-                        label = (
-                            f"{unit.roi_names[k]} {unit.member_kind} {member} ({kind})"
-                        )
-                    where = (
-                        {"z": int(member), "extra": {"line": int(member)}}
-                        if lines
-                        else {}
-                    )
-                    if lines and int(member) < len(positions):
-                        where["extra"].update(positions[int(member)])
-                    rows.append(
-                        RoiTrace(
-                            uid=0,
-                            member=n + i,
-                            source=name,
-                            engine=results.pipeline,
-                            path=file,
-                            label=label,
-                            fs=unit.fs,
-                            F=row,
-                            c=channel,
-                            **where,
-                        )
-                    )
+            rows = self._line_unit_rows(results, unit, file)
             if not rows:
                 continue
             self.traces.drop_source(name)
@@ -2229,6 +2143,106 @@ class ManualRoiWidget:
         self._save_registry()
         self.status = f"loaded {loaded} unit(s) of {file.name}"
         return True
+
+    def _line_unit_rows(
+        self, results, unit, file: Path, with_members: bool = True
+    ) -> list[RoiTrace]:
+        """One trace-table row per ROI of a results line unit (every kind it
+        wrote: ``raw`` as F, ``dff`` as norm, the rest under ``kinds``), then
+        with ``with_members`` one per member line plotting that line's raw trace.
+        """
+        name = f"{file.name}/{unit.name}"
+        rows: list[RoiTrace] = []
+        n = unit.n_rois
+        lines = unit.member_kind == "line"
+        channel = int(results.source.get("channel") or 0)
+        # a line's position comes from the reader's geometry, when the
+        # shown recording is the scan these results came from
+        src = base_array(self.iw.data[0])
+        positions = (
+            getattr(src, "line_positions", None)
+            if lines
+            and unit.attrs.get("source_unit")
+            in (None, getattr(src, "unit_key", None))
+            else None
+        ) or []
+        for k, roi in enumerate(unit.roi_names):
+            # the run's own names, which the spike-average window opens the ROI by
+            entry = {
+                "label": str(roi),
+                "fs": unit.fs,
+                "c": channel,
+                "kinds": {},
+                "extra": {"unit": unit.name, "roi": str(roi)},
+            }
+            members = unit.members[k] if k < len(unit.members) else ()
+            if lines and len(members) == 1:
+                entry["z"] = int(members[0])
+                entry["extra"]["line"] = int(members[0])
+                if int(members[0]) < len(positions):
+                    entry["extra"].update(positions[int(members[0])])
+            elif lines and len(members):
+                # a domain of several lines or patches is listed on its first
+                entry["z"] = int(members[0])
+                entry["extra"]["lines"] = [int(m) for m in members]
+            # every kind the unit wrote, under the row's field for it
+            for kind, arr in unit.traces.items():
+                row = np.asarray(arr[k], np.float32)
+                if kind == "raw":
+                    entry["F"] = row
+                elif kind == "neuropil":
+                    entry["Fneu"] = row
+                elif kind == "dff":
+                    entry["norm"] = row
+                else:
+                    entry["kinds"][kind] = row
+            rows.append(
+                RoiTrace(
+                    uid=0,
+                    member=k,
+                    source=name,
+                    engine=results.pipeline,
+                    path=file,
+                    **entry,
+                )
+            )
+        if not with_members:
+            return rows
+        ids = list(unit.attrs.get("member_ids") or [])
+        for kind, arr in unit.member_traces.items():
+            for i, row in enumerate(np.asarray(arr, np.float32)):
+                member = ids[i] if i < len(ids) else i
+                k = unit.member_roi(member)
+                if k is None:
+                    label = f"{unit.member_kind} {member} ({kind})"
+                elif len(unit.members[k]) == 1:
+                    label = f"{unit.roi_names[k]} ({kind})"
+                else:
+                    label = (
+                        f"{unit.roi_names[k]} {unit.member_kind} {member} ({kind})"
+                    )
+                where = (
+                    {"z": int(member), "extra": {"line": int(member)}}
+                    if lines
+                    else {}
+                )
+                if lines and int(member) < len(positions):
+                    where["extra"].update(positions[int(member)])
+                rows.append(
+                    RoiTrace(
+                        uid=0,
+                        member=n + i,
+                        source=name,
+                        engine=results.pipeline,
+                        path=file,
+                        label=label,
+                        fs=unit.fs,
+                        F=row,
+                        c=channel,
+                        **where,
+                    )
+                )
+        return rows
 
     def unload_set(self, si: int):
         s = self.derived.pop(si)
@@ -2492,9 +2506,14 @@ class ManualRoiWidget:
         """Show what the pipeline that wrote the data on screen found: one
         derived set per pixel unit of the array's ``results`` (a suite2p
         volume's planes each land on their own z), keyed by the plane dir the
-        unit was read from so curation writes back there. An array with no
-        results that sits in a run dir still shows that dir's ROIs.
+        unit was read from so curation writes back there. A line unit (a
+        vnoiser run of the scan on screen) becomes one trace-table row per
+        domain carrying every kind the run wrote; the lines' raw means are
+        the recording's own rows. An array with no results that sits in a
+        run dir still shows that dir's ROIs.
         """
+        from mbo_utilities.results import unit_for_source
+
         results = self.results
         if results is None:
             if self.fpath is None:
@@ -2505,7 +2524,19 @@ class ManualRoiWidget:
             ):
                 self.load_run(own)
             return
+        file = Path(results.path or self.fpath or results.pipeline)
+        src = base_array(self.iw.data[0]) if getattr(self.iw, "data", None) else None
+        shown = unit_for_source(results, str(getattr(src, "unit_key", "") or ""))
         for unit in results.units.values():
+            if unit.member_kind == "line" and unit.name == shown:
+                name = f"{file.name}/{unit.name}"
+                if not self.traces.from_source(name):
+                    for trace in self._line_unit_rows(
+                        results, unit, file, with_members=False
+                    ):
+                        self.traces.add(trace)
+                    self._results_loaded.add(str(file))
+                continue
             if unit.member_kind != "pixel" or unit.image_shape is None:
                 continue
             if tuple(unit.image_shape) != (self.ny, self.nx):
@@ -3823,6 +3854,17 @@ class ManualRoiWidget:
             self._kind = kind
             self._redisplay()
 
+    @property
+    def flip(self) -> bool:
+        """Whether the plot turns every row over (``display_trace``'s ``flip``)."""
+        return self._flip
+
+    @flip.setter
+    def flip(self, on: bool) -> None:
+        if bool(on) != self._flip:
+            self._flip = bool(on)
+            self._redisplay()
+
     def kind_options(self, rows) -> tuple[str, ...]:
         """The kinds on offer for ``rows``: every kind any of them can show,
         in ``DISPLAY_KINDS`` order.
@@ -3834,7 +3876,9 @@ class ManualRoiWidget:
         """The y axis label of what the rows show: one when they agree, else joined."""
         subtract, invert = self.deflection()
         labels = list(
-            dict.fromkeys(y_label(t, self.kind, subtract, invert) for t in rows)
+            dict.fromkeys(
+                y_label(t, self.kind, subtract, invert, self.flip) for t in rows
+            )
         )
         return " / ".join(label for label in labels if label) or DISPLAY_KINDS["dff"]
 
@@ -3907,7 +3951,7 @@ class ManualRoiWidget:
             trace = self.traces.get(key)
             if trace is None:
                 return None
-            y = display_trace(trace, self.kind, self.dff, *deflection)
+            y = display_trace(trace, self.kind, self.dff, *deflection, self.flip)
             if y is None:
                 return None
             got = np.ascontiguousarray(y, np.float32)
@@ -4109,6 +4153,14 @@ class ManualRoiWidget:
             )
             if changed:
                 self.kind = kinds[sel]
+            imgui.same_line(0, em(0.4))
+            changed, on = imgui.checkbox("flip##trace_flip", self.flip)
+            if changed:
+                self.flip = on
+            tooltip(
+                "Turn every row over: raw and neuropil about their mean (undoing the viewer's Invert Deflection "
+                "when that is on), dF/F, z-score, denoised and spikes negated"
+            )
             if any(s == "dff" and t.norm is None for t, s in zip(rows, shown)):
                 imgui.same_line(0, em(0.4))
                 if imgui.small_button("dF/F##dff_settings"):
@@ -4188,6 +4240,7 @@ class ManualRoiWidget:
             if target is None
             else tuple((label, key, rgb) for label, key, rgb in target[1]),
             self.kind,
+            self.flip,
             repr(self.dff),
             self.deflection(),
             self._window_spec(),

@@ -966,16 +966,32 @@ class StandardTraces:
         # polled at the top of every frame the strip draws
         self.strip.add_hook(self)
 
+    def _run_rows(self) -> dict[int, tuple]:
+        """``{line: key}`` of the rows a vnoiser run of this unit loaded, one
+        per domain, under each line the domain holds (a line in two domains
+        goes to the first).
+        """
+        out: dict[int, tuple] = {}
+        for t in self.roi.traces:
+            if t.source == self.name or "unit" not in t.extra:
+                continue
+            lines = t.extra.get("lines") or (
+                [t.extra["line"]] if "line" in t.extra else []
+            )
+            for line in lines:
+                out.setdefault(int(line), t.key)
+        return out
+
     def __call__(self) -> None:
-        if not self.attached:
-            if not (self.job.done and self.job.result is not None):
-                return
+        if not self.attached and self.job.done and self.job.result is not None:
             self._attach()
         rows = self.roi.traces.from_source(self.name)
-        if not rows:
+        run_rows = self._run_rows()
+        if not rows and not run_rows:
             return
-        # the ROI slider and the trace table pick the same line
-        n = len(rows)
+        # the ROI slider and the trace table pick the same line; the run's
+        # domain row first, so every kind it wrote is one combo away
+        n = len(rows) or len(self.arr.metadata.get("mesc_roi_extents") or ()) or 1
         selected = (
             min(max(int(self.iw.indices[self.roi_dim]), 0), n - 1)
             if self.roi_dim is not None
@@ -983,20 +999,25 @@ class StandardTraces:
         )
         sel = self.roi.trace_sel
         if selected != self._last_roi:
+            key = run_rows.get(selected) or (
+                ("member", self.name, selected) if rows else None
+            )
             self._last_roi = selected
-            self.roi.select_trace(("member", self.name, selected))
+            if key is not None:
+                self.roi.select_trace(key)
             self._last_sel = set(self.roi.trace_sel)
         elif sel != self._last_sel:
             self._last_sel = set(sel)
-            if len(sel) == 1:
+            if len(sel) == 1 and self.roi_dim is not None:
                 key = next(iter(sel))
+                trace = self.roi.traces.get(key)
                 if (
-                    key[0] == "member"
-                    and key[1] == self.name
-                    and self.roi_dim is not None
+                    trace is not None
+                    and trace.z is not None
+                    and (trace.source == self.name or key in run_rows.values())
                 ):
-                    self.iw.indices[self.roi_dim] = int(key[2])
-                    self._last_roi = int(key[2])
+                    self.iw.indices[self.roi_dim] = int(trace.z)
+                    self._last_roi = int(trace.z)
 
     def draw_pending(self) -> None:
         """On the Traces tab while the job has nothing to show: progress

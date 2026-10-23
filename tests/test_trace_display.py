@@ -234,3 +234,41 @@ def test_a_pipelines_own_kinds_keep_the_sign_it_wrote():
     trace = RoiTrace(uid=1, engine="masknmf", F=F, norm=norm)
     np.testing.assert_array_equal(display_trace(trace, "dff", None, True, True), norm)
     assert y_label(trace, "dff", True, True) == DISPLAY_KINDS["dff"]
+
+
+def test_flip_turns_over_whatever_is_shown():
+    denoised = np.array([0.0, -4.0, 1.0, 0.0], np.float32)
+    norm = np.array([0.0, -0.05, 0.01, 0.0], np.float32)
+    trace = RoiTrace(
+        uid=0,
+        member=0,
+        engine="vnoiser",
+        F=F,
+        norm=norm,
+        kinds={"denoised": denoised, "zscore": 2 * denoised},
+    )
+    for kind in ("denoised", "zscore", "dff"):
+        np.testing.assert_allclose(
+            display_trace(trace, kind, flip=True), -display_trace(trace, kind)
+        )
+    np.testing.assert_allclose(
+        display_trace(trace, "raw", flip=True), 2 * F.mean() - F, rtol=1e-6
+    )
+    # the panel's flip undoes the viewer's Invert Deflection on what was measured
+    np.testing.assert_allclose(
+        display_trace(trace, "raw", None, False, True, True), F, rtol=1e-6
+    )
+    assert y_label(trace, "zscore", flip=True) == "-z-score"
+    assert y_label(trace, "dff", flip=True) == "-dF/F (%)"
+    assert y_label(trace, "raw", flip=True) == "2 mean - F (counts)"
+    assert y_label(trace, "raw", False, True, True) == "F (counts)"
+
+
+def test_flip_inverts_the_trace_a_dff_is_computed_from():
+    trace = RoiTrace(uid=1, engine="mean", F=F)
+    settings = DffSettings(method="percentile")
+    np.testing.assert_allclose(
+        display_trace(trace, "dff", settings, flip=True),
+        display_trace(trace, "dff", settings, False, True),
+    )
+    assert y_label(trace, "dff", flip=True) == "dF/F (%), inverted"
