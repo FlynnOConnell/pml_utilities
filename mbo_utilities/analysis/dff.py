@@ -97,7 +97,9 @@ def rolling_percentile(
     """Rolling ``percentile`` of each row over ``window_s`` seconds.
 
     Taken on 10 ms bin means and interpolated back, so a kilohertz trace
-    costs what a 100 Hz one does.
+    costs what a 100 Hz one does. The ends are mirrored, not repeated: an
+    AOD scan's first few milliseconds are dark, and a repeated first bin
+    would fill half a window and pull the baseline to zero.
     """
     F = np.atleast_2d(np.asarray(F, dtype=np.float64))
     T = F.shape[1]
@@ -106,7 +108,7 @@ def rolling_percentile(
     padded = np.pad(F, ((0, 0), (0, nb * b - T)), mode="edge")
     bins = padded.reshape(F.shape[0], nb, b).mean(axis=2)
     size = max(1, int(round(window_s * float(fs) / b)))
-    low = percentile_filter(bins, percentile, size=(1, size), mode="nearest")
+    low = percentile_filter(bins, percentile, size=(1, size), mode="reflect")
     centers = (np.arange(nb) + 0.5) * b - 0.5
     t = np.arange(T)
     return np.stack([np.interp(t, centers, row) for row in low])

@@ -9,7 +9,7 @@ import json
 
 import numpy as np
 import pytest
-from mbo_utilities.analysis.dff import BASELINES, dfof_zscore
+from mbo_utilities.analysis.dff import BASELINES, baseline, dfof_zscore
 from mbo_utilities.analysis.roi_traces import (
     Domain,
     TraceSettings,
@@ -294,6 +294,12 @@ def test_every_baseline_method(patch):
     np.testing.assert_allclose(dfof[0][:5], F[0][:5] / F[0][:500].mean() - 1)
     dfof, _ = dfof_zscore(F, FS, method="none", n_startup=0)
     np.testing.assert_array_equal(dfof, F)
+    # an AOD scan starts dark for a few ms; the rolling baselines must not follow it
+    dark = 900 + rng.normal(0, 2, (1, N_FRAMES))
+    dark[:, :20] = 0
+    for method in ("percentile", "maxmin"):
+        f0 = baseline(dark, FS, method, window_s=5.0)
+        assert f0[0, 20:].min() > 850, method
 
 
 def test_settings_polarity_and_round_trip():
