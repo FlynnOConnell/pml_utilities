@@ -609,8 +609,9 @@ runner translates through the array's metadata, never the widget. On a MESc AOD 
 Z is the ROI index (`mesc_z_axis_meaning == "roi_index"`), so `planes` are the lines or
 patches to process: the vnoiser runner reads only those ROIs, cuts every domain down
 to them, drops a domain left empty, and records `planes` and the domain table as it
-was given (`domains`) in the provenance source block. The vnoiser tab's slice popup
-labels the row "ROIs" but still sends `planes`.
+was given (`domains`) in the provenance source block. `mbo vnoiser -p` sends
+`planes`; the vnoiser tab does not: its domains say which ROIs are read
+(`axes_consumed` Z and C are `none`; the channel is the Trace block's).
 
 A vnoiser domain is the pixels of one or more ROIs averaged into one trace
 (`analysis/roi_traces.py`, GUI-free, no vnoiser import). An ROI is one Z index:
@@ -635,13 +636,26 @@ both flips are set, and the runner reads it before anything else. The results'
 `raw` kind is each domain's trace before the inversion, so the Traces tab's own
 Invert Deflection is the only flip applied to it on screen.
 
-The vnoiser widget's domain table belongs to the scans ticked from the screen
-(`_fit_domains`): one domain per ROI, unless a table was loaded or edited and names
-only ROIs those scans have. A previous run's table (its source block's `domains`,
-the uncut one) seeds a scan on screen only when the scans that run processed have as
-many ROIs. `seed_from_view` then adds the ROI on screen as a domain of its own when
+The vnoiser widget's domain table (`DomainRow`: name, ROIs, pixel rule, mask, `run`)
+belongs to the scans ticked from the screen (`_fit_domains`): one domain per ROI,
+unless a table was loaded or edited and names only ROIs those scans have. A previous
+run's table (its source block's `domains`, the uncut one) seeds a scan on screen only
+when the scans that run processed have as many ROIs. `seed_from_view` ticks `run` on
+the domains holding the ROI on screen only, adding it as a domain of its own when
 the table leaves it out, so the button's run is never blocked by a table made for
-something else.
+something else; the task gets the ticked domains (and the background domain).
+`drawn_domains` turns the ROI tool's ROIs on the recording on screen into mask
+domains (`Domain.from_frame_mask`, cut to the ROI's extent). The viewer's Invert
+Deflection seeds polarity `invert_f` and stays display only. The preview is
+`vnoiser.pipeline.preview_domain` on a `TracePreview` worker thread; the widget
+draws what it returns and holds no trace math.
+
+Saved per-ROI traces (`linescan_viewer.saved_roi_traces`, the viewer's standard
+rows and the raw curation) come from the recording's vnoiser run only as each ROI's
+raw mean (`members/raw`, in photon counts) read on the same channel, never a
+domain's denoised trace. The curation window's raw recordings are turned over
+(`EventCurationWidget.raw_inverted`, default on, `/inverted` in the recording id)
+because vnoiser's dashboard looks for peaks.
 
 The pipeline's one help page is the vnoiser guide
 (`gui/imgui/vnoiser_help.draw_vnoiser_help(is_open, keys_open)`), drawn diagrams and

@@ -374,6 +374,8 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._preview_roi = 0
         # the preview result last drawn, so a new one refits the time axis
         self._drawn: dict | None = None
+        # F, dF/F and z; the bottom row also holds the shared time axis
+        self._preview_ratios = implot.SubplotsRowColRatios(row_ratios=[1.0, 1.0, 1.35])
         self._help_open = False
         self._help_keys = False
 
@@ -1575,12 +1577,13 @@ class VnoiserPipelineWidget(PipelineWidget):
                 implot.setup_axes("", "", axis, axis)
                 implot.setup_axes_limits(0, w, 0, h, implot.Cond_.always)
                 lo, hi = (float(v) for v in np.nanpercentile(image, (1, 99.5)))
+                # implot's greys run white to black: negated, the bright pixels are white
                 implot.push_colormap(implot.Colormap_.greys)
                 implot.plot_heatmap(
                     "##mean",
-                    image,
-                    lo,
-                    hi if hi > lo else lo + 1,
+                    np.ascontiguousarray(-image),
+                    -(hi if hi > lo else lo + 1),
+                    -lo,
                     "",
                     implot.Point(0, 0),
                     implot.Point(w, h),
@@ -1619,7 +1622,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         inverted = result["polarity"] == "invert_f"
         rows = (
             (
-                "F" + (" (before inversion)" if inverted else ""),
+                "F",
                 (
                     ("pixel mean", result["pixel_mean"], _PIXEL_MEAN_COLOR),
                     ("background", result["background"], _BACKGROUND_COLOR),
@@ -1632,7 +1635,15 @@ class VnoiserPipelineWidget(PipelineWidget):
         )
         with (
             plot_style(),
-            subplots("##vnoiser_preview_traces", 3, 1, height, -1, flags) as shown,
+            subplots(
+                "##vnoiser_preview_traces",
+                3,
+                1,
+                height,
+                -1,
+                flags,
+                self._preview_ratios,
+            ) as shown,
         ):
             if not shown:
                 return

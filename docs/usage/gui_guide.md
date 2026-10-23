@@ -591,3 +591,46 @@ mbo scan_MSession_0_MUnit_3.reg_denoise/results.hdf5
 The second command opens **Registration-Denoising Quality Control**: raw and registered on top, the two compressions below, on one time slider and one camera. The traces above show the recording's RTMC curves (µm), the masknmf shifts (px), each movie's whole-frame mean, and each movie's mean inside the rectangle drawn on any of them.
 
 In the MaskNMF entry, **Invert deflection** (in **Set slice**) flips frames about the mean image so an indicator that dims on activity reads positive. Registration runs on the movie as recorded and the registered movie is inverted for compression and demixing. A run folder is masknmf's: `results.hdf5`, `config.json`, the log and, with Denoise before registration, `alignment.hdf5`; no movie is copied, so `mbo <run folder>` replays the shifts on the recording. A later run on the same output folder with the same registration and compression settings and demixing on copies both stages from the last run and only demixes.
+
+## Voltage traces (vnoiser)
+
+The vnoiser pipeline turns a `.mesc` recording into one trace per domain, takes dF/F
+and a z-score, and runs vnoiser's wavelet denoiser and peak detector on it. Any
+recording with a time series takes it: a line scan's lines, a chessboard's or
+ribbon's patches, or a single patch.
+
+Quick start, one MESc unit:
+
+- Open the session: `mbo path\to\session.mesc`, and click the unit in the **MESc** tab.
+- Click **vnoiser on MUnit_n** in the tab's header. The vnoiser tab opens on that
+  unit. The ROI and channel on screen are what it runs.
+- **Domains**: each row is one trace. Click the ROI buttons to choose its lines or
+  patches. Under **Pixels**, choose *every pixel*, the *brightest*, *most active*
+  or *most correlated* share (the slider sets the share), or a *drawn mask*.
+  **Run** ticks the rows this run takes; the dot picks the row the preview shows.
+- To trace exactly the part of a patch the cell covers, draw it with the ROI tool
+  (**a** to draw, **r** to add; the note you give it becomes the domain's name),
+  then click **Drawn ROIs**.
+- **Trace**: the channel, **photon counts** (the file's conversion offset; on for
+  new recordings), **Polarity**, **Background**, **Reference** (a structural
+  channel such as mScarlet) and the dF/F baseline and z-score. **Recommended**
+  sets what new recordings want; **Archive defaults** reproduces the archive.
+- **Polarity** is the run's one inversion. *dims: flip z* is vnoiser's (dF/F stays
+  negative-going). *dims: invert F* turns the trace over about its mean before dF/F,
+  as the viewer's Invert Deflection does, so dF/F rises too. *brightens* keeps the
+  sign. The viewer's Invert Deflection is display only. With it on, the tab starts
+  on *invert F*.
+- **Preview** reads the selected domain on the scan on screen for the first
+  seconds, and follows every change. It shows the domain's pixels in red over the
+  ROI's mean image, then F with its background and baseline F0, dF/F, and z.
+- Tick **traces only** to stop after the z-score. Otherwise **Denoiser and peaks**
+  holds the wavelet and peak settings.
+- **Run vnoiser**. The results file `<file>.<time>.vnoiser.zarr` lands beside the
+  `.mesc`. **Load into Traces** puts each domain's F, dF/F, z and denoised trace
+  in the Traces tab, and **Curate** opens the curation window.
+
+Without a run, **Curate** lists every ROI of the file as recorded and denoises
+each one when you click it. Those traces are turned over first (the **inverted**
+switch beside the recording's name), so a dimming indicator's spikes are the
+peaks curation looks for. The same options are on the command line; see
+`mbo vnoiser --help` and [the CLI guide](cli.md#vnoiser).

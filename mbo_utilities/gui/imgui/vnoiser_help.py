@@ -87,14 +87,14 @@ KEYBINDS = (
 )
 STEPS = (
     (fa.ICON_FA_WAVE_SQUARE, "Scan", "a .mesc scan: its lines or patches"),
-    (fa.ICON_FA_OBJECT_GROUP, "Domains", "group ROIs: a soma, a branch"),
-    (fa.ICON_FA_PLAY, "Run", "one ROI and channel, or all"),
+    (fa.ICON_FA_OBJECT_GROUP, "Domains", "ROIs and pixels: a soma, a cell"),
+    (fa.ICON_FA_PLAY, "Run", "the ticked domains, one channel"),
     (fa.ICON_FA_CHECK_DOUBLE, "Curate", "yes / no every candidate"),
     (fa.ICON_FA_FLOPPY_DISK, "Results", "one .vnoiser.zarr per run"),
 )
 # the stages in order, each in the colour of the trace it leaves
 FLOW = (
-    ("ROI means", RAW),
+    ("pixels", RAW),
     ("domain", RAW),
     ("dF/F", RAW),
     ("z-score", ZSCORE),
@@ -106,26 +106,37 @@ FLOW = (
 STAGES = (
     ("stage", "does"),
     (
-        "ROI means",
-        "each line's or patch's mean brightness per frame, in one channel: the counts as MESc stored them",
+        "pixels",
+        "the pixels each ROI of the domain gives, in one channel: every pixel, the brightest, most "
+        "active or most correlated share, or a mask drawn in the ROI tool",
         (
-            "one ROI is one line of a line scan, or one patch of a chessboard or ribbon scan",
-            "Apply the file's conversion offset (Pipeline Settings) makes zero mean no photons",
+            "one ROI is one line of a line scan, one patch of a chessboard or ribbon scan, or the whole "
+            "frame of a single-patch scan",
+            "photon counts (Trace) applies the file's conversion offset so zero means no photons; off "
+            "keeps the counts as MESc stored them, the archive's way",
         ),
     ),
     (
         "domain",
-        "the ROIs of one domain averaged into one trace, each weighted by its pixel count",
+        "the chosen pixels averaged into one trace, every pixel weighing the same; then the background "
+        "(the dimmest pixels, the rest of the ROI, or a background domain) and the reference channel "
+        "(divided by, or regressed out) when the Trace block asks for them",
     ),
     (
         "dF/F",
-        "the change over a slow baseline, a Gaussian 1500 samples wide (1.4 s at 1075 Hz); the first "
-        "1000 samples, where that filter starts up, are replaced by the mean of the rest",
+        "the change over a slow baseline, a Gaussian 1500 samples wide (1.4 s at 1075 Hz), or a rolling "
+        "percentile, a rolling max-min, a bleaching fit or the mean of a fixed window (MESc's F0); the "
+        "first 1000 samples, where a filter starts up, are replaced by the mean of the rest",
     ),
     (
         "z-score",
-        "a slower baseline (5000 samples) taken off, divided by the trace's SD, and the sign flipped: "
-        "JEDI darkens when the cell depolarises, so a spike now points up",
+        "a slower baseline (5000 samples) taken off, divided by the trace's SD (or its robust SD), and "
+        "the sign flipped: JEDI and ASAP darken when the cell depolarises, so a spike now points up",
+        (
+            "Polarity can instead invert F about its mean before dF/F (pml_utilities, like the viewer's "
+            "Invert Deflection) so dF/F rises too, or keep the sign for an indicator that brightens; "
+            "never both",
+        ),
     ),
     (
         "wavelets",
@@ -163,8 +174,8 @@ WINDOW = (
     ("block", "holds"),
     (
         "vnoiser on MUnit_n",
-        "the MESc tab's button: opens this window set to the scan on screen and to the ROI and channel its "
-        "sliders are on",
+        "the MESc tab's button: opens this window set to the scan on screen, running the domain of the "
+        "ROI its slider is on, in the channel on screen",
     ),
     ("Current dataset", "the file, the scan on screen and its frame rate"),
     (
@@ -172,14 +183,13 @@ WINDOW = (
         "where the results file goes: beside the .mesc unless you change it",
     ),
     (
-        "Set slice",
-        "frames (one unbroken window), ROIs and one channel: only the chosen ROIs are read, and every "
-        "domain is cut down to them",
+        "Frames",
+        "one unbroken window of frames; the baselines and the z-score use all of it",
     ),
     (
         "Scans",
-        "the file's recordings that have lines or patches; the ticked ones run together with the same "
-        "domains, one frame rate per run",
+        "the file's recordings with lines, patches or one patch; the ticked ones run together with the "
+        "same domains, one frame rate per run",
         (
             "the scan on screen is ticked to start",
             "On screen only and All set the ticks",
@@ -187,11 +197,24 @@ WINDOW = (
             "analysis, the pipeline does not use it",
         ),
     ),
-    ("Domains", "which ROIs make each trace (below)"),
     (
-        "Pipeline Settings",
-        "every number of the stages above; a changed one turns orange and is listed under Modified "
-        "parameters, Defaults puts them back",
+        "Domains",
+        "which ROIs and pixels make each trace, and which this run takes (below)",
+    ),
+    (
+        "Trace",
+        "channel, photon counts, polarity, background, reference channel, the dF/F baseline and the "
+        "z-score, times in seconds; Archive defaults and Recommended set them all",
+    ),
+    (
+        "Preview",
+        "the domain the dot picks, on the scan on screen: its pixels in red over the ROI's mean image, "
+        "then F with its baseline, dF/F and z over the first seconds; it follows every change",
+    ),
+    (
+        "Denoiser and peaks",
+        "every number of the wavelet and peak stages; a changed one turns orange and is listed under "
+        "Modified parameters, Defaults puts them back",
     ),
     (
         "Run vnoiser",
@@ -212,21 +235,32 @@ DOMAIN_RULES = (
     ("domains", "rule"),
     (
         "a domain",
-        "a named group of ROIs averaged into one trace: the lines over a soma, a branch, one cell's patch",
+        "one trace: the pixels of one or more ROIs averaged, the lines over a soma, a branch, one cell's "
+        "patch, the part of a patch the cell covers",
     ),
     (
         "ROIs",
-        "0-based, in the order they were drawn: 0,1,2 or 0:2 (both ends included)",
+        "a button per line or patch, 0-based in the order they were drawn: click to add or remove it",
     ),
+    (
+        "Pixels",
+        "every pixel; the brightest, most active or most correlated share (the slider); or a drawn mask",
+    ),
+    ("Run, dot", "whether this run takes the domain; which domain the preview shows"),
     ("to start", "one domain per ROI of the scan on screen: roi0, roi1, ..."),
+    (
+        "presets",
+        "One per ROI, All in one, Groups of N (right-click for N), From comment (when the unit's comment "
+        "names every ROI), Drawn ROIs (each ROI drawn in the ROI tool, exactly its pixels)",
+    ),
     (
         "another scan",
         "a table you loaded or edited stays while it names only ROIs the new scan has; else it starts over",
     ),
     (
         "ROI on screen",
-        "opened from the button, a table that leaves that ROI out gets it as a domain of its own, so the "
-        "run is never empty",
+        "opened from the button, only the domains holding that ROI run; a table that leaves it out gets "
+        "it as a domain of its own, so the run is never empty",
     ),
     (
         "previous run",
@@ -831,17 +865,17 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     y = p.y + ch + gap
     run_w = 9.0 * em
     strip = (
-        f"Set slice     47620 frames  ·  1 / {len(LINES)} ROIs  ·  ch 1          "
-        f"runs   {DOMAINS[held][0]}  [{roi}]"
+        f"Frames     47620 of 47620  ·  ch 1  ·  polarity: flip z          "
+        f"runs   {DOMAINS[held][0]}  [{', '.join(str(r) for r in DOMAINS[held][2])}]"
     )
     box(dl, p.x, y, w - run_w - gap, 1.6 * em, strip, DIM)
     box(dl, p.x + w - run_w, y, run_w, 1.6 * em, "Run vnoiser", RUN, 0.3)
     imgui.dummy(imgui.ImVec2(w, ch + gap + 1.6 * em))
     imgui.text_colored(
         DIM,
-        "opened from the MESc tab's vnoiser on MUnit_30 button, the window is set to the scan on screen and "
-        "the ROI and channel its sliders are on: only that ROI is read, and the domain holding it is cut "
-        "down to it. Set slice back to every ROI and the whole table runs.",
+        "opened from the MESc tab's vnoiser on MUnit_30 button, the window is set to the scan on screen, "
+        "the channel on screen, and runs the domain holding the ROI its slider is on. Tick Run on the "
+        "other rows and the whole table runs.",
     )
     table("window", WINDOW)
 

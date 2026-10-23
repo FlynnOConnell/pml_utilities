@@ -1530,16 +1530,17 @@ class TestCurationWindow:
         app = curation_viewer.open_curation_viewer(mesc, run=False)
         try:
             widget = app.widget
+            # turned over by default, so a dimming indicator's events are peaks
             assert [r.rid for r in widget.catalog] == [
-                f"scan/MUnit_35/roi={i}" for i in range(3)
+                f"scan/MUnit_35/roi={i}/inverted" for i in range(3)
             ]
             assert not any(r.pre_denoised for r in widget.catalog)
             assert widget.session is None and "3 raw ROI traces" in widget.status
             # nothing runs until a recording is picked; then the denoiser does
             assert calls == []
-            widget.load("scan/MUnit_35/roi=1")
+            widget.load("scan/MUnit_35/roi=1/inverted")
             widget.wait(60)
-            assert calls == ["scan/MUnit_35/roi=1"]
+            assert calls == ["scan/MUnit_35/roi=1/inverted"]
             assert widget.session is not None and widget.session.n == 3
             assert (mesc.parent / ".curation").is_dir()
         finally:
@@ -1643,10 +1644,21 @@ class TestRawLines:
         assert curation.scan_raw_mesc(mesc) == 4
         assert len(curation.catalog) == 4 and "4 raw ROI traces" in curation.status
         curation.scope = lambda rec: rec.rid.split("/")[1:2] == ["MUnit_38"]
+        # dimming indicators: the traces are turned over, and the ids say so
         assert [r.rid for r in curation.shown] == [
-            "scan/MUnit_38/roi=0",
-            "scan/MUnit_38/roi=1",
+            "scan/MUnit_38/roi=0/inverted",
+            "scan/MUnit_38/roi=1/inverted",
         ]
+        source = curation._trace_sources["scan/MUnit_38/roi=1/inverted"]
+        raw = _raw_unit(38)["traces"].roi(1)
+        np.testing.assert_allclose(source["trace"](), 2 * raw.mean() - raw)
+        curation.current = "scan/MUnit_38/roi=1/inverted"
+        curation.set_raw_inverted(False)
+        assert curation.current == "scan/MUnit_38/roi=1"
+        assert not curation.raw_inverted
+        np.testing.assert_allclose(
+            curation._trace_sources[curation.current]["trace"](), raw
+        )
         _frames(curation)
 
 
