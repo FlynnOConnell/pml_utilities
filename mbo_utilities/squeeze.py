@@ -42,7 +42,10 @@ class SqueezedView:
 
     def __init__(self, base):
         self._base = base
-        self._kept = tuple(i for i, s in enumerate(base.shape) if s > 1)
+        # _shape5d, not shape: a channel view reports 4D but takes the 5D keys
+        # _expand_squeezed_key builds
+        self._shape5d = base._shape5d() if hasattr(base, "_shape5d") else base.shape
+        self._kept = tuple(i for i, s in enumerate(self._shape5d) if s > 1)
 
     @property
     def base(self):
@@ -51,7 +54,7 @@ class SqueezedView:
 
     @property
     def shape(self) -> tuple[int, ...]:
-        return tuple(self._base.shape[i] for i in self._kept)
+        return tuple(self._shape5d[i] for i in self._kept)
 
     @property
     def ndim(self) -> int:
@@ -73,6 +76,8 @@ class SqueezedView:
     @property
     def dims(self) -> tuple[str, ...] | None:
         base_dims = getattr(self._base, "dims", None)
+        if base_dims and len(base_dims) != len(self._shape5d):
+            base_dims = ("T", "C", "Z", "Y", "X")
         if base_dims:
             return tuple(d for i, d in enumerate(base_dims) if i in self._kept)
         return None
