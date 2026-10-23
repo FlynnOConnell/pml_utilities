@@ -378,17 +378,34 @@ refused. `--dry-run` prints the choice and placement without a window,
 
 ## vnoiser
 
-The spatial JEDI pipeline (Noguchi & Terada) on a `.mesc` with AOD ROI units,
-producing the `PF` folder the curation window reads. A unit's ROIs are the
-lines of a line scan or the patches of a chessboard or ribbon scan; each unit
-is one scan. Each ROI's mean fluorescence per frame is read as above, the ROIs
-of a domain (the soma, one branch, one cell's patch) are averaged
-pixel-weighted, dF/F and a sign-flipped z-score follow, then vnoiser's wavelet
-denoiser with the archive's settings, then the peak detector. The settings
-are written for the archive's 1075 Hz line scans; the parameters counted in
-samples are scaled to each scan's frame rate and the peak band-pass is capped
-below Nyquist, so a 200 Hz chessboard scan keeps the same baseline durations.
-One run takes scans of one frame rate.
+The spatial JEDI pipeline (Noguchi & Terada) on a `.mesc`, producing the
+results the curation window reads. Each recording traces come from is one
+scan: a line scan's lines, a chessboard's or ribbon's patches, or a single
+patch or raster whose whole frame is the ROI. A domain is the pixels of one or
+more ROIs averaged into one trace (the soma's lines, one cell's patch, the
+part of a patch the cell covers). Then, in order: the file's conversion
+offset, a background, a reference channel, the polarity, dF/F and the
+z-score, vnoiser's wavelet denoiser with the archive's settings and the peak
+detector. The settings are written for the archive's 1075 Hz line scans; the
+parameters counted in samples are scaled to each scan's frame rate and the
+peak band-pass is capped below Nyquist, so a 200 Hz chessboard scan keeps the
+same baseline durations. One run takes scans of one frame rate.
+
+| step | options | default |
+|------|---------|---------|
+| pixels of a domain | `--pixels all\|bright\|active\|correlated`, `--fraction`; a domain in `domains.json` may name its own, or a drawn `mask` | every pixel |
+| conversion offset | `--convert` (zero then means no photons; MESc's raw counts sit about 1000 above it, which shrinks dF/F several-fold) | off (the archive's) |
+| background | `--background dim\|outside\|domain`: the dimmest pixels of the ROI per frame (`--background-percentile`), the ROI pixels outside the domain, or the domain `--background-domain` | none |
+| reference channel | `--reference ratio\|regress`, `--reference-channel` (mScarlet beside ASAP7) | none |
+| polarity | `--polarity flip_z` (vnoiser flips the z-score), `invert_f` (pml_utilities inverts the trace about its mean before dF/F, the viewer's Invert Deflection), `none` (a brightening indicator); one, never both | `flip_z` |
+| dF/F baseline | `--dfof gaussian\|percentile\|maxmin\|exponential\|window\|none`, `--dfof-window` s, `--f0 START,STOP` s (MESc's F0 window) | `gaussian`, 1500 samples |
+| z-score noise | `--noise sd\|mad` | `sd` |
+| denoising | `--no-denoise` stops after the z-score (zarr only) | on |
+| frames | `--timepoints START:STOP` (1-based, inclusive) | every frame |
+
+`--recommended` sets what new recordings want (the conversion offset and the
+robust z-score); without it every default is the archive's. Without a
+`domains.json` every ROI is its own domain.
 
 Until 2026-10-09 this pipeline was called `voltage` (`mbo voltage`, the
 **Voltage** tab, `*.voltage.zarr`). `python scripts/convert_vnoiser_results.py
@@ -396,6 +413,9 @@ Until 2026-10-09 this pipeline was called `voltage` (`mbo voltage`, the
 that still say so, and `--write` renames them.
 
 ```bash
+mbo vnoiser scan.mesc --recommended --unit MUnit_5         # one single-patch chessboard, every ROI its own domain
+mbo vnoiser scan.mesc --recommended --pixels correlated --fraction 0.2 --background outside
+mbo vnoiser scan.mesc --polarity invert_f --reference regress --dfof percentile --no-denoise
 mbo vnoiser stan112_expt12.mesc --init                      # domains.json template beside the file
 mbo vnoiser stan112_expt12.mesc                             # every scan in domains.json
 mbo vnoiser stan112_expt12.mesc --unit MUnit_35 -o PF_new   # one scan, elsewhere
@@ -412,6 +432,13 @@ the lines of a soma or branch by hand, as the archive's layout below does:
 ```json
 {"domains": {"soma1": [0, 1, 2], "basal1": [3, 4, 5]}, "scans": ["35", "38"], "first_env": ["35"]}
 ```
+
+A domain may also pick its pixels: `{"rois": [3], "pixels": "correlated",
+"fraction": 0.2}` keeps the fifth of ROI 3's pixels whose fast fluctuation
+follows the ROI's mean best (`bright` ranks by mean, `active` by SD), and
+`{"rois": [3], "pixels": "mask", "mask": {"3": [41, 42, 61, 62]}}` takes
+exactly those pixels, flat row-major indices into the ROI's own
+height x width.
 
 Written to `<expt>/PF` for the archive layout
 (`<expt>/<expt>/<expt>.mesc`), else `PF` beside the file:
@@ -467,6 +494,9 @@ its own.
 | `scans.csv` | scan id, MESc unit, frame rate, frames, ROIs |
 | `domains.csv` | row index, domain name, ROI indices |
 | `scan<id>_rois.npy` | raw mean fluorescence, `(ROI, frame)` |
+| `scan<id>_f.npy` | each domain's trace after its pixels, conversion, background and reference, before any inversion (the results' `raw`), `(domain, frame)` |
+| `scan<id>_background.npy`, `scan<id>_reference.npy` | what was subtracted or divided by, when there was one |
+| `scan<id>_masks.json`, `scan<id>_images.npz` | each domain's pixels per ROI and each ROI's shape; each scored ROI's mean, SD and correlation images |
 | `scan<id>_dfof.npy`, `scan<id>_zscore.npy`, `scan<id>_denoised.npy` | dF/F, z-score and denoised trace per domain, `(domain, frame)` |
 | `scan<id>_peaks.csv` | detected events: domain, frame, time in seconds |
 | `scan<id>_denoised.png`, `scan<id>_rois.png` | the denoised domains with their events, and the raw ROIs, stacked |

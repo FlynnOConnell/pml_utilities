@@ -409,3 +409,53 @@ def test_a_single_patch_denoises_and_finds_its_spikes(patch):
         assert any(abs(int(p) - centre) <= 5 for p in found), (centre, found)
     # the conversion offset was applied: the raw trace is photons over the detector's zero
     assert np.median(scan.traces["raw"][0]) == pytest.approx(1800 + OFFSET, rel=0.05)
+
+
+def test_cli_runs_a_single_patch_without_a_domains_file(patch):
+    """`mbo vnoiser` on a file with no domains.json: one domain per ROI, the trace and dF/F
+    options from the command line, the run recorded with them.
+    """
+    from click.testing import CliRunner
+    from mbo_utilities.cli import main
+    from mbo_utilities.results import Results, newest_results
+
+    path, *_ = patch
+    result = CliRunner().invoke(
+        main,
+        [
+            "vnoiser",
+            str(path),
+            "--recommended",
+            "--pixels",
+            "bright",
+            "--fraction",
+            "0.09",
+            "--background",
+            "dim",
+            "--polarity",
+            "invert_f",
+            "--dfof",
+            "window",
+            "--f0",
+            "0,0.5",
+            "--no-denoise",
+            "--timepoints",
+            "1:5000",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "one domain per ROI (1)" in result.output
+    results = Results.read(newest_results(path.parent, "vnoiser"))
+    scan = results["scan4"]
+    assert scan.roi_names == ["roi0"] and scan.n_timepoints == 5000
+    assert results.source["domains"]["roi0"] == {
+        "rois": [0],
+        "pixels": "bright",
+        "fraction": 0.09,
+    }
+    assert results.provenance["polarity"] == "invert_f"
+    assert results.settings["dfof"]["method"] == "window"
+    assert results.provenance["traces"]["background"] == "dim"
+    assert scan.traces["zscore"][0][1500] > 3
+    bad = CliRunner().invoke(main, ["vnoiser", str(path), "--no-denoise", "--pkl"])
+    assert bad.exit_code != 0 and "results zarr" in bad.output

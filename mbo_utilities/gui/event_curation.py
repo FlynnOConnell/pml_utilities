@@ -138,9 +138,14 @@ class UnitTraces:
 
     def load(self) -> np.ndarray:
         """``(rois, samples)``, read or computed once."""
+        from mbo_utilities.analysis.roi_traces import (
+            Domain,
+            TraceSettings,
+            extract_traces,
+            roi_geometry,
+        )
         from mbo_utilities.arrays.mesc import MescArray
         from mbo_utilities.gui.linescan_viewer import saved_roi_traces
-        from mbo_utilities.roi_workflow import linescan_roi_means
 
         if self.traces is not None:
             return self.traces
@@ -163,7 +168,15 @@ class UnitTraces:
                 ):
                     self.traces = np.asarray(saved["traces"])
                     return self.traces
-        self.traces = np.asarray(linescan_roi_means(arr, channel=self.channel))
+        # every ROI's whole mean in photon counts; a single patch is its frame
+        rois = sorted(roi_geometry(arr))
+        found = extract_traces(
+            arr,
+            [Domain(str(r), [r]) for r in rois],
+            TraceSettings(convert=True),
+            channel=self.channel,
+        )
+        self.traces = np.stack([found.roi_mean[r] for r in rois]).astype(np.float32)
         cache_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(
             cache, traces=self.traces, size=stat.st_size, mtime_ns=stat.st_mtime_ns
@@ -175,18 +188,19 @@ class UnitTraces:
 
 
 def raw_linescan_traces(mesc_path, channel: int = 0, traces_dir=None) -> list[dict]:
-    """Every AOD ROI unit (line scan, chessboard or ribbon patches) in a
-    ``.mesc``: ``[{"key", "munit", "fs", "n_rois", "traces"}, ...]`` where
+    """Every recording traces come from in a ``.mesc`` (line scan,
+    chessboard or ribbon patches, a single patch or a raster:
+    ``is_trace_unit``): ``[{"key", "munit", "fs", "n_rois", "traces"}, ...]`` where
     ``traces`` is a :class:`UnitTraces`, read when first asked for. Nothing
     is read here beyond the units' metadata, so opening a file with many
     long scans costs nothing until a ROI is clicked.
     """
-    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
+    from mbo_utilities.arrays.mesc import is_trace_unit, list_mesc_units
 
     mesc_path = Path(mesc_path)
     out = []
     for unit in list_mesc_units(mesc_path):
-        if unit.get("kind") not in ROI_LAYOUTS:
+        if not is_trace_unit(unit):
             continue
         out.append(
             {
@@ -1013,7 +1027,9 @@ class EventCurationWidget:
                 session.colors(visible),
                 focused=int(focused[0]) if focused.size else None,
                 label="candidates",
-                tooltip=lambda i: f"candidate {visible[i] + 1}: {xs[i]:.3f} s, {session.label(visible[i])}",
+                tooltip=lambda i: (
+                    f"candidate {visible[i] + 1}: {xs[i]:.3f} s, {session.label(visible[i])}"
+                ),
             )
             if picked is not None:
                 session.select(int(visible[picked]))

@@ -607,11 +607,33 @@ was looking at:
 The selection keys keep the 5D names whatever the axis means for the source; the
 runner translates through the array's metadata, never the widget. On a MESc AOD unit
 Z is the ROI index (`mesc_z_axis_meaning == "roi_index"`), so `planes` are the lines or
-patches to process: the vnoiser runner reads only those ROIs
-(`linescan_roi_read(rois=...)`), cuts every domain down to them, drops a domain left
-empty, and records `planes` and the domain table as it was given (`domains`) in the
-provenance source block. The vnoiser tab's slice popup labels the row "ROIs" but
-still sends `planes`.
+patches to process: the vnoiser runner reads only those ROIs, cuts every domain down
+to them, drops a domain left empty, and records `planes` and the domain table as it
+was given (`domains`) in the provenance source block. The vnoiser tab's slice popup
+labels the row "ROIs" but still sends `planes`.
+
+A vnoiser domain is the pixels of one or more ROIs averaged into one trace
+(`analysis/roi_traces.py`, GUI-free, no vnoiser import). An ROI is one Z index:
+on an AOD unit a line, patch or box cropped to `mesc_roi_extents` (a ragged box of
+a Y-flipped layout sits at `y_start`, the bottom), on anything else the plane's
+whole frame, so a single-patch chessboard or a raster (layout `frames`) is a scan
+too (`arrays.mesc.is_trace_unit`: a measurement of at least `MIN_TRACE_FRAMES`).
+`domains.json` and the task's `domains` take an ROI list (every pixel, the
+archive's `domain_ROInumber`) or `{"rois", "pixels", "fraction" | "mask"}`:
+`bright` / `active` / `correlated` keep the top fraction of each ROI's pixels by
+mean, high-passed SD or correlation with the ROI's mean (scored on
+`score_seconds` of the middle of the frames read), `mask` lists flat ROI-local
+pixels. `extract_traces` reads each ROI once and applies `VnoiserSettings.traces`
+in this order: conversion offset, background (`dim`, `outside`, a named
+`domain`), reference channel (`ratio`, `regress`), inversion. dF/F and the z-score
+are `VnoiserSettings.dfof` (`analysis/dff.dfof_zscore`; `gaussian` is
+`vnoiser.preprocess.domain_zscore` bit for bit). Polarity is one of
+`POLARITIES`: `flip_z` (vnoiser negates z, the archive's), `invert_f`
+(`traces.invert`: `2 * mean - F` before dF/F, which is the viewer's Invert
+Deflection on a pixel mean) or `none`; `VnoiserSettings.polarity` raises when
+both flips are set, and the runner reads it before anything else. The results'
+`raw` kind is each domain's trace before the inversion, so the Traces tab's own
+Invert Deflection is the only flip applied to it on screen.
 
 The vnoiser widget's domain table belongs to the scans ticked from the screen
 (`_fit_domains`): one domain per ROI, unless a table was loaded or edited and names
@@ -786,7 +808,9 @@ pipeline's native files stay its cache and its compatibility layer.
   unit; every unit records `attrs["plane_dir"]` and `attrs["z"]`, its position in
   that order. `Results.from_pf(dir)` reads the vnoiser pipeline's `PF` folder
   (domains are the ROIs, their lines the members with `members/raw`, `test.h5` gives
-  `dff` and `zscore`, peaks are the events). Copy one of them for a new pipeline;
+  `dff` and `zscore`, `traces/scan<id>_f.npy` each domain's `raw`, peaks are the
+  events; a run with `runtime.denoise` off writes no pickles and its scan and domain
+  tables come from `pipeline.json`). Copy one of them for a new pipeline;
   never invent a trace or image kind, add it to the registry.
 - **Writing.** It is the vnoiser pipeline's default
   (`VnoiserSettings.runtime.output_format == "zarr"`, the Run tab's Output format):

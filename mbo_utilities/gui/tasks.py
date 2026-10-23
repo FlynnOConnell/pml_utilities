@@ -1540,8 +1540,11 @@ def task_vnoiser(args: dict, logger: logging.Logger) -> None:
 
     Runs mbo_utilities.vnoiser.pipeline.run_vnoiser_pipeline with the Run
     tab's settings (scaled there to the scans' frame rate); every ticked
-    unit is one scan, the domain table says which ROIs make each domain.
-    The runner logs every step (each ROI read, each domain denoised, the
+    unit is one scan, the domain table says which ROIs and pixels make each
+    domain. The settings carry the trace recipe and the polarity, so the
+    viewer's Invert Deflection reaches the run as ``settings.traces.invert``
+    (the widget sets it), never as a second inversion of the movie. The
+    runner logs every step (each ROI read, each domain denoised, the
     writes) with its time and memory through ``logger`` and drives the
     progress sidecar through ``monitor.update``.
     """
@@ -1553,10 +1556,7 @@ def task_vnoiser(args: dict, logger: logging.Logger) -> None:
     monitor.update(0.01, "Opening the source...")
     settings = VnoiserSettings.from_dict(args.get("settings"))
     units = list(args.get("units") or [])
-    domains = {
-        str(k): [int(v) for v in rois]
-        for k, rois in (args.get("domains") or {}).items()
-    }
+    domains = {str(k): v for k, v in (args.get("domains") or {}).items()}
     frames = args.get("frames")
     try:
         src_arr = imread(args["input_path"], **(args.get("reader_kwargs") or {}))
@@ -1569,6 +1569,10 @@ def task_vnoiser(args: dict, logger: logging.Logger) -> None:
     logger.info(f"Input: {args['input_path']}  units: {units}")
     logger.info(f"Output: {args['output_dir']}")
     logger.info(f"Domains: {domains}")
+    logger.info(
+        f"Traces: {settings.traces.to_dict()}; polarity {settings.polarity}; "
+        f"dF/F {settings.dfof.method}"
+    )
     try:
         paths = run_vnoiser_pipeline(
             args["input_path"],
@@ -1577,7 +1581,6 @@ def task_vnoiser(args: dict, logger: logging.Logger) -> None:
             first_env=args.get("first_env") or (),
             out=args["output_dir"],
             channel=int(args.get("channel") or 0),
-            convert=settings.runtime.convert,
             frames=None if frames is None else (int(frames[0]), int(frames[1])),
             planes=args.get("planes"),
             save_cwt=settings.runtime.save_cwt,
