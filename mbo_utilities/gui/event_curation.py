@@ -150,7 +150,7 @@ class UnitTraces:
         if self.traces is not None:
             return self.traces
         arr = MescArray(self.mesc_path, unit=self.unit["key"])
-        saved = saved_roi_traces(arr, self.traces_dir)
+        saved = saved_roi_traces(arr, self.traces_dir, self.channel)
         if saved is not None:
             self.traces = np.asarray(saved[0])
             return self.traces

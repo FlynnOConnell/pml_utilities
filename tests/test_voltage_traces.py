@@ -593,3 +593,24 @@ def test_rois_drawn_in_the_roi_tool_become_domains(patch):
     # another recording on screen: its ROIs are not this scan's
     widget._scans["MSession_0/MUnit_4"] = False
     assert widget.drawn_domains() == []
+
+
+def test_a_runs_saved_traces_are_raw_line_means_in_photons(patch):
+    """The viewer's standard traces and the raw curation read a unit's ROIs from its last run:
+    each ROI's raw mean converted to photons, never a domain's denoised trace, and nothing when
+    the run read another channel.
+    """
+    from mbo_utilities.gui.linescan_viewer import saved_roi_traces
+    from mbo_utilities.vnoiser.params import VnoiserSettings
+    from mbo_utilities.vnoiser.pipeline import run_vnoiser_pipeline
+
+    path, arr, green, _ = patch
+    settings = VnoiserSettings()
+    settings.runtime.denoise = False
+    run_vnoiser_pipeline(path, domains={"patch": [0]}, settings=settings)
+    found = saved_roi_traces(arr, channel=0)
+    assert found is not None and "line means" in found[1]
+    np.testing.assert_allclose(
+        found[0][0], _uint(green).mean(axis=(1, 2)) + OFFSET, rtol=1e-5
+    )
+    assert saved_roi_traces(arr, channel=1) is None

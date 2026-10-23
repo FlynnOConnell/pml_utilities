@@ -207,49 +207,61 @@ def _limits(sample) -> tuple[float, float]:
 
 
 def run_roi_traces(
-    mesc_path, unit_key: str, n_rois: int
+    mesc_path, unit_key: str, n_rois: int, channel: int = 0, conversion=(1.0, 0.0)
 ) -> tuple[np.ndarray, str] | None:
-    """``(K, T)`` traces for a line-scan unit from the experiment's vnoiser run:
-    each line carries the denoised trace of the ROI that averages it, lines
-    outside every ROI (the pipeline's background lines) are zero. Returns the
-    array and a description, or None when there is no run or the pipeline
-    never processed this scan.
+    """``(K, T)`` per-ROI traces of a unit from the recording's last vnoiser
+    run: each line's or patch's raw mean (the run's ``members/raw``), in
+    photon counts (``conversion`` applied when the run kept raw counts).
+    None when there is no run of this recording, the run read another
+    channel or not every ROI, or it predates member traces; the caller
+    then reads them itself. Never a denoised trace: those belong to domains.
     """
-    from mbo_utilities.results import ResultsArray, results_dir_of, unit_for_source
-
-    run_dir = results_dir_of(Path(mesc_path).parent.parent) or results_dir_of(
-        Path(mesc_path).parent
+    from mbo_utilities.results import (
+        ResultsArray,
+        unit_for_source,
+        vnoiser_run_for_mesc,
     )
+
+    run_dir = vnoiser_run_for_mesc(mesc_path)
     if run_dir is None:
         return None
     run = ResultsArray(run_dir, source=False)
+    if int(run.results.source.get("channel") or 0) != int(channel):
+        return None
     name = unit_for_source(run.results, unit_key)
     unit = run.results.units.get(name) if name else None
-    if unit is None or "denoised" not in unit.traces:
+    raw = None if unit is None else unit.member_traces.get("raw")
+    if raw is None:
         return None
-    denoised = unit.traces["denoised"]
-    F = np.zeros((n_rois, unit.n_timepoints), dtype=np.float32)
-    used = []
-    for k, members in enumerate(unit.members):
-        for line in members:
-            if 0 <= line < n_rois:
-                F[int(line)] = denoised[k]
-                used.append(unit.roi_names[k])
-    return F, f"{run.pipeline} {unit.name} ({len(set(used))} ROIs) from {run_dir}"
+    ids = [int(i) for i in (unit.attrs.get("member_ids") or range(len(raw)))]
+    if len(ids) != len(raw) or sorted(ids) != list(range(n_rois)):
+        return None
+    F = np.asarray(raw, dtype=np.float32)[np.argsort(ids)]
+    if not run.results.source.get("convert"):
+        F = F * np.float32(conversion[0]) + np.float32(conversion[1])
+    return F, f"{run.pipeline} {unit.name} line means from {run_dir.name}"
 
 
 def saved_roi_traces(
-    ref_arr, traces_dir: Path | None = None
+    ref_arr, traces_dir: Path | None = None, channel: int = 0
 ) -> tuple[np.ndarray, str] | None:
-    """``(K, T)`` traces a line-scan unit already has on disk, with where
-    they came from: the experiment's PF folder first (the pipeline's own
-    traces), else an ``F.npy`` a previous ``mbo linescan`` run left
+    """``(K, T)`` traces a unit already has on disk, in photon counts, with
+    where they came from: the recording's vnoiser run first (each ROI's raw
+    mean it read), else an ``F.npy`` a previous ``mbo linescan`` run left
     (``traces_dir``, or ``rois_linescan/<MUnit>`` beside the file). None
     when there is neither; nothing is written.
     """
-    n_rois = len(ref_arr.metadata.get("mesc_roi_extents") or [])
+    from mbo_utilities.analysis.roi_traces import roi_geometry
+
+    n_rois = len(roi_geometry(ref_arr))
     munit = ref_arr.metadata["mesc_unit"].rsplit("/", 1)[-1]
-    found = run_roi_traces(ref_arr.source_path, munit, n_rois)
+    conv = ref_arr.metadata.get("mesc_channel_conversion") or []
+    conversion = (
+        (float(conv[channel]["scale"]), float(conv[channel]["offset"]))
+        if channel < len(conv)
+        else (1.0, 0.0)
+    )
+    found = run_roi_traces(ref_arr.source_path, munit, n_rois, channel, conversion)
     if found is not None:
         return found
     if traces_dir is None:
@@ -287,7 +299,7 @@ class TraceJob:
         n_rois = len(ref_arr.metadata.get("mesc_roi_extents") or [])
         self.progress = (0, n_rois)
         self.thread = None
-        saved = saved_roi_traces(ref_arr, traces_dir)
+        saved = saved_roi_traces(ref_arr, traces_dir, self.channel)
         if saved is not None:
             self.result, self.source = saved
             print(f"traces: {self.source}")
@@ -943,7 +955,10 @@ class StandardTraces:
             if arr.metadata.get("mesc_layout") == "packed"
             else f"{munit} patches"
         )
-        self.job = TraceJob(arr, 0, None, auto=get_linescan_auto_traces())
+        # the channel on screen when the unit opened; the rows say which on c
+        view = getattr(parent, "slice", None)
+        channel = int(getattr(view, "c", 0) or 0) if view is not None else 0
+        self.job = TraceJob(arr, channel, None, auto=get_linescan_auto_traces())
         self.attached = False
         self._last_roi = None
         self._last_sel = None
@@ -1021,7 +1036,7 @@ class StandardTraces:
         positions = getattr(base_array(self.arr), "line_positions", None)
         self.roi.traces.drop_source(self.name)
         for k in range(traces.shape[0]):
-            extra = {"line": k}
+            extra = {"line": k, "from": str(self.job.source)}
             label = f"ROI {k}"
             if positions is not None and k < len(positions):
                 extra.update(positions[k])
@@ -1030,7 +1045,6 @@ class StandardTraces:
                     uid=0,
                     member=k,
                     source=self.name,
-                    engine=str(self.job.source),
                     label=label,
                     fs=fs,
                     z=k,

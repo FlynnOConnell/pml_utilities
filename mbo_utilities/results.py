@@ -75,6 +75,7 @@ __all__ = [
     "Results",
     "ResultsArray",
     "newest_results",
+    "vnoiser_run_for_mesc",
     "pipeline_files",
     "recording_id",
     "results_dir_of",
@@ -965,6 +966,25 @@ def results_dir_of(path) -> Path | None:
             # a folder holding a results file and the run's own files loose beside
             # it is itself the run, as a version before the files moved inside left
             return folder if (folder / PROVENANCE_FILE).is_file() else found
+    return None
+
+
+def vnoiser_run_for_mesc(mesc_path) -> Path | None:
+    """What the vnoiser pipeline last left for a line scan: the newest results
+    file beside it that was made from it, else a ``PF`` folder of pickles
+    beside it or one folder up (the ``<expt>/<expt>/<expt>.mesc`` layout keeps
+    ``<expt>/PF``); None when there is none. Another recording's run in the
+    same folder is never this one's.
+    """
+    mesc_path = Path(mesc_path)
+    found = newest_results(mesc_path.parent, "vnoiser", source=mesc_path)
+    if found is not None:
+        return found
+    for parent in (mesc_path.parent.parent, mesc_path.parent):
+        found = results_dir_of(parent / "PF")
+        # the archive's PF folders name no recording
+        if found is not None and results_source(found) in ("", mesc_path.name):
+            return found
     return None
 
 

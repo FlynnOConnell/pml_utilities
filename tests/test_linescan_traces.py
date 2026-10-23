@@ -84,13 +84,22 @@ def test_line_traces_are_one_external_set_following_the_roi_slider(viewer):
     name = "MUnit_35 lines"
     rows = roi.traces.from_source(name)
     assert sorted(t.member for t in rows) == list(range(7))
-    assert all(not t.stands_for_roi and t.engine == traces.job.source for t in rows)
+    # measured line means, shown with the mean engine's profile; where they came from rides in extra
+    assert all(
+        not t.stands_for_roi
+        and t.engine == "mean"
+        and t.extra["from"] == traces.job.source
+        for t in rows
+    )
     first = roi.traces.get(("member", name, 0))
     assert first.label == "ROI 0" and first.fs == pytest.approx(arr.fs)
     assert first.F.shape == (40,)
     # each row is its line on the unit's ROI axis; the synthetic file has no scan geometry
     assert [t.z for t in sorted(rows, key=lambda t: t.member)] == list(range(7))
-    assert all(t.c == 0 and t.extra == {"line": t.member} for t in rows)
+    assert all(
+        t.c == 0 and t.extra == {"line": t.member, "from": traces.job.source}
+        for t in rows
+    )
     assert roi._trace_cells(first.key)[:3] == ("ROI 0", "1", "0")
     assert roi.pending_traces is None
     assert roi.trace_sel == {("member", name, 0)}
