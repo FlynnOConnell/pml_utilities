@@ -666,8 +666,18 @@ the newest vnoiser run of the file (`vnoiser_run_for_mesc`) when it processed th
 unit on screen (`unit_for_source`), the run's output and never the container's.
 `ManualRoiWidget._load_array_results` loads that unit as one row per domain with
 every kind the run wrote (`_line_unit_rows`, without the member lines, which are
-the recording's own rows), and `StandardTraces` has the ROI slider pick the
-domain holding the line on screen, the line's own mean when no domain holds it.
+the recording's own rows; `extra["source_unit"]` the unit it processed, and a run
+over a frame window carries it as `RoiTrace.frames`, so it plots where it ran).
+`load_results` (the vnoiser tab's Load into Traces, a finished run adopted by
+`_adopt_finished_runs`: its results file, or a `--pkl` PF folder) loads the same
+when a MESc unit is on screen: the scan that processed it, nothing of the others.
+The domains never stand in for the recording: the ROI slider plots the line's own
+mean (`StandardTraces`), and the domain holding that line is the Traces panel's
+own **vnoiser** panel under it (`ManualRoiWidget._vnoiser_rows`: the newest run
+loaded of the unit on screen; a `vnoiser` switch and its own kind combo, the
+run's kinds as written). Picking a domain in the trace table moves the slider to
+its first line. With no run loaded, the panel's **Run vnoiser** button opens the
+Process tab's vnoiser on the unit (`open_pipeline(host, "vnoiser", seed=True)`).
 
 The pipeline's one help page is the vnoiser guide
 (`gui/imgui/vnoiser_help.draw_vnoiser_help(is_open, keys_open)`), drawn diagrams and
@@ -929,8 +939,11 @@ the other.
   (`DISPLAY_KINDS`: the results zarr's `TRACE_KINDS` plus `SUBTRACTED`,
   `raw - neuropil`, the one kind computed here and stored nowhere), the one shown
   first (`vnoiser` opens on `denoised`, the rest on `dff`), the `DffSettings` for a
-  dF/F computed from a raw row (`analysis/dff.py`: a rolling max-min baseline sized
-  in seconds, the percentile when the row has no `fs`), whether a stored dF/F is
+  dF/F and a z-score computed from a raw row (`DFF_METHODS`: suite2p's rolling
+  max-min, a rolling percentile, a Gaussian low-pass, a bleaching fit, a fixed
+  window (MESc's F0), all sized in seconds through `analysis/dff.py`, or a static
+  percentile, which a row with no `fs` always gets; the z-score's slow drift and
+  noise), whether a stored dF/F is
   percent (`masknmf`) or a fraction (`vnoiser`, and `suite2p`, whose
   `norm_traces` lbm_suite2p_python writes as `(F - F0) / F0`; the plot is always
   percent), and the `unit` its raw traces are in. A pipeline that
@@ -941,21 +954,26 @@ the other.
   trace table read every row through `display_trace(trace, kind, settings)`, one
   line per row: `raw` is `F` alone, `neuropil` is `Fneu` alone, `SUBTRACTED` is
   `F - neuropil_coeff * Fneu`, `dff` is the row's own dF/F, else one computed here
-  from the `SUBTRACTED` trace when the row has a neuropil and from `F` otherwise.
+  (`computed_dff`) from the `SUBTRACTED` trace when the row has a neuropil and from
+  `F` otherwise, `zscore` the row's own, else `computed_zscore` of that dF/F.
   `displayed_kind` says which kind that was (a kind the row lacks falls back to its
-  profile's default) and `y_label` names the axis for it with its unit
-  (`F (a.u.)`, `Fneu (a.u.)`, `F - 0.7 Fneu (a.u.)`, `dF/F (%)`). The panel offers
-  the kinds the plotted rows have in one combo and nothing else decides what is
-  subtracted: no neuropil checkbox, no second line under a trace. It shows a dF/F
-  settings popup only when a shown dF/F is computed here, labels the y axis from
-  the rows (joined when they differ) and opens in seconds whenever the data has a
-  rate.
-  The viewer's Mean Subtraction and Invert Deflection reach the rows through
+  profile's default) and `y_label` names the axis for it with its unit (the row's
+  `extra["unit"]`, else its profile's: `F (a.u.)`, `Fneu (a.u.)`, `F - 0.7 Fneu
+  (a.u.)`, `F (photons)`, `dF/F (%)`). The panel offers the kinds the plotted rows
+  have in one combo and nothing else decides what is subtracted: no neuropil
+  checkbox, no second line under a trace. Its **Trace** popup sets the mean
+  subtraction and inversion of what was measured (`trace_subtract`,
+  `trace_invert`: `viewer`, `off` or `on`; `deflection()` resolves them), the
+  dF/F baseline and its parameters, and the z-score's noise and slow drift. It
+  labels the y axis from the rows (joined when they differ) and opens in seconds
+  whenever the data has a rate.
+  That deflection (the viewer's Mean Subtraction and Invert Deflection unless the
+  popup sets its own) reaches the rows through
   `display_trace(..., subtract, invert)` (`deflect`, about the row's own mean
   over T, which is the mask mean of the transformed image): `raw`, `neuropil`
-  and `SUBTRACTED` are shown `y - m`, `2m - y` or `m - y`, a dF/F computed here
-  is taken of the inverted trace, and a pipeline's own kinds keep the sign it
-  wrote. The panel's `flip` checkbox (`display_trace(..., flip=True)`) turns
+  and `SUBTRACTED` are shown `y - m`, `2m - y` or `m - y`, a dF/F or z-score
+  computed here is taken of the inverted trace, and a pipeline's own kinds keep
+  the sign it wrote. The panel's `flip` checkbox (`display_trace(..., flip=True)`) turns
   whatever is shown over: a measured trace, and one a dF/F is computed from,
   about its mean (undoing Invert Deflection when that is on), every other kind
   negated, its label prefixed `-`.
@@ -1038,9 +1056,10 @@ the other.
   unit)` gives each ROI its `start_um` / `end_um`, `z_um`, `length_um`, `sample_um`
   and `dz_um` against the snapshot the lines were drawn on; `roi_placements` puts
   them on a stack's slices; `image_overlays` draws them. An AOD unit's rows of the
-  trace table (`linescan_viewer.StandardTraces`, for every `ROI_LAYOUTS` layout:
-  the mean of each line or patch, computed in the background unless `F.npy` or PF
-  traces exist) are keyed `("member", "<MUnit> lines", k)` or `("member", "<MUnit>
+  trace table (`linescan_viewer.StandardTraces`, for every `ROI_LAYOUTS` layout
+  and a single-patch chessboard or ribbon scan (`PATCH_MODALITIES`), whose frame is
+  its one ROI: the mean of each line or patch in photon counts, computed in the
+  background unless `F.npy` or the vnoiser run's line means exist) are keyed `("member", "<MUnit> lines", k)` or `("member", "<MUnit>
   patches", k)`, carry `z = k` (the unit's ROI axis), `c` = the channel read, and
   that position in `extra` (`line`, `z_um`, `dz_um`, ...); the label is the ROI
   alone. Depth is never a column, a label or a caption: the GUI shows where a

@@ -3,8 +3,9 @@
 One :class:`TraceProfile` per pipeline says which kinds its rows can show
 (``DISPLAY_KINDS``: the trace kinds of the results zarr, plus ``SUBTRACTED``,
 the raw trace minus its neuropil, for a pipeline that measured a real
-``Fneu``), which one to show first, how a dF/F is computed from raw when the
-row carries none, and the unit its raw traces are in. The Traces panel and
+``Fneu``), which one to show first, how a dF/F and a z-score are computed
+from raw when the row carries none (:class:`DffSettings`), and the unit its
+raw traces are in. The Traces panel and
 the trace table read every row through :func:`display_trace`; nothing else
 decides what a row's numbers mean. A pipeline outside this package registers its profile with
 :func:`register_trace_profile` when it registers its ``PipelineInfo``;
@@ -17,16 +18,27 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from mbo_utilities.analysis.dff import dfof_maxmin, dfof_percentile
+from scipy.ndimage import gaussian_filter1d
+
+from mbo_utilities.analysis.dff import (
+    NOISE_ESTIMATES,
+    baseline,
+    dfof_maxmin,
+    dfof_percentile,
+    robust_sd,
+)
 
 __all__ = [
     "DEFAULT_TRACE_PROFILE",
+    "DFF_METHODS",
     "DISPLAY_KINDS",
     "DffSettings",
     "SUBTRACTED",
     "TRACE_PROFILES",
     "TraceProfile",
     "available_kinds",
+    "computed_dff",
+    "computed_zscore",
     "deflect",
     "display_trace",
     "displayed_kind",
@@ -54,20 +66,56 @@ DISPLAY_KINDS: dict[str, str] = {
 # what was measured from the pixels, in the profile's unit
 MEASURED = ("raw", "neuropil", SUBTRACTED)
 
-DFF_METHODS = ("maxmin", "percentile")
+# kinds the panel computes from what was measured when a row carries none
+COMPUTED = ("dff", "zscore")
+
+# how a dF/F computed here finds F0 (DffSettings.method) -> its name in the
+# panel. Every one but the static percentile is sized in seconds and needs
+# the row's fs; a row without one gets the static percentile
+DFF_METHODS: dict[str, str] = {
+    "maxmin": "rolling max-min",
+    "rolling": "rolling percentile",
+    "gaussian": "Gaussian low-pass",
+    "exponential": "bleaching fit",
+    "window": "fixed window (MESc F0)",
+    "percentile": "static percentile",
+}
 
 
 @dataclass
 class DffSettings:
-    """How a dF/F is computed from a raw trace: a rolling max-min baseline
-    sized in seconds (``maxmin``, needs the row's ``fs``; falls back to the
-    percentile without one) or a static per-row percentile.
+    """How a dF/F and a z-score are computed from a measured trace.
+
+    ``method`` (:data:`DFF_METHODS`) finds F0: ``maxmin`` smooths by
+    ``sigma_s`` and takes suite2p's rolling max of the rolling min over
+    ``window_s``; ``rolling`` the rolling ``percentile`` over ``window_s``;
+    ``gaussian`` a Gaussian low-pass of ``gaussian_s`` seconds (the voltage
+    archive's, 1500 samples at its 1075 Hz); ``exponential`` a bleaching fit;
+    ``window`` the mean from ``f0_start_s`` to ``f0_stop_s`` (MESc's F0);
+    ``percentile`` the row's static ``percentile``. The z-score is dF/F
+    minus a Gaussian of ``slow_s`` seconds (0 keeps it), over its SD or
+    robust SD (``noise``, :data:`~mbo_utilities.analysis.dff.NOISE_ESTIMATES`).
     """
 
     method: str = "maxmin"
     window_s: float = 5.0
     sigma_s: float = 0.05
     percentile: float = 20.0
+    gaussian_s: float = 1.4
+    f0_start_s: float = 0.0
+    f0_stop_s: float = 1.0
+    noise: str = "sd"
+    slow_s: float = 5.0
+
+    def __post_init__(self):
+        if self.method not in DFF_METHODS:
+            raise ValueError(
+                f"dF/F method must be one of {tuple(DFF_METHODS)}, got {self.method!r}"
+            )
+        if self.noise not in NOISE_ESTIMATES:
+            raise ValueError(
+                f"noise must be one of {NOISE_ESTIMATES}, got {self.noise!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -87,7 +135,9 @@ class TraceProfile:
     dff: DffSettings = field(default_factory=DffSettings)
 
 
-DEFAULT_TRACE_PROFILE = TraceProfile(pipeline="", kinds=("dff", "raw"), default="dff")
+DEFAULT_TRACE_PROFILE = TraceProfile(
+    pipeline="", kinds=("dff", "zscore", "raw"), default="dff"
+)
 
 TRACE_PROFILES: dict[str, TraceProfile] = {
     # suite2p: F, Fneu, the deconvolved spks and lbm_suite2p_python's
@@ -103,7 +153,7 @@ TRACE_PROFILES: dict[str, TraceProfile] = {
     # masknmf: norm_traces in percent; its Fneu is zeros, so nothing to subtract
     "masknmf": TraceProfile(
         pipeline="masknmf",
-        kinds=("dff", "raw"),
+        kinds=("dff", "zscore", "raw"),
         default="dff",
         dff=DffSettings(method="percentile"),
     ),
@@ -116,11 +166,12 @@ TRACE_PROFILES: dict[str, TraceProfile] = {
         dff_percent=False,
         unit="counts",
     ),
-    # the ROI tool's mean engine: a mask mean plus a neuropil ring, no
-    # pipeline; dF/F over the rolling baseline sized in seconds
+    # the ROI tool's mean engine and a MESc unit's line and patch means: a
+    # mask mean (plus a neuropil ring for a drawn ROI), no pipeline; dF/F
+    # over the rolling baseline sized in seconds
     "mean": TraceProfile(
         pipeline="mean",
-        kinds=("dff", "raw", "neuropil", SUBTRACTED),
+        kinds=("dff", "zscore", "raw", "neuropil", SUBTRACTED),
         default="dff",
     ),
 }
@@ -138,8 +189,9 @@ def trace_profile(engine: str) -> TraceProfile:
 
 def available_kinds(trace) -> tuple[str, ...]:
     """The kinds ``trace`` can show, in its profile's order: the arrays it
-    carries, ``dff`` whenever it has a raw trace to compute one from, and
-    ``SUBTRACTED`` whenever it has both a raw trace and a neuropil.
+    carries, ``dff`` and ``zscore`` whenever it has a raw trace to compute
+    them from, and ``SUBTRACTED`` whenever it has both a raw trace and a
+    neuropil.
     """
     profile = trace_profile(trace.engine)
     out = []
@@ -148,7 +200,7 @@ def available_kinds(trace) -> tuple[str, ...]:
             has = trace.F is not None and trace.Fneu is not None
         else:
             has = trace.array(kind) is not None or (
-                kind == "dff" and trace.F is not None
+                kind in COMPUTED and trace.F is not None
             )
         if has:
             out.append(kind)
@@ -185,6 +237,49 @@ def deflect(y: np.ndarray, subtract: bool = False, invert: bool = False) -> np.n
     return out
 
 
+def computed_dff(f: np.ndarray, fs: float | None, settings: DffSettings) -> np.ndarray:
+    """dF/F of one measured trace over ``settings``' baseline, as a fraction;
+    a baseline at or below zero gives zero there. A method sized in seconds
+    takes the static percentile when ``fs`` is unknown.
+    """
+    f = np.asarray(f, np.float32)[None, :]
+    method = settings.method
+    if method == "percentile" or not fs:
+        return dfof_percentile(f, settings.percentile)[0]
+    if method == "maxmin":
+        return dfof_maxmin(f, fs, settings.window_s, settings.sigma_s)[0]
+    f0 = baseline(
+        f,
+        fs,
+        "percentile" if method == "rolling" else method,
+        sigma=max(0.5, settings.gaussian_s * float(fs)),
+        window_s=settings.window_s,
+        percentile=settings.percentile,
+        f0_window_s=(settings.f0_start_s, settings.f0_stop_s),
+    )
+    out = np.zeros(f.shape, np.float64)
+    np.divide(f - f0, f0, out=out, where=f0 > 0)
+    return out[0].astype(np.float32)
+
+
+def computed_zscore(
+    dff: np.ndarray, fs: float | None, settings: DffSettings
+) -> np.ndarray:
+    """``(dff - slow) / noise``: a dF/F minus its Gaussian of ``slow_s``
+    seconds (its mean when that is 0 or ``fs`` unknown), over the SD or the
+    robust SD of what is left.
+    """
+    d = np.asarray(dff, np.float64)[None, :]
+    if settings.slow_s > 0 and fs:
+        residual = d - gaussian_filter1d(d, sigma=settings.slow_s * float(fs), axis=1)
+    else:
+        residual = d - d.mean()
+    scale = residual.std() if settings.noise == "sd" else float(robust_sd(residual)[0, 0])
+    if not scale > 0:
+        return np.zeros(d.shape[1], np.float32)
+    return (residual[0] / scale).astype(np.float32)
+
+
 def _measured(trace, kind: str) -> np.ndarray:
     """The row's ``raw``, ``neuropil`` or ``SUBTRACTED`` trace as float32."""
     if kind == "neuropil":
@@ -211,8 +306,10 @@ def display_trace(
     ``SUBTRACTED`` the raw trace minus the profile's ``neuropil_coeff`` times
     the neuropil. ``dff`` is the row's own dF/F when it has one (scaled to
     percent), else one computed with ``settings`` (the profile's own when
-    None) from the ``SUBTRACTED`` trace when the row has one, the raw trace
-    otherwise. Every other kind is the array the row carries under that name.
+    None, :func:`computed_dff`) from the ``SUBTRACTED`` trace when the row
+    has one, the raw trace otherwise; ``zscore`` likewise the row's own, else
+    :func:`computed_zscore` of that dF/F. Every other kind is the array the
+    row carries under that name.
 
     ``subtract`` and ``invert`` are the viewer's Mean Subtraction and Invert
     Deflection, applied with :func:`deflect` to what was measured from the
@@ -231,20 +328,20 @@ def display_trace(
     if shown in MEASURED:
         return deflect(_measured(trace, shown), subtract, invert != flip)
     sign = np.float32(-1.0 if flip else 1.0)
-    if shown != "dff":
-        return sign * np.asarray(trace.array(shown), np.float32)
+    own = trace.array(shown)
     profile = trace_profile(trace.engine)
-    if trace.norm is not None:
-        norm = np.asarray(trace.norm, np.float32)
-        return sign * (norm if profile.dff_percent else norm * np.float32(100.0))
+    if own is not None:
+        own = np.asarray(own, np.float32)
+        if shown == "dff" and not profile.dff_percent:
+            own = own * np.float32(100.0)
+        return sign * own
     base = SUBTRACTED if SUBTRACTED in available_kinds(trace) else "raw"
     settings = settings or profile.dff
     f = deflect(_measured(trace, base), invert=invert != flip)
-    if settings.method == "maxmin" and trace.fs:
-        dff = dfof_maxmin(f[None, :], trace.fs, settings.window_s, settings.sigma_s)
-    else:
-        dff = dfof_percentile(f[None, :], settings.percentile)
-    return (dff[0] * 100.0).astype(np.float32)
+    dff = computed_dff(f, trace.fs, settings)
+    if shown == "zscore":
+        return computed_zscore(dff, trace.fs, settings)
+    return (dff * np.float32(100.0)).astype(np.float32)
 
 
 def y_label(
@@ -255,19 +352,23 @@ def y_label(
     flip: bool = False,
 ) -> str:
     """The y axis label of what :func:`display_trace` shows for the row. A
-    ``MEASURED`` kind is named with the viewer's deflection and its profile's
-    unit: ``F (a.u.)``, ``Fneu (a.u.)``, ``F - 0.7 Fneu (a.u.)``,
-    ``mean - F (a.u.)``; any other kind ``flip`` negated is ``-z-score``.
+    ``MEASURED`` kind is named with the viewer's deflection and its unit (the
+    row's ``extra["unit"]``, else its profile's): ``F (a.u.)``, ``Fneu
+    (a.u.)``, ``F - 0.7 Fneu (a.u.)``, ``mean - F (photons)``; a kind
+    computed here from an inverted trace adds ``, inverted``; any other kind
+    ``flip`` negated is ``-z-score``.
     """
     shown = displayed_kind(trace, kind)
     if shown is None:
         return ""
-    if shown in MEASURED or (shown == "dff" and trace.norm is None):
+    computed = shown in COMPUTED and trace.array(shown) is None
+    if shown in MEASURED or computed:
         invert = invert != flip
     elif flip:
         return f"-{DISPLAY_KINDS[shown]}"
     if shown in MEASURED:
         profile = trace_profile(trace.engine)
+        unit = (trace.extra or {}).get("unit") or profile.unit
         name = DISPLAY_KINDS[shown]
         if shown == SUBTRACTED:
             name = f"F - {profile.neuropil_coeff:g} Fneu"
@@ -279,7 +380,7 @@ def y_label(
             name = f"{name} - mean"
         elif invert:
             name = f"2 mean - {name}"
-        return f"{name} ({profile.unit})"
-    if shown == "dff" and invert and trace.norm is None:
-        return f"{DISPLAY_KINDS['dff']}, inverted"
+        return f"{name} ({unit})"
+    if computed and invert:
+        return f"{DISPLAY_KINDS[shown]}, inverted"
     return DISPLAY_KINDS[shown]

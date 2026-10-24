@@ -127,6 +127,7 @@ from mbo_utilities.annotation import (
     trace_profile,
     y_label,
 )
+from mbo_utilities.analysis.dff import NOISE_ESTIMATES
 from mbo_utilities.annotation.display import DFF_METHODS
 from mbo_utilities.arrays.features._dim_tags import (
     TAG_REGISTRY,
@@ -216,6 +217,10 @@ BEHAVIOR_PLOT_HEIGHT = 140
 # how often to look for finished pipeline runs started outside this widget;
 # the check reads one progress file per tracked process, so not every frame
 ADOPT_INTERVAL_S = 1.0
+# the Traces panel's mean subtraction and inversion: the viewer's own toggle, or set here
+DEFLECTION_MODES = ("viewer", "off", "on")
+# the panel's names for the noise a z-score computed here divides by (NOISE_ESTIMATES)
+NOISE_LABELS = {"sd": "SD", "mad": "robust SD (MAD)"}
 
 # the trace table's columns after its id: (name, sortable, hidden by default)
 TRACE_COLUMNS = (
@@ -816,9 +821,19 @@ class ManualRoiWidget:
         # every row's pipeline pick, and a kind a row lacks falls back the same way
         self._kind: str | None = None
         self._flip = False
-        # the panel's own dF/F baseline for rows that compute one; None keeps
-        # each pipeline's
+        # the panel's own dF/F baseline and z-score for rows that compute one;
+        # None keeps each pipeline's
         self.dff: DffSettings | None = None
+        # mean subtraction and inversion of what was measured (DEFLECTION_MODES):
+        # "viewer" follows the image's Mean Subtraction / Invert Deflection
+        self.trace_subtract = "viewer"
+        self.trace_invert = "viewer"
+        # the vnoiser run of the recording on screen, a panel of its own under
+        # the traces: shown, and the kind it plots (None: the run's default)
+        self.show_vnoiser = True
+        self._vnoiser_kind: str | None = None
+        self._vnoiser_lines_key = None
+        self._trace_unit: tuple = (None, False)
         # the trace table's sortable order over the keys it lists
         self.trace_order = RoiOrder({}, 0)
         self._trace_keys: list[tuple] = []
@@ -830,6 +845,7 @@ class ManualRoiWidget:
         self.show_behavior = True
         # masknmf's stacked trace panels, rebuilt when the frames or panels change
         self.trace_plot: TracePlot | None = None
+        self._motion_panel = False
         self._plot_frames: tuple | None = None
         self._plot_lines_key = None
         self._motion_key = None
@@ -2040,17 +2056,23 @@ class ManualRoiWidget:
         """Read one run dir into the widget: extract runs merge their
         traces, everything else loads as a derived set (every row, the
         rejected ones included - curation happens here). A results file
-        (``mbo_utilities.results``), one unit inside one, or a masknmf run
-        folder (its newest results file) goes through :meth:`load_results`.
+        (``mbo_utilities.results``), one unit inside one, a vnoiser ``PF``
+        folder or a masknmf run folder (its newest results file) goes
+        through :meth:`load_results`.
         """
         from mbo_utilities.arrays.masknmf_run import is_masknmf_run
-        from mbo_utilities.results import newest_results, results_pipeline
+        from mbo_utilities.results import TRACES_PKL, newest_results, results_pipeline
 
         path = Path(path)
         if is_masknmf_run(path) and newest_results(path) is not None:
             return self.load_results(newest_results(path), discarded, classes, colors)
-        if results_pipeline(path) is not None or (
-            path.parent.suffix == ".zarr" and results_pipeline(path.parent) is not None
+        if (
+            results_pipeline(path) is not None
+            or (path / TRACES_PKL).is_file()
+            or (
+                path.parent.suffix == ".zarr"
+                and results_pipeline(path.parent) is not None
+            )
         ):
             return self.load_results(path, discarded, classes, colors)
         try:
@@ -2081,7 +2103,10 @@ class ManualRoiWidget:
         (suite2p, masknmf) load as derived sets exactly like a run dir; line
         units (the vnoiser pipeline's scans) go straight to the Traces tab,
         one row per ROI plotting its denoised trace and one per member line
-        plotting the line's raw trace. Every row is named by its ROI
+        plotting the line's raw trace. With a MESc unit on screen only the
+        scan that processed it loads, without the member lines, which are
+        the recording's own rows; scans of other units are left for when
+        those are shown. Every row is named by its ROI
         (``roi3``, ``roi3 (raw)``; a line of a multi-line ROI adds itself,
         ``roi3 line 12 (raw)``) and carries the line it was read from on Z
         and the pipeline's channel on C. ``path`` may name one unit inside
@@ -2096,13 +2121,33 @@ class ManualRoiWidget:
         else:
             file, only = path, None
         try:
-            results = Results.read(file)
+            results = Results.open(file)
         except Exception as e:  # noqa: BLE001 - shown in the status row
             self._run_error = f"could not load {file.name}: {e}"
             return False
+        from mbo_utilities.arrays.mesc import MescArray
+        from mbo_utilities.results import unit_for_source
+
+        data = getattr(self.iw, "data", None)
+        src = base_array(data[0]) if data else None
+        on_screen = (
+            unit_for_source(results, src.unit_key)
+            if isinstance(src, MescArray)
+            else None
+        )
         loaded = 0
         for unit in results.units.values():
             if only is not None and unit.name != only:
+                continue
+            if unit.member_kind == "line" and isinstance(src, MescArray):
+                if unit.name != on_screen:
+                    continue
+                rows = self._line_unit_rows(results, unit, file, with_members=False)
+                if rows:
+                    self.traces.drop_source(f"{file.name}/{unit.name}")
+                    for trace in rows:
+                        self.traces.add(trace)
+                    loaded += 1
                 continue
             if unit.member_kind == "pixel" and unit.image_shape is not None:
                 plane_dir = unit.attrs.get("plane_dir")
@@ -2132,7 +2177,11 @@ class ManualRoiWidget:
             loaded += 1
         if not loaded:
             if not self._run_error:
-                self._run_error = f"{file.name} has no unit this view can show"
+                self._run_error = (
+                    f"{file.name} never processed {src.unit_key}"
+                    if isinstance(src, MescArray)
+                    else f"{file.name} has no unit this view can show"
+                )
             return False
         self._results_loaded.add(str(file))
         if any(t.source.startswith(f"{file.name}/") for t in self.traces):
@@ -2156,6 +2205,9 @@ class ManualRoiWidget:
         n = unit.n_rois
         lines = unit.member_kind == "line"
         channel = int(results.source.get("channel") or 0)
+        # a run over a frame window: its traces sit where they were recorded
+        window = results.source.get("frames")
+        frames = None if not window else (int(window[0]), int(window[1]), 1)
         # a line's position comes from the reader's geometry, when the
         # shown recording is the scan these results came from
         src = base_array(self.iw.data[0])
@@ -2171,8 +2223,13 @@ class ManualRoiWidget:
                 "label": str(roi),
                 "fs": unit.fs,
                 "c": channel,
+                "frames": frames,
                 "kinds": {},
-                "extra": {"unit": unit.name, "roi": str(roi)},
+                "extra": {
+                    "unit": unit.name,
+                    "roi": str(roi),
+                    "source_unit": unit.attrs.get("source_unit"),
+                },
             }
             members = unit.members[k] if k < len(unit.members) else ()
             if lines and len(members) == 1:
@@ -2234,6 +2291,7 @@ class ManualRoiWidget:
                         fs=unit.fs,
                         F=row,
                         c=channel,
+                        frames=frames,
                         **where,
                     )
                 )
@@ -3394,10 +3452,11 @@ class ManualRoiWidget:
             ):
                 continue  # another dataset's run
             if info.task_type == "vnoiser":
-                # a zarr-format vnoiser run leaves one results file in the PF folder
-                from mbo_utilities.results import newest_results
+                # a vnoiser run leaves one results file beside the data, or
+                # (``--pkl``) a PF folder of pickles
+                from mbo_utilities.results import newest_results, results_dir_of
 
-                found = newest_results(out, "vnoiser")
+                found = newest_results(out, "vnoiser") or results_dir_of(out)
                 dirs = [found] if found is not None and str(found) not in loaded else []
             else:
                 dirs = [
@@ -3888,6 +3947,7 @@ class ManualRoiWidget:
         self._trace_stats.clear()
         self._trace_window_cache.clear()
         self._plot_lines_key = None
+        self._vnoiser_lines_key = None
 
     def _window_spec(self) -> tuple[str, int]:
         """``(projection, size)`` of the viewer's window function.
@@ -3923,14 +3983,55 @@ class ManualRoiWidget:
         self._trace_window_cache[(id(y), proj, size)] = out
         return out
 
-    def deflection(self) -> tuple[bool, bool]:
-        """The viewer's ``(Mean Subtraction, Invert Deflection)``, which the
-        traces follow so the plot reads like the image.
-        """
+    def viewer_deflection(self) -> tuple[bool, bool]:
+        """The viewer's ``(Mean Subtraction, Invert Deflection)``."""
         return (
             bool(getattr(self.host, "mean_subtraction", False)),
             bool(getattr(self.host, "invert_deflection", False)),
         )
+
+    def deflection(self) -> tuple[bool, bool]:
+        """``(mean subtraction, invert)`` of what the rows measured: the
+        panel's own ``trace_subtract`` / ``trace_invert`` when ``"on"`` or
+        ``"off"``, else the viewer's, so the plot reads like the image.
+        """
+        return tuple(
+            seen if mode == "viewer" else mode == "on"
+            for mode, seen in zip(
+                (self.trace_subtract, self.trace_invert), self.viewer_deflection()
+            )
+        )
+
+    def _vnoiser_rows(self) -> tuple[list[RoiTrace], list[RoiTrace], Path | None]:
+        """``(holding, every, run)``: the newest vnoiser run loaded here of the
+        recording on screen (its results file), every domain row it has, and
+        the ones holding the ROI on screen (the slice's z, a MESc unit's ROI
+        axis); ``([], [], None)`` without a run.
+        """
+        from mbo_utilities.results import results_stamp
+
+        data = getattr(self.iw, "data", None)
+        src = base_array(data[0]) if data else None
+        tail = str(getattr(src, "unit_key", "") or "").rsplit("/", 1)[-1]
+        runs: dict = {}
+        for t in self.traces:
+            if t.engine != "vnoiser" or t.stands_for_roi or "unit" not in t.extra:
+                continue
+            made = str(t.extra.get("source_unit") or "").rsplit("/", 1)[-1]
+            if tail and made and made != tail:
+                continue
+            runs.setdefault(t.path, []).append(t)
+        if not runs:
+            return [], [], None
+        stamps = {p: results_stamp(p) if p is not None else None for p in runs}
+        run = max(runs, key=lambda p: (stamps[p] is not None, stamps[p] or 0))
+        line = int(self.slice.z or 0)
+        holding = [
+            t
+            for t in runs[run]
+            if line in (t.extra.get("lines") or [t.extra.get("line", t.z)])
+        ]
+        return holding, runs[run], run
 
     def _display(self, key) -> np.ndarray | None:
         """The cached display array for one trace key, in the panel's kind,
@@ -4156,15 +4257,73 @@ class ManualRoiWidget:
                 "Turn every row over: raw and neuropil about their mean (undoing the viewer's Invert Deflection "
                 "when that is on), dF/F, z-score, denoised and spikes negated"
             )
-            if any(s == "dff" and t.norm is None for t, s in zip(rows, shown)):
-                imgui.same_line(0, em(0.4))
-                if imgui.small_button("dF/F##dff_settings"):
-                    imgui.open_popup("##dff_settings")
+            imgui.same_line(0, em(0.4))
+            if imgui.small_button("Trace##trace_settings"):
+                imgui.open_popup("##trace_settings")
+            subtract, invert = self.deflection()
+            tooltip(
+                "How the rows' measured traces are shown: mean subtraction "
+                f"({'on' if subtract else 'off'}) and inversion ({'on' if invert else 'off'}), each the viewer's or "
+                "set here, and the baseline, noise and slow drift of a dF/F or z-score computed here (from raw - "
+                "neuropil when the row has a neuropil, from the raw trace otherwise). A pipeline's own dF/F, "
+                "z-score and denoised trace are shown as it wrote them."
+            )
+            self._draw_trace_settings(rows)
+        vholding, vevery, vrun = self._vnoiser_rows()
+        show_vnoiser = vrun is not None and self.show_vnoiser
+        if vrun is not None or self._shows_trace_unit():
+            imgui.same_line(0, em(0.8))
+            imgui.begin_disabled(vrun is None)
+            changed, on = imgui.checkbox("vnoiser", show_vnoiser)
+            if changed:
+                self.show_vnoiser = on
+            imgui.end_disabled()
+            unit = self.unit or "this recording"
+            if vrun is None:
                 tooltip(
-                    "The baseline of a dF/F computed here: from raw - neuropil when the row has a neuropil, from the "
-                    "raw trace otherwise"
+                    f"No vnoiser run of {unit} is loaded. Run vnoiser opens its tab on this scan; when the run "
+                    "finishes, its domains show here in a panel of their own, under the recording's trace."
                 )
-                self._draw_dff_settings(rows)
+            elif vholding:
+                tooltip(
+                    f"vnoiser's {', '.join(t.label for t in vholding)} (the domain holding ROI {self.slice.z}) from "
+                    f"{Path(vrun).name}, in a panel of its own under the recording's trace"
+                )
+            else:
+                tooltip(
+                    f"No domain of {Path(vrun).name} holds ROI {self.slice.z}; its panel stays empty here. "
+                    f"Domains: {', '.join(t.label for t in vevery)}"
+                )
+            if show_vnoiser:
+                vkinds = self.kind_options(vevery)
+                current = (
+                    self._vnoiser_kind
+                    if self._vnoiser_kind in vkinds
+                    else displayed_kind(vevery[0])
+                )
+                imgui.same_line(0, em(0.4))
+                imgui.set_next_item_width(em(7))
+                changed, sel = imgui.combo(
+                    "##vnoiser_kind", vkinds.index(current), list(vkinds)
+                )
+                tooltip(
+                    "What the vnoiser panel shows of the run's domain, as the run wrote it: denoised (the trace "
+                    "its curation and peaks use), dff, zscore, raw (the domain's F)"
+                )
+                if changed:
+                    self._vnoiser_kind = vkinds[sel]
+            if self._shows_trace_unit():
+                imgui.same_line(0, em(0.4))
+                if imgui.small_button(
+                    "Run vnoiser##traces" if vrun is None else "vnoiser tab##traces"
+                ):
+                    from mbo_utilities.gui.widgets.pipelines import open_pipeline
+
+                    open_pipeline(self.host, "vnoiser", seed=True)
+                tooltip(
+                    f"The vnoiser tab (Process) on {unit}, the ROI on screen ticked to run: pick its domains, "
+                    "pixels, polarity and dF/F there"
+                )
         if callable(getattr(self.host, "reference_view", None)):
             imgui.same_line(0, em(0.8))
             if imgui.small_button("Reference image##traces"):
@@ -4209,27 +4368,42 @@ class ManualRoiWidget:
             )
         show_motion = motion is not None and self.show_motion
         show_behavior = behavior is not None and self.show_behavior
-        if target is None and not show_motion and not show_behavior:
+        if target is None and not show_motion and not show_behavior and not show_vnoiser:
             # nothing to plot: the panel is its row of controls, the plot empty for when it comes back
             self._traces_panel.height = int(imgui.get_frame_height_with_spacing())
-            if (
-                self.trace_plot is not None
-                and self.trace_plot._lines[self.trace_plot.panels[-1]]
-            ):
+            traces_panel = self._traces_panel_name()
+            if self.trace_plot is not None and self.trace_plot._lines.get(traces_panel):
                 self._plot_lines_key = None
-                self.trace_plot.set(self.trace_plot.panels[-1], [])
+                self.trace_plot.set(traces_panel, [])
                 self._plot_mode([])
             return
         self._traces_panel.height = (
             PANEL_HEIGHT
-            + (MOTION_PANEL_HEIGHT - PANEL_HEIGHT) * int(show_motion)
+            + (MOTION_PANEL_HEIGHT - PANEL_HEIGHT) * (int(show_motion) + int(show_vnoiser))
             + BEHAVIOR_PLOT_HEIGHT * int(show_behavior)
         )
         if self.strip.collapsed or self.tdim is None:
             return
-        self._sync_plot(rows)
+        vkind = None
+        vpanel = None
+        if show_vnoiser:
+            vkind = displayed_kind(vevery[0], self._vnoiser_kind)
+            vpanel = f"vnoiser {y_label(vevery[0], vkind)}"
+        self._sync_plot(rows, vpanel)
         plot = self.trace_plot
         nt = len(plot.x)
+        if vpanel is not None:
+            vkey = (tuple(t.key for t in vholding), vkind, self._plot_frames)
+            if vkey != self._vnoiser_lines_key:
+                self._vnoiser_lines_key = vkey
+                vlines = []
+                for i, t in enumerate(vholding):
+                    y = display_trace(t, vkind)
+                    if y is None:
+                        continue
+                    rgb = GROUP_COLORS[i % len(GROUP_COLORS)] if len(vholding) > 1 else None
+                    vlines.append((t.label, self._on_frames(t.key, y, nt), rgb))
+                plot.set(vpanel, vlines)
         lines_key = (
             None
             if target is None
@@ -4249,7 +4423,7 @@ class ManualRoiWidget:
                 if y is None:
                     continue
                 lines.append((label, self._on_frames(key, self._windowed(y), nt), rgb))
-            plot.set(plot.panels[-1], lines)
+            plot.set(self._traces_panel_name(), lines)
             self._plot_mode(lines)
         plot.frame = self.current_frame()
         if show_behavior:
@@ -4258,44 +4432,131 @@ class ManualRoiWidget:
         if moved is not None:
             self.playhead.seek(self.viewer_axis().seconds(moved), source="trace_plot")
 
-    def _draw_dff_settings(self, rows) -> None:
-        """The popup editing the panel's dF/F baseline; it starts from the
-        first plotted row's pipeline settings and can go back to them.
+    def _shows_trace_unit(self) -> bool:
+        """Whether the recording on screen is a MESc scan vnoiser can run on
+        and this widget sits in a viewer that has a Process tab.
         """
-        if not imgui.begin_popup("##dff_settings"):
+        from mbo_utilities.arrays.mesc import MescArray, is_trace_unit, list_mesc_units
+
+        data = getattr(self.iw, "data", None)
+        src = base_array(data[0]) if data else None
+        if self.host is None or not isinstance(src, MescArray):
+            return False
+        # the file's unit table is read once per recording shown, not per frame
+        if self._trace_unit[0] is not src:
+            rows = list_mesc_units(src.filenames[0])
+            row = next((u for u in rows if u["key"] == src.unit_key), None)
+            self._trace_unit = (src, row is not None and is_trace_unit(row))
+        return self._trace_unit[1]
+
+    def _draw_trace_settings(self, rows) -> None:
+        """The popup setting how the rows' measured traces are shown: mean
+        subtraction and inversion (the viewer's, or set here), the baseline
+        of a dF/F computed here and the z-score's slow drift and noise. The
+        dF/F starts from the first plotted row's pipeline settings and can go
+        back to them.
+        """
+        if not imgui.begin_popup("##trace_settings"):
             return
+        changed = False
+        viewer = self.viewer_deflection()
+        for label, attr, seen, about in (
+            (
+                "mean subtraction",
+                "trace_subtract",
+                viewer[0],
+                "F - mean over time: the viewer's Mean Subtraction on the image, or set here",
+            ),
+            (
+                "invert",
+                "trace_invert",
+                viewer[1],
+                "2 mean - F, before any dF/F or z-score: a dimming indicator's events point up. The viewer's "
+                "Invert Deflection on the image, or set here",
+            ),
+        ):
+            names = [f"as the viewer ({'on' if seen else 'off'})", "off", "on"]
+            imgui.set_next_item_width(em(10))
+            moved, idx = imgui.combo(
+                f"{label}##{attr}", DEFLECTION_MODES.index(getattr(self, attr)), names
+            )
+            tooltip(about)
+            if moved:
+                setattr(self, attr, DEFLECTION_MODES[idx])
+                changed = True
         if self.dff is None:
-            self.dff = replace(trace_profile(rows[0].engine).dff)
+            self.dff = replace(
+                trace_profile(rows[0].engine).dff if rows else DffSettings()
+            )
         d = self.dff
-        imgui.set_next_item_width(em(9))
-        changed, idx = imgui.combo(
-            "baseline", DFF_METHODS.index(d.method), ["rolling max-min", "percentile"]
+        imgui.separator_text("dF/F")
+        methods = list(DFF_METHODS)
+        imgui.set_next_item_width(em(12))
+        moved, idx = imgui.combo(
+            "baseline##dff_method", methods.index(d.method), list(DFF_METHODS.values())
         )
-        if changed:
-            d.method = DFF_METHODS[idx]
-        if d.method == "maxmin":
+        tooltip(
+            "F0 under dF/F = (F - F0) / F0. rolling max-min: suite2p's, the rolling max of the rolling min of "
+            "a smoothed F. rolling percentile: that percentile of F in a moving window. Gaussian low-pass: the "
+            "voltage archive's. bleaching fit: an exponential decay fitted to F. fixed window: the mean over "
+            "a stretch of the recording, MESc's F0. static percentile: one value for the whole row."
+        )
+        if moved:
+            d.method = methods[idx]
+            changed = True
+        fields = {
+            "maxmin": (("window_s", "window (s)"), ("sigma_s", "smoothing (s)")),
+            "rolling": (("window_s", "window (s)"), ("percentile", "percentile")),
+            "gaussian": (("gaussian_s", "sigma (s)"),),
+            "exponential": (),
+            "window": (("f0_start_s", "from (s)"), ("f0_stop_s", "to (s)")),
+            "percentile": (("percentile", "percentile"),),
+        }[d.method]
+        for name, label in fields:
             imgui.set_next_item_width(em(6))
-            moved, d.window_s = imgui.input_float(
-                "window (s)", d.window_s, 0.5, 5.0, "%.1f"
-            )
-            d.window_s = max(0.1, d.window_s)
-            changed |= moved
-            imgui.set_next_item_width(em(6))
-            moved, d.sigma_s = imgui.input_float(
-                "smoothing (s)", d.sigma_s, 0.01, 0.1, "%.3f"
-            )
-            d.sigma_s = max(0.0, d.sigma_s)
-            changed |= moved
-            if not all(t.fs for t in rows):
-                imgui.text_disabled("a row without a sampling rate uses the percentile")
-        else:
-            imgui.set_next_item_width(em(6))
-            moved, d.percentile = imgui.slider_float(
-                "percentile", d.percentile, 1.0, 50.0, "%.0f"
-            )
-            changed |= moved
-        if imgui.small_button("pipeline defaults"):
+            if name == "percentile":
+                moved, value = imgui.slider_float(
+                    f"{label}##dff_{name}", getattr(d, name), 1.0, 99.0, "%.0f"
+                )
+            else:
+                moved, value = imgui.input_float(
+                    f"{label}##dff_{name}", getattr(d, name), 0.1, 1.0, "%.2f"
+                )
+                value = max(0.0, value)
+            if moved:
+                setattr(d, name, value)
+                changed = True
+        if d.method == "window" and d.f0_stop_s <= d.f0_start_s:
+            d.f0_stop_s = d.f0_start_s + 0.1
+        if d.method != "percentile" and not all(t.fs for t in rows):
+            imgui.text_disabled("a row without a sampling rate uses the static percentile")
+        imgui.separator_text("z-score")
+        noises = list(NOISE_ESTIMATES)
+        imgui.set_next_item_width(em(10))
+        moved, idx = imgui.combo(
+            "noise##z_noise",
+            noises.index(d.noise),
+            [NOISE_LABELS[n] for n in noises],
+        )
+        tooltip(
+            "What the z-score divides by: the SD of what is left after the slow drift, or 1.4826 x its median "
+            "absolute deviation, which spikes do not inflate"
+        )
+        if moved:
+            d.noise = noises[idx]
+            changed = True
+        imgui.set_next_item_width(em(6))
+        moved, value = imgui.input_float(
+            "slow drift (s)##z_slow", d.slow_s, 0.5, 5.0, "%.2f"
+        )
+        tooltip("A Gaussian of this many seconds taken off the dF/F first; 0 takes off its mean")
+        if moved:
+            d.slow_s = max(0.0, value)
+            changed = True
+        imgui.spacing()
+        if imgui.small_button("pipeline defaults##trace_settings"):
             self.dff = None
+            self.trace_subtract = self.trace_invert = "viewer"
             changed = True
         if changed:
             self._redisplay()
@@ -5522,12 +5783,29 @@ class ManualRoiWidget:
             )
         return lines
 
-    def _sync_plot(self, rows) -> None:
-        """Build or reset the trace plot for the frames and panels on screen, then put its lines in."""
+    def _traces_panel_name(self) -> str | None:
+        """The trace plot's panel the selection's rows go in: after the motion
+        correction, before the vnoiser run's.
+        """
+        if self.trace_plot is None:
+            return None
+        panels = self.trace_plot.panels
+        return panels[1] if self._motion_panel and len(panels) > 1 else panels[0]
+
+    def _sync_plot(self, rows, vnoiser_panel: str | None = None) -> None:
+        """Build or reset the trace plot for the frames and panels on screen
+        (the motion correction, the rows, the vnoiser run's own panel), then
+        put the motion's lines in.
+        """
         nt, timings = self._plot_axis()
         motion = bool(self.motion) and self.show_motion
         traces_panel = self.plot_y_label(rows) if rows else "traces"
-        panels = ((self.motion.y_label,) if motion else ()) + (traces_panel,)
+        self._motion_panel = motion
+        panels = (
+            ((self.motion.y_label,) if motion else ())
+            + (traces_panel,)
+            + ((vnoiser_panel,) if vnoiser_panel else ())
+        )
         key = (
             nt,
             None if timings is None else float(timings[-1]),
@@ -5552,6 +5830,7 @@ class ManualRoiWidget:
             self._plot_frames = key
             self._motion_key = None
             self._plot_lines_key = None
+            self._vnoiser_lines_key = None
             if self.behavior and self.show_behavior:
                 axis = self.viewer_axis()
                 for i, (name, spans) in enumerate(

@@ -223,7 +223,8 @@ WINDOW = (
     ),
     (
         "Load into Traces",
-        "the finished run's denoised and line traces in the Traces tab, over the recording",
+        "the finished run's domains in the Traces tab: a vnoiser panel under the scan's own trace, the "
+        "domain holding the line on the ROI slider",
     ),
     (
         "Curate",

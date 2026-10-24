@@ -296,8 +296,9 @@ class TraceJob:
         self.result: np.ndarray | None = None
         self.error: BaseException | None = None
         self.source = ""
-        n_rois = len(ref_arr.metadata.get("mesc_roi_extents") or [])
-        self.progress = (0, n_rois)
+        from mbo_utilities.analysis.roi_traces import roi_geometry
+
+        self.progress = (0, len(roi_geometry(ref_arr)))
         self.thread = None
         saved = saved_roi_traces(ref_arr, traces_dir, self.channel)
         if saved is not None:
@@ -341,12 +342,28 @@ class TraceJob:
         print(f"  traces: ROI {i + 1}/{k} done ({seconds:.1f}s)")
 
     def _run(self) -> None:
+        from mbo_utilities.analysis.roi_traces import (
+            TraceSettings,
+            extract_traces,
+            roi_geometry,
+        )
         from mbo_utilities.roi_workflow import linescan_roi_means
 
         try:
-            self.result = linescan_roi_means(
-                self.ref_arr, channel=self.channel, progress=self._on_roi
-            )
+            if self.ref_arr.metadata.get("mesc_roi_extents"):
+                self.result = linescan_roi_means(
+                    self.ref_arr, channel=self.channel, progress=self._on_roi
+                )
+            else:
+                # a single-patch scan: its one frame is the ROI
+                found = extract_traces(
+                    self.ref_arr,
+                    {f"roi{k}": [k] for k in roi_geometry(self.ref_arr)},
+                    TraceSettings(convert=True),
+                    channel=self.channel,
+                    progress=self._on_roi,
+                )
+                self.result = found.F.astype(np.float32)
             self.source = f"computed from channel {self.channel}"
         except BaseException as e:
             self.error = e
@@ -928,12 +945,15 @@ class LinePanel:
 class StandardTraces:
     """An AOD unit's per-ROI traces on the standard viewer (``mbo
     file.mesc``), a line scan's lines or a chessboard / ribbon scan's
-    patches, one per Z index: a :class:`TraceJob` for the traces, its progress on the
-    ROI widget's Traces tab until they are in, then one
+    patches, one per Z index (a single-patch scan's one frame): a
+    :class:`TraceJob` for the traces, its progress on the ROI widget's
+    Traces tab until they are in, then one
     :class:`~mbo_utilities.annotation.RoiTrace` row per ROI in its trace
-    table (``member`` rows under this unit's source name). The plotted row
-    follows the ROI slider and the slider follows a row picked in the trace
-    table; the unit's motion correction reaches the tab through the array
+    table (``member`` rows under this unit's source name, in photon counts).
+    The plotted row follows the ROI slider and the slider follows a row
+    picked in the trace table, a vnoiser domain's to its first line; a
+    vnoiser run's domains are the Traces tab's own panel, never this row.
+    The unit's motion correction reaches the tab through the array
     (``motion_correction``). Kept on ``parent.linescan_traces``; ``close``
     takes the rows off.
     """
@@ -966,32 +986,14 @@ class StandardTraces:
         # polled at the top of every frame the strip draws
         self.strip.add_hook(self)
 
-    def _run_rows(self) -> dict[int, tuple]:
-        """``{line: key}`` of the rows a vnoiser run of this unit loaded, one
-        per domain, under each line the domain holds (a line in two domains
-        goes to the first).
-        """
-        out: dict[int, tuple] = {}
-        for t in self.roi.traces:
-            if t.source == self.name or "unit" not in t.extra:
-                continue
-            lines = t.extra.get("lines") or (
-                [t.extra["line"]] if "line" in t.extra else []
-            )
-            for line in lines:
-                out.setdefault(int(line), t.key)
-        return out
-
     def __call__(self) -> None:
         if not self.attached and self.job.done and self.job.result is not None:
             self._attach()
         rows = self.roi.traces.from_source(self.name)
-        run_rows = self._run_rows()
-        if not rows and not run_rows:
+        if not rows:
             return
-        # the ROI slider and the trace table pick the same line; the run's
-        # domain row first, so every kind it wrote is one combo away
-        n = len(rows) or len(self.arr.metadata.get("mesc_roi_extents") or ()) or 1
+        # the ROI slider and the trace table pick the same line
+        n = len(rows)
         selected = (
             min(max(int(self.iw.indices[self.roi_dim]), 0), n - 1)
             if self.roi_dim is not None
@@ -999,22 +1001,21 @@ class StandardTraces:
         )
         sel = self.roi.trace_sel
         if selected != self._last_roi:
-            key = run_rows.get(selected) or (
-                ("member", self.name, selected) if rows else None
-            )
             self._last_roi = selected
-            if key is not None:
-                self.roi.select_trace(key)
+            self.roi.select_trace(("member", self.name, selected))
             self._last_sel = set(self.roi.trace_sel)
         elif sel != self._last_sel:
             self._last_sel = set(sel)
             if len(sel) == 1 and self.roi_dim is not None:
-                key = next(iter(sel))
-                trace = self.roi.traces.get(key)
+                trace = self.roi.traces.get(next(iter(sel)))
+                # a line, or a vnoiser domain (on its first line), moves the slider to it
                 if (
                     trace is not None
                     and trace.z is not None
-                    and (trace.source == self.name or key in run_rows.values())
+                    and (
+                        trace.source == self.name
+                        or (trace.engine == "vnoiser" and "unit" in trace.extra)
+                    )
                 ):
                     self.iw.indices[self.roi_dim] = int(trace.z)
                     self._last_roi = int(trace.z)
@@ -1057,7 +1058,8 @@ class StandardTraces:
         positions = getattr(base_array(self.arr), "line_positions", None)
         self.roi.traces.drop_source(self.name)
         for k in range(traces.shape[0]):
-            extra = {"line": k, "from": str(self.job.source)}
+            # every source of these rows is in photon counts (the file's conversion applied)
+            extra = {"line": k, "from": str(self.job.source), "unit": "photons"}
             label = f"ROI {k}"
             if positions is not None and k < len(positions):
                 extra.update(positions[k])
@@ -1086,20 +1088,26 @@ class StandardTraces:
 def attach_standard_traces(parent) -> StandardTraces | None:
     """The per-ROI traces of a ``PreviewDataWidget`` showing an AOD ``.mesc``
     unit (a line scan, chessboard or ribbon scan: ``ROI_LAYOUTS``, one ROI
-    per Z index), on its ROI widget's Traces tab; None (nothing added) for
+    per Z index; or a single-patch chessboard or ribbon scan, its frame the
+    one ROI), on its ROI widget's Traces tab; None (nothing added) for
     anything else, and without the ROI widget (Widgets > Manual ROI
     Labeling), whose tab they live on.
     """
-    from mbo_utilities.arrays.mesc import ROI_LAYOUTS, MescArray
+    from mbo_utilities.arrays.mesc import PATCH_MODALITIES, ROI_LAYOUTS, MescArray
     from mbo_utilities.lazy_array import base_array
 
     data = getattr(getattr(parent, "image_widget", None), "data", None)
     # the viewer wraps the array in proxies; the traces come from the file
     arr = base_array(data[0]) if data else None
-    if (
-        not isinstance(arr, MescArray)
-        or arr.metadata.get("mesc_layout") not in ROI_LAYOUTS
-    ):
+    if not isinstance(arr, MescArray):
+        return None
+    md = arr.metadata
+    single_patch = (
+        md.get("mesc_layout") == "frames"
+        and md.get("mesc_modality") in PATCH_MODALITIES
+        and int(arr.shape[0]) > 1
+    )
+    if md.get("mesc_layout") not in ROI_LAYOUTS and not single_patch:
         return None
     if (
         getattr(parent, "manual_roi", None) is None
