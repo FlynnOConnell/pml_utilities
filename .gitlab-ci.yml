@@ -1,27 +1,30 @@
-# ruff format and fix on every push to main, committed and pushed to GitLab and
-# GitHub together so the two never diverge. The GitHub workflow only checks.
-# Needs two masked CI variables (Settings > CI/CD > Variables):
+# ruff format and fix on every merge request into main, committed to the
+# request's source branch, so main only ever receives formatted code and no
+# bot commit lands on main itself (main on GitLab and GitHub moves only through
+# a push to both). A request from a fork is only checked.
+# Needs one masked CI variable (Settings > CI/CD > Variables):
 #   GITLAB_PUSH_TOKEN  project access token, role Maintainer, scope write_repository
-#   GITHUB_PUSH_TOKEN  GitHub fine-grained token with contents: read and write on the repo
 
 format:
   image: python:3.12
   rules:
-    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
   script:
     - pip install --quiet ruff==0.14.10
     - ruff format .
     - ruff check --fix --exit-zero .
-    - git config user.name "gitlab-ci"
-    - git config user.email "gitlab-ci@users.noreply.gitlab.com"
-    - git checkout -B main
     - git add -A
     - |
       if git diff --cached --quiet; then
         echo "already formatted"
+      elif [ "$CI_MERGE_REQUEST_SOURCE_PROJECT_ID" != "$CI_PROJECT_ID" ]; then
+        echo "request from a fork: run ruff format and ruff check --fix on the branch"
+        exit 1
       else
+        git config user.name "gitlab-ci"
+        git config user.email "gitlab-ci@users.noreply.gitlab.com"
+        git checkout -B "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
         git commit -m "ruff format and fix"
-        git push -o ci.skip "https://oauth2:${GITLAB_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" main
-        git push "https://x-access-token:${GITHUB_PUSH_TOKEN}@github.com/FlynnOConnell/pml_utilities.git" main
+        git push -o ci.skip "https://oauth2:${GITLAB_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
       fi
     - ruff check . || true
