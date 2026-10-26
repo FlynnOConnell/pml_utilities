@@ -1,0 +1,27 @@
+# ruff format and fix on every push to main, committed and pushed to GitLab and
+# GitHub together so the two never diverge. The GitHub workflow only checks.
+# Needs two masked CI variables (Settings > CI/CD > Variables):
+#   GITLAB_PUSH_TOKEN  project access token, role Maintainer, scope write_repository
+#   GITHUB_PUSH_TOKEN  GitHub fine-grained token with contents: read and write on the repo
+
+format:
+  image: python:3.12
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+  script:
+    - pip install --quiet ruff==0.14.10
+    - ruff format .
+    - ruff check --fix --exit-zero .
+    - git config user.name "gitlab-ci"
+    - git config user.email "gitlab-ci@users.noreply.gitlab.com"
+    - git checkout -B main
+    - git add -A
+    - |
+      if git diff --cached --quiet; then
+        echo "already formatted"
+      else
+        git commit -m "ruff format and fix"
+        git push -o ci.skip "https://oauth2:${GITLAB_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" main
+        git push "https://x-access-token:${GITHUB_PUSH_TOKEN}@github.com/FlynnOConnell/pml_utilities.git" main
+      fi
+    - ruff check . || true
