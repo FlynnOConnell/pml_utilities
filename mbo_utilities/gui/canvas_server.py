@@ -144,12 +144,32 @@ class BrowserCanvas(HttpRenderCanvas):
     at 60 fps of jpeg even while idle, and each draw request cancelled the
     lossless frame meant to follow the last change, so a still view never
     sharpened.
+
+    Frames are rendered at no more than ``max_pixel_ratio`` physical pixels
+    per css pixel (a HiDPI browser gets a frame it upscales, a quarter of the
+    bytes), as jpeg of ``quality`` while they change.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self, *args, quality: int = 80, max_pixel_ratio: float = 1.0, **kwargs
+    ):
         self._last_array = None
         self._lossless_sent = False
+        self._quality = int(quality)
+        self.max_pixel_ratio = float(max_pixel_ratio)
         super().__init__(*args, **kwargs)
+
+    def _on_event(self, event, id):
+        ratio = event.get("ratio", 1.0) if event.get("type") == "resize" else 1.0
+        if ratio > self.max_pixel_ratio:
+            scale = self.max_pixel_ratio / ratio
+            event = {
+                **event,
+                "pwidth": max(1, round(event["pwidth"] * scale)),
+                "pheight": max(1, round(event["pheight"] * scale)),
+                "ratio": self.max_pixel_ratio,
+            }
+        super()._on_event(event, id)
 
     def _rc_set_logical_size(self, width, height):
         super()._rc_set_logical_size(width, height)

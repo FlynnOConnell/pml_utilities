@@ -2246,6 +2246,14 @@ def curate(path, serve, host, port, channel):
     help="Side widget of the session PATH opens.",
 )
 @click.option(
+    "--quality",
+    type=click.IntRange(1, 99),
+    default=80,
+    show_default=True,
+    help="JPEG quality of frames while the view changes; a still view is sent "
+    "lossless. 50 halves the bytes, for a slow or relayed link.",
+)
+@click.option(
     "--token",
     default=None,
     help="Token the link carries (default: a new random one each start).",
@@ -2256,7 +2264,9 @@ def curate(path, serve, host, port, channel):
     default=False,
     help="Serve without a token, for a localhost-only port behind a tunnel.",
 )
-def serve(path, host, port, max_sessions, idle_timeout, widget, token, no_token):
+def serve(
+    path, host, port, max_sessions, idle_timeout, widget, quality, token, no_token
+):
     """Serve Miller Brain Studio to browsers from this machine.
 
     Each browser session runs the Studio in a process of its own on this
@@ -2300,6 +2310,7 @@ def serve(path, host, port, max_sessions, idle_timeout, widget, token, no_token)
         max_sessions=max_sessions,
         idle_timeout=idle_timeout * 60,
         token=token,
+        quality=quality,
     )
     click.echo(f"Miller Brain Studio: {gateway.link()}")
     if path:

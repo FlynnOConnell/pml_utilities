@@ -57,6 +57,9 @@ class StudioServer(CanvasServer):
         Canvas size until the first browser reports its window size.
     key : str, optional
         Accept only requests carrying it (the gateway's session key).
+    quality : int
+        JPEG quality of the frames while the view changes; a still view is
+        sent lossless. 50 halves the bytes of the default 80.
     """
 
     def __init__(
@@ -69,6 +72,7 @@ class StudioServer(CanvasServer):
         port: int = DEFAULT_PORT,
         size=DEFAULT_SIZE,
         key: str | None = None,
+        quality: int = 80,
     ):
         from masknmf.visualization.imgui.options import OPTIONS
 
@@ -83,7 +87,7 @@ class StudioServer(CanvasServer):
             widget=widget,
             unit=unit,
             size=size,
-            canvas=BrowserCanvas(size=size, max_fps=60.0),
+            canvas=BrowserCanvas(size=size, max_fps=60.0, quality=quality),
         )
         name = Path(str(path[0] if isinstance(path, (list, tuple)) else path)).name
         super().__init__(
@@ -105,6 +109,7 @@ def serve_studio(
     port: int = DEFAULT_PORT,
     size=DEFAULT_SIZE,
     key: str | None = None,
+    quality: int = 80,
     parent_pid: int | None = None,
 ) -> None:
     """Serve the Studio on ``path`` until interrupted or its canvas closes.
@@ -116,7 +121,14 @@ def serve_studio(
     # before any worker spawns, as run_gui does
     apply_persisted_compute_gpu()
     server = StudioServer(
-        path, widget=widget, unit=unit, host=host, port=port, size=size, key=key
+        path,
+        widget=widget,
+        unit=unit,
+        host=host,
+        port=port,
+        size=size,
+        key=key,
+        quality=quality,
     )
     if parent_pid is not None:
         threading.Thread(
@@ -155,6 +167,12 @@ def main(argv: list[str] | None = None) -> None:
         help="canvas size until a browser reports its window (default 1600x1000)",
     )
     ap.add_argument(
+        "--quality",
+        type=int,
+        default=80,
+        help="jpeg quality while the view changes (default 80; 50 halves the bytes)",
+    )
+    ap.add_argument(
         "--parent-pid",
         type=int,
         default=None,
@@ -170,6 +188,7 @@ def main(argv: list[str] | None = None) -> None:
         port=args.port,
         size=args.size,
         key=os.environ.get(SESSION_KEY_ENV) or None,
+        quality=args.quality,
         parent_pid=args.parent_pid,
     )
 

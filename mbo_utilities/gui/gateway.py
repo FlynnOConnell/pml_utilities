@@ -193,6 +193,8 @@ class Gateway:
         Seconds a session lives with no browser connected; 0 never stops one.
     token : str or None
         What the printed link carries; None serves anyone who can connect.
+    quality : int
+        JPEG quality of each session's frames while they change.
     """
 
     def __init__(
@@ -203,12 +205,14 @@ class Gateway:
         max_sessions: int = 1,
         idle_timeout: float = 600.0,
         token: str | None = None,
+        quality: int = 80,
     ):
         self.host = str(host)
         self.port = int(port)
         self.max_sessions = int(max_sessions)
         self.idle_timeout = float(idle_timeout)
         self.token = token
+        self.quality = int(quality)
         self.sessions: dict[str, Session] = {}
         self._cookie = f"mbo_gateway_{self.port}"
         self._watcher = None
@@ -248,6 +252,8 @@ class Gateway:
             str(port),
             "--widget",
             widget,
+            "--quality",
+            str(self.quality),
             "--parent-pid",
             str(os.getpid()),
         ]
