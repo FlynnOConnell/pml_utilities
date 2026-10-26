@@ -92,9 +92,19 @@ What does not work in a browser yet:
 - The browse buttons in the GUI's own dialogs; type the path.
 - Copy and paste stay inside the GUI; nothing reaches your clipboard.
 
-Frame rate depends on the link: about 600 KB per frame at a 1400 x 900
-window. Over a relayed tailnet connection (`tailscale status` shows
-`relay`), lower `--quality` or shrink the window.
+Frame rate depends on the link, not the server: a frame of a 1400 x 900
+window is about 600 KB. A browser on the server itself receives the movie at
+its full playback rate; one behind a relayed tailnet connection
+(`tailscale status` shows `relay`) gets what the relay carries. There, lower
+`--quality` or shrink the window.
+
+```{image} /_images/serve/serve_playback_fps.png
+:alt: Frames per second reaching the browser while a movie plays
+:width: 100%
+```
+
+`scripts/benchmark_serve.py` measured it (`run` from each machine, then
+`plot`); `docs/_images/serve/serve_benchmark.json` holds the trials.
 
 ## Convert
 

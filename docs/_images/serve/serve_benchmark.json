@@ -1,0 +1,205 @@
+[
+ {
+  "label": "Browser on pml-w1 itself (no network)",
+  "link": "none",
+  "client": "pml-w1",
+  "gateway": "pml-w1",
+  "file": "u005a04_20260915_FamfDay1_FOV1-002.h5",
+  "size": [
+   1400,
+   900
+  ],
+  "date": "2026-10-26T01:25:24",
+  "trials": [
+   {
+    "frames": 433,
+    "distinct": 433,
+    "bytes": 257322624,
+    "seconds": 15.0,
+    "first_frame_s": 0.022
+   },
+   {
+    "frames": 433,
+    "distinct": 433,
+    "bytes": 256315142,
+    "seconds": 15.0,
+    "first_frame_s": 0.016
+   },
+   {
+    "frames": 432,
+    "distinct": 432,
+    "bytes": 256270204,
+    "seconds": 15.0,
+    "first_frame_s": 0.016
+   }
+  ]
+ },
+ {
+  "label": "Desktop via tailnet relay, JPEG quality 80",
+  "link": "tailnet relay",
+  "client": "fo-home1",
+  "gateway": "pml-w1",
+  "file": "u005a04_20260915_FamfDay1_FOV1-002.h5",
+  "size": [
+   1400,
+   900
+  ],
+  "date": "2026-10-26T01:27:06",
+  "trials": [
+   {
+    "frames": 13,
+    "distinct": 13,
+    "bytes": 7619557,
+    "seconds": 15.0,
+    "first_frame_s": 3.768
+   },
+   {
+    "frames": 8,
+    "distinct": 8,
+    "bytes": 4711348,
+    "seconds": 15.0,
+    "first_frame_s": 5.658
+   }
+  ]
+ },
+ {
+  "label": "Desktop via tailnet relay, JPEG quality 50",
+  "link": "tailnet relay",
+  "client": "fo-home1",
+  "gateway": "pml-w1",
+  "file": "u005a04_20260915_FamfDay1_FOV1-002.h5",
+  "size": [
+   1400,
+   900
+  ],
+  "date": "2026-10-26T01:30:14",
+  "trials": [
+   {
+    "frames": 19,
+    "distinct": 19,
+    "bytes": 6382211,
+    "seconds": 15.0,
+    "first_frame_s": 2.147
+   },
+   {
+    "frames": 22,
+    "distinct": 22,
+    "bytes": 7379838,
+    "seconds": 15.0,
+    "first_frame_s": 2.699
+   }
+  ]
+ },
+ {
+  "label": "Desktop via tailnet relay, JPEG quality 80",
+  "link": "tailnet relay",
+  "client": "fo-home1",
+  "gateway": "pml-w1",
+  "file": "u005a04_20260915_FamfDay1_FOV1-002.h5",
+  "size": [
+   1400,
+   900
+  ],
+  "date": "2026-10-26T01:31:57",
+  "trials": [
+   {
+    "frames": 22,
+    "distinct": 22,
+    "bytes": 12145236,
+    "seconds": 15.0,
+    "first_frame_s": 4.094
+   },
+   {
+    "frames": 16,
+    "distinct": 16,
+    "bytes": 9472556,
+    "seconds": 15.0,
+    "first_frame_s": 2.37
+   }
+  ]
+ },
+ {
+  "label": "Desktop via tailnet relay, JPEG quality 50",
+  "link": "tailnet relay",
+  "client": "fo-home1",
+  "gateway": "pml-w1",
+  "file": "u005a04_20260915_FamfDay1_FOV1-002.h5",
+  "size": [
+   1400,
+   900
+  ],
+  "date": "2026-10-26T01:32:55",
+  "trials": [
+   {
+    "frames": 22,
+    "distinct": 22,
+    "bytes": 7382709,
+    "seconds": 15.0,
+    "first_frame_s": 3.027
+   },
+   {
+    "frames": 43,
+    "distinct": 43,
+    "bytes": 14278306,
+    "seconds": 15.0,
+    "first_frame_s": 1.652
+   }
+  ]
+ },
+ {
+  "label": "Desktop via tailnet relay, JPEG quality 80",
+  "link": "tailnet relay",
+  "client": "fo-home1",
+  "gateway": "pml-w1",
+  "file": "u005a04_20260915_FamfDay1_FOV1-002.h5",
+  "size": [
+   1400,
+   900
+  ],
+  "date": "2026-10-26T01:34:16",
+  "trials": [
+   {
+    "frames": 5,
+    "distinct": 5,
+    "bytes": 2988041,
+    "seconds": 15.0,
+    "first_frame_s": 4.48
+   },
+   {
+    "frames": 39,
+    "distinct": 39,
+    "bytes": 23077370,
+    "seconds": 15.0,
+    "first_frame_s": 1.7
+   }
+  ]
+ },
+ {
+  "label": "Desktop via tailnet relay, JPEG quality 50",
+  "link": "tailnet relay",
+  "client": "fo-home1",
+  "gateway": "pml-w1",
+  "file": "u005a04_20260915_FamfDay1_FOV1-002.h5",
+  "size": [
+   1400,
+   900
+  ],
+  "date": "2026-10-26T01:34:59",
+  "trials": [
+   {
+    "frames": 111,
+    "distinct": 111,
+    "bytes": 36489309,
+    "seconds": 15.0,
+    "first_frame_s": 0.43
+   },
+   {
+    "frames": 126,
+    "distinct": 126,
+    "bytes": 41955566,
+    "seconds": 15.0,
+    "first_frame_s": 0.249
+   }
+  ]
+ }
+]
