@@ -351,7 +351,10 @@ def test_a_zscore_is_computed_from_the_dff_for_any_row_that_measured():
     robust = DffSettings(method="gaussian", slow_s=0.0, noise="mad")
     scale = robust_sd((dff - dff.mean())[None, :])[0, 0]
     np.testing.assert_allclose(
-        computed_zscore(dff, fs, robust), (dff - dff.mean()) / scale, rtol=1e-4, atol=1e-5
+        computed_zscore(dff, fs, robust),
+        (dff - dff.mean()) / scale,
+        rtol=1e-4,
+        atol=1e-5,
     )
     # inverted, the dips are the events, pointing up
     up = display_trace(row, "zscore", settings, False, True)
@@ -361,7 +364,9 @@ def test_a_zscore_is_computed_from_the_dff_for_any_row_that_measured():
     # a pipeline's own z-score wins and keeps its sign
     own = np.array([0.0, 1.0, -2.0, 0.5], np.float32)
     scored = RoiTrace(uid=1, engine="vnoiser", F=F, kinds={"zscore": own})
-    np.testing.assert_array_equal(display_trace(scored, "zscore", None, True, True), own)
+    np.testing.assert_array_equal(
+        display_trace(scored, "zscore", None, True, True), own
+    )
 
 
 def test_maxmin_is_suite2ps_and_sits_under_the_trace():

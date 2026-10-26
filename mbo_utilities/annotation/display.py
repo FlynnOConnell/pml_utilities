@@ -17,7 +17,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-
 from scipy.ndimage import gaussian_filter1d
 
 from mbo_utilities.analysis.dff import (
@@ -274,7 +273,9 @@ def computed_zscore(
         residual = d - gaussian_filter1d(d, sigma=settings.slow_s * float(fs), axis=1)
     else:
         residual = d - d.mean()
-    scale = residual.std() if settings.noise == "sd" else float(robust_sd(residual)[0, 0])
+    scale = (
+        residual.std() if settings.noise == "sd" else float(robust_sd(residual)[0, 0])
+    )
     if not scale > 0:
         return np.zeros(d.shape[1], np.float32)
     return (residual[0] / scale).astype(np.float32)

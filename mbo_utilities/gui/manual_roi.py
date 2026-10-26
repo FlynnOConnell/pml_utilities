@@ -110,6 +110,7 @@ from masknmf.visualization.imgui.keybinds import CLASSIFICATION, DEMIXING, Bind,
 from masknmf.visualization.rois import MARKED_COLOR, SELECTED_ALPHA, FootprintSet
 
 from mbo_utilities import log
+from mbo_utilities.analysis.dff import NOISE_ESTIMATES
 from mbo_utilities.annotation import (
     DISPLAY_KINDS,
     ENGINES,
@@ -127,7 +128,6 @@ from mbo_utilities.annotation import (
     trace_profile,
     y_label,
 )
-from mbo_utilities.analysis.dff import NOISE_ESTIMATES
 from mbo_utilities.annotation.display import DFF_METHODS
 from mbo_utilities.arrays.features._dim_tags import (
     TAG_REGISTRY,
@@ -4368,7 +4368,12 @@ class ManualRoiWidget:
             )
         show_motion = motion is not None and self.show_motion
         show_behavior = behavior is not None and self.show_behavior
-        if target is None and not show_motion and not show_behavior and not show_vnoiser:
+        if (
+            target is None
+            and not show_motion
+            and not show_behavior
+            and not show_vnoiser
+        ):
             # nothing to plot: the panel is its row of controls, the plot empty for when it comes back
             self._traces_panel.height = int(imgui.get_frame_height_with_spacing())
             traces_panel = self._traces_panel_name()
@@ -4379,7 +4384,8 @@ class ManualRoiWidget:
             return
         self._traces_panel.height = (
             PANEL_HEIGHT
-            + (MOTION_PANEL_HEIGHT - PANEL_HEIGHT) * (int(show_motion) + int(show_vnoiser))
+            + (MOTION_PANEL_HEIGHT - PANEL_HEIGHT)
+            * (int(show_motion) + int(show_vnoiser))
             + BEHAVIOR_PLOT_HEIGHT * int(show_behavior)
         )
         if self.strip.collapsed or self.tdim is None:
@@ -4401,7 +4407,11 @@ class ManualRoiWidget:
                     y = display_trace(t, vkind)
                     if y is None:
                         continue
-                    rgb = GROUP_COLORS[i % len(GROUP_COLORS)] if len(vholding) > 1 else None
+                    rgb = (
+                        GROUP_COLORS[i % len(GROUP_COLORS)]
+                        if len(vholding) > 1
+                        else None
+                    )
                     vlines.append((t.label, self._on_frames(t.key, y, nt), rgb))
                 plot.set(vpanel, vlines)
         lines_key = (
@@ -4529,7 +4539,9 @@ class ManualRoiWidget:
         if d.method == "window" and d.f0_stop_s <= d.f0_start_s:
             d.f0_stop_s = d.f0_start_s + 0.1
         if d.method != "percentile" and not all(t.fs for t in rows):
-            imgui.text_disabled("a row without a sampling rate uses the static percentile")
+            imgui.text_disabled(
+                "a row without a sampling rate uses the static percentile"
+            )
         imgui.separator_text("z-score")
         noises = list(NOISE_ESTIMATES)
         imgui.set_next_item_width(em(10))
@@ -4549,7 +4561,9 @@ class ManualRoiWidget:
         moved, value = imgui.input_float(
             "slow drift (s)##z_slow", d.slow_s, 0.5, 5.0, "%.2f"
         )
-        tooltip("A Gaussian of this many seconds taken off the dF/F first; 0 takes off its mean")
+        tooltip(
+            "A Gaussian of this many seconds taken off the dF/F first; 0 takes off its mean"
+        )
         if moved:
             d.slow_s = max(0.0, value)
             changed = True

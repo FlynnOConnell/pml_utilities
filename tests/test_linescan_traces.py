@@ -134,8 +134,7 @@ def test_line_traces_are_one_external_set_following_the_roi_slider(viewer):
     assert [t.z for t in sorted(rows, key=lambda t: t.member)] == list(range(7))
     assert all(
         t.c == 0
-        and t.extra
-        == {"line": t.member, "from": traces.job.source, "unit": "photons"}
+        and t.extra == {"line": t.member, "from": traces.job.source, "unit": "photons"}
         for t in rows
     )
     assert roi._trace_cells(first.key)[:3] == ("ROI 0", "1", "0")
@@ -541,12 +540,16 @@ def test_a_vnoiser_run_reaches_its_panel_from_the_scan(single_patch_viewer):
     settings = VnoiserSettings()
     settings.runtime.denoise = False
     run_vnoiser_pipeline(
-        arr.filenames[0], domains={"cell": {"rois": [0], "pixels": "bright"}}, settings=settings
+        arr.filenames[0],
+        domains={"cell": {"rois": [0], "pixels": "bright"}},
+        settings=settings,
     )
     found = newest_results(Path(arr.filenames[0]).parent, "vnoiser")
     assert found is not None and roi.load_run(found)
     holding, every, run = roi._vnoiser_rows()
-    assert run == found and [t.label for t in holding] == ["cell"] == [t.label for t in every]
+    assert run == found and [t.label for t in holding] == ["cell"] == [
+        t.label for t in every
+    ]
     assert roi.kind_options(every) == ("dff", "zscore", "raw")
 
     draw = _DrawWithSettings(roi)
