@@ -592,9 +592,8 @@ pipelines use the same path; nothing is hardcoded by name.
 - `seeds_from_view = True` + `seed_from_view()` sets the widget's selection to
   what the viewer shows (the recording on screen, the slice its sliders are on);
   `open_pipeline(..., seed=True)` calls it first, and `quick_pipelines(host)`
-  lists the pipelines that apply and set it, which is how the MESc tab header,
-  the Process menu and `Shift+P` offer "vnoiser on MUnit_3" without naming a
-  pipeline.
+  lists the pipelines that apply and set it, which is how the MESc tab header
+  and `Shift+P` offer "vnoiser on MUnit_3" without naming a pipeline.
 
 ### 7.3 Input contract
 

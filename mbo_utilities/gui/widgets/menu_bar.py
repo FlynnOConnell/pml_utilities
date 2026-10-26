@@ -14,11 +14,6 @@ from imgui_bundle import imgui, imgui_ctx
 from mbo_utilities.gui._dialogs import start_open_prompt
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.gui.widgets.notebooks import draw_notebook_menu
-from mbo_utilities.gui.widgets.pipelines import (
-    open_pipeline,
-    quick_pipelines,
-    shown_name,
-)
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.gui.widgets.widget_toggles import draw_widgets_menu
 
@@ -67,26 +62,6 @@ def draw_menu_bar(parent: Any):
                     parent._show_options_popup = True
                 imgui.end_menu()
             draw_widgets_menu(parent)
-            if imgui.begin_menu("Process", True):
-                # one entry per pipeline that can set itself to what is on screen
-                shown = shown_name(parent)
-                quick = quick_pipelines(parent)
-                for cls in quick:
-                    if imgui.menu_item(
-                        f"{cls.name} on {shown}",
-                        "Shift+P" if cls is quick[0] else "",
-                        p_selected=False,
-                        enabled=True,
-                    )[0]:
-                        open_pipeline(parent, cls.name, seed=True)
-                    if imgui.is_item_hovered():
-                        imgui.set_tooltip(
-                            f"Open the {cls.name} pipeline in the Process tab, set to "
-                            "this recording and the ROI and channel on screen."
-                        )
-                if not quick:
-                    imgui.text_disabled("No pipeline sets itself to this data.")
-                imgui.end_menu()
             if imgui.begin_menu("Docs", True):
                 if imgui.menu_item("Help", "h", p_selected=False, enabled=True)[0]:
                     parent._show_help_popup = True
