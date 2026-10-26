@@ -1,7 +1,7 @@
 > **A fork of [mbo_utilities](https://github.com/MillerBrainObservatory/mbo_utilities) for Program in Memory Longevity (PML)**
 
 <p align="center">
-<img src="mbo_utilities/assets/static/logo_utilities.png" height="220" alt="MBO Utilities logo">
+<img src="mbo_utilities/assets/static/logo_utilities.png" height="110" alt="MBO Utilities logo">
 </p>
 
 <p align="center">
@@ -41,125 +41,51 @@ Python 3.12.7 to 3.13. The distribution is `pml_utilities`; it installs the
 `mbo_utilities` package and the `mbo` command, so it cannot share an environment
 with the PyPI `mbo_utilities`.
 
-We recommend [uv](https://docs.astral.sh/uv/) for managing environments; drop the
-`uv` from the commands below for plain pip.
-
 ```bash
 uv venv --python 3.12
 uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```
 
-### With masknmf-toolbox (optional)
-
-Install both in one command so the shared pins (fastplotlib, imgui-bundle, numpy,
-opencv) are resolved together; two separate installs let the second one move them.
-masknmf's `main` still pins fastplotlib 0.6.1, which this package excludes, so use a
-masknmf revision that allows 0.7.
+With MaskNMF, install both in one command so the shared pins resolve together:
 
 ```bash
 uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox" "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```
 
-### Quick viewer (no install)
+With suite2p (`lbm-suite2p-python` depends on the PyPI `mbo_utilities`, so `--no-deps`):
+
+```bash
+uv pip install --no-deps lbm-suite2p-python
+uv pip install suite2p rastermap torch torchvision
+```
+
+Quick viewer without installing:
 
 ```bash
 uvx --from "git+https://github.com/FlynnOConnell/pml_utilities.git" mbo /path/to/data
 ```
 
-### Extras
-
-The base install is the viewer, I/O, metadata and scan-phase tools, with no pytorch.
+Upgrade:
 
 ```bash
-uv pip install "pml_utilities[hpc] @ git+https://github.com/FlynnOConnell/pml_utilities.git"        # mbo hpc: submitit / SLURM
-uv pip install "pml_utilities[server] @ git+https://github.com/FlynnOConnell/pml_utilities.git"     # mbo curate --serve (see note)
-uv pip install "pml_utilities[napari] @ git+https://github.com/FlynnOConnell/pml_utilities.git"     # napari viewer
-uv pip install "pml_utilities[notebooks] @ git+https://github.com/FlynnOConnell/pml_utilities.git"  # jupyterlab + notebook rendering
-uv pip install "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"        # the four above
+uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```
 
-`mbo curate --serve` also needs rendercanvas's http backend, which is not in a
-release yet (2.7.2 lacks it): `uv pip install git+https://github.com/pygfx/rendercanvas`.
-
-Pipelines are their own packages:
+On a minimal Ubuntu/Debian install the viewer's window needs Qt's system libraries:
 
 ```bash
-uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox"   # MaskNMF (optional, see above)
-uv pip install isoview                                 # isoview light-sheet
-uv pip install --no-deps lbm-suite2p-python            # suite2p, step 1
-uv pip install suite2p rastermap torch torchvision     # suite2p, step 2
+sudo apt install --no-install-recommends libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-render0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 libxkbcommon0 libx11-xcb1 libegl1 libgl1 libfontconfig1 libdbus-1-3 ffmpeg
 ```
 
-`lbm-suite2p-python` declares a dependency on the PyPI `mbo_utilities`, whose files
-would overwrite this package's, so install it with `--no-deps`. From a checkout,
-`uv sync --group suite2p` does the same through the override in `pyproject.toml`.
-
-### Linux system libraries (Ubuntu/Debian)
-
-On Linux the viewer opens its window through PyQt6. The PyQt6 wheel ships Qt
-itself, but Qt's X11 platform plugin (`xcb`) loads a set of system libraries at
-startup that a fresh or minimal Ubuntu install does not have. Without them `mbo`
-prints a list of available platform plugins and aborts before any window opens.
+Suite2p on a GPU needs the CUDA build of pytorch; see the pytorch
+[Get Started](https://pytorch.org/get-started/locally/) page for your CUDA version:
 
 ```bash
-sudo apt update
-sudo apt install --no-install-recommends   libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1   libxcb-randr0 libxcb-render-util0 libxcb-render0 libxcb-shape0   libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0   libxcb-xkb1 libxkbcommon-x11-0 libxkbcommon0 libx11-xcb1   libegl1 libgl1 libfontconfig1 libdbus-1-3 ffmpeg
-```
-
-- `apt` resolves the whole list before installing anything, so one bad name
-  installs nothing. If it reports `Unable to locate package`, the name was most
-  likely mangled by copy-paste (a non-breaking space shows up as extra spaces in
-  the error). Retype that name, or confirm the spelling with
-  `apt-cache search libxcb-`.
-- `mbo --check-install` starts Qt in a subprocess and reports whether the
-  platform plugin loads, with the command above as the fix.
-- To see exactly which library the plugin cannot find:
-
-  ```bash
-  QT_DEBUG_PLUGINS=1 mbo
-  ```
-
-- `ffmpeg` is only needed for `.mp4` export.
-
-**Running without Qt.** The viewer does not need Qt; it needs any window backend
-[rendercanvas](https://rendercanvas.readthedocs.io/) can drive. If the system
-libraries cannot be installed (no `sudo`), use the bundled glfw backend instead:
-
-```bash
-RENDERCANVAS_BACKEND=glfw mbo /path/to/data
-# or for every launch
-echo 'export RENDERCANVAS_BACKEND=glfw' >> ~/.bashrc
-```
-
-`mbo` respects `RENDERCANVAS_BACKEND` and skips Qt entirely when it names
-another backend. glfw needs only `libgl1` (or `libegl1`) and a running X11 or
-Wayland session.
-
-### GPU dependencies
-
-PyTorch and CuPy require CUDA-specific wheels that must be installed separately.
-
-Suite2p requires pytorch. Installation depends on your cuda version. See the pytorch [Get Started](https://pytorch.org/get-started/locally/) page for the correct install command for your OS/Cuda version.
-
-```bash
-# pytorch with CUDA 12.N (required for suite2p GPU)
-# make sure you uninstall any previous versions of pytorch
-uv pip uninstall torch torchvision  
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-
-# cupy (optional, enables GPU for axial registration)
-nvidia-smi # check your cuda version first
-uv pip install cupy-cuda12x  # for CUDA 12.x
-uv pip install cupy-cuda11x  # for CUDA 11.x
 ```
 
-### Verify installation
-
-```bash
-mbo --check-install
-```
-
-This will show the status of all packages, GPU availability, and provide exact install commands for anything missing.
+`mbo --check-install` reports every package, GPU availability and the install
+command for anything missing.
 
 ## Usage
 
@@ -200,8 +126,6 @@ The [ScanPhase Guide](https://millerbrainobservatory.github.io/mbo_utilities/usa
 ### Miller Brain Studio
 
 Launch an interactive GPU-accelerated viewer for exploring large imaging datasets. Supports all MBO file formats with real-time visualization.
-
-Note again, `mbo` is how 
 
 ```bash
 mbo                    # launch GUI
@@ -247,12 +171,6 @@ aligned = mbo.with_axial_shifts(data, plane_shifts=shifts)
 In Miller Brain Studio, datasets that carry valid `plane_shifts` are aligned
 automatically on load. Saving the aligned view bakes the shifts into the output
 pixels.
-
-### Upgrade
-
-```bash
-uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
-```
 
 ## ScanImage Acquisition Modes
 
