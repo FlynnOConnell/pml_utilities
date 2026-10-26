@@ -639,6 +639,8 @@ def _figure_kwargs_for_here(
 # the smallest image a subplot keeps, per side, in logical px; the window
 # stops shrinking there
 _MIN_VIEWPORT = 150
+_NOTEBOOK_CANVASES = ("JupyterRenderCanvas", "AnywidgetRenderCanvas")
+_BROWSER_CANVASES = ("HttpRenderCanvas", "BrowserCanvas")
 
 
 def _clamp_window_to_layout(figure, event=None) -> None:
@@ -687,22 +689,24 @@ def _clamp_window_to_layout(figure, event=None) -> None:
             glfw.DONT_CARE,
         )
     elif event is not None:
-        # a notebook canvas is 1x1 until the browser reports its first resize
+        # a notebook or http canvas is 1x1 until the browser reports its first resize
         w, h = canvas.get_logical_size()
         if w < min_w or h < min_h:
-            # the css size trait still holds the pre-drag value, so an unchanged
-            # value would never reach the browser
-            canvas.set_logical_size(0, 0)
+            if type(canvas).__name__ in _NOTEBOOK_CANVASES:
+                # the css size trait still holds the pre-drag value, so an
+                # unchanged value would never reach the browser; an http
+                # browser would report the 0 x 0 back as a resize
+                canvas.set_logical_size(0, 0)
             canvas.set_logical_size(max(w, min_w), max(h, min_h))
 
 
 def _hold_min_size(figure) -> None:
-    """Keep a Qt, glfw or notebook canvas from shrinking below its layout."""
+    """Keep a Qt, glfw, notebook or browser canvas from shrinking below its layout."""
     canvas = figure.canvas
     if not (
         hasattr(canvas, "setMinimumSize")
         or type(canvas).__name__
-        in ("GlfwRenderCanvas", "JupyterRenderCanvas", "AnywidgetRenderCanvas")
+        in ("GlfwRenderCanvas", *_NOTEBOOK_CANVASES, *_BROWSER_CANVASES)
     ):
         return
     canvas.add_event_handler(

@@ -13,6 +13,7 @@ The `mbo` command provides tools for viewing, converting, and analyzing imaging 
 | `mbo formats` | List supported formats |
 | `mbo shortcut` | Create a desktop icon |
 | `mbo gpu` | Show render/compute GPU and memory |
+| `mbo serve` | Serve the GUI to a browser from a remote machine |
 
 ## GUI Mode
 
@@ -45,6 +46,65 @@ you drag.
 ```
 :::
 ::::
+
+## Serve
+
+Run the GUI on a server, where the GPU and the data are, and use it from a
+browser on your own machine. Needs the `server` extra
+(`uv pip install "pml_utilities[server]"`).
+
+```bash
+mbo serve --host tailscale                    # launcher on the tailnet address, port 8800
+mbo serve /data/session1.mesc --host tailscale  # and open a session on it right away
+mbo serve --no-token                          # localhost only; then ssh -L 8800:localhost:8800 server
+```
+
+Open the link it prints; it carries a token, which the page trades for a
+cookie, so later visits need only `http://<server>:8800/`. The page lists the
+running sessions and browses the server's folders: click a folder to enter
+it, double-click a file (or type a path and press Enter) to open it. That
+page stands in for the file dialog `mbo` shows on a desktop.
+
+Each session is a GUI process of its own on the server, streamed to the
+browser as JPEG frames over a websocket while the view changes, then once
+losslessly when it stops; nothing is sent while it is still. Closing the tab
+leaves the session running; one with no browser for `--idle-timeout` minutes
+(default 10, 0 keeps it) is stopped, as is every session when `mbo serve`
+exits. `--max-sessions` (default 1) caps how many run at once.
+
+| Option | Default | |
+|--------|---------|---|
+| `--host` | `127.0.0.1` | `tailscale` for the tailnet address, `0.0.0.0` for every network |
+| `--port` | 8800 | |
+| `--max-sessions` | 1 | GUI processes allowed at once |
+| `--idle-timeout` | 10 | minutes without a browser before a session stops |
+| `--widget` | `preview` | side widget for the session `PATH` opens |
+| `--quality` | 80 | JPEG quality while the view changes; 50 for a slow link |
+| `--token` / `--no-token` | random | the token the link carries |
+
+Anyone with the link reads what the user who started `mbo serve` can read;
+keep it on localhost or the tailnet.
+
+What does not work in a browser yet:
+
+- Windows the GUI opens beside the viewer (spike average, Registration QC, the
+  curation dashboard) start on the server, which has no display.
+- The browse buttons in the GUI's own dialogs; type the path.
+- Copy and paste stay inside the GUI; nothing reaches your clipboard.
+
+Frame rate depends on the link, not the server: a frame of a 1400 x 900
+window is about 600 KB. A browser on the server itself receives the movie at
+its full playback rate; one behind a relayed tailnet connection
+(`tailscale status` shows `relay`) gets what the relay carries. There, lower
+`--quality` or shrink the window.
+
+```{image} /_images/serve/serve_playback_fps.png
+:alt: Frames per second reaching the browser while a movie plays
+:width: 100%
+```
+
+`scripts/benchmark_serve.py` measured it (`run` from each machine, then
+`plot`); `docs/_images/serve/serve_benchmark.json` holds the trials.
 
 ## Convert
 

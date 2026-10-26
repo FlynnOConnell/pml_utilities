@@ -72,7 +72,7 @@ Issues = "https://github.com/MillerBrainObservatory/mbo_utilities/issues"
 
 [project.optional-dependencies]
 hpc = ["submitit>=1.5.0"]
-server = ["uvicorn>=0.30", "websockets>=13"]
+server = ["uvicorn>=0.30", "websockets>=13", "simplejpeg>=1.8"]
 napari = [
     "napari",
     "napari-ome-zarr",

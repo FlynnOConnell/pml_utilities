@@ -31,6 +31,8 @@ pml_utilities/
 │   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # Miller Brain Studio (imgui + fastplotlib)
+│   │   ├── gateway.py        # `mbo serve`: launcher + one studio_server process per browser session
+│   │   ├── studio_server.py  # one Studio on a BrowserCanvas (canvas_server.py), served over http
 │   │   ├── playhead.py       # one time in seconds shared by every view (§7.6)
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
@@ -74,6 +76,7 @@ test against a local checkout, `uv pip install -e ~/repos/masknmf-toolbox`.
 | `gui` views | Draw what the array answers (`results`, `motion_correction`, `behavior`) at the position the host's `Slice` and `Playhead` say is on screen (§7.6) | Read `iw.indices` itself; parse a pipeline's files; name a format |
 | `gui/widgets/pipelines` | Draw a pipeline's config; spawn its worker task | Compute inline; hold pipeline math |
 | `gui/tasks` + `gui/_worker` | Re-open the source in a subprocess and call the runner | Depend on GUI state; args are JSON |
+| `gui/gateway` | Start, proxy and stop one `studio_server` process per browser session; browse folders | Import fastplotlib, `rendercanvas.auto` or any viewer; hold more than session bookkeeping |
 | `cli` | Thin click wrappers over `imread`/`imwrite`/runners | Hold logic unreachable from Python |
 
 If a change crosses a boundary, split it into two PRs or justify it in the description.

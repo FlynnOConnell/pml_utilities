@@ -4148,6 +4148,7 @@ all = [
     { name = "pyqt6" },
     { name = "qtpy" },
     { name = "seaborn" },
+    { name = "simplejpeg" },
     { name = "submitit" },
     { name = "uvicorn" },
     { name = "websockets" },
@@ -4192,6 +4193,7 @@ notebooks = [
     { name = "seaborn" },
 ]
 server = [
+    { name = "simplejpeg" },
     { name = "uvicorn" },
     { name = "websockets" },
 ]
@@ -4288,6 +4290,7 @@ requires-dist = [
     { name = "scikit-image" },
     { name = "scipy" },
     { name = "seaborn", marker = "extra == 'notebooks'", specifier = ">=0.13.2" },
+    { name = "simplejpeg", marker = "extra == 'server'", specifier = ">=1.8" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=6.1.3" },
     { name = "sphinx-autodoc2", marker = "extra == 'docs'" },
     { name = "sphinx-book-theme", marker = "extra == 'docs'" },
