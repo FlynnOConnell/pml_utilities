@@ -2214,6 +2214,100 @@ def curate(path, serve, host, port, channel):
     open_curation_viewer(path, channel=channel)
 
 
+@main.command("serve")
+@click.argument("path", type=click.Path(exists=True), required=False)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    show_default=True,
+    help="Interface to listen on: 'tailscale' for this machine's tailnet address, "
+    "0.0.0.0 for every network.",
+)
+@click.option("--port", type=int, default=8800, show_default=True, help="Port.")
+@click.option(
+    "--max-sessions",
+    type=int,
+    default=1,
+    show_default=True,
+    help="Studio processes allowed at once.",
+)
+@click.option(
+    "--idle-timeout",
+    type=float,
+    default=10.0,
+    show_default=True,
+    help="Minutes a session lives with no browser connected; 0 keeps it.",
+)
+@click.option(
+    "--widget",
+    type=click.Choice(["preview", "manualroi", "none"]),
+    default="preview",
+    show_default=True,
+    help="Side widget of the session PATH opens.",
+)
+@click.option(
+    "--token",
+    default=None,
+    help="Token the link carries (default: a new random one each start).",
+)
+@click.option(
+    "--no-token",
+    is_flag=True,
+    default=False,
+    help="Serve without a token, for a localhost-only port behind a tunnel.",
+)
+def serve(path, host, port, max_sessions, idle_timeout, widget, token, no_token):
+    """Serve Miller Brain Studio to browsers from this machine.
+
+    Each browser session runs the Studio in a process of its own on this
+    machine's GPU and data, streamed to the browser over a websocket. The
+    page at the printed link lists the sessions and opens a file or folder
+    in a new one, in place of the desktop file dialog. With PATH a session
+    on it starts right away.
+
+    The link carries a token; anyone with it can read what you can, so keep
+    the port on localhost or the tailnet.
+
+    \b
+      mbo serve --host tailscale
+      mbo serve /data/stan112/stan112_expt12.mesc --host tailscale
+      mbo serve --port 8800 --no-token     # then: ssh -L 8800:localhost:8800 server
+    """
+    import secrets
+    import subprocess
+
+    from mbo_utilities.gui.gateway import Gateway
+
+    if host == "tailscale":
+        try:
+            out = subprocess.run(
+                ["tailscale", "ip", "-4"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            ).stdout
+        except (OSError, subprocess.SubprocessError) as e:
+            raise click.ClickException(f"no tailnet address: {e}") from e
+        host = out.split()[0]
+    if no_token:
+        token = None
+    elif token is None:
+        token = secrets.token_urlsafe(16)
+    gateway = Gateway(
+        host=host,
+        port=port,
+        max_sessions=max_sessions,
+        idle_timeout=idle_timeout * 60,
+        token=token,
+    )
+    click.echo(f"Miller Brain Studio: {gateway.link()}")
+    if path:
+        session = gateway.open(path, widget)
+        click.echo(f"  {Path(path).name}: {gateway.link(session.url)}")
+    gateway.serve()
+
+
 @main.command("spike-average")
 @click.argument("path", type=click.Path(exists=True))
 @click.option(

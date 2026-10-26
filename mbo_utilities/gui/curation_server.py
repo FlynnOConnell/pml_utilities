@@ -12,58 +12,30 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import logging
-import os
 from pathlib import Path
 
-__all__ = ["CurationServer", "PAGE_HTML", "main", "serve_curation"]
+from mbo_utilities import log
+from mbo_utilities.gui.canvas_server import (
+    BrowserCanvas,
+    CanvasServer,
+    select_http_backend,
+)
+
+__all__ = ["CurationServer", "main", "serve_curation"]
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 60649
 DEFAULT_SIZE = (1500, 900)
-
-PAGE_HTML = """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset='utf-8'>
-    <title>$title</title>
-    <script type='module' src='renderview.js'></script>
-    <script type='module' src='renderview-client.js'></script>
-    <link rel='stylesheet' href='renderview.css'>
-    <style>
-        html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1f22; color: #ddd;
-                     font-family: system-ui, sans-serif; }
-        #canvas p { width: 100%; height: 100%; margin: 0; display: flex; justify-content: center;
-                    align-items: center; color: #888; }
-        #canvas .renderview-resizer { width: 18px; height: 18px;
-                    background: linear-gradient(135deg, transparent 55%, rgba(200, 200, 200, 0.7) 55%); }
-        .badge { position: fixed; bottom: 6px; padding: 2px 8px; font: 12px monospace; color: #bbb;
-                 background: rgba(0, 0, 0, 0.45); border-radius: 4px; }
-        #status { right: 8px; }
-        #fit { right: 8px; bottom: 30px; cursor: pointer; }
-        .badge button { font: inherit; margin-left: 6px; }
-    </style>
-</head>
-<body>
-    <div id='canvas' class='is-resizable' style='display:block; width:100vw; height:100vh; --line-thickness:0'>
-        <p>Connecting to the curation dashboard ...</p>
-    </div>
-    <div id='fit' class='badge' title='drag the bottom-right corner to resize; this fits the window again'
-         onclick="const c = document.getElementById('canvas'); c.style.width = '100vw'; c.style.height = '100vh';">
-        fit window</div>
-    <div id='status' class='badge'></div>
-</body>
-</html>
-"""
+WAITING = "Connecting to the curation dashboard ..."
 
 
-class CurationServer:
+class CurationServer(CanvasServer):
     """The curation dashboard on an ``http`` rendercanvas, ready to serve.
 
     Building it renders nothing yet: frames are drawn once a browser
-    connects and reports its size. ``serve()`` runs uvicorn in this thread
-    until interrupted; ``serve_async()`` does the same inside a running
-    asyncio loop; ``asgi`` mounts into a larger ASGI app (FastAPI, Starlette).
+    connects. ``serve()`` runs uvicorn in this thread until interrupted;
+    ``serve_async()`` does the same inside a running asyncio loop; ``asgi``
+    mounts into a larger ASGI app (FastAPI, Starlette).
 
     Parameters
     ----------
@@ -89,94 +61,26 @@ class CurationServer:
         port: int = DEFAULT_PORT,
         size=DEFAULT_SIZE,
         title: str | None = None,
-        logger: logging.Logger | None = None,
+        logger=None,
     ):
-        # the auto backend is never used here, but fastplotlib resolves it at
-        # import and the desktop branch of the figure helper would ask Qt for
-        # a screen: a server has none
-        os.environ.setdefault("RENDERCANVAS_FORCE_OFFSCREEN", "1")
-        try:
-            from rendercanvas.http import asgi, resources
-        except ImportError as e:
-            raise ImportError(
-                "mbo curate --serve needs the rendercanvas http backend, which no release "
-                "has yet (2.7.2 lacks it): uv pip install git+https://github.com/pygfx/rendercanvas"
-            ) from e
-
         from mbo_utilities.gui.curation_viewer import CurationVis
 
-        self.logger = logger or logging.getLogger("curation_server")
-        self.host = str(host)
-        self.port = int(port)
-        self.vis = CurationVis(
-            path, channel=channel, canvas="http", size=tuple(size), logger=self.logger
+        size = tuple(size)
+        vis = CurationVis(
+            path,
+            channel=channel,
+            canvas=BrowserCanvas(size=size, max_fps=60.0),
+            size=size,
+            logger=logger or log.get("gui.curation_server"),
         )
-        self.title = title or self.vis.title
-        resources["index.html"] = "text/html", PAGE_HTML.replace("$title", self.title)
-        self.asgi = asgi
-        self._closed = False
-        self.vis.show()
+        super().__init__(
+            vis, title=title or vis.title, waiting=WAITING, host=host, port=port
+        )
 
     @property
     def widget(self):
         """The :class:`EventCurationWidget` being served."""
         return self.vis.widget
-
-    @property
-    def canvas(self):
-        return self.vis.figure.canvas
-
-    @property
-    def url(self) -> str:
-        host = "localhost" if self.host in ("0.0.0.0", "::") else self.host
-        return f"http://{host}:{self.port}/"
-
-    def clients(self) -> int:
-        """How many browsers are connected."""
-        return int(self.asgi.get_count())
-
-    def _uvicorn_config(self, **kwargs):
-        try:
-            import uvicorn
-        except ImportError as e:
-            raise ImportError(
-                'uvicorn not installed. Install with: uv pip install "pml_utilities[server] @ git+https://github.com/FlynnOConnell/pml_utilities.git"'
-            ) from e
-
-        return uvicorn.Config(
-            self.asgi,
-            host=self.host,
-            port=self.port,
-            log_level="warning",
-            **kwargs,
-        )
-
-    def serve(self) -> None:
-        """Run the server in this thread until it is interrupted."""
-        import uvicorn
-
-        self.logger.warning("curation dashboard at %s (ctrl+c stops)", self.url)
-        print(f"curation dashboard: {self.url}", flush=True)
-        try:
-            uvicorn.Server(self._uvicorn_config()).run()
-        finally:
-            self.close()
-
-    async def serve_async(self) -> None:
-        """Run the server inside the current asyncio loop until it is stopped."""
-        import uvicorn
-
-        self.logger.warning("curation dashboard at %s", self.url)
-        try:
-            await uvicorn.Server(self._uvicorn_config()).serve()
-        finally:
-            self.close()
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self.vis.close()
 
 
 def serve_curation(
@@ -188,6 +92,7 @@ def serve_curation(
     size=DEFAULT_SIZE,
 ) -> None:
     """Serve the dashboard on ``path`` until interrupted."""
+    select_http_backend()
     CurationServer(path, channel=channel, host=host, port=port, size=size).serve()
 
 
@@ -222,6 +127,7 @@ def main(argv: list[str] | None = None) -> None:
         help="canvas size until a browser reports its window (default 1500x900)",
     )
     args = ap.parse_args(argv)
+    print(f"curation dashboard: http://{args.host}:{args.port}/", flush=True)
     serve_curation(
         args.path, channel=args.channel, host=args.host, port=args.port, size=args.size
     )
