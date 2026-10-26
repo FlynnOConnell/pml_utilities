@@ -2138,9 +2138,10 @@ def linescan_roi_read(
     offset makes every dF/F several times too small.
 
     Each ROI (its own Z-index of ``arr``) is cropped back to its true,
-    unpadded ``height x width`` from ``arr.metadata["mesc_roi_extents"]``
-    before averaging - the array pads ragged ROIs to a shared frame with
-    zeros, which would pull the mean down. The kymograph averages over the
+    unpadded ``height x width`` from ``arr.metadata["mesc_roi_extents"]``,
+    starting at its ``y_start`` (a Y-flipped layout puts a short box at the
+    bottom of the frame), before averaging - the array pads ragged ROIs to
+    a shared frame with zeros, which would pull the mean down. The kymograph averages over the
     ROI's lines (its height) and over ``bin_frames`` consecutive frames;
     ``W`` is the widest ROI and narrower ROIs are NaN beyond their width.
     Reads ``batch_size`` frames at a time; the means are accumulated and
@@ -2174,9 +2175,10 @@ def linescan_roi_read(
     t0 = time.time()
     for i, (movie, ext) in enumerate(zip(movies, extents)):
         h, w = int(ext["height"]), int(ext["width"])
+        y0 = int(ext.get("y_start", 0))
         for tt0 in range(0, T, batch_size):
             tt1 = min(T, tt0 + batch_size)
-            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(
+            blk = movie.frames(tt0, tt1, slice(y0, y0 + h), slice(0, w)).astype(
                 dtype, copy=False
             )
             if scale != 1.0 or offset != 0.0:

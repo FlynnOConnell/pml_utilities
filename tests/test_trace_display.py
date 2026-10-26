@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import numpy as np
-from mbo_utilities.analysis.dff import dfof_maxmin, dfof_percentile, maxmin_baseline
+import pytest
+from mbo_utilities.analysis.dff import (
+    baseline,
+    dfof_maxmin,
+    dfof_percentile,
+    maxmin_baseline,
+    robust_sd,
+)
 from mbo_utilities.annotation import RoiTrace
 from mbo_utilities.annotation.display import (
     DEFAULT_TRACE_PROFILE,
+    DFF_METHODS,
     DISPLAY_KINDS,
     SUBTRACTED,
     TRACE_PROFILES,
     DffSettings,
     TraceProfile,
     available_kinds,
+    computed_dff,
+    computed_zscore,
     deflect,
     display_trace,
     displayed_kind,
@@ -60,7 +70,7 @@ def test_registering_a_profile_makes_it_the_engines_own():
 
 def test_suite2p_rows_plot_the_lsp_recipe():
     row = RoiTrace(uid=1, engine="suite2p", F=F, Fneu=FNEU)
-    assert available_kinds(row) == ("dff", "raw", "neuropil", SUBTRACTED)
+    assert available_kinds(row) == ("dff", "zscore", "raw", "neuropil", SUBTRACTED)
     assert displayed_kind(row) == "dff" and y_label(row) == "dF/F (%)"
     # a dF/F computed here is taken of the neuropil-subtracted trace
     corr = F - 0.7 * FNEU
@@ -94,9 +104,13 @@ def test_the_raw_trace_its_neuropil_and_their_difference_are_three_kinds():
         "F - 0.7 Fneu (a.u.)",
     ]
     # nothing to subtract without a neuropil, and masknmf's zeros are not one
-    assert available_kinds(RoiTrace(uid=1, engine="suite2p", F=F)) == ("dff", "raw")
+    assert available_kinds(RoiTrace(uid=1, engine="suite2p", F=F)) == (
+        "dff",
+        "zscore",
+        "raw",
+    )
     masknmf = RoiTrace(uid=1, engine="masknmf", F=F, Fneu=np.zeros(4))
-    assert available_kinds(masknmf) == ("dff", "raw")
+    assert available_kinds(masknmf) == ("dff", "zscore", "raw")
     f0 = float(np.percentile(F, 20))
     np.testing.assert_allclose(display_trace(masknmf), (F - f0) / f0 * 100.0, rtol=1e-5)
     spikes = RoiTrace(uid=1, engine="suite2p", F=F, kinds={"spikes": FNEU})
@@ -121,7 +135,7 @@ def test_vnoiser_rows_show_the_curated_trace_first_and_dff_in_percent():
     )
     # a line's raw means: counts, and a dF/F computed over the rolling baseline
     line = RoiTrace(uid=0, member=1, engine="vnoiser", F=F, fs=1000.0)
-    assert available_kinds(line) == ("dff", "raw")
+    assert available_kinds(line) == ("dff", "zscore", "raw")
     assert y_label(line, "raw") == "F (counts)"
     expected = dfof_maxmin(F[None, :], 1000.0, 5.0, 0.05)[0] * 100.0
     np.testing.assert_allclose(display_trace(line, "dff"), expected)
@@ -272,3 +286,97 @@ def test_flip_inverts_the_trace_a_dff_is_computed_from():
         display_trace(trace, "dff", settings, False, True),
     )
     assert y_label(trace, "dff", flip=True) == "dF/F (%), inverted"
+
+
+def _bleaching(fs: float = 100.0, n: int = 3000) -> np.ndarray:
+    """A bleaching trace with a dip every second, on a dark first sample."""
+    t = np.arange(n) / fs
+    rng = np.random.default_rng(1)
+    f = 200.0 + 100.0 * np.exp(-t / 10.0) + rng.normal(0, 2.0, n)
+    f[(np.arange(n) % int(fs)) < 3] -= 40.0
+    return f.astype(np.float32)
+
+
+def test_every_baseline_is_on_offer_and_computed_from_the_measured_trace():
+    fs = 100.0
+    f = _bleaching(fs)
+    row = RoiTrace(uid=1, engine="mean", F=f, fs=fs)
+    for method in DFF_METHODS:
+        settings = DffSettings(method=method)
+        shown = display_trace(row, "dff", settings)
+        assert shown.shape == f.shape and np.isfinite(shown).all(), method
+        np.testing.assert_allclose(shown, computed_dff(f, fs, settings) * 100.0)
+    # a rolling percentile is analysis.dff's, sized in seconds
+    settings = DffSettings(method="rolling", window_s=2.0, percentile=10.0)
+    f0 = baseline(f[None, :], fs, "percentile", window_s=2.0, percentile=10.0)[0]
+    np.testing.assert_allclose(
+        computed_dff(f, fs, settings), (f - f0) / f0, rtol=1e-4, atol=1e-6
+    )
+    # MESc's F0: the mean over a fixed stretch
+    settings = DffSettings(method="window", f0_start_s=1.0, f0_stop_s=2.0)
+    f0 = f[100:200].mean()
+    np.testing.assert_allclose(
+        computed_dff(f, fs, settings), (f - f0) / f0, rtol=1e-4, atol=1e-6
+    )
+    # every moving baseline follows the decay; a fixed F0 does not
+    early, late = slice(200, 700), slice(2500, None)
+    for method in ("exponential", "gaussian", "maxmin", "rolling"):
+        dff = computed_dff(f, fs, DffSettings(method=method))
+        assert abs(np.median(dff[late]) - np.median(dff[early])) < 0.03, method
+    dff = computed_dff(f, fs, DffSettings(method="window"))
+    assert np.median(dff[late]) - np.median(dff[early]) < -0.15
+    # without a rate every method but the static percentile has no size: the static percentile
+    no_rate = RoiTrace(uid=1, engine="mean", F=f)
+    np.testing.assert_allclose(
+        display_trace(no_rate, "dff", DffSettings(method="gaussian")),
+        dfof_percentile(f[None, :], 20.0)[0] * 100.0,
+        rtol=1e-5,
+    )
+    with pytest.raises(ValueError, match="dF/F method"):
+        DffSettings(method="median")
+    with pytest.raises(ValueError, match="noise"):
+        DffSettings(noise="iqr")
+
+
+def test_a_zscore_is_computed_from_the_dff_for_any_row_that_measured():
+    fs = 100.0
+    f = _bleaching(fs)
+    row = RoiTrace(uid=1, engine="mean", F=f, fs=fs)
+    assert "zscore" in available_kinds(row)
+    settings = DffSettings(method="gaussian", slow_s=0.0, noise="sd")
+    dff = computed_dff(f, fs, settings)
+    z = display_trace(row, "zscore", settings)
+    np.testing.assert_allclose(z, (dff - dff.mean()) / dff.std(), rtol=1e-4, atol=1e-5)
+    # a robust SD that the dips do not inflate makes them bigger
+    robust = DffSettings(method="gaussian", slow_s=0.0, noise="mad")
+    scale = robust_sd((dff - dff.mean())[None, :])[0, 0]
+    np.testing.assert_allclose(
+        computed_zscore(dff, fs, robust), (dff - dff.mean()) / scale, rtol=1e-4, atol=1e-5
+    )
+    # inverted, the dips are the events, pointing up
+    up = display_trace(row, "zscore", settings, False, True)
+    assert up[(np.arange(f.size) % 100) < 3].mean() > 3
+    assert y_label(row, "zscore") == "z-score"
+    assert y_label(row, "zscore", False, True) == "z-score, inverted"
+    # a pipeline's own z-score wins and keeps its sign
+    own = np.array([0.0, 1.0, -2.0, 0.5], np.float32)
+    scored = RoiTrace(uid=1, engine="vnoiser", F=F, kinds={"zscore": own})
+    np.testing.assert_array_equal(display_trace(scored, "zscore", None, True, True), own)
+
+
+def test_maxmin_is_suite2ps_and_sits_under_the_trace():
+    from scipy.ndimage import gaussian_filter1d
+
+    f = _bleaching()[None, :].astype(np.float64)
+    base = maxmin_baseline(f, 100.0, window_s=2.0, sigma_s=0.05)
+    # the rolling max of the rolling min: down at the dips, under the
+    # smoothed trace (a max-then-min would ride its top)
+    smooth = gaussian_filter1d(f[0], 5.0)
+    assert np.median(smooth[200:-200] - base[0, 200:-200]) > 5
+    assert np.median(dfof_maxmin(f, 100.0, 2.0, 0.05)) > 0
+
+
+def test_a_rows_unit_names_its_axis():
+    row = RoiTrace(uid=1, engine="mean", F=F, extra={"unit": "photons"})
+    assert y_label(row, "raw") == "F (photons)"
+    assert y_label(row, "raw", True, False) == "F - mean (photons)"

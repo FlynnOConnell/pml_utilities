@@ -2714,7 +2714,7 @@ class TestTracePlotView:
         """
         rows = [widget.traces.get(k) for k in self._two_traces(widget)]
         # quick traces are mean-engine rows without a ring: no neuropil kinds
-        assert widget.kind_options(rows) == ("dff", "raw")
+        assert widget.kind_options(rows) == ("dff", "zscore", "raw")
         assert widget.plot_y_label(rows) == "dF/F (%)"
         s2p = RoiTrace(
             uid=0,
@@ -2736,6 +2736,7 @@ class TestTracePlotView:
         assert widget.kind_options([s2p, volt]) == (
             "dff",
             "denoised",
+            "zscore",
             "raw",
             "neuropil",
             SUBTRACTED,
@@ -2761,7 +2762,13 @@ class TestTracePlotView:
             RoiTrace(uid=0, member=0, source="run", engine="suite2p", F=f, Fneu=fneu)
         )
         widget.select_trace(s2p.key)
-        assert widget.kind_options([s2p]) == ("dff", "raw", "neuropil", SUBTRACTED)
+        assert widget.kind_options([s2p]) == (
+            "dff",
+            "zscore",
+            "raw",
+            "neuropil",
+            SUBTRACTED,
+        )
         shown = {"raw": f, "neuropil": fneu, SUBTRACTED: f - 0.7 * fneu}
         labels = {
             "raw": "F (a.u.)",

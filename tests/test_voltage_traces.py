@@ -147,6 +147,29 @@ def test_ragged_boxes_on_a_flipped_layout_sit_at_the_bottom():
     assert roi_geometry(Unit()) == {0: (0, 8, 6), 1: (3, 5, 4)}
 
 
+def test_line_means_read_a_short_box_where_it_sits():
+    """The Traces tab's line and patch means (``linescan_roi_read``) take a
+    short box from its ``y_start``, not from the top of the padded frame.
+    """
+    from mbo_utilities.arrays.numpy import NumpyArray
+    from mbo_utilities.roi_workflow import linescan_roi_means
+
+    data = np.zeros((5, 1, 2, 8, 6), np.float32)
+    data[:, 0, 0] = 1.0
+    data[:, 0, 1, 3:8, 0:4] = 7.0
+    arr = NumpyArray(
+        data,
+        metadata={
+            "mesc_roi_extents": [
+                {"index": 0, "y_start": 0, "y_end": 8, "height": 8, "width": 6},
+                {"index": 1, "y_start": 3, "y_end": 8, "height": 5, "width": 4},
+            ]
+        },
+        dims="TCZYX",
+    )
+    np.testing.assert_allclose(linescan_roi_means(arr), [[1.0] * 5, [7.0] * 5])
+
+
 def test_a_mask_drawn_on_the_frame_becomes_a_domain_of_its_roi():
     """A mask drawn in the viewer's (padded, flipped) frame is cut to the ROI's own pixels."""
     geometry = {0: (0, 8, 6), 1: (3, 5, 4)}
@@ -297,9 +320,11 @@ def test_every_baseline_method(patch):
     # an AOD scan starts dark for a few ms; the rolling baselines must not follow it
     dark = 900 + rng.normal(0, 2, (1, N_FRAMES))
     dark[:, :20] = 0
-    for method in ("percentile", "maxmin"):
-        f0 = baseline(dark, FS, method, window_s=5.0)
-        assert f0[0, 20:].min() > 850, method
+    f0 = baseline(dark, FS, "percentile", window_s=5.0)
+    assert f0[0, 20:].min() > 850
+    # max-min smooths first (50 ms), so the dark start reaches a little past itself
+    f0 = baseline(dark, FS, "maxmin", window_s=5.0)
+    assert f0[0, 200:].min() > 850
 
 
 def test_settings_polarity_and_round_trip():

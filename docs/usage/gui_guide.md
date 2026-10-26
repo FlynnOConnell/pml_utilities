@@ -240,7 +240,9 @@ Femtonics MESc files only. A `.mesc` holds one measurement unit per scan the ope
 
 **Reference image** (the **picture** button on the MESc tab, and a button on the Traces panel) opens a popup showing where the shown scan's lines or patches were drawn: the picture MEScan took just before the scan, and every Z-stack holding them, projected over the slices they were scanned on rather than over the whole stack. Each carries the lines or patches drawn in MESc's colours, the one the ROI slider is on thicker. The picture carries every line whatever its depth, since that is where the operator drew them; a Z-stack carries only the lines actually scanned inside it, and the caption says how many of the scan's lines those are. Click a line to move the ROI slider to it. The popup's **display** button shows the image's own unit in the viewer, a Z-stack at the slice its lines sit on, so the Z-plane slider lands on the right tissue instead of slice 1. Pan, zoom, colormap, contrast and pixel values work as in **Open full FOV**; the popup follows a unit switch while it is open. The pairing is by the file's own metadata (`CoordinateMapJSON` outlines, `ReferenceViewportJSON` placement, `BackgroundImagePath`), so a unit MESc recorded no ROIs for has no reference image. A scan whose ROI list was edited after acquisition falls back to the viewer's own colours.
 
-**Traces of a vnoiser run.** When vnoiser has run on the shown scan (a `*.vnoiser.zarr` made from this file beside it, or a `PF` folder), the Traces tab opens with the run's domains already loaded, one row each, and the ROI slider plots the domain holding the line on screen (a line no domain holds plots its own mean). The kind combo switches the row between **denoised**, **dff**, **zscore** and **raw**; **flip** beside it turns whichever is shown over, and **MC** puts the RTMC shifts above it on the same time axis.
+**From a scan to its traces.** Pick the scan in the MESc tab. The Traces tab plots the line or patch the ROI slider is on (a single-patch scan's whole frame): its mean in photon counts, computed in the background. The kind combo shows it as **dff**, **zscore** or **raw**; **Trace** beside it sets the mean subtraction and the inversion (each as the viewer's, or on or off here) and the dF/F baseline: suite2p's rolling max-min, a rolling percentile, a Gaussian low-pass, a bleaching fit, a fixed window (MESc's F0) or one percentile for the whole trace, with the z-score's noise and slow drift. **flip** turns whatever is shown over, and **MC** puts the RTMC shifts above it on the same time axis.
+
+**Traces of a vnoiser run.** **Run vnoiser** on the Traces tab opens the vnoiser tab on the scan. When vnoiser has run on it (a `*.vnoiser.zarr` made from this file beside it, or a `PF` folder), the run's domains load by themselves, one row each in the trace table, and the domain holding the line on screen plots in a **vnoiser** panel of its own under the scan's trace, never in its place. Its combo shows the run's **denoised**, **dff**, **zscore** or **raw** trace as the run wrote it; the **vnoiser** switch hides the panel. A line no domain holds leaves the panel empty. A finished run started from the Studio loads the same way.
 
 (gui-metadata)=
 ## Metadata Viewer
@@ -451,13 +453,18 @@ the pipeline that wrote a results file), from which run. A results file's rows a
 named by their ROI (`roi3` for its trace, `roi3 (raw)` for its line; a line of a
 multi-line ROI adds itself, `roi3 line 12 (raw)`) and put the line on the ROI axis
 column. The plot shows the checked rows the way their pipeline says: the **kind**
-combo picks `raw`, the pipeline's own `dF/F` (or one computed here over a rolling
-max-min baseline sized in seconds; the **dF/F** button sets its window and smoothing
-or switches to a percentile baseline), `denoised` or `z-score`, and a row without
-that kind shows its pipeline's default (the vnoiser pipeline's curated trace, dF/F
-elsewhere); the y axis is labelled from what is on it. **neuropil corrected** appears
-only when a plotted row's pipeline measured a neuropil (suite2p, or the mean engine's
-ring). The x axis opens in seconds whenever the data has a sampling rate. Running
+combo picks `raw`, `neuropil` and `raw - neuropil` (when the pipeline measured a
+neuropil: suite2p, or the mean engine's ring), the pipeline's own `dF/F` and
+`z-score` (or ones computed here), `denoised` or `spikes`, and a row without that
+kind shows its pipeline's default (the vnoiser pipeline's curated trace, dF/F
+elsewhere); the y axis is labelled from what is on it. The **Trace** button sets
+the mean subtraction and inversion of what was measured (as the viewer's Mean
+Subtraction and Invert Deflection, or on or off here) and how a dF/F or z-score
+computed here is made: its baseline (rolling max-min, rolling percentile,
+Gaussian low-pass, bleaching fit, fixed window or static percentile, each with
+its window, percentile or sigma in seconds) and the z-score's noise (SD or
+robust SD) and slow drift; **pipeline defaults** puts them back. The x axis opens
+in seconds whenever the data has a sampling rate. Running
 the same ROI the same way again
 replaces its row; reading it on another channel, z-plane or with another engine adds
 one. Click a row to plot it, ctrl+click to plot several; the plot follows the ROI
@@ -629,7 +636,8 @@ Quick start, one MESc unit:
   holds the wavelet and peak settings.
 - **Run vnoiser**. The results file `<file>.<time>.vnoiser.zarr` lands beside the
   `.mesc`. **Load into Traces** puts each domain's F, dF/F, z and denoised trace
-  in the Traces tab, and **Curate** opens the curation window.
+  in the Traces tab's vnoiser panel, under the scan's own trace, and **Curate**
+  opens the curation window.
 
 Without a run, **Curate** lists every ROI of the file as recorded and denoises
 each one when you click it. Those traces are turned over first (the **inverted**

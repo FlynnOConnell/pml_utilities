@@ -126,6 +126,8 @@ _VOLUME_MODALITIES = frozenset({11})
 # lines of a line scan, the patches of a chessboard, the boxes of a ribbon
 # scan. The vnoiser pipeline and the curation widget take any of them.
 ROI_LAYOUTS = frozenset({"packed", "tiled", "boxes"})
+# chessboard and ribbon scans: AOD patches, one of which can be the whole frame
+PATCH_MODALITIES = _TILED_MODALITIES | _BOX_MODALITIES
 # shortest single-frame-ROI recording (a one-patch chessboard, a raster) the
 # voltage pipeline takes; a snapshot or a 4-frame calibration is not a trace
 MIN_TRACE_FRAMES = 100

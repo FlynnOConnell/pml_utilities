@@ -48,20 +48,21 @@ def maxmin_baseline(
 ) -> np.ndarray:
     """Rolling max-min baseline, sized in seconds via ``fs``.
 
-    Same two-pass smooth -> rolling-max -> rolling-min baseline as a
-    suite2p-style dF/F, but sized in seconds rather than a fixed frame
-    count: a line-scan's frame rate (~1-2.5 kHz) is one to two orders of
-    magnitude higher than a raster-scanned movie's (~10-30 Hz), so a fixed
-    frame-count window would be the wrong number of seconds here. Uses
-    ``scipy.ndimage``'s O(T) sliding max/min filters rather than a per-frame
-    python loop, since a line-scan run has far more timepoints.
+    suite2p's baseline: smooth, then the rolling maximum of the rolling
+    minimum, so F0 follows the bottom of F and sits under it. Sized in
+    seconds rather than a fixed frame count: a line-scan's frame rate (~1-2.5
+    kHz) is one to two orders of magnitude higher than a raster-scanned
+    movie's (~10-30 Hz), so a fixed frame-count window would be the wrong
+    number of seconds here. Uses ``scipy.ndimage``'s O(T) sliding max/min
+    filters rather than a per-frame python loop, since a line-scan run has
+    far more timepoints.
     """
     fs = float(fs)
     window = max(3, int(round(window_s * fs)))
     sigma = max(0.5, sigma_s * fs)
     smoothed = gaussian_filter1d(F, sigma=sigma, axis=1)
-    rolled_max = maximum_filter1d(smoothed, size=window, axis=1, mode="nearest")
-    return minimum_filter1d(rolled_max, size=window, axis=1, mode="nearest")
+    rolled_min = minimum_filter1d(smoothed, size=window, axis=1, mode="nearest")
+    return maximum_filter1d(rolled_min, size=window, axis=1, mode="nearest")
 
 
 def dfof_maxmin(
