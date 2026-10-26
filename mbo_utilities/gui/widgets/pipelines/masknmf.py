@@ -706,7 +706,10 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 "reference_block_sizes",
                 "Copy block sizes",
                 lo=2,
-                tooltip="Patch size in px of the denoised copy; small blocks keep fine detail.",
+                tooltip="Patch size in px of the denoised copy, like the main "
+                "compression's Block sizes. The block count, and the time, grows "
+                "with the square of the FOV over the block: 4x4 on a 2P plane "
+                "is tens of thousands of blocks and a day of registration.",
             )
             self._f_int(reg, "reference_max_components", "Copy components")
             self._f_int(reg, "reference_spatial_avg_factor", "Copy spatial avg")

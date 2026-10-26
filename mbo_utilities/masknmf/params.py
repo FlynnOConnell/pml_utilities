@@ -43,12 +43,14 @@ class MasknmfRegistrationSettings:
     minimum_patch_sizes: tuple[int, int] = (50, 50)
     overlaps: tuple[int, int] = (5, 5)
     max_deviation_rigid: tuple[int, int] = (2, 2)
-    # estimate shifts on a quick denoised copy and apply them to the raw movie
+    # estimate shifts on a quick denoised copy and apply them to the raw movie;
+    # the copy is blocked like the main compression (the ASAP7 ribbon's 4x4
+    # blocks with 4x pooling took 27 h on one 2P plane, 61102 blocks at ~1.6 s)
     denoised_reference: bool = False
-    reference_block_sizes: tuple[int, int] = (4, 4)
+    reference_block_sizes: tuple[int, int] = (20, 20)
     reference_max_components: int = 20
-    reference_spatial_avg_factor: int = 4
-    reference_temporal_avg_factor: int = 2
+    reference_spatial_avg_factor: int = 1
+    reference_temporal_avg_factor: int = 1
 
     def strategy_kwargs(self) -> dict:
         """Kwargs for the masknmf motion-corrector constructor."""

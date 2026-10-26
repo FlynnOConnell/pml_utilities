@@ -363,9 +363,19 @@ def test_reference_kwargs_make_the_denoised_copy():
         "block_sizes": (6, 6),
         "max_components": 20,
         "max_consecutive_failures": 1,
-        "spatial_avg_factor": 4,
-        "temporal_avg_factor": 2,
+        "spatial_avg_factor": 1,
+        "temporal_avg_factor": 1,
     }
+
+
+def test_the_default_denoised_copy_is_blocked_like_the_compression():
+    # the ASAP7 copy (4x4 blocks, 4x pooling) registered one 2P plane in 27 h
+    s = MasknmfSettings()
+    ref = s.registration.reference_kwargs()
+    assert ref["block_sizes"] == tuple(s.compression.block_sizes)
+    assert ref["max_components"] == s.compression.max_components
+    assert ref["spatial_avg_factor"] == 1
+    assert ref["temporal_avg_factor"] == 1
 
 
 @pytest.fixture

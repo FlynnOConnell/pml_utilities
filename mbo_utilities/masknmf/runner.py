@@ -19,7 +19,7 @@ import functools
 import hashlib
 import json
 import logging
-import os
+import math
 import shutil
 import time
 from dataclasses import asdict
@@ -78,7 +78,7 @@ def _export_atomic(obj, path: Path, prov: dict | None = None) -> None:
     if prov is not None:
         with h5py.File(tmp, "a") as f:
             f.attrs["mbo_provenance"] = json.dumps(prov, sort_keys=True)
-    os.replace(tmp, path)
+    tmp.replace(path)
 
 
 def _matches(previous: Path | None, group: str, prov: dict) -> bool:
@@ -177,7 +177,15 @@ def _register(raw, cfg, runtime, device: str, logger):
     )
     reference = raw
     if cfg.denoised_reference:
-        logger.info("masknmf: denoising a copy of the movie to register on")
+        by, bx = cfg.reference_block_sizes
+        ny = math.ceil((raw.shape[1] - by) / (by - math.ceil(by / 2))) + 1
+        nx = math.ceil((raw.shape[2] - bx) / (bx - math.ceil(bx / 2))) + 1
+        logger.info(
+            f"masknmf: denoising a copy of the movie to register on: "
+            f"{ny * nx} blocks of {by}x{bx} px over {raw.shape[1]}x{raw.shape[2]}, "
+            f"spatial avg {cfg.reference_spatial_avg_factor}, "
+            f"temporal avg {cfg.reference_temporal_avg_factor}"
+        )
         reference = masknmf.CompressStrategy(
             **cfg.reference_kwargs(),
             frame_batch_size=runtime.frame_batch_size,
