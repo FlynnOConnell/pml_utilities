@@ -1,7 +1,8 @@
 # ruff format and fix on every merge request into main, committed to the
 # request's source branch, so main only ever receives formatted code and no
-# bot commit lands on main itself (main on GitLab and GitHub moves only through
-# a push to both). A request from a fork is only checked.
+# bot commit lands on main itself. GitHub is a push mirror of this project
+# (Settings > Repository > Mirroring repositories), so it gets every push made
+# here, the bot's included. A request from a fork is only checked.
 # Needs one masked CI variable (Settings > CI/CD > Variables):
 #   GITLAB_PUSH_TOKEN  project access token, role Maintainer, scope write_repository
 
