@@ -375,50 +375,6 @@ def test_from_suite2p_orders_planes_by_number_and_z_is_the_position(tmp_path):
     ] == [("zplane01", 1), ("zplane02", 2)]
 
 
-def test_pixel_units_load_as_run_results_for_the_roi_widget(tmp_path):
-    from mbo_utilities.roi_workflow import run_result_from_unit
-
-    run = tmp_path / "run"
-    _suite2p_plane(run / "zplane02_tp00001-00030", pipeline="masknmf")
-    results = Results.from_suite2p(run)
-    path = results.write(run / "2026-09-16_run.zarr")
-    unit = Results.read(path)["zplane02"]
-    res = run_result_from_unit(unit, path / unit.name, "masknmf")
-    # z is the plane's position in the folder it was read from, not its number
-    assert (
-        res.path == path / "zplane02"
-        and res.kind == "masknmf"
-        and res.z == 0
-        and res.shape == (4, 5)
-    )
-    assert run_result_from_unit(unit, path / unit.name, "masknmf", z=3).z == 3
-    # every other trace kind rides along by name
-    assert set(res.kinds) == {"spikes"} and res.kinds["spikes"].shape == (2, 30)
-    assert [s["ypix"].tolist() for s in res.stat] == [[0, 0], [2]] and [
-        s["xpix"].tolist() for s in res.stat
-    ] == [[0, 1], [3]]
-    np.testing.assert_allclose(res.stat[1]["lam"], [2.0])
-    assert res.stat[0]["npix"] == 2 and res.stat[0]["med"] == (0.0, 0.5)
-    assert (
-        res.F.shape == (2, 30)
-        and res.Fneu.shape == (2, 30)
-        and res.norm.shape == (2, 30)
-        and res.iscell.shape == (2, 2)
-    )
-    assert res.uids is None and res.store_indices is None
-    line = ResultUnit(
-        name="scan1",
-        kind="scan",
-        index=1,
-        roi_names=["soma"],
-        traces={"denoised": np.zeros((1, 5))},
-        member_kind="line",
-        members=[np.array([0])],
-    )
-    with pytest.raises(ValueError, match="pixel"):
-        run_result_from_unit(line, path / "scan1")
-
-
 def test_results_files_are_run_dirs_to_the_roi_widget(tmp_path):
     from mbo_utilities.gui import roi_runs as rr
     from mbo_utilities.results import results_summary

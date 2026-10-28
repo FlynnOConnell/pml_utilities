@@ -141,38 +141,34 @@ def disc(y, x, r=3):
 
 
 def make_result(
-    widget, footprints, z=0, name="find01", kind="discover", with_traces=False
+    widget, footprints, z=0, name="find01", kind="masknmf", with_traces=False
 ):
-    """A synthetic ``RunResult`` shaped like a loaded discovery dir."""
-    from mbo_utilities.roi_workflow import RunResult
+    """``(unit, path, pipeline)`` for ``_add_derived``: a synthetic pixel
+    unit shaped like a loaded run, its path ``name``.
+    """
+    from mbo_utilities.results import ResultUnit
 
-    rows = []
-    for ypix, xpix in footprints:
-        rows.append(
-            {
-                "ypix": np.asarray(ypix, np.int32),
-                "xpix": np.asarray(xpix, np.int32),
-                "lam": np.ones(len(ypix), np.float32),
-                "med": (float(np.mean(ypix)), float(np.mean(xpix))),
-                "npix": int(len(ypix)),
-            }
-        )
-    F = None
+    members = [
+        np.asarray(ypix, np.int64) * widget.nx + np.asarray(xpix, np.int64)
+        for ypix, xpix in footprints
+    ]
+    traces = {}
     if with_traces:
-        F = np.arange(len(rows) * 6, dtype=np.float32).reshape(len(rows), 6)
-    return RunResult(
-        path=Path(name),
-        kind=kind,
-        z=z,
-        shape=(widget.ny, widget.nx),
-        stat=np.array(rows, dtype=object),
-        F=F,
-        Fneu=np.zeros_like(F) if F is not None else None,
-        norm=None,
-        iscell=None,
-        uids=None,
-        store_indices=None,
+        F = np.arange(len(members) * 6, dtype=np.float32).reshape(len(members), 6)
+        traces = {"raw": F, "neuropil": np.zeros_like(F)}
+    unit = ResultUnit(
+        name="zplane01",
+        kind="plane",
+        index=1,
+        roi_names=[f"roi{k}" for k in range(len(members))],
+        traces=traces,
+        member_kind="pixel",
+        members=members,
+        weights=[np.ones(m.size, np.float32) for m in members],
+        image_shape=(widget.ny, widget.nx),
+        attrs={"z": z},
     )
+    return unit, Path(name), kind
 
 
 class TestMasks:
@@ -199,13 +195,15 @@ class TestMasks:
         assert widget.counts == []
         assert "not added" in widget.status
 
-    def test_overlap_keeps_only_free_pixels(self, widget):
+    def test_overlapping_rois_both_keep_their_pixels(self, widget):
         widget.add_roi(square(10, 10, 9))
         widget.add_roi(square(15, 10, 9))
-        # second ROI loses the 5 columns already owned by the first
-        assert widget.counts == [100, 50]
-        assert widget.labels[15, 17] == 1
+        assert widget.counts == [100, 100]
+        # the label image shows the smaller (here the later) roi on top
+        assert widget.labels[15, 12] == 1
+        assert widget.labels[15, 17] == 2
         assert widget.labels[15, 22] == 2
+        assert widget.store.mask(0)[15, 17] and widget.store.mask(1)[15, 17]
 
     def test_stroke_clipped_to_image(self, widget):
         widget.add_roi(square(-20, -20, 40))
@@ -281,15 +279,17 @@ class TestMasks:
         assert tuple(rgb[15, 19]) == widget.store.roi_rgb(0)
         assert tuple(rgb[15, 20]) == widget.store.roi_rgb(1)
 
-    def test_save_writes_labels_zarr(self, widget, tmp_path):
-        from mbo_utilities.annotation import LabelsZarr
+    def test_save_writes_the_rois_zarr(self, widget, tmp_path):
+        from mbo_utilities.annotation import RoiFile
 
         widget.fpath = tmp_path / "movie.tif"
         widget.add_roi(square(10, 10, 9))
         widget.save()
-        restored = LabelsZarr.load(tmp_path / "manual_labels.zarr")
-        assert np.array_equal(restored.labels, widget.store.labels)
-        assert restored.counts == [100]
+        got = RoiFile.load(tmp_path / "movie.rois.zarr")
+        assert np.array_equal(got.store.label_image(0), widget.labels)
+        assert got.store.counts == [100]
+        assert got.store.rois[0].polygon.shape == (4, 2)
+        assert got.source["path"] == str(tmp_path / "movie.tif")
 
 
 class TestSelection:
@@ -361,7 +361,7 @@ class TestSelection:
     def test_clicking_a_drawn_roi_clears_the_source_filter(self, widget):
         widget.add_roi(square(10, 10, 20))
         widget.select_roi(-1)
-        widget._add_derived(make_result(widget, [disc(45, 45)]))
+        widget._add_derived(*make_result(widget, [disc(45, 45)]))
         widget.order.source = 1  # the derived set only
         widget.order.rebuild()
         assert 0 not in widget.order.order
@@ -372,7 +372,7 @@ class TestSelection:
 
     def test_clicking_a_derived_component_reveals_its_row(self, widget):
         widget.add_roi(square(10, 10, 20))
-        widget._add_derived(make_result(widget, [disc(45, 45)]))
+        widget._add_derived(*make_result(widget, [disc(45, 45)]))
         widget.order.source = 0  # drawn only
         widget.order.rebuild()
         click(widget, 45, 45)
@@ -532,7 +532,7 @@ class TestClassLabels:
         assert widget.selected == 1
 
     def test_follow_mode_advances_through_derived_rows(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40), disc(20, 20)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40), disc(20, 20)]))
         widget.store.add_label_name("soma")
         widget.follow = True
         widget.select_derived(0, 0)
@@ -692,7 +692,7 @@ class TestContours:
         assert not drawn_showing(widget)
 
     def test_algo_rows_draw_in_the_same_overlay(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40), disc(52, 52)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40), disc(52, 52)]))
         widget.set_contours(True)
         assert drawn_showing(widget)
         points = np.concatenate(paths(widget.outline))
@@ -703,7 +703,7 @@ class TestContours:
     def test_a_marked_row_draws_red(self, widget):
         from masknmf.visualization.rois import MARKED_COLOR
 
-        widget._add_derived(make_result(widget, [disc(40, 40)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40)]))
         widget.select_roi(-1)
         widget.mark([(0, 0)], True)
         expected = tuple(int(round(c * 255)) for c in MARKED_COLOR)
@@ -736,7 +736,7 @@ class TestImguiWindows:
         widget.store.add_label_name("soma")
         label(widget, 0, 0)
         widget.select_roi(1)
-        widget._add_derived(make_result(widget, [disc(40, 40)], with_traces=True))
+        widget._add_derived(*make_result(widget, [disc(40, 40)], with_traces=True))
         polygon(widget, square(30, 30, 20))
         widget.keybinds_open = True
 
@@ -824,8 +824,7 @@ class TestPersistence:
             w.save()
         finally:
             iw.close()
-        assert (tmp_path / "manual_labels.zarr").exists()
-        assert (tmp_path / "roi_runs.json").exists()
+        assert [p.name for p in tmp_path.iterdir()] == ["movie.rois.zarr"]
 
     def test_a_chosen_folder_holds_the_rois(self, tmp_path, options):
         from mbo_utilities.gui._ndviewer import MboNDViewer
@@ -848,9 +847,9 @@ class TestPersistence:
             assert w.folder == roi_folder(fpath, root)
             assert w.folder.parent == root
             assert w.folder.name.startswith("movie.tif_")
-            assert (w.folder / "manual_labels.zarr").exists()
+            assert (w.folder / "movie.rois.zarr").exists()
             assert list(data_dir.iterdir()) == []
-            assert w._run_out_dir("roi01").parent == w.folder
+            assert w._run_out_path("roi01").parent == w.folder
         finally:
             iw.close()
 
@@ -862,7 +861,7 @@ class TestPersistence:
             iw.close()
 
     def test_rois_saved_beside_the_data_restore_under_a_folder(self, tmp_path, options):
-        from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
+        from mbo_utilities.annotation import RoiFile, RoiLabelStore
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
 
@@ -871,7 +870,7 @@ class TestPersistence:
         mask = np.zeros((64, 64), bool)
         mask[10:20, 10:20] = True
         store.add_roi(0, mask)
-        LabelsZarr(tmp_path / "manual_labels.zarr").save(store)
+        RoiFile(tmp_path / "movie.rois.zarr").save(store)
         options["roi_folder"] = str(tmp_path / "mine")
 
         iw = MboNDViewer(data=np.zeros((4, 64, 64), np.float32))
@@ -897,10 +896,12 @@ class TestPersistence:
             w.store.add_label_name("soma")
             w.assign_class(0)
             w.store.set_note(0, "check me")
+            w.quick_trace(0)
+            pump(w)
             w._autosave()
         finally:
             iw.close()
-        assert (tmp_path / "manual_labels.zarr").exists()
+        assert (tmp_path / "movie.rois.zarr").exists()
 
         iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
         iw.show()
@@ -911,6 +912,9 @@ class TestPersistence:
             assert w2.store.rois[0].class_index == 0
             assert w2.store.rois[0].note == "check me"
             assert "restored" in w2.status
+            # the quick trace came back with the rois
+            (trace,) = w2.traces.for_roi(w2.store.rois[0].uid)
+            assert trace.source == "quick" and trace.F.shape == (4,)
         finally:
             iw.close()
 
@@ -929,14 +933,7 @@ class TestPersistence:
         try:
             w = ManualRoiWidget(iw, fpath=fpath, auto_trace=False)
             w.add_roi(square(10, 10, 9))
-
-            class Boom:
-                path = w._writer.path
-
-                def save_dirty(self, *a, **k):
-                    raise OSError("read only")
-
-            w._writer = Boom()
+            w._write_rois = _read_only
             w.add_roi(square(35, 35, 9))
             assert w.n_rois == 2 and "autosave failed" in w._save_error
             parked = w.store
@@ -947,15 +944,16 @@ class TestPersistence:
         finally:
             iw.close()
 
-    def test_shape_mismatch_starts_fresh(self, tmp_path):
-        from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
+    def test_shape_mismatch_starts_fresh_and_leaves_the_file(self, tmp_path, options):
+        from mbo_utilities.annotation import RoiFile, RoiLabelStore
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
 
+        options["roi_autosave"] = True
         fpath = tmp_path / "movie.tif"
         other = RoiLabelStore(2, 16, 16)
         other.add_roi(0, np.ones((16, 16), bool))
-        LabelsZarr(tmp_path / "manual_labels.zarr").save(other)
+        RoiFile(tmp_path / "movie.rois.zarr").save(other)
 
         data = np.zeros((4, 64, 64), np.float32)
         iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
@@ -964,8 +962,24 @@ class TestPersistence:
             w = ManualRoiWidget(iw, fpath=fpath, auto_trace=False)
             assert w.counts == []
             assert "starting fresh" in w.status
+            assert w._save_target().name == "movie_1x64x64.rois.zarr"
+            w.add_roi(square(10, 10, 9))
         finally:
             iw.close()
+        # the other shape's file is untouched; this shape has its own
+        assert RoiFile.load(tmp_path / "movie.rois.zarr").store.shape == (2, 16, 16)
+        got = RoiFile.load(tmp_path / "movie_1x64x64.rois.zarr").store
+        assert got.shape == (1, 64, 64) and got.counts == [100]
+        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
+        iw.show()
+        try:
+            assert ManualRoiWidget(iw, fpath=fpath, auto_trace=False).counts == [100]
+        finally:
+            iw.close()
+
+
+def _read_only():
+    raise OSError("read only")
 
 
 @pytest.fixture
@@ -993,9 +1007,9 @@ class TestZPlanes:
         assert zwidget.z == 1
         zwidget.add_roi(square(10, 10, 9))
         assert zwidget.store.rois[0].plane == 1
-        assert zwidget.store.labels[1, 15, 15] == 1
-        assert zwidget.store.labels[0].max() == 0
-        assert zwidget.store.labels[2].max() == 0
+        assert zwidget.store.label_image(1)[15, 15] == 1
+        assert zwidget.store.label_image(0).max() == 0
+        assert zwidget.store.label_image(2).max() == 0
 
     def test_z_change_refreshes_the_overlay(self, zwidget):
         zwidget.add_roi(square(10, 10, 9))
@@ -1035,13 +1049,13 @@ class TestZPlanes:
         assert zwidget.region_selector is None
 
     def test_derived_overlay_follows_z(self, zwidget):
-        zwidget._add_derived(make_result(zwidget, [disc(40, 40)], z=2))
+        zwidget._add_derived(*make_result(zwidget, [disc(40, 40)], z=2))
         assert not drawn_showing(zwidget)  # the set lives on z 2
         zwidget.iw.indices["z"] = 2
         assert drawn_showing(zwidget)
 
     def test_selecting_a_derived_row_jumps_z(self, zwidget):
-        zwidget._add_derived(make_result(zwidget, [disc(40, 40)], z=2))
+        zwidget._add_derived(*make_result(zwidget, [disc(40, 40)], z=2))
         zwidget.select_derived(0, 0)
         assert zwidget.z == 2
         assert zwidget.selected_derived == (0, 0)
@@ -1102,7 +1116,7 @@ class TestTraces:
         from mbo_utilities.roi_workflow import feather_mask
 
         data = np.asarray(zwidget.iw.data[0])
-        mask = zwidget.store.labels[2] == 1
+        mask = zwidget.store.mask(0)
         w = feather_mask(mask)[mask]
         expected = data[:, 2][:, mask] @ (w / w.sum())
         uid = zwidget.store.rois[0].uid
@@ -1180,7 +1194,8 @@ class TestRuns:
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
 
         options["roi_autosave"] = True
-        from mbo_utilities.gui.roi_runs import load_run_registry, registry_path
+        from mbo_utilities.annotation import RoiFile
+        from mbo_utilities.results import Results, newest_results
 
         data = np.random.default_rng(1).random((6, 64, 64)).astype(np.float32)
         iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
@@ -1194,15 +1209,21 @@ class TestRuns:
             pump(w)
             assert w._run_error is None
             assert w.status.startswith("done"), w.status
-            out = tmp_path / "rois_roi02"
-            F = np.load(out / "F.npy")
-            assert F.shape == (1, 6)
-            np.testing.assert_allclose(
-                F[0], data[:, w.labels == 2].mean(axis=1), rtol=1e-5
+            out = newest_results(tmp_path, "manual")
+            assert out.name.startswith("movie.roi02.") and out.name.endswith(
+                ".manual.zarr"
             )
-            assert np.load(out / "roi_indices.npy").tolist() == [1]
+            results = Results.read(out)
+            assert results.pipeline == "manual" and results.source["tag"] == "roi02"
+            (unit,) = results.units.values()
+            F = unit.traces["raw"]
+            assert unit.name == "zplane01" and F.shape == (1, 6)
+            np.testing.assert_allclose(
+                F[0], data[:, w.store.mask(1)].mean(axis=1), rtol=1e-5
+            )
+            assert unit.attrs["store_indices"] == [1] and unit.attrs["uids"] == [uid1]
             (trace,) = w.traces.for_roi(uid1)
-            assert trace.source == "rois_roi02" and trace.engine == "mean"
+            assert trace.source == w._set_name(out) and trace.engine == "mean"
             np.testing.assert_allclose(trace.F, F[0])
             assert trace.Fneu is not None
             assert w.trace_uid == uid1
@@ -1210,13 +1231,14 @@ class TestRuns:
             # the same measurement again replaces the rows instead of doubling them
             w.run_in_view()
             pump(w)
-            assert np.load(tmp_path / "rois_manual" / "F.npy").shape == (2, 6)
+            (second,) = tmp_path.glob("movie.manual.*.manual.zarr")
+            assert Results.read(second).units["zplane01"].traces["raw"].shape == (2, 6)
             assert {t.uid for t in w.traces} == {w.store.rois[0].uid, uid1}
-            assert {t.source for t in w.traces} == {"rois_manual"}
+            assert {t.source for t in w.traces} == {w._set_name(second)}
             assert len(w.traces) == 2
-            # both runs are remembered in the sidecar for the next session
-            paths = {e["path"] for e in load_run_registry(registry_path(w.fpath))}
-            assert {str(out), str(tmp_path / "rois_manual")} <= paths
+            # both runs are remembered with the rois for the next session
+            paths = {e["path"] for e in RoiFile.load(w._save_target()).runs}
+            assert {str(out), str(second)} <= paths
         finally:
             iw.close()
 
@@ -1245,7 +1267,7 @@ class TestRuns:
             assert w2.counts == [100]
             # the run's traces come back keyed by the same persistent uid
             assert [t.uid for t in w2.traces] == [uid]
-            assert w2.traces.rows[0].source == "rois_roi01"
+            assert w2.traces.rows[0].source.startswith("movie.roi01.")
             assert w2.has_traces()
         finally:
             iw.close()
@@ -1291,7 +1313,7 @@ class TestDerived:
 
     def _set(self, widget, with_traces=False):
         s = widget._add_derived(
-            make_result(widget, [disc(40, 40), disc(52, 52)], with_traces=with_traces)
+            *make_result(widget, [disc(40, 40), disc(52, 52)], with_traces=with_traces)
         )
         assert s is not None
         return s
@@ -1406,19 +1428,19 @@ class TestDerived:
         assert widget.promoted_index(0, 0) is None
         assert widget._format_cell("source", widget._row_index[(0, 0)]) == "find01"
 
-    def test_promote_with_no_free_pixels_is_refused(self, widget):
+    def test_promote_over_a_drawn_roi_keeps_both(self, widget):
         widget.add_roi(square(34, 34, 14))  # covers disc(40, 40) completely
         self._set(widget)
-        assert widget.promote_derived(0, 0) is None
-        assert "overlaps" in widget.status
-        assert widget.counts == [225]
+        assert widget.promote_derived(0, 0) == 1
+        assert widget.counts == [225, 36]
+        assert widget.store.mask(0)[40, 40] and widget.store.mask(1)[40, 40]
 
     def test_promote_set_reports_the_split(self, widget):
-        widget.add_roi(square(34, 34, 14))  # blocks row 0
         self._set(widget)
+        assert widget.promote_derived(0, 0) == 0
         widget.promote_set(0)
         assert "promoted 1 / skipped 1" in widget.status
-        assert widget.counts == [225, 36]
+        assert widget.counts == [36, 36]
 
     def test_discard_advances_the_selection(self, widget):
         self._set(widget)
@@ -1478,6 +1500,7 @@ class TestDerived:
             dtype=object,
         )
         np.save(tmp_path / "stat.npy", stat)
+        np.save(tmp_path / "F.npy", np.zeros((1, 4), np.float32))
         np.save(
             tmp_path / "ops.npy",
             {"Ly": 64, "Lx": 64, "plane": 5, "pipeline": "masknmf"},
@@ -1489,26 +1512,28 @@ class TestDerived:
         try:
             w = ManualRoiWidget(iw, fpath=fpath, auto_trace=False)
             assert len(w.derived) == 1
-            assert w.derived[0].result.kind == "masknmf"
-            assert w.derived[0].result.z == 0
+            assert w.derived[0].kind == "masknmf"
+            assert w.derived[0].z == 0
             assert (0, 0) in w._row_index
         finally:
             iw.close()
 
-    def test_accept_reject_round_trips_iscell(self, widget, tmp_path):
-        res = make_result(widget, [disc(40, 40), disc(20, 20)])
+    def test_accept_reject_is_kept_with_the_rois(self, widget, tmp_path):
+        unit, _path, kind = make_result(widget, [disc(40, 40), disc(20, 20)])
         d = tmp_path / "run"
         d.mkdir()
-        res.path = d
-        s = widget._add_derived(res)
+        np.save(d / "iscell.npy", np.ones((2, 2), np.float32))
+        s = widget._add_derived(unit, d, kind)
         assert s.accepted.all()
         widget.set_accepted(0, 1)
         assert not s.accepted[1]
-        iscell = np.load(d / "iscell.npy")
-        assert iscell[1, 0] == 0.0 and iscell[0, 0] == 1.0
-        assert widget._format_cell("ok", widget._row_index[(0, 1)]) == "no"
-        widget.set_accepted(0, 1)
+        # the run is never written to
         assert np.load(d / "iscell.npy")[1, 0] == 1.0
+        assert widget._format_cell("ok", widget._row_index[(0, 1)]) == "no"
+        (entry,) = widget._run_entries()
+        assert entry["path"] == str(d) and entry["iscell"] == {1: False}
+        widget.set_accepted(0, 1)
+        assert widget._run_entries()[0]["iscell"] == {}
 
     def test_rejected_rows_load_and_stay_curatable(self, widget, tmp_path):
         # iscell is read unfiltered so rejected cells can be re-accepted
@@ -1528,23 +1553,23 @@ class TestDerived:
             dtype=object,
         )
         np.save(d / "stat.npy", stat)
+        np.save(d / "F.npy", np.zeros((2, 6), np.float32))
         np.save(d / "iscell.npy", np.array([[1, 0.5], [0, 0.5]], np.float32))
         np.save(d / "ops.npy", {"Ly": 64, "Lx": 64, "plane": 1}, allow_pickle=True)
         assert widget.load_run(d)
         s = widget.derived[0]
-        assert len(s.result.stat) == 2
+        assert len(s) == 2
         assert s.accepted.tolist() == [True, False]
 
     def test_derived_labels_persist_through_the_registry(self, widget):
-        res = make_result(widget, [disc(40, 40), disc(20, 20)])
-        widget._add_derived(res)
+        widget._add_derived(*make_result(widget, [disc(40, 40), disc(20, 20)]))
         widget.select_derived(0, 1)
         widget.assign_class(0)
         assert widget.derived[0].classes == {1: 0}
         row = widget._row_index[(0, 1)]
         assert widget.classes.labels[row] == 0
         # a reload of the same dir keeps the label
-        widget._add_derived(make_result(widget, [disc(40, 40), disc(20, 20)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40), disc(20, 20)]))
         assert widget.derived[0].classes == {1: 0}
         # promoting carries it into the drawn store
         index = widget.promote_derived(0, 1)
@@ -1552,7 +1577,7 @@ class TestDerived:
         assert widget.store.rois[index].class_index == 0
 
     def test_out_of_range_plane_is_refused(self, widget):
-        assert widget._add_derived(make_result(widget, [disc(40, 40)], z=4)) is None
+        assert widget._add_derived(*make_result(widget, [disc(40, 40)], z=4)) is None
         assert widget.derived == []
         assert "plane 5" in widget._run_error
 
@@ -1603,7 +1628,7 @@ class TestTracesTab:
         assert plotted, "the Traces tab never plotted a line"
 
     def test_a_derived_selection_renders_its_trace(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40)], with_traces=True))
+        widget._add_derived(*make_result(widget, [disc(40, 40)], with_traces=True))
         widget.select_derived(0, 0)
         errors = draw_frames(widget, 3)
         assert not errors, errors[0]
@@ -1626,7 +1651,7 @@ class TestTracesTab:
 
     def test_derived_traces_fill_the_table(self, widget):
         widget._add_derived(
-            make_result(widget, [disc(40, 40), disc(20, 20)], with_traces=True)
+            *make_result(widget, [disc(40, 40), disc(20, 20)], with_traces=True)
         )
         rows = widget._trace_rows()
         assert ("member", "find01", 0) in rows and ("member", "find01", 1) in rows
@@ -1799,17 +1824,19 @@ class TestTracesTab:
             tmp_path / "run.2026-10-07-00-00-00.suite2p.zarr"
         )
         assert widget.load_results(path)
-        by_path = {s.result.path: i for i, s in enumerate(widget.derived)}
+        by_path = {s.path: i for i, s in enumerate(widget.derived)}
         assert set(by_path) == {plane_dir, path / "zplane02"}
         widget.set_accepted(by_path[plane_dir], 1, False)
         widget.set_accepted(by_path[path / "zplane02"], 1, False)
-        np.testing.assert_array_equal(
-            np.load(plane_dir / "iscell.npy")[:, 0], [1.0, 0.0]
-        )
-        assert not (path / "zplane02" / "iscell.npy").exists()
+        # curation stays with the rois: the run's own files are untouched
+        assert not (plane_dir / "iscell.npy").exists()
         np.testing.assert_allclose(
-            Results.read(path).units["zplane02"].iscell, [[1, 0.9], [0, 0.4]]
+            Results.read(path).units["zplane02"].iscell, [[1, 0.9], [1, 0.4]]
         )
+        assert {e["path"]: e["iscell"] for e in widget._run_entries()} == {
+            str(plane_dir): {1: False},
+            str(path / "zplane02"): {1: False},
+        }
         # an algo row opens its run: the plane dir it was read from, or the file and unit
         widget.select_derived(by_path[plane_dir], 1)
         assert widget._spike_target([]) == (plane_dir, None, "1", None)
@@ -1913,7 +1940,7 @@ class TestTracesTab:
 
     def test_deleting_a_derived_trace_row_marks_the_component(self, widget):
         widget._add_derived(
-            make_result(widget, [disc(40, 40), disc(20, 20)], with_traces=True)
+            *make_result(widget, [disc(40, 40), disc(20, 20)], with_traces=True)
         )
         widget.delete_trace_row(("member", "find01", 1))
         assert 1 in widget.derived[0].discarded
@@ -1989,7 +2016,7 @@ class TestSorting:
         assert list(labels) == sorted(labels)
 
     def test_sorting_by_source_groups_the_sets(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40)]))
         order = self._order(widget)
         order.sort_by = "source"
         order.rebuild()
@@ -1997,7 +2024,7 @@ class TestSorting:
         assert list(codes) == sorted(codes)
 
     def test_descending_reverses(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40)]))
         order = self._order(widget)
         order.sort_by = "source"
         order.ascending = False
@@ -2179,7 +2206,7 @@ class TestRoiTab:
 
     def test_tab_draws_with_drawn_and_derived_rows(self, widget):
         widget.add_roi(square(10, 10, 20))
-        widget._add_derived(make_result(widget, [disc(45, 45)]))
+        widget._add_derived(*make_result(widget, [disc(45, 45)]))
         widget.order.set_range_column("ok")
         assert draw_tab_frames(widget) == []
 
@@ -2287,7 +2314,7 @@ class TestWidgetAttach:
             gui = self._preview(iw)
             gui.sync_manual_roi(True)
             w = gui.manual_roi
-            w._add_derived(make_result(w, [disc(40, 40)], with_traces=True))
+            w._add_derived(*make_result(w, [disc(40, 40)], with_traces=True))
             w.promote_derived(0, 0)
             uid = w.store.rois[0].uid
 
@@ -2335,13 +2362,13 @@ class TestWidgetAttach:
             iw.close()
 
     def test_saved_annotations_turn_the_widget_on(self, tmp_path):
-        from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
+        from mbo_utilities.annotation import RoiFile, RoiLabelStore
         from mbo_utilities.arrays.numpy import NumpyArray
         from mbo_utilities.gui.run_gui import _create_image_widget
 
         store = RoiLabelStore(1, 32, 32)
         store.add_roi(0, np.pad(np.ones((8, 8), bool), 12))
-        LabelsZarr(tmp_path / "manual_labels.zarr").save(store)
+        RoiFile(tmp_path / "movie.rois.zarr").save(store)
 
         data = np.random.default_rng(0).random((4, 1, 1, 32, 32)).astype(np.float32)
         arr = NumpyArray(data, dims="TCZYX")
@@ -2465,8 +2492,8 @@ class TestPlaneMapping:
         cwidget.iw.indices["z"] = 2
         cwidget.add_roi(square(10, 10, 9))
         assert cwidget.store.rois[0].plane == 5
-        assert cwidget.store.labels[5, 15, 15] == 1
-        assert cwidget.store.labels[2].max() == 0  # same z, other channel
+        assert cwidget.store.label_image(5)[15, 15] == 1
+        assert cwidget.store.label_image(2).max() == 0  # same z, other channel
 
     def test_channel_flip_swaps_the_overlay(self, cwidget):
         cwidget.add_roi(square(10, 10, 9))  # plane 0 = (c0, z0)
@@ -2492,6 +2519,7 @@ class TestPlaneMapping:
         assert movie is not None
         assert movie.z == 2 and movie.c == 1
         assert movie.shape == (4, 64, 64)
+
 
 class TestGroupBuffer:
     """Ctrl / shift click builds a group; labels and colors apply to all."""
@@ -2544,7 +2572,7 @@ class TestGroupBuffer:
     def test_group_color_reaches_derived_rows(self, widget):
         from mbo_utilities.gui.roi_runs import component_color
 
-        widget._add_derived(make_result(widget, [disc(30, 30)]))
+        widget._add_derived(*make_result(widget, [disc(30, 30)]))
         widget.buffer_toggle(0, 0)
         widget.set_group_color((0.0, 1.0, 0.0))
         assert component_color(widget.derived[0], 0) == (0.0, 1.0, 0.0)
@@ -2973,7 +3001,7 @@ class TestRunCoordinates:
         cwidget.trace_rois([0], c=1)
         pump(cwidget)
         data = np.asarray(cwidget.iw.data[0])
-        mask = cwidget.store.labels[2] == 1
+        mask = cwidget.store.mask(0)
         w = feather_mask(mask)[mask]
         rows = {t.key: t for t in cwidget.traces.for_roi(uid)}
         assert set(rows) == {("roi", uid, 2, 0, "mean"), ("roi", uid, 2, 1, "mean")}
@@ -3068,15 +3096,17 @@ class TestRunCoordinates:
             w.run_roi(0)
             pump(w)
             assert w._run_error is None, w._run_error
-            out = tmp_path / "rois_roi01"
-            F = np.load(out / "F.npy")
+            from mbo_utilities.results import Results, newest_results
+
+            out = newest_results(tmp_path, "manual")
+            (unit,) = Results.read(out).units.values()
+            F = unit.traces["raw"]
             assert F.shape == (1, 4)
             np.testing.assert_allclose(
-                F[0], data[:4, 1, 0][:, w.store.labels[0] == 1].mean(axis=1), rtol=1e-5
+                F[0], data[:4, 1, 0][:, w.store.mask(0)].mean(axis=1), rtol=1e-5
             )
-            ops = np.load(out / "ops.npy", allow_pickle=True).item()
-            wf = ops["roi_workflow"]
-            assert (wf["z"], wf["c"], wf["frames"], wf["tp_indices"]) == (
+            attrs = unit.attrs
+            assert (attrs["z"], attrs["c"], attrs["frames"], attrs["tp_indices"]) == (
                 0,
                 1,
                 [0, 4, 1],
@@ -3084,12 +3114,13 @@ class TestRunCoordinates:
             )
             (trace,) = w.traces.for_roi(uid)
             assert trace.key == ("roi", uid, 0, 1, "mean") and trace.frames == (0, 4, 1)
-            # both channels: one child dir per read, named by the filename tags
+            # both channels: one unit per read, named by the filename tags
             w.run_where = "drawn"
             w.run_tp = None
             w.run_rois([0], "both", c=None)
             pump(w)
-            assert (tmp_path / "rois_both" / "F.npy").exists()
+            (both,) = tmp_path.glob("movie.both.*.manual.zarr")
+            assert Results.read(both).units["zplane01"].attrs["c"] == 0
             assert {t.key for t in w.traces.for_roi(uid)} == {
                 ("roi", uid, 0, 0, "mean"),
                 ("roi", uid, 0, 1, "mean"),
@@ -3098,10 +3129,6 @@ class TestRunCoordinates:
             w.run_where, w.run_c = "fixed", 0
             w.trace_rois([0], c=1)
             pump(w)
-            assert (
-                w._set_name(tmp_path / "rois_x" / "ch02_zplane01")
-                == "rois_x/ch02_zplane01"
-            )
         finally:
             iw.close()
 
@@ -3117,7 +3144,7 @@ class TestHelpAndKeysAreAppWide:
         doc = help_markdown()
         assert doc.startswith("## ROI Labeling")
         assert "### Workflow" in doc and "### Output files" in doc
-        assert "manual_labels.zarr" in doc
+        assert ".rois.zarr" in doc
         for step in _HELP_STEPS:
             assert step in doc
         # the keys are the Keybinds popup's job, not the guide's
@@ -3176,6 +3203,7 @@ class TestAdoptingRunsStartedElsewhere:
         )
         path.mkdir(parents=True, exist_ok=True)
         np.save(path / "stat.npy", stat)
+        np.save(path / "F.npy", np.zeros((len(accepted), 6), np.float32))
         np.save(
             path / "iscell.npy",
             np.array([[1.0 if a else 0.0, 0.5] for a in accepted], np.float32),
@@ -3204,7 +3232,7 @@ class TestAdoptingRunsStartedElsewhere:
         try:
             widget._adopt_checked = 0.0
             widget._adopt_finished_runs()
-            assert [s.result.path for s in widget.derived] == [d]
+            assert [s.path for s in widget.derived] == [d]
             # accepted / rejected come from the run's own iscell, curatable
             # in the table like any other loaded run
             assert widget.derived[0].accepted.tolist() == [True, False]
@@ -3247,7 +3275,7 @@ class TestAdoptingRunsStartedElsewhere:
         """One masknmf table row per trace, the id cell in its trace's color."""
         from imgui_bundle import imgui
 
-        widget._add_derived(make_result(widget, [disc(40, 40)], with_traces=True))
+        widget._add_derived(*make_result(widget, [disc(40, 40)], with_traces=True))
         labels = []
         real = imgui.selectable
 
@@ -3285,7 +3313,7 @@ class TestFollowModeAdvances:
 
     def test_labeling_an_algo_row_skips_ones_already_labeled(self, widget):
         widget._add_derived(
-            make_result(widget, [disc(10, 10), disc(30, 30), disc(50, 50)])
+            *make_result(widget, [disc(10, 10), disc(30, 30), disc(50, 50)])
         )
         widget.store.add_label_name("soma")
         widget.store.add_label_name("dendrite")
@@ -3304,7 +3332,7 @@ class TestFollowModeAdvances:
         assert widget.order.current == rows[2]
 
     def test_it_wraps_to_the_first_row_still_needing_a_label(self, widget):
-        widget._add_derived(make_result(widget, [disc(10, 10), disc(30, 30)]))
+        widget._add_derived(*make_result(widget, [disc(10, 10), disc(30, 30)]))
         widget.store.add_label_name("soma")
         widget._resync()
         widget.follow = True
@@ -3597,7 +3625,7 @@ class TestSliderRoles:
             pump(w)
             (trace,) = w.traces.for_roi(w.store.rois[0].uid)
             expected = np.asarray(data)[:, 1, 2]
-            mask = w.store.labels[w.store.rois[0].plane] == 1
+            mask = w.store.mask(0)
             from mbo_utilities.roi_workflow import feather_mask
 
             wts = feather_mask(mask)[mask]
@@ -3710,12 +3738,12 @@ class TestArrayResults:
             roi = gui.manual_roi
             # a run's output turns the ROI widget on by itself
             assert roi is not None and roi.slice is gui.slice
-            assert [s.result.z for s in roi.derived] == [0, 1]
-            assert [s.result.path.name for s in roi.derived] == [
+            assert [s.z for s in roi.derived] == [0, 1]
+            assert [s.path.name for s in roi.derived] == [
                 "zplane01_tp00001-00006",
                 "zplane02_tp00001-00006",
             ]
-            assert [s.result.kind for s in roi.derived] == ["suite2p", "suite2p"]
+            assert [s.kind for s in roi.derived] == ["suite2p", "suite2p"]
             # the ROI table opens on the plane on screen, with the classifier's probability
             assert roi.order.plane == 0 and "prob" in roi.columns
             assert roi._format_cell("prob", roi._row_index[(0, 0)]) == "0.9"
@@ -3750,8 +3778,8 @@ class TestArrayResults:
         iw.show()
         try:
             w = ManualRoiWidget(iw, fpath=arr.source_path, auto_trace=False)
-            assert len(w.derived) == 1 and w.derived[0].result.z == 0
-            assert w.derived[0].result.path == tmp_path / "zplane02_tp00001-00006"
+            assert len(w.derived) == 1 and w.derived[0].z == 0
+            assert w.derived[0].path == tmp_path / "zplane02_tp00001-00006"
             assert drawn_showing(w) and len(w._trace_rows()) == 1
             # the widget on a bare viewer feeds a slice of its own
             assert w._own_slice and w.slice.z == 0
@@ -3810,7 +3838,9 @@ class TestKeys:
         # masknmf leaves shift open on t; here shift+t is the run key alone
         assert ROI_KEYS["trace_follow"].shift is False and ROI_KEYS["run"].shift is True
         assert all(
-            bind.shift is None for name, bind in ROI_KEYS.items() if name in ("up", "down", "left", "right")
+            bind.shift is None
+            for name, bind in ROI_KEYS.items()
+            if name in ("up", "down", "left", "right")
         )
         widget.add_roi(square(10, 10, 9))
         widget.select_roi(0)

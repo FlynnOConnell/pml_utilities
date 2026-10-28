@@ -484,20 +484,19 @@ def pump(widget, seconds: float = 60.0):
 
 
 def test_sidecars_are_named_after_the_unit(tmp_path):
-    from mbo_utilities.gui.roi_runs import registry_path
-    from mbo_utilities.roi_workflow import labels_path
+    from mbo_utilities.roi_workflow import labels_path, run_path
 
     mesc = tmp_path / "scan.mesc"
-    assert labels_path(mesc).name == "manual_labels.zarr"
+    assert labels_path(mesc).name == "scan.rois.zarr"
     assert (
         labels_path(mesc, "MSession_0_MUnit_3").name
-        == "manual_labels_MSession_0_MUnit_3.zarr"
+        == "scan_MSession_0_MUnit_3.rois.zarr"
     )
     assert labels_path(mesc, "MSession_0_MUnit_3").parent == tmp_path
-    assert (
-        registry_path(mesc, "MSession_0_MUnit_3").name
-        == "roi_runs_MSession_0_MUnit_3.json"
-    )
+    run = run_path(mesc, "MSession_0_MUnit_3_manual")
+    assert run.parent == tmp_path
+    assert run.name.startswith("scan.MSession_0_MUnit_3_manual.")
+    assert run.name.endswith(".manual.zarr")
 
 
 def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
@@ -532,8 +531,10 @@ def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
         first = gui.manual_roi
         assert first is not None and first.unit == "MUnit_0"
         assert first.tag == "MSession_0_MUnit_0"
-        assert first._save_target().name == "manual_labels_MSession_0_MUnit_0.zarr"
-        assert first.run_prefix == "rois_MSession_0_MUnit_0_"
+        assert first._save_target().name == "two_units_MSession_0_MUnit_0.rois.zarr"
+        assert first._run_out_path("manual").name.startswith(
+            "two_units.MSession_0_MUnit_0_manual."
+        )
         first.auto_trace = False
         first.add_roi([(2.0, 2.0), (9.0, 2.0), (9.0, 9.0), (2.0, 9.0)])
         first.quick_trace(0)
@@ -545,7 +546,7 @@ def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
         second = gui.manual_roi
         assert second is not None and second is not first and second.unit == "MUnit_1"
         assert second.n_rois == 0 and not second.has_traces()
-        assert second._save_target().name == "manual_labels_MSession_0_MUnit_1.zarr"
+        assert second._save_target().name == "two_units_MSession_0_MUnit_1.rois.zarr"
         second.add_roi([(3.0, 3.0), (8.0, 3.0), (8.0, 8.0), (3.0, 8.0)])
         second.add_roi([(12.0, 3.0), (18.0, 3.0), (18.0, 9.0), (12.0, 9.0)])
         assert second.n_rois == 2
@@ -556,9 +557,9 @@ def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
         assert back.store is first.store
         tab._switch(arr.units[1])
         assert gui.manual_roi.unit == "MUnit_1" and gui.manual_roi.n_rois == 2
-        assert (mesc_path.parent / "manual_labels_MSession_0_MUnit_0.zarr").exists()
-        assert (mesc_path.parent / "manual_labels_MSession_0_MUnit_1.zarr").exists()
-        assert not (mesc_path.parent / "manual_labels.zarr").exists()
+        assert (mesc_path.parent / "two_units_MSession_0_MUnit_0.rois.zarr").exists()
+        assert (mesc_path.parent / "two_units_MSession_0_MUnit_1.rois.zarr").exists()
+        assert not (mesc_path.parent / "two_units.rois.zarr").exists()
     finally:
         iw.close()
         set_widget_enabled("manual_roi", was, persist=False)

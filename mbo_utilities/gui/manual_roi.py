@@ -27,27 +27,28 @@ slice whose center is inside it (or outside, per its switch), live as it is
 drawn and dragged. Add ROI (r) fills it into the store as a drawn ROI on
 the exact slice the viewer shows (every scrolling dim except time keys its
 own plane of masks); with ``auto_trace`` on its mean trace is computed at
-once. Annotations stay in memory until Save, or as they change with
-autosave on (off by default: data is often opened where nothing should be
-written), as an OME-NGFF-style labels zarr (``manual_labels.zarr``, see
-``mbo_utilities.annotation``) in the dataset's ROI folder: beside the data,
-or a folder the user picks (``roi_folder``). They are restored from there,
-or from beside the data, on relaunch. A file holding several recordings (a
-``.mesc``) gets one per recording (``manual_labels_MSession_0_MUnit_3.zarr``;
-the run registry and run dirs likewise), and switching recordings swaps the
-whole widget, so the ROIs, runs and traces on screen are the shown one's.
+once; ROIs may overlap. Annotations stay in memory until Save, or as they
+change with autosave on (off by default: data is often opened where nothing
+should be written), as the rois zarr (``<stem>.rois.zarr``,
+``mbo_utilities.annotation.RoiFile``: the ROIs, the quick traces, the loaded
+runs with their curation, and an OME-NGFF 0.5 label image) in the dataset's
+ROI folder: beside the data, or a folder the user picks (``roi_folder``).
+They are restored from there, or from beside the data, on relaunch. A file
+holding several recordings (a ``.mesc``) gets one per recording
+(``<stem>_MSession_0_MUnit_3.rois.zarr``; the run files likewise), and
+switching recordings swaps the whole widget, so the ROIs, runs and traces on
+screen are the shown one's.
 
 Runs read an ROI's mask where it was drawn and its pixels wherever the RUN
 section points them (``run_z`` / ``run_c`` / ``run_tp``, "as drawn" by
-default), through :meth:`run_rois`, writing ``rois_<tag>/`` into the ROI
-folder; a run of the same ROI at the same coordinates with the same engine
-replaces its row. Region detection and full-plane suite2p / masknmf runs
-load their outputs as derived sets, rows of the table, whose components can
-be promoted into the drawn store (y). Delete (d) removes a drawn ROI and
-marks an algo one for deletion: it stays listed at the top of the table and
-red on the image until it is unmarked. Loaded runs are remembered in
-``roi_runs.json`` beside the labels zarr, saved with it, and restored on
-relaunch.
+default), through :meth:`run_rois`, writing one results zarr
+(``<stem>.<tag>.<stamp>.manual.zarr``) into the ROI folder; a run of the
+same ROI at the same coordinates with the same engine replaces its row.
+Suite2p, masknmf and vnoiser runs load as derived sets, rows of the table,
+whose components can be promoted into the drawn store (y). Delete (d)
+removes a drawn ROI and marks an algo one for deletion: it stays listed at
+the top of the table and red on the image until it is unmarked; the run's
+files are never written to, the curation stays with the ROIs.
 
 Masks draw as masknmf's feathered footprints: every ROI at the masks
 opacity, the selection and its group at their own with a white rim, each
@@ -66,6 +67,7 @@ slider that plane encodes. Only the first subplot is drawable.
 from __future__ import annotations
 
 import queue
+import shutil
 import threading
 import time
 from collections import OrderedDict
@@ -77,7 +79,6 @@ from typing import Any
 
 import cv2
 import numpy as np
-import zarr
 from fastplotlib.graphics.selectors._polygon import point_in_polygon
 from imgui_bundle import (
     icons_fontawesome_6 as fa,
@@ -112,10 +113,9 @@ from mbo_utilities.analysis.dff import NOISE_ESTIMATES
 from mbo_utilities.annotation import (
     DISPLAY_KINDS,
     ENGINES,
-    FULL_IMAGE,
     UNLABELED,
     DffSettings,
-    LabelsZarr,
+    RoiFile,
     RoiLabelStore,
     RoiModel,
     RoiTrace,
@@ -130,7 +130,6 @@ from mbo_utilities.annotation.display import DFF_METHODS
 from mbo_utilities.arrays.features._dim_tags import (
     TAG_REGISTRY,
     DimensionTag,
-    OutputFilename,
     filename_tags,
 )
 from mbo_utilities.arrays.features._slicing import index_window
@@ -155,13 +154,10 @@ from mbo_utilities.gui.roi_runs import (
     RoiRunManager,
     component_color,
     finished_dirs,
-    load_run_registry,
     outline_data,
-    registry_path,
-    result_traces,
     run_dir_complete,
-    save_run_registry,
     set_color,
+    unit_trace,
 )
 from mbo_utilities.gui.slice import Slice, viewer_positions, viewer_roles
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
@@ -172,20 +168,24 @@ from mbo_utilities.preferences import (
     set_roi_autosave,
     set_roi_folder,
 )
-from mbo_utilities.results import results_pipeline
+from mbo_utilities.results import (
+    Results,
+    pipeline_files,
+    results_pipeline,
+)
 from mbo_utilities.roi_workflow import (
-    OUT_PREFIX,
-    SAVE_NAME,
+    RUN_PIPELINE,
     PlaneMovie,
     demix_rois,
     detection_algo,
     extract_rois,
     feather_mask,
     labels_path,
-    load_run_dir,
     roi_folder,
     roi_trace,
-    run_result_from_unit,
+    run_path,
+    slice_name,
+    write_run,
 )
 
 __all__ = [
@@ -195,7 +195,6 @@ __all__ = [
     "KEYBINDS",
     "ROI_KEYS",
     "ManualRoiWidget",
-    "SAVE_NAME",
     "attach_roi_widget",
     "detach_roi_widget",
     "labels_path",
@@ -431,11 +430,12 @@ _HELP_STEPS = (
     "empty pixel adds its 5x5 average.",
 )
 _HELP_FILES = (
-    "manual_labels.zarr  the drawn ROIs, on Save or with autosave on\n"
-    "                    (mbo_utilities.annotation.LabelsZarr.load)\n"
-    "rois_<tag>/         one run's outputs: stat.npy, F.npy, Fneu.npy,\n"
-    "                    iscell.npy, ops.npy, rois.json\n"
-    "roi_runs.json       which runs this dataset has loaded"
+    "<stem>.rois.zarr    the drawn ROIs, quick traces and which runs are\n"
+    "                    loaded, on Save or with autosave on\n"
+    "                    (mbo_utilities.annotation.RoiFile.load); its\n"
+    "                    labels/drawn is an OME-NGFF 0.5 label image\n"
+    "<stem>.<tag>.<stamp>.manual.zarr\n"
+    "                    one run: a results zarr, one unit per slice read"
 )
 
 
@@ -453,18 +453,6 @@ def help_markdown() -> str:
         "### Output files\n\n"
         f"```\n{_HELP_FILES}\n```\n"
     )
-
-
-def slice_name(z: int | None = None, c: int | None = None) -> str:
-    """One slice's name in the filename vocabulary (``ch02_zplane03``): the
-    C tag before the Z tag, 1-based, only the axes given.
-    """
-    tags = []
-    if c is not None:
-        tags.append(DimensionTag(TAG_REGISTRY["C"], int(c) + 1, None))
-    if z is not None:
-        tags.append(DimensionTag(TAG_REGISTRY["Z"], int(z) + 1, None))
-    return OutputFilename(tags).build("")
 
 
 def _frames_of(movie) -> dict:
@@ -606,11 +594,11 @@ class ManualRoiWidget:
     iw : MboNDViewer
         The viewer to draw on. Only its first subplot is drawable.
     fpath : path-like, optional
-        The data path. Annotations are saved to ``manual_labels.zarr`` and
-        loaded runs to ``roi_runs.json`` in its ROI folder (``roi_folder``
+        The data path. Annotations, quick traces and the loaded runs are
+        saved to ``<stem>.rois.zarr`` in its ROI folder (``roi_folder``
         under the ``roi_folder`` preference, beside the data when unset) on
-        Save, or as they change when the ``roi_autosave`` preference is on;
-        both are restored on construction.
+        Save, or as they change when the ``roi_autosave`` preference is on,
+        and restored on construction.
     label_names : iterable of str
         Class labels to seed the label set with.
     store : RoiLabelStore, optional
@@ -710,13 +698,16 @@ class ManualRoiWidget:
         self.status = "draw (a) a region, add it as an ROI (r)"
         self._save_error: str | None = None
         self._run_error: str | None = None
-        self._writer: LabelsZarr | None = None
+        # the rois zarr the data wants when the saved one was for another
+        # shape: "" normally, "<nz>x<ny>x<nx>" after a mismatch
+        self._save_suffix = ""
         self.new_label = ""
         self._note_buf = ""
         self.scroll_to_selection = False
         self.follow = False  # center the shown ROI; labeling then advances
         self.keybinds_open = False
-        # ctrl+z steps, newest last
+        # ctrl+z steps, newest last: a store snapshot, the drawn ROIs' traces,
+        # the marks and the selection as they were before the step
         self._undo: list[dict] = []
         self._panel_hovered = -2
 
@@ -872,7 +863,10 @@ class ManualRoiWidget:
         # typed there is the user's own tag and nothing else
         self.run_tag = ""
         self.manager = RoiRunManager()
+        # loaded runs the derived sets do not stand for: a manual run merged
+        # into the trace table, a run that could not load; saved with the ROIs
         self._registry_extra: list[dict] = []
+        self._saved_runs: list[dict] = []
         # pids of finished pipeline runs already pulled in by
         # _adopt_finished_runs, and when it last looked
         self._adopted: set[int] = set()
@@ -924,7 +918,7 @@ class ManualRoiWidget:
         without geometry.
         """
         line = trace.extra.get("line")
-        if line is None and (trace.stands_for_roi or trace.source == FULL_IMAGE):
+        if line is None and trace.stands_for_roi:
             line = trace.z
         pos = (
             dict(self.line_positions[int(line)])
@@ -1107,7 +1101,7 @@ class ManualRoiWidget:
         if action == "tint":
             self.refresh_overlay()
             return
-        if action in ("add", "delete", "clear"):
+        if action in ("add", "delete", "clear", "restore"):
             live = {r.uid for r in self.store.rois}
             self.traces.prune(live)
             self._feathers = {u: v for u, v in self._feathers.items() if u in live}
@@ -1117,6 +1111,7 @@ class ManualRoiWidget:
             "add",
             "delete",
             "clear",
+            "restore",
             "class",
         ):
             self.apply_color_by()
@@ -1188,8 +1183,8 @@ class ManualRoiWidget:
 
     @property
     def labels(self) -> np.ndarray:
-        """The current z-plane's label image (a view into the store volume)"""
-        return self.store.labels[self.z]
+        """The plane on screen's label image: ROI ``i`` paints ``i + 1``."""
+        return self.store.label_image(self.z)
 
     @property
     def counts(self) -> list[int]:
@@ -1230,15 +1225,13 @@ class ManualRoiWidget:
         for si, s in enumerate(self.derived):
             if not s.visible:
                 continue
-            iscell = s.result.iscell
-            scored = iscell is not None and np.ndim(iscell) == 2 and iscell.shape[1] > 1
-            for k, stat_row in enumerate(s.result.stat):
+            for k, (ypix, _xpix, _lam) in enumerate(s.footprints):
                 self.rows.append((si, k))
-                planes.append(s.result.z)
+                planes.append(s.z)
                 sources.append(1 + si)
-                areas.append(int(stat_row.get("npix", len(stat_row["ypix"]))))
+                areas.append(int(ypix.size))
                 oks.append(1 if s.accepted[k] else 0)
-                probs.append(float(iscell[k, 1]) if scored else np.nan)
+                probs.append(s.prob(k))
                 marks.append(int(k in s.discarded))
         self._row_index = {pair: row for row, pair in enumerate(self.rows)}
         if (
@@ -1305,12 +1298,7 @@ class ManualRoiWidget:
     @property
     def has_prob(self) -> bool:
         """Whether a loaded set carries a classifier probability (suite2p's ``iscell[:, 1]``)."""
-        return any(
-            s.result.iscell is not None
-            and np.ndim(s.result.iscell) == 2
-            and s.result.iscell.shape[1] > 1
-            for s in self.derived
-        )
+        return any(s.has_prob for s in self.derived)
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -1329,16 +1317,18 @@ class ManualRoiWidget:
         if len(points) < 3:
             self.status = "a region needs three points"
             return
-        points = np.round(np.asarray(points, np.float32)).astype(np.int32)
+        drawn = np.asarray(points, np.float32)
+        points = np.round(drawn).astype(np.int32)
         points[:, 0] = points[:, 0].clip(0, self.nx - 1)
         points[:, 1] = points[:, 1].clip(0, self.ny - 1)
         filled = np.zeros((self.ny, self.nx), np.uint8)
         cv2.fillPoly(filled, [points], 1)
-        index = self.store.add_roi(self.z, filled.astype(bool))
+        self._push_undo()
+        index = self.store.add_roi(self.z, filled.astype(bool), polygon=drawn)
         if index is None:
-            self.status = f"under {MIN_ROI_PIXELS} free px, not added"
+            self._undo.pop()
+            self.status = f"under {MIN_ROI_PIXELS} px, not added"
             return
-        self._push_undo({"kind": "add", "uid": self.store.rois[index].uid})
         self.select_roi(index)
         if self.auto_trace and self.trace_disabled(index) is None:
             self.quick_trace(index)
@@ -1356,7 +1346,7 @@ class ManualRoiWidget:
                 hit = (-1, index)
             elif 0 <= row < self.ny and 0 <= col < self.nx:
                 for si, s in enumerate(self.derived):
-                    if not s.visible or s.result.z != self.z:
+                    if not s.visible or s.z != self.z:
                         continue
                     k = int(s.pick_map[row, col])
                     if k >= 0:
@@ -1465,9 +1455,7 @@ class ManualRoiWidget:
         """Select component ``k`` of derived set ``si`` (clears any drawn
         selection; jumps z to the set's plane).
         """
-        if not (
-            0 <= si < len(self.derived) and 0 <= k < len(self.derived[si].result.stat)
-        ):
+        if not (0 <= si < len(self.derived) and 0 <= k < len(self.derived[si])):
             self.select_roi(-1)
             return
         self.selected = -1
@@ -1478,15 +1466,14 @@ class ManualRoiWidget:
         s = self.derived[si]
         row = self._row_index.get((si, k))
         cleared = self.order.reveal(row) if row is not None else []
-        stat_row = s.result.stat[k]
-        npix = int(stat_row.get("npix", len(stat_row["ypix"])))
+        ypix, xpix, _lam = s.footprints[k]
         tail = " · promoted" if (s.name, k) in self._promoted else ""
         tail += " · marked for deletion" if k in s.discarded else ""
-        self.status = f"{s.name} row {k}: {npix} px{tail}" + _cleared_note(cleared)
-        if s.result.z != self.z:
-            self._goto_plane(s.result.z)
+        self.status = f"{s.name} row {k}: {ypix.size} px{tail}" + _cleared_note(cleared)
+        if s.z != self.z:
+            self._goto_plane(s.z)
         if self.follow:
-            self._center_on(stat_row["ypix"], stat_row["xpix"])
+            self._center_on(ypix, xpix)
         self._sync_trace_sel()
         self.refresh_overlay()
 
@@ -1583,7 +1570,7 @@ class ManualRoiWidget:
             self.store.block_events(False)
         self._refresh_group_view()
         self._autosave()
-        self._save_registry()
+        self._autosave()
         self.status = (
             f"colored {len(targets)} ROI(s)"
             if rgb is not None
@@ -1671,22 +1658,13 @@ class ManualRoiWidget:
             return
 
     def delete_roi(self, index: int, record: bool = True):
-        """Drop one drawn ROI and renumber the labels above it; traces of
+        """Drop one drawn ROI; the indices above it shift and the traces of
         every other ROI survive (they are keyed by uid). Ctrl+z brings it back.
         """
         if not 0 <= index < self.n_rois:
             return
         if record:
-            roi = self.store.rois[index]
-            mask = self.store.labels[roi.plane] == index + 1
-            self._push_undo(
-                {
-                    "kind": "delete",
-                    "record": replace(roi),
-                    "mask": np.nonzero(mask),
-                    "traces": list(self.traces.for_roi(roi.uid)),
-                }
-            )
+            self._push_undo()
         # the store's event resyncs the rows, so the group is renumbered first
         self.buffer = [
             (si, k - (1 if si < 0 and k > index else 0))
@@ -1761,7 +1739,7 @@ class ManualRoiWidget:
             self.status = f"{len(self.buffer)} ROIs -> {name}"
             self._refresh_group_view()
             self._autosave()
-            self._save_registry()
+            self._autosave()
             return
         if self.selected >= 0:
             self.store.set_class(self.selected, class_index)
@@ -1785,7 +1763,7 @@ class ManualRoiWidget:
         if row is not None:
             self.order.goto(row)
             self.status = f"{s.name} row {k}: {self.classes.name_of(row)}"
-        self._save_registry()
+        self._autosave()
         if self.follow and class_index != UNLABELED:
             # the next algo row that still needs a label, not just the next
             # one: labeling used to land on rows already labeled
@@ -1813,10 +1791,9 @@ class ManualRoiWidget:
         record = self.store.rois[index]
         got = self._feathers.get(record.uid)
         if got is None:
-            mask = self.store.labels[record.plane] == index + 1
-            w = feather_mask(mask)
-            ypix, xpix = np.nonzero(mask)
-            got = (ypix.astype(np.int32), xpix.astype(np.int32), w[ypix, xpix])
+            w = feather_mask(self.store.mask(index))
+            ypix, xpix, _weights = self.store.footprint(index)
+            got = (ypix, xpix, w[ypix, xpix])
             self._feathers[record.uid] = got
         return got
 
@@ -1925,8 +1902,8 @@ class ManualRoiWidget:
             self._center_on(ypix, xpix)
         elif self.selected_derived is not None:
             si, k = self.selected_derived
-            row = self.derived[si].result.stat[k]
-            self._center_on(row["ypix"], row["xpix"])
+            ypix, xpix, _lam = self.derived[si].footprints[k]
+            self._center_on(ypix, xpix)
 
     def toggle_follow(self):
         """Center (f): every view on the selection, following it as it moves;
@@ -1956,28 +1933,53 @@ class ManualRoiWidget:
         return name
 
     def _add_derived(
-        self, res, discarded=(), classes=None, colors=None
+        self,
+        unit,
+        path,
+        pipeline: str = "",
+        *,
+        z: int | None = None,
+        algo: str = "",
+        discarded=(),
+        classes=None,
+        colors=None,
+        iscell=None,
     ) -> DerivedSet | None:
-        """Wrap a loaded run as a derived set (replacing an earlier load of
-        the same dir) and merge its uid-keyed traces.
+        """Wrap one pixel unit of a results file as a derived set keyed by
+        ``path`` (replacing an earlier load of the same path) and merge the
+        traces its rows carry. ``z`` is the plane of the array shown the
+        unit sits on (its own ``attrs["z"]``, else its plane number, when
+        None); ``iscell`` overrides the unit's own accept / reject flags.
         """
-        if tuple(res.shape) != (self.ny, self.nx):
+        path = Path(path)
+        shape = (
+            None
+            if unit.image_shape is None
+            else tuple(int(v) for v in unit.image_shape)
+        )
+        if unit.member_kind != "pixel" or shape is None:
+            self._run_error = f"{path.name} has no pixel ROIs to show"
+            return None
+        if shape != (self.ny, self.nx):
             self._run_error = (
-                f"{res.path.name} is {res.shape[0]}x{res.shape[1]}, "
-                f"data is {self.ny}x{self.nx}"
+                f"{path.name} is {shape[0]}x{shape[1]}, data is {self.ny}x{self.nx}"
             )
             return None
-        if not 0 <= res.z < self.store.nz:
+        if z is None:
+            z = unit.attrs.get("z")
+        if z is None:
+            z = int(unit.index) - 1 if unit.kind == "plane" else 0
+        if not 0 <= int(z) < self.store.nz:
             self._run_error = (
-                f"{res.path.name} is plane {res.z + 1}, "
-                f"data has {self.store.nz} plane(s)"
+                f"{path.name} is plane {int(z) + 1}, data has {self.store.nz} plane(s)"
             )
             return None
         promoted_traces: list[RoiTrace] = []
         classes = dict(classes or {})
         colors = dict(colors or {})
+        iscell = dict(iscell or {})
         for si, old in enumerate(self.derived):
-            if old.result.path == res.path:
+            if old.path == path:
                 discarded = set(discarded) | old.discarded
                 classes = {**old.classes, **classes}
                 colors = {**old.colors, **colors}
@@ -1987,20 +1989,28 @@ class ManualRoiWidget:
                 ]
                 self.unload_set(si)
                 break
+        kind = str(pipeline or unit.attrs.get("pipeline") or "suite2p")
         s = DerivedSet(
-            res,
-            self._set_name(res.path),
-            set_color(len(self.derived)),
+            unit=unit,
+            path=path,
+            name=self._set_name(path),
+            color=set_color(len(self.derived)),
+            z=int(z),
+            kind=kind,
+            algo=str(algo),
             discarded={int(k) for k in discarded},
             classes={int(k): int(v) for k, v in classes.items()},
             colors={int(k): tuple(float(x) for x in v) for k, v in colors.items()},
         )
+        for k, on in iscell.items():
+            if 0 <= int(k) < len(s):
+                s.accepted[int(k)] = bool(on)
         self.derived.append(s)
         if self.store.nz > 1 and len(self.derived) == 1 and self.order.plane is None:
             # per-plane results: the ROI table opens on the plane on screen
             self.order.plane = self.z
-        self._merge_run_traces(res, s.name)
-        for k in range(len(res.stat)):
+        self._merge_run_traces(unit, s.name, path)
+        for k in range(len(s)):
             if k not in s.discarded and (s.name, k) not in self._promoted:
                 trace = self._member_trace(s, k)
                 if trace is not None:
@@ -2009,112 +2019,60 @@ class ManualRoiWidget:
             self.traces.add(trace)
         self._resync()
         self.refresh_overlay()
-        self._save_registry()
+        self._autosave()
         return s
 
     def _member_trace(self, s: DerivedSet, k: int) -> RoiTrace | None:
-        """Component ``k`` of a loaded set as a Traces-tab row, or None when
-        the run carries no traces.
+        """Component ``k`` of a loaded set as a Traces-tab row, read where
+        its plane sits unless the run recorded where it read; None when the
+        run carries no traces.
         """
-        res = s.result
-        if res.F is None or not 0 <= k < len(res.F):
-            return None
-        pos = self._plane_pos(res.z)
+        pos = self._plane_pos(s.z)
         zname, cname = self.store.axis_name("z"), self.store.axis_name("c")
-        return RoiTrace(
-            uid=0,
-            member=k,
-            source=s.name,
-            z=pos.get(zname, 0) if res.read_z is None else int(res.read_z),
-            c=(pos.get(cname, 0) if cname else self._channel())
-            if res.read_c is None
-            else int(res.read_c),
-            engine=res.engine
-            or ("masknmf" if res.kind in ("demix", "masknmf") else "suite2p"),
-            F=np.asarray(res.F[k], np.float32),
-            Fneu=None if res.Fneu is None else np.asarray(res.Fneu[k], np.float32),
-            norm=None if res.norm is None else np.asarray(res.norm[k], np.float32),
-            kinds={name: np.asarray(v[k], np.float32) for name, v in res.kinds.items()},
-            frames=res.frames,
-            path=res.path,
+        return s.trace(
+            k,
+            z=pos.get(zname, 0),
+            c=pos.get(cname, 0) if cname else self._channel(),
         )
 
-    def load_run(self, path, discarded=(), classes=None, colors=None) -> bool:
-        """Read one run dir into the widget: extract runs merge their
-        traces, everything else loads as a derived set (every row, the
-        rejected ones included - curation happens here). A results file
-        (``mbo_utilities.results``), one unit inside one, a vnoiser ``PF``
-        folder or a masknmf run folder (its newest results file) goes
-        through :meth:`load_results`.
+    def load_run(
+        self, path, discarded=(), classes=None, colors=None, iscell=None
+    ) -> bool:
+        """Read one run into the widget: a results file
+        (``mbo_utilities.results``), one unit inside one
+        (``<file>.zarr/zplane01``), a suite2p plane dir, a masknmf run
+        folder or a vnoiser ``PF`` folder, all through ``Results.open``.
+
+        A pixel unit loads as a derived set (every row, the rejected ones
+        included - curation happens here), except a manual run's unit whose
+        rows stand for drawn ROIs still in the store: those merge into the
+        trace table keyed by uid. A line unit (the vnoiser pipeline's scans)
+        goes straight to the Traces tab, one row per ROI plotting its
+        denoised trace and one per member line plotting the line's raw
+        trace; with a MESc unit on screen only the scan that processed it
+        loads, without the member lines, which are the recording's own rows.
+        Every row is named by its ROI (``roi3``, ``roi3 (raw)``; a line of a
+        multi-line ROI adds itself, ``roi3 line 12 (raw)``) and carries the
+        line it was read from on Z and the pipeline's channel on C. Returns
+        True when anything loaded.
         """
-        from mbo_utilities.arrays.masknmf_run import is_masknmf_run
-        from mbo_utilities.results import TRACES_PKL, newest_results, results_pipeline
+        from mbo_utilities.arrays.mesc import MescArray
+        from mbo_utilities.results import unit_for_source
 
         path = Path(path)
-        if is_masknmf_run(path) and newest_results(path) is not None:
-            return self.load_results(newest_results(path), discarded, classes, colors)
         if (
-            results_pipeline(path) is not None
-            or (path / TRACES_PKL).is_file()
-            or (
-                path.parent.suffix == ".zarr"
-                and results_pipeline(path.parent) is not None
-            )
+            path.parent.suffix == ".zarr"
+            and results_pipeline(path) is None
+            and results_pipeline(path.parent) is not None
         ):
-            return self.load_results(path, discarded, classes, colors)
-        try:
-            res = load_run_dir(path, iscell_only=False, logger=self.logger)
-        except Exception as e:  # noqa: BLE001 - shown in the status row
-            self._run_error = f"could not load {path.name}: {e}"
-            return False
-        if (
-            self.store.nz == 1
-            and res.z != 0
-            and self.fpath is not None
-            and path == roi_folder(self.fpath)
-        ):
-            # the movie on screen IS this plane, whatever z the run recorded
-            res = replace(res, z=0)
-        if res.kind == "extract":
-            self._merge_run_traces(res, self._set_name(path))
-            if not any(str(e["path"]) == str(path) for e in self._registry_extra):
-                self._registry_extra.append(
-                    {"path": str(path), "kind": res.kind, "discarded": []}
-                )
-            self._save_registry()
-            return True
-        return self._add_derived(res, discarded, classes, colors) is not None
-
-    def load_results(self, path, discarded=(), classes=None, colors=None) -> bool:
-        """Read a results file (AGENTS.md §7.5) into the widget. Pixel units
-        (suite2p, masknmf) load as derived sets exactly like a run dir; line
-        units (the vnoiser pipeline's scans) go straight to the Traces tab,
-        one row per ROI plotting its denoised trace and one per member line
-        plotting the line's raw trace. With a MESc unit on screen only the
-        scan that processed it loads, without the member lines, which are
-        the recording's own rows; scans of other units are left for when
-        those are shown. Every row is named by its ROI
-        (``roi3``, ``roi3 (raw)``; a line of a multi-line ROI adds itself,
-        ``roi3 line 12 (raw)``) and carries the line it was read from on Z
-        and the pipeline's channel on C. ``path`` may name one unit inside
-        the file (``<file>.zarr/zplane01``). Returns True when anything
-        loaded.
-        """
-        from mbo_utilities.results import Results, results_pipeline
-
-        path = Path(path)
-        if path.parent.suffix == ".zarr" and results_pipeline(path) is None:
             file, only = path.parent, path.name
         else:
             file, only = path, None
         try:
             results = Results.open(file)
         except Exception as e:  # noqa: BLE001 - shown in the status row
-            self._run_error = f"could not load {file.name}: {e}"
+            self._run_error = f"could not load {path.name}: {e}"
             return False
-        from mbo_utilities.arrays.mesc import MescArray
-        from mbo_utilities.results import unit_for_source
-
         data = getattr(self.iw, "data", None)
         src = base_array(data[0]) if data else None
         on_screen = (
@@ -2122,7 +2080,15 @@ class ManualRoiWidget:
             if isinstance(src, MescArray)
             else None
         )
+        # the plane dir the movie on screen IS sits on z 0 whatever it recorded
+        own = self.fpath is not None and roi_folder(self.fpath) in (file, file.parent)
+        algo = (
+            detection_algo(results.metadata)
+            if results.metadata and results.pipeline in ("suite2p", "masknmf")
+            else results.pipeline
+        )
         loaded = 0
+        lines = 0
         for unit in results.units.values():
             if only is not None and unit.name != only:
                 continue
@@ -2135,24 +2101,49 @@ class ManualRoiWidget:
                     for trace in rows:
                         self.traces.add(trace)
                     loaded += 1
+                    lines += 1
                 continue
             if unit.member_kind == "pixel" and unit.image_shape is not None:
+                uids = unit.attrs.get("uids")
+                if (
+                    results.pipeline == RUN_PIPELINE
+                    and uids
+                    and len(uids) == unit.n_rois
+                ):
+                    name = self._set_name(file)
+                    if self._merge_run_traces(unit, name, file):
+                        loaded += 1
+                        if not any(
+                            str(e["path"]) == str(file) for e in self._registry_extra
+                        ):
+                            self._registry_extra.append({"path": str(file)})
+                    continue
                 plane_dir = unit.attrs.get("plane_dir")
                 key = (
                     Path(plane_dir)
                     if plane_dir and Path(plane_dir).is_dir()
+                    else (
+                        file
+                        if file == roi_folder(self.fpath or "")
+                        else file / unit.name
+                    )
+                    if results_pipeline(file) is None
                     else file / unit.name
                 )
-                res = run_result_from_unit(unit, key, results.pipeline)
-                if (
-                    self.store.nz == 1
-                    and res.z != 0
-                    and self.fpath is not None
-                    and file.parent == roi_folder(self.fpath)
-                ):
-                    # the movie on screen IS this plane, whatever plane the file recorded
-                    res = replace(res, z=0)
-                loaded += self._add_derived(res, discarded, classes, colors) is not None
+                loaded += (
+                    self._add_derived(
+                        unit,
+                        key,
+                        results.pipeline,
+                        z=0 if own and self.store.nz == 1 else None,
+                        algo=algo,
+                        discarded=discarded,
+                        classes=classes,
+                        colors=colors,
+                        iscell=iscell,
+                    )
+                    is not None
+                )
                 continue
             name = f"{file.name}/{unit.name}"
             rows = self._line_unit_rows(results, unit, file)
@@ -2162,6 +2153,7 @@ class ManualRoiWidget:
             for trace in rows:
                 self.traces.add(trace)
             loaded += 1
+            lines += 1
         if not loaded:
             if not self._run_error:
                 self._run_error = (
@@ -2171,14 +2163,15 @@ class ManualRoiWidget:
                 )
             return False
         self._results_loaded.add(str(file))
-        if any(t.source.startswith(f"{file.name}/") for t in self.traces):
-            if not any(str(e["path"]) == str(file) for e in self._registry_extra):
-                self._registry_extra.append(
-                    {"path": str(file), "kind": results.pipeline, "discarded": []}
-                )
-        self._save_registry()
+        # line units stand in the trace table only, so the file is listed
+        # for the next session; a derived set lists itself
+        if lines and not any(str(e["path"]) == str(file) for e in self._registry_extra):
+            self._registry_extra.append({"path": str(file)})
+        self._autosave()
         self.status = f"loaded {loaded} unit(s) of {file.name}"
         return True
+
+    load_results = load_run
 
     def _line_unit_rows(
         self, results, unit, file: Path, with_members: bool = True
@@ -2288,7 +2281,7 @@ class ManualRoiWidget:
         s = self.derived.pop(si)
         self.traces.drop_source(s.name)
         self._registry_extra = [
-            e for e in self._registry_extra if str(e["path"]) != str(s.result.path)
+            e for e in self._registry_extra if str(e["path"]) != str(s.path)
         ]
         if self.selected_derived is not None:
             osi, k = self.selected_derived
@@ -2305,7 +2298,7 @@ class ManualRoiWidget:
             self.order.source -= 1
         self._resync()
         self.refresh_overlay()
-        self._save_registry()
+        self._autosave()
 
     def promoted_index(self, si: int, k: int) -> int | None:
         """Store index of the drawn ROI promoted from set ``si`` row ``k``."""
@@ -2325,12 +2318,15 @@ class ManualRoiWidget:
         if len(self.store.rois) >= 65535:
             self.status = "store is full (65535 labels)"
             return None
-        stat_row = s.result.stat[k]
-        mask = np.zeros((self.ny, self.nx), bool)
-        mask[stat_row["ypix"], stat_row["xpix"]] = True
-        index = self.store.add_roi(s.result.z, mask, source=f"{s.name}:{k}")
+        ypix, xpix, lam = s.footprints[k]
+        index = self.store.add_roi(
+            s.z,
+            pixels=ypix.astype(np.int64) * self.nx + xpix,
+            weights=lam,
+            source=f"{s.name}:{k}",
+        )
         if index is None:
-            self.status = "overlaps existing ROIs, nothing free to claim"
+            self.status = f"{s.name} row {k} is under {MIN_ROI_PIXELS} px"
             return None
         self._promoted[(s.name, k)] = index
         if k in s.classes:
@@ -2366,7 +2362,7 @@ class ManualRoiWidget:
         promoted = skipped = 0
         self.store.block_events(True)
         try:
-            for k in range(len(s.result.stat)):
+            for k in range(len(s)):
                 if k in s.discarded or (s.name, k) in self._promoted:
                     skipped += 1
                     continue
@@ -2383,27 +2379,16 @@ class ManualRoiWidget:
         self.status = f"{s.name}: promoted {promoted} / skipped {skipped}"
 
     def set_accepted(self, si: int, k: int, on: bool | None = None):
-        """Flip (or set) one derived component's accepted flag, mirrored
-        into the run dir's ``iscell.npy``, or a results file's ``rois/iscell``.
+        """Flip (or set) one derived component's accepted flag. The run is
+        never written: the flag is kept with the ROIs (the rois zarr's
+        ``runs`` entry for the run) as an override on the run's own
+        ``iscell``.
         """
         s = self.derived[si]
         s.accepted[k] = (not s.accepted[k]) if on is None else bool(on)
-        path = s.result.path / "iscell.npy"
-        try:
-            if s.result.path.parent.suffix == ".zarr":
-                group = zarr.open_group(s.result.path.parent, mode="r+")
-                group[f"{s.result.path.name}/rois/iscell"][k, 0] = float(s.accepted[k])
-            else:
-                n = len(s.result.stat)
-                iscell = np.load(path) if path.exists() else np.ones((n, 2), np.float32)
-                if len(iscell) != n:
-                    iscell = np.ones((n, 2), np.float32)
-                iscell[k, 0] = 1.0 if s.accepted[k] else 0.0
-                np.save(path, iscell)
-        except OSError as e:
-            self._save_error = f"iscell save failed: {e}"
         self._resync()
         self.refresh_overlay()
+        self._autosave()
         state = "accepted" if s.accepted[k] else "rejected"
         self.status = f"{s.name} row {k}: {state}"
 
@@ -2422,41 +2407,51 @@ class ManualRoiWidget:
         return None if self.fpath is None else roi_folder(self.fpath, self.root)
 
     def _save_target(self) -> Path:
-        return labels_path(self.fpath, self.tag, self.root)
+        tag = "_".join(t for t in (self.tag, self._save_suffix) if t)
+        return labels_path(self.fpath, tag, self.root)
 
     def _restore(self):
-        """Adopt a previously saved labels zarr from the ROI folder, else
-        from beside the data, if any.
+        """Adopt the rois zarr saved for this data, from the ROI folder, else
+        from beside the data, if any: its ROIs, its quick traces and the
+        list of runs to load (``_restore_runs``). One saved for data of
+        another shape (the same file read with other ``dims``) is left as
+        it is and this data saves under a name carrying its shape.
         """
         if self.fpath is None:
             return
-        target = self._save_target()
-        if self.autosave:
-            self._writer = LabelsZarr(target)
         if self._adopted_store:
             # the parked store is the in-session truth; the zarr can be
             # behind it when an autosave failed
             return
-        if not target.exists():
-            target = labels_path(self.fpath, self.tag)
-        if not target.exists():
+        found = None
+        for target in dict.fromkeys(
+            (self._save_target(), labels_path(self.fpath, self.tag))
+        ):
+            if target.exists():
+                found = target
+                break
+        if found is None:
             return
         try:
-            store = LabelsZarr.load(target)
+            contents = RoiFile.load(found)
         except (OSError, ValueError) as e:
-            self.logger.warning(f"could not restore {target}: {e}")
+            self.logger.warning(f"could not restore {found}: {e}")
             self.status = f"restore failed: {e}"
             return
-        if (store.nz, store.ny, store.nx) != (
-            self.store.nz,
-            self.store.ny,
-            self.store.nx,
-        ):
+        store = contents.store
+        if store.shape != self.store.shape:
+            self._save_suffix = "x".join(str(v) for v in self.store.shape)
+            own = self._save_target()
             self.logger.warning(
-                f"{target} is {store.labels.shape}, data wants "
-                f"{self.store.labels.shape}; starting fresh"
+                f"{found} is for {store.shape} data, this is {self.store.shape}; "
+                f"left alone, saving to {own.name}"
             )
-            self.status = "saved labels do not match this data, starting fresh"
+            if own.exists():
+                self._restore()
+                return
+            self.status = (
+                f"{found.name} is for other data; starting fresh as {own.name}"
+            )
             return
         for name in self.store.label_names:
             store.add_label_name(name)
@@ -2464,12 +2459,24 @@ class ManualRoiWidget:
         store.plane_axes = self.plane_axes
         store.axis_roles = self.axis_roles
         self.store = store
-        self.status = f"restored {len(store.rois)} ROIs"
+        zname, cname = store.axis_name("z"), store.axis_name("c")
+        for trace in contents.traces:
+            self.traces.add(trace)
+            if trace.source == "pixel" and "pixel" in trace.extra:
+                pos = {}
+                if zname is not None:
+                    pos[zname] = trace.z
+                if cname is not None:
+                    pos[cname] = trace.c
+                row, col = trace.extra["pixel"]
+                self.pixels[(store.plane_of(pos), int(row), int(col))] = trace.key
+        self._saved_runs = list(contents.runs)
+        self.status = f"restored {len(store.rois)} ROIs from {found.name}"
         self.refresh_overlay()
 
     def _restore_runs(self, parked: dict | None):
         """Adopt the previous widget's parked runs, else re-load every
-        surviving run dir named in ``roi_runs.json``.
+        surviving run the rois zarr lists.
         """
         if parked is not None:
             manager = parked.get("manager")
@@ -2481,45 +2488,24 @@ class ManualRoiWidget:
                 self.derived = [
                     s
                     for s in (parked.get("derived") or [])
-                    if tuple(s.result.shape) == (self.ny, self.nx)
+                    if s.shape == (self.ny, self.nx)
                 ]
                 self._registry_extra = list(parked.get("extra") or [])
                 return
             # the parked sets and traces key uids of the previous data's
-            # store; fall through to this data's own registry
+            # store; fall through to this data's own list of runs
         self._restoring = True
         try:
-            paths = (
-                dict.fromkeys(
-                    (
-                        registry_path(self.fpath, self.tag, self.root),
-                        registry_path(self.fpath, self.tag),
-                    )
-                )
-                if self.fpath is not None
-                else {}
-            )
-            entries = [e for p in paths for e in load_run_registry(p)]
-            for entry in {str(e["path"]): e for e in entries}.values():
+            for entry in self._saved_runs:
                 path = Path(entry["path"])
-                if not run_dir_complete(path):
-                    # a spawned pipeline may have suffixed the dir name
-                    hits = sorted(
-                        d
-                        for d in path.parent.glob(path.name + "*")
-                        if d.is_dir() and run_dir_complete(d)
-                    )
-                    if hits:
-                        path = hits[0]
-                        entry = {**entry, "path": str(path)}
-                if run_dir_complete(path):
-                    if self.load_run(
-                        path,
-                        discarded=entry.get("discarded", ()),
-                        classes=entry.get("classes"),
-                        colors=entry.get("colors"),
-                    ):
-                        continue
+                if run_dir_complete(path) and self.load_run(
+                    path,
+                    discarded=entry.get("discarded", ()),
+                    classes=entry.get("classes"),
+                    colors=entry.get("colors"),
+                    iscell=entry.get("iscell"),
+                ):
+                    continue
                 self._registry_extra.append(entry)
             self._load_array_results()
         finally:
@@ -2529,11 +2515,10 @@ class ManualRoiWidget:
         """Show what the pipeline that wrote the data on screen found: one
         derived set per pixel unit of the array's ``results`` (a suite2p
         volume's planes each land on their own z), keyed by the plane dir the
-        unit was read from so curation writes back there. A line unit (a
-        vnoiser run of the scan on screen) becomes one trace-table row per
-        domain carrying every kind the run wrote; the lines' raw means are
-        the recording's own rows. An array with no results that sits in a
-        run dir still shows that dir's ROIs.
+        unit was read from. A line unit (a vnoiser run of the scan on screen)
+        becomes one trace-table row per domain carrying every kind the run
+        wrote; the lines' raw means are the recording's own rows. An array
+        with no results that sits in a run dir still shows that dir's ROIs.
         """
         from mbo_utilities.results import unit_for_source
 
@@ -2542,14 +2527,13 @@ class ManualRoiWidget:
             if self.fpath is None:
                 return
             own = roi_folder(self.fpath)
-            if run_dir_complete(own) and not any(
-                s.result.path == own for s in self.derived
-            ):
+            if run_dir_complete(own) and not any(s.path == own for s in self.derived):
                 self.load_run(own)
             return
         file = Path(results.path or self.fpath or results.pipeline)
         src = base_array(self.iw.data[0]) if getattr(self.iw, "data", None) else None
         shown = unit_for_source(results, str(getattr(src, "unit_key", "") or ""))
+        algo = detection_algo(results.metadata) if results.metadata else ""
         for unit in results.units.values():
             if unit.member_kind == "line" and unit.name == shown:
                 name = f"{file.name}/{unit.name}"
@@ -2567,47 +2551,100 @@ class ManualRoiWidget:
             path = Path(
                 unit.attrs.get("plane_dir") or (results.path or Path()) / unit.name
             )
-            if any(s.result.path == path for s in self.derived):
+            if any(s.path == path for s in self.derived):
                 continue
-            res = run_result_from_unit(unit, path, results.pipeline)
-            if results.metadata:
-                # the run's ops say which detector made the rows (s2p-sparsery, s2p-cellpose)
-                res = replace(res, algo=detection_algo(results.metadata))
-            if self.store.nz == 1 and res.z != 0:
-                # the movie on screen IS this plane, whatever z the unit recorded
-                res = replace(res, z=0)
-            self._add_derived(res)
+            # the movie on screen IS this plane, whatever z the unit recorded
+            self._add_derived(
+                unit,
+                path,
+                results.pipeline,
+                z=0 if self.store.nz == 1 else None,
+                algo=algo,
+            )
+
+    def _run_entries(self) -> list[dict]:
+        """The loaded runs as the rois zarr keeps them: one entry per derived
+        set (its marks, labels, colors and accept / reject overrides) plus
+        the runs no set stands for.
+        """
+        loaded = {str(s.path) for s in self.derived}
+        entries = []
+        for s in self.derived:
+            iscell = s.unit.iscell
+            own = (
+                np.asarray(iscell)[:, 0] > 0
+                if iscell is not None and len(iscell) == len(s)
+                else np.ones(len(s), bool)
+            )
+            entries.append(
+                {
+                    "path": str(s.path),
+                    "discarded": s.discarded,
+                    "classes": s.classes,
+                    "colors": {k: list(v) for k, v in s.colors.items()},
+                    "iscell": {
+                        k: bool(a)
+                        for k, (a, o) in enumerate(zip(s.accepted, own))
+                        if a != o
+                    },
+                }
+            )
+        blank = {"discarded": set(), "classes": {}, "colors": {}, "iscell": {}}
+        entries += [
+            {**blank, **e} for e in self._registry_extra if str(e["path"]) not in loaded
+        ]
+        return entries
+
+    def _source_block(self) -> dict:
+        """What the rois zarr records about the recording it annotates."""
+        data = getattr(self.iw, "data", None)
+        arr = base_array(data[0]) if data else None
+        return {
+            "path": str(self.fpath),
+            "reader_kwargs": dict(getattr(arr, "reader_kwargs", None) or {}),
+            "unit": self.unit_key,
+        }
+
+    def _write_rois(self) -> Path:
+        """Write the store, the quick traces and the run list to the rois
+        zarr; raises ``OSError`` when the folder cannot be written.
+        """
+        data = getattr(self.iw, "data", None)
+        arr = base_array(data[0]) if data else None
+        target = self._save_target()
+        RoiFile(target).save(
+            self.store,
+            self.traces.rows,
+            source=self._source_block(),
+            runs=self._run_entries(),
+            scale=tuple(getattr(arr, name, None) for name in ("dz", "dy", "dx")),
+        )
+        return target
 
     def _autosave(self):
-        if not self.autosave or self.fpath is None:
+        if not self.autosave or self.fpath is None or self._restoring:
             return
-        if self._writer is None:
-            self._writer = LabelsZarr(self._save_target())
         try:
-            self._writer.save_dirty(self.store, source_path=self.fpath)
+            self._write_rois()
             self._save_error = None
         except OSError as e:
             if self._save_error is None:
-                self.logger.warning(f"autosave to {self._writer.path} failed: {e}")
+                self.logger.warning(f"autosave to {self._save_target()} failed: {e}")
             self._save_error = f"autosave failed: {e}"
 
     def save(self):
-        """Write the full store to ``manual_labels.zarr`` and the loaded runs
-        to ``roi_runs.json`` in the ROI folder.
+        """Write the drawn ROIs, the quick traces and the loaded runs to the
+        rois zarr in the ROI folder.
         """
         if self.fpath is None:
             self.status = "no data path to save for"
             return
-        target = self._save_target()
-        if self._writer is None or self._writer.path != target:
-            self._writer = LabelsZarr(target)
         try:
-            self._writer.save(self.store, source_path=self.fpath)
+            target = self._write_rois()
         except OSError as e:
             self._save_error = f"save failed: {e}; pick another folder"
             return
         self._save_error = None
-        self._save_registry(force=True)
         self.status = f"saved to {target}"
         self.logger.info(f"saved {self.n_rois} ROIs to {target}")
 
@@ -2627,34 +2664,10 @@ class ManualRoiWidget:
         """
         self.root = Path(root) if root else None
         set_roi_folder(self.root or "")
-        self._writer = None
         if self.autosave:
             self.save()
         else:
             self.status = f"ROIs will be saved to {self.folder}"
-
-    def _save_registry(self, force: bool = False):
-        """Mirror the loaded sets (plus not-yet-loadable entries) into
-        ``roi_runs.json``, when autosaving or on Save (``force``).
-        """
-        if self.fpath is None or self._restoring or not (self.autosave or force):
-            return
-        loaded = {str(s.result.path) for s in self.derived}
-        entries = [
-            {
-                "path": str(s.result.path),
-                "kind": s.result.kind,
-                "discarded": s.discarded,
-                "classes": s.classes,
-                "colors": {k: list(v) for k, v in s.colors.items()},
-            }
-            for s in self.derived
-        ]
-        entries += [e for e in self._registry_extra if str(e["path"]) not in loaded]
-        try:
-            save_run_registry(registry_path(self.fpath, self.tag, self.root), entries)
-        except OSError as e:
-            self._save_error = f"run registry save failed: {e}"
 
     def open_full_fov(self):
         """Masknmf's summary-image popup over the frame on screen and the labels."""
@@ -2798,7 +2811,7 @@ class ManualRoiWidget:
             )
             if movie is None:
                 continue
-            mask = self.store.labels[target.plane] == target.index + 1
+            mask = self.store.mask(target.index)
             work.append((target, mask, feather_mask(mask), movie))
         if not work:
             if indices:
@@ -2860,37 +2873,34 @@ class ManualRoiWidget:
             self.order.columns["peak"] = self._row_peaks()
         self._footprints = None
 
-    def _merge_run_traces(self, res, name: str) -> int:
-        """Add one run's rows to the trace table under source ``name``,
-        keyed by store uid: ``res.uids`` first, else legacy
-        ``store_indices`` mapped through the current store. A run that did
-        not record where it read gets the ROI's own z-plane and channel.
-        Returns how many rows landed.
+    def _merge_run_traces(self, unit, name: str, path) -> int:
+        """Add a run unit's rows to the trace table under source ``name``,
+        keyed by the store uids the unit's ``uids`` attr names; rows whose
+        ROI is gone are skipped. A run that did not record where it read
+        gets the ROI's own z-plane and channel. Returns how many landed.
         """
-        if res.F is None:
-            return 0
-        uids = res.uids
-        if uids is None and res.store_indices is not None:
-            uids = np.full(len(res.stat), -1, np.int64)
-            for row, i in enumerate(res.store_indices):
-                if 0 <= int(i) < self.n_rois:
-                    uids[row] = self.store.rois[int(i)].uid
-                else:
-                    self.logger.info(
-                        f"manual_roi: {name} row {row} maps to missing ROI {i}; skipped"
-                    )
-        if uids is None:
+        uids = unit.attrs.get("uids")
+        if not uids or len(uids) != unit.n_rois:
             return 0
         merged = 0
-        for trace in result_traces(res, uids):
-            index = self.store.uid_index(trace.uid)
+        for row, uid in enumerate(uids):
+            index = self.store.uid_index(int(uid))
             if index is None:
                 continue
-            trace.source = name
-            if res.read_z is None:
-                trace.z = self.store.roi_z(index)
-            if res.read_c is None:
-                trace.c = self.store.roi_c(index)
+            z, c = unit.attrs.get("z"), unit.attrs.get("c")
+            trace = unit_trace(
+                unit,
+                row,
+                uid=int(uid),
+                member=None,
+                source=name,
+                path=path,
+                z=self.store.roi_z(index) if z is None else int(z),
+                c=self.store.roi_c(index) if c is None else int(c),
+                engine=str(unit.attrs.get("engine") or "mean"),
+            )
+            if trace is None:
+                continue
             self.traces.add(trace)
             self.trace_uid = trace.uid
             merged += 1
@@ -2975,14 +2985,11 @@ class ManualRoiWidget:
         self.host._force_run_tab = True
         self.status = f"{kind} parameters are in the Process tab"
 
-    @property
-    def run_prefix(self) -> str:
-        """What a run dir's name starts with: ``rois_``, then the recording's
-        tag when the file holds several (``rois_MSession_0_MUnit_3_``).
+    def _run_out_path(self, tag: str) -> Path | None:
+        """Where a run with ``tag`` goes: ``<stem>.<tag>.<stamp>.manual.zarr``
+        in the ROI folder (the recording's own tag first when its file holds
+        several); None, with the reason in the status, when it cannot.
         """
-        return f"{OUT_PREFIX}{self.tag}_" if self.tag else OUT_PREFIX
-
-    def _run_out_dir(self, tag: str) -> Path | None:
         if self.fpath is None:
             self.status = "no data path to write beside"
             return None
@@ -2990,9 +2997,10 @@ class ManualRoiWidget:
             r.tag == tag and r.job is not None and not r.finished
             for r in self.manager.runs
         ):
-            self.status = f"{self.run_prefix}{tag} is still being written"
+            self.status = f"{tag} is still being written"
             return None
-        return self.folder / f"{self.run_prefix}{tag}"
+        tags = "_".join(t for t in (self.tag, tag) if t)
+        return run_path(self.fpath, tags, self.folder)
 
     def run_rois(
         self,
@@ -3005,23 +3013,24 @@ class ManualRoiWidget:
         engine: str | None = None,
     ):
         """Send drawn ROIs through an extraction engine on the viewer's own
-        array, writing ``rois_<tag>/`` beside the data.
+        array, writing one results zarr (``<stem>.<tag>.<stamp>.manual.zarr``)
+        in the ROI folder.
 
         Each mask stays on the plane it was drawn on; its pixels come from
-        ``z`` / ``c`` / ``frames`` (else the Process tab's ``run_z`` /
-        ``run_c`` / ``run_tp``, else where the ROI was drawn). ROIs
-        read from more than one z-plane or channel get one child dir each
-        (``zplane02``, ``zplane02_ch01``). A finished run's rows replace
-        earlier rows at the same coordinates with the same engine. The run
-        closes over a store snapshot, so drawing on is safe while it works.
+        ``z`` / ``c`` / ``frames`` (else ``run_z`` / ``run_c`` / ``run_tp``,
+        else where the ROI was drawn). ROIs read from more than one z-plane
+        or channel get one unit each (``zplane02``, ``ch01_zplane02``). A
+        finished run's rows replace earlier rows at the same coordinates with
+        the same engine. The run closes over a store snapshot, so drawing on
+        is safe while it works.
         """
         indices = [int(i) for i in indices if 0 <= int(i) < self.n_rois]
         if not indices:
             self.status = "nothing to run"
             return
         tag = (tag or "").strip() or DEFAULT_RUN_TAG
-        out_dir = self._run_out_dir(tag)
-        if out_dir is None:
+        out_path = self._run_out_path(tag)
+        if out_path is None:
             return
         engine = self.engine if engine is None else str(engine)
         if engine not in ENGINES:
@@ -3038,57 +3047,75 @@ class ManualRoiWidget:
             plane, zz, cc = key
             movie = self._frame_select(self.movie(plane, z=zz, c=cc), tp)
             if movie is None or int(movie.shape[0]) < 2:
-                self.status = "no (T, Y, X) movie behind this view: nothing to trace over"
+                self.status = (
+                    "no (T, Y, X) movie behind this view: nothing to trace over"
+                )
                 return
             movies[key] = movie
         many_c = len({cc for _p, _z, cc in groups}) > 1
-        dests = {}
-        for key in groups:
-            _plane, zz, cc = key
-            # one child per slice read, named in the filename vocabulary
-            child = slice_name(zz, cc if many_c else None)
-            dests[key] = out_dir if len(groups) == 1 else out_dir / child
         settings = self.masknmf_settings() if engine == "masknmf" else None
         logger = self.logger
+        source = self.iw.data[0]
+        work = out_path.with_name(out_path.name + ".work")
 
         def fn(job):
-            outs = []
+            units = []
             for i, (key, on_plane) in enumerate(groups.items()):
                 plane, zz, cc = key
-                job.set_progress(i / len(groups), slice_name(zz, cc))
+                name = slice_name(zz, cc if many_c else None)
+                job.set_progress(i / len(groups), name)
                 if engine == "masknmf":
-                    out = demix_rois(
+                    unit = demix_rois(
                         movies[key],
                         store,
                         on_plane,
                         z=plane,
                         c=cc,
-                        out_dir=dests[key],
+                        work_dir=work / name,
                         settings=settings,
-                        tag=tag,
                         logger=logger,
                     )
                 else:
-                    out = extract_rois(
+                    unit = extract_rois(
                         movies[key],
                         store,
                         on_plane,
                         z=plane,
                         c=cc,
-                        out_dir=dests[key],
                         engine=engine,
-                        tag=tag,
                         logger=logger,
                     )
-                if out is not None:
-                    outs.append(Path(out))
-            return outs
+                if unit is None:
+                    continue
+                unit.name = name
+                while any(u.name == unit.name for u in units):
+                    # two store planes read at the same slice (masks drawn on
+                    # two channels, traced on one): a unit each
+                    unit.name += f"_p{plane}"
+                units.append(unit)
+            if not units:
+                return None
+            write_run(
+                out_path,
+                units,
+                source=source,
+                store=store,
+                tag=tag,
+                settings=settings or {},
+            )
+            if work.exists():
+                native = pipeline_files(out_path)
+                native.mkdir(parents=True, exist_ok=True)
+                for child in work.iterdir():
+                    shutil.move(str(child), str(native / child.name))
+                shutil.rmtree(work)
+            return out_path
 
         run = RoiRun(
             kind="demix" if engine == "masknmf" else "extract",
             tag=tag,
-            description=f"{engine}: {len(indices)} ROI(s) -> {out_dir.name}",
-            out_root=out_dir,
+            description=f"{engine}: {len(indices)} ROI(s) -> {out_path.name}",
+            out_root=out_path,
             planes=sorted({zz + 1 for _p, zz, _c in groups}),
         )
         self.manager.submit(run, fn, heavy=(engine == "masknmf"))
@@ -3169,9 +3196,6 @@ class ManualRoiWidget:
             if run.error is not None:
                 self._run_error = f"{run.description} failed: {run.error}"
                 continue
-            if run.kind == "discover" and payload is None:
-                self.status = f"{run.description}: nothing found in the region"
-                continue
             if run.job is not None:
                 if isinstance(payload, (str, Path)):
                     run.out_dirs = [Path(payload)]
@@ -3226,7 +3250,7 @@ class ManualRoiWidget:
             return
         roots = {roi_folder(self.fpath), self.folder}
         mine = {r.pid for r in self.manager.runs if r.pid is not None}
-        loaded = {str(s.result.path) for s in self.derived} | self._results_loaded
+        loaded = {str(s.path) for s in self.derived} | self._results_loaded
         for info in get_process_manager().get_running():
             if (
                 info.pid in mine
@@ -3533,12 +3557,8 @@ class ManualRoiWidget:
             return THEME.err, self._run_error
         active = self.manager.active
         if active:
-            verbs = {"discover": "find", "extract": "extract", "demix": "masknmf"}
-            names = ", ".join(
-                f"{verbs.get(r.kind, r.kind)} "
-                + (f"{self.run_prefix}{r.tag}" if r.job is not None else r.tag)
-                for r in active
-            )
+            verbs = {"extract": "extract", "demix": "masknmf"}
+            names = ", ".join(f"{verbs.get(r.kind, r.kind)} {r.tag}" for r in active)
             return THEME.warn, f"{len(active)} running: {names}"
         return THEME.text_dim, self.status
 
@@ -3574,17 +3594,17 @@ class ManualRoiWidget:
         if not imgui.is_item_hovered():
             return
         imgui.begin_tooltip()
-        imgui.text(f"labels zarr: {self._save_target()}")
+        imgui.text(f"rois zarr: {self._save_target()}")
         imgui.text(
-            f"runs:        {registry_path(self.fpath, self.tag, self.root)}, "
-            f"{self.run_prefix}<tag>/"
+            "runs:      <stem>.<tag>.<stamp>.manual.zarr beside it, listed in the rois zarr"
         )
         imgui.text_colored(
             to_vec4(THEME.code),
-            "from mbo_utilities.annotation import LabelsZarr\n"
-            f'store = LabelsZarr.load(r"{self._save_target()}")\n'
-            "store.labels        # (Z, Y, X) uint16; 0 = bg, ROI i = i + 1\n"
-            "store.rois          # per-ROI plane, area, class, note, uid, source",
+            "from mbo_utilities.annotation import RoiFile\n"
+            f'rois = RoiFile.load(r"{self._save_target()}")\n'
+            "rois.store.rois            # per-ROI pixels, weights, plane, class, note, uid\n"
+            "rois.store.label_image(z)  # (Y, X); 0 = bg, ROI i = i + 1\n"
+            "rois.traces                # the quick traces and pixel averages",
         )
         imgui.end_tooltip()
 
@@ -3972,7 +3992,7 @@ class ManualRoiWidget:
         """
         if self.selected < 0 and self.selected_derived is not None and not self.buffer:
             si, k = self.selected_derived
-            path = Path(self.derived[si].result.path)
+            path = Path(self.derived[si].path)
             if results_pipeline(path.parent) is not None:
                 return (path.parent, path.name, str(k), None)
             return (path, None, str(k), None) if path.is_dir() else None
@@ -4394,7 +4414,7 @@ class ManualRoiWidget:
             trace = self.traces.get(key)
             placed = trace is not None and (
                 trace.stands_for_roi
-                or trace.source in (FULL_IMAGE, "pixel")
+                or trace.source == "pixel"
                 or "line" in trace.extra
                 or self._set_by_name(trace.source) is not None
             )
@@ -4411,7 +4431,7 @@ class ManualRoiWidget:
         # a results file's rows have no slice to name
         placed = (
             trace.stands_for_roi
-            or trace.source in (FULL_IMAGE, "pixel")
+            or trace.source == "pixel"
             or "line" in trace.extra
             or self._set_by_name(trace.source) is not None
         )
@@ -4596,10 +4616,10 @@ class ManualRoiWidget:
             if si < 0:
                 return "drawn"
             s = self.derived[si]
-            algo = getattr(s.result, "algo", "") or s.name
+            algo = s.algo or s.name
             return f"{algo} · promoted" if (s.name, k) in self._promoted else algo
         if name == "z":
-            z = self.store.rois[k].plane if si < 0 else self.derived[si].result.z
+            z = self.store.rois[k].plane if si < 0 else self.derived[si].z
             return self._plane_label(z)
         if name == "ok":
             return "" if si < 0 else ("yes" if self.derived[si].accepted[k] else "no")
@@ -4708,22 +4728,14 @@ class ManualRoiWidget:
 
     def _row_plane(self, row: int) -> int:
         si, k = self.rows[row]
-        return self.store.rois[k].plane if si < 0 else self.derived[si].result.z
+        return self.store.rois[k].plane if si < 0 else self.derived[si].z
 
     def _row_footprint(self, row: int) -> tuple:
         """``(ypix, xpix, lam)`` of one table row."""
         si, k = self.rows[row]
         if si < 0:
             return self._feather(k)
-        stat_row = self.derived[si].result.stat[k]
-        lam = stat_row.get("lam")
-        if lam is None:
-            lam = np.ones(len(stat_row["ypix"]), np.float32)
-        return (
-            np.asarray(stat_row["ypix"], np.int32),
-            np.asarray(stat_row["xpix"], np.int32),
-            np.asarray(lam, np.float32),
-        )
+        return self.derived[si].footprints[k]
 
     def _row_center(self, row: int) -> tuple[float, float]:
         """``(x, y)`` center of one row's footprint, where the region tests it."""
@@ -4912,7 +4924,7 @@ class ManualRoiWidget:
         if not pairs:
             return
         if record:
-            self._push_undo({"kind": "mark", "pairs": pairs, "on": on})
+            self._push_undo()
         for si, k in pairs:
             if on:
                 self.derived[si].discarded.add(k)
@@ -4920,7 +4932,7 @@ class ManualRoiWidget:
                 self.derived[si].discarded.discard(k)
         self._resync()
         self.refresh_overlay()
-        self._save_registry()
+        self._autosave()
         self.status = f"{'marked' if on else 'unmarked'} {len(pairs)} algo ROI(s)"
 
     def deselect(self):
@@ -4969,14 +4981,23 @@ class ManualRoiWidget:
             "active_pixel": self.active_pixel,
         }
 
-    def _push_undo(self, step: dict):
-        step["selection"] = self._selection_state()
-        self._undo.append(step)
+    def _push_undo(self):
+        """Remember the ROIs, their traces, the marks and the selection as
+        they are now, for ctrl+z (before the step that changes them).
+        """
+        self._undo.append(
+            {
+                "store": self.store.snapshot(),
+                "traces": [t for t in self.traces if t.stands_for_roi],
+                "marks": {str(s.path): set(s.discarded) for s in self.derived},
+                "selection": self._selection_state(),
+            }
+        )
         del self._undo[:-_UNDO_DEPTH]
 
     def _snapshot(self):
         """Push the selection for ctrl+z (masknmf's snapshot before a deselect)."""
-        self._push_undo({"kind": "selection"})
+        self._push_undo()
 
     def undo(self):
         """Ctrl+z: back one step; a deleted ROI comes back with its traces, a drawn one goes."""
@@ -4984,35 +5005,16 @@ class ManualRoiWidget:
             return
         step = self._undo.pop()
         self._drop_region()
-        kind = step["kind"]
-        if kind == "add":
-            index = self.store.uid_index(step["uid"])
-            if index is not None:
-                self.delete_roi(index, record=False)
-        elif kind == "delete":
-            record = step["record"]
-            mask = np.zeros((self.ny, self.nx), bool)
-            mask[step["mask"]] = True
-            min_pixels, self.store.min_pixels = self.store.min_pixels, 1
-            try:
-                index = self.store.add_roi(record.plane, mask, source=record.source)
-            finally:
-                self.store.min_pixels = min_pixels
-            if index is not None:
-                roi = self.store.rois[index]
-                roi.uid, roi.class_index, roi.note, roi.color = (
-                    record.uid,
-                    record.class_index,
-                    record.note,
-                    record.color,
-                )
-                for trace in step["traces"]:
-                    self.traces.add(trace)
-                self._resync()
-                self._autosave()
-        elif kind == "mark":
-            live = [(si, k) for si, k in step["pairs"] if si < len(self.derived)]
-            self.mark(live, not step["on"], record=False)
+        self.store.restore(step["store"])
+        live = {r.uid for r in self.store.rois}
+        for trace in step["traces"]:
+            if trace.uid in live and trace.key not in self.traces:
+                self.traces.add(trace)
+        for s in self.derived:
+            marks = step["marks"].get(str(s.path))
+            if marks is not None:
+                s.discarded = set(marks)
+        self._resync()
         state = step["selection"]
         for pid in list(self.pixels):
             if pid not in state["pixels"]:
@@ -5297,9 +5299,7 @@ class ManualRoiWidget:
         if imgui.button(f"{fa.ICON_FA_CHECK}##roi_accept", size):
             self.set_accepted(*self.selected_derived)
         imgui.end_disabled()
-        tooltip(
-            "Accept / reject the selected algo ROI, written to its run's iscell (x)"
-        )
+        tooltip("Accept / reject the selected algo ROI, kept with the ROIs (x)")
         imgui.same_line(0, gap)
         if imgui.button(f"{fa.ICON_FA_FLOPPY_DISK}##roi_save", size):
             self.save()
@@ -5367,7 +5367,7 @@ class ManualRoiWidget:
             "no data path to write beside"
             if no_path
             else f"Run the {len(indices)} selected ROI(s) through {self.engine} -> "
-            f"{self.run_prefix}{self.effective_tag}/ (shift+t)"
+            f"<stem>.{self.effective_tag}.<stamp>.manual.zarr (shift+t)"
             if indices
             else "select a drawn ROI first"
         )
@@ -5397,7 +5397,10 @@ class ManualRoiWidget:
         _changed, self.run_tag = imgui.input_text_with_hint(
             "##roi_run_tag", DEFAULT_RUN_TAG, self.run_tag
         )
-        help_mark(f"the run's tag: it writes {self.run_prefix}<tag>/ beside the data")
+        help_mark(
+            "the run's tag: it names the run file, <stem>.<tag>.<stamp>.manual.zarr, "
+            "in the ROI folder"
+        )
 
     def _selection_status(self) -> str:
         """Masknmf's footer: what is grouped or selected, else how to start."""

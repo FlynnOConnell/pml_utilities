@@ -926,9 +926,7 @@ class VnoiserPipelineWidget(PipelineWidget):
                 continue
             name = (record.note or "").strip() or f"drawn{record.uid}"
             try:
-                d = Domain.from_frame_mask(
-                    name, z, store.labels[record.plane] == i + 1, geometry
-                )
+                d = Domain.from_frame_mask(name, z, store.mask(i), geometry)
             except ValueError:
                 continue
             rows.append(DomainRow(d.name, d.rois, d.pixels, d.fraction, d.mask))

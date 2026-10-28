@@ -8,7 +8,6 @@ here imports masknmf or opens a figure.
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from pathlib import Path
@@ -16,9 +15,9 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from mbo_utilities import roi_workflow as rw
 from mbo_utilities.gui import roi_runs as rr
 from mbo_utilities.gui.widgets.process_manager import LocalJob
+from mbo_utilities.results import ResultUnit
 
 
 class _StubPM:
@@ -103,20 +102,24 @@ def _row(ypix, xpix, lam):
     }
 
 
-def _result(rows, shape=(6, 6), z=0, kind="discover"):
-    return rw.RunResult(
-        path=Path("run"),
-        kind=kind,
-        z=z,
-        shape=shape,
-        stat=np.array(rows, dtype=object),
-        F=None,
-        Fneu=None,
-        norm=None,
-        iscell=None,
-        uids=None,
-        store_indices=None,
+def _result(rows, shape=(6, 6), **attrs):
+    """A pixel ``ResultUnit`` from suite2p-shaped stat rows."""
+    ly, lx = shape
+    return ResultUnit(
+        name="zplane01",
+        kind="plane",
+        index=1,
+        roi_names=[f"roi{k}" for k in range(len(rows))],
+        member_kind="pixel",
+        members=[r["ypix"].astype(np.int64) * lx + r["xpix"] for r in rows],
+        weights=[r["lam"] for r in rows],
+        image_shape=(ly, lx),
+        attrs=dict(attrs),
     )
+
+
+def _set(unit, name, color, **kw):
+    return rr.DerivedSet(unit, Path("run") / name, name, color, **kw)
 
 
 def test_submit_success_and_single_poll(pm):
@@ -271,16 +274,17 @@ def test_pick_map_strongest_lam_wins():
             _row([1, 2], [1, 2], [2.0, 2.0]),
         ]
     )
-    pick = rr.build_pick_map(res.stat, res.shape)
+    s = _set(res, "a", rr.set_color(0))
+    pick = rr.build_pick_map(s.footprints, s.shape)
     assert pick[0, 0] == 0 and pick[2, 2] == 1
     assert pick[1, 1] == 0  # contested pixel goes to the stronger component
     assert pick[3, 3] == -1
-    s = rr.DerivedSet(res, "a", rr.set_color(0))
     np.testing.assert_array_equal(s.pick_map, pick)
+    assert len(s) == 2 and s.z == 0 and s.engine == "suite2p" and not s.has_prob
 
 
 def test_derived_rgba_lam_weights():
-    s = rr.DerivedSet(_result([_row([1, 2], [1, 2], [1.0, 2.0])]), "a", (1.0, 0.0, 0.0))
+    s = _set(_result([_row([1, 2], [1, 2], [1.0, 2.0])]), "a", (1.0, 0.0, 0.0))
     img = rr.derived_rgba((6, 6), [s], 0.5)
     assert img.shape == (6, 6, 4) and img.dtype == np.uint8
     c = np.rint(np.asarray(rr.component_color(s, 0)) * 255).astype(int).tolist()
@@ -290,8 +294,8 @@ def test_derived_rgba_lam_weights():
 
 
 def test_derived_rgba_overlap_winner_takes_color():
-    a = rr.DerivedSet(_result([_row([1, 2], [1, 2], [0.5, 1.0])]), "a", (1.0, 0.0, 0.0))
-    b = rr.DerivedSet(_result([_row([1], [1], [1.0])]), "b", (0.0, 0.0, 1.0))
+    a = _set(_result([_row([1, 2], [1, 2], [0.5, 1.0])]), "a", (1.0, 0.0, 0.0))
+    b = _set(_result([_row([1], [1], [1.0])]), "b", (0.0, 0.0, 1.0))
     img = rr.derived_rgba((6, 6), [a, b], 0.6)
     ca = np.rint(np.asarray(rr.component_color(a, 0)) * 255).astype(int).tolist()
     cb = np.rint(np.asarray(rr.component_color(b, 0)) * 255).astype(int).tolist()
@@ -301,9 +305,7 @@ def test_derived_rgba_overlap_winner_takes_color():
 
 def test_derived_rgba_selection_fill_and_rim():
     yy, xx = np.mgrid[1:4, 1:4]
-    s = rr.DerivedSet(
-        _result([_row(yy.ravel(), xx.ravel(), np.ones(9))]), "a", (1.0, 0.0, 0.0)
-    )
+    s = _set(_result([_row(yy.ravel(), xx.ravel(), np.ones(9))]), "a", (1.0, 0.0, 0.0))
     img = rr.derived_rgba((6, 6), [s], 0.3, selected=(s, 0))
     fill = round(rr.SELECTED_ALPHA * 255)
     c = np.rint(np.asarray(rr.component_color(s, 0)) * 255).astype(int).tolist()
@@ -313,7 +315,7 @@ def test_derived_rgba_selection_fill_and_rim():
 
 
 def test_derived_rgba_skips_discarded_and_invisible():
-    s = rr.DerivedSet(
+    s = _set(
         _result(
             [
                 _row([1], [1], [1.0]),
@@ -413,7 +415,7 @@ def test_outline_data_of_nothing_is_empty():
 
 
 def test_derived_outline_follows_the_same_rows_as_derived_rgba():
-    s = rr.DerivedSet(
+    s = _set(
         _result(
             [
                 _row([1], [1], [1.0]),
@@ -436,7 +438,7 @@ def test_derived_outline_follows_the_same_rows_as_derived_rgba():
 
 
 def test_derived_outline_haloes_the_selection():
-    s = rr.DerivedSet(_result([_row([3], [3], [1.0])]), "a", (1.0, 0.0, 0.0))
+    s = _set(_result([_row([3], [3], [1.0])]), "a", (1.0, 0.0, 0.0))
     pos, colors = rr.derived_outline([s], "circle", selected=(s, 0))
     assert len(_pieces(pos)) == 2
     assert np.allclose(colors[-1], (1.0, 1.0, 1.0, 1.0))
@@ -445,51 +447,46 @@ def test_derived_outline_haloes_the_selection():
 def test_component_color_is_class_color_when_labeled():
     from mbo_utilities.annotation import class_color
 
-    s = rr.DerivedSet(_result([_row([1], [1], [1.0])]), "a", (1.0, 0.0, 0.0))
+    s = _set(_result([_row([1], [1], [1.0])]), "a", (1.0, 0.0, 0.0))
     hue = rr.component_color(s, 0)
     s.classes[0] = 1
     assert rr.component_color(s, 0) == class_color(1) != hue
 
 
-def test_result_traces_carry_the_read_coordinates(tmp_path):
-    stat = np.array([_row([0], [0], [1.0])] * 2, object)
-    res = rw.RunResult(
-        path=tmp_path / "rois_manual",
-        kind="extract",
-        z=3,
-        shape=(8, 9),
-        stat=stat,
-        F=np.arange(8, dtype=np.float32).reshape(2, 4),
-        Fneu=np.zeros((2, 4), np.float32),
-        norm=None,
-        iscell=None,
-        uids=np.array([5, 0]),
-        store_indices=None,
-        engine="suite2p",
-        read_z=1,
-        read_c=2,
+def test_unit_trace_carries_the_read_coordinates(tmp_path):
+    unit = _result(
+        [_row([0], [0], [1.0])] * 2, shape=(8, 9), engine="suite2p", z=1, c=2
     )
-    (trace,) = rr.result_traces(res)
+    unit.fs = 5.0
+    unit.traces = {
+        "raw": np.arange(8, dtype=np.float32).reshape(2, 4),
+        "neuropil": np.zeros((2, 4), np.float32),
+        "spikes": np.ones((2, 4), np.float32),
+    }
+    unit.attrs["frames"] = (10, 14, 1)
+    path = tmp_path / "movie.a.2026-10-28-10-00-00.manual.zarr"
+    trace = rr.unit_trace(
+        unit, 0, uid=5, member=None, source="a", path=path, z=1, c=2, engine="suite2p"
+    )
     assert trace.key == ("roi", 5, 1, 2, "suite2p")
-    assert trace.source == "rois_manual" and trace.path == res.path
+    assert trace.source == "a" and trace.path == path
+    assert trace.frames == (10, 14, 1) and trace.fs == 5.0
     np.testing.assert_array_equal(trace.F, [0, 1, 2, 3])
-    # no read coordinates recorded: the store plane stands in for z
-    plain = rw.RunResult(
-        path=tmp_path / "find01",
-        kind="demix",
-        z=3,
-        shape=(8, 9),
-        stat=stat,
-        F=res.F,
-        Fneu=None,
-        norm=None,
-        iscell=None,
-        uids=None,
-        store_indices=None,
+    np.testing.assert_array_equal(trace.Fneu, 0)
+    assert trace.norm is None and trace.kinds["spikes"].tolist() == [1] * 4
+    assert (
+        rr.unit_trace(
+            unit, 2, uid=0, member=None, source="a", path=path, z=0, c=0, engine="mean"
+        )
+        is None
     )
-    assert rr.result_traces(plain) == []
-    (t0, t1) = rr.result_traces(plain, uids=[7, 8])
-    assert (t0.z, t0.c, t0.engine) == (3, 0, "masknmf") and t1.uid == 8
+    s = _set(unit, "a", rr.set_color(0))
+    assert (s.read_z, s.read_c, s.frames, s.engine) == (1, 2, (10, 14, 1), "suite2p")
+    member = s.trace(1, z=0, c=0)
+    assert member.key == ("member", "a", 1) and member.z == 1 and member.c == 2
+    plain = _set(_result([_row([0], [0], [1.0])]), "b", rr.set_color(1), z=3)
+    assert (plain.read_z, plain.read_c, plain.frames) == (None, None, None)
+    assert plain.trace(0, z=3, c=0) is None
 
 
 def _run_dir(path, kind=None, n_stat=1, n_rois=None, pipeline=None):
@@ -505,48 +502,6 @@ def _run_dir(path, kind=None, n_stat=1, n_rois=None, pipeline=None):
     if n_stat is not None:
         np.save(path / "stat.npy", np.array([_row([0], [0], [1.0])] * n_stat, object))
     return path
-
-
-def test_run_registry_round_trip(tmp_path):
-    target = rr.registry_path(tmp_path / "raw.tif")
-    assert target == tmp_path / rr.REGISTRY_NAME
-    assert rr.load_run_registry(target) == []
-
-    entries = [
-        {
-            "path": tmp_path / "rois_a",
-            "kind": "extract",
-            "discarded": {3, 1},
-            "classes": {2: 0},
-            "colors": {4: (1.0, 0.5, 0.0)},
-        },
-        {"path": tmp_path / "gone" / "rois_b", "kind": "demix"},  # dir never existed
-    ]
-    rr.save_run_registry(target, entries)
-    got = rr.load_run_registry(target)
-    assert got == [
-        {
-            "path": str(tmp_path / "rois_a"),
-            "kind": "extract",
-            "discarded": [1, 3],
-            "classes": {2: 0},
-            "colors": {4: (1.0, 0.5, 0.0)},
-        },
-        {
-            "path": str(tmp_path / "gone" / "rois_b"),
-            "kind": "demix",
-            "discarded": [],
-            "classes": {},
-            "colors": {},
-        },
-    ]
-    assert json.loads(target.read_text())["runs"][0]["discarded"] == [1, 3]
-
-    target.write_text("not json {")
-    assert rr.load_run_registry(target) == []
-    nested = tmp_path / "new" / "deep" / rr.REGISTRY_NAME
-    rr.save_run_registry(nested, [])
-    assert rr.load_run_registry(nested) == []
 
 
 class _Settings:
@@ -631,5 +586,3 @@ class TestSuite2pHydrate:
         assert _try_hydrate_s2p_from_binary(parent, plane)
         assert parent.s2p.do_detection == before, "the Skip/Run gate must not move"
         assert parent.s2p.tau == pytest.approx(0.7), "parameters still hydrate"
-
-

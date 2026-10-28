@@ -839,8 +839,7 @@ pipeline's native files stay its cache and its compatibility layer.
   and calls `results.write(path)`. `Results.from_suite2p(dir, plane_dirs=None)` reads
   suite2p and MaskNMF folders into the same shape without writing (`F` → `raw`,
   `Fneu` → `neuropil`, `spks` → `spikes`, `norm_traces` → `dff`, or `zscore` when
-  the plane's ops say `norm_method = "zscore"` (`norm_traces_kind`, which
-  `roi_workflow.load_run_dir` reads the same file through), `stat` → pixel
+  the plane's ops say `norm_method = "zscore"` (`norm_traces_kind`), `stat` → pixel
   members, `meanImg`/`max_proj`/`Vcorr`/`refImg` → images, the cropped `max_proj`
   and `Vcorr` put back into the full frame at `yrange`/`xrange` so every image
   shares the ROIs' pixel coordinates; ops through `load_plane_ops`, and ROIs with
@@ -881,23 +880,30 @@ pipeline's native files stay its cache and its compatibility layer.
   the run scanners use; `ZarrArray` declines a results file. `imread` never returns
   a results file as a movie of itself. No widget parses a plane dir: it asks the
   array for `results`.
-- **Viewing.** The ROI widget's Traces tab takes a results file through the same door
-  as a run dir: `ManualRoiWidget.load_run(path)` (a file, or one unit as
-  `<file>.zarr/zplane01`) calls `load_results`. A pixel unit becomes a `RunResult`
-  (`roi_workflow.run_result_from_unit`) and loads as a derived set with its overlay,
-  exactly like `stat.npy` + `F.npy`, keyed by the plane dir the unit was read from
-  (`attrs["plane_dir"]`) so accept/reject writes back to that dir's `iscell.npy`;
-  the array's own `results` load the same way when the widget opens
+- **Viewing.** The ROI widget takes every run through one door:
+  `ManualRoiWidget.load_run(path)` opens a results file, one unit of one
+  (`<file>.zarr/zplane01`), a suite2p plane dir, a masknmf run folder or a
+  vnoiser `PF` folder with `Results.open`. A pixel unit becomes a
+  `roi_runs.DerivedSet` (the unit, its footprints as `(ypix, xpix, lam)`, its
+  `accepted` flags from the unit's `iscell`) drawn in the overlay and listed in
+  the ROI table, keyed by the plane dir the unit was read from
+  (`attrs["plane_dir"]`) or by `<file>/<unit>`; the run's files are never
+  written to: accept / reject, marks, labels and group colors are curation and
+  stay with the ROIs (the rois zarr's `runs` list, §7.6 Persistence). The
+  array's own `results` load the same way when the widget opens
   (`ManualRoiWidget._load_array_results`), one derived set per plane on its own z,
   `spks` as the `spikes` kind and `iscell[:, 1]` as the ROI table's `prob` column.
+  A manual run (pipeline `manual`, §7.6 Run coordinates) whose unit's `uids`
+  name drawn ROIs still in the store merges into the trace table instead
+  (`_merge_run_traces`, one `roi_runs.unit_trace` row per uid).
   A line unit becomes an `external` `TraceSet` with
   one row per ROI (its `denoised` trace, else `dff`, else `raw`) and one per member
   line, every row named by its ROI (`roi3`, `roi3 (raw)`; a line of a multi-line
   ROI adds itself, `roi3 line 12 (raw)`) and carrying its `fs`, the line it was read
   from on `z` (`extra["line"]`) and the pipeline's channel on `c`.
   `roi_runs.run_dir_complete` and
-  `scan_run_dirs` treat results files as run dirs, `roi_runs.json` restores them, a
-  finished `vnoiser` worker is adopted like a suite2p one, and the vnoiser tab's
+  `scan_run_dirs` treat results files as run dirs, the rois zarr's `runs` list
+  restores them, a finished `vnoiser` worker is adopted like a suite2p one, and the vnoiser tab's
   "Load into Traces" button does it on demand. A new pipeline that writes the results
   zarr therefore reaches the Traces tab with no GUI code.
 
@@ -989,13 +995,21 @@ its events.
   read: the mask always from the plane it was drawn on, the pixels from `z` / `c`
   when given, else from where it was drawn. The widget's `run_where` is `drawn`,
   `screen` (the slice the sliders show when the run starts) or `fixed` (`run_z`,
-  `run_c`); `run_frames` cuts T (`PlaneMovie.window`). `run_rois` groups targets by
-  `(plane, z, c)` and writes one `rois_<tag>/` child per read (`zplane02`,
-  `zplane02_ch01`) when there is more than one. Every run records `plane`
-  (store plane), `z`, `c`, `frames` and `engine` in `ops["roi_workflow"]` and
-  `plane` / `z` / `c` per row in `rois.json`; `RunResult.read_z` / `read_c` /
-  `frames` / `engine` read them back and `roi_runs.result_traces` turns a result
-  into table rows.
+  `run_c`); `run_tp` cuts T (`PlaneMovie.select`). A run is one results zarr
+  (§7.5), pipeline `manual`, `<stem>.<tag>.<stamp>.manual.zarr` in the ROI
+  folder (`roi_workflow.run_path`; the stamp advances a second while the name
+  is taken): `run_rois` groups targets by `(plane, z, c)`, `extract_rois` or
+  `demix_rois` makes one `ResultUnit` per group named by its slice
+  (`slice_name`: `zplane02`, `ch01_zplane02` when more than one channel was
+  read), and `write_run` writes them with the recording's path, reader kwargs
+  and unit in the source block. Each unit's `attrs` record `engine`, `plane`
+  (store plane), `z`, `c`, `frames` / `tp_indices`, the `uids` and
+  `store_indices` of the ROIs it holds (`roi<uid>` names), and its `members`
+  are the store's pixels and weights (masknmf's own footprints after
+  demixing, with `n_components`); `DerivedSet.read_z` / `read_c` / `frames` /
+  `engine` read them back and `roi_runs.unit_trace` turns a row into a trace.
+  masknmf's native files land in the zarr's `manual/` folder
+  (`results.pipeline_files`); a plane dir's PMD cache stays in the plane dir.
 - **masknmf's curation viewer.** The ROI tool is laid out, keyed and styled as
   masknmf's `SingleSessionDemixingVis`, drawn with its imgui widgets
   (`masknmf.visualization.imgui`: `TracePlot`, `draw_roi_table`, `RoiOrder`,
@@ -1161,11 +1175,11 @@ its events.
   reapplies it as ROIs, labels or traces change, so the overlay, the table and the
   trace legend agree without any view knowing why.
 - **Shared vocabularies.** Nothing in the ROI work spells a name or a selection
-  of its own: run children and full-image row keys are `OutputFilename` tags in
-  T, C, Z order (`ch01_zplane02`; `build("")` names a folder), a single ROI's run
-  is the R tag (`rois_roi02` for store index 1, 1-based like every tag), a full
-  plane's dir is `results.unit_name("plane", n)`, and a run dir's per-slice child
-  is recognised with `filename_tags`, never a regex. The frame selection is the
+  of its own: a run's units are `OutputFilename` tags in T, C, Z order
+  (`ch01_zplane02`), a single ROI's run tag is the R tag (`roi02` for store
+  index 1, 1-based like every tag), a full plane's dir is
+  `results.unit_name("plane", n)`, and a run dir's per-slice child is
+  recognised with `filename_tags`, never a regex. The frame selection is the
   string every Save As and pipeline row takes (`parse_timepoint_selection`,
   1-based `start:stop:step,exclude`), kept as the 0-based `run_tp` index list the
   worker tasks call `tp_indices`; `PlaneMovie.select(indices)` reads it (`window`
@@ -1178,24 +1192,44 @@ its events.
   and the ROI widget both use, so every slice popup and the ROI tool call an AOD
   unit's Z axis `ROI`.
 - **Persistence.** Nothing is written beside the data unasked: data is often
-  opened where the user cannot or should not write. The store is saved to
-  `manual_labels.zarr` (`plane` per ROI; older stores wrote `z` and load
-  unchanged) and the loaded runs to `roi_runs.json` on Save, or as they change
-  when the `roi_autosave` option is on (off by default). Both, and every
-  `rois_<tag>/` run and full-plane run, go to the dataset's ROI folder
-  (`roi_workflow.roi_folder(fpath, root)`): beside the data, or
+  opened where the user cannot or should not write. Everything the widget
+  keeps is one file, the rois zarr `<stem>.rois.zarr`
+  (`annotation/ngff.py::RoiFile`, `roi_workflow.labels_path`), written whole
+  on Save, or as anything changes when the `roi_autosave` option is on (off by
+  default), into a `.tmp` sibling swapped into place. It is a zarr v3 group:
+  `rois/` is the truth, ragged membership like the results zarr's
+  (`offsets`, `member` as flat `y * X + x`, `weight`) plus one column per ROI
+  (`uid`, `plane`, `class`, `color`, the drawn `polygon`) and the notes and
+  sources in attrs, so ROIs may overlap and keep every pixel; `traces/` holds
+  the rows of `SAVED_SOURCES` (the quick traces and pixel averages, `raw` and
+  `neuropil` ragged, the row records in attrs); `labels/drawn` is an OME-NGFF
+  0.5 label image derived from `rois/` (uid per pixel, the smallest ROI on
+  top; `multiscales` axes from `plane_axes` plus y, x, scaled by `dz`, `dy`,
+  `dx`; `image-label` colors and properties per uid, `source.image` the
+  recording when it is a zarr) for napari and nothing here reads it back; the
+  root attrs hold `mbo_rois`, `shape`, `plane_axes`, `label_names`,
+  `next_uid`, the `source` block and `runs`, the loaded runs with their
+  curation (`discarded`, `classes`, `colors`, and `iscell` overrides on the
+  run's own flags). `annotation.write_label_image` writes any label image
+  that way (`arrays/suite2p._add_suite2p_labels` uses it for a converted
+  zarr's `labels/suite2p`). A restore reads the ROI folder, then beside the
+  data; a file saved for data of another shape is left alone and the data
+  saves as `<stem>_<nz>x<ny>x<nx>.rois.zarr` (`_save_suffix`). The ROI folder
+  (`roi_workflow.roi_folder(fpath, root)`) is beside the data, or
   `<root>/<name>_<hash of the path>/` when the user picks a folder (the
-  `roi_folder` option). Both options live in `preferences` and are set from
-  the ROIs tab's OVERLAY > on disk row. A restore reads the ROI folder, then
-  beside the data. Quick traces, full-image rows and tints live for the
-  session. A file holding several recordings (a `.mesc`) keeps all of it per
-  recording: the widget's `unit_key` (`manual_roi.unit_key`, the base array's)
-  names the files `manual_labels_<tag>.zarr`, `roi_runs_<tag>.json` and
-  `rois_<tag>_<run>/` (`labels_path(fpath, tag)`, `registry_path`, `run_prefix`,
-  tag `MSession_0_MUnit_3`), and a unit switch (`MescTabWidget._install`) parks
-  the outgoing widget's store and runs under its unit and rebuilds the widget for
-  the incoming one, so the ROIs, runs and traces on screen are the shown
-  recording's.
+  `roi_folder` option); both options live in `preferences` and are set from
+  the ROIs tab's OVERLAY > on disk row, and every manual run goes there too.
+  Tints live for the session. Ctrl+z is a stack of store snapshots
+  (`_push_undo` before every add, delete, mark and deselect: the snapshot,
+  the drawn ROIs' traces, the marks, the selection; `undo` restores the
+  store in place, `RoiLabelStore.restore`, one `restore` event). A file
+  holding several recordings (a `.mesc`) keeps all of it per recording: the
+  widget's `unit_key` (`manual_roi.unit_key`, the base array's) names the
+  files `<stem>_<tag>.rois.zarr` and `<stem>.<tag>_<run>.<stamp>.manual.zarr`
+  (`labels_path(fpath, tag)`, `_run_out_path`, tag `MSession_0_MUnit_3`), and
+  a unit switch (`MescTabWidget._install`) parks the outgoing widget's store
+  and runs under its unit and rebuilds the widget for the incoming one, so
+  the ROIs, runs and traces on screen are the shown recording's.
 
 Pinned by `tests/test_roi_model.py`, `tests/test_playhead.py`, `tests/test_trace_display.py`, `tests/test_manual_roi.py`
 (`TestRunCoordinates`, `TestAutoTrace`, `TestRoiPipelineTab`, `TestPlayheadWiring`,

@@ -10,7 +10,6 @@ import pytest
 from mbo_utilities.annotation import (
     COLUMNS,
     ENGINES,
-    FULL_IMAGE,
     ModelEvent,
     Observable,
     RoiLabelStore,
@@ -389,15 +388,3 @@ class TestColorize:
             1: (31, 119, 180)
         }
         assert model.colorize({2: 5.0}, cmap="viridis") == {2: (68, 1, 84)}
-
-    def test_full_image_rows_take_string_members(self):
-        table = RoiTraceTable()
-        row = table.add(
-            RoiTrace(uid=0, source=FULL_IMAGE, member="z2c1", z=2, c=1, F=np.ones(3))
-        )
-        assert row.key == ("member", FULL_IMAGE, "z2c1") and not row.stands_for_roi
-        table.add(
-            RoiTrace(uid=0, source=FULL_IMAGE, member="z2c1", z=2, c=1, F=np.zeros(3))
-        )
-        assert len(table) == 1 and table.get(row.key).F.sum() == 0
-        assert table.prune([]) == [] and len(table) == 1

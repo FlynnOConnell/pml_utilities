@@ -400,10 +400,11 @@ table) group several, and their traces share the plot, each in the color its mas
 and table row take. With **pixel traces** (`p`) a click on an empty pixel adds the
 movie's 5x5 average there. **Delete** (`d`) removes a drawn ROI and marks an algo
 one for deletion: it stays listed at the top of the table and red on the image
-until you unmark it. `ctrl+z` undoes. Masks autosave beside the data as
-`manual_labels.zarr`; a `.mesc` gets one per unit
-(`manual_labels_MSession_0_MUnit_3.zarr`), and the ROIs and traces on screen are
-always the shown unit's.
+until you unmark it. `ctrl+z` undoes. ROIs may overlap. With autosave on, the
+ROIs, the quick traces and the list of loaded runs are saved beside the data as
+`<stem>.rois.zarr` (its `labels/drawn` is an OME-NGFF 0.5 label image napari
+opens); a `.mesc` gets one per unit (`<stem>_MSession_0_MUnit_3.rois.zarr`), and
+the ROIs and traces on screen are always the shown unit's.
 
 Running ROIs is the Curation tab's **RUN** section (`shift+t` runs the selection):
 
@@ -417,10 +418,13 @@ Running ROIs is the Curation tab's **RUN** section (`shift+t` runs the selection
 - **Engine**: `mean` (raw mask mean plus a neuropil ring, no pipeline), `suite2p`
   (suite2p's extractor), `masknmf` (seeded demixing). `suite2p` and `masknmf` use
   the settings of their own tab, including the skip / run / force toggles; **Open**
-  jumps there. The **tag** names the output folder `rois_<tag>/` beside the data.
-- **Run** writes suite2p-shaped outputs (`F.npy`, `Fneu.npy`, `stat.npy`,
-  `rois.json`, `ops.npy` with `roi_workflow` recording `z`, `c`, `frames` and
-  `engine`); **Trace** computes an in-memory mean without writing.
+  jumps there. The **tag** names the run file.
+- **Run** writes one results zarr, `<stem>.<tag>.<stamp>.manual.zarr`, beside
+  the data (one unit per slice read, each recording `z`, `c`, `frames`,
+  `engine` and the ROIs' uids), and the run's rows land on the Traces tab;
+  **Trace** computes an in-memory mean without writing. Accepting, rejecting
+  and marking a loaded run's ROIs never touches the run: that curation is
+  kept with the ROIs.
 
 The sliders are the array's axes whatever they are called: a MESc AOD unit's
 **ROI** slider or an IsoView **View** slider keys masks and runs like any z-plane

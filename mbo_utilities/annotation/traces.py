@@ -21,12 +21,10 @@ import numpy as np
 
 from mbo_utilities.annotation.events import Observable
 
-__all__ = ["ENGINES", "FULL_IMAGE", "RoiTrace", "RoiTraceTable", "trace_key"]
+__all__ = ["ENGINES", "RoiTrace", "RoiTraceTable", "trace_key"]
 
 # selector order; a run dir's ops["roi_workflow"]["engine"] uses the same names
 ENGINES: tuple[str, ...] = ("mean", "suite2p", "masknmf")
-# the source of rows that measure the whole frame rather than a drawn mask
-FULL_IMAGE = "full image"
 
 
 def trace_key(uid: int, z: int, c: int, engine: str) -> tuple:
@@ -41,10 +39,9 @@ class RoiTrace:
     ``uid`` names the drawn ROI (0 for a row that stands for none), ``z``
     and ``c`` the 0-based plane and channel the pixels were read from,
     ``engine`` how (``ENGINES``), ``source`` the run or origin that produced
-    it (``"quick"``, ``"rois_manual"``, ``"find01"``, ``"MUnit_3 lines"``,
-    ``FULL_IMAGE``) and ``member`` the row inside that source for rows
-    without a uid (an int, or a string such as ``"z2c1"`` for a whole-frame
-    read).
+    it (``"quick"``, ``"pixel"``, a run file's name, ``"MUnit_3 lines"``)
+    and ``member`` the row inside that source for rows without a uid (an
+    int, or a string such as ``"12,40 zplane02"`` for a pixel average).
     ``frames`` is the ``(start, stop, step)`` window of source frames the
     trace covers (``arrays.features._slicing.index_window`` of the frames
     read), None for the whole recording or a gapped selection, which then

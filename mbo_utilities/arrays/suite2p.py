@@ -1120,87 +1120,45 @@ def _add_suite2p_labels(
     dtype,
     compression_level: int,
 ):
+    """Write the accepted suite2p ROIs of each plane dir as the OME-NGFF 0.5
+    label image ``labels/suite2p`` of ``root_group`` (``annotation.ngff
+    .write_label_image``), ROI values counting up across planes.
     """
-    Add Suite2p segmentation masks as OME-Zarr labels.
-
-    Creates a 'labels' subgroup with ROI masks from Suite2p stat.npy files.
-    Follows OME-NGFF v0.5 labels specification.
-    """
-    import zarr
-    from zarr.codecs import BytesCodec, GzipCodec
+    from mbo_utilities.annotation.ngff import write_label_image
 
     logger.info("Creating labels array from Suite2p masks...")
-
-    labels_group = root_group.create_group("labels", overwrite=True)
-
-    label_codecs = [BytesCodec(), GzipCodec(level=compression_level)]
-    masks = zarr.create(
-        store=labels_group.store,
-        path="labels/0",
-        shape=(Z, Y, X),
-        chunks=(1, Y, X),
-        dtype=np.uint32,
-        codecs=label_codecs,
-        overwrite=True,
-    )
-
+    volume = np.zeros((Z, Y, X), np.uint32)
     roi_id = 1
-
     for zi, s2p_dir in enumerate(suite2p_dirs):
         stat_path = s2p_dir / "stat.npy"
         iscell_path = s2p_dir / "iscell.npy"
-
         if not stat_path.exists():
             logger.warning(f"stat.npy not found in {s2p_dir}, skipping z={zi}")
             continue
-
         stat = load_npy(stat_path)
-
         if iscell_path.exists():
             iscell = load_npy(iscell_path)[:, 0].astype(bool)
         else:
             iscell = np.ones(len(stat), dtype=bool)
-
-        plane_mask = np.zeros((Y, X), dtype=np.uint32)
-
-        for _roi_idx, (roi_stat, is_cell) in enumerate(zip(stat, iscell, strict=False)):
-            if not is_cell:
+        for roi_stat, is_cell in zip(stat, iscell, strict=False):
+            ypix = np.asarray(roi_stat.get("ypix", []))
+            xpix = np.asarray(roi_stat.get("xpix", []))
+            if not is_cell or ypix.size == 0 or xpix.size == 0:
                 continue
-
-            ypix = roi_stat.get("ypix", [])
-            xpix = roi_stat.get("xpix", [])
-
-            if len(ypix) == 0 or len(xpix) == 0:
-                continue
-
-            ypix = np.clip(ypix, 0, Y - 1)
-            xpix = np.clip(xpix, 0, X - 1)
-
-            plane_mask[ypix, xpix] = roi_id
+            volume[zi, ypix.clip(0, Y - 1), xpix.clip(0, X - 1)] = roi_id
             roi_id += 1
-
-        masks[zi, :, :] = plane_mask
-        logger.debug(
-            f"Added {(plane_mask > 0).sum()} labeled pixels for z-plane {zi + 1}/{Z}"
-        )
-
-    labels_metadata = {
-        "version": "0.5",
-        "labels": ["0"],
-    }
-
-    label_array_meta = {
-        "version": "0.5",
-        "image-label": {
-            "version": "0.5",
-            "colors": [],
-            "source": {"image": "../../0"},
-        },
-    }
-
-    labels_group.attrs.update(labels_metadata)
-    labels_group["0"].attrs.update(label_array_meta)
-
+    labels_group = root_group.create_group("labels", overwrite=True)
+    write_label_image(
+        labels_group,
+        "suite2p",
+        volume,
+        [
+            {"name": "z", "type": "space", "unit": "micrometer"},
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"},
+        ],
+        source_image="../../0",
+    )
     logger.info(f"Added {roi_id - 1} total ROIs across {Z} z-planes")
 
 
