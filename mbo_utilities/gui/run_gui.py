@@ -919,6 +919,7 @@ def _run_gui_impl(
     runner_params: Any | None = None,
     mode: str = "Fastplotlib viewer (default)",
     unit: int | str | None = None,
+    dims: str | None = None,
     vis: str = "demixing",
     raw_path: str | Path | None = None,
     motion_correction_path: str | Path | None = None,
@@ -1085,11 +1086,11 @@ def _run_gui_impl(
 
         # Dispatch based on Mode
         # pollen calibration is auto-detected in the fastplotlib viewer via get_viewer_class()
-        if mode == "Fastplotlib viewer (default)":
-            return _launch_standard_viewer(data_in, roi, widget, metadata_only, unit)
         if mode == "Napari viewer":
-            return _launch_napari(data_in, roi, unit)
-        return _launch_standard_viewer(data_in, roi, widget, metadata_only, unit)
+            return _launch_napari(data_in, roi, unit, dims)
+        return _launch_standard_viewer(
+            data_in, roi, widget, metadata_only, unit, dims
+        )
 
     finally:
         # ensure splash is closed on any exit path
@@ -1226,13 +1227,14 @@ class ViewerCancelled(Exception):
     """The user dismissed a picker the viewer needed an answer from."""
 
 
-def _load_for_viewer(data_in, roi=None, unit=None):
+def _load_for_viewer(data_in, roi=None, unit=None, dims=None):
     """Open ``data_in`` the way the viewer wants it.
 
-    Resolves the ``.mesc`` unit, reads lazily, then wraps the array so the
-    viewer shows it aligned (per-plane axial shifts saved with the data) and
-    can toggle scan-phase correction on formats without a native control.
-    Raises ``ViewerCancelled`` when the unit picker was dismissed.
+    Resolves the ``.mesc`` unit, reads lazily (``dims`` names a plain
+    TIFF's page axis), then wraps the array so the viewer shows it aligned
+    (per-plane axial shifts saved with the data) and can toggle scan-phase
+    correction on formats without a native control. Raises
+    ``ViewerCancelled`` when the unit picker was dismissed.
     """
     import time as _time
 
@@ -1246,6 +1248,8 @@ def _load_for_viewer(data_in, roi=None, unit=None):
     mesc_kwargs, proceed = _resolve_mesc_unit(data_in, unit)
     if not proceed:
         raise ViewerCancelled(f"unit selection cancelled for {data_in}")
+    if dims:
+        mesc_kwargs["dims"] = dims
     t0 = _time.perf_counter()
     data_array = imread(data_in, roi=roi, **mesc_kwargs)
     t_imread = _time.perf_counter() - t0
@@ -1300,7 +1304,9 @@ def _wrap_for_viewer(data_array, logger):
     return data_array
 
 
-def _launch_standard_viewer(data_in, roi, widget, metadata_only, unit=None):
+def _launch_standard_viewer(
+    data_in, roi, widget, metadata_only, unit=None, dims=None
+):
     """Build a ``DataVis`` for the path and show it the way this process can.
 
     A terminal gets a window and the event loop; a notebook gets the canvas
@@ -1314,7 +1320,7 @@ def _launch_standard_viewer(data_in, roi, widget, metadata_only, unit=None):
 
     if metadata_only:
         try:
-            data_array = _load_for_viewer(data_in, roi=roi, unit=unit)
+            data_array = _load_for_viewer(data_in, roi=roi, unit=unit, dims=dims)
         except ViewerCancelled:
             return None
         metadata = data_array.metadata
@@ -1327,7 +1333,7 @@ def _launch_standard_viewer(data_in, roi, widget, metadata_only, unit=None):
 
     t1 = _time.perf_counter()
     try:
-        vis = DataVis(data_in, roi=roi, widget=widget, unit=unit)
+        vis = DataVis(data_in, roi=roi, widget=widget, unit=unit, dims=dims)
     except ViewerCancelled:
         return None
     logger.debug(
@@ -1462,7 +1468,7 @@ def _prompt_for_dz(default: float = 16.0) -> float | None:
     return float(value) if ok else None
 
 
-def _launch_napari(data_in, roi=None, unit=None):
+def _launch_napari(data_in, roi=None, unit=None, dims=None):
     from mbo_utilities.log import get as get_logger
 
     logger = get_logger("gui.napari")
@@ -1487,6 +1493,8 @@ def _launch_napari(data_in, roi=None, unit=None):
 
         # a .mesc holds many unrelated scans; pick one before opening anything
         mesc_kwargs, proceed = _resolve_mesc_unit(data_in, unit)
+        if dims:
+            mesc_kwargs["dims"] = dims
         if not proceed:
             return None
 
@@ -1688,6 +1696,7 @@ def run_gui(
     select_only: bool = False,
     runner_params: Any | None = None,
     unit: int | str | None = None,
+    dims: str | None = None,
     vis: str = "demixing",
     raw_path: str | Path | None = None,
     motion_correction_path: str | Path | None = None,
@@ -1695,6 +1704,9 @@ def run_gui(
 ):
     """
     Open a GUI to preview data of any supported type.
+
+    ``dims`` names a plain TIFF's page axis (``"ZYX"`` for a z-stack,
+    ``"CYX"`` for channels) the way ``imread(..., dims=...)`` does.
 
     ``qc`` opens Registration-Denoising Quality Control on a MaskNMF run
     folder (or its ``results.hdf5``) or a ``mbo reg-denoise`` result, which
@@ -1785,6 +1797,7 @@ def run_gui(
         select_only=select_only,
         runner_params=runner_params,
         unit=unit,
+        dims=dims,
         vis=vis,
         raw_path=raw_path,
         motion_correction_path=motion_correction_path,

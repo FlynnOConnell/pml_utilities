@@ -35,6 +35,9 @@ class DataVis:
         Which measurement unit of a ``.mesc`` to open. In a terminal the
         picker asks when this is omitted; in a notebook it is required when
         the file holds more than one.
+    dims : str, optional
+        A plain TIFF's page axis, as ``imread(..., dims=...)`` takes it:
+        ``"ZYX"`` for a z-stack, ``"CYX"`` for channels, ``"TYX"`` for time.
     size : tuple of int, optional
         Canvas size in pixels. Defaults to the screen's work area for a
         desktop window and to (1400, 900) in a notebook, where the edge
@@ -65,6 +68,7 @@ class DataVis:
         roi: int | tuple[int, ...] | None = None,
         widget: bool | str = "preview",
         unit: int | str | None = None,
+        dims: str | None = None,
         size: tuple[int, int] | None = None,
         **figure_kwargs,
     ):
@@ -75,7 +79,7 @@ class DataVis:
         )
 
         self._source = data
-        self._data_array = _load_for_viewer(data, roi=roi, unit=unit)
+        self._data_array = _load_for_viewer(data, roi=roi, unit=unit, dims=dims)
         kwargs = _figure_kwargs_for_here(size=size)
         kwargs.update(figure_kwargs)
         self._iw = _create_image_widget(

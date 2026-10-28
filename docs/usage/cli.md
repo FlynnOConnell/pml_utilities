@@ -21,6 +21,7 @@ The `mbo` command provides tools for viewing, converting, and analyzing imaging 
 mbo                          # file dialog
 mbo /path/to/data            # open specific file
 mbo /path/to/data --metadata # show only metadata
+mbo /path/to/stack.tif --dims ZYX   # a plain TIFF whose pages are z-planes (CYX: channels)
 mbo /path/to/<time>_masknmf_zplane01 --qc   # a MaskNMF run in Registration-Denoising Quality Control
 ```
 

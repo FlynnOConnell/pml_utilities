@@ -303,10 +303,7 @@ _TRACE_MODES = {
 }
 _UNDO_DEPTH = 50  # ctrl+z steps kept
 
-# masknmf's DEMIXING keys, worded for drawn and algo ROIs, with its labeling
-# keys and this tool's own; every handler and the keybinds popup read this
-ROI_KEYS: Mapping[str, Bind] = {
-    **DEMIXING,
+_OWN_KEYS: Mapping[str, Bind] = {
     "click": Bind(
         "click",
         "on an ROI: select it, again to deselect; on an empty pixel with pixel traces on: add its 5x5 average to the "
@@ -384,6 +381,18 @@ ROI_KEYS: Mapping[str, Bind] = {
         imgui.Key.t,
         shift=True,
     ),
+}
+# masknmf leaves shift open so the arrows can read it as a stride; every other
+# unmodified key must stay unmodified here, or shift+m toggles the masks as
+# well as firing the viewer's own shift+m
+_STRIDE_KEYS = ("up", "down", "left", "right")
+# masknmf's DEMIXING keys, worded for drawn and algo ROIs, with its labeling
+# keys and this tool's own; every handler and the keybinds popup read this
+ROI_KEYS: Mapping[str, Bind] = {
+    name: bind._replace(shift=False)
+    if bind.shift is None and name not in _STRIDE_KEYS
+    else bind
+    for name, bind in {**DEMIXING, **_OWN_KEYS}.items()
 }
 # the keys the viewer's global shortcuts leave alone while the tool is on
 _CLAIMED_KEYS = (
@@ -709,6 +718,7 @@ class ManualRoiWidget:
         self.keybinds_open = False
         # ctrl+z steps, newest last
         self._undo: list[dict] = []
+        self._panel_hovered = -2
 
         # masknmf's OVERLAY: every mask at one opacity, weighted by its trace's
         # peak or its own; the selection and group at their own with a white
@@ -1429,6 +1439,7 @@ class ManualRoiWidget:
         a trace shows it in the trace plot.
         """
         self.selected_derived = None
+        self.active_pixel = None
         self.selected = index if index is not None and 0 <= index < self.n_rois else -1
         self.scroll_to_selection = True
         if self.selected < 0:
@@ -1460,6 +1471,7 @@ class ManualRoiWidget:
             self.select_roi(-1)
             return
         self.selected = -1
+        self.active_pixel = None
         self._note_buf = ""
         self.selected_derived = (si, k)
         self.scroll_to_selection = True
@@ -1686,14 +1698,13 @@ class ManualRoiWidget:
         self.status = f"deleted ROI {index}"
 
     def delete_selected(self):
-        """Masknmf's Delete: the selected drawn ROI goes, the active pixel
-        average is dropped, else the selected algo ROIs are marked for
-        deletion (unmarked when all are); marking one steps to the next row.
+        """Delete (d): the active drawn ROI, else the active pixel average,
+        else mark the selected algo ROIs for deletion (unmark when all are);
+        marking one steps to the next row. A group of drawn ROIs is never
+        deleted at once.
         """
-        if self.selected >= 0 and not any(si >= 0 for si, _k in self.buffer):
-            drawn = [k for si, k in self.buffer if si < 0] or [self.selected]
-            for k in sorted(drawn, reverse=True):
-                self.delete_roi(k)
+        if self.selected >= 0:
+            self.delete_roi(self.selected)
             return
         if self.active_pixel is not None:
             self._snapshot()
@@ -2285,6 +2296,13 @@ class ManualRoiWidget:
                 self.selected_derived = None
             elif osi > si:
                 self.selected_derived = (osi - 1, k)
+        self.buffer = [
+            (osi - (1 if osi > si else 0), k) for osi, k in self.buffer if osi != si
+        ]
+        if self.order.source is not None and self.order.source == 1 + si:
+            self.order.source = None
+        elif self.order.source is not None and self.order.source > 1 + si:
+            self.order.source -= 1
         self._resync()
         self.refresh_overlay()
         self._save_registry()
@@ -3019,8 +3037,8 @@ class ManualRoiWidget:
         for key in groups:
             plane, zz, cc = key
             movie = self._frame_select(self.movie(plane, z=zz, c=cc), tp)
-            if movie is None:
-                self.status = "no (T, Y, X) movie behind this view"
+            if movie is None or int(movie.shape[0]) < 2:
+                self.status = "no (T, Y, X) movie behind this view: nothing to trace over"
                 return
             movies[key] = movie
         many_c = len({cc for _p, _z, cc in groups}) > 1
@@ -3131,27 +3149,19 @@ class ManualRoiWidget:
                 break
             index = self.store.uid_index(target.uid) if target is not None else None
             if error is not None:
-                shown = (
-                    "full image"
-                    if target is None
-                    else (index if index is not None else f"uid {target.uid}")
-                )
-                self.status = f"trace for {shown if target is None else 'ROI ' + str(shown)} failed: {error}"
+                if target is None:
+                    self.status = f"trace failed: {error}"
+                else:
+                    shown = index if index is not None else f"uid {target.uid}"
+                    self.status = f"trace for ROI {shown} failed: {error}"
                 continue
             if target is not None and index is None:
                 continue  # deleted while the trace ran
+            if trace.source == "pixel" and trace.key not in self.pixels.values():
+                continue  # dropped (esc, d) while the average ran
             self.traces.add(trace)
             if trace.stands_for_roi:
                 self.trace_uid = trace.uid
-            elif (
-                trace.source == FULL_IMAGE
-                and self._selection_pair() is None
-                and not self.trace_picked
-            ):
-                # nothing else on the plot: a whole-frame read shows itself
-                self.trace_sel = {trace.key}
-                self.trace_picked = True
-                self._plot_lines_key = None
             self.status = (
                 f"{trace.label or 'ROI ' + str(index)}: {trace.n_frames} frames"
             )
@@ -3263,10 +3273,28 @@ class ManualRoiWidget:
                     f"{info.task_type} run at {out} has no dir for this plane"
                 )
 
-    def handle_keys(self):
-        """Masknmf's DEMIXING keys with its labeling keys and this tool's own (``ROI_KEYS``)."""
+    def _keys_live(self) -> bool:
+        """The pointer is over the image (no imgui window under it), over one
+        of this tool's panels drawn last frame, or the keybinds window is up.
+        """
         io = imgui.get_io()
-        if io.want_text_input:
+        return (
+            not io.want_capture_mouse
+            or imgui.get_frame_count() - self._panel_hovered <= 1
+            or self.keybinds_open
+        )
+
+    def _note_hover(self) -> None:
+        """Stamp this frame when the pointer is over the panel being drawn."""
+        if imgui.is_window_hovered(imgui.HoveredFlags_.child_windows):
+            self._panel_hovered = imgui.get_frame_count()
+
+    def handle_keys(self):
+        """Masknmf's DEMIXING keys with its labeling keys and this tool's own
+        (``ROI_KEYS``), only while the pointer is where this tool draws.
+        """
+        io = imgui.get_io()
+        if io.want_text_input or not self._keys_live():
             return
         claim_keys(_CLAIMED_KEYS)
         keys = ROI_KEYS
@@ -3349,6 +3377,7 @@ class ManualRoiWidget:
         guide and keybinds buttons, then the Curation and ROIs tabs, each a
         child that scrolls on its own.
         """
+        self._note_hover()
         if imgui.button(f"{fa.ICON_FA_IMAGE} Full FOV"):
             self.open_full_fov()
         tooltip(
@@ -3965,6 +3994,7 @@ class ManualRoiWidget:
         masknmf's stacked trace panels (the motion correction over the
         traces) on the viewer's frames, the playhead bound to the viewer's t.
         """
+        self._note_hover()
         target = self._plot_lines()
         motion = self.motion if self.motion else None
         behavior = self.behavior if self.behavior else None
@@ -4433,6 +4463,7 @@ class ManualRoiWidget:
         narrows the rows to those (the Process tab shows the ROIs it is
         about to run).
         """
+        self._note_hover()
         rows = self._trace_rows()
         if keys is not None:
             wanted = set(keys)
@@ -4616,14 +4647,6 @@ class ManualRoiWidget:
             if not moving:
                 self._drop_region()
             return
-        x0, y0 = np.floor(polygon.min(axis=0)).astype(int)
-        x1, y1 = np.ceil(polygon.max(axis=0)).astype(int)
-        self.region = (
-            int(np.clip(y0, 0, self.ny - 1)),
-            int(np.clip(y1, 1, self.ny)),
-            int(np.clip(x0, 0, self.nx - 1)),
-            int(np.clip(x1, 1, self.nx)),
-        )
         if (
             self._region_hits is not None
             and not moving
@@ -4728,8 +4751,12 @@ class ManualRoiWidget:
     def _group_colors(self) -> dict:
         """One contrasting color per group member, shared by its trace, mask and table row (masknmf's)."""
         members = [*self.buffer, *self.pixel_group]
-        if len(members) < 2:
+        if not members:
             return {}
+        if len(members) == 1:
+            # a lone pixel average has no color of its own: the first group
+            # color, never the deletion red its callers fall back to
+            return {members[0]: GROUP_COLORS[0]}
         return {m: GROUP_COLORS[i % len(GROUP_COLORS)] for i, m in enumerate(members)}
 
     def _pointer_down(self, ev):
@@ -4790,6 +4817,10 @@ class ManualRoiWidget:
         self._seed_buffer()
         if pid not in self.pixel_group:
             self.pixel_group.append(pid)
+        # the pixel is the one active thing now; the ROI stays in the group
+        self.selected = -1
+        self.selected_derived = None
+        self._note_buf = ""
         self.active_pixel = pid
         self._plot_lines_key = None
         self.refresh_overlay()
@@ -4835,7 +4866,7 @@ class ManualRoiWidget:
         except Exception as error:  # noqa: BLE001 - reported on the job
             self.logger.exception(f"{trace.label} failed")
             job.fail(f"{type(error).__name__}: {error}")
-            self._trace_results.put((None, None, str(error)))
+            self._trace_results.put((None, None, f"{trace.label}: {error}"))
             return
         trace.F = np.asarray(y, np.float32)
         trace.frames = _frames_of(movie)["frames"]
@@ -4913,11 +4944,26 @@ class ManualRoiWidget:
         self._refresh_group_view()
         self.status = f"{len(rows)} in group"
 
+    def _key_of(self, pair):
+        """A row's identity for undo: a drawn ROI by uid, an algo row by its pair."""
+        if pair is None:
+            return None
+        si, k = pair
+        return ("uid", self.store.rois[k].uid) if si < 0 else (si, k)
+
+    def _pair_of(self, key):
+        """The row an undo key names now, or None when it is gone."""
+        if key is None:
+            return None
+        if key[0] == "uid":
+            index = self.store.uid_index(key[1])
+            return None if index is None else (-1, index)
+        return key if key in self._row_index else None
+
     def _selection_state(self) -> dict:
         return {
-            "selected": self.selected,
-            "selected_derived": self.selected_derived,
-            "buffer": list(self.buffer),
+            "selected": self._key_of(self._selection_pair()),
+            "buffer": [self._key_of(pair) for pair in self.buffer],
             "pixel_group": list(self.pixel_group),
             "pixels": OrderedDict(self.pixels),
             "active_pixel": self.active_pixel,
@@ -4980,11 +5026,16 @@ class ManualRoiWidget:
         self.active_pixel = (
             state["active_pixel"] if state["active_pixel"] in self.pixels else None
         )
-        self.buffer = [pair for pair in state["buffer"] if pair in self._row_index]
-        if state["selected_derived"] in self._row_index:
-            self.select_derived(*state["selected_derived"])
+        self.buffer = [
+            pair
+            for pair in (self._pair_of(key) for key in state["buffer"])
+            if pair is not None
+        ]
+        pair = self._pair_of(state["selected"])
+        if pair is None:
+            self.select_roi(-1)
         else:
-            self.select_roi(state["selected"])
+            self.select_pair(*pair)
         self._refresh_group_view()
         self.status = f"undone, {len(self._undo)} more"
 

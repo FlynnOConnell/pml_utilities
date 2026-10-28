@@ -478,9 +478,14 @@ def swap_viewer_array(parent: Any, arr, title: str | None = None) -> None:
     display = _ScrubTimingProxy(display)
     iw.data[0] = display
     # slider labels are a plain attribute on the widget; a swap can change
-    # both the count and the meaning (Z-plane vs ROI), so they have to be
-    # re-stamped alongside the data.
-    iw._slider_dim_names = tuple(arr.slider_dim_labels) or None
+    # both the count and the meaning (Z-plane vs ROI, pages on T vs Z), so
+    # they have to be re-stamped alongside the data, as on open
+    from mbo_utilities.arrays.features import get_slider_dims
+
+    custom_labels = getattr(arr, "slider_dim_labels", None)
+    iw._slider_dim_names = (
+        tuple(custom_labels) if custom_labels else get_slider_dims(arr)
+    ) or None
     if getattr(iw, "n_sliders", 0) > 0:
         iw.indices = [0] * iw.n_sliders
 

@@ -356,6 +356,15 @@ def main(
     ),
 )
 @click.option(
+    "--dims",
+    default=None,
+    help=(
+        "For a plain TIFF: which axis its pages are, as 'TYX' (time, the default "
+        "reading), 'ZYX' (a z-stack) or 'CYX' (channels). The Image tab's Page Axis "
+        "panel changes it in the viewer."
+    ),
+)
+@click.option(
     "--gpu",
     "gpu_index",
     type=int,
@@ -414,6 +423,7 @@ def view(
     no_widget=False,
     metadata=False,
     unit=None,
+    dims=None,
     gpu_index=None,
     list_gpus=False,
     vis=None,
@@ -434,6 +444,7 @@ def view(
       mbo view /data --widget manualroi  Open with the ROIs widget on (draw + label by hand)
       mbo view /data/scan.mesc --unit 2   Open one MESc measurement unit
       mbo view /data/scan.mesc --unit MUnit_35   A line-scan unit opens the line-scan viewer
+      mbo view /data/stack.tif --dims ZYX   A plain TIFF whose pages are z-planes
       mbo view run/demixing_results.hdf5 --vis classification   masknmf's classification viewer
       mbo out/20261008T143623_masknmf_zplane01 --qc   raw, registered, PMD, RTMC and shifts
       mbo view --list-gpus           Show available GPU adapters
@@ -521,6 +532,7 @@ def view(
         widget="none" if no_widget else widget,
         metadata_only=metadata,
         unit=_parse_unit(unit),
+        dims=dims,
         vis=vis,
         raw_path=raw_path,
         motion_correction_path=motion_correction_path,

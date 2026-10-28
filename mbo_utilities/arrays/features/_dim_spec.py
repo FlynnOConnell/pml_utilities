@@ -66,8 +66,9 @@ class DimensionSpec:
         whether this is spatial, iteratable, or batch
     size : int
         current size in this dimension
-    scale : float
-        physical size per index (e.g., dz=15um, dt=0.033s, dx=0.5um)
+    scale : float or None
+        physical size per index (dz=15um, dt=0.033s, dx=0.5um); None when
+        the source stored no value for an iteratable axis
     unit : str | None
         physical unit: "second", "micrometer", None (for channels)
 
@@ -81,7 +82,7 @@ class DimensionSpec:
     name: str
     role: DimRole
     size: int
-    scale: float = 1.0
+    scale: float | None = 1.0
     unit: str | None = field(default=None)
 
     def __post_init__(self):
@@ -190,20 +191,18 @@ class DimensionSpecs:
             role = DimRole.from_dim_name(name)
             size = shape[i] if i < len(shape) else 1
 
-            # get scale from metadata
+            # pixel size defaults to 1.0 (the registry's default); a z-step or
+            # rate nobody stored is None, never a placeholder
             scale = 1.0
             if name == "X":
                 scale = get_param(metadata, "dx", default=1.0) or 1.0
             elif name == "Y":
                 scale = get_param(metadata, "dy", default=1.0) or 1.0
             elif name == "Z":
-                scale = get_param(metadata, "dz", default=1.0) or 1.0
+                scale = get_param(metadata, "dz") or None
             elif name == "T":
                 fs = get_param(metadata, "fs")
-                if fs and fs > 0:
-                    scale = 1.0 / fs  # time interval
-                else:
-                    scale = 1.0
+                scale = 1.0 / fs if fs and fs > 0 else None
 
             specs.append(
                 DimensionSpec(
@@ -265,20 +264,20 @@ class DimensionSpecs:
 
     @property
     def dz(self) -> float | None:
-        """z-step size (None if no Z dimension)."""
+        """z-step size (None without a Z dimension or a stored value)."""
         spec = self.get("Z")
         return spec.scale if spec else None
 
     @property
     def fs(self) -> float | None:
-        """Frame rate in Hz (None if no T or dt=0)."""
+        """Sampling rate in Hz (None without a T dimension or a stored rate)."""
         spec = self.get("T")
-        if spec and spec.scale > 0:
+        if spec and spec.scale:
             return 1.0 / spec.scale
         return None
 
     @property
     def finterval(self) -> float | None:
-        """Frame interval in seconds (None if no T)."""
+        """Sampling interval in seconds (None without a T dimension or a stored rate)."""
         spec = self.get("T")
         return spec.scale if spec else None

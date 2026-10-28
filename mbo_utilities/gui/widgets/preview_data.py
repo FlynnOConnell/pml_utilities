@@ -827,12 +827,12 @@ class PreviewDataWidget(EdgeWindow):
         slider's [1, 50] range and never overrides a user-typed fps.
         """
         try:
-            from mbo_utilities.metadata import get_param
-
             arr = self.image_widget.data[0]
-            md = getattr(arr, "metadata", None)
-            # a LazyArray's fs answers 1.0 when no rate is stored; that would play at 1 fps
-            fs = get_param(md, "fs") if md is not None else getattr(arr, "fs", None)
+            fs = getattr(arr, "fs", None)
+            if fs is None:
+                from mbo_utilities.metadata import get_param
+
+                fs = get_param(getattr(arr, "metadata", None), "fs")
             from mbo_utilities.gui._keyboard import _get_sliders_ui
 
             sliders = _get_sliders_ui(self)

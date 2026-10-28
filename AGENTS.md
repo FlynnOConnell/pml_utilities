@@ -147,7 +147,8 @@ Format-specific labels win over the rank guess:
 
 | Source | Axis evidence used |
 |--------|--------------------|
-| ImageJ / Fiji TIFF | `frames`, `slices`, `channels`. A plain stack (`slices>1`, no `hyperstack`, no `spacing`) is read as **T**; `dims="ZYX"` keeps it as Z. Page order XYCZT. |
+| ImageJ / Fiji TIFF | `frames`, `slices`, `channels`. A plain stack (`slices>1`, no `hyperstack`, no `spacing`) is read as **T**; `dims="ZYX"` keeps it as Z. tifffile's `imagej=True` default writes `channels=N`, read as C until `dims` says otherwise. Page order XYCZT. |
+| Plain TIFF (no axis tags) | the pages go on **T**; a three-letter `dims` (`"TYX"`, `"ZYX"`, `"CYX"`) puts a file's one populated axis on the axis named (`tiff._apply_dims_override`, `_declared_layout`). The Studio's Page Axis panel and `mbo view --dims` are the same `dims`. |
 | OME-TIFF | `SizeT`, `SizeZ`, `SizeC`; page order from `DimensionOrder`. |
 | ScanImage TIFF | `stack_type` from `si`: LBM (>2 saved channels) puts beamlets on Z and color ports on C; piezo puts slices on Z and volumes on T; single_plane has Z=1. |
 | Multi-file TIFF | `planeNN` in the filename groups files onto Z; otherwise files concatenate along T; `roiN` yields one array per ROI. |

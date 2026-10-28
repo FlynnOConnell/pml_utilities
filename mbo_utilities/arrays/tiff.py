@@ -217,21 +217,21 @@ def _imagej_layout(meta: dict, path: Path) -> tuple[int, ...] | None:
 def _apply_dims_override(
     layout: tuple[int, ...], dims: str | Sequence[str] | None
 ) -> tuple[int, ...]:
-    """Move a single-file page axis between T and Z when the caller says so.
+    """Move a single-file page axis to the one the caller named.
 
-    ``dims`` naming T but not Z (``"TYX"``) puts a z-labelled stack on T;
-    naming Z but not T (``"ZYX"``) does the reverse. Anything else, or a file
-    that already has both axes populated, is left alone.
+    A layout whose whole non-spatial extent sits on one of T, Z or C and a
+    three-letter ``dims`` (``"TYX"``, ``"ZYX"``, ``"CYX"``) put that extent
+    on the named axis. A file with two populated axes, or a ``dims`` naming
+    more than one, is left alone.
     """
     if not dims:
         return layout
-    letters = {d.upper() for d in (dims if not isinstance(dims, str) else tuple(dims))}
-    frames, slices, channels = layout
-    if "T" in letters and "Z" not in letters and frames == 1 and slices > 1:
-        return (slices, 1, channels)
-    if "Z" in letters and "T" not in letters and slices == 1 and frames > 1:
-        return (1, frames, channels)
-    return layout
+    letters = "".join(dims).upper()
+    populated = [n for n in layout if n > 1]
+    if len(letters) != 3 or letters[0] not in "TZC" or len(populated) != 1:
+        return layout
+    n = populated[0]
+    return {"T": (n, 1, 1), "Z": (1, n, 1), "C": (1, 1, n)}[letters[0]]
 
 
 def _ome_layout(meta: dict) -> tuple[int, int, int] | None:
@@ -274,6 +274,26 @@ def _shape_layout(meta: dict) -> tuple[int, ...] | None:
     if shape and len(shape) == 4 and shape[1] > 1:
         return shape[0], shape[1]
     return None
+
+
+def _declared_layout(
+    path: Path, dims: str | Sequence[str] | None
+) -> tuple[int, int, int] | None:
+    """``(frames, slices, channels)`` for a plain single file whose page axis
+    the caller named: ``dims="ZYX"`` puts the pages on Z, ``"CYX"`` on C.
+    None for ``"TYX"`` or no ``dims``, which leaves them on T, and for a
+    one-page file.
+    """
+    if not dims:
+        return None
+    letters = "".join(dims).upper()
+    if len(letters) != 3 or letters[0] not in "ZC":
+        return None
+    with TiffFile(path) as tf:
+        pages = len(tf.pages)
+    if pages <= 1:
+        return None
+    return (1, pages, 1) if letters[0] == "Z" else (1, 1, pages)
 
 
 class _InterleavedTiffReader:
@@ -447,7 +467,10 @@ class _SingleTiffPlaneReader:
                 except (json.JSONDecodeError, TypeError, KeyError):
                     pass
 
-            if nframes is None:
+            # the page estimate divides the file size by one page's stride,
+            # which only holds for ScanImage's uniform pages; any other file
+            # walks its IFDs
+            if nframes is None and tfile.is_scanimage:
                 try:
                     est = query_tiff_pages(fpath)
                     if est > 1:
@@ -658,12 +681,14 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
 
         # STEP 2: a single file carrying a hyperstack layout reads as one
         # interleaved file; multi-file / plane-per-file inputs fall to the
-        # structure heuristics. ImageJ counts win over a legacy TZCYX shape.
+        # structure heuristics. ImageJ counts win over a legacy TZCYX shape;
+        # a plain file has only the page axis the caller declared.
         if len(file_list) == 1:
             layout = (
                 _imagej_layout(self._metadata, file_list[0])
                 or _ome_layout(self._metadata)
                 or _shape_layout(self._metadata)
+                or _declared_layout(file_list[0], dims)
             )
             if layout:
                 self._init_interleaved(

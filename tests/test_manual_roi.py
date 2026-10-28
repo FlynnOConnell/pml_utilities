@@ -2021,13 +2021,16 @@ def in_window(name, draw, size=(600, 760)):
         imgui.end()
 
 
-def draw_frames(widget, n=4, tabs=True):
+def draw_frames(widget, n=4, tabs=True, foreign=False):
     """Render n frames with the top strip guarded; returns its tracebacks.
 
     A raise inside an imgui update call is swallowed by rendercanvas, so
     collect it off the guard rather than letting the draw look clean.
+    ``foreign`` draws a window of some other tool where the ROIs tab would be.
     """
     import traceback
+
+    from imgui_bundle import imgui
 
     errors = []
 
@@ -2038,6 +2041,8 @@ def draw_frames(widget, n=4, tabs=True):
             strip.update()
             if tabs:
                 in_window("##rois_tab", widget.draw_rois)
+            if foreign:
+                in_window("##another_tool", imgui.separator)
         except Exception:
             errors.append(traceback.format_exc())
 
@@ -3752,3 +3757,124 @@ class TestArrayResults:
             assert w._own_slice and w.slice.z == 0
         finally:
             iw.close()
+
+
+def press(widget, key, *, ctrl=False, shift=False, mouse=None, foreign=False):
+    """Press ``key`` for one frame the way a user would: the pointer parked at
+    ``mouse`` (figure pixels) for two frames first, the modifiers held, the
+    strip and the ROIs tab (or a ``foreign`` window instead) drawing.
+    """
+    from imgui_bundle import imgui
+
+    # the figure makes its imgui context current on its first draw; an io
+    # taken before that belongs to another context and swallows the events
+    errors = draw_frames(widget, 1, tabs=not foreign, foreign=foreign)
+    io = imgui.get_io()
+    if mouse is not None:
+        io.add_mouse_pos_event(float(mouse[0]), float(mouse[1]))
+    errors += draw_frames(widget, 2, tabs=not foreign, foreign=foreign)
+    if ctrl:
+        io.add_key_event(imgui.Key.mod_ctrl, True)
+    if shift:
+        io.add_key_event(imgui.Key.mod_shift, True)
+    io.add_key_event(key, True)
+    errors += draw_frames(widget, 1, tabs=not foreign, foreign=foreign)
+    io.add_key_event(key, False)
+    if ctrl:
+        io.add_key_event(imgui.Key.mod_ctrl, False)
+    if shift:
+        io.add_key_event(imgui.Key.mod_shift, False)
+    errors += draw_frames(widget, 1, tabs=not foreign, foreign=foreign)
+    assert not errors, errors[0]
+
+
+class TestKeys:
+    """Key presses injected through imgui's io: the chords that used to fire
+    two actions, the one active thing, and keys asleep over other windows.
+    """
+
+    def test_shift_m_leaves_the_masks_alone(self, widget):
+        from imgui_bundle import imgui
+
+        widget.add_roi(square(10, 10, 9))
+        shown = widget.show_masks
+        press(widget, imgui.Key.m, shift=True)
+        assert widget.show_masks == shown
+        press(widget, imgui.Key.m)
+        assert widget.show_masks != shown
+
+    def test_shift_t_runs_and_plain_t_follows(self, widget):
+        from imgui_bundle import imgui
+        from mbo_utilities.gui.manual_roi import ROI_KEYS
+
+        # masknmf leaves shift open on t; here shift+t is the run key alone
+        assert ROI_KEYS["trace_follow"].shift is False and ROI_KEYS["run"].shift is True
+        assert all(
+            bind.shift is None for name, bind in ROI_KEYS.items() if name in ("up", "down", "left", "right")
+        )
+        widget.add_roi(square(10, 10, 9))
+        widget.select_roi(0)
+        press(widget, imgui.Key.t, shift=True)
+        assert widget.status == "no data path to write beside"
+
+    def test_ctrl_digit_does_not_label(self, widget):
+        from imgui_bundle import imgui
+
+        widget.store.add_label_name("soma")
+        widget.add_roi(square(10, 10, 9))
+        widget.select_roi(0)
+        press(widget, imgui.Key._1, ctrl=True)
+        assert widget.store.rois[0].class_index == -1
+        press(widget, imgui.Key._1)
+        assert widget.store.rois[0].class_index == 0
+
+    def test_d_deletes_the_active_drawn_roi_only(self, widget):
+        from imgui_bundle import imgui
+
+        widget.add_roi(square(10, 10, 9))
+        widget.add_roi(square(30, 30, 9))
+        widget.buffer_add(-1, 0)
+        widget.buffer_add(-1, 1)
+        press(widget, imgui.Key.d)
+        assert widget.n_rois == 1
+
+    def test_a_pixel_average_is_the_active_thing(self, widget):
+        widget.add_roi(square(10, 10, 9))
+        widget.select_roi(0)
+        widget.set_pixel_traces(True)
+        widget.add_pixel(40, 40)
+        assert widget.selected == -1 and widget.active_pixel == (0, 40, 40)
+        assert (-1, 0) in widget.buffer
+        widget.delete_selected()
+        assert widget.active_pixel is None and not widget.pixels
+        assert widget.n_rois == 1
+        widget.select_roi(0)
+        assert widget.active_pixel is None
+
+    def test_undo_brings_the_deleted_roi_back_as_the_selection(self, widget):
+        widget.add_roi(square(10, 10, 9))
+        widget.add_roi(square(30, 30, 9))
+        widget.add_roi(square(50, 50, 9))
+        uid = widget.store.rois[0].uid
+        widget.select_roi(0)
+        widget.delete_selected()
+        assert [r.uid for r in widget.store.rois] == [uid + 1, uid + 2]
+        widget.undo()
+        assert widget.store.rois[widget.selected].uid == uid
+
+    def test_a_lone_pixel_average_takes_a_group_color(self, widget):
+        from masknmf.visualization.imgui.theme import GROUP_COLORS
+
+        widget.set_pixel_traces(True)
+        widget.add_pixel(40, 40)
+        assert widget._group_colors() == {(0, 40, 40): GROUP_COLORS[0]}
+
+    def test_keys_sleep_while_the_pointer_is_over_another_window(self, widget):
+        from imgui_bundle import imgui
+
+        widget.add_roi(square(10, 10, 9))
+        widget.select_roi(0)
+        press(widget, imgui.Key.d, mouse=(300, 300), foreign=True)
+        assert widget.n_rois == 1
+        press(widget, imgui.Key.d, mouse=(300, 300))
+        assert widget.n_rois == 0

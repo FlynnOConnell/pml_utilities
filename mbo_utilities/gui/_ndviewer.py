@@ -571,14 +571,14 @@ class MboNDViewer:
         return None
 
     def _seed_fps_from_data(self):
-        """Seed the t playback fps from the first array's stored rate."""
+        """Seed the t playback fps from the first array's ``fs``."""
         try:
-            from mbo_utilities.metadata import get_param
-
             arr = self._arrays[0]
-            md = getattr(arr, "metadata", None)
-            # a LazyArray's fs answers 1.0 when no rate is stored; that would play at 1 fps
-            fs = get_param(md, "fs") if md is not None else getattr(arr, "fs", None)
+            fs = getattr(arr, "fs", None)
+            if fs is None:
+                from mbo_utilities.metadata import get_param
+
+                fs = get_param(getattr(arr, "metadata", None), "fs")
             self._sliders.seed_fps("t", fs)
         except Exception:
             pass
