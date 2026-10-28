@@ -242,29 +242,6 @@ class TestLabelsZarr:
         index = restored.add_roi(1, disk(32, 32, 16, 16, 3))
         assert restored.rois[index].uid == 3  # uid 2 is never reused
 
-    def test_legacy_zarr_loads_with_fresh_uids(self, tmp_path):
-        import zarr
-
-        store = self._populated()
-        path = tmp_path / "manual_labels.zarr"
-        LabelsZarr(path).save(store)
-        # strip the uid-era attrs to mimic a zarr from before they existed
-        root = zarr.open_group(str(path), mode="a")
-        mbo = dict(root.attrs["mbo"])
-        del mbo["next_uid"]
-        root.attrs["mbo"] = mbo
-        arr = root["0"]
-        image_label = dict(arr.attrs["image-label"])
-        image_label["properties"] = [
-            {k: v for k, v in p.items() if k not in ("uid", "source")}
-            for p in image_label["properties"]
-        ]
-        arr.attrs["image-label"] = image_label
-        restored = LabelsZarr.load(path)
-        assert [r.uid for r in restored.rois] == [1, 2]
-        assert all(r.source == "" for r in restored.rois)
-        assert restored.next_uid == 3
-
     def test_ngff_layout(self, tmp_path):
         import zarr
 
@@ -283,29 +260,6 @@ class TestLabelsZarr:
         assert len(image_label["properties"]) == 2
         first = image_label["properties"][0]
         assert first["label-value"] == 1 and first["class"] == "dendrite"
-
-    def test_foreign_zarr_without_properties_loads(self, tmp_path):
-        import zarr
-
-        path = tmp_path / "labels.zarr"
-        volume = np.zeros((2, 16, 16), np.uint32)
-        volume[0, 2:6, 2:6] = 1
-        volume[1, 8:12, 8:12] = 2
-        root = zarr.open_group(str(path), mode="w")
-        arr = zarr.create(
-            store=root.store,
-            path="0",
-            shape=volume.shape,
-            dtype=np.uint32,
-            overwrite=True,
-        )
-        arr[:] = volume
-        root.attrs.update({"version": "0.5", "labels": ["0"]})
-        restored = LabelsZarr.load(path)
-        assert np.array_equal(restored.labels, volume)
-        assert [r.plane for r in restored.rois] == [0, 1]
-        assert [r.area for r in restored.rois] == [16, 16]
-        assert all(r.class_index == UNLABELED for r in restored.rois)
 
     def test_load_errors(self, tmp_path):
         import zarr

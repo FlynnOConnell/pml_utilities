@@ -17,10 +17,6 @@ that:
   source image path (a sidecar store has no ``../../0`` image group to
   point at, so it lives here instead of ``image-label.source``).
 
-``load`` also accepts a labels zarr written by other tools (no
-``properties``): records are then derived from the volume itself and come
-back unclassified.
-
 Chunking one plane per chunk is what makes the GUI's autosave cheap:
 ``save_dirty`` rewrites only the planes a mutation touched, plus attrs.
 """
@@ -165,27 +161,22 @@ class LabelsZarr:
             for p in (image_label.get("properties") or ())
             if "label-value" in p
         }
-        # per-label fallbacks (used when a foreign zarr has no properties),
-        # computed per plane so cost is one volume pass, not one per label
-        areas = np.bincount(volume.ravel(), minlength=num + 1)
-        z_of = np.full(num + 1, -1)
-        for z in range(volume.shape[0]):
-            for value in np.unique(volume[z]):
-                if value and z_of[value] < 0:
-                    z_of[value] = z
+        missing = [v for v in range(1, num + 1) if v not in by_value]
+        if missing:
+            raise ValueError(
+                f"{path}: image-label properties missing for label values {missing}"
+            )
         rois: list[RoiRecord] = []
         for value in range(1, num + 1):
-            area = int(areas[value])
-            z = int(z_of[value]) if z_of[value] >= 0 else 0
-            props = by_value.get(value, {})
+            props = by_value[value]
             class_index = int(props.get("class-index", -1))
             if not -1 <= class_index < max(len(label_names), 1):
                 class_index = -1
             color = props.get("color")
             rois.append(
                 RoiRecord(
-                    plane=int(props.get("plane", props.get("z", z))),
-                    area=int(props.get("area", area)),
+                    plane=int(props["plane"]),
+                    area=int(props["area"]),
                     class_index=class_index,
                     note=str(props.get("note", "")),
                     uid=int(props.get("uid", 0) or 0),

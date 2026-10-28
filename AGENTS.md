@@ -28,7 +28,7 @@ pml_utilities/
 │   ├── pipeline_registry.py  # PipelineInfo + entry-point loading
 │   ├── results.py            # the results zarr every pipeline molds into + ResultsArray (§7.5)
 │   ├── masknmf/  vnoiser/    # pipeline packages: params / runner / outputs / qc
-│   ├── roi_workflow.py       # register -> ROI subset -> extract | demix | discover
+│   ├── roi_workflow.py       # drawn ROIs -> extract (mean | suite2p) | demix (masknmf)
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # Miller Brain Studio (imgui + fastplotlib)
 │   │   ├── gateway.py        # `mbo serve`: launcher + one studio_server process per browser session
@@ -908,9 +908,8 @@ Pinned by `tests/test_results.py`, `tests/test_suite2p_results.py`,
 Hand-drawn ROIs are a session model in `mbo_utilities/annotation/`, GUI-free and
 observable (`events.Observable`, after fastplotlib's `GraphicFeature`: a view
 subscribes with `add_event_handler(fn, "rois")` and redraws from the event). The
-ROI widget (`gui/manual_roi.py`) and the Process tab's ROIs pipeline
-(`gui/widgets/pipelines/rois.py`) are two views of one `RoiModel`; neither polls
-the other.
+ROI widget (`gui/manual_roi.py`) is one view of a `RoiModel` and redraws from
+its events.
 
 | Object | Holds | Emits |
 |--------|-------|-------|
@@ -1026,15 +1025,6 @@ the other.
   is added (its mean at the run coordinates); no tab is selected for the user. The
   RUN section, `shift+t` and the Process tab run ROIs the way the widget is set
   (`engine`, `run_where`, `run_frames`, `run_tag`).
-- **The ROIs pipeline** (`RoiPipelineWidget`, name `ROIs`; not listed in the
-  Process tab until it is reworked, neither hardcoded nor an entry point; `axes_consumed`
-  `T: range, Z: select-one, C: select-one`) applies to any array with a time axis.
-  It picks which ROIs (selected / group, listed, this slice, all), where they are
-  read, the engine and tag, runs them, and shows the trace table cut down to those
-  ROIs (`ManualRoiWidget.draw_trace_table(keys=...)`). Region and full-plane
-  detection live there too: the region is the drawn polygon's bounding box
-  (`region`). It turns Manual ROI Labeling on when it is off. The trace plot
-  and its controls stay a panel on the top strip.
 - **Any slice.** The viewer's sliders are the array's T, C, Z axes by position
   (`manual_roi.slider_roles`), whatever the array labels them (`Timepoint` /
   `Channel` / `ROI` for a MESc AOD unit, `Tile` / `View` for IsoView); the widget
@@ -1121,13 +1111,6 @@ the other.
   page on what a `.mesc` holds. The header line, not a row, carries one button
   per `quick_pipelines` entry (`vnoiser on MUnit_3`): it opens that pipeline in
   the Process tab seeded from the unit and sliders on screen (§7.2).
-- **Full image.** The ROIs pipeline's `full image` target is the whole frame as
-  one mask at the run coordinates: with `mean` a `FULL_IMAGE` row of the trace
-  table (`ManualRoiWidget.trace_full`, keyed `("member", "full image", "z<z>c<c>")`
-  so the same slice replaces itself); with `suite2p` / `masknmf` a full detection
-  of that z-plane and channel (`run_full_plane`, whose worker args carry `channel`
-  1-based and `tp_indices` for a frame window). No store mask is involved, so it
-  never claims pixels.
 - **The stack.** The Traces panel is masknmf's `TracePlot` over the viewer's
   frames (its timings in seconds when the data has a rate; its right-click
   menu picks frames or time, autofit, fit now), with no autofit so a zoom

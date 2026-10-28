@@ -235,17 +235,6 @@ def test_finished_dirs_prefix_matches_suffixed_plane_dirs(tmp_path):
     assert rr.finished_dirs(a) == [a]
 
 
-def test_scan_lists_the_opened_dir_and_vanilla_suite2p(tmp_path):
-    np.save(tmp_path / "stat.npy", np.empty(0, object))
-    np.save(tmp_path / "ops.npy", {"Ly": 4, "Lx": 4}, allow_pickle=True)
-    _fake_run_dir(tmp_path, "suite2p/plane0")
-    _fake_run_dir(tmp_path, "plane2")
-    paths = {str(r["path"]) for r in rr.scan_run_dirs(tmp_path / "data.bin")}
-    assert str(tmp_path) in paths
-    assert str(tmp_path / "suite2p" / "plane0") in paths
-    assert str(tmp_path / "plane2") in paths
-
-
 def test_spawn_disappearance_with_outputs_is_success(pm, tmp_path):
     # the console prunes completed entries after a few minutes; outputs on
     # disk mean the run finished, not that it crashed
@@ -518,77 +507,6 @@ def _run_dir(path, kind=None, n_stat=1, n_rois=None, pipeline=None):
     return path
 
 
-def test_scan_run_dirs(tmp_path):
-    _run_dir(tmp_path / "rois_a", kind="extract", n_rois=2, n_stat=2)
-    _run_dir(tmp_path / "rois_m" / "z01", kind="demix", pipeline="masknmf")
-    _run_dir(tmp_path / "rois_m" / "z02", kind="demix", pipeline="masknmf")
-    _run_dir(tmp_path / "rois_partial", kind="extract", n_stat=None)  # still writing
-    _run_dir(tmp_path / "zplane01", n_stat=3)  # full suite2p plane
-    _run_dir(tmp_path / "zplane01" / "rois_d", kind="discover")
-    _run_dir(tmp_path / "zplane02", n_stat=None)  # registered only, no detection
-
-    rows = rr.scan_run_dirs(tmp_path)
-    by_path = {r["path"]: r for r in rows}
-    assert set(by_path) == {
-        tmp_path / "rois_a",
-        tmp_path / "rois_m" / "z01",
-        tmp_path / "rois_m" / "z02",
-        tmp_path / "zplane01",
-        tmp_path / "zplane01" / "rois_d",
-    }
-    assert by_path[tmp_path / "rois_a"]["kind"] == "extract"
-    assert by_path[tmp_path / "rois_a"]["n_rois"] == 2
-    assert by_path[tmp_path / "rois_m" / "z01"]["kind"] == "demix"
-    assert by_path[tmp_path / "rois_m" / "z01"]["n_rois"] == 1  # from stat.npy
-    assert by_path[tmp_path / "zplane01"]["kind"] == "suite2p"
-    assert by_path[tmp_path / "zplane01"]["n_rois"] == 3
-    assert all(r["mtime"] > 0 for r in rows)
-    assert [r["mtime"] for r in rows] == sorted(
-        (r["mtime"] for r in rows), reverse=True
-    )
-    # a data file scans the dir beside it; nothing on disk is fine
-    assert {r["path"] for r in rr.scan_run_dirs(tmp_path / "raw.tif")} == set(by_path)
-    assert rr.scan_run_dirs(tmp_path / "missing" / "raw.tif") == []
-
-
-def test_full_plane_args_minimal_payloads(tmp_path):
-    from mbo_utilities.masknmf.params import MasknmfSettings
-
-    fpath = tmp_path / "raw.tif"
-    s2p = rr.full_plane_args("suite2p", fpath, 3, None)
-    assert set(s2p) == {
-        "input_path",
-        "output_dir",
-        "planes",
-        "reader_kwargs",
-        "ops",
-        "s2p_settings",
-    }
-    assert s2p["input_path"] == str(fpath) and s2p["output_dir"] == str(tmp_path)
-    assert s2p["planes"] == [3] and s2p["reader_kwargs"] == {}
-    # detection is the point of a plane run, and it must be spelled twice:
-    # the source dir's ops.npy can carry roidetect=0 from a registration
-    # pass, and a stat.npy staged in from an earlier run of any pipeline
-    # otherwise reads as "detection already complete"
-    assert s2p["ops"] == {"roidetect": 1}
-    assert s2p["s2p_settings"] == {"force_reg": False, "force_detect": True}
-
-    mnmf = rr.full_plane_args("masknmf", fpath, 1, None)
-    assert set(mnmf) == {
-        "input_path",
-        "output_dir",
-        "planes",
-        "reader_kwargs",
-        "settings",
-    }
-    assert mnmf["settings"] == MasknmfSettings().to_dict()
-
-    with pytest.raises(ValueError, match="pipeline"):
-        rr.full_plane_args("bogus", fpath, 1, None)
-    with pytest.raises(ValueError, match="data path"):
-        rr.full_plane_args("suite2p", None, 1, None)
-
-
 def test_run_registry_round_trip(tmp_path):
     target = rr.registry_path(tmp_path / "raw.tif")
     assert target == tmp_path / rr.REGISTRY_NAME
@@ -654,53 +572,6 @@ class _Host:
             self._pipeline_instances = {"MaskNMF": _Settings({}, settings=masknmf)}
 
 
-def test_full_plane_args_uses_the_run_tabs_suite2p_settings(tmp_path):
-    fpath = tmp_path / "raw.tif"
-    # tri-state 2 = force, which reaches lsp as its own kwarg
-    s2p = _Settings({"run": {"do_registration": 2}}, do_registration=2, do_detection=0)
-    host = _Host(s2p=s2p, s2p_db=_Settings({"data_path": ["x"]}))
-
-    args = rr.full_plane_args("suite2p", fpath, 3, None, host=host)
-    assert args["settings"] == {"run": {"do_registration": 2}}
-    assert args["db"] == {"data_path": ["x"]}
-    assert args["s2p_settings"] == {"force_reg": True, "force_detect": False}
-
-
-def test_full_plane_args_without_a_host_keeps_the_old_payload(tmp_path):
-    from mbo_utilities.masknmf.params import MasknmfSettings
-
-    fpath = tmp_path / "raw.tif"
-    s2p = rr.full_plane_args("suite2p", fpath, 3, None)
-    assert set(s2p) == {
-        "input_path",
-        "output_dir",
-        "planes",
-        "reader_kwargs",
-        "ops",
-        "s2p_settings",
-    }
-    assert s2p["ops"] == {"roidetect": 1}
-    mnmf = rr.full_plane_args("masknmf", fpath, 1, None)
-    assert mnmf["settings"] == MasknmfSettings().to_dict()
-
-
-def test_full_plane_args_honors_an_explicit_detection_skip(tmp_path):
-    """The Process tab's Skip still wins - the fix is about the toggle the
-    user never set, not about overriding one they did.
-    """
-    host = _Host(s2p=_Settings({}, do_detection=0, do_registration=1))
-    args = rr.full_plane_args("suite2p", tmp_path / "raw.tif", 1, None, host=host)
-    assert args["ops"] == {"roidetect": 0}
-    assert args["s2p_settings"]["force_detect"] is False
-
-
-def test_full_plane_args_uses_the_run_tabs_masknmf_settings(tmp_path):
-    fpath = tmp_path / "raw.tif"
-    tuned = _Settings({"demixing": {"do_demixing": 2}})
-    args = rr.full_plane_args("masknmf", fpath, 1, None, host=_Host(masknmf=tuned))
-    assert args["settings"] == {"demixing": {"do_demixing": 2}}
-
-
 def test_masknmf_settings_is_none_until_the_run_tab_builds_it():
     assert rr.masknmf_settings(None) is None
     assert rr.masknmf_settings(_Host()) is None
@@ -762,34 +633,3 @@ class TestSuite2pHydrate:
         assert parent.s2p.tau == pytest.approx(0.7), "parameters still hydrate"
 
 
-def test_registration_does_not_leave_roidetect_behind(tmp_path):
-    """roidetect=0 is how register() asks for registration only; left in
-    ops.npy it is inherited by every later stage and by the GUI.
-    """
-    import logging
-
-    from mbo_utilities.roi_workflow import _drop_run_gates
-
-    ops_path = tmp_path / "ops.npy"
-    np.save(ops_path, {"roidetect": 0, "do_registration": 1, "Ly": 4, "Lx": 4})
-    _drop_run_gates(ops_path, logging.getLogger("test.gates"))
-
-    ops = np.load(ops_path, allow_pickle=True).item()
-    assert "roidetect" not in ops
-    assert ops["do_registration"] == 1 and ops["Ly"] == 4
-    # missing file / missing key are both no-ops
-    _drop_run_gates(ops_path, logging.getLogger("test.gates"))
-    _drop_run_gates(tmp_path / "nope.npy", logging.getLogger("test.gates"))
-
-
-def test_full_plane_args_carry_a_channel_and_a_frame_window(tmp_path):
-    fpath = tmp_path / "raw.tif"
-    args = rr.full_plane_args(
-        "suite2p", fpath, 2, None, channel=2, tp_indices=range(0, 5)
-    )
-    assert args["channel"] == 2
-    assert args["tp_indices"] == [0, 1, 2, 3, 4] and args["selected_planes_0based"] == [
-        1
-    ]
-    args = rr.full_plane_args("masknmf", fpath, 1, None, channel=1)
-    assert args["channel"] == 1 and "tp_indices" not in args

@@ -401,18 +401,15 @@ until you unmark it. `ctrl+z` undoes. Masks autosave beside the data as
 (`manual_labels_MSession_0_MUnit_3.zarr`), and the ROIs and traces on screen are
 always the shown unit's.
 
-Running ROIs is the **Process tab > ROIs** pipeline:
+Running ROIs is the Curation tab's **RUN** section (`shift+t` runs the selection):
 
-- **Which ROIs**: the selected one (or the ctrl / shift click group), the rows the
-  ROIs tab lists (its filters apply), every ROI drawn on the slice on screen, all of
-  them, or the **full image**: the whole frame as one mask. With `mean` that is the
-  frame's mean trace; with `suite2p` or `masknmf` it is a full detection of that
-  z-plane and channel.
+- **Which ROIs**: the selected one (or the ctrl / shift click group), or every ROI
+  the ROIs tab lists.
 - **Read from**: **as drawn** reads each mask on the z-plane and channel it was drawn
   on; **slice on screen** reads it wherever the sliders are when you press Run, so
   a cell drawn on the structural channel is traced on the functional one by
-  scrolling there and running again; **fixed** picks a z-plane and channel. A
-  **frames** window (`start:stop`, 1-based) cuts T.
+  scrolling there and running again. A **frames** window (`start:stop`, 1-based)
+  cuts T.
 - **Engine**: `mean` (raw mask mean plus a neuropil ring, no pipeline), `suite2p`
   (suite2p's extractor), `masknmf` (seeded demixing). `suite2p` and `masknmf` use
   the settings of their own tab, including the skip / run / force toggles; **Open**
@@ -420,9 +417,6 @@ Running ROIs is the **Process tab > ROIs** pipeline:
 - **Run** writes suite2p-shaped outputs (`F.npy`, `Fneu.npy`, `stat.npy`,
   `rois.json`, `ops.npy` with `roi_workflow` recording `z`, `c`, `frames` and
   `engine`); **Trace** computes an in-memory mean without writing.
-- **Find cells in a region**: draw a region (`a`) and let suite2p or masknmf look
-  for cells inside its bounding box. Results arrive as algo rows: promote (`y`) or
-  mark for deletion (`n`) each component.
 
 The sliders are the array's axes whatever they are called: a MESc AOD unit's
 **ROI** slider or an IsoView **View** slider keys masks and runs like any z-plane

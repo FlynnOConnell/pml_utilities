@@ -1,4 +1,4 @@
-"""Registration -> ROI subset -> extraction | demixing | discovery, on any lazy array.
+"""Trace extraction and demixing of drawn ROIs, on any lazy array.
 
 The one thing everything here needs from a movie is
 
@@ -17,29 +17,18 @@ a raw file, a suite2p plane dir (``ops.npy`` + registered ``data.bin``), a
 masknmf run folder (its registered movie rebuilt from the recording), or a
 directory of either.
 
-ROIs come from the manual-ROI tool (``manual_labels.zarr`` /
-``RoiLabelStore``). The processing steps are
+ROIs come from the manual-ROI tool (``RoiLabelStore``). The processing steps are
 
 - **extract** - suite2p-style trace extraction with the drawn masks (no
   detection): ``F`` / ``Fneu`` / ``stat`` / ``iscell``;
 - **demix** - masknmf NMF seeded with the drawn masks as initial spatial
   footprints, writing the same suite2p-shaped sidecars plus
-  ``demixing_results.hdf5``;
-- **discover** - unseeded detection inside a rectangular region: masknmf's
-  superpixel initialisation or suite2p's detector runs on the crop and the
-  outputs are written back in full-frame coordinates.
+  ``demixing_results.hdf5``.
 
 Outputs go to ``<out_dir>/`` - by default ``rois_<tag>/`` beside the source -
 so a full-detection run in a plane dir is never overwritten; the subset's
 ``ops.npy`` points ``reg_file`` back at the parent ``data.bin`` when there is
 one and ``roi_indices.npy`` maps each output row to its index in the store.
-
-Draw the masks on the same frames the pipeline reads - the registered
-``data.bin``. ``run(..., process="none")`` registers and stops;
-``mbo <save_path>`` or ``mbo <plane_dir>`` then opens that registered movie
-in the viewer, the ROI tool autosaves ``manual_labels.zarr`` into the
-directory that was opened, and ``run(<save_path>, register_method="none")``
-picks those stores up per plane (:func:`plane_store`).
 
 Only numpy/scipy are required for the ``"mean"`` extraction engine and the
 quick traces; suite2p, lbm_suite2p_python and masknmf are imported lazily
@@ -52,7 +41,7 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -60,7 +49,6 @@ import numpy as np
 
 from mbo_utilities import log
 from mbo_utilities.analysis.dff import maxmin_baseline
-from mbo_utilities.annotation.ngff import LabelsZarr
 from mbo_utilities.annotation.store import RoiLabelStore
 from mbo_utilities.arrays.features._dim_tags import filename_tags
 from mbo_utilities.arrays.features._slicing import index_window
@@ -68,32 +56,25 @@ from mbo_utilities.results import norm_traces_kind
 
 __all__ = [
     "PlaneMovie",
-    "RoiSelection",
     "RunResult",
     "as_movie",
     "detection_algo",
-    "load_rois",
     "load_run_dir",
-    "select_rois",
     "plane_masks",
     "roi_trace",
     "pixel_trace",
     "open_registered",
     "plane_index",
-    "plane_store",
     "labels_path",
     "roi_folder",
-    "register",
     "extract_rois",
     "demix_rois",
-    "discover_rois",
     "extract_linescan_traces",
     "extract_linescan_units",
     "linescan_roi_read",
     "linescan_roi_means",
     "feather_mask",
     "pmd_crop",
-    "run",
 ]
 
 RegisterMethod = Literal["suite2p", "masknmf", "none"]
@@ -103,9 +84,6 @@ DiscoverEngine = Literal["masknmf", "suite2p"]
 
 OUT_PREFIX = "rois_"
 SAVE_NAME = "manual_labels.zarr"
-_Z_RE = re.compile(r"z(\d+)")
-
-
 def roi_folder(fpath, root=None) -> Path:
     """Where ``fpath``'s ROI work is saved: beside a file or inside a
     directory, or, with a ``root``, a folder under it named after the data
@@ -349,77 +327,6 @@ def _source_nz(arr) -> int:
     return int(dict(zip(movie_dims(arr), arr.shape)).get("Z", 1))
 
 
-@dataclass
-class RoiSelection:
-    """Which ROIs of a store to run. Empty fields mean "no filter on this".
-
-    ``planes`` are 0-based z indices, ``indices`` are store indices, and
-    ``labels`` are class-label *names* from the store's label set. The
-    criteria intersect, so ``planes=[0], labels=["soma"]`` is "somata on the
-    first plane".
-    """
-
-    planes: list[int] = field(default_factory=list)
-    indices: list[int] = field(default_factory=list)
-    labels: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-
-def load_rois(rois, *, source=None) -> RoiLabelStore:
-    """Resolve ``rois`` to a ``RoiLabelStore``.
-
-    ``rois`` may be a store, a path to a labels zarr, a path whose sibling
-    ``manual_labels.zarr`` should be used, or ``None`` (then ``source`` is
-    used the same way - the annotations the GUI saved next to the data).
-    """
-    if isinstance(rois, RoiLabelStore):
-        return rois
-    target = rois if rois is not None else source
-    if target is None:
-        raise ValueError(
-            "no ROI source: pass a RoiLabelStore, a labels zarr, or a data path"
-        )
-    target = Path(target)
-    if target.suffix != ".zarr" or not (target / "zarr.json").exists():
-        target = labels_path(target)
-    return LabelsZarr.load(target)
-
-
-def select_rois(
-    store: RoiLabelStore,
-    planes: list[int] | None = None,
-    indices: list[int] | None = None,
-    labels: list[str] | None = None,
-) -> list[int]:
-    """Indices of the store's ROIs matching every given criterion.
-
-    With no criteria this is every ROI. Unknown label names raise so a typo
-    does not silently run zero ROIs.
-    """
-    keep = list(range(len(store.rois)))
-    if indices:
-        wanted = set(int(i) for i in indices)
-        bad = sorted(i for i in wanted if not 0 <= i < len(store.rois))
-        if bad:
-            raise IndexError(
-                f"ROI indices out of range for {len(store.rois)} ROIs: {bad}"
-            )
-        keep = [i for i in keep if i in wanted]
-    if planes:
-        zs = set(int(z) for z in planes)
-        keep = [i for i in keep if store.rois[i].plane in zs]
-    if labels:
-        names = list(store.label_names)
-        unknown = [n for n in labels if n not in names]
-        if unknown:
-            raise KeyError(f"unknown ROI labels {unknown}; store has {names}")
-        classes = {names.index(n) for n in labels}
-        keep = [i for i in keep if store.rois[i].class_index in classes]
-    return keep
-
-
 def plane_masks(
     store: RoiLabelStore, z: int, indices: list[int]
 ) -> tuple[np.ndarray, list[int]]:
@@ -623,45 +530,6 @@ def plane_index(plane_dir: str | Path, ops: dict | None = None) -> int:
     return z_tags[0].start - 1 if z_tags else 0
 
 
-def _find_plane_dirs(root: str | Path) -> list[Path]:
-    """Suite2p-shaped plane dirs (``ops.npy``) or masknmf run folders at or under ``root``."""
-    from mbo_utilities.arrays.masknmf_run import RUN_CONFIG, is_masknmf_run
-
-    root = Path(root)
-    if (root / "ops.npy").exists() or is_masknmf_run(root):
-        return [root]
-    dirs = sorted(
-        p.parent
-        for p in (*root.rglob("ops.npy"), *root.rglob(RUN_CONFIG))
-        if not p.parent.name.startswith(OUT_PREFIX)
-        and ((p.parent / "ops.npy").exists() or is_masknmf_run(p.parent))
-    )
-    if not dirs:
-        raise FileNotFoundError(f"no ops.npy or masknmf run folder under {root}")
-    return dirs
-
-
-def plane_store(
-    plane_dir: str | Path, fallback: RoiLabelStore | None = None
-) -> tuple[RoiLabelStore | None, int]:
-    """``(store, z)`` to use for one registered plane dir.
-
-    ROIs drawn on the *registered* movie - ``mbo <plane_dir>`` then the ROI
-    tool - are saved as ``<plane_dir>/manual_labels.zarr`` with a single
-    plane, so that store wins and ``z`` is ``0``. ROIs drawn on the volume
-    root (``mbo <save_path>``) or on the raw data live in ``fallback`` and
-    are indexed by the plane dir's own z. Returns ``(None, z)`` when there
-    is nothing to draw from.
-    """
-    plane_dir = Path(plane_dir)
-    z_global = plane_index(plane_dir)
-    local = plane_dir / SAVE_NAME
-    if local.exists():
-        st = LabelsZarr.load(local)
-        return st, (0 if st.nz == 1 else z_global)
-    return fallback, z_global
-
-
 @dataclass
 class RunResult:
     """One run dir's outputs - a ``rois_<tag>/`` subset, a discovery, or a
@@ -756,15 +624,10 @@ def load_run_dir(
         # vanilla suite2p's plane0, plane1... are 0-based, unlike the tag vocabulary
         vanilla = re.fullmatch(r"plane(\d+)", path.name)
         z_tags = [t for t in filename_tags(path.name) if t.definition.label == "zplane"]
-        legacy = _Z_RE.search(
-            path.name
-        )  # z03 children of runs written before the tag vocabulary
         if vanilla:
             z = int(vanilla.group(1))
         elif z_tags:
             z = z_tags[0].start - 1
-        elif legacy:
-            z = int(legacy.group(1)) - 1
         else:
             z = plane_index(path, ops)
     stat = np.load(path / "stat.npy", allow_pickle=True)
@@ -926,149 +789,6 @@ def run_result_from_unit(
             if k not in ("raw", "neuropil", "dff")
         },
     )
-
-
-def register(
-    input_data,
-    save_path: str | Path,
-    method: RegisterMethod = "suite2p",
-    *,
-    planes: list[int] | None = None,
-    settings: dict | None = None,
-    metadata: dict | None = None,
-    frame_indices: list[int] | None = None,
-    channel: int | None = None,
-    force: bool = False,
-    logger=None,
-) -> list[Path]:
-    """Register ``input_data`` and return the plane dirs: suite2p-shaped, or masknmf run folders.
-
-    ``planes`` are 1-based (lsp / masknmf convention); ``None`` means every
-    z-plane. ``method="none"`` treats ``input_data`` as already-registered
-    plane dir(s) and just lists them.
-
-    - ``suite2p``: ``lbm_suite2p_python.run_volume`` with detection off
-      (``roidetect=0``). ``settings`` are extra ops.
-    - ``masknmf``: ``mbo_utilities.masknmf.run_plane`` with compression and
-      demixing skipped, one run folder per plane (``MasknmfRunArray`` opens
-      its registered movie). ``settings`` is a ``MasknmfSettings`` dict; only
-      its ``registration`` / ``runtime`` sections are used.
-    """
-    logger = logger or log.get("roi_workflow")
-    save_path = Path(save_path)
-    if method == "none":
-        return _find_plane_dirs(input_data)
-
-    from mbo_utilities.reader import imread, source_reader_kwargs
-
-    arr = input_data if hasattr(input_data, "shape") else imread(input_data)
-    nz = _source_nz(arr)
-    planes = list(planes) if planes else list(range(1, nz + 1))
-    t0 = time.time()
-
-    if method == "suite2p":
-        from lbm_suite2p_python import run_volume as lsp_run_volume
-
-        ops = {"do_registration": 1, "roidetect": 0}
-        ops.update(settings or {})
-        if metadata:
-            from mbo_utilities.metadata import get_param
-
-            fs = get_param(metadata, "fs")
-            if fs and ops.get("fs") in (None, 10.0):
-                ops["fs"] = float(fs)
-        logger.info(
-            f"roi_workflow: suite2p registration of planes {planes} -> {save_path}"
-        )
-        lsp_run_volume(
-            arr,
-            save_path,
-            ops=ops,
-            planes=planes,
-            force_reg=force,
-            replot=False,
-            frame_indices=frame_indices,
-            # a binned (frame_average) source carries its factor here, so
-            # the plane workers re-open the same averaged movie
-            reader_kwargs={
-                **source_reader_kwargs(arr),
-                **({"channel": channel} if channel is not None else {}),
-            }
-            or None,
-            workers=1,
-        )
-    elif method == "masknmf":
-        from mbo_utilities.masknmf import MasknmfSettings
-        from mbo_utilities.masknmf import run_plane as mnmf_run_plane
-        from mbo_utilities.masknmf.params import STAGE_FORCE, STAGE_RUN, STAGE_SKIP
-
-        s = MasknmfSettings.from_dict(settings or {})
-        s.registration.do_registration = STAGE_FORCE if force else STAGE_RUN
-        s.compression.do_compression = STAGE_SKIP
-        s.demixing.do_demixing = STAGE_SKIP
-        logger.info(
-            f"roi_workflow: masknmf registration of planes {planes} -> {save_path}"
-        )
-        # a run folder per plane; its registered movie is the shifts replayed on the source
-        runs = [
-            mnmf_run_plane(
-                arr,
-                save_path,
-                plane=p,
-                settings=s,
-                metadata=metadata,
-                frame_indices=frame_indices,
-                channel=channel,
-                replot=False,
-                logger=logger,
-            )
-            for p in planes
-        ]
-        logger.info(f"roi_workflow: registration done in {time.time() - t0:.1f}s")
-        return runs
-    else:
-        raise ValueError(f"unknown registration method {method!r}")
-
-    from mbo_utilities.masknmf.runner import generate_plane_dirname
-
-    dirs = []
-    for p in planes:
-        d = save_path / generate_plane_dirname(p, frame_indices)
-        if not (d / "ops.npy").exists():
-            # lsp may name planes differently when timepoints are given
-            cands = [c for c in _find_plane_dirs(save_path) if plane_index(c) == p - 1]
-            if not cands:
-                raise FileNotFoundError(
-                    f"registration produced no plane dir for plane {p}"
-                )
-            d = cands[0]
-        dirs.append(d)
-        _drop_run_gates(d / "ops.npy", logger)
-    logger.info(f"roi_workflow: registration done in {time.time() - t0:.1f}s")
-    return dirs
-
-
-def _drop_run_gates(ops_path: Path, logger) -> None:
-    """Strip ``roidetect`` from a plane dir's ops.npy after registration.
-
-    ``roidetect=0`` is how this function asks suite2p for registration
-    only; it is an instruction for one run, not a property of the data.
-    Left in ops.npy it is inherited by every later stage (masknmf's
-    merge_ops keeps it, lsp lets it win over settings that do not spell
-    it) and the GUI hydrates it as "Detection: Skip" - which is how a
-    suite2p run ends up regenerating figures and finding no ROIs.
-    """
-    try:
-        if not ops_path.exists():
-            return
-        ops = np.load(ops_path, allow_pickle=True).item()
-        if not isinstance(ops, dict) or "roidetect" not in ops:
-            return
-        ops.pop("roidetect")
-        np.save(ops_path, ops)
-        logger.debug(f"roi_workflow: dropped roidetect from {ops_path}")
-    except Exception as error:  # noqa: BLE001 - never fail a run over this
-        logger.warning(f"roi_workflow: could not clean {ops_path}: {error}")
 
 
 def _frames_info(movie: PlaneMovie) -> dict:
@@ -1871,231 +1591,6 @@ def demix_rois(
     return out_dir
 
 
-def _shift_stat(out_dir: Path, y0: int, x0: int, shape: tuple[int, int]) -> np.ndarray:
-    """Move a crop-space ``stat.npy`` into the full ``(Ly, Lx)`` frame."""
-    ly, lx = shape
-    stat = np.load(Path(out_dir) / "stat.npy", allow_pickle=True)
-    for r in stat:
-        r["ypix"] = np.clip(r["ypix"] + y0, 0, ly - 1).astype(np.int32)
-        r["xpix"] = np.clip(r["xpix"] + x0, 0, lx - 1).astype(np.int32)
-        r["med"] = (float(r["med"][0]) + y0, float(r["med"][1]) + x0)
-    np.save(Path(out_dir) / "stat.npy", stat)
-    return stat
-
-
-def discover_rois(
-    source,
-    box: tuple[int, int, int, int],
-    *,
-    engine: DiscoverEngine = "masknmf",
-    z: int = 0,
-    c: int = 0,
-    out_dir: str | Path | None = None,
-    settings: dict | None = None,
-    device: str = "auto",
-    tag: str = "find",
-    logger=None,
-) -> Path | None:
-    """Detect ROIs inside a rectangular region of ``source``, unseeded.
-
-    ``box`` is ``(y0, y1, x0, x1)`` in frame pixels, clipped to the frame.
-    Everything runs on the crop - masknmf's superpixel initialisation
-    (``engine="masknmf"``) or suite2p's detector plus its extractor
-    (``engine="suite2p"``) - and ``stat.npy`` is written back in full-frame
-    coordinates, so the outputs read like any other run dir. When the plane
-    already has a ``compression.hdf5`` computed with the same settings, the
-    crop's PMD is built from those factors (:func:`pmd_crop`) instead of
-    recompressing.
-
-    Returns the output dir (``out_dir`` or ``rois_<tag>/`` beside the
-    source), or ``None`` when nothing is found in the region - an ordinary
-    outcome, not an error. ``settings`` is a ``MasknmfSettings`` dict for
-    masknmf, extra detection settings for suite2p.
-    """
-    logger = logger or log.get("roi_workflow")
-    if engine not in ("masknmf", "suite2p"):
-        raise ValueError(f"unknown discovery engine {engine!r}")
-    z = int(z)
-    if isinstance(source, PlaneMovie):
-        movie = source
-    else:
-        arr = source
-        if isinstance(arr, (str, Path)):
-            from mbo_utilities.reader import imread
-
-            arr = imread(arr)
-        nz = _source_nz(arr)
-        movie = PlaneMovie(arr, z=(z if nz > 1 else 0), c=c)
-    nframes, ly, lx = movie.shape
-    y0, y1, x0, x1 = (int(v) for v in box)
-    y0, x0 = max(y0, 0), max(x0, 0)
-    y1, x1 = min(y1, ly), min(x1, lx)
-    if y1 <= y0 or x1 <= x0:
-        raise ValueError(f"empty region ({y0}:{y1}, {x0}:{x1}) in a {ly}x{lx} frame")
-    crop = movie.crop(y0, y1, x0, x1)
-    h, w = y1 - y0, x1 - x0
-    out_dir = Path(out_dir) if out_dir is not None else _default_out_dir(source, tag)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ops = _ops_for(source, movie)
-    t0 = time.time()
-    info = {
-        "process": "discover",
-        "engine": engine,
-        "box": [y0, y1, x0, x1],
-        "plane": movie.z,
-        "channel": int(c),
-    }
-
-    if engine == "masknmf":
-        from masknmf.demixing import NoSignalsDetectedError
-
-        import masknmf
-        from mbo_utilities.masknmf import MasknmfSettings
-        from mbo_utilities.masknmf import outputs as _outputs
-        from mbo_utilities.masknmf import runner as _runner
-        from mbo_utilities.masknmf.params import DEMIX_FILE
-        from mbo_utilities.metadata import get_param
-
-        s = (
-            settings
-            if isinstance(settings, MasknmfSettings)
-            else MasknmfSettings.from_dict(settings or {})
-        )
-        dev = _runner._resolve_device(
-            s.runtime.device if device == "auto" else device, logger
-        )
-        fs = get_param(ops, "fs")
-        fs = float(fs) if fs else None
-        # masknmf's spline detrenders need a movie longer than their window
-        detrend_ok = bool(fs) and nframes >= 2 * int(40 * fs)
-        if fs and not detrend_ok:
-            s.compression.detrend = False
-        cached = _cached_pmd_crop(source, crop, s.compression, logger)
-        if cached is not None:
-            pmd, comp_seconds, pmd_key = cached[0], 0.0, cached[1]
-        else:
-            pmd, comp_seconds, pmd_key = _runner._stage_compression(
-                crop,
-                s.compression,
-                s.runtime,
-                out_dir,
-                dev,
-                np.ones((h, w), float),
-                fs,
-                logger,
-                f"registered:{_movie_fingerprint(crop, _source_path(source))}",
-                False,
-            )
-            if pmd is None:
-                raise ValueError(
-                    "compression skipped and no cached compression.hdf5 to demix from"
-                )
-        detrender = None
-        if detrend_ok:
-            from masknmf.compression.preprocessing import MaximinSplineDetrend
-
-            detrender = MaximinSplineDetrend(
-                num_frames=nframes,
-                num_knots=max(4, int(nframes / fs / 20)),
-                window=int(20 * fs),
-                sigma=max(2.0, 0.3 * fs),
-                device=dev,
-            )
-        cfg = _runner.clamp_background_downsampling(s.demixing, h, w, logger)
-        logger.info(
-            f"roi_workflow: masknmf discovery in ({y0}:{y1}, {x0}:{x1}) on plane z={z} ({dev})"
-        )
-        demixer = masknmf.SignalDemixer(
-            pmd, device=dev, frame_batch_size=s.runtime.frame_batch_size
-        )
-        try:
-            demixer.initialize_signals(**cfg.init_kwargs(detrender))
-        except NoSignalsDetectedError:
-            logger.info("roi_workflow: masknmf found no signals in the region")
-            return None
-        demixer.demix(
-            **cfg.nmf_kwargs(cfg.unfiltered_support_lo, ring=True, detrender=detrender)
-        )
-        results = demixer.results
-        info.update(
-            settings=_runner._stage_hash(cfg, "do_demixing"), input=pmd_key, fs=fs
-        )
-        _runner._export_atomic(results, out_dir / DEMIX_FILE, info)
-        coo_idx, values, baseline = _runner._extract_footprints(results)
-        cc = np.asarray(
-            results.signals_array.export_temporal_demixed(), dtype=np.float32
-        )
-        counts = _outputs.write_plane_outputs(
-            out_dir,
-            indices=coo_idx,
-            values=values,
-            c=cc,
-            shape=(h, w),
-            baseline=baseline,
-            var_img=_runner._to_np(pmd.noise_variance_image),
-            mean_img=_runner._to_np(pmd.mean_image),
-        )
-        stat = _shift_stat(out_dir, y0, x0, (ly, lx))
-        F = np.load(out_dir / "F.npy")
-        Fneu = np.load(out_dir / "Fneu.npy")
-        info["compression_seconds"] = round(comp_seconds, 3)
-        info["n_components"] = int(counts["n_rois"])
-    else:
-        import torch
-        from suite2p import default_settings, detection_wrapper
-        from suite2p.extraction.extract import extract_traces
-        from suite2p.extraction.masks import create_masks
-
-        from mbo_utilities.metadata import get_param
-
-        dev = torch.device(
-            device
-            if device != "auto"
-            else ("cuda" if torch.cuda.is_available() else "cpu")
-        )
-        det = dict(default_settings()["detection"])
-        det.update(settings or {})
-        fs = get_param(ops, "fs")
-        logger.info(
-            f"roi_workflow: suite2p discovery in ({y0}:{y1}, {x0}:{x1}) on plane z={z} ({dev})"
-        )
-        try:
-            _, stat, _ = detection_wrapper(
-                crop,
-                fs=float(fs) if fs else 30,
-                yrange=None,
-                xrange=None,
-                settings=det,
-                device=dev,
-            )
-        except ValueError:
-            logger.info("roi_workflow: suite2p found no ROIs in the region")
-            return None
-        cell_masks, neuropil_masks = create_masks(list(stat), h, w)
-        F, Fneu = extract_traces(crop, cell_masks, neuropil_masks, device=dev)
-        F = np.asarray(F, np.float32)
-        Fneu = np.asarray(Fneu, np.float32) if Fneu is not None else np.zeros_like(F)
-        for r in stat:
-            r["ypix"] = np.clip(r["ypix"] + y0, 0, ly - 1).astype(np.int32)
-            r["xpix"] = np.clip(r["xpix"] + x0, 0, lx - 1).astype(np.int32)
-            r["med"] = (float(r["med"][0]) + y0, float(r["med"][1]) + x0)
-
-    info["seconds"] = round(time.time() - t0, 3)
-    out = _write_discovery_outputs(
-        out_dir,
-        source=source,
-        ops=ops,
-        stat=stat,
-        F=F,
-        Fneu=Fneu,
-        info=info,
-    )
-    logger.info(
-        f"roi_workflow: discovered {len(stat)} ROIs -> {out} ({info['seconds']}s)"
-    )
-    return out
-
-
 def _bridge_frames(F: np.ndarray, frames: np.ndarray) -> np.ndarray:
     """Copy of ``F`` with the listed frames replaced by linear interpolation
     between their nearest untouched neighbours (edges hold the neighbour).
@@ -2504,167 +1999,3 @@ def extract_linescan_units(
     return outputs
 
 
-def run(
-    input_data,
-    save_path: str | Path | None = None,
-    *,
-    register_method: RegisterMethod = "suite2p",
-    process: ProcessMethod = "extract",
-    rois=None,
-    selection: RoiSelection | dict | None = None,
-    planes: list[int] | None = None,
-    register_settings: dict | None = None,
-    process_settings: dict | None = None,
-    metadata: dict | None = None,
-    frame_indices: list[int] | None = None,
-    channel: int | None = None,
-    force: bool = False,
-    tag: str = "manual",
-    logger=None,
-) -> dict[int, Path]:
-    """Register, pick ROIs, and extract or demix them. Returns ``{z: out_dir}``.
-
-    Parameters
-    ----------
-    input_data
-        Raw data (anything ``imread`` opens) - or, with
-        ``register_method="none"``, a registered plane dir / a directory of them.
-    save_path
-        Where registration writes plane dirs. Required unless ``register_method="none"``.
-    register_method
-        ``"suite2p"``, ``"masknmf"`` or ``"none"``.
-    process
-        ``"extract"`` (suite2p-style traces from the masks), ``"demix"``
-        (masknmf seeded NMF), ``"discover"`` (unseeded detection inside
-        ``process_settings["box"]``, engine from ``process_settings["engine"]``,
-        no ROI store needed), or ``"none"`` to stop after registration so
-        ROIs can be drawn on the registered movie first.
-    rois
-        ``RoiLabelStore``, labels zarr path, or ``None`` to look for
-        ``manual_labels.zarr`` in each plane dir (drawn on the registered
-        movie - preferred), then beside ``input_data``, then in ``save_path``.
-    selection
-        ``RoiSelection`` (or its dict) restricting which ROIs run; ``None`` = all.
-    planes
-        1-based z-planes to register/process; ``None`` = all. Independent of
-        ``selection.planes`` (0-based) - a plane with no selected ROI is skipped.
-    register_settings / process_settings
-        Passed through to ``register`` and ``extract_rois`` / ``demix_rois``.
-    """
-    logger = logger or log.get("roi_workflow")
-    if register_method != "none" and save_path is None:
-        raise ValueError("save_path is required when registering")
-    if process not in ("extract", "demix", "discover", "none"):
-        raise ValueError(f"unknown process {process!r}")
-    if process == "discover" and not (process_settings or {}).get("box"):
-        raise ValueError(
-            'process="discover" needs process_settings["box"] = [y0, y1, x0, x1]'
-        )
-    source_path = None if hasattr(input_data, "shape") else input_data
-    sel = (
-        selection
-        if isinstance(selection, RoiSelection)
-        else RoiSelection(**(selection or {}))
-    )
-
-    plane_dirs = register(
-        input_data,
-        save_path or "",
-        register_method,
-        planes=planes,
-        settings=register_settings,
-        metadata=metadata,
-        frame_indices=frame_indices,
-        channel=channel,
-        force=force,
-        logger=logger,
-    )
-    if planes and register_method == "none":
-        plane_dirs = [d for d in plane_dirs if plane_index(d) + 1 in set(planes)]
-
-    if process == "none":
-        # register only: draw ROIs on the registered movie next
-        root = Path(save_path) if save_path else Path(plane_dirs[0]).parent
-        logger.info(
-            f"roi_workflow: registered {len(plane_dirs)} plane(s); draw ROIs on them with "
-            f"`mbo {root}` (or `mbo <plane_dir>`) then run with --register none"
-        )
-        return {plane_index(d): d for d in plane_dirs}
-
-    if process == "discover":
-        ps = dict(process_settings or {})
-        box = tuple(int(v) for v in ps.pop("box"))
-        engine = ps.pop("engine", "masknmf")
-        found: dict[int, Path] = {}
-        for d in plane_dirs:
-            z_global = plane_index(d)
-            if sel.planes and z_global not in set(sel.planes):
-                continue
-            out = discover_rois(
-                d,
-                box,
-                engine=engine,
-                z=z_global,
-                c=channel or 0,
-                tag=tag,
-                logger=logger,
-                **ps,
-            )
-            if out is not None:
-                found[z_global] = out
-        if not found:
-            logger.warning("roi_workflow: discovery found nothing; nothing written")
-        return found
-
-    # a shared store: given explicitly, or saved beside the raw input / root
-    shared: RoiLabelStore | None = None
-    if rois is not None:
-        shared = load_rois(rois)
-    elif source_path is not None and labels_path(source_path).exists():
-        shared = load_rois(None, source=source_path)
-    elif save_path and (Path(save_path) / SAVE_NAME).exists():
-        shared = LabelsZarr.load(Path(save_path) / SAVE_NAME)
-
-    outputs: dict[int, Path] = {}
-    n_selected = 0
-    n_stores = 0
-    for d in plane_dirs:
-        store, z = plane_store(d, shared)
-        z_global = plane_index(d)
-        if store is None:
-            logger.warning(
-                f"roi_workflow: no ROI store for {d.name}; draw ROIs with `mbo {d}`"
-            )
-            continue
-        n_stores += 1
-        if sel.planes and z_global not in set(sel.planes):
-            continue
-        # per-plane stores are single-plane: the plane filter was applied on
-        # the global index above and must not be passed to select_rois
-        indices = select_rois(
-            store,
-            planes=sel.planes if store is shared else None,
-            indices=sel.indices or None,
-            labels=sel.labels or None,
-        )
-        n_selected += len(indices)
-        if not indices:
-            continue
-        # each plane dir opens as a single-plane movie; ``z`` addresses the store
-        kw = dict(z=z, c=channel or 0, tag=tag, logger=logger)
-        if process == "extract":
-            out = extract_rois(d, store, indices, **kw, **(process_settings or {}))
-        else:
-            out = demix_rois(d, store, indices, **kw, settings=process_settings)
-        if out is not None:
-            outputs[z_global] = out
-    if n_stores == 0:
-        raise FileNotFoundError(
-            "no ROIs found: pass rois=, or draw them on the registered planes "
-            f"(`mbo {save_path or plane_dirs[0]}`) or beside the raw data"
-        )
-    if n_selected == 0:
-        raise ValueError("ROI selection matched no ROIs")
-    if not outputs:
-        logger.warning("roi_workflow: no plane had a selected ROI; nothing written")
-    return outputs

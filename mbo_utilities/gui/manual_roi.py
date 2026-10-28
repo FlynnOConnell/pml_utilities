@@ -11,8 +11,7 @@ top strip, with the recording's motion correction as a panel of its own and
 its behavior log as a raster row over them. The keys are masknmf's
 ``DEMIXING`` table plus its 1-9 / 0 / u labeling keys and a few of this
 tool's own (:data:`ROI_KEYS`); while the tool is on it takes those keys from
-the viewer's global shortcuts. The Process tab's ``ROIs`` pipeline
-(``widgets/pipelines/rois.py``) reads this widget's model.
+the viewer's global shortcuts.
 
 The state is a :class:`~mbo_utilities.annotation.RoiModel`: the
 ``RoiLabelStore`` (one ``(P, Y, X)`` uint16 label volume, 0 background, ROI
@@ -20,8 +19,7 @@ The state is a :class:`~mbo_utilities.annotation.RoiModel`: the
 ``uid`` and a ``source`` naming where it came from), the
 ``RoiTraceTable`` (one row per measurement, keyed by ROI uid, z-plane,
 channel and engine) and the slider position. The widget subscribes to the
-model's events and redraws from them, so the same model drives the
-Process tab's ROI pipeline without either widget polling the other.
+model's events and redraws from them.
 
 Draw (a) arms a polygon: click its vertices on the image, click the first
 one to close it. While it is there it selects every ROI in view on this
@@ -135,7 +133,6 @@ from mbo_utilities.arrays.features._dim_tags import (
     OutputFilename,
     filename_tags,
 )
-from mbo_utilities.arrays.features._selection import to_lsp_kwargs
 from mbo_utilities.arrays.features._slicing import index_window
 from mbo_utilities.behavior import behavior_for
 from mbo_utilities.gui import roi_runs
@@ -158,7 +155,6 @@ from mbo_utilities.gui.roi_runs import (
     RoiRunManager,
     component_color,
     finished_dirs,
-    full_plane_args,
     load_run_registry,
     outline_data,
     registry_path,
@@ -176,14 +172,13 @@ from mbo_utilities.preferences import (
     set_roi_autosave,
     set_roi_folder,
 )
-from mbo_utilities.results import results_pipeline, unit_name
+from mbo_utilities.results import results_pipeline
 from mbo_utilities.roi_workflow import (
     OUT_PREFIX,
     SAVE_NAME,
     PlaneMovie,
     demix_rois,
     detection_algo,
-    discover_rois,
     extract_rois,
     feather_mask,
     labels_path,
@@ -795,7 +790,6 @@ class ManualRoiWidget:
         self._region_key = None
         self._region_hits: list | None = None
         # its bounding box (y0, y1, x0, x1): where Find in region looks
-        self.region: tuple[int, int, int, int] | None = None
         # the last press on the image: a click travelling further is a pan
         self._press: tuple[float, float] | None = None
         self._press_drawn = False
@@ -1035,12 +1029,6 @@ class ManualRoiWidget:
         # a unit switch (MESc) can drop a scroll dim the store was keyed on;
         # that dim then sits at plane 0 rather than taking the GUI down
         return {name: self.slice.positions.get(name, 0) for name, _n in self.plane_axes}
-
-    def _current_z(self) -> int:
-        """Flat store plane for the viewer's scroll position (see
-        ``RoiLabelStore.plane_of``).
-        """
-        return self.store.plane_of(self._view_pos())
 
     def _plane_pos(self, plane: int) -> dict[str, int]:
         return self.store.plane_pos(plane)
@@ -1326,10 +1314,6 @@ class ManualRoiWidget:
         elif not on and self.region_selector is not None:
             self._drop_region()
 
-    def set_region_mode(self, on: bool):
-        """The Process tab's region drawing: the same polygon, its bounding box is where Find looks."""
-        self.set_drawing(on)
-
     def add_roi(self, points):
         """Fill a closed polygon (``(x, y)`` points on the image) and store it as the next label on the plane on screen."""
         if len(points) < 3:
@@ -1348,11 +1332,6 @@ class ManualRoiWidget:
         self.select_roi(index)
         if self.auto_trace and self.trace_disabled(index) is None:
             self.quick_trace(index)
-
-    def clear_region(self):
-        """Drop the drawn region and the box Find looks in."""
-        self._drop_region()
-        self.region = None
 
     def _pick(self, row: int, col: int, mods: frozenset = frozenset()):
         """Masknmf's click: a drawn ROI under the cursor, else an algo one.
@@ -1498,9 +1477,6 @@ class ManualRoiWidget:
             self._center_on(stat_row["ypix"], stat_row["xpix"])
         self._sync_trace_sel()
         self.refresh_overlay()
-
-    def in_buffer(self, si: int, k: int) -> bool:
-        return (si, k) in self.buffer
 
     def _seed_buffer(self):
         """A first ctrl / shift click keeps the current selection grouped,
@@ -2422,10 +2398,6 @@ class ManualRoiWidget:
     def undiscard_derived(self, si: int, k: int):
         self.mark([(si, k)], False)
 
-    def restore_discarded(self, si: int):
-        s = self.derived[si]
-        self.mark([(si, k) for k in sorted(s.discarded)], False)
-
     @property
     def folder(self) -> Path | None:
         """Where this dataset's ROI work is saved (``roi_folder``)."""
@@ -2462,32 +2434,12 @@ class ManualRoiWidget:
             self.store.ny,
             self.store.nx,
         ):
-            zsize = dict(self.plane_axes).get(self.zdim, 1)
-            if (
-                (store.ny, store.nx) == (self.store.ny, self.store.nx)
-                and not store.plane_axes
-                and store.nz == zsize < self.store.nz
-            ):
-                # a store saved before channels keyed planes: z is last in
-                # the flat order, so its planes are the first ones here
-                grown = np.zeros(self.store.labels.shape, np.uint16)
-                grown[: store.nz] = store.labels
-                store = RoiLabelStore(
-                    self.store.nz,
-                    self.store.ny,
-                    self.store.nx,
-                    label_names=store.label_names,
-                    labels=grown,
-                    rois=store.rois,
-                    next_uid=store.next_uid,
-                )
-            else:
-                self.logger.warning(
-                    f"{target} is {store.labels.shape}, data wants "
-                    f"{self.store.labels.shape}; starting fresh"
-                )
-                self.status = "saved labels do not match this data, starting fresh"
-                return
+            self.logger.warning(
+                f"{target} is {store.labels.shape}, data wants "
+                f"{self.store.labels.shape}; starting fresh"
+            )
+            self.status = "saved labels do not match this data, starting fresh"
+            return
         for name in self.store.label_names:
             store.add_label_name(name)
         store.min_pixels = MIN_ROI_PIXELS
@@ -2878,51 +2830,6 @@ class ManualRoiWidget:
         self._trace_threads.append(thread)
         thread.start()
 
-    def trace_full(self, *, z: int | None = None, c: int | None = None, frames=None):
-        """The whole frame as one mask: its mean per frame at the run
-        coordinates (the slice on screen when nothing says otherwise), as a
-        ``FULL_IMAGE`` row of the trace table, replacing an earlier read of
-        the same slice.
-        """
-        z, c, tp = self._coords(z, c, frames)
-        movie = self._frame_select(self.movie(z=z, c=c), tp)
-        if movie is None or int(movie.shape[0]) < 2:
-            self.status = "no (T, Y, X) movie behind this view"
-            return
-        averaged = int(getattr(self.host, "frame_average", 1) or 1)
-        zz, cc = int(movie.z), int(movie.c)
-        label = f"full image {self._axis_tag('z', zz)} {self._axis_tag('c', cc)}"
-        job = get_process_manager().start_job("roi_trace", label)
-        self.status = f"{label} started"
-        mask = np.ones(movie.shape[1:], bool)
-
-        def run():
-            try:
-                y = roi_trace(movie, mask)
-            except Exception as error:  # noqa: BLE001 - reported on the job
-                self.logger.exception(f"{label} failed")
-                job.fail(f"{type(error).__name__}: {error}")
-                self._trace_results.put((None, None, str(error)))
-                return
-            trace = RoiTrace(
-                uid=0,
-                member=slice_name(zz, cc),
-                source=FULL_IMAGE,
-                label=label,
-                z=zz,
-                c=cc,
-                engine="mean",
-                F=np.asarray(y, np.float32),
-                frame_average=averaged,
-                **_frames_of(movie),
-            )
-            self._trace_results.put((None, trace, None))
-            job.done(f"{int(y.size)} frames")
-
-        thread = threading.Thread(target=run, name="roi-trace-full", daemon=True)
-        self._trace_threads.append(thread)
-        thread.start()
-
     def _traces_changed(self):
         """Trace rows moved: drop stale stats and picks, redraw the lines, refresh the peaks."""
         self._trace_stats.clear()
@@ -2985,17 +2892,6 @@ class ManualRoiWidget:
         there is one place to change them rather than two that disagree.
         """
         return roi_runs.masknmf_settings(self.host)
-
-    def suite2p_detection_settings(self) -> dict | None:
-        """The Process tab's suite2p detection section, for unseeded discovery."""
-        s2p = getattr(self.host, "s2p", None)
-        if s2p is None:
-            return None
-        try:
-            return (s2p.to_dict() or {}).get("detection") or None
-        except Exception:
-            self.logger.debug("suite2p settings unreadable", exc_info=True)
-            return None
 
     def _pipeline_summary(self, kind: str) -> tuple[str, str]:
         """``(label, tooltip)`` for what a run of ``kind`` would use."""
@@ -3079,18 +2975,6 @@ class ManualRoiWidget:
             self.status = f"{self.run_prefix}{tag} is still being written"
             return None
         return self.folder / f"{self.run_prefix}{tag}"
-
-    def _next_find_tag(self) -> str:
-        base = self.folder
-        used = {r.tag for r in self.manager.runs}
-        n = 1
-        while True:
-            tag = f"find{n:02d}"
-            if tag not in used and (
-                base is None or not (base / f"{self.run_prefix}{tag}").exists()
-            ):
-                return tag
-            n += 1
 
     def run_rois(
         self,
@@ -3237,106 +3121,6 @@ class ManualRoiWidget:
     def trace_in_view(self):
         """Quick trace every drawn ROI the table currently lists."""
         self.trace_rois(self.listed_drawn())
-
-    def discover_region(self, engine: str):
-        """Detect ROIs inside ``self.region`` on the plane on screen; the
-        region is consumed by the submit.
-        """
-        if self.region is None:
-            self.status = "draw a region with r first"
-            return
-        tag = self._next_find_tag()
-        out_dir = self._run_out_dir(tag)
-        if out_dir is None:
-            return
-        box = self.region
-        z = self.z
-        src = self.movie(z)
-        if src is None:
-            self.status = "no (T, Y, X) movie behind this view"
-            return
-        c = src.c
-        settings = (
-            self.masknmf_settings()
-            if engine == "masknmf"
-            else self.suite2p_detection_settings()
-        )
-        logger = self.logger
-
-        def fn(job):
-            job.set_progress(0.05, f"{engine} in {box[0]}:{box[1]}, {box[2]}:{box[3]}")
-            return discover_rois(
-                src,
-                box,
-                engine=engine,
-                z=z,
-                c=c,
-                out_dir=out_dir,
-                settings=settings,
-                tag=tag,
-                logger=logger,
-            )
-
-        run = RoiRun(
-            kind="discover",
-            tag=tag,
-            description=f"find ({engine}) -> {out_dir.name}",
-            out_root=out_dir,
-            box=box,
-            planes=[z + 1],
-        )
-        self.manager.submit(run, fn, heavy=True)
-        self.clear_region()
-        self._run_error = None
-        self.status = f"{run.description} started"
-
-    def run_full_plane(
-        self, kind: str, *, z: int | None = None, c: int | None = None, frames=None
-    ):
-        """Spawn a full suite2p / masknmf run of one z-plane as a detached
-        worker: the plane, channel and frame window the run coordinates
-        say (the slice on screen when nothing says otherwise). The Process
-        tab's own suite2p / masknmf pipelines cover whole volumes.
-        """
-        if self.fpath is None:
-            self.status = "no data path to run on"
-            return
-        z, c, tp = self._coords(z, c, frames)
-        movie = self.movie(z=z, c=c)
-        if movie is None:
-            self.status = "no (T, Y, X) movie behind this view"
-            return
-        # workers take 1-based plane / channel and a 0-based frame list
-        lsp = to_lsp_kwargs({"Z": [int(movie.z)], "C": [int(movie.c)]})
-        plane = lsp["planes"][0]
-        channel = lsp["channels"][0] if movie.nc > 1 else None
-        selected = self._frame_select(movie, tp)
-        tp_indices = None if selected is movie else selected.t_indices
-        try:
-            args = full_plane_args(
-                kind,
-                self.fpath,
-                plane,
-                self.iw,
-                host=self.host,
-                channel=channel,
-                tp_indices=tp_indices,
-                root=self.root,
-            )
-        except ValueError as e:
-            self.status = str(e)
-            return
-        tag = slice_name(movie.z, movie.c if channel is not None else None)
-        run = RoiRun(kind=kind, tag=tag, description=f"{kind} {tag}", planes=[plane])
-        self.manager.spawn(run, kind, args)
-        if run.pid is None:
-            return
-        run.out_dirs = [Path(args["output_dir"]) / unit_name("plane", plane)]
-        self._registry_extra.append(
-            {"path": str(run.out_dirs[0]), "kind": kind, "discarded": []}
-        )
-        self._save_registry()
-        self.status = f"{run.description} started (pid {run.pid})"
 
     def _poll_jobs(self):
         """Drain finished traces and runs; called once per frame from the panel."""
@@ -3546,11 +3330,6 @@ class ManualRoiWidget:
             picked = self.classes.hotkey_pressed()
             if picked is not None:
                 self.assign_class(picked)
-
-    @property
-    def top_tab(self) -> str | None:
-        """The top strip's selected panel: ``"traces"`` while the plot is up."""
-        return self.strip.active
 
     def _frame(self):
         """Per-frame work the strip runs whatever tab is on top: background
@@ -3866,14 +3645,6 @@ class ManualRoiWidget:
         self.trace_picked = False
         self._plot_lines_key = None
 
-    def _trace_target(self):
-        """``(header, [(label, key), ...])`` the plot shows, or None."""
-        got = self._plot_lines()
-        if got is None:
-            return None
-        header, lines = got
-        return header, [(label, key) for label, key, _rgb in lines]
-
     def _binning_tag(self, key) -> str:
         """`` x10`` when a trace was taken at a different frame averaging than
         the data now shows — those traces are on another time base.
@@ -3935,11 +3706,6 @@ class ManualRoiWidget:
             )
         )
         return " / ".join(label for label in labels if label) or DISPLAY_KINDS["dff"]
-
-    def _plotted_rows(self, lines) -> list[RoiTrace]:
-        return [
-            t for t in (self.traces.get(key) for _label, key in lines) if t is not None
-        ]
 
     def _redisplay(self) -> None:
         """The rows read differently now: drop the cached arrays, redraw the lines."""

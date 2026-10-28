@@ -27,7 +27,7 @@ import numpy as np
 from mbo_utilities import log
 from mbo_utilities.annotation import ROI_COLORS, RoiTrace, class_color
 from mbo_utilities.gui.widgets.process_manager import LocalJob, get_process_manager
-from mbo_utilities.roi_workflow import OUT_PREFIX, RunResult, roi_folder
+from mbo_utilities.roi_workflow import RunResult, roi_folder
 
 __all__ = [
     "DerivedSet",
@@ -46,7 +46,6 @@ __all__ = [
     "footprint_center",
     "footprint_edges",
     "footprint_radius",
-    "full_plane_args",
     "load_run_registry",
     "outline_data",
     "outline_paths",
@@ -54,7 +53,6 @@ __all__ = [
     "result_traces",
     "ring",
     "save_run_registry",
-    "scan_run_dirs",
     "set_color",
 ]
 
@@ -654,169 +652,6 @@ def finished_dirs(out_root, planes=None) -> list[Path]:
     for pat in pats:
         out += [d for d in sorted(root.glob(pat)) if d.is_dir() and run_dir_complete(d)]
     return out
-
-
-def scan_run_dirs(fpath, root=None) -> list[dict]:
-    """Loadable run dirs beside ``fpath`` and in its ROI folder under
-    ``root`` (``roi_folder``), newest first.
-
-    Covers ``rois_<tag>/`` dirs (and their per-plane ``zNN/`` children) and
-    sibling ``zplane*`` trees and masknmf ``*_zplane*`` run folders from full-plane pipelines (including their own
-    ``rois_*`` subsets), vanilla suite2p ``plane*`` / ``suite2p/plane*`` dirs,
-    and the opened dir itself when it holds results. Rows are ``{"path", "kind", "n_rois", "mtime"}``; a
-    dir without ``stat.npy`` + ``ops.npy`` (still being written, say) is
-    not listed.
-    """
-    bases = [roi_folder(fpath)]
-    if root is not None:
-        bases.append(roi_folder(fpath, root))
-    bases = [b for b in bases if b.is_dir()]
-    dirs: list[Path] = []
-
-    def add(d: Path):
-        if (d / "stat.npy").exists() and (d / "ops.npy").exists():
-            dirs.append(d)
-
-    if bases:
-        add(bases[0])  # the opened data may itself sit in a result dir
-    for d in sorted(d for b in bases for d in b.glob(f"{OUT_PREFIX}*")):
-        if not d.is_dir():
-            continue
-        add(d)
-        for child in sorted(d.glob("z[0-9]*")):
-            if child.is_dir():
-                add(child)
-    for d in sorted(d for b in bases for d in b.glob("*zplane*")):
-        if not d.is_dir():
-            continue
-        add(d)
-        for sub in sorted(d.glob(f"{OUT_PREFIX}*")):
-            if sub.is_dir():
-                add(sub)
-    for pattern in ("plane[0-9]*", "suite2p/plane[0-9]*"):
-        for d in sorted(d for b in bases for d in b.glob(pattern)):
-            if d.is_dir():
-                add(d)
-
-    rows = []
-    for d in dirs:
-        try:
-            ops = np.load(d / "ops.npy", allow_pickle=True).item()
-        except Exception:
-            continue
-        n = ops.get("n_rois")
-        if n is None:
-            try:
-                n = len(np.load(d / "stat.npy", allow_pickle=True))
-            except Exception:
-                n = 0
-        rows.append(
-            {
-                "path": d,
-                "kind": _kind_of(ops),
-                "n_rois": int(n),
-                "mtime": (d / "ops.npy").stat().st_mtime,
-            }
-        )
-    # results files (mbo_utilities.results) beside the data, in a run dir, or in a PF folder
-    from mbo_utilities.results import results_summary
-
-    for pattern in ("*.zarr", f"{OUT_PREFIX}*/*.zarr", "*zplane*/*.zarr", "PF/*.zarr"):
-        for z in sorted(z for b in bases for z in b.glob(pattern)):
-            summary = results_summary(z)
-            if summary is None:
-                continue
-            rows.append(
-                {
-                    "path": z,
-                    "kind": summary["pipeline"],
-                    "n_rois": int(summary["n_rois"]),
-                    "mtime": (z / "zarr.json").stat().st_mtime,
-                }
-            )
-    rows.sort(key=lambda r: r["mtime"], reverse=True)
-    return rows
-
-
-def full_plane_args(
-    kind: str,
-    fpath,
-    plane_1based: int,
-    iw,
-    host=None,
-    channel: int | None = None,
-    tp_indices=None,
-    root=None,
-) -> dict:
-    """``task_suite2p`` / ``task_masknmf`` worker args for one plane.
-
-    Parameters
-    ----------
-    kind : {"suite2p", "masknmf"}
-        Which pipeline to run.
-    fpath : path-like
-        The data to run on; outputs go to its ``roi_folder`` under ``root``
-        (beside it when None).
-    plane_1based : int
-        The z-plane to run, 1-based.
-    iw : MboNDViewer
-        The viewer, for its reader settings.
-    host : PreviewDataWidget, optional
-        The widget holding the Run tab's live settings. Given one, the run
-        uses exactly the parameters configured there - including the
-        Registration / Detection skip / run / force toggles - instead of the
-        pipeline's defaults.
-    channel : int, optional
-        1-based channel to read; None reads the source as is.
-    tp_indices : list of int, optional
-        0-based frames to read; None reads every frame.
-
-    Returns
-    -------
-    dict
-        Worker args for the task named by ``kind``.
-    """
-    if fpath is None:
-        raise ValueError("no data path to run a full plane on")
-    if kind not in ("suite2p", "masknmf"):
-        raise ValueError(f"unknown pipeline {kind!r}")
-    from mbo_utilities.reader import widget_reader_kwargs
-
-    args = {
-        "input_path": str(fpath),
-        "output_dir": str(roi_folder(fpath, root)),
-        "planes": [int(plane_1based)],
-        "reader_kwargs": widget_reader_kwargs(iw),
-    }
-    if channel is not None:
-        args["channel"] = int(channel)
-    if tp_indices is not None:
-        args["tp_indices"] = [int(t) for t in tp_indices]
-        args["selected_planes_0based"] = [int(plane_1based) - 1]
-    if kind == "masknmf":
-        args["settings"] = masknmf_settings(host) or _default_masknmf_settings()
-        return args
-    s2p = getattr(host, "s2p", None)
-    # This button exists to find ROIs on this plane, so say so outright.
-    # lsp merges the source plane dir's ops.npy under the caller's ops, and
-    # a dir written by a registration pass carries roidetect=0 - which wins
-    # over anything the caller leaves unspelled and silently turns the run
-    # into "regenerate figures only".
-    detect = 1 if s2p is None else int(bool(getattr(s2p, "do_detection", 1)))
-    args["ops"] = {"roidetect": detect}
-    # roidetect alone is not enough: lsp skips detection when the plane dir already
-    # holds a stat.npy, which staging copies in. force_reg stays the tri-state.
-    args["s2p_settings"] = {
-        "force_reg": s2p is not None and int(getattr(s2p, "do_registration", 1)) == 2,
-        "force_detect": bool(detect),
-    }
-    if s2p is None:
-        return args
-    args["settings"] = s2p.to_dict()
-    db = getattr(host, "s2p_db", None)
-    if db is not None:
-        args["db"] = db.to_dict()
-    return args
 
 
 def _default_masknmf_settings() -> dict:

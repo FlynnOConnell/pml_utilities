@@ -455,10 +455,6 @@ def test_results_files_are_run_dirs_to_the_roi_widget(tmp_path):
     assert not rr.run_dir_complete(beside / "zplane09") and not rr.run_dir_complete(
         tmp_path
     )
-    rows = {r["path"]: r for r in rr.scan_run_dirs(tmp_path / "raw.tif")}
-    assert set(rows) == {run, beside, pf}
-    assert rows[beside]["kind"] == "suite2p" and rows[beside]["n_rois"] == 2
-    assert rows[pf]["kind"] == "vnoiser" and rows[pf]["n_rois"] == 2
 
 
 def test_imread_does_not_open_a_results_file_as_an_image(tmp_path):

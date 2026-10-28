@@ -1490,50 +1490,6 @@ def task_generate_bigstitcher(args: dict, logger: logging.Logger) -> None:
 
 
 # Registry
-def task_roi_workflow(args: dict, logger: logging.Logger) -> None:
-    """Register (suite2p | masknmf | none) then extract, demix, or discover ROIs.
-
-    ``args`` mirrors ``mbo_utilities.roi_workflow.run``: ``input_path``,
-    ``output_dir``, ``register_method``, ``process`` (``"extract"``,
-    ``"demix"``, or ``"discover"``, which reads ``box`` and ``engine`` from
-    ``process_settings``), ``rois`` (labels zarr
-    path or None for the store beside the input), ``selection``
-    (``{"planes": [...0-based], "indices": [...], "labels": [...]}``),
-    ``planes`` (1-based), ``register_settings``, ``process_settings``,
-    ``metadata``, ``tp_indices``, ``channel``, ``force``, ``tag``.
-    """
-    from mbo_utilities.roi_workflow import run as roi_run
-
-    output_dir = args.get("output_dir")
-    monitor = TaskMonitor(output_dir or ".", uuid=args.get("_uuid"))
-    monitor.update(0.02, "Starting ROI workflow...")
-    try:
-        outputs = roi_run(
-            args["input_path"],
-            output_dir,
-            register_method=args.get("register_method", "suite2p"),
-            process=args.get("process", "extract"),
-            rois=args.get("rois"),
-            selection=args.get("selection"),
-            planes=args.get("planes"),
-            register_settings=args.get("register_settings"),
-            process_settings=args.get("process_settings"),
-            metadata=args.get("metadata"),
-            frame_indices=args.get("tp_indices"),
-            channel=args.get("channel"),
-            force=bool(args.get("force", False)),
-            tag=args.get("tag", "manual"),
-            logger=logger,
-        )
-        monitor.finish(f"ROI workflow wrote {len(outputs)} plane(s).")
-        for z, out in sorted(outputs.items()):
-            logger.info(f"roi_workflow: z={z} -> {out}")
-    except Exception as e:
-        monitor.fail(str(e), details={"traceback": traceback.format_exc()})
-        logger.exception(f"roi_workflow failed: {e}")
-        raise
-
-
 def task_vnoiser(args: dict, logger: logging.Logger) -> None:
     """
     Vnoiser pipeline task: AOD ROI units of a .mesc to a PF folder.
@@ -1609,7 +1565,6 @@ TASKS = {
     "suite2p": task_suite2p,
     "masknmf": task_masknmf,
     "vnoiser": task_vnoiser,
-    "roi_workflow": task_roi_workflow,
     "isoview": task_isoview,
     "isoview_correct": task_correct_stack,
     "isoview_raw_projections": task_isoview_raw_projections,
