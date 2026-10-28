@@ -915,12 +915,32 @@ Pinned by `tests/test_results.py`, `tests/test_suite2p_results.py`,
 Hand-drawn ROIs are a session model in `mbo_utilities/annotation/`, GUI-free and
 observable (`events.Observable`, after fastplotlib's `GraphicFeature`: a view
 subscribes with `add_event_handler(fn, "rois")` and redraws from the event). The
-ROI widget (`gui/manual_roi.py`) is one view of a `RoiModel` and redraws from
-its events.
+ROI widget (`gui/manual_roi.ManualRoiWidget`) is one view of a `RoiModel` and
+redraws from its events. The widget is the glue (`__init__`, the slider and
+playhead wiring, `add_roi`, loading runs as derived sets, promotion, the rois
+zarr persistence) over one mixin per concern in `gui/roi/`:
+
+| Module | Mixin | Holds |
+|--------|-------|-------|
+| `_shared` | | the constants, `ROI_KEYS` / `KEYBINDS`, the help text, `_PlaneOrder`, `_RunSpec`, `unit_key`, `help_markdown` |
+| `keys` | `KeysMixin` | `handle_keys`, `_keys_live`, the per-frame `_frame` hook |
+| `overlay` | `OverlayMixin` | the mask / contour overlay, region drawing, pointer picking, `set_color_by` |
+| `selection` | `SelectionMixin` | selection, the group buffer, labeling, marks, delete, undo |
+| `jobs` | `JobsMixin` | quick and pixel traces (`measure_mean`), `run_rois` / `_run_job`, job polling, run adoption |
+| `traces_panel` | `TracesPanelMixin` | `draw_traces`, `_sync_plot`, the motion and behavior rows, kind and dF/F settings |
+| `trace_table` | `TraceTableMixin` | `draw_trace_table` and its rows, cells, sorting |
+| `curation` | `CurationMixin` | `draw_rois`, `draw_tab`, the labels, on-disk and exchange rows, the filter, `exchange` |
+
+A mixin has no state of its own and no `__init__`; every attribute is the
+widget's. A test that patches a module global (`measure_mean`, `demix_rois`)
+patches it on the mixin's module (`gui.roi.jobs`), where the call lives.
+Names other modules import (`PANEL_HEIGHT`, `KEYBINDS`, `attach_roi_widget`,
+`labels_path`, ...) are re-exported from `gui/manual_roi` and listed in its
+`__all__`.
 
 | Object | Holds | Emits |
 |--------|-------|-------|
-| `RoiLabelStore` | the `(P, Y, X)` uint16 label volume, one `RoiRecord` per ROI (`plane`, `area`, `class_index`, `note`, `uid`, `source`, `color`), the label-name set, `plane_axes` | `rois` with `action` `add` `delete` `clear` `class` `note` `color` `labels` |
+| `RoiLabelStore` | one `RoiRecord` per ROI (its flat `pixels` and `weights` on one `plane`, `area`, `class_index`, `note`, `uid`, `source`, `color`, the `polygon` as drawn), so ROIs may overlap; `label_image(plane)` derived on demand; the label-name set, `plane_axes` | `rois` with `action` `add` `delete` `clear` `restore` `class` `note` `color` `labels` `tint` |
 | `RoiTraceTable` | one `RoiTrace` per measurement | `traces` with `action` `add` `remove` `clear` |
 | `RoiModel` | the two above plus the slider position (`view`, `plane`, `z`, `c`) | the two above forwarded, plus `view` when the plane changes |
 
@@ -1040,8 +1060,23 @@ its events.
   is added (its mean at the run coordinates); no tab is selected for the user. The
   RUN section, `shift+t` and the Process tab run ROIs the way the widget is set
   (`engine`, `run_where`, `run_frames`, `run_tag`).
+- **Fiji and CSV exchange.** `annotation/imagej.py` (`roifile` is a base
+  dependency) is the one place ROIs and traces leave or enter in another
+  tool's format: `export_roiset` writes every drawn ROI as its polygon (a
+  promoted mask's outline, `mask_outline`) into a `RoiSet.zip` Fiji's ROI
+  Manager opens, `c` and `z` stored 1-based and `t_position` 0 so it shows on
+  every frame; `import_roiset` fills each polygon on the plane its positions
+  name and keeps the ImageJ name as the note; `export_label_tiff` is the
+  label image as an ImageJ hyperstack (`slices` and `channels` from
+  `plane_axes`); `export_traces` is one CSV, `time_s` or `frame` then one
+  column per row named by `RoiTrace.name`, each placed at its frame window;
+  `export_footprints_npz` is masknmf's `spatial_footprints` seed file. The
+  ROIs tab's exchange row (**export RoiSet**, **import RoiSet**, **export
+  traces**) runs them through `ManualRoiWidget.exchange(kind, path)` after a
+  native file dialog; an import is one undo step. Nothing else in `gui`
+  imports `roifile` or writes a TIFF of ROIs.
 - **Any slice.** The viewer's sliders are the array's T, C, Z axes by position
-  (`manual_roi.slider_roles`), whatever the array labels them (`Timepoint` /
+  (`_dim_labels.slider_roles`), whatever the array labels them (`Timepoint` /
   `Channel` / `ROI` for a MESc AOD unit, `Tile` / `View` for IsoView); the widget
   hands the store `axis_roles = {"z": <slider>, "c": <slider>}` so `roi_z` / `roi_c`
   and every run decode the right slice. Every `LazyArray` is indexable in y and x
@@ -1231,7 +1266,7 @@ its events.
   and runs under its unit and rebuilds the widget for the incoming one, so
   the ROIs, runs and traces on screen are the shown recording's.
 
-Pinned by `tests/test_roi_model.py`, `tests/test_playhead.py`, `tests/test_trace_display.py`, `tests/test_manual_roi.py`
+Pinned by `tests/test_roi_model.py`, `tests/test_playhead.py`, `tests/test_trace_display.py`, `tests/test_imagej.py`, `tests/test_manual_roi.py`
 (`TestRunCoordinates`, `TestAutoTrace`, `TestRoiPipelineTab`, `TestPlayheadWiring`,
 `TestColorBy`, `TestFullImage`, `TestSliderRoles`), `tests/test_roi_runs.py`.
 

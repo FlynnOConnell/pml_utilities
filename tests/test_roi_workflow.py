@@ -167,17 +167,12 @@ def test_plane_movie_crop_shifts_keys():
         c[0, 6, 0]
 
 
-def test_feather_mask_and_weighted_trace():
+def test_feather_mask():
     mask = np.zeros((9, 9), bool)
     mask[2:7, 2:7] = True
     w = rw.feather_mask(mask, edge_width=2)
     assert w[4, 4] == 1.0 and 0 < w[2, 2] < 1.0
     assert w[~mask].max() == 0.0
-    mov = np.zeros((3, 1, 1, 9, 9), np.float32)
-    mov[:, 0, 0, 4, 4] = 90.0  # centre-only signal
-    plain = rw.roi_trace(mov, mask)
-    weighted = rw.roi_trace(mov, mask, weights=w)
-    assert weighted[0] > plain[0]  # the feather emphasises the centre
 
 
 def test_shift_matches_numpy_on_a_crop():
@@ -225,7 +220,7 @@ def test_plane_movie_lower_ranks():
     assert rw.as_movie(m) is m
 
 
-def test_roi_and_pixel_traces_read_only_the_bbox():
+def test_measure_mean_reads_only_the_bbox():
     T = 40
     data = np.zeros((T, 1, 1, 20, 30), np.float32)
     data[:, 0, 0, 5:8, 10:14] = np.arange(T)[:, None, None]
@@ -233,15 +228,24 @@ def test_roi_and_pixel_traces_read_only_the_bbox():
     arr = _SpatialOnly(data)
     mask = np.zeros((20, 30), bool)
     mask[5:8, 10:14] = True
-    tr = rw.roi_trace(arr, mask, batch=7)
-    expected = data[:, 0, 0][:, mask].mean(axis=1)
-    np.testing.assert_allclose(tr, expected)
+    F, Fneu = rw.measure_mean(rw.as_movie(arr), [mask], neuropil=False, batch=7)
+    assert Fneu is None and F.shape == (1, T)
+    np.testing.assert_allclose(F[0], data[:, 0, 0][:, mask].mean(axis=1), rtol=1e-5)
     assert all(k[3] == slice(5, 8) and k[4] == slice(10, 14) for k in arr.reads)
-    px = rw.pixel_trace(arr, 6, 11, t=slice(0, 10, 2))
-    np.testing.assert_allclose(px, np.arange(0, 10, 2) + 100)
-    assert arr.reads[-1][3] == 6 and arr.reads[-1][4] == 11
-    with pytest.raises(IndexError):
-        rw.pixel_trace(arr, 50, 0)
+    # the ring reads around the mask and never inside another roi
+    other = np.zeros((20, 30), bool)
+    other[8:10, 10:14] = True
+    data[:, 0, 0, 8:10, 10:14] = 1000
+    F, Fneu = rw.measure_mean(
+        rw.as_movie(_SpatialOnly(data)),
+        [mask],
+        mask | other,
+        inner=1,
+        outer=3,
+        min_npix=4,
+    )
+    assert Fneu.shape == (1, T) and Fneu.max() < 1000
+    np.testing.assert_allclose(F[0], data[:, 0, 0][:, mask].mean(axis=1), rtol=1e-5)
 
 
 def test_extract_from_in_memory_array(tmp_path, store):
@@ -442,17 +446,17 @@ def test_pmd_crop_matches_full_reconstruction():
         rw.pmd_crop(pmd, 3, 15, 0, 5)
 
 
-def test_roi_trace_factorized_single_read():
+def test_measure_mean_factorized_single_read():
     if not (_importable("masknmf") and _importable("torch")):
         pytest.skip("masknmf/torch not importable")
     pmd = _toy_pmd()
     assert rw._factorized(pmd) and not rw._factorized(pmd[:])
     mask = _disc(6, 5, 3, shape=pmd.shape[1:])
     np.testing.assert_allclose(
-        rw.roi_trace(pmd, mask), rw.roi_trace(pmd[:], mask), rtol=1e-5, atol=1e-5
-    )
-    np.testing.assert_allclose(
-        rw.pixel_trace(pmd, 6, 5), rw.pixel_trace(pmd[:], 6, 5), rtol=1e-5, atol=1e-5
+        rw.measure_mean(rw.as_movie(pmd), [mask], neuropil=False)[0],
+        rw.measure_mean(rw.as_movie(pmd[:]), [mask], neuropil=False)[0],
+        rtol=1e-5,
+        atol=1e-5,
     )
 
 

@@ -22,6 +22,13 @@ from mbo_utilities.annotation.display import (
     y_label,
 )
 from mbo_utilities.annotation.events import ModelEvent, Observable
+from mbo_utilities.annotation.imagej import (
+    export_footprints_npz,
+    export_label_tiff,
+    export_roiset,
+    export_traces,
+    import_roiset,
+)
 from mbo_utilities.annotation.model import COLUMNS, RoiModel, RunTarget
 from mbo_utilities.annotation.ngff import (
     SAVED_SOURCES,
@@ -71,6 +78,11 @@ __all__ = [
     "class_color",
     "display_trace",
     "displayed_kind",
+    "export_footprints_npz",
+    "export_label_tiff",
+    "export_roiset",
+    "export_traces",
+    "import_roiset",
     "register_trace_profile",
     "trace_key",
     "trace_profile",

@@ -978,6 +978,43 @@ class TestPersistence:
             iw.close()
 
 
+class TestExchange:
+    """The on-disk row's Fiji and CSV exchange runs through ``exchange``."""
+
+    def test_rois_round_trip_through_a_roiset(self, widget, tmp_path):
+        import roifile
+
+        widget.add_roi(square(10, 10, 9))
+        widget.add_roi(square(30, 30, 7))
+        widget.exchange("export_roiset", tmp_path / "RoiSet.zip")
+        assert len(roifile.roiread(tmp_path / "RoiSet.zip")) == 2
+        assert "exported 2 ROIs" in widget.status
+        before = [r.uid for r in widget.store.rois]
+        widget.exchange("import_roiset", tmp_path / "RoiSet.zip")
+        assert widget.n_rois == 4 and widget.selected == 3
+        assert widget.store.rois[2].source == "imagej"
+        assert widget.store.mask(2).sum() == widget.store.mask(0).sum()
+        widget.undo()
+        assert [r.uid for r in widget.store.rois] == before
+
+    def test_traces_export_as_a_csv(self, widget, tmp_path):
+        import csv
+
+        widget.add_roi(square(10, 10, 9))
+        widget.quick_trace(0)
+        pump(widget)
+        widget.exchange("export_traces", tmp_path / "traces.csv")
+        with open(tmp_path / "traces.csv") as f:
+            got = list(csv.reader(f))
+        assert got[0][0] == "frame" and len(got[0]) == 2
+        assert len(got) == 1 + widget.iw.data[0].shape[0]
+
+    def test_a_failed_export_lands_in_the_status(self, widget, tmp_path):
+        widget.add_roi(square(10, 10, 9))
+        widget.exchange("export_roiset", tmp_path / "missing" / "RoiSet.zip")
+        assert "export roiset failed" in widget._run_error
+
+
 def _read_only():
     raise OSError("read only")
 
@@ -1083,17 +1120,27 @@ class TestTraces:
         uid = widget.store.rois[0].uid
         widget.quick_trace(0)
         pump(widget)
-        from mbo_utilities.roi_workflow import feather_mask
-
         (trace,) = widget.traces.for_roi(uid)
         data = np.asarray(widget.iw.data[0])
         mask = widget.labels == 1
-        w = feather_mask(mask)[mask]
-        expected = data[:, mask] @ (w / w.sum())
-        np.testing.assert_allclose(trace.F, expected, rtol=1e-5)
+        np.testing.assert_allclose(trace.F, data[:, mask].mean(axis=1), rtol=1e-5)
+        assert trace.Fneu is not None and trace.Fneu.shape == trace.F.shape
         assert trace.key == ("roi", uid, 0, 0, "mean") and trace.source == "quick"
         assert widget.trace_uid == uid
         assert widget.has_traces()
+
+    def test_a_quick_trace_and_a_mean_run_agree(self, widget, tmp_path):
+        from mbo_utilities.roi_workflow import extract_rois
+
+        widget.add_roi(square(10, 10, 9))
+        widget.add_roi(square(16, 10, 9))  # a neighbour the ring must avoid
+        uid = widget.store.rois[0].uid
+        widget.quick_trace(0)
+        pump(widget)
+        (quick,) = widget.traces.for_roi(uid)
+        unit = extract_rois(widget.iw.data[0], widget.store, [0], z=0, engine="mean")
+        np.testing.assert_allclose(quick.F, unit.traces["raw"][0], rtol=1e-6)
+        np.testing.assert_allclose(quick.Fneu, unit.traces["neuropil"][0], rtol=1e-6)
 
     def test_two_rois_trace_at_once(self, widget):
         widget.add_roi(square(4, 4, 9))
@@ -1113,12 +1160,9 @@ class TestTraces:
         zwidget.iw.indices["z"] = 0
         zwidget.quick_trace(0)
         pump(zwidget)
-        from mbo_utilities.roi_workflow import feather_mask
-
         data = np.asarray(zwidget.iw.data[0])
         mask = zwidget.store.mask(0)
-        w = feather_mask(mask)[mask]
-        expected = data[:, 2][:, mask] @ (w / w.sum())
+        expected = data[:, 2][:, mask].mean(axis=1)
         uid = zwidget.store.rois[0].uid
         (trace,) = zwidget.traces.for_roi(uid)
         np.testing.assert_allclose(trace.F, expected, rtol=1e-5)
@@ -1147,10 +1191,10 @@ class TestTraces:
         assert "frames" in new[0].status_message
 
     def test_a_failure_is_reported_not_swallowed(self, widget, monkeypatch):
-        import mbo_utilities.gui.manual_roi as mr
+        import mbo_utilities.gui.roi.jobs as jobs
         from mbo_utilities.gui.widgets.process_manager import get_process_manager
 
-        monkeypatch.setattr(mr, "roi_trace", lambda *a, **k: 1 / 0)
+        monkeypatch.setattr(jobs, "measure_mean", lambda *a, **k: 1 / 0)
         pm = get_process_manager()
         before = {j.job_id for j in pm.get_jobs()}
         widget.add_roi(square(10, 10, 9))
@@ -2651,6 +2695,19 @@ class TestTracePlotView:
         expected = tuple(int(round(c * 255)) for c in GROUP_COLORS[1])
         assert tuple(widget.overlay.data.value[6, 20, :3]) == expected
 
+    def test_the_x_zoom_survives_a_relabel(self, widget):
+        rows = self._two_traces(widget)
+        widget.select_trace(rows[0])
+        self._draw(widget, 2)
+        plot = widget.trace_plot
+        assert plot.panels == ("dF/F (%)",)
+        plot._x_span = (1.0, 3.0)
+        widget.kind = "raw"  # another y label: the panel is renamed
+        self._draw(widget, 2)
+        assert widget.trace_plot is plot and plot.panels == ("F (a.u.)",)
+        assert plot._lines[plot.panels[-1]]
+        assert plot._x_span == (1.0, 3.0)
+
     def test_show_traces_off_only_highlights(self, widget):
         rows = self._two_traces(widget)
         widget.select_trace(rows[0])
@@ -2696,8 +2753,15 @@ class TestTracePlotView:
         (AGENTS.md §7.6, Trace display).
         """
         rows = [widget.traces.get(k) for k in self._two_traces(widget)]
-        # quick traces are mean-engine rows without a ring: no neuropil kinds
-        assert widget.kind_options(rows) == ("dff", "zscore", "raw")
+        # quick traces are mean-engine rows with a neuropil ring, the same
+        # measurement as a mean run, so the neuropil kinds are on offer
+        assert widget.kind_options(rows) == (
+            "dff",
+            "zscore",
+            "raw",
+            "neuropil",
+            "raw - neuropil",
+        )
         assert widget.plot_y_label(rows) == "dF/F (%)"
         s2p = RoiTrace(
             uid=0,
@@ -2911,7 +2975,7 @@ class TestPipelineParams:
             seen.update(kwargs)
             return None
 
-        monkeypatch.setattr("mbo_utilities.gui.manual_roi.demix_rois", fake_demix)
+        monkeypatch.setattr("mbo_utilities.gui.roi.jobs.demix_rois", fake_demix)
         widget.fpath = tmp_path / "movie.tif"
         widget.host = _StubHost(masknmf=_StubSettings({"runtime": {"device": "cpu"}}))
         widget.engine = "masknmf"
@@ -2991,8 +3055,6 @@ class TestRunCoordinates:
     """
 
     def test_a_mask_drawn_on_one_channel_traces_the_other(self, cwidget):
-        from mbo_utilities.roi_workflow import feather_mask
-
         cwidget.iw.indices["c"] = 0
         cwidget.iw.indices["z"] = 2
         cwidget.add_roi(square(10, 10, 9))
@@ -3002,17 +3064,16 @@ class TestRunCoordinates:
         pump(cwidget)
         data = np.asarray(cwidget.iw.data[0])
         mask = cwidget.store.mask(0)
-        w = feather_mask(mask)[mask]
         rows = {t.key: t for t in cwidget.traces.for_roi(uid)}
         assert set(rows) == {("roi", uid, 2, 0, "mean"), ("roi", uid, 2, 1, "mean")}
         np.testing.assert_allclose(
             rows[("roi", uid, 2, 1, "mean")].F,
-            data[:, 1, 2][:, mask] @ (w / w.sum()),
+            data[:, 1, 2][:, mask].mean(axis=1),
             rtol=1e-5,
         )
         np.testing.assert_allclose(
             rows[("roi", uid, 2, 0, "mean")].F,
-            data[:, 0, 2][:, mask] @ (w / w.sum()),
+            data[:, 0, 2][:, mask].mean(axis=1),
             rtol=1e-5,
         )
         assert cwidget._trace_cells(("roi", uid, 2, 1, "mean"))[1:4] == (
@@ -3049,14 +3110,9 @@ class TestRunCoordinates:
         pump(widget)
         (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
         assert trace.frames == (1, 4, 1) and trace.n_frames == 3
-        from mbo_utilities.roi_workflow import feather_mask
-
         data = np.asarray(widget.iw.data[0])
         mask = widget.labels == 1
-        w = feather_mask(mask)[mask]
-        np.testing.assert_allclose(
-            trace.F, data[1:4][:, mask] @ (w / w.sum()), rtol=1e-5
-        )
+        np.testing.assert_allclose(trace.F, data[1:4][:, mask].mean(axis=1), rtol=1e-5)
         assert "t2-4" in widget._trace_label(trace)
         # a strided selection: one sample per two frames, the axis says so
         widget.run_tp = [0, 2, 4]
@@ -3066,7 +3122,7 @@ class TestRunCoordinates:
         (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
         assert trace.frames == (0, 5, 2) and trace.n_frames == 3
         np.testing.assert_allclose(
-            trace.F, data[[0, 2, 4]][:, mask] @ (w / w.sum()), rtol=1e-5
+            trace.F, data[[0, 2, 4]][:, mask].mean(axis=1), rtol=1e-5
         )
         assert widget.trace_axis(trace).per_second == pytest.approx(0.5)
         assert "t1-5-2" in widget._trace_label(trace)
@@ -3139,7 +3195,8 @@ class TestHelpAndKeysAreAppWide:
     """
 
     def test_the_roi_guide_is_markdown_for_the_help_viewer(self):
-        from mbo_utilities.gui.manual_roi import _HELP_STEPS, help_markdown
+        from mbo_utilities.gui.manual_roi import help_markdown
+        from mbo_utilities.gui.roi._shared import _HELP_STEPS
 
         doc = help_markdown()
         assert doc.startswith("## ROI Labeling")
@@ -3346,7 +3403,7 @@ class TestFollowModeAdvances:
         labeled and the cursor is already on the next one; stepping past it
         skipped every other ROI.
         """
-        from mbo_utilities.gui.manual_roi import _PlaneOrder
+        from mbo_utilities.gui.roi._shared import _PlaneOrder
 
         labels = np.array([-1, -1, -1], np.int64)
         order = _PlaneOrder({"source": np.zeros(3, np.int64)}, labels, 3)
@@ -3626,11 +3683,8 @@ class TestSliderRoles:
             (trace,) = w.traces.for_roi(w.store.rois[0].uid)
             expected = np.asarray(data)[:, 1, 2]
             mask = w.store.mask(0)
-            from mbo_utilities.roi_workflow import feather_mask
-
-            wts = feather_mask(mask)[mask]
             np.testing.assert_allclose(
-                trace.F, expected[:, mask] @ (wts / wts.sum()), rtol=1e-5
+                trace.F, expected[:, mask].mean(axis=1), rtol=1e-5
             )
             assert w._trace_label(trace) == "mean"
             other = RoiTrace(

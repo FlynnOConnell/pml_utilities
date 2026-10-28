@@ -68,8 +68,7 @@ __all__ = [
     "as_movie",
     "detection_algo",
     "plane_masks",
-    "roi_trace",
-    "pixel_trace",
+    "measure_mean",
     "open_registered",
     "plane_index",
     "labels_path",
@@ -393,122 +392,6 @@ def _factorized(arr) -> bool:
     return callable(getattr(arr, "getitem_tensor", None))
 
 
-def roi_trace(
-    source,
-    mask: np.ndarray,
-    t=slice(None),
-    *,
-    z: int = 0,
-    c: int = 0,
-    batch: int = 500,
-    weights: np.ndarray | None = None,
-) -> np.ndarray:
-    """Mean over ``mask`` per frame, reading only the mask's bounding box.
-
-    Parameters
-    ----------
-    source
-        Anything :func:`as_movie` accepts - a lazy array, a numpy array, a
-        ``PlaneMovie`` or an ``imread``-able path.
-    mask : np.ndarray
-        ``(Y, X)`` boolean mask.
-    t : slice or int, optional
-        Frames to read; all by default.
-    z, c : int, optional
-        Plane and channel passed to :func:`as_movie`.
-    batch : int, optional
-        Frames per read on a raw movie, so a long recording never lands in
-        RAM at once. A masknmf factorized array (``CompressionArray``, ``SignalsArray``,
-        ``ResidualArray``, ...) reconstructs only the bounding box, so it is
-        read in a single call regardless of ``batch``.
-    weights : np.ndarray, optional
-        Full-frame weight image (e.g. :func:`feather_mask`); makes the trace
-        a weighted mean over the mask's pixels.
-
-    Returns
-    -------
-    np.ndarray
-        ``(num_frames,)`` float32 trace.
-    """
-    movie = as_movie(source, z=z, c=c)
-    if _factorized(movie.arr):
-        batch = movie.shape[0]
-    y0, y1, x0, x1 = _bbox(mask)
-    m = np.asarray(mask, bool)[y0:y1, x0:x1]
-    w = None
-    if weights is not None:
-        w = np.asarray(weights, np.float32)[y0:y1, x0:x1][m]
-        w = w / (float(w.sum()) or 1.0)
-    lo, hi, step = (
-        t.indices(movie.shape[0]) if isinstance(t, slice) else (int(t), int(t) + 1, 1)
-    )
-    frames = range(lo, hi, step)
-    out = np.empty(len(frames), np.float32)
-    pos = 0
-    for b0 in range(0, len(frames), batch):
-        sel = frames[b0 : b0 + batch]
-        blk = movie[slice(sel.start, sel.stop, sel.step), y0:y1, x0:x1].reshape(
-            -1, y1 - y0, x1 - x0
-        )
-        picked = blk[:, m]
-        out[pos : pos + blk.shape[0]] = (
-            picked @ w if w is not None else picked.mean(axis=1)
-        )
-        pos += blk.shape[0]
-    return out
-
-
-def pixel_trace(
-    source,
-    row: int,
-    col: int,
-    t=slice(None),
-    *,
-    z: int = 0,
-    c: int = 0,
-    batch: int = 2000,
-) -> np.ndarray:
-    """One pixel's value per frame - ``movie[t, row, col]``.
-
-    Parameters
-    ----------
-    source
-        Anything :func:`as_movie` accepts.
-    row, col : int
-        Pixel coordinates in the frame.
-    t : slice or int, optional
-        Frames to read; all by default.
-    z, c : int, optional
-        Plane and channel passed to :func:`as_movie`.
-    batch : int, optional
-        Frames per read on a raw movie; a masknmf factorized array is read
-        in a single call.
-
-    Returns
-    -------
-    np.ndarray
-        ``(num_frames,)`` float32 trace.
-    """
-    movie = as_movie(source, z=z, c=c)
-    if _factorized(movie.arr):
-        batch = movie.shape[0]
-    nt, ny, nx = movie.shape
-    if not (0 <= row < ny and 0 <= col < nx):
-        raise IndexError(f"pixel ({row}, {col}) outside {ny}x{nx}")
-    lo, hi, step = t.indices(nt) if isinstance(t, slice) else (int(t), int(t) + 1, 1)
-    frames = range(lo, hi, step)
-    out = np.empty(len(frames), np.float32)
-    pos = 0
-    for b0 in range(0, len(frames), batch):
-        sel = frames[b0 : b0 + batch]
-        blk = movie[slice(sel.start, sel.stop, sel.step), int(row), int(col)].reshape(
-            -1
-        )
-        out[pos : pos + blk.size] = blk
-        pos += blk.size
-    return out
-
-
 def open_registered(plane_dir: str | Path) -> tuple[np.memmap, dict]:
     """``(movie (T, Y, X) int16 memmap, ops)`` for a suite2p-shaped plane dir.
 
@@ -809,26 +692,36 @@ def _neuropil_annulus(
         outer *= 2
 
 
-def _extract_mean(
+def measure_mean(
     movie: PlaneMovie,
     masks: list[np.ndarray],
-    exclude: np.ndarray,
+    exclude: np.ndarray | None = None,
     *,
-    neuropil,
-    inner,
-    outer,
-    min_npix,
-    batch,
-):
-    """Streaming mean extraction: ``(F, Fneu)`` as ``(K, T)`` float32,
-    ``Fneu`` None without a neuropil.
+    neuropil: bool = True,
+    inner: int = 2,
+    outer: int = 8,
+    min_npix: int = 350,
+    batch: int = 500,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """``(F, Fneu)`` as ``(K, T)`` float32: the uniform mean of each mask's
+    pixels per frame and of a neuropil ring around it that avoids every
+    pixel of ``exclude`` (every drawn ROI on the plane; the masks themselves
+    when None); ``Fneu`` is None without a neuropil.
 
-    Reads only the union bounding box of the selected ROIs (and their
-    neuropil rings), in ``batch``-frame blocks - the cheap path on a
-    spatially lazy source, and no worse than full frames on one that isn't.
+    The one measurement behind a ``mean`` row: the quick trace, the pixel
+    average (no ring) and the ``mean`` engine all call it, so a row is the
+    same numbers whoever made it. Reads only the union bounding box of the
+    masks and rings, in ``batch``-frame blocks (one read on a masknmf
+    factorized array, which reconstructs just the crop).
     """
     T, ly, lx = movie.shape
     K = len(masks)
+    if _factorized(movie.arr):
+        batch = T
+    if exclude is None:
+        exclude = np.zeros((ly, lx), bool)
+        for m in masks:
+            exclude |= m
     rings = (
         [_neuropil_annulus(m, exclude, inner, outer, min_npix) for m in masks]
         if neuropil
@@ -997,7 +890,7 @@ def extract_rois(
             device=device,
         )
     elif engine == "mean":
-        F, Fneu = _extract_mean(
+        F, Fneu = measure_mean(
             movie,
             masks,
             store.label_image(z) > 0,
