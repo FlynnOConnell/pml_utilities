@@ -354,6 +354,9 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._status_color = _DIM_COLOR
         # the spike-average windows this tab started, until they exit
         self._windows: list = []
+        # the workers this tab started, until each one's run is loaded
+        self._spawned: set[int] = set()
+        self._polled = 0.0
         self._show_settings_popup = False
         self._settings_sizer: PopupAutoSize | None = None
         self._show_slice_popup = False
@@ -2296,9 +2299,39 @@ class VnoiserPipelineWidget(PipelineWidget):
             output_path=self._outdir,
         )
         if pid:
+            self._spawned.add(int(pid))
             self._set_status(f"Started (PID {pid}); progress in the process console.")
         else:
             self._set_status("Failed to start the worker.", error=True)
+
+    def poll(self) -> None:
+        """Once a second: a worker this tab started that has finished lands
+        in the Traces tab (its results file, through :meth:`_load_traces`,
+        which turns Manual ROI Labeling on), and one that failed lands in
+        the status row. Runs whatever tab is showing.
+        """
+        if not self._spawned or time.monotonic() - self._polled < 1.0:
+            return
+        self._polled = time.monotonic()
+        from mbo_utilities.gui.widgets.process_manager import get_process_manager
+
+        for info in get_process_manager().get_running():
+            if info.pid not in self._spawned or info.status == "running":
+                continue
+            self._spawned.discard(info.pid)
+            if info.status != "completed":
+                self._set_status(
+                    f"vnoiser failed: {info.status_message or info.status}", error=True
+                )
+                continue
+            out = (info.args or {}).get("output_dir") or self._outdir
+            results = newest_results(out, "vnoiser", source=self._mesc_path())
+            if results is None:
+                self._set_status(
+                    f"vnoiser finished but left no results file in {out}", error=True
+                )
+                continue
+            self._load_traces(results)
 
     def _load_traces(self, results: Path) -> None:
         """Switch Manual ROI Labeling on and load a results file into its Traces tab."""

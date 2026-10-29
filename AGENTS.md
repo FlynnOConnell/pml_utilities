@@ -589,7 +589,9 @@ pipelines use the same path; nothing is hardcoded by name.
   drawn by the Process tab. `open_pipeline(host, name)` selects it there and
   brings the tab forward. A widget never opens a window of its own and never
   assumes what it is drawn in, so the Process tab can later move into a window
-  and back without the widgets knowing.
+  and back without the widgets knowing. The host calls every built widget's
+  `poll()` once a frame whatever tab is showing; a widget that watches a
+  worker it started does it there, never in `draw_config`.
 - `seeds_from_view = True` + `seed_from_view()` sets the widget's selection to
   what the viewer shows (the recording on screen, the slice its sliders are on);
   `open_pipeline(..., seed=True)` calls it first, and `quick_pipelines(host)`
@@ -681,6 +683,10 @@ loaded of the unit on screen; a `vnoiser` switch and its own kind combo, the
 run's kinds as written). Picking a domain in the trace table moves the slider to
 its first line. With no run loaded, the panel's **Run vnoiser** button opens the
 Process tab's vnoiser on the unit (`open_pipeline(host, "vnoiser", seed=True)`).
+A run the vnoiser tab started loads itself into the Traces tab when its worker
+finishes (`VnoiserPipelineWidget.poll`, through `_load_traces`, which turns
+Manual ROI Labeling on); `_adopt_finished_runs` still picks up a run started
+anywhere else while the ROI widget is on.
 
 The pipeline's one help page is the vnoiser guide
 (`gui/imgui/vnoiser_help.draw_vnoiser_help(is_open, keys_open)`), drawn diagrams and

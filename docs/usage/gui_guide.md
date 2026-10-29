@@ -642,7 +642,8 @@ Quick start, one MESc unit:
 - Tick **traces only** to stop after the z-score. Otherwise **Denoiser and peaks**
   holds the wavelet and peak settings.
 - **Run vnoiser**. The results file `<file>.<time>.vnoiser.zarr` lands beside the
-  `.mesc`. **Load into Traces** puts each domain's F, dF/F, z and denoised trace
+  `.mesc` and loads into the Traces tab by itself when the worker finishes,
+  whatever tab is showing. **Load into Traces** puts each domain's F, dF/F, z and denoised trace
   in the Traces tab's vnoiser panel, under the scan's own trace, and **Curate**
   opens the curation window.
 

@@ -986,3 +986,111 @@ def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     assert widget._scans == {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": False}
     assert widget._first_env == {"MSession_0/MUnit_3": True}
     assert [(r.name, r.rois) for r in widget._domains] == [("a", [0])]
+
+
+def test_widget_loads_its_own_run_when_the_worker_finishes(tmp_path, monkeypatch):
+    """A run the tab started lands in the Traces tab by itself once its
+    worker reports completion, whatever tab is showing and whether or not
+    the ROI widget was on; a failed worker lands in the status row.
+    """
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import h5py
+    import mbo_utilities.gui.widgets.process_manager as pm
+    import mbo_utilities.gui.widgets.widget_toggles as toggles
+    from mbo_utilities.gui.widgets.pipelines.settings import _MISSING_COLOR
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
+    from mbo_utilities.gui.widgets.process_manager import ProcessInfo
+    from mbo_utilities.results import Results, ResultUnit, results_name
+
+    mesc = tmp_path / "session1.mesc"
+    with h5py.File(mesc, "w") as f:
+        unit = f.create_group("MSession_0").create_group("MUnit_3")
+        unit.attrs.update(
+            {
+                "MethodType": 6,
+                "VecChannelsSize": 1,
+                "TStepInMs": 1.0,
+                "MeasurementDatePosix": 0,
+                "CoordinateMapJSON": json.dumps(
+                    {
+                        "maps": [
+                            {
+                                "measurementROIs": [
+                                    {
+                                        "lowerLeftFramePix": [2 * i + 1, 1],
+                                        "upperRightFramePix": [2 * i + 2, 1],
+                                    }
+                                    for i in range(4)
+                                ]
+                            }
+                        ]
+                    }
+                ),
+            }
+        )
+        unit.create_dataset("Channel_0", data=np.zeros((1, 20, 8), np.uint16))
+    scan = ResultUnit(
+        name="scan3",
+        kind="scan",
+        index=3,
+        fs=1000.0,
+        roi_names=["soma"],
+        traces={"denoised": np.zeros((1, 20))},
+        member_kind="line",
+        members=[np.array([0, 1])],
+        attrs={"scan_id": "3"},
+    )
+    results = Results(
+        pipeline="vnoiser",
+        units={scan.name: scan},
+        source={"mesc": str(mesc), "units": {"3": "MSession_0/MUnit_3"}},
+    ).write(tmp_path / results_name(mesc, pipeline="vnoiser"))
+
+    roi = SimpleNamespace(load_run=Mock(return_value=True), _run_error="")
+    parent = SimpleNamespace(
+        fpath=mesc, image_widget=None, manual_roi=roi, sync_manual_roi=Mock()
+    )
+    monkeypatch.setattr(toggles, "set_widget_enabled", Mock())
+    run = ProcessInfo(
+        pid=4242,
+        description="vnoiser",
+        start_time=0.0,
+        task_type="vnoiser",
+        args={"output_dir": str(tmp_path)},
+    )
+    manager = SimpleNamespace(get_running=Mock(return_value=[run]))
+    monkeypatch.setattr(pm, "get_process_manager", Mock(return_value=manager))
+
+    widget = VnoiserPipelineWidget(parent)
+    widget._spawned.add(4242)
+    widget.poll()
+    roi.load_run.assert_not_called()
+    assert widget._spawned == {4242}
+
+    run.status = "completed"
+    widget._polled = 0.0
+    widget.poll()
+    roi.load_run.assert_called_once_with(results)
+    parent.sync_manual_roi.assert_called_once_with(True)
+    assert widget._spawned == set()
+    assert widget._last_status == f"Loaded {results.name} into the Traces tab."
+
+    failed = ProcessInfo(
+        pid=4343,
+        description="vnoiser",
+        start_time=0.0,
+        task_type="vnoiser",
+        args={"output_dir": str(tmp_path)},
+        status="error",
+        status_message="boom",
+    )
+    manager.get_running.return_value = [failed]
+    widget._spawned.add(4343)
+    widget._polled = 0.0
+    widget.poll()
+    assert widget._spawned == set()
+    assert "boom" in widget._last_status
+    assert widget._status_color is _MISSING_COLOR

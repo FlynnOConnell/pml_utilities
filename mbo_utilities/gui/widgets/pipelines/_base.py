@@ -124,6 +124,13 @@ class PipelineWidget(ABC):
         seeded (a previous run's domains and settings).
         """
 
+    def poll(self) -> None:
+        """Called by the host every frame, whatever tab is showing. A widget
+        that watches a worker it started (the vnoiser tab loading its run
+        when the worker finishes) does it here, never in ``draw_config``,
+        which only runs while the tab is on screen.
+        """
+
     def cleanup(self) -> None:
         """Clean up resources when widget is destroyed.
 

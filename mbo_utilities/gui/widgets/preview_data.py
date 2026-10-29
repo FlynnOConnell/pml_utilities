@@ -1472,6 +1472,8 @@ class PreviewDataWidget(EdgeWindow):
         except Exception:
             self.logger.debug("raw projection refresh skipped", exc_info=True)
 
+        for pipeline in list(getattr(self, "_pipeline_instances", {}).values()):
+            pipeline.poll()
         self._sync_top_panels()
         t1 = time.perf_counter()
         # wrap text at the panel edge everywhere the viewer draws directly;
