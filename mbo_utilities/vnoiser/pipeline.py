@@ -144,8 +144,8 @@ class _RunUsage:
             "step": step,
             **begun,
             **fields,
-            "seconds": round(wall, 3),
-            "cpu_seconds": round(cpu, 3),
+            "seconds": round(wall, 6),
+            "cpu_seconds": round(cpu, 6),
             "rss_gb": round(snap["proc_gb"], 3),
             "peak_rss_gb": round(self._step_peak, 3),
         }
@@ -170,7 +170,7 @@ class _RunUsage:
         scans: dict[str, dict] = {}
         for row in self.steps:
             step, seconds = row["step"], row["seconds"]
-            totals[step] = round(totals.get(step, 0.0) + seconds, 3)
+            totals[step] = round(totals.get(step, 0.0) + seconds, 6)
             if step == "denoise":
                 for key, value in row.items():
                     if key.endswith("_s"):
@@ -178,7 +178,7 @@ class _RunUsage:
             if "scan" not in row:
                 continue
             scan = scans.setdefault(row["scan"], {})
-            scan[step] = round(scan.get(step, 0.0) + seconds, 3)
+            scan[step] = round(scan.get(step, 0.0) + seconds, 6)
             if "domain" in row:
                 scan.setdefault("domains", {}).setdefault(row["domain"], {})[step] = (
                     seconds
