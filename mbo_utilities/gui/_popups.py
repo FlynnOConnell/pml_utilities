@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import psutil
 from imgui_bundle import ImVec2, imgui
 
 from mbo_utilities.gui._imgui_helpers import begin_popup_size
@@ -112,7 +113,6 @@ def _draw_gpu_meter(d: dict) -> None:
     dm = d.get("driver_model")
     if dm:
         dm_pending = d.get("driver_model_pending")
-        # pending differs -> driver-model switch staged until reboot
         caption.append(f"{dm}→{dm_pending}" if dm_pending and dm_pending != dm else dm)
     caption_s = ("  " + " · ".join(caption)) if caption else ""
 
@@ -128,23 +128,28 @@ def _cpu_temp() -> float | None:
     absent and this returns None, so the meter simply omits the temp like
     a GPU that doesn't report one.
     """
-    try:
-        import psutil
-
-        fn = getattr(psutil, "sensors_temperatures", None)
-        if fn is None:
-            return None
-        temps = fn() or {}
-        for key in ("coretemp", "k10temp", "cpu_thermal", "acpitz"):
-            entries = temps.get(key)
-            if entries:
-                return float(entries[0].current)
-        for entries in temps.values():
-            if entries:
-                return float(entries[0].current)
-    except Exception:
+    if not hasattr(psutil, "sensors_temperatures"):  # NOTE: linux and freebsd only
         return None
+    temps = psutil.sensors_temperatures() or {}
+    for key in ("coretemp", "k10temp", "cpu_thermal", "acpitz"):
+        entries = temps.get(key)
+        if entries:
+            return float(entries[0].current)
+    for entries in temps.values():
+        if entries:
+            return float(entries[0].current)
     return None
+
+
+def _sys_row(k: str, v: str, value_color: Any = None) -> None:
+    imgui.table_next_row()
+    imgui.table_next_column()
+    imgui.text_colored(_SYS_LABEL, k)
+    imgui.table_next_column()
+    if value_color is not None:
+        imgui.text_colored(value_color, v)
+    else:
+        imgui.text(v)
 
 
 def _draw_cpu_meter(cpu_pct: float) -> None:
@@ -183,7 +188,7 @@ def _draw_gpu_selectors(parent: Any, devices: list, show_render: bool) -> None:
     Compute device is applied live via CUDA_VISIBLE_DEVICES so newly
     started jobs use it, and persisted for future launches.
     """
-    labels = getattr(parent, "_options_gpu_labels", []) or []
+    labels = parent._options_gpu_labels
     multi_render = show_render and len(labels) > 1
     multi_compute = len(devices) > 1
     if not (multi_render or multi_compute):
@@ -193,11 +198,9 @@ def _draw_gpu_selectors(parent: Any, devices: list, show_render: bool) -> None:
     bar_w = max(80.0, imgui.get_content_region_avail().x * 0.5)
 
     if multi_render:
-        if not hasattr(parent, "_options_gpu_idx"):
-            parent._options_gpu_idx = get_gpu_index()
         imgui.text_colored(_SYS_LABEL, "Render GPU")
         imgui.set_next_item_width(bar_w)
-        ui_idx = parent._options_gpu_idx + 1  # 0 == auto
+        ui_idx = parent._options_gpu_idx + 1
         changed, new_ui = imgui.combo("##sys_render_gpu", ui_idx, labels)
         if changed:
             parent._options_gpu_idx = new_ui - 1
@@ -231,77 +234,46 @@ def _draw_system_info_header(parent: Any) -> None:
 
     _ensure_gpu_list(parent)
 
-    # per-GPU usage (nvidia-smi) + total CPU%, throttled. nvidia-smi is a
-    # subprocess; cpu_percent(interval=None) needs a gap between calls to be
-    # meaningful — both want the ~1.5s window, not per-frame.
     now = time.monotonic()
-    if (
-        not hasattr(parent, "_sys_gpu_devices")
-        or now - getattr(parent, "_sys_gpu_last_refresh", 0.0) >= 1.5
-    ):
+    # NOTE: nvidia-smi is a subprocess and cpu_percent(interval=None) needs a gap between calls, so both refresh on a 1.5 s window
+    if now - parent._sys_gpu_last_refresh >= 1.5:
         from mbo_utilities.gpu import gpu_devices
 
-        try:
-            parent._sys_gpu_devices = gpu_devices()
-        except Exception:
-            parent._sys_gpu_devices = []
-        try:
-            import psutil
-
-            parent._sys_cpu_pct = psutil.cpu_percent(interval=None)
-        except Exception:
-            parent._sys_cpu_pct = None
+        parent._sys_gpu_devices = gpu_devices()
+        parent._sys_cpu_pct = psutil.cpu_percent(interval=None)
         parent._sys_gpu_last_refresh = now
     gpu_devices_live = parent._sys_gpu_devices
-    cpu_pct = getattr(parent, "_sys_cpu_pct", None)
+    cpu_pct = parent._sys_cpu_pct
 
-    # RAM on its own throttle: a snapshot costs a children walk (~8 ms), so it
-    # follows the user's tick rate rather than the frame rate or the slower
-    # nvidia-smi window.
-    tick = max(0.25, min(get_mem_monitor_interval(), 2.0))
-    if (
-        not hasattr(parent, "_sys_mem")
-        or now - getattr(parent, "_sys_mem_last_refresh", 0.0) >= tick
-    ):
+    tick = max(
+        0.25, min(get_mem_monitor_interval(), 2.0)
+    )  # a snapshot walks the children (~8 ms)
+    if now - parent._sys_mem_last_refresh >= tick:
         from mbo_utilities._sysmem import mem_snapshot
 
-        try:
-            parent._sys_mem = mem_snapshot()
-        except Exception:
-            parent._sys_mem = None
+        parent._sys_mem = mem_snapshot()
         parent._sys_mem_last_refresh = now
     mem_snap = parent._sys_mem
 
-    # CPU core counts via psutil (static). Live RAM moves to the CPU meter.
-    try:
-        import psutil
+    cpu_phys = psutil.cpu_count(logical=False)
+    cpu_log = psutil.cpu_count(logical=True)
+    cpu_str = f"{cpu_phys}p / {cpu_log}t" if cpu_phys else f"{cpu_log or '?'}"
 
-        cpu_phys = psutil.cpu_count(logical=False)
-        cpu_log = psutil.cpu_count(logical=True)
-        cpu_str = f"{cpu_phys}p / {cpu_log}t" if cpu_phys else f"{cpu_log or '?'}"
-    except ImportError:
-        import os as _os
+    adapters = parent._options_gpu_adapters
 
-        cpu_str = f"{_os.cpu_count() or '?'}"
-
-    adapters = getattr(parent, "_options_gpu_adapters", []) or []
-
-    # Selected adapter resolved from persisted preferences. -1 == auto.
     sel_idx = get_gpu_index()
     if 0 <= sel_idx < len(adapters):
-        info_d = getattr(adapters[sel_idx], "info", {}) or {}
+        info_d = adapters[sel_idx].info
         sel_name = info_d.get("device", "?")
         sel_backend = info_d.get("backend_type", "")
         selected_str = f"{sel_name} [{sel_backend}]" if sel_backend else sel_name
     else:
         selected_str = "auto (wgpu picks)"
 
-    # Deduplicate physical GPUs by device name; skip software/CPU adapters
-    # so the list shows only real hardware the user can render with.
     seen: set[str] = set()
     gpu_names: list[str] = []
     for a in adapters:
-        info_d = getattr(a, "info", {}) or {}
+        info_d = a.info
         name = info_d.get("device", "?")
         adapter_type = info_d.get("adapter_type", "?")
         if adapter_type in ("CPU", "Unknown"):
@@ -317,23 +289,11 @@ def _draw_system_info_header(parent: Any) -> None:
         imgui.table_setup_column("k", imgui.TableColumnFlags_.width_fixed, 140)
         imgui.table_setup_column("v", imgui.TableColumnFlags_.width_stretch)
 
-        def _row(k: str, v: str, value_color: Any = None) -> None:
-            imgui.table_next_row()
-            imgui.table_next_column()
-            imgui.text_colored(_SYS_LABEL, k)
-            imgui.table_next_column()
-            if value_color is not None:
-                imgui.text_colored(value_color, v)
-            else:
-                imgui.text(v)
-
-        _row("CPU cores:", cpu_str)
-        # render adapter shown as text only when there's nothing to pick;
-        # the multi-GPU picker below replaces it otherwise.
+        _sys_row("CPU cores:", cpu_str)
         if len(gpu_names) <= 1:
-            _row("GPU (selected):", selected_str, value_color=_SYS_ACCENT)
+            _sys_row("GPU (selected):", selected_str, value_color=_SYS_ACCENT)
         if not gpu_devices_live:
-            _row("GPU (available):", gpus_str)
+            _sys_row("GPU (available):", gpus_str)
 
         imgui.end_table()
 
@@ -365,11 +325,9 @@ def draw_tools_popups(parent: Any):
         imgui.end()
 
     if parent.show_metadata_viewer:
-        # use absolute screen positioning so window is visible even when widget collapsed
         io = imgui.get_io()
         screen_w, screen_h = io.display_size.x, io.display_size.y
         win_w, win_h = min(600, screen_w * 0.5), min(500, screen_h * 0.6)
-        # center on screen
         imgui.set_next_window_pos(
             ImVec2((screen_w - win_w) / 2, (screen_h - win_h) / 2),
             imgui.Cond_.first_use_ever,
@@ -381,21 +339,12 @@ def draw_tools_popups(parent: Any):
         )
         if parent.image_widget and parent.image_widget.data:
             data_arr = parent.image_widget.data[0]
-            # Check if data has metadata (numpy arrays don't)
-            if hasattr(data_arr, "metadata"):
-                # user-set values from the metadata editor (e.g. isoview fs)
-                # live on parent._custom_metadata and don't persist into the
-                # array's computed metadata — merge them so the viewer reflects
-                # what the user entered.
-                metadata = dict(data_arr.metadata or {})
-                custom = getattr(parent, "_custom_metadata", None) or {}
-                metadata.update({k: v for k, v in custom.items() if v is not None})
-                draw_metadata_inspector(metadata, data_array=data_arr)
-            else:
-                imgui.text("No metadata available")
-                imgui.text(f"Data type: {type(data_arr).__name__}")
-                if hasattr(data_arr, "shape"):
-                    imgui.text(f"Shape: {data_arr.shape}")
+            # the metadata editor's values live on parent._custom_metadata, never on the array
+            metadata = dict(data_arr.metadata or {})
+            metadata.update(
+                {k: v for k, v in parent._custom_metadata.items() if v is not None}
+            )
+            draw_metadata_inspector(metadata, data_array=data_arr)
         else:
             imgui.text("No data loaded")
         imgui.end()
@@ -409,22 +358,6 @@ def draw_process_console_popup(parent: Any):
     meters are worth watching while a job runs. Position, size and collapsed
     state persist through imgui's ini.
     """
-    if not hasattr(parent, "_show_process_console"):
-        parent._show_process_console = False
-    if not hasattr(parent, "_process_console_open"):
-        parent._process_console_open = False
-    if not hasattr(parent, "_process_console_size"):
-        parent._process_console_size = ImVec2(500, 350)
-    if not hasattr(parent, "_process_console_content_h"):
-        parent._process_console_content_h = 0.0
-    if not hasattr(parent, "_process_console_grow_to"):
-        parent._process_console_grow_to = None
-    if not hasattr(parent, "_proc_log_fixed_h"):
-        parent._proc_log_fixed_h = 0.0
-    if not hasattr(parent, "_proc_log_count"):
-        parent._proc_log_count = 0
-
-    # open request from the menu-bar status button
     if parent._show_process_console:
         parent._process_console_open = True
         parent._process_console_focus = True
@@ -437,9 +370,9 @@ def draw_process_console_popup(parent: Any):
     max_w = max(400.0, work.x - 40.0)
     max_h = max(300.0, work.y - 40.0)
 
-    if getattr(parent, "_process_console_focus", False):
-        # a second click on the status button raises it instead of doing
-        # nothing when it's already open behind the viewer
+    if (
+        parent._process_console_focus
+    ):  # a second click on the status button raises the window
         imgui.set_next_window_focus()
         parent._process_console_focus = False
 
@@ -452,13 +385,10 @@ def draw_process_console_popup(parent: Any):
         imgui.Cond_.first_use_ever,
     )
     imgui.set_next_window_size(parent._process_console_size, imgui.Cond_.appearing)
-    # low minimum height on purpose: the window can be shrunk down to just
-    # the System meters and parked next to the viewer.
-    imgui.set_next_window_size_constraints(
+    imgui.set_next_window_size_constraints(  # the window may shrink to just the system meters
         imgui.ImVec2(340, 120), imgui.ImVec2(max_w, max_h)
     )
 
-    # grow to fit content (requested last frame); width preserved, height bounded
     if parent._process_console_grow_to is not None:
         imgui.set_next_window_size(
             imgui.ImVec2(
@@ -468,8 +398,6 @@ def draw_process_console_popup(parent: Any):
         )
         parent._process_console_grow_to = None
 
-    # a normal window: no dimmed background, collapsible, and the viewer
-    # stays clickable underneath.
     expanded, still_open = imgui.begin(
         "Process Console",
         p_open=True,
@@ -478,13 +406,9 @@ def draw_process_console_popup(parent: Any):
     parent._process_console_open = still_open
 
     try:
-        # collapsed -> title bar only; skip the body (and its process polling)
         if expanded and still_open:
-            # save current size for next time
             parent._process_console_size = imgui.get_window_size()
 
-            # System info header — pinned above the scrollable list so it
-            # stays visible regardless of how many processes are queued.
             _draw_system_info_header(parent)
 
             pm = get_process_manager()
@@ -498,19 +422,11 @@ def draw_process_console_popup(parent: Any):
 
             progress_items = _get_active_progress_items(parent)
 
-            # recompute available height AFTER the header so the scroll
-            # area gets exactly what's left, minus footer space.
             avail = imgui.get_content_region_avail()
-            # clamp positive: while resizing, the popup can momentarily have
-            # near-zero client area, which would give begin_child a degenerate
-            # (negative) size and make it clip to false.
             content_height = max(
                 1.0, avail.y - 35
-            )  # space for separator + close button
+            )  # NOTE: never <= 0: a degenerate begin_child size clips to false mid-resize
 
-            # split leftover height evenly among expanded log boxes so they
-            # fill the area. uses last frame's non-box height and box count
-            # (stable on resize) against this frame's available height.
             n_boxes = parent._proc_log_count
             if n_boxes > 0:
                 log_fill_h = max(
@@ -522,14 +438,10 @@ def draw_process_console_popup(parent: Any):
             expanded_boxes = 0
             sum_box_h = 0.0
 
-            # scrollable content area. begin_child needs a matching end_child
-            # even when it returns false (clipped/collapsed during resize) —
-            # otherwise the window stack unwinds wrong and end_popup() asserts.
-            content_open = imgui.begin_child(
+            content_open = imgui.begin_child(  # NOTE: end_child is required even when this returns false
                 "##ProcessContent", ImVec2(0, content_height), imgui.ChildFlags_.none
             )
             if content_open:
-                # active tasks section
                 if progress_items:
                     imgui.text_colored(
                         _SYS_TITLE, f"Active Tasks ({len(progress_items)})"
@@ -549,16 +461,12 @@ def draw_process_console_popup(parent: Any):
                             imgui.text(f"{item['text']}")
                         imgui.pop_text_wrap_pos()
 
-                        # progress bar with percentage overlay
                         imgui.progress_bar(item["progress"], ImVec2(-1, 0), f"{pct}%")
                         imgui.spacing()
 
                     if running or jobs:
                         imgui.spacing()
 
-                # in-process jobs section (ROI traces, etc.). These run on a
-                # thread inside the GUI rather than as a spawned process, so
-                # they have no pid, log file or kill button — just state.
                 if jobs:
                     imgui.text_colored(_SYS_TITLE, f"In-Process Jobs ({len(jobs)})")
                     imgui.separator()
@@ -588,7 +496,6 @@ def draw_process_console_popup(parent: Any):
                     if running:
                         imgui.spacing()
 
-                # background processes section
                 if running:
                     imgui.text_colored(
                         _SYS_TITLE, f"Background Processes ({len(running)})"
@@ -605,30 +512,25 @@ def draw_process_console_popup(parent: Any):
                             expanded_boxes += 1
                             sum_box_h += box_h
 
-                # empty state
                 if not running and not progress_items and not jobs:
                     imgui.spacing()
                     imgui.text_disabled("No active tasks or background processes.")
 
-                # natural height of everything drawn, for next-frame window grow
                 parent._process_console_content_h = imgui.get_cursor_pos_y()
             imgui.end_child()
 
-            # remember the non-box height and box count for next frame's split
             parent._proc_log_fixed_h = parent._process_console_content_h - sum_box_h
             parent._proc_log_count = expanded_boxes
 
-            # enlarge window to fit content, bounded by the main window.
-            # skip on frames where a log box was just toggled (box count
-            # changed): the measured height is transiently off by one box.
             win_h = imgui.get_window_height()
             target_h = min(
                 win_h - content_height + parent._process_console_content_h, max_h
             )
-            if target_h > win_h + 1.0 and expanded_boxes == n_boxes:
+            if (
+                target_h > win_h + 1.0 and expanded_boxes == n_boxes
+            ):  # NOTE: a just-toggled log box leaves the measured height off by one box
                 parent._process_console_grow_to = target_h
 
-            # footer actions, centered
             imgui.separator()
             imgui.spacing()
 
@@ -661,7 +563,6 @@ def _draw_process_entry(pm: Any, proc: Any, log_fill_h: float = 0.0) -> float:
     imgui.push_id(f"proc_{proc.pid}")
     box_h = 0.0
 
-    # status indicator + description
     if proc.status == "error":
         imgui.text_colored(imgui.ImVec4(1.0, 0.4, 0.4, 1.0), "[ERR]")
     elif proc.status == "completed":
@@ -671,22 +572,21 @@ def _draw_process_entry(pm: Any, proc: Any, log_fill_h: float = 0.0) -> float:
 
     imgui.same_line()
 
-    # description wraps to the full content width
     imgui.push_text_wrap_pos(0.0)
     imgui.text(proc.description)
     imgui.pop_text_wrap_pos()
 
-    # meta line: PID/elapsed on the left, actions right-aligned
     has_copy = bool(proc.output_path and Path(proc.output_path).is_file())
     action_label = "Kill" if proc.is_alive() else "Dismiss"
     style = imgui.get_style()
 
-    def _btn_w(label: str) -> float:
-        return imgui.calc_text_size(label).x + style.frame_padding.x * 2.0
-
-    actions_w = _btn_w(action_label)
+    actions_w = imgui.calc_text_size(action_label).x + style.frame_padding.x * 2.0
     if has_copy:
-        actions_w += style.item_spacing.x + _btn_w("Copy")
+        actions_w += (
+            style.item_spacing.x
+            + imgui.calc_text_size("Copy").x
+            + style.frame_padding.x * 2.0
+        )
 
     imgui.text_disabled(f"PID {proc.pid} · {proc.elapsed_str()}")
     imgui.same_line()
@@ -704,19 +604,13 @@ def _draw_process_entry(pm: Any, proc: Any, log_fill_h: float = 0.0) -> float:
     if has_copy:
         imgui.same_line()
         if imgui.small_button("Copy"):
-            try:
-                with open(proc.output_path, encoding="utf-8") as f:
-                    imgui.set_clipboard_text(f.read())
-            except Exception:
-                pass
+            imgui.set_clipboard_text(Path(proc.output_path).read_text(encoding="utf-8"))
 
-    # error message
     if proc.status == "error" and proc.status_message:
         imgui.push_text_wrap_pos(0)
         imgui.text_colored(imgui.ImVec4(1.0, 0.6, 0.6, 1.0), f"  {proc.status_message}")
         imgui.pop_text_wrap_pos()
 
-    # collapsible log output
     if proc.output_path and Path(proc.output_path).is_file():
         tree_open = imgui.tree_node(f"Log Output##proc_{proc.pid}")
         if tree_open:
@@ -725,17 +619,14 @@ def _draw_process_entry(pm: Any, proc: Any, log_fill_h: float = 0.0) -> float:
                 box_h = max(_MIN_LOG_BOX_H, log_fill_h)
 
                 child_flags = imgui.ChildFlags_.borders
-                # begin_child always needs end_child, regardless of return value
                 imgui.begin_child(f"##log_{proc.pid}", ImVec2(-1, box_h), child_flags)
-                # only auto-scroll when user is already pinned to the bottom;
-                # otherwise scrolling up would be overridden every frame
+                # NOTE: auto-scroll only while pinned to the bottom, else every frame undoes a scroll up
                 at_bottom = imgui.get_scroll_y() >= imgui.get_scroll_max_y() - 1.0
                 line_h = imgui.get_text_line_height()
                 imgui.push_text_wrap_pos(0.0)
                 for line in lines:
                     color, display = _log_line_style(line.strip())
                     imgui.text_colored(color, display)
-                    # wrapped line spans >1 row: add a small gap before the next
                     if imgui.get_item_rect_size().y > line_h + 1.0:
                         imgui.spacing()
                 imgui.pop_text_wrap_pos()

@@ -9,10 +9,9 @@ import numpy as np
 from mbo_utilities.annotation import (
     UNLABELED,
 )
-
 from mbo_utilities.gui.roi._shared import (
-    _cleared_note,
     _UNDO_DEPTH,
+    _cleared_note,
 )
 
 
@@ -20,10 +19,9 @@ class SelectionMixin:
     """Selection, the group buffer, labeling, marks, delete and undo."""
 
     def _pick(self, row: int, col: int, mods: frozenset = frozenset()):
-        """Masknmf's click: a drawn ROI under the cursor, else an algo one.
-        Ctrl toggles it in the group, shift adds it; a plain click selects it
-        alone, or deselects it when it is already the selection. An empty
-        pixel adds its 5x5 average with pixel traces on, else deselects.
+        """Masknmf's click: a drawn ROI under the cursor, else an algo one; ctrl toggles it in the group, shift adds it, plain selects it alone (again deselects).
+
+        An empty pixel adds its 5x5 average with pixel traces on, else deselects.
         """
         try:
             hit: tuple[int, int] | None = None
@@ -108,12 +106,7 @@ class SelectionMixin:
         self.select_pair(*self.rows[row])
 
     def select_roi(self, index: int | None):
-        """Select drawn ROI ``index``; anything out of range clears the
-        selection (and any derived one).
-
-        Selecting an ROI on another plane jumps the z slider to it; one with
-        a trace shows it in the trace plot.
-        """
+        """Select drawn ROI ``index`` (out of range clears the selection), jumping the z slider to its plane and the plot to its trace."""
         self.selected_derived = None
         self.active_pixel = None
         self.selected = index if index is not None and 0 <= index < self.n_rois else -1
@@ -138,9 +131,7 @@ class SelectionMixin:
         self.refresh_overlay()
 
     def select_derived(self, si: int, k: int):
-        """Select component ``k`` of derived set ``si`` (clears any drawn
-        selection; jumps z to the set's plane).
-        """
+        """Select component ``k`` of derived set ``si``, clearing any drawn selection and jumping z to the set's plane."""
         if not (0 <= si < len(self.derived) and 0 <= k < len(self.derived[si])):
             self.select_roi(-1)
             return
@@ -164,9 +155,7 @@ class SelectionMixin:
         self.refresh_overlay()
 
     def _seed_buffer(self):
-        """A first ctrl / shift click keeps the current selection grouped,
-        so 'select one, ctrl+click another' makes a group of two.
-        """
+        """A first ctrl / shift click keeps the current selection grouped, so select one, ctrl+click another makes a group of two."""
         if self.buffer:
             return
         pair = self._selection_pair()
@@ -197,9 +186,7 @@ class SelectionMixin:
             self._after_buffer_change(si, k)
 
     def buffer_extend_to(self, item: int):
-        """Shift+click in the table: group every row between the cursor and
-        ``item``, in the order the table shows.
-        """
+        """Shift+click in the table: group every row between the cursor and ``item``, in the table's order."""
         hits = np.flatnonzero(self.order.order == item)
         if not len(hits):
             return
@@ -234,9 +221,7 @@ class SelectionMixin:
         self.refresh_overlay()
 
     def set_group_color(self, rgb: tuple[float, float, float] | None):
-        """Give every grouped ROI (or just the selection) an explicit
-        display color; None reverts to the class / hue colors.
-        """
+        """Give every grouped ROI (else the selection) a display color; None reverts to the class / hue colors."""
         targets = list(self.buffer)
         if not targets and self._selection_pair() is not None:
             targets = [self._selection_pair()]
@@ -256,7 +241,6 @@ class SelectionMixin:
             self.store.block_events(False)
         self._refresh_group_view()
         self._autosave()
-        self._autosave()
         self.status = (
             f"colored {len(targets)} ROI(s)"
             if rgb is not None
@@ -264,17 +248,13 @@ class SelectionMixin:
         )
 
     def step(self, delta: int):
-        """Up / down: the next or previous row of the ROIs table; the image,
-        the table and the trace plot land on the same ROI.
-        """
+        """Up / down: the next or previous row of the ROIs table, on the image, the table and the trace plot."""
         if self.order.step(delta):
             self.buffer_clear()
             self.select_row(self.order.current)
 
     def step_trace(self, delta: int) -> bool:
-        """Move to the next / previous row of the trace table, in the order
-        the table shows, and select the ROI behind it.
-        """
+        """Select the next / previous trace row in the table's order, and the ROI behind it."""
         rows = self._sorted_trace_rows()
         if not rows:
             return False
@@ -317,13 +297,7 @@ class SelectionMixin:
         skip_promoted: bool = False,
         unlabeled_only: bool = False,
     ):
-        """Select the next derived row in view at or after ``start_pos``.
-
-        ``unlabeled_only`` walks past rows that already carry a label and
-        wraps once, so labeling a run's components in follow mode lands on
-        each one that still needs a label rather than on whatever row
-        happens to come next.
-        """
+        """Select the next derived row in view at or after ``start_pos``; ``unlabeled_only`` skips labeled rows and wraps once."""
         n = len(self.order.order)
         if not n:
             return
@@ -344,9 +318,7 @@ class SelectionMixin:
             return
 
     def delete_roi(self, index: int, record: bool = True):
-        """Drop one drawn ROI; the indices above it shift and the traces of
-        every other ROI survive (they are keyed by uid). Ctrl+z brings it back.
-        """
+        """Drop one drawn ROI; the indices above it shift, other ROIs' traces survive (keyed by uid), ctrl+z brings it back."""
         if not 0 <= index < self.n_rois:
             return
         if record:
@@ -362,10 +334,9 @@ class SelectionMixin:
         self.status = f"deleted ROI {index}"
 
     def delete_selected(self):
-        """Delete (d): the active drawn ROI, else the active pixel average,
-        else mark the selected algo ROIs for deletion (unmark when all are);
-        marking one steps to the next row. A group of drawn ROIs is never
-        deleted at once.
+        """Delete (d): the active drawn ROI, else the active pixel average, else mark the selected algo ROIs (unmark when all are), stepping on from a single mark.
+
+        A group of drawn ROIs is never deleted at once.
         """
         if self.selected >= 0:
             self.delete_roi(self.selected)
@@ -400,10 +371,7 @@ class SelectionMixin:
         self.status = "cleared"
 
     def assign_class(self, class_index: int):
-        """Give the selected ROI - drawn or derived - a class label;
-        UNLABELED (-1) clears it. With a group of two or more (ctrl / shift
-        click) the label lands on every member.
-        """
+        """Label the selected ROI, drawn or derived, or every member of a group; ``UNLABELED`` clears."""
         if len(self.buffer) > 1:
             self.store.block_events(True)
             try:
@@ -425,12 +393,10 @@ class SelectionMixin:
             self.status = f"{len(self.buffer)} ROIs -> {name}"
             self._refresh_group_view()
             self._autosave()
-            self._autosave()
             return
         if self.selected >= 0:
             self.store.set_class(self.selected, class_index)
-            # False when a label filter dropped the row as it was labeled -
-            # the cursor is then already on the next candidate
+            # False when a label filter dropped the row as it was labeled: the cursor is already on the next candidate
             listed = self.order.goto(self.selected)
             self.status = f"ROI {self.selected}: {self.classes.name_of(self.selected)}"
             if self.follow and class_index != UNLABELED:
@@ -451,8 +417,6 @@ class SelectionMixin:
             self.status = f"{s.name} row {k}: {self.classes.name_of(row)}"
         self._autosave()
         if self.follow and class_index != UNLABELED:
-            # the next algo row that still needs a label, not just the next
-            # one: labeling used to land on rows already labeled
             self._select_next_derived(self.order.pos + 1, unlabeled_only=True)
 
     label_selected = assign_class
@@ -503,9 +467,7 @@ class SelectionMixin:
             self.buffer_extend_to(item)
 
     def mark(self, pairs, on: bool, record: bool = True):
-        """Mark algo rows for deletion, or unmark them: they stay listed,
-        pinned at the top of the table and red on the image, until unmarked.
-        """
+        """Mark algo rows for deletion, or unmark them; marked rows stay listed, pinned first and red on the image."""
         pairs = [(int(si), int(k)) for si, k in pairs if si >= 0]
         if not pairs:
             return
@@ -568,9 +530,7 @@ class SelectionMixin:
         }
 
     def _push_undo(self):
-        """Remember the ROIs, their traces, the marks and the selection as
-        they are now, for ctrl+z (before the step that changes them).
-        """
+        """Remember the ROIs, their traces, the marks and the selection for ctrl+z, before the step that changes them."""
         self._undo.append(
             {
                 "store": self.store.snapshot(),

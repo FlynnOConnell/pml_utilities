@@ -9,13 +9,18 @@ from __future__ import annotations
 import webbrowser
 from typing import Any
 
+from imgui_bundle import icons_fontawesome as fa
 from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities.gui._dialogs import start_open_prompt
-from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.gui.widgets.notebooks import draw_notebook_menu
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.gui.widgets.widget_toggles import draw_widgets_menu
+
+_ICON_IDLE = fa.ICON_FA_CIRCLE
+_ICON_RUNNING = fa.ICON_FA_SPINNER
+_ICON_ERROR = fa.ICON_FA_EXCLAMATION_TRIANGLE
+_ICON_CHECK = fa.ICON_FA_CHECK_CIRCLE
 
 
 def draw_menu_bar(parent: Any):
@@ -31,16 +36,12 @@ def draw_menu_bar(parent: Any):
     ):
         if imgui.begin_menu_bar():
             if imgui.begin_menu("File", True):
-                # Open File / Open Folder: a typed path with the native
-                # dialog as a browse shortcut, so a remote kernel still works
                 if imgui.menu_item("Open File", "o", p_selected=False, enabled=True)[0]:
                     start_open_prompt(parent, "file")
                 if imgui.menu_item(
                     "Open Folder", "Shift+O", p_selected=False, enabled=True
                 )[0]:
                     start_open_prompt(parent, "folder")
-                # the notebooks for the open recording: the scripts folder
-                # beside it and the shipped templates that fit it
                 draw_notebook_menu(parent)
                 imgui.separator()
                 if imgui.menu_item(
@@ -48,7 +49,6 @@ def draw_menu_bar(parent: Any):
                 )[0]:
                     parent._show_metadata_popup = True
                 imgui.separator()
-                # Check if current data supports imwrite
                 can_save = parent.is_mbo_scan
                 if parent.image_widget and parent.image_widget.data:
                     arr = parent.image_widget.data[0]
@@ -75,15 +75,11 @@ def draw_menu_bar(parent: Any):
                         "https://millerbrainobservatory.github.io/mbo_utilities/"
                     )
                 imgui.end_menu()
-            # the strip spans the canvas, so the status and metadata buttons
-            # fit on the menu row instead of a second line under it
             parent._clear_stale_progress()
             draw_process_status_indicator(parent, in_menu_bar=True)
             imgui.end_menu_bar()
 
 
-# label, hotkey hint pairs of the buttons that follow the status button; the
-# widths are measured together so the cluster can be right-aligned in one go
 _TRAILING_BUTTONS = (("Metadata Viewer", "(m)"), ("Help", "(h)"), ("Keybinds", "(k)"))
 
 
@@ -96,7 +92,7 @@ def _open_help(parent: Any) -> None:
 
 
 def _open_keybinds(parent: Any) -> None:
-    parent._show_keybinds_popup = not getattr(parent, "_show_keybinds_popup", False)
+    parent._show_keybinds_popup = not parent._show_keybinds_popup
 
 
 def _status_cluster_width(status_text: str) -> float:
@@ -126,35 +122,16 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
     puts the second button back on top of the first, so the caller says which
     it is.
     """
-    # Import icons
-    try:
-        from imgui_bundle import icons_fontawesome as fa
-
-        ICON_IDLE = fa.ICON_FA_CIRCLE
-        ICON_RUNNING = fa.ICON_FA_SPINNER
-        ICON_ERROR = fa.ICON_FA_EXCLAMATION_TRIANGLE
-        ICON_CHECK = fa.ICON_FA_CHECK_CIRCLE
-    except (ImportError, AttributeError):
-        # Fallback to unicode
-        ICON_IDLE = "\uf111"  # circle
-        ICON_RUNNING = "\uf110"  # spinner
-        ICON_ERROR = "\uf071"  # exclamation-triangle
-        ICON_CHECK = "\uf058"  # check-circle
-
     pm = get_process_manager()
     pm.cleanup_finished()
     all_procs = pm.get_running()
 
-    # Get in-app progress items
     from mbo_utilities.gui.widgets.progress_bar import _get_active_progress_items
 
     progress_items = _get_active_progress_items(parent)
 
-    # in-process jobs (ROI traces, etc.) count the same as spawned ones —
-    # a click has to show up somewhere or the user cannot tell it landed
     all_procs = [*all_procs, *pm.get_jobs()]
 
-    # categorize processes
     running_procs = [p for p in all_procs if p.is_alive()]
     completed_procs = [
         p for p in all_procs if not p.is_alive() and p.status == "completed"
@@ -167,56 +144,38 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
     n_completed = len(completed_procs)
     n_errors = len(error_procs)
 
-    # Determine status color and icon. `status_width_text` (when set) sizes the
-    # button to a fixed worst-case width so a per-frame-changing label (the live
-    # %) doesn't make the click target jitter and drop clicks.
-    status_width_text = None
+    status_width_text = None  # NOTE: the widest label the button can show; a per-frame label change would otherwise move the click target
     if n_errors > 0:
-        # errors take priority
-        status_color = imgui.ImVec4(0.8, 0.2, 0.2, 1.0)  # Dark Red
-        status_text = f"{ICON_ERROR} Error ({n_errors})"
+        status_color = imgui.ImVec4(0.8, 0.2, 0.2, 1.0)
+        status_text = f"{_ICON_ERROR} Error ({n_errors})"
     elif n_running > 0:
-        # actively running tasks
-        status_color = imgui.ImVec4(0.85, 0.45, 0.0, 1.0)  # Dark Orange
+        status_color = imgui.ImVec4(0.85, 0.45, 0.0, 1.0)
 
-        # Add percentage if we have progress items
         if progress_items:
             avg_progress = sum(item["progress"] for item in progress_items) / len(
                 progress_items
             )
             status_text = (
-                f"{ICON_RUNNING} Running ({n_running}) {int(avg_progress * 100)}%"
+                f"{_ICON_RUNNING} Running ({n_running}) {int(avg_progress * 100)}%"
             )
-            # widest the % can get -> fixes the button width as it animates
-            status_width_text = f"{ICON_RUNNING} Running ({n_running}) 100%"
+            status_width_text = f"{_ICON_RUNNING} Running ({n_running}) 100%"
         else:
-            status_text = f"{ICON_RUNNING} Running ({n_running})"
+            status_text = f"{_ICON_RUNNING} Running ({n_running})"
     elif n_completed > 0:
-        # completed tasks waiting to be acknowledged
-        status_color = imgui.ImVec4(0.15, 0.55, 0.15, 1.0)  # Dark Green
+        status_color = imgui.ImVec4(0.15, 0.55, 0.15, 1.0)
         task_word = "task" if n_completed == 1 else "tasks"
-        status_text = f"{ICON_CHECK} Completed {n_completed} {task_word}"
+        status_text = f"{_ICON_CHECK} Completed {n_completed} {task_word}"
     else:
-        # idle
-        status_color = imgui.ImVec4(0.15, 0.55, 0.15, 1.0)  # Dark Green
-        status_text = f"{ICON_IDLE} Console: Idle"
+        status_color = imgui.ImVec4(0.15, 0.55, 0.15, 1.0)
+        status_text = f"{_ICON_IDLE} Console: Idle"
 
-    # Draw rounded buttons
     imgui.push_style_var(imgui.StyleVar_.frame_rounding, 5.0)
 
-    # The row's left half belongs to the menus, so this cluster is pinned to
-    # the right edge: its width is known before anything is drawn, so measure
-    # it and jump the cursor there once.
     _right_align(_status_cluster_width(status_width_text or status_text))
 
-    # 1. Status Button
-    # Use distinct background color based on status
     imgui.push_style_color(imgui.Col_.button, status_color)
-    imgui.push_style_color(
-        imgui.Col_.text, imgui.ImVec4(1, 1, 1, 1)
-    )  # Always white text
+    imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(1, 1, 1, 1))
 
-    # Slightly lighter hover color
     hover_col = imgui.ImVec4(
         min(status_color.x + 0.1, 1.0),
         min(status_color.y + 0.1, 1.0),
@@ -226,7 +185,6 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
     imgui.push_style_color(imgui.Col_.button_hovered, hover_col)
     imgui.push_style_color(imgui.Col_.button_active, status_color)
 
-    # fixed width while the label animates so the click target stays put
     if status_width_text is not None:
         pad = imgui.get_style().frame_padding.x
         btn_w = imgui.calc_text_size(status_width_text).x + pad * 2.0
@@ -236,21 +194,16 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
     else:
         clicked = imgui.button(status_text + "##process_status")
     if clicked:
-        # the console is a plain window now, so the status button toggles it
-        if getattr(parent, "_process_console_open", False):
+        if parent._process_console_open:
             parent._process_console_open = False
         else:
             parent._show_process_console = True
 
-    imgui.pop_style_color(4)  # button, text, hovered, active
+    imgui.pop_style_color(4)
 
     if imgui.is_item_hovered():
         imgui.set_mouse_cursor(imgui.MouseCursor_.hand)
 
-    # 2. Metadata / help / keybinds buttons, all in the same dark grey with
-    # their hotkeys greyed out beside them. Help and Keybinds are one button
-    # each for the whole app - the ROI tool is a section inside them, not a
-    # second pair of buttons.
     if not in_menu_bar:
         imgui.same_line()
     imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.2, 0.2, 0.2, 1.0))
@@ -272,7 +225,7 @@ def draw_process_status_indicator(parent: Any, in_menu_bar: bool = False):
         imgui.text_disabled(hint)
 
     imgui.pop_style_color(4)
-    imgui.pop_style_var()  # frame_rounding
+    imgui.pop_style_var()
 
 
 def _roi_keybinds(parent: Any) -> list[tuple[str, str | None]]:
@@ -282,7 +235,7 @@ def _roi_keybinds(parent: Any) -> list[tuple[str, str | None]]:
     of each, so its keys live here and its guide is a tab in the help
     viewer.
     """
-    roi = getattr(parent, "manual_roi", None)
+    roi = parent.manual_roi
     if roi is None:
         return []
     from mbo_utilities.gui.manual_roi import KEYBINDS
@@ -296,14 +249,6 @@ def draw_keybinds_popup(parent: Any):
     `_show_keybinds_popup` is the desired state: True = should be open,
     False = should be closed. The 'k' shortcut flips it.
     """
-    if not hasattr(parent, "_show_keybinds_popup"):
-        parent._show_keybinds_popup = False
-    if not hasattr(parent, "_keybinds_popup_actually_open"):
-        parent._keybinds_popup_actually_open = False
-    if not hasattr(parent, "_keybinds_sizer"):
-        parent._keybinds_sizer = PopupAutoSize("Keybinds", auto_resize=False)
-
-    # sync imgui's popup state with desired state
     if parent._show_keybinds_popup and not parent._keybinds_popup_actually_open:
         parent._keybinds_sizer.before_open()
         imgui.open_popup("Keybinds")
@@ -314,7 +259,6 @@ def draw_keybinds_popup(parent: Any):
         "Keybinds", flags=imgui.WindowFlags_.no_saved_settings
     )[0]
     if popup_open:
-        # if user flipped the flag off (e.g. pressed k again), close the popup
         if not parent._show_keybinds_popup:
             imgui.close_current_popup()
             parent._keybinds_popup_actually_open = False
@@ -322,7 +266,6 @@ def draw_keybinds_popup(parent: Any):
         imgui.separator()
         imgui.dummy(imgui.ImVec2(0, 5))
 
-        # keybinds data: (key, description)
         keybinds = [
             ("Navigation", None),
             ("\u2190 / \u2192", "Previous / Next frame (T)"),
@@ -357,20 +300,17 @@ def draw_keybinds_popup(parent: Any):
             imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
         )
         if imgui.begin_table("keybinds_table", 2, table_flags):
-            # wide enough for the ROI section's chords ("ctrl+click")
             imgui.table_setup_column("key", imgui.TableColumnFlags_.width_fixed, 110)
             imgui.table_setup_column("desc", imgui.TableColumnFlags_.width_stretch)
 
             for key, desc in keybinds:
                 if desc is None:
-                    # section header
                     imgui.table_next_row()
                     imgui.table_next_column()
                     imgui.dummy(imgui.ImVec2(0, 3))
                     imgui.text_colored(imgui.ImVec4(0.6, 0.8, 1.0, 1.0), key)
                     imgui.table_next_column()
                 elif key == "":
-                    # spacer
                     imgui.table_next_row()
                     imgui.table_next_column()
                     imgui.table_next_column()
@@ -391,6 +331,5 @@ def draw_keybinds_popup(parent: Any):
 
         imgui.end_popup()
     else:
-        # imgui reports popup is not being drawn (e.g. user pressed escape)
         parent._keybinds_popup_actually_open = False
         parent._show_keybinds_popup = False

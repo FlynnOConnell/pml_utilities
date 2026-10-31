@@ -15,6 +15,7 @@ that demixed in the spike-triggered average window.
 import dataclasses
 import math
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -38,10 +39,10 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
     _draw_md_field,
     _format_size,
 )
+from mbo_utilities.metadata import get_param
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
 
-# palette matched to the Suite2p settings panel
 _TITLE_COLOR = imgui.ImVec4(1.0, 0.85, 0.4, 1.0)
 _SUB_COLOR = imgui.ImVec4(0.55, 0.75, 1.0, 1.0)
 _DIM_COLOR = imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
@@ -83,7 +84,6 @@ _STABLE_FIELDS: set[str] = {
     "background_downsampling_factor",
 }
 
-# lazy availability check cache
 _HAS_MASKNMF: bool | None = None
 
 
@@ -178,6 +178,9 @@ def _collect_modified(settings) -> list[tuple[str, Any, Any]]:
     return rows
 
 
+_SETTINGS_POPUP_TITLE = "MaskNMF Pipeline Settings##masknmf_settings_popup"
+
+
 class MaskNMFPipelineWidget(PipelineWidget):
     """masknmf processing widget."""
 
@@ -201,9 +204,15 @@ class MaskNMFPipelineWidget(PipelineWidget):
         self._invert_deflection = False
         self._last_status = ""
         self._show_settings_popup = False
-        self._settings_sizer: PopupAutoSize | None = None
+        self._settings_sizer = PopupAutoSize(_SETTINGS_POPUP_TITLE)
         self._show_slice_popup = False
         self._last_fpath = None
+        self._masknmf_last_max_tp = None
+        self._masknmf_last_num_planes = None
+        self._masknmf_last_num_channels = None
+        self._masknmf_tp_parsed = None
+        self._masknmf_z_start = self._masknmf_z_stop = self._masknmf_z_step = 1
+        self._masknmf_c_start = self._masknmf_c_stop = self._masknmf_c_step = 1
         # the windows View movies and Spike average started, until they exit
         self._windows: list = []
 
@@ -213,26 +222,17 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
         return MasknmfSettings()
 
-    # -- data probes -----------------------------------------------------
-
     def _array(self):
-        iw = getattr(self.parent, "image_widget", None)
+        iw = self.parent.image_widget
         if iw is None or not iw.data:
             return None
         return iw.data[0]
 
     def _dims(self) -> tuple[int, int, int]:
         """(max_frames, num_planes, num_channels) of the loaded data."""
-        max_frames = 1000
-        try:
-            arr = self._array()
-            if arr is not None:
-                max_frames = int(getattr(arr, "num_timepoints", None) or arr.shape[0])
-        except Exception:
-            pass
-        num_planes = int(getattr(self.parent, "nz", 0) or 0) or 1
-        num_channels = int(getattr(self.parent, "nc", 0) or 0) or 1
-        return max_frames, num_planes, num_channels
+        arr = self._array()
+        max_frames = 1000 if arr is None else int(arr.num_timepoints)
+        return max_frames, int(self.parent.nz or 1), int(self.parent.nc or 1)
 
     def _hydrate_from_run(self, fpath) -> None:
         """Fill parameters + output dir from a previous run's tree
@@ -252,28 +252,26 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
     def _ensure_slice_state(self) -> None:
         """Seed/reset slicing state when the dataset changes (suite2p parity)."""
-        fpath = getattr(self.parent, "fpath", None)
+        fpath = self.parent.fpath
         max_frames, num_planes, num_channels = self._dims()
         fpath_changed = fpath != self._last_fpath
         if fpath_changed:
-            self._invert_deflection = bool(
-                getattr(self.parent, "invert_deflection", False)
-            )
+            self._invert_deflection = bool(self.parent.invert_deflection)
             self._hydrate_from_run(fpath)
-        if fpath_changed or getattr(self, "_masknmf_last_max_tp", None) != max_frames:
+        if fpath_changed or self._masknmf_last_max_tp != max_frames:
             self._last_fpath = fpath
             self._masknmf_last_max_tp = max_frames
             self._masknmf_tp_selection = f"1:{max_frames}"
             self._masknmf_tp_parsed = None
             self._masknmf_tp_error = ""
-        if getattr(self, "_masknmf_last_num_planes", None) != num_planes:
+        if self._masknmf_last_num_planes != num_planes:
             self._masknmf_last_num_planes = num_planes
             self._masknmf_z_selection = f"1:{num_planes}"
             self._masknmf_z_start = 1
             self._masknmf_z_stop = num_planes
             self._masknmf_z_step = 1
             self._masknmf_z_error = ""
-        if getattr(self, "_masknmf_last_num_channels", None) != num_channels:
+        if self._masknmf_last_num_channels != num_channels:
             self._masknmf_last_num_channels = num_channels
             self._masknmf_c_selection = f"1:{num_channels}"
             self._masknmf_c_start = 1
@@ -285,27 +283,25 @@ class MaskNMFPipelineWidget(PipelineWidget):
         _, num_planes, _ = self._dims()
         if num_planes <= 1:
             return [1]
-        start = getattr(self, "_masknmf_z_start", 1)
-        stop = min(getattr(self, "_masknmf_z_stop", num_planes), num_planes)
-        step = max(getattr(self, "_masknmf_z_step", 1), 1)
+        start = self._masknmf_z_start
+        stop = min(self._masknmf_z_stop, num_planes)
+        step = max(self._masknmf_z_step, 1)
         return list(range(start, stop + 1, step))
 
     def _selected_channels(self) -> list[int]:
         _, _, num_channels = self._dims()
         if num_channels <= 1:
             return [1]
-        start = getattr(self, "_masknmf_c_start", 1)
-        stop = min(getattr(self, "_masknmf_c_stop", num_channels), num_channels)
-        step = max(getattr(self, "_masknmf_c_step", 1), 1)
+        start = self._masknmf_c_start
+        stop = min(self._masknmf_c_stop, num_channels)
+        step = max(self._masknmf_c_step, 1)
         return list(range(start, stop + 1, step))
 
     def _tp_indices(self) -> list[int] | None:
-        parsed = getattr(self, "_masknmf_tp_parsed", None)
-        if parsed is not None and getattr(parsed, "final_indices", None):
+        parsed = self._masknmf_tp_parsed
+        if parsed is not None and parsed.final_indices:
             return list(parsed.final_indices)
         return None
-
-    # -- draw ------------------------------------------------------------
 
     def draw_config(self) -> None:
         self._ensure_slice_state()
@@ -342,7 +338,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
         if arr is None:
             imgui.text_disabled("No dataset loaded.")
             return
-        fpath = getattr(self.parent, "fpath", None)
+        fpath = self.parent.fpath
         path_str = str(fpath) if fpath else ""
         short_name = Path(path_str).name or path_str if path_str else "(in-memory)"
         imgui.indent(8)
@@ -351,25 +347,14 @@ class MaskNMFPipelineWidget(PipelineWidget):
             imgui.set_tooltip(path_str)
         filenames = getattr(arr, "filenames", None) or ([path_str] if path_str else [])
         if filenames:
-            imgui.text(
-                f"Size on disk: {_format_size(_dataset_size_bytes(self, filenames))}"
-            )
-        try:
-            shape_text = " × ".join(str(s) for s in arr.shape)
-            imgui.text(f"Shape: {shape_text}")
-        except Exception:
-            pass
-        try:
-            from mbo_utilities.metadata import get_param
-
-            md = dict(getattr(arr, "metadata", {}) or {})
-            md.update(getattr(self.parent, "_custom_metadata", {}) or {})
-            _draw_md_field("Frame rate", get_param(md, "fs"), "Hz")
-            _, num_planes, _ = self._dims()
-            if num_planes > 1:
-                _draw_md_field("Z-step", get_param(md, "dz"), "µm")
-        except Exception:
-            pass
+            imgui.text(f"Size on disk: {_format_size(_dataset_size_bytes(filenames))}")
+        imgui.text("Shape: " + " × ".join(str(s) for s in arr.shape))
+        md = dict(arr.metadata or {})
+        md.update(self.parent._custom_metadata)
+        _draw_md_field("Frame rate", get_param(md, "fs"), "Hz")
+        _, num_planes, _ = self._dims()
+        if num_planes > 1:
+            _draw_md_field("Z-step", get_param(md, "dz"), "µm")
         imgui.unindent(8)
 
     def _draw_output_row(self) -> None:
@@ -448,16 +433,14 @@ class MaskNMFPipelineWidget(PipelineWidget):
             # Window Functions seeds it, the same way the save-as menu is
             self.parent._masknmf_frame_average = draw_frame_average_input(
                 "Frame average##masknmf_frame_average",
-                getattr(self.parent, "_masknmf_frame_average", 1),
-                viewer_factor=int(getattr(self.parent, "frame_average", 1) or 1),
+                self.parent._masknmf_frame_average,
+                viewer_factor=int(self.parent.frame_average or 1),
                 max_frames=source_timepoints(self.parent),
             )
             imgui.spacing()
             if imgui.button("Close##masknmf_slice_close", imgui.ImVec2(_BTN_W, 0)):
                 imgui.close_current_popup()
             imgui.end_popup()
-
-    # -- settings popup ---------------------------------------------------
 
     def _mod_push(self, obj, field: str) -> bool:
         if not _is_default(obj, field):
@@ -476,7 +459,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
         """
         pushed = self._mod_push(obj, field)
         if field in _IMPORTANT_FIELDS:
-            draw_boxed_label(text, font=getattr(self.parent, "_bold_font", None))
+            draw_boxed_label(text, font=self.parent._bold_font)
         else:
             imgui.text(text)
         self._mod_pop(pushed)
@@ -538,10 +521,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
             body()
 
     def _draw_settings_popup(self) -> None:
-        popup_title = "MaskNMF Pipeline Settings##masknmf_settings_popup"
-        if self._settings_sizer is None:
-            self._settings_sizer = PopupAutoSize(popup_title)
-
+        popup_title = _SETTINGS_POPUP_TITLE
         if self._show_settings_popup:
             imgui.open_popup(popup_title)
             self._show_settings_popup = False
@@ -598,7 +578,6 @@ class MaskNMFPipelineWidget(PipelineWidget):
             imgui.spacing()
             imgui.separator()
 
-            # Defaults (orange) / Close (red, right-aligned) — suite2p layout
             imgui.push_style_color(
                 imgui.Col_.button, imgui.ImVec4(0.60, 0.35, 0.10, 1.0)
             )
@@ -744,15 +723,15 @@ class MaskNMFPipelineWidget(PipelineWidget):
             tooltip="Max PMD components per block.",
         )
 
-        def _stable() -> None:
-            self._f_int(comp, "sim_conf", "Sim conf")
-            self._f_int(comp, "spatial_avg_factor", "Spatial avg")
-            self._f_int(comp, "temporal_avg_factor", "Temporal avg")
-            if comp.denoise:
-                self._f_int(comp, "num_epochs", "Denoiser epochs")
-                self._f_float(comp, "noise_variance_quantile", "Noise quantile")
+        self._stable_header("pmd_stable", partial(self._draw_compression_stable, comp))
 
-        self._stable_header("pmd_stable", _stable)
+    def _draw_compression_stable(self, comp) -> None:
+        self._f_int(comp, "sim_conf", "Sim conf")
+        self._f_int(comp, "spatial_avg_factor", "Spatial avg")
+        self._f_int(comp, "temporal_avg_factor", "Temporal avg")
+        if comp.denoise:
+            self._f_int(comp, "num_epochs", "Denoiser epochs")
+            self._f_float(comp, "noise_variance_quantile", "Noise quantile")
 
     def _draw_demixing_params(self) -> None:
         dmx = self.settings.demixing
@@ -804,18 +783,18 @@ class MaskNMFPipelineWidget(PipelineWidget):
             self._f_float(dmx, "merge_overlap_threshold", "Merge overlap")
             self._f_check(dmx, "reassign_background", "Reassign background")
 
-        def _stable() -> None:
-            self._f_float(dmx, "mad_threshold", "MAD thr", step=0.1, fmt="%.1f")
-            self._f_float(dmx, "residual_threshold", "Residual thr")
-            self._f_int2(dmx, "patch_size", "Patch size", lo=8)
-            self._f_int(dmx, "min_peak_distance", "Min peak dist")
-            self._f_float(dmx, "deletion_threshold", "Deletion thr")
-            self._f_float(dmx, "support_threshold_hi", "Support thr hi")
-            self._f_float(dmx, "min_brightness", "Min brightness", step=0.1, fmt="%.1f")
-            self._f_int(dmx, "update_frequency", "Update freq")
-            self._f_int(dmx, "background_downsampling_factor", "Bg downsample")
+        self._stable_header("demix_stable", partial(self._draw_demixing_stable, dmx))
 
-        self._stable_header("demix_stable", _stable)
+    def _draw_demixing_stable(self, dmx) -> None:
+        self._f_float(dmx, "mad_threshold", "MAD thr", step=0.1, fmt="%.1f")
+        self._f_float(dmx, "residual_threshold", "Residual thr")
+        self._f_int2(dmx, "patch_size", "Patch size", lo=8)
+        self._f_int(dmx, "min_peak_distance", "Min peak dist")
+        self._f_float(dmx, "deletion_threshold", "Deletion thr")
+        self._f_float(dmx, "support_threshold_hi", "Support thr hi")
+        self._f_float(dmx, "min_brightness", "Min brightness", step=0.1, fmt="%.1f")
+        self._f_int(dmx, "update_frequency", "Update freq")
+        self._f_int(dmx, "background_downsampling_factor", "Bg downsample")
 
     def _draw_runtime_row(self) -> None:
         rt = self.settings.runtime
@@ -903,7 +882,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
     def _draw_run(self) -> None:
         planes = self._selected_planes()
-        fpath = getattr(self.parent, "fpath", None)
+        fpath = self.parent.fpath
         has_save_path = bool(self._outdir)
         ready = has_save_path and bool(fpath) and bool(planes)
 
@@ -1017,21 +996,17 @@ class MaskNMFPipelineWidget(PipelineWidget):
             )
             args = {
                 "input_path": str(self.parent.fpath),
-                "reader_kwargs": widget_reader_kwargs(
-                    getattr(self.parent, "image_widget", None)
-                ),
+                "reader_kwargs": widget_reader_kwargs(self.parent.image_widget),
                 "output_dir": output_dir,
                 "planes": planes,
                 "settings": self.settings.to_dict(),
                 "fix_phase": self._fix_phase,
                 "use_fft": self._use_fft,
                 "invert_deflection": self._invert_deflection,
-                "frame_average": int(
-                    getattr(self.parent, "_masknmf_frame_average", 1) or 1
-                ),
+                "frame_average": int(self.parent._masknmf_frame_average or 1),
                 "tp_indices": tp_indices,
                 "channel": channel if (multi_channel or has_channels) else None,
-                "custom_metadata": dict(getattr(self.parent, "_custom_metadata", {})),
+                "custom_metadata": dict(self.parent._custom_metadata),
             }
             if len(planes) == 1:
                 description = f"{self.name} plane{planes[0]:02d}"

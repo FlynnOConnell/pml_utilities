@@ -63,13 +63,11 @@ class OutputMetadata:
     source_dims: tuple[str, ...] | None = None
     selections: dict[str, list[int]] | None = None
 
-    # legacy params for backwards compatibility
     frame_indices: list[int] | None = None
     plane_indices: list[int] | None = None
     source_num_frames: int | None = None
     source_num_planes: int | None = None
 
-    # computed fields
     _is_contiguous: bool = field(default=True, init=False)
     _frame_step: int = field(default=1, init=False)
     _z_step_factor: int = field(default=1, init=False)
@@ -77,7 +75,6 @@ class OutputMetadata:
 
     def __post_init__(self):
         """Compute derived values after init."""
-        # migrate legacy params to selections dict
         if self.selections is None:
             self.selections = {}
 
@@ -86,11 +83,9 @@ class OutputMetadata:
         if self.plane_indices is not None and "Z" not in self.selections:
             self.selections["Z"] = list(self.plane_indices)
 
-        # default to 5D TCZYX if not provided
         if self.source_dims is None:
             self.source_dims = ("T", "C", "Z", "Y", "X")
 
-        # compute derived values
         self._compute_contiguity()
         self._compute_z_step_factor()
         self._compute_output_shape()
@@ -178,8 +173,6 @@ class OutputMetadata:
             return steps[0]
         return 1
 
-    # shape and dimension properties
-
     @property
     def output_shape(self) -> tuple[int, ...]:
         """Shape of output array after selections."""
@@ -240,8 +233,6 @@ class OutputMetadata:
         except ValueError:
             return get_param(self.source, "num_color_channels", default=1) or 1
 
-    # legacy compatibility properties
-
     @property
     def is_contiguous(self) -> bool:
         """Whether frame selection is contiguous with uniform step."""
@@ -274,7 +265,6 @@ class OutputMetadata:
 
     # dz and fs carry `_metadata_provenance` so a second pass over already-scaled
     # metadata does not scale it twice: dz = base * stride, fs = base / stride
-
     def _provenance(self) -> dict:
         """Current provenance dict from source (empty when absent)."""
         prov = self.source.get("_metadata_provenance")
@@ -380,7 +370,6 @@ class OutputMetadata:
             "loop": False,
         }
 
-        # always 5D TZCYX
         n_frames = shape[0]
         n_slices = shape[1]
         n_channels = shape[2]
@@ -486,7 +475,6 @@ class OutputMetadata:
         """
         result = dict(self.source)
 
-        # update shape
         result["shape"] = self.output_shape
 
         # fill spatial dimensions only when the source doesn't already
@@ -498,7 +486,6 @@ class OutputMetadata:
         result.setdefault("Lx", self.Lx)
         result.setdefault("Ly", self.Ly)
 
-        # update with computed voxel size
         vs = self.voxel_size
         result.update(vs.to_dict(include_aliases=include_aliases))
 
@@ -508,9 +495,7 @@ class OutputMetadata:
         if prov_stamp:
             result["_metadata_provenance"] = prov_stamp
 
-        # frame rate / timing. any rate alias the source carried is repaired
-        # (or nulled) alongside the canonicals — otherwise a decimated write
-        # would leave e.g. `framerate` at the source rate while `fs` changed.
+        # NOTE: every rate alias the source carried is repaired or nulled with the canonicals; a decimated write would otherwise leave `framerate` at the source rate while `fs` changed
         fs = self.fs
         finterval = self.finterval
         rate_adjusted = False
@@ -546,15 +531,14 @@ class OutputMetadata:
             if source_fs is not None:
                 result["source_fs"] = source_fs
 
-        # a recomputed (or nulled) rate invalidates any OME block carried
-        # from the source: its time scale still describes the pre-selection
-        # rate, and writers regenerate a fresh OME block from this dict —
-        # a stale carried copy would shadow it and warn on every access.
         if rate_adjusted:
+            # a recomputed (or nulled) rate invalidates any OME block carried
+            # from the source: its time scale still describes the pre-selection
+            # rate, and writers regenerate a fresh OME block from this dict —
+            # a stale carried copy would shadow it and warn on every access.
             for key in ("ome", "multiscales", "_ome_time_scale"):
                 result.pop(key, None)
 
-        # update dimension counts with all aliases
         result["num_timepoints"] = self.num_timepoints
         result["nframes"] = self.num_timepoints
         result["num_frames"] = self.num_timepoints
@@ -571,10 +555,10 @@ class OutputMetadata:
         result["Z"] = self.num_zplanes
         result["nz"] = self.num_zplanes
         result["slices"] = self.num_zplanes
-        result["num_channels"] = self.num_zplanes  # lbm: z-planes as channels
+        result["num_channels"] = self.num_zplanes
+        # lbm: z-planes as channels
         result["num_color_channels"] = self.num_color_channels
 
-        # record selection info
         if self._z_step_factor > 1:
             result["z_step_factor"] = self._z_step_factor
         if self._frame_step > 1:

@@ -104,22 +104,17 @@ def _ref_to_index(x) -> int:
     return _round_half_up(x) - 1
 
 
-def _with_float32_cast(func):
-    """``func`` (or identity) with float32 output, so funcs over integer data
-    are not truncated into an integer texture.
-    """
-    if func is None:
+class _Float32Cast:
+    """``func`` (identity when None) with float32 output, so a func over integer data is not truncated into an integer texture."""
 
-        def _cast(a):
-            return np.asarray(a, dtype=np.float32)
-    else:
+    _mbo_float_cast = True
 
-        def _cast(a):
-            return np.asarray(func(a), dtype=np.float32)
+    def __init__(self, func):
+        self._mbo_user_func = func
 
-    _cast._mbo_float_cast = True
-    _cast._mbo_user_func = func
-    return _cast
+    def __call__(self, a):
+        out = a if self._mbo_user_func is None else self._mbo_user_func(a)
+        return np.asarray(out, dtype=np.float32)
 
 
 async def _noop_indices(*_args, **_kwargs):
@@ -447,7 +442,6 @@ class MboNDViewer:
                         f"data arrays must be array-like with `{attr}`, got: {type(arr)}"
                     )
 
-        # per-array rgb flags
         if rgb is None:
             self._rgb = [bool(getattr(a, "rgb", False)) for a in arrays]
         elif isinstance(rgb, bool):
@@ -560,10 +554,7 @@ class MboNDViewer:
         for arr, cnt in zip(arrays, counts):
             if cnt != n_dims:
                 continue
-            try:
-                labels = getattr(arr, "slider_dim_labels", None)
-            except Exception:
-                continue
+            labels = getattr(arr, "slider_dim_labels", None)
             if labels:
                 labels = tuple(str(x) for x in labels)
                 if len(labels) == n_dims:
@@ -572,16 +563,13 @@ class MboNDViewer:
 
     def _seed_fps_from_data(self):
         """Seed the t playback fps from the first array's ``fs``."""
-        try:
-            arr = self._arrays[0]
-            fs = getattr(arr, "fs", None)
-            if fs is None:
-                from mbo_utilities.metadata import get_param
+        arr = self._arrays[0]
+        fs = getattr(arr, "fs", None)
+        if fs is None:
+            from mbo_utilities.metadata import get_param
 
-                fs = get_param(getattr(arr, "metadata", None), "fs")
-            self._sliders.seed_fps("t", fs)
-        except Exception:
-            pass
+            fs = get_param(getattr(arr, "metadata", None), "fs")
+        self._sliders.seed_fps("t", fs)
 
     def _make_dim_names(
         self, n: int, requested: Sequence[str] | None
@@ -874,7 +862,7 @@ class MboNDViewer:
         ndg = self._ndgraphics[i]
         func = self._routed_spatial.get(i)
         if self._needs_float(i):
-            ndg.slicer.spatial_func = _with_float32_cast(func)
+            ndg.slicer.spatial_func = _Float32Cast(func)
             return self._ensure_float_texture(ndg)
         ndg.slicer.spatial_func = func
         return False
@@ -883,13 +871,7 @@ class MboNDViewer:
         """True when graphic ``i`` shows func output of integer data."""
         ndg = self._ndgraphics[i]
         data = ndg.data
-        if data is None:
-            return False
-        try:
-            kind = np.dtype(data.dtype).kind
-        except Exception:
-            return False
-        if kind not in "bui":
+        if data is None or np.dtype(data.dtype).kind not in "bui":
             return False
         if self._routed_spatial.get(i) is not None:
             return True
@@ -904,13 +886,7 @@ class MboNDViewer:
         one, keeping contrast, camera and stacking; True when rebuilt.
         """
         g = ndg.graphic
-        if g is None:
-            return False
-        try:
-            kind = np.asarray(g.data.value).dtype.kind
-        except Exception:
-            return False
-        if kind not in "bui":
+        if g is None or np.asarray(g.data.value).dtype.kind not in "bui":
             return False
         vmin = getattr(g, "vmin", None)
         vmax = getattr(g, "vmax", None)
@@ -1098,9 +1074,7 @@ class MboNDViewer:
         need = max(counts) if counts else 0
         ri = self._ndw.indices
         ndui = self._ndw.ui_sliders
-        fps_snapshot = (
-            self._sliders._snapshot_fps() if hasattr(self, "_sliders") else None
-        )
+        fps_snapshot = self._sliders._snapshot_fps()
 
         old = list(self._dim_names)
         if len(self._arrays) == 1:
@@ -1129,9 +1103,8 @@ class MboNDViewer:
 
         self._slider_dim_names = tuple(self._dim_names) or None
 
-        if hasattr(self, "_sliders"):
-            self._sliders._after_dims_changed(fps_snapshot)
-            self._seed_fps_from_data()
+        self._sliders._after_dims_changed(fps_snapshot)
+        self._seed_fps_from_data()
 
         self._window_funcs_state = None
         self._window_sizes_state = None

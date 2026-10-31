@@ -21,9 +21,11 @@ break collection.
 
 from __future__ import annotations
 
+import functools
 import os
 import threading
 import time
+import traceback
 from pathlib import Path
 
 os.environ.setdefault("RENDERCANVAS_FORCE_OFFSCREEN", "1")
@@ -740,31 +742,21 @@ class TestImguiWindows:
         polygon(widget, square(30, 30, 20))
         widget.keybinds_open = True
 
-        seen = []
-        real_child = imgui.begin_child
-        real_text = imgui.text_colored
-
-        def spy(name, *args, **kwargs):
-            if isinstance(name, str):
-                seen.append(name)
-            return real_child(name, *args, **kwargs)
-
-        def spy_text(color, text, *args, **kwargs):
-            seen.append(text)
-            return real_text(color, text, *args, **kwargs)
-
+        children = _StrSpy(imgui.begin_child)
+        texts = _SecondArgSpy(imgui.text_colored)
         set_widget_enabled("manual_roi", True, persist=False)
-        imgui.begin_child = spy
-        imgui.text_colored = spy_text
+        imgui.begin_child = children
+        imgui.text_colored = texts
         try:
             errors = draw_frames(widget, 4)
         finally:
-            imgui.begin_child = real_child
-            imgui.text_colored = real_text
+            imgui.begin_child = children.real
+            imgui.text_colored = texts.real
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
+        seen = set(children.seen) | set(texts.seen)
         # masknmf's Curation tab sections, then this tool's
-        assert {"OVERLAY", "SELECTION", "LABELS", "RUN"} <= set(seen)
+        assert {"OVERLAY", "SELECTION", "LABELS", "RUN"} <= seen
         assert "##roi_curation_tab" in seen
 
     def test_the_roi_keys_are_taken_from_the_viewer(self, widget):
@@ -1004,7 +996,7 @@ class TestExchange:
         widget.quick_trace(0)
         pump(widget)
         widget.exchange("export_traces", tmp_path / "traces.csv")
-        with open(tmp_path / "traces.csv") as f:
+        with (tmp_path / "traces.csv").open() as f:
             got = list(csv.reader(f))
         assert got[0][0] == "frame" and len(got[0]) == 2
         assert len(got) == 1 + widget.iw.data[0].shape[0]
@@ -1339,12 +1331,8 @@ class TestRuns:
         from mbo_utilities.gui.roi_runs import RoiRun
 
         widget.fpath = tmp_path / "movie.tif"
-
-        def boom(job):
-            raise ValueError("boom")
-
         widget.manager.submit(
-            RoiRun(kind="extract", tag="x", description="extract rois_x"), boom
+            RoiRun(kind="extract", tag="x", description="extract rois_x"), _raise_boom
         )
         pump(widget)
         assert "failed" in widget._run_error
@@ -1656,20 +1644,14 @@ class TestTracesTab:
         widget.add_roi(square(10, 10, 9))
         widget.quick_trace(0)
         pump(widget)
-        plotted = []
-        real = implot.plot_line
-
-        def spy(name, *a, **k):
-            plotted.append(name)
-            return real(name, *a, **k)
-
-        implot.plot_line = spy
+        lines = _Spy(implot.plot_line)
+        implot.plot_line = lines
         try:
             errors = draw_frames(widget, 3)
         finally:
-            implot.plot_line = real
+            implot.plot_line = lines.real
         assert not errors, errors[0]
-        assert plotted, "the Traces tab never plotted a line"
+        assert lines.seen, "the Traces tab never plotted a line"
 
     def test_a_derived_selection_renders_its_trace(self, widget):
         widget._add_derived(*make_result(widget, [disc(40, 40)], with_traces=True))
@@ -1715,38 +1697,23 @@ class TestTracesTab:
         pump(widget)
         widget.trace_sel = set(widget._trace_rows())
         widget.trace_picked = True
-        plotted = []
-        real = implot.plot_line
-
-        def spy(name, *a, **k):
-            plotted.append(name)
-            return real(name, *a, **k)
-
-        implot.plot_line = spy
+        lines = _Spy(implot.plot_line)
+        implot.plot_line = lines
         try:
             errors = draw_frames(widget, 2)
         finally:
-            implot.plot_line = real
+            implot.plot_line = lines.real
         assert not errors, errors[0]
-        assert len(set(plotted)) == 2, plotted
+        assert len(set(lines.seen)) == 2, lines.seen
 
     def test_trace_table_renders(self, widget):
-        import traceback
-
         widget.add_roi(square(10, 10, 9))
         widget.quick_trace(0)
         pump(widget)
-        errors = []
-
-        def body(*_args):
-            try:
-                widget.draw_trace_table()
-            except Exception:
-                errors.append(traceback.format_exc())
-
+        body = _Guard(widget.draw_trace_table)
         widget.strip._update_calls[:] = [body]
         widget.iw.figure.canvas.draw()
-        assert not errors, errors[0]
+        assert not body.errors, body.errors[0]
 
     def test_arrows_step_the_roi_table_and_the_traces_follow(self, widget):
         """Masknmf's up / down walk the ROIs table; the plot shows the row landed on."""
@@ -2092,55 +2059,115 @@ def in_window(name, draw, size=(600, 760)):
         imgui.end()
 
 
+class _Spy:
+    """Stands in for an imgui call: records the label (the first argument, positional or keyword) of every call and passes it on to ``real``."""
+
+    def __init__(self, real):
+        self.real = real
+        self.seen = []
+
+    def record(self, label, args, kwargs):
+        self.seen.append(label)
+
+    def __call__(self, *args, **kwargs):
+        self.record(args[0] if args else next(iter(kwargs.values())), args, kwargs)
+        return self.real(*args, **kwargs)
+
+
+class _StrSpy(_Spy):
+    def record(self, label, args, kwargs):
+        if isinstance(label, str):
+            self.seen.append(label)
+
+
+class _SecondArgSpy(_Spy):
+    def record(self, label, args, kwargs):
+        self.seen.append(args[1] if len(args) > 1 else kwargs["text"])
+
+
+class _RowSpy(_Spy):
+    def record(self, label, args, kwargs):
+        if "##row" in label:
+            self.seen.append(label)
+
+
+class _SmallButtonSpy(_Spy):
+    """Records each label with the cursor x and the width left at the call."""
+
+    def record(self, label, args, kwargs):
+        from imgui_bundle import imgui
+
+        self.seen.append(
+            (label, imgui.get_cursor_pos_x(), imgui.get_content_region_avail().x)
+        )
+
+
+class _Guard:
+    """Runs ``fns`` in order as the strip's update call; a raise, which rendercanvas swallows, lands in ``errors`` as a traceback."""
+
+    def __init__(self, *fns, reraise=False):
+        self.fns = fns
+        self.reraise = reraise
+        self.errors = []
+        self.calls = 0
+
+    def __call__(self, *_args):
+        self.calls += 1
+        try:
+            for fn in self.fns:
+                fn()
+        except Exception:
+            self.errors.append(traceback.format_exc())
+            if self.reraise:
+                raise
+
+
+class _KwargsSink:
+    """A run function that keeps the kwargs it was called with and returns None."""
+
+    def __init__(self):
+        self.seen = {}
+
+    def __call__(self, *args, **kwargs):
+        self.seen.update(kwargs)
+        return None
+
+
+class _BareHost:
+    manual_roi = None
+    image_widget = None
+
+
+def _raise_boom(job):
+    raise ValueError("boom")
+
+
 def draw_frames(widget, n=4, tabs=True, foreign=False):
     """Render n frames with the top strip guarded; returns its tracebacks.
 
-    A raise inside an imgui update call is swallowed by rendercanvas, so
-    collect it off the guard rather than letting the draw look clean.
     ``foreign`` draws a window of some other tool where the ROIs tab would be.
     """
-    import traceback
-
     from imgui_bundle import imgui
 
-    errors = []
-
-    strip = widget.strip
-
-    def guarded(*_args):
-        try:
-            strip.update()
-            if tabs:
-                in_window("##rois_tab", widget.draw_rois)
-            if foreign:
-                in_window("##another_tool", imgui.separator)
-        except Exception:
-            errors.append(traceback.format_exc())
-
-    strip._update_calls[:] = [guarded]
-    for _ in range(n):
-        widget.iw.figure.canvas.draw()
-    return errors
-
-
-def draw_tab_frames(widget, n=2):
-    """Same as draw_frames for the ROIs tab body, which the strip window is
-    happy to host: it only needs to sit inside some imgui window.
-    """
-    import traceback
-
-    errors = []
-
-    def guarded(*_args):
-        try:
-            widget.draw_tab()
-        except Exception:
-            errors.append(traceback.format_exc())
-
+    fns = [widget.strip.update]
+    if tabs:
+        fns.append(functools.partial(in_window, "##rois_tab", widget.draw_rois))
+    if foreign:
+        fns.append(functools.partial(in_window, "##another_tool", imgui.separator))
+    guarded = _Guard(*fns)
     widget.strip._update_calls[:] = [guarded]
     for _ in range(n):
         widget.iw.figure.canvas.draw()
-    return errors
+    return guarded.errors
+
+
+def draw_tab_frames(widget, n=2):
+    """``draw_frames`` for the ROIs tab body, which the strip window hosts: it only needs to sit inside some imgui window."""
+    guarded = _Guard(widget.draw_tab)
+    widget.strip._update_calls[:] = [guarded]
+    for _ in range(n):
+        widget.iw.figure.canvas.draw()
+    return guarded.errors
 
 
 def send(widget, kind, x, y, button=1, modifiers=()):
@@ -2441,39 +2468,24 @@ class TestWidgetAttach:
         # focus_tab selects the ROI tab on the first frame, so its body
         # (draw_rois) actually runs; a draw error inside the imgui update is
         # swallowed by rendercanvas, so capture it here
-        seen, errors = [], []
-        real = imgui.begin_tab_item
-
-        def spy(label, *args, **kwargs):
-            seen.append(label)
-            return real(label, *args, **kwargs)
-
-        original_draw_tab = roi.draw_rois
-        ran = []
-
-        def guarded():
-            ran.append(True)
-            try:
-                original_draw_tab()
-            except Exception as exc:  # noqa: BLE001 - reported below
-                errors.append(exc)
-                raise
-
-        ts.imgui.begin_tab_item = spy
+        tabs = _Spy(imgui.begin_tab_item)
+        guarded = _Guard(roi.draw_rois, reraise=True)
+        ts.imgui.begin_tab_item = tabs
         roi.draw_rois = guarded
         try:
             panel_errors = draw_frames(roi, 4, tabs=False)
         finally:
-            ts.imgui.begin_tab_item = real
+            ts.imgui.begin_tab_item = tabs.real
             iw.close()
 
+        seen = tabs.seen
         assert not panel_errors, f"ROI panel raised: {panel_errors[0]}"
         assert "ROIs" in seen, f"ROIs tab missing from tab bar: {seen}"
         assert "Traces" in seen, f"Traces tab missing from tab bar: {seen}"
         assert "Runs" not in seen, "the Runs tab was removed"
         assert "Image" in seen and "Process" in seen, "the other tabs must survive"
-        assert ran, "ROI tab body never drew"
-        assert not errors, f"ROI tab raised: {errors}"
+        assert guarded.calls, "ROI tab body never drew"
+        assert not guarded.errors, f"ROI tab raised: {guarded.errors}"
         assert roi.focus_tab is False, "focus must be one-shot"
 
 
@@ -2641,20 +2653,11 @@ class TestTracePlotView:
 
     def _draw(self, widget, frames=1):
         """Draw the Traces panel ``frames`` times; raises what it raised."""
-        import traceback
-
-        errors = []
-
-        def body(*_args):
-            try:
-                widget.draw_traces()
-            except Exception:
-                errors.append(traceback.format_exc())
-
+        body = _Guard(widget.draw_traces)
         widget.strip._update_calls[:] = [body]
         for _ in range(frames):
             widget.iw.figure.canvas.draw()
-        assert not errors, errors[0]
+        assert not body.errors, body.errors[0]
 
     def _two_traces(self, widget):
         for i in range(2):
@@ -2969,20 +2972,15 @@ class TestPipelineParams:
         assert "demix:force" in detail
 
     def test_demix_run_carries_the_settings(self, widget, monkeypatch, tmp_path):
-        seen = {}
-
-        def fake_demix(src, store, indices, **kwargs):
-            seen.update(kwargs)
-            return None
-
-        monkeypatch.setattr("mbo_utilities.gui.roi.jobs.demix_rois", fake_demix)
+        demix = _KwargsSink()
+        monkeypatch.setattr("mbo_utilities.gui.roi.jobs.demix_rois", demix)
         widget.fpath = tmp_path / "movie.tif"
         widget.host = _StubHost(masknmf=_StubSettings({"runtime": {"device": "cpu"}}))
         widget.engine = "masknmf"
         widget.add_roi(square(10, 10, 9))
         widget.run_rois([0], "params")
         pump(widget)
-        assert seen.get("settings") == {"runtime": {"device": "cpu"}}
+        assert demix.seen.get("settings") == {"runtime": {"device": "cpu"}}
 
     def test_the_selection_row_carries_masknmfs_buttons(self, widget):
         """Masknmf's SELECTION row: center, draw, add ROI, delete, then this
@@ -2991,21 +2989,16 @@ class TestPipelineParams:
         from imgui_bundle import imgui
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        seen = []
-        real_button = imgui.button
-
-        def button_spy(label, *args, **kwargs):
-            seen.append(label)
-            return real_button(label, *args, **kwargs)
-
+        buttons = _Spy(imgui.button)
         set_widget_enabled("manual_roi", True, persist=False)
-        imgui.button = button_spy
+        imgui.button = buttons
         try:
             errors = draw_frames(widget, 3)
         finally:
-            imgui.button = real_button
+            imgui.button = buttons.real
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
+        seen = buttons.seen
         ids = [label.split("##")[-1] for label in seen[: len(seen) // 3]]
         row = [
             "roi_center",
@@ -3210,10 +3203,7 @@ class TestHelpAndKeysAreAppWide:
     def test_the_help_viewer_lists_the_roi_tab_only_with_the_widget(self):
         from mbo_utilities.gui import _help_viewer
 
-        class _Parent:
-            manual_roi = None
-
-        parent = _Parent()
+        parent = _BareHost()
         assert [name for name, _ in _help_viewer.docs_for(parent)] == [
             name for name, _ in _help_viewer.DOCS
         ]
@@ -3226,10 +3216,7 @@ class TestHelpAndKeysAreAppWide:
         from mbo_utilities.gui.manual_roi import KEYBINDS
         from mbo_utilities.gui.widgets.menu_bar import _roi_keybinds
 
-        class _Parent:
-            manual_roi = None
-
-        parent = _Parent()
+        parent = _BareHost()
         assert _roi_keybinds(parent) == []
         parent.manual_roi = object()
         rows = _roi_keybinds(parent)
@@ -3333,33 +3320,17 @@ class TestAdoptingRunsStartedElsewhere:
         from imgui_bundle import imgui
 
         widget._add_derived(*make_result(widget, [disc(40, 40)], with_traces=True))
-        labels = []
-        real = imgui.selectable
-
-        def spy(label, *args, **kwargs):
-            if "##row" in label:
-                labels.append(label)
-            return real(label, *args, **kwargs)
-
-        import traceback
-
-        errors = []
-
-        def body(*_args):
-            try:
-                widget.draw_trace_table()
-            except Exception:
-                errors.append(traceback.format_exc())
-
+        rows = _RowSpy(imgui.selectable)
+        body = _Guard(widget.draw_trace_table)
         widget.strip._update_calls[:] = [body]
-        imgui.selectable = spy
+        imgui.selectable = rows
         try:
             for _ in range(2):
                 widget.iw.figure.canvas.draw()
         finally:
-            imgui.selectable = real
-        assert not errors, errors[0]
-        assert labels, "no trace rows drawn"
+            imgui.selectable = rows.real
+        assert not body.errors, body.errors[0]
+        assert rows.seen, "no trace rows drawn"
         assert widget._trace_keys == [("member", "find01", 0)]
 
 
@@ -3430,28 +3401,16 @@ class TestLabelButtons:
         from imgui_bundle import imgui
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        seen, small = [], []
-        real_button, real_small = imgui.button, imgui.small_button
-
-        def button_spy(label, *args, **kwargs):
-            seen.append(label)
-            return real_button(label, *args, **kwargs)
-
-        def small_spy(label, *args, **kwargs):
-            small.append(
-                (label, imgui.get_cursor_pos_x(), imgui.get_content_region_avail().x)
-            )
-            return real_small(label, *args, **kwargs)
-
+        buttons, small = _Spy(imgui.button), _SmallButtonSpy(imgui.small_button)
         set_widget_enabled("manual_roi", True, persist=False)
-        imgui.button, imgui.small_button = button_spy, small_spy
+        imgui.button, imgui.small_button = buttons, small
         try:
             errors = draw_frames(widget, 3)
         finally:
-            imgui.button, imgui.small_button = real_button, real_small
+            imgui.button, imgui.small_button = buttons.real, small.real
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
-        return seen, small
+        return buttons.seen, small.seen
 
     def test_class_buttons_paint_their_own_columns(self, widget):
         widget.store.add_label_name("spine")
@@ -3624,22 +3583,16 @@ class TestColorBy:
         from imgui_bundle import imgui
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        seen = []
-        real = imgui.combo
-
-        def spy(label, *args, **kwargs):
-            seen.append(label)
-            return real(label, *args, **kwargs)
-
+        combos = _Spy(imgui.combo)
         set_widget_enabled("manual_roi", True, persist=False)
-        imgui.combo = spy
+        imgui.combo = combos
         try:
             errors = draw_frames(widget, 2)
         finally:
-            imgui.combo = real
+            imgui.combo = combos.real
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
-        assert "##color_by" in seen and "##color_cmap" in seen
+        assert "##color_by" in combos.seen and "##color_cmap" in combos.seen
 
 
 class TestSliderRoles:

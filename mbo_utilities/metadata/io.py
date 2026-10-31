@@ -28,7 +28,6 @@ __all__ = [
     "get_metadata_batch",
     "get_metadata_single",
     "imagej_hyperstack_counts",
-    # file I/O functions
     "is_raw_scanimage",
     "query_tiff_pages",
 ]
@@ -50,7 +49,6 @@ def _metadata_from_ops(ops: dict) -> dict:
     dict
         Metadata dictionary with standard keys.
     """
-    # Use get_param for consistent value extraction across aliases
     result = {
         "num_planes": get_param(ops, "nplanes", default=1),
         "Lx": get_param(ops, "Lx"),
@@ -71,7 +69,6 @@ def _metadata_from_ops(ops: dict) -> dict:
         "dtype": "int16",
         "source": "ops_fallback",
     }
-    # Filter out None values
     return {k: v for k, v in result.items() if v is not None}
 
 
@@ -98,23 +95,14 @@ def is_raw_scanimage(file: os.PathLike | str) -> bool:
         return False
     try:
         with tifffile.TiffFile(file) as tf:
-            # must have scanimage metadata
             if tf.scanimage_metadata is None:
                 return False
 
-            # check for our custom tag 50839 (mbo processed file marker)
-            # if present, this is a processed file, not raw
             page0 = tf.pages.first
             if page0 and 50839 in page0.tags:
                 return False
 
-            # check shaped_metadata - if it has content, likely processed
-            if (
-                hasattr(tf, "shaped_metadata")
-                and tf.shaped_metadata is not None
-                and isinstance(tf.shaped_metadata, (list, tuple))
-                and len(tf.shaped_metadata) > 0
-            ):
+            if isinstance(tf.shaped_metadata, (list, tuple)) and tf.shaped_metadata:
                 return False
 
             return True
@@ -190,17 +178,14 @@ def get_metadata(
     >>> files = ["scan_00001.tif", "scan_00002.tif", "scan_00003.tif"]
     >>> meta = get_metadata(files, dz=5.0)
     """
-    # Handle z_step alias for backward compatibility
     if dz is None and z_step is not None:
         dz = z_step
 
-    # Convert input to Path object and handle different input types
     if hasattr(file, "metadata"):
         metadata = dict(file.metadata) if file.metadata else {}
         return normalize_resolution(metadata, dx=dx, dy=dy, dz=dz)
 
     if isinstance(file, (list, tuple)):
-        # make sure all values in the list are strings or paths
         if not all(isinstance(f, (str, os.PathLike)) for f in file):
             raise ValueError(
                 "All items in the list must be of type str or os.PathLike."
@@ -213,7 +198,6 @@ def get_metadata(
     file_path = Path(file)
 
     if file_path.is_dir():
-        # check for .zarr , get_files doesn't work on nested zarr files
         if file_path.suffix in [".zarr"]:
             metadata = get_metadata_single(file_path)
             return normalize_resolution(metadata, dx=dx, dy=dy, dz=dz)
@@ -287,23 +271,20 @@ def _imagej_to_metadata(tiff_file) -> dict:
 
     spacing = ij.get("spacing")
     if spacing:
-        md["spacing"] = float(spacing)  # -> dz (registry rename alias)
+        md["spacing"] = float(spacing)
     finterval = ij.get("finterval")
     if finterval:
-        md["finterval"] = float(finterval)  # -> fs (registry transform alias)
+        md["finterval"] = float(finterval)
     unit = ij.get("unit")
     if unit:
         md["unit"] = unit
 
-    # X/Y resolution tags are pixels-per-unit; the registry maps them to the
-    # reciprocal (µm/px). Require an explicit micron unit (ImageJ always writes
-    # one when calibrated), so an uncalibrated or inch/cm-scanned image doesn't
-    # yield a bogus dx/dy. Accept both the micro sign (U+00B5) and Greek mu
-    # (U+03BC) spellings of "µm".
+    # NOTE: resolution tags are pixels per unit: without a micron unit an inch-scanned or uncalibrated image gives a bogus dx; both µ spellings (U+00B5, U+03BC) occur
     micron_units = {"micron", "microns", "um", "µm", "μm", "micrometer", "micrometers"}
     if page0 is not None and unit and str(unit).lower() in micron_units:
         for tag in ("XResolution", "YResolution"):
-            value = getattr(page0.tags.get(tag), "value", None)
+            tag_obj = page0.tags.get(tag)
+            value = tag_obj.value if tag_obj is not None else None
             if isinstance(value, (tuple, list)) and len(value) == 2 and value[1]:
                 md[tag] = value[0] / value[1]
             elif isinstance(value, (int, float)) and value:
@@ -311,8 +292,6 @@ def _imagej_to_metadata(tiff_file) -> dict:
     return md
 
 
-# OME unit symbols -> µm / seconds. OME defaults are µm and s when the
-# *Unit attribute is absent.
 _OME_LENGTH_TO_UM = {
     "pm": 1e-6,
     "nm": 1e-3,
@@ -347,7 +326,7 @@ def _ome_to_metadata(tiff_file) -> dict:
     """
     import xml.etree.ElementTree as ET
 
-    xml_text = getattr(tiff_file, "ome_metadata", None)
+    xml_text = tiff_file.ome_metadata
     if not xml_text:
         return {}
     try:
@@ -355,10 +334,7 @@ def _ome_to_metadata(tiff_file) -> dict:
     except ET.ParseError:
         return {}
 
-    def _local(el):
-        return el.tag.rsplit("}", 1)[-1]
-
-    pixels = next((el for el in root.iter() if _local(el) == "Pixels"), None)
+    pixels = next((el for el in root.iter() if _ome_local_name(el) == "Pixels"), None)
     if pixels is None:
         return {}
 
@@ -389,272 +365,180 @@ def _ome_to_metadata(tiff_file) -> dict:
         if scale is not None:
             md["TimeIncrement"] = float(value) * scale
 
-    # "channel_names", not "channels": that key is a layout-count alias
     names = [
         el.attrib["Name"]
         for el in pixels
-        if _local(el) == "Channel" and el.attrib.get("Name")
+        if _ome_local_name(el) == "Channel" and el.attrib.get("Name")
     ]
     if names:
         md["channel_names"] = names
 
-    image = next((el for el in root.iter() if _local(el) == "Image"), None)
+    image = next((el for el in root.iter() if _ome_local_name(el) == "Image"), None)
     if image is not None:
         if image.attrib.get("Name"):
             md["image_name"] = image.attrib["Name"]
         for el in image:
-            if _local(el) == "AcquisitionDate" and el.text and el.text.strip():
+            if _ome_local_name(el) == "AcquisitionDate" and el.text and el.text.strip():
                 md["acquisition_date"] = el.text.strip()
-            elif _local(el) == "Description" and el.text and el.text.strip():
+            elif _ome_local_name(el) == "Description" and el.text and el.text.strip():
                 md["description"] = el.text.strip()
     return md
 
 
+def _ops_fallback(file: Path) -> dict:
+    """``_metadata_from_ops`` of the nearest ``ops.npy`` above ``file``, else ``{"source": "no_metadata"}``."""
+    for parent in Path(file).parents:
+        ops_path = parent / "ops.npy"
+        if ops_path.exists():
+            result = _metadata_from_ops(load_npy(ops_path).item())
+            if "plane0" in str(parent).lower():
+                result["num_planes"] = 1
+            return result
+    return {"source": "no_metadata"}
+
+
+def _processed_tiff_metadata(tiff_file, file: Path) -> dict:
+    """The metadata a non-ScanImage tiff carries: shaped metadata, else the ImageJ or OME layout with any embedded mbo JSON layered under it, else tag 50839 or the page description alone."""
+    if tiff_file.shaped_metadata:
+        return tiff_file.shaped_metadata[0]
+    tag_meta = _read_ij_tag_50839(tiff_file)
+    if tiff_file.is_imagej:
+        meta = _imagej_to_metadata(tiff_file)
+        if isinstance(tag_meta, dict):
+            layout = {k: meta[k] for k in ("frames", "slices", "channels")}
+            meta.update(tag_meta)
+            meta.update(layout)
+        return meta
+    if tiff_file.is_ome:
+        meta = _ome_to_metadata(tiff_file)
+        if meta:
+            if isinstance(tag_meta, dict):
+                layout = {k: meta[k] for k in ("SizeT", "SizeZ", "SizeC") if k in meta}
+                meta.update(tag_meta)
+                meta.update(layout)
+            return meta
+    if isinstance(tag_meta, dict):
+        return tag_meta
+    page0 = tiff_file.pages.first
+    if page0 and page0.description:
+        try:
+            meta = json.loads(page0.description)
+        except json.JSONDecodeError:
+            meta = None
+        if isinstance(meta, dict):
+            return meta
+    raise ValueError(f"No metadata found in {file}.")
+
+
+def _scanimage_tiff_metadata(tiff_file, file: Path) -> dict:
+    """The deposit for a raw ScanImage tiff: the mROI geometry, the interleaved page count and the ``si`` header, through ``clean_scanimage_metadata``."""
+    meta = tiff_file.scanimage_metadata
+    if not meta:
+        logger.info(f"{file} has no scanimage_metadata, trying ops.npy fallback.")
+        return _ops_fallback(file)
+
+    from mbo_utilities._writers import _make_json_serializable as _serialize
+
+    si = meta.get("FrameData", {})
+    if not si:
+        logger.warning(f"No FrameData found in {file}.")
+        return {"source": "scanimage_no_framedata"}
+
+    shape = tiff_file.pages[0].shape
+    roi_group = meta.get("RoiGroups", {}).get("imagingRoiGroup", {}).get("rois")
+    if roi_group is None:
+        logger.warning(f"No ROI information found in {file}.")
+        return {"source": "scanimage_no_rois"}
+    if isinstance(roi_group, dict):
+        roi_group = [roi_group]
+    num_rois = len(roi_group)
+
+    channel_save = si.get("SI.hChannels.channelSave")
+    if channel_save is None or isinstance(channel_save, (int, float)):
+        nchannels = 1
+    else:
+        nchannels = len(channel_save)
+
+    zoom_factor = si.get("SI.hRoiManager.scanZoomFactor")
+    uniform_sampling = si.get("SI.hScan2D.uniformSampling", "NA")
+    objective_resolution = si.get("SI.objectiveResolution", 1.0)
+    frame_rate = si.get("SI.hRoiManager.scanFrameRate")
+
+    fly_to_time = float(si.get("SI.hScan2D.flytoTimePerScanfield", 0))
+    line_period = float(si.get("SI.hRoiManager.linePeriod", 1))
+    num_fly_to_lines = round(fly_to_time / line_period) if line_period > 0 else 0
+
+    sizes = []
+    num_pixel_xys = []
+    for roi in roi_group:
+        scanfields = roi.get("scanfields")
+        if scanfields is None:
+            continue
+        if isinstance(scanfields, list):
+            scanfields = scanfields[0] if scanfields else {}
+        size_xy = scanfields.get("sizeXY")
+        pixel_res = scanfields.get("pixelResolutionXY")
+        if size_xy:
+            sizes.append(size_xy)
+        if pixel_res:
+            num_pixel_xys.append(pixel_res)
+
+    if not sizes or not num_pixel_xys:
+        logger.warning(f"Could not extract ROI size/resolution from {file}.")
+        return {"source": "scanimage_no_roi_sizes"}
+
+    size_xy = sizes[0]
+    num_pixel_xy = num_pixel_xys[0]
+    roi_fov_x_um = round(objective_resolution * size_xy[0])
+    roi_fov_y_um = round(objective_resolution * size_xy[1])
+    pixel_resolution = (
+        roi_fov_x_um / num_pixel_xy[0],
+        roi_fov_y_um / num_pixel_xy[1],
+    )
+    roi_width, roi_height = (
+        num_pixel_xy[0],
+        num_pixel_xy[1],
+    )
+
+    metadata = {
+        "nchannels": nchannels,
+        "num_rois": num_rois,
+        "roi": (roi_width, roi_height),  # one strip; fov is every strip side by side
+        "fov": (num_rois * roi_width, roi_height),
+        "fov_um": (num_rois * roi_fov_x_um, roi_fov_y_um),
+        "frame_rate": frame_rate,
+        "pixel_resolution": np.round(pixel_resolution, 2),
+        "ndim": len(shape),
+        "dtype": "int16",
+        "size": np.prod(shape),
+        "page_height": shape[0],
+        "page_width": shape[1],
+        "objective_resolution": objective_resolution,
+        "zoom_factor": zoom_factor,
+        "uniform_sampling": uniform_sampling,
+        "num_fly_to_lines": num_fly_to_lines,
+        "roi_heights": [px[1] for px in num_pixel_xys],
+        "roi_groups": _serialize(roi_group),
+        "si": _serialize(si),
+    }
+    return clean_scanimage_metadata(metadata)
+
+
 def get_metadata_single(file: Path):
-    """
-    Extract metadata from a single TIFF file produced by ScanImage or processed via the save_as function.
+    """The metadata of one file: a zarr, h5 or mesc through its reader; a raw ScanImage tiff from its header; any other tiff from what it embeds (``_processed_tiff_metadata``).
 
-    Parameters
-    ----------
-    file : Path
-        The full path to the TIFF file from which metadata is to be extracted.
-    verbose : bool, optional
-        If True, returns an extended metadata dictionary that includes all available ScanImage attributes.
-        Default is False.
-    z_step : float, optional
-        The z-step size in microns. If provided, it will be included in the returned metadata.
-
-    Returns
-    -------
-    dict
-        A dictionary containing the extracted metadata (e.g., number of planes, frame rate, field-of-view,
-        pixel resolution).
-
-    Raises
-    ------
-    ValueError
-        If no recognizable metadata is found in the TIFF file (e.g., the file is not a valid ScanImage TIFF).
-
-    Notes
-    -----
-    - num_timepoints represents the T dimension (sequential timepoints)
-
-    Examples
-    --------
-    >>> mdata = get_metadata("path/to/rawscan_00001.tif")
-    >>> print(mdata["num_timepoints"])
+    >>> get_metadata_single(Path("rawscan_00001.tif"))["num_timepoints"]
     5345
-    >>> mdata = get_metadata("path/to/assembled_data.tif")
-    >>> print(mdata["shape"])
-    (14, 5345, 477, 477)
-    >>> meta_verbose = get_metadata("path/to/scanimage_file.tif", verbose=True)
-    >>> print(meta_verbose["all"])
-    {... Includes all ScanImage FrameData ...}
     """
     if file.suffix in [".zarr", ".h5", ".mesc"]:
         from mbo_utilities import imread
 
-        file = imread(file)
-        return file.metadata
+        return imread(file).metadata
 
-    tiff_file = tifffile.TiffFile(file)
-    if not is_raw_scanimage(file):
-        # try shaped_metadata first (tifffile shaped format)
-        if (
-            hasattr(tiff_file, "shaped_metadata")
-            and tiff_file.shaped_metadata is not None
-            and len(tiff_file.shaped_metadata) > 0
-        ):
-            return tiff_file.shaped_metadata[0]
-
-        # IJMetadata tag (50839): mbo stores its full JSON here under 'Info';
-        # Fiji stores slice 'Labels'.
-        tag_meta = _read_ij_tag_50839(tiff_file)
-
-        # ImageJ / Fiji hyperstacks: deposit the source dimension + voxel tags
-        # so dims/labels and reactive dz/fs/dx/dy resolve. Any embedded mbo
-        # metadata (tag 'Info') is layered on top and wins.
-        if getattr(tiff_file, "is_imagej", False):
-            meta = _imagej_to_metadata(tiff_file)
-            if isinstance(tag_meta, dict):
-                # Info JSON supplements, but the ImageJ page-layout counts
-                # (written from the actual array shape) stay authoritative — a
-                # stale source `channels`/`slices` must not redefine the layout.
-                layout = {k: meta[k] for k in ("frames", "slices", "channels")}
-                meta.update(tag_meta)
-                meta.update(layout)
-            return meta
-
-        # OME-TIFF: deposit the OME-XML Pixels attributes so dims and
-        # dx/dy/dz/fs resolve through the registry. Embedded mbo metadata
-        # supplements, but the OME dimension counts stay authoritative.
-        if getattr(tiff_file, "is_ome", False):
-            meta = _ome_to_metadata(tiff_file)
-            if meta:
-                if isinstance(tag_meta, dict):
-                    layout = {
-                        k: meta[k] for k in ("SizeT", "SizeZ", "SizeC") if k in meta
-                    }
-                    meta.update(tag_meta)
-                    meta.update(layout)
-                return meta
-
-        if isinstance(tag_meta, dict):
-            return tag_meta
-
-        # fallback: try reading JSON from first page description
-        # (this is how _write_tiff stores metadata in non-ImageJ mode)
-        try:
-            page0 = tiff_file.pages.first
-            if page0 and page0.description:
-                meta = json.loads(page0.description)
-                if isinstance(meta, dict):
-                    return meta
-        except (json.JSONDecodeError, TypeError, AttributeError):
-            pass
-
-        raise ValueError(f"No metadata found in {file}.")
-
-    if hasattr(tiff_file, "scanimage_metadata"):
-        meta = tiff_file.scanimage_metadata
-        # if no ScanImage metadata at all → fallback immediately
-        if not meta:
-            logger.info(f"{file} has no scanimage_metadata, trying ops.npy fallback.")
-            for parent in Path(file).parents:
-                ops_path = parent / "ops.npy"
-                if ops_path.exists():
-                    try:
-                        ops = load_npy(ops_path).item()
-                        return _metadata_from_ops(ops)
-                    except Exception as e:
-                        logger.warning(f"Failed ops.npy fallback for {file}: {e}")
-            return {"source": "no_metadata"}
-
-        from mbo_utilities._writers import _make_json_serializable as _serialize
-
-        si = meta.get("FrameData", {})
-        if not si:
-            logger.warning(f"No FrameData found in {file}.")
-            return {"source": "scanimage_no_framedata"}
-
-        pages = tiff_file.pages
-        first_page = pages[0]
-        shape = first_page.shape
-
-        # Extract ROI and imaging metadata with defensive access
-        roi_groups_container = meta.get("RoiGroups", {})
-        imaging_roi_group = roi_groups_container.get("imagingRoiGroup", {})
-        roi_group = imaging_roi_group.get("rois")
-
-        if roi_group is None:
-            logger.warning(f"No ROI information found in {file}.")
-            return {"source": "scanimage_no_rois"}
-
-        if isinstance(roi_group, dict):
-            num_rois = 1
-            roi_group = [roi_group]
-        else:
-            num_rois = len(roi_group)
-
-        # nchannels = interleaved channels in TIFF (len(channelSave)) - used for shape/indexing
-        # num_planes and num_color_channels are computed by clean_scanimage_metadata after
-        # it transforms the flat si keys to nested structure
-        channel_save = si.get("SI.hChannels.channelSave")
-        if channel_save is None or isinstance(channel_save, (int, float)):
-            nchannels = 1
-        else:
-            nchannels = len(channel_save)
-
-        zoom_factor = si.get("SI.hRoiManager.scanZoomFactor")
-        uniform_sampling = si.get("SI.hScan2D.uniformSampling", "NA")
-        objective_resolution = si.get("SI.objectiveResolution", 1.0)
-        frame_rate = si.get("SI.hRoiManager.scanFrameRate")
-
-        fly_to_time = float(si.get("SI.hScan2D.flytoTimePerScanfield", 0))
-        line_period = float(si.get("SI.hRoiManager.linePeriod", 1))
-        num_fly_to_lines = round(fly_to_time / line_period) if line_period > 0 else 0
-
-        sizes = []
-        num_pixel_xys = []
-        for roi in roi_group:
-            scanfields = roi.get("scanfields")
-            if scanfields is None:
-                continue
-            if isinstance(scanfields, list):
-                scanfields = scanfields[0] if scanfields else {}
-            size_xy = scanfields.get("sizeXY")
-            pixel_res = scanfields.get("pixelResolutionXY")
-            if size_xy:
-                sizes.append(size_xy)
-            if pixel_res:
-                num_pixel_xys.append(pixel_res)
-
-        if not sizes or not num_pixel_xys:
-            logger.warning(f"Could not extract ROI size/resolution from {file}.")
-            return {"source": "scanimage_no_roi_sizes"}
-
-        size_xy = sizes[0]
-        num_pixel_xy = num_pixel_xys[0]
-
-        roi_fov_x_um = round(objective_resolution * size_xy[0])
-        roi_fov_y_um = round(objective_resolution * size_xy[1])
-        pixel_resolution = (
-            roi_fov_x_um / num_pixel_xy[0],
-            roi_fov_y_um / num_pixel_xy[1],
-        )
-
-        # roi is per-strip dimensions (width, height)
-        # fov/fov_um are total tiled field of view (num_rois * per-roi)
-        roi_width, roi_height = num_pixel_xy[0], num_pixel_xy[1]
-
-        metadata = {
-            "nchannels": nchannels,  # interleaved channels in TIFF (for shape calculation)
-            "num_rois": num_rois,
-            "roi": (roi_width, roi_height),
-            "fov": (num_rois * roi_width, roi_height),
-            "fov_um": (num_rois * roi_fov_x_um, roi_fov_y_um),
-            "frame_rate": frame_rate,
-            "pixel_resolution": np.round(pixel_resolution, 2),
-            "ndim": len(shape),
-            "dtype": "int16",
-            "size": np.prod(shape),
-            "page_height": shape[0],
-            "page_width": shape[1],
-            "objective_resolution": objective_resolution,
-            "zoom_factor": zoom_factor,
-            "uniform_sampling": uniform_sampling,
-            "num_fly_to_lines": num_fly_to_lines,
-            "roi_heights": [px[1] for px in num_pixel_xys],
-            "roi_groups": _serialize(roi_group),
-            "si": _serialize(si),
-        }
-        return clean_scanimage_metadata(metadata)
-
-    logger.info(f"No ScanImage metadata found in {file}, trying ops.npy fallback.")
-    # fallback: no ScanImage metadata, try nearby ops.npy
-    ops_path = Path(file).with_name("ops.npy")
-    if not ops_path.exists():
-        # climb until you find suite2p or root
-        for parent in Path(file).parents:
-            ops_path = parent / "ops.npy"
-            if ops_path.exists():
-                try:
-                    ops = load_npy(ops_path).item()
-                    result = _metadata_from_ops(ops)
-                    # single-plane suite2p folder → force to 1
-                    if "plane0" in str(ops_path.parent).lower():
-                        result["num_planes"] = 1
-                    return result
-                except Exception as e:
-                    logger.warning(f"Failed ops.npy fallback for {file}: {e}")
-    if ops_path.exists():
-        logger.info(f"Found ops.npy at {ops_path}, attempting to load.")
-        try:
-            ops = load_npy(ops_path).item()
-            return _metadata_from_ops(ops)
-        except Exception as e:
-            logger.warning(f"Failed ops.npy fallback for {file}: {e}")
-    return {"source": "no_metadata"}
+    with tifffile.TiffFile(file) as tiff_file:
+        if is_raw_scanimage(file):
+            return _scanimage_tiff_metadata(tiff_file, file)
+        return _processed_tiff_metadata(tiff_file, file)
 
 
 def get_metadata_batch(file_paths: list | tuple):
@@ -674,13 +558,9 @@ def get_metadata_batch(file_paths: list | tuple):
     if not file_paths:
         raise ValueError("No files provided")
 
-    # Get metadata from first file only
     metadata = get_metadata_single(file_paths[0])
-    # nchannels = interleaved pages per frame (for LBM: beamlets, for single-plane: PMT channels)
-    # this is what we divide by to get frame count, not num_planes (spatial z-planes)
     nchannels = metadata.get("nchannels", 1)
 
-    # count frames for all files (page-header read, sub-millisecond per file)
     _t0 = time.perf_counter()
     frames_per_file = [query_tiff_pages(fp) // nchannels for fp in file_paths]
     logger.debug(
@@ -693,8 +573,8 @@ def get_metadata_batch(file_paths: list | tuple):
     total_frames = sum(frames_per_file)
     return metadata | {
         "num_timepoints": total_frames,
-        "nframes": total_frames,  # suite2p alias
-        "num_frames": total_frames,  # legacy alias
+        "nframes": total_frames,
+        "num_frames": total_frames,
         "frames_per_file": frames_per_file,
         "file_paths": [str(fp) for fp in file_paths],
         "num_files": len(file_paths),
@@ -725,22 +605,18 @@ def query_tiff_pages(file_path):
     file_size = os.path.getsize(file_path)
 
     with open(file_path, "rb") as f:
-        # Read header (8 bytes)
         header = f.read(8)
 
-        # Detect byte order
         if header[:2] == b"II":
-            bo = "<"  # Little-endian
+            bo = "<"
         elif header[:2] == b"MM":
-            bo = ">"  # Big-endian
+            bo = ">"
         else:
             raise ValueError("Not a TIFF file")
 
-        # Detect TIFF version
         version = struct.unpack(f"{bo}H", header[2:4])[0]
 
         if version == 42:
-            # Classic TIFF (32-bit offsets)
             offset_fmt = f"{bo}I"
             offset_size = 4
             tag_count_fmt = f"{bo}H"
@@ -750,7 +626,6 @@ def query_tiff_pages(file_path):
             header_size = 8
 
         elif version == 43:
-            # BigTIFF (64-bit offsets)
             offset_fmt = f"{bo}Q"
             offset_size = 8
             tag_count_fmt = f"{bo}Q"
@@ -763,28 +638,18 @@ def query_tiff_pages(file_path):
         else:
             raise ValueError(f"Unknown TIFF version: {version}")
 
-        # Go to first IFD
         f.seek(first_ifd_offset)
 
-        # Read tag count, then the whole tag block
         tag_count = struct.unpack(tag_count_fmt, f.read(tag_count_size))[0]
         tag_block = f.read(tag_count * tag_size)
 
-        # Read second IFD offset (follows the tag block)
         second_ifd_offset = struct.unpack(offset_fmt, f.read(offset_size))[0]
 
         if second_ifd_offset == 0:
-            return 1  # Only one page
+            return 1
 
-        # Calculate page size (IFD + image data for one page)
         page_size = second_ifd_offset - first_ifd_offset
 
-        # The estimate assumes [IFD][data][IFD][data]... layout. Writers that
-        # cluster IFDs apart from the pixel data (Femtonics / Bio-Formats
-        # OME-TIFFs) have an IFD stride far smaller than one page of data,
-        # inflating the estimate ~1000x. Bound the stride by the first page's
-        # uncompressed data size; when it can't hold a page, count the IFD
-        # chain directly instead.
         bigtiff = version == 43
         width = height = None
         bits, spp, compression = 8, 1, 1
@@ -822,8 +687,8 @@ def query_tiff_pages(file_path):
                 offset_size,
             )
 
-        # Calculate total pages
         data_size = file_size - header_size
+        # NOTE: assumes [IFD][data][IFD][data]; writers that cluster IFDs (Femtonics, Bio-Formats OME) would inflate this ~1000x, so the stride is bounded by one page of data above
         num_pages = data_size // page_size
 
         return int(num_pages)
@@ -877,6 +742,93 @@ def _count_ifd_chain(
     return count
 
 
+def _json_serializable(value) -> bool:
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _ome_local_name(el) -> str:
+    return el.tag.rsplit("}", 1)[-1]
+
+
+def _clean_value(x):
+    if x is None:
+        return None
+    if isinstance(x, (np.generic,)):
+        x = x.item()
+    if isinstance(x, np.ndarray):
+        if x.size == 0:
+            return None
+        x = x.tolist()
+    if isinstance(x, float):
+        if not np.isfinite(x):
+            return None
+        return x
+    if isinstance(x, (int, bool)):
+        return x
+    if isinstance(x, str):
+        s = x.strip()
+        return s if s != "" else None
+    if isinstance(x, (list, tuple)):
+        out = []
+        for v in x:
+            cv = _clean_value(v)
+            if cv is not None:
+                out.append(cv)
+        return out if out else None
+    if isinstance(x, dict):
+        out = {}
+        for k, v in x.items():
+            cv = _clean_value(v)
+            if cv is not None:
+                out[str(k)] = cv
+        return out if out else None
+    return x if _json_serializable(x) else None
+
+
+def _prune_empty(d):
+    if not isinstance(d, dict):
+        return d
+    for k in list(d.keys()):
+        v = d[k]
+        if isinstance(v, dict):
+            pv = _prune_empty(v)
+            if pv and len(pv) > 0:
+                d[k] = pv
+            else:
+                d.pop(k, None)
+        elif v in (None, [], ""):
+            d.pop(k, None)
+    return d
+
+
+def _collect_si_keys(node):
+    out = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if isinstance(k, str) and k.startswith("SI."):
+                out.append((k, v))
+            out.extend(_collect_si_keys(v))
+    elif isinstance(node, (list, tuple)):
+        for v in node:
+            out.extend(_collect_si_keys(v))
+    return out
+
+
+def _nest_into_si(root_dict, dotted_key, value):
+    dotted_key = dotted_key.removeprefix("SI.")
+
+    parts = dotted_key.split(".")
+    cur = root_dict
+    for p in parts[:-1]:
+        cur = cur.setdefault(p, {})
+    leaf = parts[-1]
+    cur[leaf] = _clean_value(value)
+
+
 def clean_scanimage_metadata(meta: dict) -> dict:
     """
     Build a JSON-serializable, nicely nested dict from ScanImage metadata.
@@ -885,114 +837,29 @@ def clean_scanimage_metadata(meta: dict) -> dict:
     - All 'SI.*' keys (from anywhere) are nested under 'si' with 'SI.' prefix stripped
     - So SI.hChannels.channelSave -> metadata['si']['hChannels']['channelSave']
     """
-
-    def _clean(x):
-        if x is None:
-            return None
-        if isinstance(x, (np.generic,)):
-            x = x.item()
-        if isinstance(x, np.ndarray):
-            if x.size == 0:
-                return None
-            x = x.tolist()
-        if isinstance(x, float):
-            if not np.isfinite(x):
-                return None
-            return x
-        if isinstance(x, (int, bool)):
-            return x
-        if isinstance(x, str):
-            s = x.strip()
-            return s if s != "" else None
-        if isinstance(x, (list, tuple)):
-            out = []
-            for v in x:
-                cv = _clean(v)
-                if cv is not None:
-                    out.append(cv)
-            return out if out else None
-        if isinstance(x, dict):
-            out = {}
-            for k, v in x.items():
-                cv = _clean(v)
-                if cv is not None:
-                    out[str(k)] = cv
-            return out if out else None
-        try:
-            json.dumps(x)
-            return x
-        except Exception:
-            return None
-
-    def _prune(d):
-        if not isinstance(d, dict):
-            return d
-        for k in list(d.keys()):
-            v = d[k]
-            if isinstance(v, dict):
-                pv = _prune(v)
-                if pv and len(pv) > 0:
-                    d[k] = pv
-                else:
-                    d.pop(k, None)
-            elif v in (None, [], ""):
-                d.pop(k, None)
-        return d
-
-    def _collect_SI_keys(node):
-        """Collect all 'SI.*' keys anywhere in the tree."""
-        out = []
-        if isinstance(node, dict):
-            for k, v in node.items():
-                if isinstance(k, str) and k.startswith("SI."):
-                    out.append((k, v))
-                # Recurse into nested dicts/lists
-                out.extend(_collect_SI_keys(v))
-        elif isinstance(node, (list, tuple)):
-            for v in node:
-                out.extend(_collect_SI_keys(v))
-        return out
-
-    def _nest_into_si(root_dict, dotted_key, value):
-        """Nest 'SI.hChannels.channelSave' into root_dict as ['hChannels']['channelSave']."""
-        # Strip 'SI.' prefix
-        dotted_key = dotted_key.removeprefix("SI.")
-
-        parts = dotted_key.split(".")
-        cur = root_dict
-        for p in parts[:-1]:
-            cur = cur.setdefault(p, {})
-        leaf = parts[-1]
-        cur[leaf] = _clean(value)
-
-    # 1) Copy all top-level keys EXCEPT 'si'
     result = {}
     for k, v in meta.items():
         if k == "si":
             continue
-        cv = _clean(v)
+        cv = _clean_value(v)
         if cv is not None:
             result[k] = cv
 
-    # 2) Initialize 'si' dict
     result["si"] = {}
 
-    # 3) Add non-SI.* keys from meta['si'] (like RoiGroups, etc.)
     if isinstance(meta.get("si"), dict):
         for k, v in meta["si"].items():
             if not (isinstance(k, str) and k.startswith("SI.")):
-                cv = _clean(v)
+                cv = _clean_value(v)
                 if cv is not None:
                     result["si"][k] = cv
 
-    # 4) Collect ALL 'SI.*' keys from entire meta tree and nest under result['si']
-    si_pairs = _collect_SI_keys(meta)
+    si_pairs = _collect_si_keys(meta)
     for dotted_key, val in si_pairs:
         _nest_into_si(result["si"], dotted_key, val)
 
-    result = _prune(result)
+    result = _prune_empty(result)
 
-    # 5) Add derived ScanImage stack detection fields
     from .scanimage import (
         detect_stack_type,
         get_frame_rate,
@@ -1009,30 +876,25 @@ def clean_scanimage_metadata(meta: dict) -> dict:
         result["piezo_stack"] = stack_type == "piezo"
         result["num_color_channels"] = get_num_color_channels(result)
 
-        # set num_planes from stack detection if not already present
         if "num_zplanes" not in result and "num_planes" not in result:
             num_z = get_num_zplanes(result)
             result["num_zplanes"] = num_z
-            result["num_planes"] = num_z  # alias for ScanImageArray
+            result["num_planes"] = num_z
 
-        # add dz if available from ScanImage (but NOT for LBM - user must supply)
         if stack_type != "lbm":
             dz = get_z_step_size(result)
             if dz is not None:
                 result["dz"] = dz
 
-        # add frame rate if available
         fs = get_frame_rate(result)
         if fs is not None:
             result["fs"] = fs
 
-        # add ROI/FOV info (don't overwrite existing values)
         roi_info = get_roi_info(result)
         for k, v in roi_info.items():
             if v is not None and k not in result:
                 result[k] = v
 
-    # add all standard aliases for backward compatibility
     from .params import normalize_metadata
 
     normalize_metadata(result)
@@ -1043,111 +905,97 @@ def clean_scanimage_metadata(meta: dict) -> dict:
 def default_ops():
     """Default options to run pipeline."""
     return {
-        # file input/output settings
-        "look_one_level_down": False,  # whether to look in all subfolders when searching for tiffs
-        "fast_disk": [],  # used to store temporary binary file, defaults to save_path0
-        "delete_bin": False,  # whether to delete binary file after processing
-        "mesoscan": False,  # for reading in scanimage mesoscope files
-        "bruker": False,  # whether or not single page BRUKER tiffs!
-        "bruker_bidirectional": False,  # bidirectional multiplane in bruker: 0, 1, 2, 2, 1, 0 (True) vs 0, 1, 2, 0, 1, 2 (False)
-        "h5py": [],  # take h5py as input (deactivates data_path)
-        "h5py_key": "data",  # key in h5py where data array is stored
+        "look_one_level_down": False,
+        "fast_disk": [],
+        "delete_bin": False,
+        "mesoscan": False,
+        "bruker": False,
+        "bruker_bidirectional": False,
+        "h5py": [],
+        "h5py_key": "data",
         "nwb_file": "",
         "nwb_driver": "",
         "nwb_series": "",
-        "save_path0": "",  # pathname where you'd like to store results, defaults to first item in data_path
-        "save_folder": [],  # directory you"d like suite2p results to be saved to
-        "subfolders": [],  # subfolders you"d like to search through when look_one_level_down is set to True
-        "move_bin": False,  # if 1, and fast_disk is different than save_disk, binary file is moved to save_disk
-        # main settings
-        "nplanes": 1,  # each tiff has these many planes in sequence
-        "nchannels": 1,  # each tiff has these many channels per plane
-        "functional_chan": 1,  # this channel is used to extract functional ROIs (1-based)
-        "tau": 1.3,  # this is the main parameter for deconvolution
-        "fs": 10.0,  # sampling rate (PER PLANE e.g. for 12 plane recordings it will be around 2.5)
-        "force_sktiff": False,  # whether or not to use scikit-image for tiff reading
+        "save_path0": "",
+        "save_folder": [],
+        "subfolders": [],
+        "move_bin": False,
+        "nplanes": 1,
+        "nchannels": 1,
+        "functional_chan": 1,
+        "tau": 1.3,
+        "fs": 10.0,
+        "force_sktiff": False,
         "frames_include": -1,
-        "multiplane_parallel": False,  # whether or not to run on server
+        "multiplane_parallel": False,
         "ignore_flyback": [],
-        # output settings
-        "preclassify": 0.0,  # apply classifier before signal extraction with probability 0.3
-        "save_mat": False,  # whether to save output as matlab files
+        "preclassify": 0.0,
+        "save_mat": False,
         "save_NWB": False,
-        "combined": True,  # combine multiple planes into a single result /single canvas for GUI
-        "aspect": 1.0,  # um/pixels in X / um/pixels in Y (for correct aspect ratio in GUI)
-        # bidirectional phase offset
-        "do_bidiphase": False,  # whether or not to compute bidirectional phase offset (applies to 2P recordings only)
-        "bidiphase": 0,  # Bidirectional Phase offset from line scanning (set by user). Applied to all frames in recording.
-        "bidi_corrected": False,  # Whether to do bidirectional correction during registration
-        # registration settings
-        "do_registration": True,  # whether to register data (2 forces re-registration)
-        "two_step_registration": False,  # whether or not to run registration twice (useful for low SNR data). Set keep_movie_raw to True if setting this parameter to True.
-        "keep_movie_raw": False,  # whether to keep binary file of non-registered frames.
-        "nimg_init": 300,  # subsampled frames for finding reference image
-        "batch_size": 500,  # number of frames per batch
-        "maxregshift": 0.1,  # max allowed registration shift, as a fraction of frame max(width and height)
-        "align_by_chan": 1,  # when multi-channel, you can align by non-functional channel (1-based)
-        "reg_tif": False,  # whether to save registered tiffs
-        "reg_tif_chan2": False,  # whether to save channel 2 registered tiffs
-        "subpixel": 10,  # precision of subpixel registration (1/subpixel steps)
-        "smooth_sigma_time": 0,  # gaussian smoothing in time
-        "smooth_sigma": 1.15,  # ~1 good for 2P recordings, recommend 3-5 for 1P recordings
-        "th_badframes": 1.0,  # this parameter determines which frames to exclude when determining cropping - set it smaller to exclude more frames
-        "norm_frames": True,  # normalize frames when detecting shifts
-        "force_refImg": False,  # if True, use refImg stored in ops if available
-        "pad_fft": False,  # if True, pads image during FFT part of registration
-        # non rigid registration settings
-        "nonrigid": True,  # whether to use nonrigid registration
+        "combined": True,
+        "aspect": 1.0,
+        "do_bidiphase": False,
+        "bidiphase": 0,
+        "bidi_corrected": False,
+        "do_registration": True,
+        "two_step_registration": False,
+        "keep_movie_raw": False,
+        "nimg_init": 300,
+        "batch_size": 500,
+        "maxregshift": 0.1,
+        "align_by_chan": 1,
+        "reg_tif": False,
+        "reg_tif_chan2": False,
+        "subpixel": 10,
+        "smooth_sigma_time": 0,
+        "smooth_sigma": 1.15,
+        "th_badframes": 1.0,
+        "norm_frames": True,
+        "force_refImg": False,
+        "pad_fft": False,
+        "nonrigid": True,
         "block_size": [
             128,
             128,
-        ],  # block size to register (** keep this a multiple of 2 **)
-        "snr_thresh": 1.2,  # if any nonrigid block is below this threshold, it gets smoothed until above this threshold. 1.0 results in no smoothing
-        "maxregshiftNR": 5,  # maximum pixel shift allowed for nonrigid, relative to rigid
-        # 1P settings
-        "1Preg": False,  # whether to perform high-pass filtering and tapering
-        "spatial_hp_reg": 42,  # window for spatial high-pass filtering before registration
-        "pre_smooth": 0,  # whether to smooth before high-pass filtering before registration
-        "spatial_taper": 40,  # how much to ignore on edges (important for vignetted windows, for FFT padding do not set BELOW 3*ops["smooth_sigma"])
-        # cell detection settings with suite2p
-        "roidetect": True,  # whether or not to run ROI extraction
-        "spikedetect": True,  # whether or not to run spike deconvolution
-        "sparse_mode": True,  # whether or not to run sparse_mode
-        "spatial_scale": 0,  # 0: multi-scale; 1: 6 pixels, 2: 12 pixels, 3: 24 pixels, 4: 48 pixels
-        "connected": True,  # whether or not to keep ROIs fully connected (set to 0 for dendrites)
-        "nbinned": 5000,  # max number of binned frames for cell detection
-        "max_iterations": 20,  # maximum number of iterations to do cell detection
-        "threshold_scaling": 1.0,  # adjust the automatically determined threshold by this scalar multiplier
-        "max_overlap": 0.75,  # cells with more overlap than this get removed during triage, before refinement
-        "high_pass": 100,  # running mean subtraction across bins with a window of size "high_pass" (use low values for 1P)
-        "spatial_hp_detect": 25,  # window for spatial high-pass filtering for neuropil subtraction before detection
-        "denoise": False,  # denoise binned movie for cell detection in sparse_mode
-        # cell detection settings with cellpose (used if anatomical_only > 0)
-        "anatomical_only": 0,  # run cellpose to get masks on 1: max_proj / mean_img; 2: mean_img; 3: mean_img enhanced, 4: max_proj
-        "diameter": 0,  # use diameter for cellpose, if 0 estimate diameter
-        "cellprob_threshold": 0.0,  # cellprob_threshold for cellpose
-        "flow_threshold": 1.5,  # flow_threshold for cellpose
-        "spatial_hp_cp": 0,  # high-pass image spatially by a multiple of the diameter
-        "pretrained_model": "cyto",  # path to pretrained model or model type string in Cellpose (can be user model)
-        # classification parameters
-        "soma_crop": True,  # crop dendrites for cell classification stats like compactness
-        # ROI extraction parameters
-        "neuropil_extract": True,  # whether or not to extract neuropil; if False, Fneu is set to zero
-        "inner_neuropil_radius": 2,  # number of pixels to keep between ROI and neuropil donut
-        "min_neuropil_pixels": 350,  # minimum number of pixels in the neuropil
-        "lam_percentile": 50.0,  # percentile of lambda within area to ignore when excluding cell pixels for neuropil extraction
-        "allow_overlap": False,  # pixels that are overlapping are thrown out (False) or added to both ROIs (True)
-        "use_builtin_classifier": False,  # whether or not to use built-in classifier for cell detection (overrides
-        # classifier specified in classifier_path if set to True)
-        "classifier_path": "",  # path to classifier
-        # channel 2 detection settings (stat[n]["chan2"], stat[n]["not_chan2"])
-        "chan2_thres": 0.65,  # minimum for detection of brightness on channel 2
-        # deconvolution settings
-        "baseline": "maximin",  # baselining mode (can also choose "prctile")
-        "win_baseline": 60.0,  # window for maximin
-        "sig_baseline": 10.0,  # smoothing constant for gaussian filter
-        "prctile_baseline": 8.0,  # optional (whether to use a percentile baseline)
-        "neucoeff": 0.7,  # neuropil coefficient
+        ],
+        "snr_thresh": 1.2,
+        "maxregshiftNR": 5,
+        "1Preg": False,
+        "spatial_hp_reg": 42,
+        "pre_smooth": 0,
+        "spatial_taper": 40,
+        "roidetect": True,
+        "spikedetect": True,
+        "sparse_mode": True,
+        "spatial_scale": 0,
+        "connected": True,
+        "nbinned": 5000,
+        "max_iterations": 20,
+        "threshold_scaling": 1.0,
+        "max_overlap": 0.75,
+        "high_pass": 100,
+        "spatial_hp_detect": 25,
+        "denoise": False,
+        "anatomical_only": 0,
+        "diameter": 0,
+        "cellprob_threshold": 0.0,
+        "flow_threshold": 1.5,
+        "spatial_hp_cp": 0,
+        "pretrained_model": "cyto",
+        "soma_crop": True,
+        "neuropil_extract": True,
+        "inner_neuropil_radius": 2,
+        "min_neuropil_pixels": 350,
+        "lam_percentile": 50.0,
+        "allow_overlap": False,
+        "use_builtin_classifier": False,
+        "classifier_path": "",
+        "chan2_thres": 0.65,
+        "baseline": "maximin",
+        "win_baseline": 60.0,
+        "sig_baseline": 10.0,
+        "prctile_baseline": 8.0,
+        "neucoeff": 0.7,
     }
 
 
@@ -1182,14 +1030,12 @@ def _build_ome_metadata(
         normalize_dims,
     )
 
-    # determine dims
     ndim = len(shape)
     if dims is None:
         dims = infer_dims(ndim)
     else:
         dims = normalize_dims(dims)
 
-    # use standard metadata extraction for consistent handling of aliases
     from mbo_utilities.metadata.params import get_param, get_voxel_size
 
     vs = get_voxel_size(metadata)
@@ -1197,10 +1043,8 @@ def _build_ome_metadata(
 
     time_scale = 1.0 / float(frame_rate) if frame_rate else 1.0
 
-    # build OME-NGFF v0.5 axes from dims
     axes = dims_to_ome_axes(dims)
 
-    # build scale values matching dimension order
     scale_values = []
     for dim in dims:
         if dim == "T":
@@ -1212,7 +1056,7 @@ def _build_ome_metadata(
         elif dim == "X":
             scale_values.append(float(vs.dx))
         else:
-            scale_values.append(1.0)  # C, V, B, etc.
+            scale_values.append(1.0)
 
     datasets = [
         {
@@ -1221,8 +1065,6 @@ def _build_ome_metadata(
         }
     ]
 
-    # ngff 0.5: per-multiscale `version` was removed (lives only on parent
-    # `ome` object). strict schema also requires `metadata` and `type`.
     multiscales = [
         {
             "name": metadata.get("name", "volume"),
@@ -1236,7 +1078,6 @@ def _build_ome_metadata(
         }
     ]
 
-    # Build OME content
     ome_content = {
         "version": "0.5",
         "multiscales": multiscales,
@@ -1244,10 +1085,8 @@ def _build_ome_metadata(
 
     result = {"ome": ome_content}
 
-    # Add custom metadata fields (ScanImage, acquisition info, etc.)
     custom_meta = {}
 
-    # Add ScanImage metadata
     if "si" in metadata:
         si = metadata["si"]
         custom_meta["scanimage"] = {
@@ -1259,14 +1098,12 @@ def _build_ome_metadata(
             "scan_mode": si.get("hScan2D", {}).get("scanMode", "unknown"),
         }
 
-        # Add beam/laser info
         if "hBeams" in si:
             custom_meta["scanimage"]["laser_power"] = si["hBeams"].get("powers", 0)
             custom_meta["scanimage"]["power_fraction"] = si["hBeams"].get(
                 "powerFractions", 0
             )
 
-        # Add ROI info
         if "hRoiManager" in si:
             roi_mgr = si["hRoiManager"]
             custom_meta["scanimage"]["roi"] = {
@@ -1277,11 +1114,9 @@ def _build_ome_metadata(
                 "bidirectional": si.get("hScan2D", {}).get("bidirectional", True),
             }
 
-    # Add ROI groups information
     if "roi_groups" in metadata:
         custom_meta["roi_groups"] = metadata["roi_groups"]
 
-    # Add acquisition metadata
     acq_meta = {}
     for key in ["acquisition_date", "experimenter", "description", "specimen"]:
         if key in metadata:
@@ -1290,7 +1125,6 @@ def _build_ome_metadata(
     if acq_meta:
         custom_meta["acquisition"] = acq_meta
 
-    # Add microscope metadata
     microscope_meta = {}
     for key in [
         "objective",
@@ -1304,7 +1138,6 @@ def _build_ome_metadata(
     if microscope_meta:
         custom_meta["microscope"] = microscope_meta
 
-    # Add processing metadata
     processing_meta = {}
     for key in ["fix_phase", "phasecorr_method", "use_fft", "register_z"]:
         if key in metadata:
@@ -1313,7 +1146,6 @@ def _build_ome_metadata(
     if processing_meta:
         custom_meta["processing"] = processing_meta
 
-    # Add file info
     if "file_paths" in metadata or "num_files" in metadata:
         custom_meta["source_files"] = {
             "num_files": metadata.get("num_files"),
@@ -1323,15 +1155,12 @@ def _build_ome_metadata(
             "frames_per_file": metadata.get("frames_per_file"),
         }
 
-    # Add all serializable custom metadata
     for key, value in custom_meta.items():
-        try:
-            json.dumps(value)
+        if _json_serializable(value):
             result[key] = value
-        except (TypeError, ValueError):
+        else:
             logger.debug(f"Skipping non-serializable metadata key: {key}")
 
-    # Add any other simple metadata fields
     for key, value in metadata.items():
         if (
             key
@@ -1365,10 +1194,7 @@ def _build_ome_metadata(
             ]
             and key not in result
         ):
-            try:
-                json.dumps(value)
+            if _json_serializable(value):
                 result[key] = value
-            except (TypeError, ValueError):
-                pass
 
     return result

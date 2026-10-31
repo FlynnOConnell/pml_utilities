@@ -454,8 +454,7 @@ WINDOWS = tuple(
 )
 
 # the vnoiser window sketch: the file's scans as (unit, length, ticked), the domain table as
-# (name, text, ROIs) and the seven lines on their picture as (x0, y0, x1, y1) fractions of the card
-SCANS = (
+SCANS = (  # (name, text, ROIs) and the seven lines on their picture as (x0, y0, x1, y1) fractions of the card
     ("MUnit_30 (on screen)", "300 s", True),
     ("MUnit_32", "10 s", False),
     ("MUnit_27", "30 s", False),
@@ -479,9 +478,9 @@ OWNER = tuple(
     for k in range(len(LINES))
 )
 
+CALLS = ("yes", "auto_yes", "yes", "auto_no", "auto_yes", "no")
 # the curation sketch: each spike is a candidate with a label, a likeness to the template, a spot on
 # the PCA and a snippet as wide as given; the lines sit at these heights of the trace
-CALLS = ("yes", "auto_yes", "yes", "auto_no", "auto_yes", "no")
 COSINES = (0.97, 0.88, 0.95, 0.41, 0.98, 0.52)
 PCA = (
     (0.78, 0.60),
@@ -499,11 +498,11 @@ SNIPPETS = tuple(
     tuple(0.1 + 0.8 * h * math.exp(-(((u - 20) / 20 / width) ** 2)) for u in range(41))
     for (_s, h), width in zip(SPIKES, SNIPPET_WIDTHS, strict=True)
 )
-# the template: the mean snippet of the events it is built from
 TEMPLATE_SOURCE = (0, 1, 2, 4)
+# the template: the mean snippet of the events it is built from
 TEMPLATE = tuple(np.mean([SNIPPETS[k] for k in TEMPLATE_SOURCE], axis=0).tolist())
-# the A1 to A4 sliders as (name, colour, where the grab sits, the count under it)
 SLIDERS = (
+    # the A1 to A4 sliders as (name, colour, where the grab sits, the count under it)
     ("thr", THRESHOLD, THRESHOLD_AT, "6 found"),
     ("peak", AUTO_PASS, AUTO_PASS_AT, "3/6"),
     ("PC1", PC1, PC1_AT, "4/6"),
@@ -648,15 +647,15 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     imgui.set_next_window_size_constraints(
         imgui.ImVec2(0, 0), imgui.ImVec2(viewport.size.x, 0.94 * viewport.size.y)
     )
-    # the sketches are drawn for a dark backdrop: a host with see-through windows would show through them
     imgui.set_next_window_bg_alpha(1.0)
+    # the sketches are drawn for a dark backdrop: a host with see-through windows would show through them
     opened, is_open = popup(f"{TITLE} guide", is_open)
     if not opened:
         imgui.end()
         return is_open, keys_open
     dl = imgui.get_window_draw_list()
-    # the cursor sweeps the sketches every 7.5 s; the ROI on screen and the focused candidate step every 1.5 s
     now = imgui.get_time()
+    # the cursor sweeps the sketches every 7.5 s; the ROI on screen and the focused candidate step every 1.5 s
     cursor = now * 8.0 % SPAN
     roi = int(now / 1.5) % len(LINES)
     focus = int(now / 1.5) % len(SPIKES)
@@ -722,8 +721,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
         box(dl, x, p.y, bw, bh, label, color, 0.18)
     imgui.dummy(imgui.ImVec2(w, bh))
     imgui.dummy(imgui.ImVec2(0, 0.1 * em))
-    # the trace after three of the stages, named in a gutter on the left, the detected peaks as dots
     p = imgui.get_cursor_screen_pos()
+    # the trace after three of the stages, named in a gutter on the left, the detected peaks as dots
     ph = 8.4 * em
     top = card(dl, p.x, p.y, w, 1.2 * em + ph, "a made-up domain's trace")
     gutter = 5.5 * em
@@ -741,8 +740,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
         polyline(dl, x0, y + 0.12 * slot, pw, 0.76 * slot, TRACES[kind], u32(color))
     y = top + 2 * slot + 0.12 * slot
     for s, h in SPIKES:
-        # the weakest spike is under the peak detector's height; the curation window still offers it
         if h > 0.5:
+            # the weakest spike is under the peak detector's height; the curation window still offers it
             at = imgui.ImVec2(
                 x0 + s / SPAN * pw, y + 0.76 * slot * (1.0 - (0.08 + 0.8 * h))
             )
@@ -756,8 +755,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     )
     imgui.dummy(imgui.ImVec2(w, 1.2 * em + ph))
     imgui.dummy(imgui.ImVec2(0, 0.1 * em))
-    # the bands before and after the mask, the event windows outlined on the second
     p = imgui.get_cursor_screen_pos()
+    # the bands before and after the mask, the event windows outlined on the second
     gap = 0.4 * em
     cw, ih = (w - gap) / 2, 6.0 * em
     heat = u32(ACCENT) & 0xFFFFFF
@@ -842,8 +841,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
         )
         dl.add_text(imgui.ImVec2(x + 1.7 * em, ry), u32(TEXT), name)
         dl.add_text(imgui.ImVec2(x + 6.4 * em, ry), u32(TEXT), text)
-    # the scan's lines where they were drawn, the one the ROI slider is on lit
     x += dw + gap
+    # the scan's lines where they were drawn, the one the ROI slider is on lit
     top = card(dl, x, p.y, lw, ch, f"MUnit_30    ROI {roi + 1} / {len(LINES)}    ch 1")
     ih = ch - 1.2 * em
     dl.add_rect_filled_multi_color(
@@ -862,8 +861,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
             dl.add_line(a, b, u32(GROUP[OWNER[k]]), 0.26 * em)
         else:
             dl.add_line(a, b, u32(GROUP[OWNER[k]], 0.55), 2.0)
-    # the slice line and the run under them: the domain holding the ROI, cut down to it
     y = p.y + ch + gap
+    # the slice line and the run under them: the domain holding the ROI, cut down to it
     run_w = 9.0 * em
     strip = (
         f"Frames     47620 of 47620  ·  ch 1  ·  polarity: flip z          "
@@ -884,8 +883,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     table("domains", DOMAIN_RULES)
 
     heading(fa.ICON_FA_CHECK_DOUBLE, "The curation window")
-    # the trace row: A with its two lines, the candidates in their label colours, the sliders beside it
     p = imgui.get_cursor_screen_pos()
+    # the trace row: A with its two lines, the candidates in their label colours, the sliders beside it
     col = 2.7 * em
     sliders_w = len(SLIDERS) * col + 0.8 * em
     aw, ah = w - sliders_w - gap, 7.0 * em
@@ -933,8 +932,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
                 u32(tint),
                 text,
             )
-    # the candidate row: the template, the focused candidate over it, every candidate on the PCA
     y = p.y + 1.2 * em + ah + gap
+    # the candidate row: the template, the focused candidate over it, every candidate on the PCA
     bw, bh = (w - 2 * gap) / 3, 6.2 * em
     top = card(dl, p.x, y, bw, 1.2 * em + bh, "B. Current template")
     for k in TEMPLATE_SOURCE:
@@ -1005,8 +1004,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
         if k == focus:
             dl.add_circle(at, 0.58 * em, u32(TEXT), 0, 1.5)
     imgui.dummy(imgui.ImVec2(w, y + 1.2 * em + bh - p.y))
-    # the label colours, as the dots carry them
     p = imgui.get_cursor_screen_pos()
+    # the label colours, as the dots carry them
     x = p.x
     for name, color in LABELS.items():
         text = name.replace("_", " ")

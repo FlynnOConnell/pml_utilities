@@ -1,9 +1,4 @@
-"""
-Global Metadata Editor Dialog.
-
-This module provides the metadata editor popup that allows users to define
-metadata fields before processing or saving data.
-"""
+"""The Set Metadata popup: the host's ``_custom_metadata`` overrides, edited per canonical key."""
 
 from __future__ import annotations
 
@@ -12,7 +7,6 @@ from typing import Any
 
 from imgui_bundle import hello_imgui, imgui
 
-from mbo_utilities.gui._imgui_helpers import PopupAutoSize
 from mbo_utilities.metadata import get_filename_suggestions, parse_filename_metadata
 
 _COL_SET = imgui.ImVec4(0.5, 0.8, 0.5, 1.0)
@@ -32,9 +26,9 @@ def _field_tooltip(field: dict) -> str:
 
 def _input_tooltip(dtype) -> str:
     tip = "Type a value and click Set to save"
-    if dtype == str:
+    if dtype is str:
         tip += " (text)"
-    elif dtype == float:
+    elif dtype is float:
         tip += " (number)"
     return tip
 
@@ -47,32 +41,24 @@ def _push_wrap_at_edge() -> None:
     )
 
 
-def _apply_set(
-    parent: Any, current_data: Any, canonical: str, dtype, input_key: str
-) -> None:
-    input_val = getattr(parent, input_key).strip()
+def _apply_set(parent: Any, current_data: Any, canonical: str, dtype) -> None:
+    input_val = parent._meta_inputs.get(canonical, "").strip()
     if not input_val:
         return
     try:
         parsed = dtype(input_val)
-        parent._custom_metadata[canonical] = parsed
-        if current_data and hasattr(current_data, "metadata"):
-            if isinstance(current_data.metadata, dict):
-                current_data.metadata[canonical] = parsed
-        setattr(parent, input_key, "")
-    except (ValueError, TypeError):
-        pass
+    except ValueError:  # text that is not a number stays in the box
+        return
+    parent._custom_metadata[canonical] = parsed
+    if current_data is not None:
+        current_data.metadata[canonical] = parsed
+    parent._meta_inputs[canonical] = ""
 
 
 def _apply_clear(parent: Any, current_data: Any, canonical: str) -> None:
     del parent._custom_metadata[canonical]
-    if (
-        current_data
-        and hasattr(current_data, "metadata")
-        and isinstance(current_data.metadata, dict)
-        and canonical in current_data.metadata
-    ):
-        del current_data.metadata[canonical]
+    if current_data is not None:
+        current_data.metadata.pop(canonical, None)
 
 
 def _apply_custom_add(parent: Any) -> None:
@@ -84,53 +70,13 @@ def _apply_custom_add(parent: Any) -> None:
     parent._custom_value = ""
 
 
-def _get_suggested_metadata(parent: Any) -> list:
-    """Get suggested metadata fields from array."""
-    try:
-        current_data = parent.image_widget.data[0]
-    except (IndexError, AttributeError):
-        return []
-
-    fields = []
-
-    # get array-specific suggested fields (e.g., from LBMArray)
-    if current_data and hasattr(current_data, "get_suggested_metadata"):
-        fields.extend(current_data.get_suggested_metadata())
-    # fallback to old name for backwards compat
-    elif current_data and hasattr(current_data, "get_required_metadata"):
-        fields.extend(current_data.get_required_metadata())
-
-    return fields
-
-
-def _check_missing_metadata(parent: Any) -> list:
-    """Check for missing suggested metadata fields."""
-    fields = _get_suggested_metadata(parent)
-
-    missing = []
-    for field in fields:
-        canonical = field["canonical"]
-        custom_val = getattr(parent, "_custom_metadata", {}).get(canonical)
-        source_val = field.get("value")
-        if custom_val is None and source_val is None:
-            missing.append(field)
-
-    return missing
-
-
-def _build_suggested_fields(parent: Any) -> list[dict]:
-    """Build the complete list of suggested metadata fields."""
-    # get array data
-    try:
-        current_data = parent.image_widget.data[0]
-    except (IndexError, AttributeError):
-        current_data = None
-
-    # get array-specific suggested fields
-    suggested_fields = _get_suggested_metadata(parent)
+def _build_suggested_fields(parent: Any, current_data: Any) -> list[dict]:
+    """The fields the editor offers: the reader's required ones (a ScanImage TIFF's), dz, fs, then the filename suggestions."""
+    suggested_fields = []
+    if hasattr(current_data, "get_required_metadata"):  # only TiffArray has them
+        suggested_fields.extend(current_data.get_required_metadata())
     existing_canonicals = {f["canonical"] for f in suggested_fields}
 
-    # add z-step if not already provided
     z_step_canonicals = ("dz", "z_step_um", "axial_step_um")
     if not any(c in existing_canonicals for c in z_step_canonicals):
         z_step_field = {
@@ -140,7 +86,7 @@ def _build_suggested_fields(parent: Any) -> list[dict]:
             "dtype": float,
             "description": "Distance between Z-planes in micrometers.",
         }
-        val = getattr(current_data, "dz", None)
+        val = None if current_data is None else current_data.dz
         if val:
             z_step_field["value"] = val
         suggested_fields.append(z_step_field)
@@ -148,7 +94,7 @@ def _build_suggested_fields(parent: Any) -> list[dict]:
 
     # add frame rate if not already provided (e.g. isoview XML has no fs)
     fs_canonicals = ("fs", "frame_rate", "framerate")
-    is_tiled = bool(getattr(current_data, "is_tiled", False))
+    is_tiled = bool(getattr(current_data, "is_tiled", False))  # isoview only
     if not is_tiled and not any(c in existing_canonicals for c in fs_canonicals):
         fs_field = {
             "canonical": "fs",
@@ -157,38 +103,31 @@ def _build_suggested_fields(parent: Any) -> list[dict]:
             "dtype": float,
             "description": "Volume (or frame) sampling rate in Hz.",
         }
-        val = getattr(current_data, "fs", None)
+        val = None if current_data is None else current_data.fs
         if val:
             fs_field["value"] = val
         suggested_fields.append(fs_field)
         existing_canonicals.add("fs")
 
-    # parse filename for auto-detected metadata
     filename_meta = None
-    if hasattr(parent, "fpath") and parent.fpath:
-        fpath = parent.fpath[0] if isinstance(parent.fpath, list) else parent.fpath
-        if fpath:
-            filename_meta = parse_filename_metadata(str(fpath))
+    fpath = parent.fpath[0] if isinstance(parent.fpath, list) else parent.fpath
+    if fpath:
+        filename_meta = parse_filename_metadata(str(fpath))
 
-    # add user-provided metadata fields from standard suggestions
     user_fields = get_filename_suggestions()
     for canonical, field_def in user_fields.items():
         if canonical in existing_canonicals:
             continue
 
         field = dict(field_def)
-        # check if value detected from filename
         if filename_meta:
             detected_val = getattr(filename_meta, canonical, None)
             if detected_val:
                 field["value"] = detected_val
-                field["detected"] = True  # mark as auto-detected
+                field["detected"] = True
 
-        # check if value in array metadata
-        if current_data and hasattr(current_data, "metadata"):
-            meta = current_data.metadata
-            if isinstance(meta, dict) and canonical in meta:
-                field["value"] = meta[canonical]
+        if current_data is not None and canonical in current_data.metadata:
+            field["value"] = current_data.metadata[canonical]
 
         suggested_fields.append(field)
         existing_canonicals.add(canonical)
@@ -197,41 +136,27 @@ def _build_suggested_fields(parent: Any) -> list[dict]:
 
 
 def draw_metadata_editor_content(parent: Any):
-    """Draw metadata editor fields. can be embedded in any container (tab, popup, etc.)."""
-    if not hasattr(parent, "_custom_metadata"):
-        parent._custom_metadata = {}
-    if not hasattr(parent, "_custom_key"):
-        parent._custom_key = ""
-    if not hasattr(parent, "_custom_value"):
-        parent._custom_value = ""
-
-    # get array data
-    try:
-        current_data = parent.image_widget.data[0]
-    except (IndexError, AttributeError):
-        current_data = None
-
-    # build suggested fields (includes filename detection)
-    suggested_fields = _build_suggested_fields(parent)
+    """Draw the editor's fields into whatever container is open."""
+    data = parent.image_widget.data
+    current_data = data[0] if data else None
+    suggested_fields = _build_suggested_fields(parent, current_data)
 
     table_flags = (
         imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
     )
-    # column widths shared by suggested + custom tables so everything aligns
     col_label = hello_imgui.em_size(7)
     col_value = hello_imgui.em_size(10)
     col_input = hello_imgui.em_size(8)
-    col_btn = hello_imgui.em_size(6)  # widened to fit Set + delete-X
-    input_w = hello_imgui.em_size(7.5)
-
+    col_btn = hello_imgui.em_size(6)
     # narrow container (docked side panel): stacked rows instead of the
     # fixed-width table, which would clip past the right edge
+    input_w = hello_imgui.em_size(7.5)
+
     table_w = col_label + col_value + col_input + col_btn
     if imgui.get_content_region_avail().x < table_w + hello_imgui.em_size(1):
         _draw_editor_narrow(parent, current_data, suggested_fields)
         return
 
-    # draw suggested fields in a table
     if suggested_fields:
         if imgui.begin_table("suggested_meta", 4, table_flags):
             imgui.table_setup_column(
@@ -254,7 +179,6 @@ def draw_metadata_editor_content(parent: Any):
                 dtype = field.get("dtype", str)
                 detected = field.get("detected", False)
 
-                # get current value (custom overrides source)
                 custom_val = parent._custom_metadata.get(canonical)
                 source_val = field.get("value")
                 value = custom_val if custom_val is not None else source_val
@@ -262,13 +186,11 @@ def draw_metadata_editor_content(parent: Any):
 
                 imgui.table_next_row()
 
-                # label column
                 imgui.table_next_column()
                 imgui.text_colored(_COL_SET if is_set else _COL_UNSET, label)
                 if imgui.is_item_hovered():
                     imgui.set_tooltip(_field_tooltip(field))
 
-                # value column
                 imgui.table_next_column()
                 if is_set:
                     val_str = f"{value} {unit}".strip()
@@ -281,27 +203,22 @@ def draw_metadata_editor_content(parent: Any):
                 else:
                     imgui.text_colored(_COL_EMPTY, "-")
 
-                # input column
                 imgui.table_next_column()
-                input_key = f"_meta_input_{canonical}"
-                if not hasattr(parent, input_key):
-                    setattr(parent, input_key, "")
-
                 imgui.set_next_item_width(input_w)
                 flags = (
                     imgui.InputTextFlags_.chars_decimal if dtype in (float, int) else 0
                 )
-                _, new_val = imgui.input_text(
-                    f"##{canonical}", getattr(parent, input_key), flags=flags
+                _, parent._meta_inputs[canonical] = imgui.input_text(
+                    f"##{canonical}",
+                    parent._meta_inputs.get(canonical, ""),
+                    flags=flags,
                 )
-                setattr(parent, input_key, new_val)
                 if imgui.is_item_hovered():
                     imgui.set_tooltip(_input_tooltip(dtype))
 
-                # button column: Set (always) + X delete (only when user has overridden)
                 imgui.table_next_column()
                 if imgui.small_button(f"Set##{canonical}"):
-                    _apply_set(parent, current_data, canonical, dtype, input_key)
+                    _apply_set(parent, current_data, canonical, dtype)
                 if custom_val is not None:
                     imgui.same_line()
                     if imgui.small_button(f"X##del_{canonical}"):
@@ -313,7 +230,6 @@ def draw_metadata_editor_content(parent: Any):
 
         imgui.spacing()
 
-    # === Custom section ===
     suggested_keys = {f["canonical"] for f in suggested_fields}
     custom_entries = [
         (k, v) for k, v in parent._custom_metadata.items() if k not in suggested_keys
@@ -336,7 +252,6 @@ def draw_metadata_editor_content(parent: Any):
         )
         imgui.table_setup_column("btn", imgui.TableColumnFlags_.width_fixed, col_btn)
 
-        # existing custom entries \u2014 same row layout as suggested table
         to_remove = None
         for key, value in custom_entries:
             imgui.table_next_row()
@@ -344,7 +259,7 @@ def draw_metadata_editor_content(parent: Any):
             imgui.text_colored(_COL_SET, key)
             imgui.table_next_column()
             imgui.text_colored(_COL_SET, str(value))
-            imgui.table_next_column()  # input col left blank
+            imgui.table_next_column()
             imgui.table_next_column()
             if imgui.small_button(f"X##custom_del_{key}"):
                 to_remove = key
@@ -353,7 +268,6 @@ def draw_metadata_editor_content(parent: Any):
         if to_remove:
             del parent._custom_metadata[to_remove]
 
-        # new-entry row \u2014 key in label col, value in input col, Set in btn col
         imgui.table_next_row()
         imgui.table_next_column()
         imgui.set_next_item_width(col_label)
@@ -361,7 +275,7 @@ def draw_metadata_editor_content(parent: Any):
         if imgui.is_item_hovered():
             imgui.set_tooltip("Custom key name")
 
-        imgui.table_next_column()  # value col empty until Set
+        imgui.table_next_column()
         imgui.table_next_column()
         imgui.set_next_item_width(input_w)
         _, parent._custom_value = imgui.input_text("##custom_val", parent._custom_value)
@@ -412,23 +326,19 @@ def _draw_editor_narrow(
             imgui.text_colored(_COL_EMPTY, "-")
         imgui.pop_text_wrap_pos()
 
-        input_key = f"_meta_input_{canonical}"
-        if not hasattr(parent, input_key):
-            setattr(parent, input_key, "")
         reserve = set_w + style.item_spacing.x
         if custom_val is not None:
             reserve += x_w + style.item_spacing.x
         imgui.set_next_item_width(-reserve)
         flags = imgui.InputTextFlags_.chars_decimal if dtype in (float, int) else 0
-        _, new_val = imgui.input_text(
-            f"##{canonical}", getattr(parent, input_key), flags=flags
+        _, parent._meta_inputs[canonical] = imgui.input_text(
+            f"##{canonical}", parent._meta_inputs.get(canonical, ""), flags=flags
         )
-        setattr(parent, input_key, new_val)
         if imgui.is_item_hovered():
             imgui.set_tooltip(_input_tooltip(dtype))
         imgui.same_line()
         if imgui.button(f"Set##{canonical}"):
-            _apply_set(parent, current_data, canonical, dtype, input_key)
+            _apply_set(parent, current_data, canonical, dtype)
         if custom_val is not None:
             imgui.same_line()
             if imgui.button(f"X##del_{canonical}"):
@@ -477,26 +387,13 @@ def _draw_editor_narrow(
 
 
 def draw_metadata_popup(parent: Any) -> None:
-    """Standalone "Set Metadata" popup.
-
-    Driven by `parent._show_metadata_popup` (set True from the File menu
-    or the Shift+M keybind). Draws every frame; opens the modal once when
-    the flag flips on, then resets the flag. The modal stays open until
-    the user closes it via the X button, the Close button, or Escape.
-    """
-    if not hasattr(parent, "_show_metadata_popup"):
-        parent._show_metadata_popup = False
-    if not hasattr(parent, "_metadata_sizer"):
-        parent._metadata_sizer = PopupAutoSize(
-            "Set Metadata##MetadataPopup", auto_resize=False
-        )
-
+    """The Set Metadata modal, opened once when ``parent._show_metadata_popup`` flips on (File menu, Shift+M)."""
     if parent._show_metadata_popup:
+        # default size; top anchor comes from _metadata_sizer.
         parent._metadata_sizer.before_open()
         imgui.open_popup("Set Metadata##MetadataPopup")
         parent._show_metadata_popup = False
 
-    # default size; top anchor comes from _metadata_sizer.
     io = imgui.get_io()
     screen_w, screen_h = io.display_size.x, io.display_size.y
     win_w = min(560, screen_w * 0.7)
@@ -514,12 +411,12 @@ def draw_metadata_popup(parent: Any) -> None:
     if not opened:
         return
     try:
+        # scrollable content area so the close button stays anchored at
+        # the bottom no matter how many fields the editor renders.
         if not visible:
             imgui.close_current_popup()
             return
         imgui.dummy(imgui.ImVec2(0, 4))
-        # scrollable content area so the close button stays anchored at
-        # the bottom no matter how many fields the editor renders.
         avail = imgui.get_content_region_avail()
         content_h = max(0.0, avail.y - 36.0)
         if imgui.begin_child(

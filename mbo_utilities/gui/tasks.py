@@ -1,15 +1,8 @@
-"""
-Task registry for background worker processes.
-
-This module contains the actual logic for background tasks:
-- TaskMonitor: Helper for reporting progress to a JSON sidecar file.
-- task_save_as: Generic array conversion/saving.
-- task_suite2p: Suite2p pipeline.
-- TASKS: Registry mapping task names to functions.
-"""
+"""Worker tasks, one ``task_<name>(args, logger)`` per pipeline, and the ``TASKS`` registry."""
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
@@ -18,6 +11,8 @@ import time
 import traceback
 from pathlib import Path
 
+import psutil
+
 from mbo_utilities import imread, log
 from mbo_utilities.arrays._registration import (
     compute_axial_shifts,
@@ -25,57 +20,31 @@ from mbo_utilities.arrays._registration import (
 )
 from mbo_utilities.arrays.features import apply_read_features
 from mbo_utilities.metadata import get_param
+from mbo_utilities.preferences import get_debug_logging, get_mbo_dirs
 from mbo_utilities.writer import imwrite
 
 logger = log.get("worker.tasks")
 
 
 def _auto_workers(num_planes: int, *, use_gpu: bool = False) -> int:
-    """Pick a worker count from hardware capacity and dataset size.
-
-    Bounded by ``num_planes`` (no point spawning more workers than tasks),
-    leaves CPU headroom for the OS + GUI, and budgets ~8 GB of available
-    RAM per worker (one suite2p plane fits comfortably in that).
-
-    GPU consumers (cellpose on GPU, etc.) are capped at 2 workers since
-    they contend for one device — set ``use_gpu=True`` to enable that.
-    """
-    cpu = os.cpu_count() or 4
-    cpu_workers = max(1, cpu - 2)
-    try:
-        import psutil
-
-        avail_gb = psutil.virtual_memory().available / (1024**3)
-        mem_workers = max(1, int(avail_gb // 8))
-    except Exception:
-        mem_workers = cpu_workers
+    """Worker count bounded by the planes, the cpus minus two, 8 GB of free RAM each, and 2 on a gpu."""
+    cpu_workers = max(1, (os.cpu_count() or 4) - 2)
+    avail_gb = psutil.virtual_memory().available / (1024**3)
+    mem_workers = max(1, int(avail_gb // 8))
     cap = 2 if use_gpu else 12
     return max(1, min(num_planes, cpu_workers, mem_workers, cap))
 
 
 class TaskMonitor:
-    """
-    Helper to report task progress to a JSON sidecar file.
-    Plugins into the ProcessManager on the GUI side.
-    """
+    """Writes a task's progress to the JSON sidecar the Process Console reads."""
 
     def __init__(self, output_dir: Path | str, uuid: str | None = None):
         self.output_dir = Path(output_dir)
         self.pid = os.getpid()
         self.uuid = uuid
-        # Sidecar file: progress_{pid}.json or progress_{uuid}.json in the log directory
-        # We assume output_dir might be the data dir, so let's try to find a logs dir
-        # or just put it in a standard location if possible.
-        # Actually, ProcessManager expects to just read info.
-        # Let's write to a standard location that ProcessManager knows about.
-        # Standard: ~/.mbo/logs/progress_{pid}.json
-        from mbo_utilities.preferences import get_mbo_dirs
-
         self.log_dir = get_mbo_dirs()["logs"]
-        if self.uuid:
-            self.progress_file = self.log_dir / f"progress_{self.uuid}.json"
-        else:
-            self.progress_file = self.log_dir / f"progress_{self.pid}.json"
+        stem = self.uuid if self.uuid else self.pid
+        self.progress_file = self.log_dir / f"progress_{stem}.json"
 
     def update(
         self,
@@ -84,12 +53,7 @@ class TaskMonitor:
         state: str = "running",
         details: dict | None = None,
     ):
-        """
-        Update progress file.
-        progress: 0.0 to 1.0
-        message: Short status description
-        state: "running", "completed", "error".
-        """
+        """Write ``progress`` (0 to 1), ``message`` and ``state`` (running, completed, error)."""
         data = {
             "pid": self.pid,
             "uuid": self.uuid,
@@ -99,23 +63,16 @@ class TaskMonitor:
             "message": message,
             "details": details or {},
         }
-        try:
-            # Write atomically to avoid race conditions with readers.
-            # On windows the replace can fail with WinError 5 when the gui
-            # has the sidecar open for read (default share flags deny
-            # rename); retry briefly so a reader blip doesn't drop an
-            # update.
-            tmp_file = self.progress_file.with_suffix(".tmp")
-            with open(tmp_file, "w") as f:
-                json.dump(data, f)
-            for _ in range(10):
-                try:
-                    tmp_file.replace(self.progress_file)
-                    break
-                except PermissionError:
-                    time.sleep(0.05)
-        except Exception:
-            pass  # Non-blocking
+        tmp_file = self.progress_file.with_suffix(".tmp")
+        with tmp_file.open("w") as f:
+            json.dump(data, f)
+        # windows denies the rename while the gui holds the sidecar open for read
+        for _ in range(10):
+            try:
+                tmp_file.replace(self.progress_file)
+                return
+            except PermissionError:
+                time.sleep(0.05)
 
     def finish(self, message: str = "Task completed"):
         self.update(1.0, message, state="completed")
@@ -124,35 +81,37 @@ class TaskMonitor:
         self.update(0.0, f"Error: {error}", state="error", details=details)
 
 
+def _save_progress(monitor: TaskMonitor, current, total=None, **kwargs) -> None:
+    """Map a writer's progress onto 0.1 to 1.0.
+
+    Writers call back as ``cb(fraction)``, ``cb(current, total)`` or
+    ``cb(fraction, message)``, so a numeric ``total`` is the only way to tell
+    the forms apart.
+    """
+    if isinstance(total, (int, float)) and not isinstance(total, bool):
+        fraction = float(current) / max(float(total), 1.0)
+        message = f"Writing frame {current}/{total}"
+    else:
+        fraction = float(current)
+        message = "Writing..." if total is None else str(total)
+    monitor.update(0.1 + 0.9 * fraction, message)
+
+
 def task_save_as(args: dict, logger: logging.Logger) -> None:
-    """
-    Generic save/convert task.
-    Supports saving any readable array to .zarr, .h5, .tiff, .bin, etc.
-    """
+    """Save any readable array as ``.zarr``, ``.h5``, ``.tiff``, ``.bin``, ..."""
     monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
     monitor.update(0.0, "Initializing save task...")
 
     input_path = args["input_path"]
-    output_path = Path(args["output_path"])  # Full path including extension
+    output_path = Path(args["output_path"])
     output_dir = args.get("output_dir")
     if output_dir:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Optional params
-    planes = args.get("planes")
-    channels = args.get("channels")  # list of 1-based channel indices or None
-    rois = args.get("rois")
-    frames = args.get("frames")  # list of 1-based frame indices or None
-    metadata = args.get("metadata", {})
-
-    # Load array
     monitor.update(0.05, f"Loading {Path(input_path).name}...")
     logger.info(f"Loading {input_path}")
     arr = imread(input_path, **(args.get("reader_kwargs") or {}))
-
-    # read-time features: phase settings land on the reader, frame_average
-    # wraps it so the binning is baked into the output. reader_kwargs may
-    # already carry frame_average from the viewer; the explicit arg wins.
+    # reader_kwargs may already carry the viewer's frame_average; the explicit arg wins
     arr, _ = apply_read_features(
         arr,
         fix_phase=args.get("fix_phase", True),
@@ -160,161 +119,53 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
         frame_average=args.get("frame_average", None),
     )
 
-    # Handle Z-Registration
-    register_z = args.get("register_z", False)
-    if register_z:
-        monitor.update(0.05, "Checking Z-registration status...")
-
-        # merge existing array metadata with overrides
-        combined_meta = getattr(arr, "metadata", {}).copy()
-        combined_meta.update(metadata)
-
-        # axial registration knobs (optional; gui can set via task args)
-        axial_max_frames = int(args.get("max_frames", 200))
-        axial_chunk_frames = int(args.get("chunk_frames", 10))
-        axial_max_reg_xy = int(args.get("max_reg_xy", 30))
-
-        def _reg_cb(progress, msg=""):
-            monitor.update(0.05 + 0.05 * progress, f"Registration: {msg}")
-
-        num_planes = get_param(combined_meta, "nplanes") or getattr(
-            arr, "num_planes", 1
-        )
-        reg_error: Exception | None = None
-
-        if validate_axial_shifts(combined_meta, num_planes):
-            logger.info("using plane_shifts already present in metadata.")
-            metadata["plane_shifts"] = list(combined_meta["plane_shifts"])
-            monitor.update(0.1, "Z-registration ready (cached).")
-        else:
-            logger.info("computing axial plane shifts...")
-            try:
-                compute_axial_shifts(
-                    arr,
-                    metadata=combined_meta,
-                    max_frames=axial_max_frames,
-                    chunk_frames=axial_chunk_frames,
-                    max_reg_xy=axial_max_reg_xy,
-                    progress_callback=_reg_cb,
-                )
-            except Exception as e:
-                reg_error = e
-
-            if reg_error is None and validate_axial_shifts(combined_meta, num_planes):
-                metadata["plane_shifts"] = list(combined_meta["plane_shifts"])
-                metadata["plane_shifts_params"] = combined_meta.get(
-                    "plane_shifts_params"
-                )
-                monitor.update(0.1, "Z-registration ready.")
-            else:
-                if reg_error is not None:
-                    logger.warning(f"Z-registration failed: {reg_error}.")
-                else:
-                    logger.warning("axial registration produced no valid plane_shifts.")
-
+    ext = args.get("ext") or output_path.suffix or ".zarr"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     monitor.update(0.1, f"Saving to {output_path.name}...")
-
-    # writers call this as cb(fraction), cb(current, total) or cb(1.0, message),
-    # so a numeric `total` is the only way to tell them apart
-    def _progress_cb(current, total=None, **kwargs):
-        msg = "Writing..."
-        if total is None:
-            # fraction-only form
-            try:
-                p = 0.1 + 0.9 * float(current)
-            except (TypeError, ValueError):
-                p = 0.5
-        elif isinstance(total, (int, float)) and not isinstance(total, bool):
-            # (current, total) form — guard against div-by-zero by clamping
-            # the divisor to >= 1 (max, not min — the previous code used
-            # min(total,1) which always returns 1 for total>=1 and made the
-            # division a no-op).
-            denom = max(float(total), 1.0)
-            p = 0.1 + 0.9 * (float(current) / denom)
-            msg = f"Writing frame {current}/{total}"
-        else:
-            # second positional arg is a string (e.g. "Complete") — treat
-            # `current` as a fraction and `total` as the status message.
-            try:
-                p = 0.1 + 0.9 * float(current)
-            except (TypeError, ValueError):
-                p = 1.0
-            msg = str(total)
-
-        # throttle updates to avoid IO thrashing
-        monitor.update(p, msg)
-
+    logger.info(f"Writing to {output_path} with ext={ext}")
     try:
-        # Determine extension: explicit > from path > default
-        ext = args.get("ext")
-        if not ext:
-            ext = output_path.suffix if output_path.suffix else ".zarr"
-
-        # If output_path is a directory-like path (no extension) and we invoke imwrite,
-        # it treats it as a directory.
-        # If output_path has extension, it treats it as file.
-        # However, for _imwrite (ScanImageArray), it generally expects 'outdir'.
-
-        # Ensure output directory exists
-        if not output_path.suffix:
-            output_path.mkdir(parents=True, exist_ok=True)
-        else:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"Writing to {output_path} with ext={ext}")
-
-        # We use the internal _imwrite method of the array if available for optimization,
-        # else generic imwrite.
-        if hasattr(arr, "_imwrite"):
-            # ScanImageArray._imwrite takes 'outdir'
-            # If output_path is a file path, we should probably pass parent as outdir?
-            # Existing usage suggests outdir is the target folder.
-            # If saving to zarr, outdir is the .zarr folder.
-            arr._imwrite(
-                outpath=output_path,
-                ext=ext,
-                planes=planes,
-                channels=channels,
-                frames=frames,
-                roi=rois,
-                overwrite=True,
-                metadata_overrides=metadata,
-                progress_callback=_progress_cb,
-                **args.get("kwargs", {}),
-            )
-        else:
-            # Fallback for generic arrays
-            imwrite(
-                arr,
-                output_path,
-                ext=ext,
-                planes=planes,
-                channels=channels,
-                frames=frames,
-                roi=rois,
-                overwrite=True,
-                metadata=metadata,
-                progress_callback=_progress_cb,
-                **args.get("kwargs", {}),
-            )
-
+        imwrite(
+            arr,
+            output_path,
+            ext=ext,
+            planes=args.get("planes"),
+            channels=args.get("channels"),
+            timepoints=args.get("frames"),
+            roi=args.get("rois"),
+            register_z=bool(args.get("register_z", False)),
+            max_frames=int(args.get("max_frames", 200)),
+            chunk_frames=int(args.get("chunk_frames", 10)),
+            max_reg_xy=int(args.get("max_reg_xy", 30)),
+            overwrite=True,
+            metadata=args.get("metadata", {}),
+            progress_callback=functools.partial(_save_progress, monitor),
+            **args.get("kwargs", {}),
+        )
         monitor.finish(f"Saved to {output_path.name}")
         logger.info("Save completed")
-
     except Exception as e:
         monitor.fail(str(e), details={"traceback": traceback.format_exc()})
         raise
 
 
-def task_suite2p(args: dict, logger: logging.Logger) -> None:
-    """
-    Suite2p pipeline task.
+def _suite2p_progress(
+    monitor: TaskMonitor, plane=0, total_planes=1, step="", message="", **kw
+) -> None:
+    """Map lbm_suite2p_python's (plane, step) progress onto 0.1 to 0.95."""
+    base = 0.1 + 0.85 * (plane / max(total_planes, 1))
+    offsets = {
+        "plane_start": 0.0,
+        "writing_binary": 0.01,
+        "suite2p": 0.05,
+        "postprocessing": 0.70,
+        "plane_done": 0.85 / max(total_planes, 1),
+        "done": 0.85 / max(total_planes, 1),
+    }
+    monitor.update(min(base + offsets.get(step, 0), 0.95), message)
 
-    Delegates entirely to lbm_suite2p_python.pipeline which handles:
-    - input loading (paths, lists of paths, arrays)
-    - plane iteration for volumetric data
-    - binary extraction and suite2p processing
-    """
+
+def task_suite2p(args: dict, logger: logging.Logger) -> None:
+    """Run ``lbm_suite2p_python.pipeline`` on the selected planes with the Run tab's ops."""
     from lbm_suite2p_python import pipeline
 
     monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
@@ -323,29 +174,18 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
     input_path = args["input_path"]
     output_dir = Path(args["output_dir"])
     planes = args.get("planes")
-    # the GUI's target_timepoints defaults to -1 (meaning "all frames").
-    # normalize to None so downstream code (lsp's pipeline, writer_kwargs)
-    # doesn't propagate -1 as a literal num_frames — that makes
-    # generate_plane_dirname produce "zplane01" (no tp suffix) and can
-    # confuse frame-count arithmetic in the or-chain.
+    # the gui sends -1 for "all frames"; as a literal nframes it would name the plane dir "zplane01"
     num_timepoints = args.get("num_timepoints")
     if num_timepoints is not None and num_timepoints <= 0:
         num_timepoints = None
-    # Config can arrive as either a legacy flat `ops` dict OR as the new
-    # upstream-shaped pair (`settings`, `db`). Normalize to flat ops here
-    # so the rest of this function keeps working with its existing
-    # mutation pipeline; the lbm run_plane patch re-splits at the bottom.
+    # the config is a flat ops dict or lsp's (settings, db) pair; the rest of the task mutates flat ops
     ops = dict(args.get("ops") or {})
     incoming_settings = args.get("settings")
     incoming_db = args.get("db")
     if incoming_settings is not None or incoming_db is not None:
-        try:
-            from lbm_suite2p_python.db_settings import db_settings_to_ops
+        from lbm_suite2p_python.db_settings import db_settings_to_ops
 
-            flattened = db_settings_to_ops(incoming_db, incoming_settings)
-        except ImportError:
-            flattened = {**(incoming_db or {}), **(incoming_settings or {})}
-        # ops overrides on top of the flattened base
+        flattened = db_settings_to_ops(incoming_db, incoming_settings)
         flattened.update(ops)
         ops = flattened
     s2p_settings = args.get("s2p_settings", {})
@@ -357,42 +197,21 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
         f"s2p_settings has workers key: {'workers' in s2p_settings}"
     )
 
-    # Merge GUI-set custom metadata (e.g. dz from the metadata editor)
-    # into ops. The user explicitly set these in the editor, so they win
-    # over both ops defaults and the source file's voxel size.
+    # the metadata editor's values win over ops defaults and the source file
     custom_metadata = args.get("custom_metadata") or {}
     if custom_metadata:
         ops.update(custom_metadata)
-        logger.info(f"Applied custom metadata to ops: {sorted(custom_metadata.keys())}")
+        logger.info(f"Applied custom metadata to ops: {sorted(custom_metadata)}")
 
-    # ALWAYS load source metadata and propagate fs/dz to ops, even when
-    # no stride selection is present. lbm's default_ops ships fs=10.0
-    # hardcoded, and that leaks into ops.npy unless we explicitly
-    # replace it with the source value here. This was the root cause of
-    # repeated "ops.npy fs=10 even though my source is 14Hz" reports.
-    from mbo_utilities.metadata import OutputMetadata, get_param
+    from mbo_utilities.metadata import OutputMetadata
 
-    _src_arr = None
-    try:
-        _src_arr = imread(input_path, **(args.get("reader_kwargs") or {}))
-        src_meta = dict(getattr(_src_arr, "metadata", {}) or {})
-        src_shape = (
-            tuple(_src_arr._shape5d()) if hasattr(_src_arr, "_shape5d") else None
-        )
-    except Exception as e:
-        logger.warning(
-            f"task_suite2p: could not load source metadata for reactive "
-            f"fs/dz scaling: {e}. Falling back to ops defaults."
-        )
-        src_meta = {}
-        src_shape = None
+    _src_arr = imread(input_path, **(args.get("reader_kwargs") or {}))
+    src_meta = dict(_src_arr.metadata or {})
+    src_shape = tuple(_src_arr._shape5d())
+    src_meta.update(custom_metadata)
 
-    # Carry over the user's editor metadata so it wins over the source.
-    if custom_metadata:
-        src_meta.update(custom_metadata)
-
-    raw_src_fs = get_param(src_meta, "fs") if src_meta else None
-    raw_src_dz = get_param(src_meta, "dz") if src_meta else None
+    raw_src_fs = get_param(src_meta, "fs")
+    raw_src_dz = get_param(src_meta, "dz")
     logger.info(
         f"task_suite2p: source fs={raw_src_fs}, dz={raw_src_dz}, "
         f"input_path={input_path!r}"
@@ -405,77 +224,58 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             "(10 Hz). To fix: set fs via the metadata editor, or fix the "
             "source TIFF metadata."
         )
-    else:
-        # Pull the raw source fs into ops, replacing lbm's hardcoded 10.
-        # The reactive scaling block below may overwrite this with a
-        # stride-scaled value when tp_indices is non-None.
-        if ops.get("fs") in (None, 10.0):
-            ops["fs"] = float(raw_src_fs)
-            logger.info(
-                f"task_suite2p: replaced lbm default fs=10 with source fs={raw_src_fs}"
-            )
+    elif ops.get("fs") in (None, 10.0):
+        # lsp's default_ops ships fs=10.0, which leaked into ops.npy as the source rate
+        ops["fs"] = float(raw_src_fs)
+        logger.info(
+            f"task_suite2p: replaced lbm default fs=10 with source fs={raw_src_fs}"
+        )
 
-    # Same for dz — only override the lbm default, not a user-set value.
-    if raw_src_dz is not None:
-        if ops.get("dz") in (None, 1.0):
-            ops["dz"] = float(raw_src_dz)
-            logger.info(f"task_suite2p: pulled source dz={raw_src_dz} into ops")
+    if raw_src_dz is not None and ops.get("dz") in (None, 1.0):
+        ops["dz"] = float(raw_src_dz)
+        logger.info(f"task_suite2p: pulled source dz={raw_src_dz} into ops")
 
-    # Reactively scale fs/dz via OutputMetadata when the user has a
-    # timepoint or z-plane stride selection. This block REPLACES the
-    # source values pulled above with stride-scaled versions when
-    # appropriate.
     tp_indices = args.get("tp_indices")
     selected_planes_0based = args.get("selected_planes_0based")
     if tp_indices is not None or selected_planes_0based is not None:
-        if src_meta:
-            selections = {}
-            if tp_indices is not None:
-                selections["T"] = list(tp_indices)
-            if selected_planes_0based is not None:
-                selections["Z"] = list(selected_planes_0based)
-
-            out_meta = OutputMetadata(
-                source=src_meta,
-                source_shape=src_shape,
-                source_dims=("T", "C", "Z", "Y", "X"),
-                selections=selections,
-            )
-
-            scaled = out_meta.to_dict()
-            # a None scaled value removes the key, so nothing downstream reads a
-            # stale default as the answer
-            for key in (
-                "fs",
-                "dz",
-                "dx",
-                "dy",
-                "z_step",
-                "umPerPixZ",
-                "umPerPixX",
-                "umPerPixY",
-            ):
-                if key in scaled and scaled[key] is not None:
-                    ops[key] = scaled[key]
-                elif key in ("fs", "dz") and key in ops:
-                    # only fs/dz get the strict "remove if missing"
-                    # treatment — the others have sensible 1.0 defaults
-                    # in get_voxel_size and aren't worth surfacing as
-                    # missing-data signals.
-                    ops.pop(key, None)
-            logger.info(
-                f"task_suite2p: applied reactive metadata -> "
-                f"fs={ops.get('fs')}, dz={ops.get('dz')} "
-                f"(t-stride from {len(tp_indices) if tp_indices else 0} indices, "
-                f"z-stride from {len(selected_planes_0based) if selected_planes_0based else 0} planes)"
-            )
+        selections = {}
+        if tp_indices is not None:
+            selections["T"] = list(tp_indices)
+        if selected_planes_0based is not None:
+            selections["Z"] = list(selected_planes_0based)
+        scaled = OutputMetadata(
+            source=src_meta,
+            source_shape=src_shape,
+            source_dims=("T", "C", "Z", "Y", "X"),
+            selections=selections,
+        ).to_dict()
+        # a scaled None removes fs and dz so nothing downstream reads a stale default
+        for key in (
+            "fs",
+            "dz",
+            "dx",
+            "dy",
+            "z_step",
+            "umPerPixZ",
+            "umPerPixX",
+            "umPerPixY",
+        ):
+            if scaled.get(key) is not None:
+                ops[key] = scaled[key]
+            elif key in ("fs", "dz"):
+                ops.pop(key, None)
+        logger.info(
+            f"task_suite2p: applied reactive metadata -> "
+            f"fs={ops.get('fs')}, dz={ops.get('dz')} "
+            f"(t-stride from {len(tp_indices) if tp_indices else 0} indices, "
+            f"z-stride from {len(selected_planes_0based) if selected_planes_0based else 0} planes)"
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # display name for logging
     if isinstance(input_path, list):
         if len(input_path) == 1:
-            input_path = input_path[0]  # unwrap single-item list
+            input_path = input_path[0]
             display_name = Path(input_path).name
         else:
             display_name = f"{len(input_path)} files ({Path(input_path[0]).name}...)"
@@ -487,76 +287,34 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
     logger.info(f"Output: {output_dir}")
     logger.info(f"Planes: {planes}")
 
-    # axial registration: compute per-plane offsets and store in
-    # ops["plane_shifts"]. shifts are not applied to the bin pixels —
-    # downstream viewers consume the metadata to align planes at render
-    # time (see AxialShiftView).
-    register_z = args.get("register_z", False)
-
-    if register_z:
-        # reuse the array already loaded at the top of the task
-        _src_arr_for_reg = _src_arr
-        if _src_arr_for_reg is None:
+    # the shifts go to ops["plane_shifts"] for AxialShiftView; the bin pixels stay unshifted
+    if args.get("register_z", False) and src_shape[2] > 1:
+        num_planes_reg = src_shape[2]
+        combined_meta = dict(src_meta)
+        if not validate_axial_shifts(combined_meta, num_planes_reg):
+            logger.info("task_suite2p: computing axial plane shifts...")
             try:
-                _src_arr_for_reg = imread(input_path)
-            except Exception as e:
-                logger.warning(
-                    f"task_suite2p: cannot open source for axial registration: {e}. "
-                    f"skipping axial registration."
+                compute_axial_shifts(
+                    _src_arr,
+                    metadata=combined_meta,
+                    max_frames=int(args.get("max_frames", 200)),
+                    chunk_frames=int(args.get("chunk_frames", 10)),
+                    max_reg_xy=int(args.get("max_reg_xy", 30)),
                 )
-                _src_arr_for_reg = None
+            except Exception as e:  # NOTE: the shifts are an add-on; the binaries are still written, unshifted
+                logger.warning(f"task_suite2p: axial registration failed: {e}")
+        if validate_axial_shifts(combined_meta, num_planes_reg):
+            ops["plane_shifts"] = list(combined_meta["plane_shifts"])
+            logger.info(
+                f"task_suite2p: axial shifts stored in ops ({num_planes_reg} planes)"
+            )
+        else:
+            logger.warning("task_suite2p: no valid plane_shifts produced.")
 
-        num_planes_reg = None
-        if _src_arr_for_reg is not None:
-            try:
-                num_planes_reg = int(_src_arr_for_reg._shape5d()[2])
-            except Exception as e:
-                logger.warning(
-                    f"task_suite2p: cannot probe num_planes: {e}. "
-                    f"skipping axial registration."
-                )
+    # lsp's generate_plane_dirname needs a frame count for the directory name
+    ops["nframes"] = num_timepoints if num_timepoints else int(src_shape[0])
 
-        if num_planes_reg is not None and num_planes_reg > 1:
-            combined_meta = dict(getattr(_src_arr_for_reg, "metadata", {}) or {})
-            combined_meta.update(custom_metadata)
-
-            if not validate_axial_shifts(combined_meta, num_planes_reg):
-                logger.info("task_suite2p: computing axial plane shifts...")
-                try:
-                    compute_axial_shifts(
-                        _src_arr_for_reg,
-                        metadata=combined_meta,
-                        max_frames=int(args.get("max_frames", 200)),
-                        chunk_frames=int(args.get("chunk_frames", 10)),
-                        max_reg_xy=int(args.get("max_reg_xy", 30)),
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"task_suite2p: axial registration failed: {e}. "
-                        f"binaries will be written without axial shift."
-                    )
-
-            if validate_axial_shifts(combined_meta, num_planes_reg):
-                ops["plane_shifts"] = list(combined_meta["plane_shifts"])
-                logger.info(
-                    f"task_suite2p: axial shifts stored in ops "
-                    f"({num_planes_reg} planes)"
-                )
-            else:
-                logger.warning("task_suite2p: no valid plane_shifts produced.")
-
-    # seed nframes into ops so lsp's generate_plane_dirname always has a
-    # frame count for the directory name. explicit num_timepoints wins;
-    # otherwise fall back to the source array's T dimension.
-    if num_timepoints is not None and num_timepoints > 0:
-        ops["nframes"] = num_timepoints
-    elif src_shape is not None:
-        ops["nframes"] = int(src_shape[0])
-
-    # per-channel extraction: pass channel through reader_kwargs so each
-    # parallel worker re-creates the same 4D TZYX wrap after its own
-    # imread (the wrap can't survive pickling — workers re-open from
-    # paths). Path-based pipeline_input survives unchanged.
+    # each parallel worker re-opens from the path, so the channel travels in reader_kwargs
     channel = args.get("channel")
     pipeline_input = input_path
     reader_kwargs: dict = dict(args.get("reader_kwargs") or {})
@@ -568,17 +326,10 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             f"Single-channel extraction: channel {channel} (zero-based: {channel - 1})"
         )
 
-    # Resolve workers: pass-through user choice, but honour 0/None as
-    # "auto" using hardware capacity. lsp also has its own auto path,
-    # but ours additionally bounds by available RAM and respects a GPU
-    # cap. Passing the resolved number through means logs say a real
-    # count instead of "auto/0".
+    # workers 0 or None is auto; resolved here so the logs say a real count
     raw_workers = s2p_settings.get("workers")
     if raw_workers in (None, 0):
         n_planes = len(planes) if planes else 1
-        # suite2p reg/detect run on the GPU unless torch_device is cpu or
-        # the env policy forces CPU; GPU workers contend for one device so
-        # _auto_workers caps them. Key off the real device, not rastermap.
         from mbo_utilities.gpu import gpu_compute_disabled
 
         device = str(
@@ -594,91 +345,48 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             s2p_settings = dict(s2p_settings)
             s2p_settings["workers"] = resolved
 
-    # build writer_kwargs for the read-time features (phase, temporal binning)
     writer_kwargs = {
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
         "frame_average": int(args.get("frame_average") or 1),
     }
 
-    # a detection-only re-run copies the source ops.npy rather than writing
-    # a new one, so images left there as JSON lists by an older export would
-    # reach suite2p's plotting as lists and every figure that indexes .shape
-    # would fail. repair both ends before handing them over.
+    # a detection-only re-run reuses the source ops.npy, where an older export left the summary images as json lists
     from mbo_utilities.metadata import repair_ops_tree
 
     for target in (input_path, output_dir):
-        try:
-            fixed = repair_ops_tree(target)
-            if fixed:
-                logger.info(
-                    f"task_suite2p: repaired {fixed} ops.npy file(s) under {target} "
-                    "(summary images were stored as lists)"
-                )
-        except Exception as _e:  # noqa: BLE001 - never block the run on this
-            logger.warning(
-                f"task_suite2p: ops.npy repair pass failed for {target}: {_e}"
+        fixed = repair_ops_tree(target)
+        if fixed:
+            logger.info(
+                f"task_suite2p: repaired {fixed} ops.npy file(s) under {target} "
+                "(summary images were stored as lists)"
             )
 
-    # Rastermap Force → drop cached model.npy in every plane subdir under
-    # output_dir before pipeline runs. lsp's plot_zplane_figures already
-    # deletes the rastermap PNG every run, but reuses model.npy when its
-    # isort length matches n_accepted. Force == "recompute from scratch".
+    # lsp reuses a cached model.npy whose isort length matches, so Force has to delete it
     if (
         s2p_settings.get("force_rastermap")
         and s2p_settings.get("rastermap_kwargs") is not None
     ):
-        try:
-            removed = 0
-            for cached in Path(output_dir).glob("plane*/model.npy"):
-                try:
-                    cached.unlink()
-                    removed += 1
-                except OSError as _e:
-                    logger.warning(f"force_rastermap: could not remove {cached}: {_e}")
-            if removed:
-                logger.info(
-                    f"force_rastermap: removed {removed} cached model.npy file(s)"
-                )
-        except Exception as _e:
-            logger.warning(f"force_rastermap pre-clean failed: {_e}")
+        cached_models = list(Path(output_dir).glob("plane*/model.npy"))
+        for cached in cached_models:
+            cached.unlink()
+        if cached_models:
+            logger.info(
+                f"force_rastermap: removed {len(cached_models)} cached model.npy file(s)"
+            )
 
-    # cellpose anatomical detection loads the shared cpsam checkpoint. once
-    # the pipeline fans out to parallel plane workers, each would download it
-    # to the same path concurrently and corrupt the file. fetch it once here,
-    # in this single parent process, before fan-out.
+    # parallel plane workers downloading the cpsam checkpoint to one path corrupt it; fetch it once here
     algo = str(ops.get("algorithm", "")).lower()
-    try:
-        anatomical_on = int(ops.get("anatomical_only", 0) or 0) > 0
-    except (TypeError, ValueError):
-        anatomical_on = False
+    anatomical_on = int(ops.get("anatomical_only", 0) or 0) > 0
     custom_model = ops.get("pretrained_model")
     uses_default_model = not custom_model or str(custom_model).endswith("cpsam")
     if (algo == "cellpose" or anatomical_on) and uses_default_model:
-        try:
-            from mbo_utilities._cellpose_model import ensure_cellpose_model
+        from mbo_utilities._cellpose_model import ensure_cellpose_model
 
-            ensure_cellpose_model(logger=logger)
-        except Exception as _e:
-            logger.warning(f"cellpose model prefetch failed: {_e}")
+        ensure_cellpose_model(logger=logger)
 
     try:
         monitor.update(0.1, "Running Suite2p...")
-
-        # progress callback maps plane/step to 0.1-0.95 range
-        def _progress(plane=0, total_planes=1, step="", message="", **kw):
-            base = 0.1 + 0.85 * (plane / max(total_planes, 1))
-            offsets = {
-                "plane_start": 0.0,
-                "writing_binary": 0.01,
-                "suite2p": 0.05,
-                "postprocessing": 0.70,
-                "plane_done": 0.85 / max(total_planes, 1),
-                "done": 0.85 / max(total_planes, 1),
-            }
-            frac = base + offsets.get(step, 0)
-            monitor.update(min(frac, 0.95), message)
-
         if tp_indices:
             logger.info(
                 f"task_suite2p: frame_indices len={len(tp_indices)}, "
@@ -709,14 +417,10 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             save_json=s2p_settings.get("save_json", False),
             correct_neuropil=s2p_settings.get("correct_neuropil", True),
             cell_filters=s2p_settings.get("cell_filters") or None,
-            # unified rastermap api: dict keyed by mode ("planar" /
-            # "volumetric"). presence-of-key = mode on; empty sub-dict
-            # = use lsp's built-in defaults; None overall = both off.
-            # built gui-side by build_rastermap_kwargs() in settings.py.
             rastermap_kwargs=s2p_settings.get("rastermap_kwargs"),
             writer_kwargs=writer_kwargs,
             reader_kwargs=reader_kwargs or None,
-            progress_callback=_progress,
+            progress_callback=functools.partial(_suite2p_progress, monitor),
             workers=s2p_settings.get("workers", 1),
             skip_volumetric=s2p_settings.get("skip_volumetric", False),
             threads_per_worker=s2p_settings.get("threads_per_worker"),
@@ -731,15 +435,30 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
         raise
 
 
-def task_masknmf(args: dict, logger: logging.Logger) -> None:
-    """
-    Masknmf pipeline task.
+def _masknmf_progress(
+    monitor: TaskMonitor, plane=0, total_planes=1, step="", message="", **kw
+) -> None:
+    """Map the masknmf runner's (plane, stage) progress onto 0.1 to 0.95."""
+    slot = 0.85 / max(total_planes, 1)
+    offsets = {
+        "registration": 0.02,
+        "compression": 0.35,
+        "demixing": 0.55,
+        "exports": 0.85,
+        "figures": 0.92,
+    }
+    frac = 0.1 + slot * plane + slot * offsets.get(step, 0.0)
+    monitor.update(min(frac, 0.95), message)
 
-    Runs mbo_utilities.masknmf.runner per selected plane: stage-gated
-    registration -> PMD compression -> demixing into one masknmf run folder
-    per plane under output_dir, QC figures beside. Stage Skip/Run/Force
-    tri-states travel inside args["settings"].
-    """
+
+def _heartbeat(stop: threading.Event, logger: logging.Logger, name: str) -> None:
+    """Log every ten minutes so the worker watchdog sees a silent gpu stage as alive."""
+    while not stop.wait(600):
+        logger.info(f"{name}: still running")
+
+
+def task_masknmf(args: dict, logger: logging.Logger) -> None:
+    """Run ``mbo_utilities.masknmf.run_volume``: registration, PMD compression and demixing per plane, into one run folder each."""
     monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
     monitor.update(0.01, "Initializing masknmf pipeline...")
 
@@ -759,7 +478,7 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
         raise
 
     # the runner reads fs from here and scales it by the frame stride itself
-    metadata = dict(getattr(src_arr, "metadata", {}) or {})
+    metadata = dict(src_arr.metadata or {})
     metadata.update(custom_metadata)
 
     writer_kwargs = {
@@ -774,49 +493,24 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
     logger.info(f"Output: {output_dir}")
     logger.info(f"Planes: {planes}")
 
-    # same repair the suite2p task does: a stage that resumes from an
-    # existing plane dir reads its ops.npy, and an older export may have
-    # left the summary images there as JSON lists
+    # a stage resuming from a plane dir reads its ops.npy, where an older export left the summary images as json lists
     from mbo_utilities.metadata import repair_ops_tree
 
     for target in (input_path, output_dir):
-        try:
-            fixed = repair_ops_tree(target)
-            if fixed:
-                logger.info(
-                    f"task_masknmf: repaired {fixed} ops.npy file(s) under {target} "
-                    "(summary images were stored as lists)"
-                )
-        except Exception as _e:  # noqa: BLE001 - never block the run on this
-            logger.warning(
-                f"task_masknmf: ops.npy repair pass failed for {target}: {_e}"
+        fixed = repair_ops_tree(target)
+        if fixed:
+            logger.info(
+                f"task_masknmf: repaired {fixed} ops.npy file(s) under {target} "
+                "(summary images were stored as lists)"
             )
 
-    # periodic log line keeps the worker's stall watchdog fed through long
-    # silent GPU stages (PMD / HALS)
     _stop_heartbeat = threading.Event()
-
-    def _heartbeat():
-        while not _stop_heartbeat.wait(600):
-            logger.info("masknmf: still running")
-
-    threading.Thread(target=_heartbeat, daemon=True).start()
+    threading.Thread(
+        target=_heartbeat, args=(_stop_heartbeat, logger, "masknmf"), daemon=True
+    ).start()
 
     try:
         monitor.update(0.05, "Running masknmf pipeline...")
-
-        def _progress(plane=0, total_planes=1, step="", message="", **kw):
-            slot = 0.85 / max(total_planes, 1)
-            offsets = {
-                "registration": 0.02,
-                "compression": 0.35,
-                "demixing": 0.55,
-                "exports": 0.85,
-                "figures": 0.92,
-            }
-            frac = 0.1 + slot * plane + slot * offsets.get(step, 0.0)
-            monitor.update(min(frac, 0.95), message)
-
         from mbo_utilities.masknmf import run_volume
 
         runs = run_volume(
@@ -829,7 +523,7 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
             channel=channel,
             writer_kwargs=writer_kwargs,
             logger=logger,
-            progress_callback=_progress,
+            progress_callback=functools.partial(_masknmf_progress, monitor),
         )
 
         monitor.finish("masknmf pipeline completed.")
@@ -844,14 +538,11 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
 
 
 def _bridge_consolidate_logging(worker_logger: logging.Logger) -> None:
-    """Attach the worker's handlers to the consolidator's mbo logger.
+    """Attach the worker's handlers to the consolidator's logger.
 
-    Every ``mbo.*`` logger has ``propagate=False`` (see ``mbo_utilities.log``),
-    and the worker's per-task file handler is bound to ``mbo.worker``
-    only. Without this bridge the consolidator's INFO messages
-    (``consolidate corrected: src=... out=... ...``, ``consolidate: wrote ...``)
-    go nowhere in the subprocess. Idempotent — same handler is never
-    added twice.
+    Every ``mbo.*`` logger has ``propagate=False`` and the worker's file
+    handler sits on ``mbo.worker`` only, so without this the consolidator's
+    INFO lines go nowhere in the subprocess.
     """
     cons_logger = logging.getLogger("mbo.arrays.isoview.consolidate")
     cons_logger.setLevel(logging.INFO)
@@ -864,16 +555,50 @@ def _bridge_consolidate_logging(worker_logger: logging.Logger) -> None:
             cons_logger.addHandler(h)
 
 
-def task_isoview(args: dict, logger: logging.Logger) -> None:
-    """Isoview consolidator pipeline task.
+class _ConsolidateProgress:
+    """Maps the consolidator's ``(stage, current, total)`` calls onto one bar that never runs backwards.
 
-    Calls ``consolidate_isoview`` and forwards its per-stage progress
-    to ``TaskMonitor`` via a stage-weighted mapping. The consolidator's
-    progress callback fires with ``(stage, current, total)`` per
-    ``(t, c)`` slab written; we bucket the stage into one of four
-    weight slots so the bar moves smoothly across the whole run
-    instead of resetting at every level/subgroup transition.
+    Stage weights are the measured share of the 61-timepoint corrected demo:
+    image 360 s, seg 240 s, projections 360 s, aux and misc 30 s. A bucket's
+    weight is split evenly over the sub-stages seen so far (``image_l0``,
+    ``image_l1``, ...).
     """
+
+    WEIGHTS = {"image": 0.40, "seg": 0.15, "proj": 0.30, "aux": 0.10, "misc": 0.05}
+
+    def __init__(self, monitor: TaskMonitor, logger: logging.Logger):
+        self.monitor = monitor
+        self.logger = logger
+        self.consumed = {k: 0.0 for k in self.WEIGHTS}
+        self.seen = {k: set() for k in self.WEIGHTS}
+
+    @staticmethod
+    def bucket(stage: str) -> str:
+        stem = stage.split("_", 1)[0]
+        if stem in ("image", "seg", "aux"):
+            return stem
+        if stem in ("max", "raw"):
+            return "proj"
+        return "misc"
+
+    def __call__(self, stage: str, current: int, total: int) -> None:
+        if total <= 0:
+            return
+        bucket = self.bucket(stage)
+        if stage not in self.seen[bucket]:
+            self.seen[bucket].add(stage)
+            self.logger.info(f"consolidate: stage '{stage}' starting (total={total})")
+        substage_weight = self.WEIGHTS[bucket] / len(self.seen[bucket])
+        done = (len(self.seen[bucket]) - 1 + current / total) * substage_weight
+        self.consumed[bucket] = max(self.consumed[bucket], done)
+        # finalize() pushes the bar to 1.0 on success
+        self.monitor.update(
+            min(sum(self.consumed.values()), 0.99), f"{stage}: {current}/{total}"
+        )
+
+
+def task_isoview(args: dict, logger: logging.Logger) -> None:
+    """Run ``consolidate_isoview`` on a corrected or fused tree."""
     from mbo_utilities.arrays.isoview import consolidate_isoview
 
     _bridge_consolidate_logging(logger)
@@ -898,64 +623,6 @@ def task_isoview(args: dict, logger: logging.Logger) -> None:
         f"codec={compressor}@{compression_level}"
     )
 
-    # Stage-weight budget. Numbers reflect empirical timing on the
-    # 61-timepoint corrected demo (image: ~90s × 4 levels = 360s,
-    # seg: ~60s × 4 levels = 240s, projections: ~30s × 3 axes × 4
-    # levels = 360s, aux + misc: ~30s). Normalized to sum to 1.0.
-    stage_weights = {
-        "image": 0.40,
-        "seg": 0.15,
-        "proj": 0.30,
-        "aux": 0.10,
-    }
-    stage_weights["misc"] = 1.0 - sum(stage_weights.values())
-
-    def _classify(stage: str) -> str:
-        stem = stage.split("_", 1)[0]
-        if stem == "image":
-            return "image"
-        if stem == "seg":
-            return "seg"
-        if stem in ("max", "raw"):
-            return "proj"
-        if stem == "aux":
-            return "aux"
-        return "misc"
-
-    # Track cumulative budget consumed by completed stages so the bar
-    # never goes backward when a new stage starts.
-    consumed: dict[str, float] = {k: 0.0 for k in stage_weights}
-    bucket_done: dict[str, set[str]] = {k: set() for k in stage_weights}
-    seen_stages: set[str] = set()
-
-    def cb(stage: str, current: int, total: int) -> None:
-        if total <= 0:
-            return
-        # First sighting of this sub-stage → one INFO line so the user
-        # sees the pipeline moving. Per-(t,c) progress within a stage
-        # would spam the log; the TaskMonitor still gets every update.
-        if stage not in seen_stages:
-            seen_stages.add(stage)
-            logger.info(f"consolidate: stage '{stage}' starting (total={total})")
-        bucket = _classify(stage)
-        weight = stage_weights[bucket]
-        # consolidator fires many sub-stages per bucket (e.g. image_l0,
-        # image_l1, image_l2, image_l3 all map to "image"). Split the
-        # bucket's weight evenly across the sub-stages we've seen so far.
-        bucket_done[bucket].add(stage)
-        n_substages = max(1, len(bucket_done[bucket]))
-        substage_weight = weight / n_substages
-        substage_frac = current / total
-        # consumed for this bucket: every prior sub-stage in this bucket
-        # is treated as fully done (1.0); current sub-stage at substage_frac.
-        bucket_consumed = (
-            len(bucket_done[bucket]) - 1
-        ) * substage_weight + substage_frac * substage_weight
-        consumed[bucket] = max(consumed[bucket], bucket_consumed)
-        total_frac = sum(consumed.values())
-        # cap at 0.99 — actual finalize() pushes to 1.0 on success.
-        monitor.update(min(total_frac, 0.99), f"{stage}: {current}/{total}")
-
     t_start = time.monotonic()
     try:
         out = consolidate_isoview(
@@ -967,7 +634,7 @@ def task_isoview(args: dict, logger: logging.Logger) -> None:
             pyramid_max_layers=pyramid_max_layers,
             compressor=compressor,
             compression_level=compression_level,
-            progress_callback=cb,
+            progress_callback=_ConsolidateProgress(monitor, logger),
         )
         _record_isoview_runtime(
             "consolidate",
@@ -984,23 +651,13 @@ def task_isoview(args: dict, logger: logging.Logger) -> None:
 
 
 def _build_isoview_processing_config(args: dict):
-    """Assemble an :class:`isoview.ProcessingConfig` from a task args dict.
-
-    Only forwards keys the user explicitly set — everything else falls
-    through to ProcessingConfig's own defaults (which themselves get
-    further refined by ``update_from_metadata`` once the XML is read
-    inside the pipeline). Path-typed fields are coerced to ``Path``.
-    """
+    """Build an ``isoview.ProcessingConfig`` from the keys the widget set; the rest keep isoview's defaults."""
     from isoview import ProcessingConfig
 
-    config_kwargs: dict = {}
-
-    # required: input_dir always provided by the widget
-    config_kwargs["input_dir"] = Path(args["input_path"])
+    config_kwargs: dict = {"input_dir": Path(args["input_path"])}
     if args.get("output_dir"):
         config_kwargs["output_dir"] = Path(args["output_dir"])
 
-    # plain pass-throughs — keep keys only when the widget supplied them
     for key in (
         "output_suffix",
         "stitcher_suffix",
@@ -1037,9 +694,6 @@ def _build_isoview_processing_config(args: dict):
         "flip_vertical",
         "rotation",
         "front_flag",
-        # Per-view overrides — dict[int, T] keyed by view ID. Resolved
-        # by isoview's ProcessingConfig.get_blend(view); views absent
-        # from a dict fall back to the scalar above.
         "blending_method_by_view",
         "blending_range_by_view",
         "transition_plane_by_view",
@@ -1065,7 +719,6 @@ def _build_isoview_processing_config(args: dict):
         if val is not None:
             config_kwargs[key] = val
 
-    # tuple-typed: median_kernel
     if args.get("median_kernel") is not None:
         config_kwargs["median_kernel"] = tuple(args["median_kernel"])
     if args.get("search_offsets_x") is not None:
@@ -1080,8 +733,7 @@ def _build_isoview_processing_config(args: dict):
         if d is not None:
             config_kwargs[key] = {int(v): tuple(off) for v, off in d.items()}
 
-    # crop_* dicts are keyed by camera index; JSON round-trips int keys to
-    # strings, so coerce back to int or get_crop(camera) misses every entry.
+    # json turned the camera-index keys into strings; get_crop(camera) needs ints
     for key in (
         "crop_left",
         "crop_top",
@@ -1094,9 +746,9 @@ def _build_isoview_processing_config(args: dict):
         if isinstance(d, dict):
             config_kwargs[key] = {int(k): int(v) for k, v in d.items()}
 
-    # tile_crops: {"SPM##": {crop_param: {camera: value}}} — only the camera
-    # (leaf) keys are int; JSON stringifies them, so coerce back.
-    tc = config_kwargs.get("tile_crops")
+    tc = config_kwargs.get(
+        "tile_crops"
+    )  # {"SPM##": {crop_param: {camera: value}}}, camera keys are ints
     if isinstance(tc, dict):
         config_kwargs["tile_crops"] = {
             str(spm): {
@@ -1109,8 +761,11 @@ def _build_isoview_processing_config(args: dict):
     return ProcessingConfig(**config_kwargs)
 
 
+ISOVIEW_CONFIG_FILENAME = "isoview_config.json"
+
+
 def _format_runtime(seconds: float) -> str:
-    """Compact H/M/S runtime string (e.g. ``1h 3m 7s``)."""
+    """``1h 3m 7s``."""
     total = int(round(seconds))
     h, rem = divmod(total, 3600)
     m, s = divmod(rem, 60)
@@ -1122,9 +777,7 @@ def _format_runtime(seconds: float) -> str:
 
 
 def _isoview_config_root(path) -> Path | None:
-    """Dataset root holding ``isoview_config.json`` for a corrected/fused
-    tree path (its parent). Returns ``None`` when no tree is found.
-    """
+    """The dataset root (the parent of the ``.corrected`` or ``.fused`` tree ``path`` is in), else None."""
     if not path:
         return None
     p = Path(path)
@@ -1145,45 +798,28 @@ def _record_isoview_runtime(
     config_root,
     logger: logging.Logger,
 ) -> None:
-    """Log the step's total wall-clock runtime and append it to the
-    dataset's ``isoview_config.json`` under a ``runtimes`` section.
-
-    ``config_root`` is the directory holding ``isoview_config.json``
-    (``config.input_dir.parent`` for the pipeline steps); ``None`` logs
-    the runtime without persisting it.
-    """
+    """Log the step's wall time and record it under ``runtimes`` in the dataset's ``isoview_config.json``; a None root only logs."""
     logger.info(f"Total runtime ({step}): {_format_runtime(elapsed)} ({elapsed:.1f}s)")
     if config_root is None:
         return
-    try:
-        from isoview.config import CONFIG_FILENAME
-    except Exception:
-        CONFIG_FILENAME = "isoview_config.json"
-    try:
-        cfg_path = Path(config_root) / CONFIG_FILENAME
-        data: dict = {}
-        if cfg_path.exists():
-            with open(cfg_path) as f:
-                data = json.load(f)
-        data.setdefault("runtimes", {})[step] = round(float(elapsed), 1)
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cfg_path, "w") as f:
-            json.dump(data, f, indent=2)
-        logger.info(f"isoview_config runtime saved: {cfg_path}")
-    except Exception as e:
-        logger.warning(f"could not save runtime to isoview_config: {e}")
+    cfg_path = Path(config_root) / ISOVIEW_CONFIG_FILENAME
+    data: dict = {}
+    if cfg_path.exists():
+        with cfg_path.open() as f:
+            data = json.load(f)
+    data.setdefault("runtimes", {})[step] = round(float(elapsed), 1)
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with cfg_path.open("w") as f:
+        json.dump(data, f, indent=2)
+    logger.info(f"isoview_config runtime saved: {cfg_path}")
 
 
 class _ForwardingHandler(logging.Handler):
-    """Mirror records to a fixed list of target handlers at our own level.
+    """Mirrors records onto the worker's handlers at its own level.
 
-    Used to bridge the upstream ``isoview`` logger into the worker's
-    log stream without inheriting the upstream's level config. isoview
-    calls ``setup_logging()`` partway through ``multi_fuse`` which
-    flips its logger to DEBUG — without this wrapper, our bridge would
-    silently start emitting every DEBUG record. We forward by calling
-    each target's ``handle`` (not ``emit``) so target-level filters,
-    formatters, and filters apply.
+    isoview's ``setup_logging()`` flips its logger to DEBUG partway through
+    ``multi_fuse``, so this handler's level is the gate. ``handle`` rather
+    than ``emit`` so each target's own level and filters apply.
     """
 
     def __init__(self, targets: list[logging.Handler], level=logging.INFO):
@@ -1195,75 +831,35 @@ class _ForwardingHandler(logging.Handler):
             h.handle(record)
 
 
-# Sentinel attribute marking the bridge we install. Per-process; reset
-# implicitly because each worker is a fresh subprocess.
-_ISOVIEW_BRIDGE_ATTR = "_mbo_isoview_bridge"
-
-
 def _bridge_isoview_logging(worker_logger: logging.Logger) -> None:
-    """Forward isoview pipeline logs to the worker's stream + file.
+    """Mirror the ``isoview`` logger's INFO records (DEBUG with debug logging on) onto the worker's handlers.
 
-    isoview uses its own top-level ``isoview`` logger; by default only
-    WARNING+ flows to stderr and INFO/DEBUG lands in
-    ``<fused_dir>/<method>/fusion.log`` — which the GUI user can't see
-    in real time. This helper attaches a forwarding handler that mirrors
-    INFO+ records (DEBUG+ when debug logging is on) to the worker logger's
-    handlers (the per-task file), sets ``isoview``'s
-    propagation to ``False`` so nothing double-prints, and is idempotent
-    — only one bridge is installed per process even if both isoview
-    tasks fire (the second call refreshes its target list and level to
-    pick up any handlers added since).
+    isoview writes INFO to ``<fused_dir>/<method>/fusion.log``, which the
+    Process Console never sees. One bridge per process; a second call
+    refreshes its targets and level.
     """
-    # Honor the GUI "Debug logging" toggle: the worker inherits MBO_DEBUG in
-    # its environment at spawn (_options_popup sets it), with the persisted
-    # preference as a fallback for fresh launches. When on, forward isoview
-    # DEBUG records to the process console; otherwise INFO only. isoview's
-    # setup_logging() forces its logger to DEBUG, so the bridge handler level
-    # is the real gate.
-    debug = bool(int(os.getenv("MBO_DEBUG", "0")))
-    if not debug:
-        try:
-            from mbo_utilities.preferences import get_debug_logging
-
-            debug = get_debug_logging()
-        except Exception:
-            debug = False
+    debug = log.debug_enabled() or get_debug_logging()
     level = logging.DEBUG if debug else logging.INFO
 
     iso_logger = logging.getLogger("isoview")
     iso_logger.setLevel(level)
     iso_logger.propagate = False
 
-    # never add the root `mbo` StreamHandler here: the worker's stderr already
-    # points at the same file, so every line would be written twice
+    # never the root mbo StreamHandler: the worker's stderr is already the log file
     targets: list[logging.Handler] = list(worker_logger.handlers)
     if not targets:
         targets = list(logging.getLogger("mbo").handlers)
 
-    existing = getattr(iso_logger, _ISOVIEW_BRIDGE_ATTR, None)
-    if isinstance(existing, _ForwardingHandler):
-        existing._targets = targets  # refresh target list
-        existing.setLevel(level)
-        return
-
-    bridge = _ForwardingHandler(targets, level=level)
-    iso_logger.addHandler(bridge)
-    setattr(iso_logger, _ISOVIEW_BRIDGE_ATTR, bridge)
+    for handler in iso_logger.handlers:
+        if isinstance(handler, _ForwardingHandler):
+            handler._targets = targets
+            handler.setLevel(level)
+            return
+    iso_logger.addHandler(_ForwardingHandler(targets, level=level))
 
 
 def task_correct_stack(args: dict, logger: logging.Logger) -> None:
-    """IsoView ``correct_stack`` pipeline task.
-
-    Runs the pixel-correction + segmentation + per-camera output stage
-    against raw ``.stack`` data. Mirrors the ``~/repos/isoview/pipeline/
-    correct_stack.py`` example script: assemble a ProcessingConfig from
-    the args dict, call ``isoview.correct_stack(config)``.
-
-    Progress: coarse — the upstream ``correct_stack`` has no progress
-    callback hook, so the TaskMonitor only flips
-    ``initializing`` → ``running`` → ``completed/failed``. The per-camera
-    detail lands in the per-process log file (``~/.mbo/logs/...``).
-    """
+    """Run ``isoview.correct_stack`` on raw ``.stack`` data; it has no progress hook, so the bar only moves at the ends."""
     from isoview import correct_stack
 
     _bridge_isoview_logging(logger)
@@ -1297,16 +893,7 @@ def task_correct_stack(args: dict, logger: logging.Logger) -> None:
 
 
 def task_isoview_raw_projections(args: dict, logger: logging.Logger) -> None:
-    """Precompute raw XY max-projections for the segmentation / dead-pixel
-    previews.
-
-    Writes ``SPM##_TM######_CM##.xyProjection.tif`` into the flat sibling
-    ``<raw_dir>.raw.projections/`` directory. Existing files are skipped
-    so re-running (and the later ``correct_stack``) only fills gaps. No
-    dependency on the upstream ``isoview`` package.
-
-    Args: ``raw_dir`` (required), ``overwrite`` (optional, default False).
-    """
+    """Write the raw XY max projections into ``<raw_dir>.raw.projections/``, skipping files already there."""
     from mbo_utilities.arrays.isoview import make_raw_projections
 
     raw_dir = args.get("raw_dir")
@@ -1317,16 +904,12 @@ def task_isoview_raw_projections(args: dict, logger: logging.Logger) -> None:
     monitor = TaskMonitor(raw_dir, uuid=args.get("_uuid"))
     monitor.update(0.01, "Scanning raw stacks...")
 
-    def cb(current: int, total: int, name: str) -> None:
-        frac = current / total if total else 1.0
-        monitor.update(min(0.99, frac), f"projection {current}/{total}: {name}")
-
     t_start = time.monotonic()
     try:
         result = make_raw_projections(
             raw_dir,
             overwrite=overwrite,
-            progress_callback=cb,
+            progress_callback=functools.partial(_projection_progress, monitor),
         )
         _record_isoview_runtime(
             "raw_projections",
@@ -1348,15 +931,23 @@ def task_isoview_raw_projections(args: dict, logger: logging.Logger) -> None:
         raise
 
 
-def task_multi_fuse(args: dict, logger: logging.Logger) -> None:
-    """IsoView ``multi_fuse`` pipeline task.
+def _projection_progress(
+    monitor: TaskMonitor, current: int, total: int, name: str
+) -> None:
+    frac = current / total if total else 1.0
+    monitor.update(min(0.99, frac), f"projection {current}/{total}: {name}")
 
-    Runs the camera-pair fusion stage on a corrected output tree.
-    Assembles a ProcessingConfig (same kwargs format as
-    :func:`task_correct_stack`) and calls ``isoview.multi_fuse(config)``.
-    Progress is coarse — same caveat as ``task_correct_stack``: the
-    per-pair detail lives in the log file.
-    """
+
+def _run_capturing(func, arg, result: dict) -> None:
+    """Thread target: call ``func(arg)`` and park any exception under ``result["error"]``."""
+    try:
+        func(arg)
+    except BaseException as exc:
+        result["error"] = exc
+
+
+def task_multi_fuse(args: dict, logger: logging.Logger) -> None:
+    """Run ``isoview.multi_fuse`` on a corrected tree, counting fused timepoint dirs for progress."""
     from isoview import multi_fuse
 
     _bridge_isoview_logging(logger)
@@ -1377,43 +968,23 @@ def task_multi_fuse(args: dict, logger: logging.Logger) -> None:
         logger.info(f"isoview per-run log: {fusion_log_path} (DEBUG records)")
         monitor.update(0.05, "Running multi_fuse (see log file for details)...")
 
-        # multi_fuse runs the whole parallel loop with no progress callback,
-        # so the worker watchdog (kills after MAX_STALL_MINUTES of unchanged
-        # progress) would terminate a long but healthy run. Run it in a
-        # thread and heartbeat from the count of fused timepoint dirs: the
-        # count advances as each timepoint completes (keeping the watchdog
-        # alive) and freezes if fusion genuinely hangs (so it still fires).
+        # multi_fuse has no progress callback and the watchdog kills a worker whose progress stalls,
+        # so the count of fused timepoint dirs (SPM##/TM###### for a timelapse, SPM## tiled) is the progress
         total = max(len(config.timepoints), 1)
         result: dict = {}
-
-        def _run():
-            try:
-                multi_fuse(config)
-            except BaseException as exc:
-                result["error"] = exc
-
-        worker = threading.Thread(target=_run, daemon=True)
+        worker = threading.Thread(
+            target=_run_capturing, args=(multi_fuse, config, result), daemon=True
+        )
         worker.start()
         while worker.is_alive():
             worker.join(timeout=30)
-            try:
-                # new fused layout: <fused>/SPM##/TM######/ (timelapse) or
-                # <fused>/SPM##/ (tiled) — count whichever advances.
-                done = sum(1 for p in fused_dir.glob("SPM*/TM*") if p.is_dir()) or sum(
-                    1 for p in fused_dir.glob("SPM*") if p.is_dir()
-                )
-            except OSError:
-                done = 0
+            done = sum(1 for p in fused_dir.glob("SPM*/TM*") if p.is_dir()) or sum(
+                1 for p in fused_dir.glob("SPM*") if p.is_dir()
+            )
             frac = 0.05 + 0.9 * min(done / total, 1.0)
             monitor.update(frac, f"multi_fuse: {done}/{total} timepoints")
         if "error" in result:
             raise result["error"]
-
-        # output_suffix is already encoded in fused_dir (isoview names the
-        # tree <root>.fused_<suffix>), so the method subdir stays <method>.
-        # No post-run rename — doing so would double-apply the suffix and
-        # break resume (next run writes to <method>/, completed data sits
-        # in <method>_<suffix>/).
 
         _record_isoview_runtime(
             "fuse",
@@ -1430,18 +1001,7 @@ def task_multi_fuse(args: dict, logger: logging.Logger) -> None:
 
 
 def task_generate_bigstitcher(args: dict, logger: logging.Logger) -> None:
-    """IsoView ``generate_bigstitcher_xml`` export task.
-
-    Walks ``config.fused_dir`` for VW00/VW90 pairs and writes one BDV
-    SpimData dataset per fusion method under ``config.stitcher_dir``.
-    No resampling. ``orientation`` (default none) bakes an optional
-    rotation/flip seed onto VW00 only; otherwise VW00/VW90 are written in
-    their native fused frame. Orient and register them in BigStitcher.
-
-    Reuses the shared isoview ProcessingConfig builder + log bridge so
-    the same path resolution and per-run log routing as correct_stack /
-    multi_fuse apply.
-    """
+    """Write one BDV SpimData dataset per fusion method from the VW00/VW90 pairs under ``config.fused_dir``; no resampling."""
     from isoview import generate_bigstitcher_xml
 
     _bridge_isoview_logging(logger)
@@ -1489,20 +1049,11 @@ def task_generate_bigstitcher(args: dict, logger: logging.Logger) -> None:
         raise
 
 
-# Registry
 def task_vnoiser(args: dict, logger: logging.Logger) -> None:
-    """
-    Vnoiser pipeline task: AOD ROI units of a .mesc to a PF folder.
+    """Run the vnoiser pipeline on the ticked units of a ``.mesc`` with the Run tab's settings and domain table.
 
-    Runs mbo_utilities.vnoiser.pipeline.run_vnoiser_pipeline with the Run
-    tab's settings (scaled there to the scans' frame rate); every ticked
-    unit is one scan, the domain table says which ROIs and pixels make each
-    domain. The settings carry the trace recipe and the polarity, so the
-    viewer's Invert Deflection reaches the run as ``settings.traces.invert``
-    (the widget sets it), never as a second inversion of the movie. The
-    runner logs every step (each ROI read, each domain denoised, the
-    writes) with its time and memory through ``logger`` and drives the
-    progress sidecar through ``monitor.update``.
+    The viewer's Invert Deflection reaches the run as
+    ``settings.traces.invert``, never as a second inversion of the movie.
     """
     from mbo_utilities.metadata import strip_for_export
     from mbo_utilities.vnoiser.params import VnoiserSettings
@@ -1516,7 +1067,7 @@ def task_vnoiser(args: dict, logger: logging.Logger) -> None:
     frames = args.get("frames")
     try:
         src_arr = imread(args["input_path"], **(args.get("reader_kwargs") or {}))
-        metadata = dict(getattr(src_arr, "metadata", {}) or {})
+        metadata = dict(src_arr.metadata or {})
         metadata.update(args.get("custom_metadata") or {})
     except Exception as e:
         monitor.fail(str(e), details={"traceback": traceback.format_exc()})
@@ -1576,22 +1127,7 @@ _PLUGIN_TASKS_LOADED = False
 
 
 def register_task(name: str, func) -> None:
-    """
-    Register a worker function under ``name``.
-
-    Parameters
-    ----------
-    name : str
-        The ``task_type`` the GUI spawns with. Must not collide with a
-        built-in.
-    func : callable
-        Called as ``func(args, logger)`` in the worker subprocess.
-
-    Raises
-    ------
-    ValueError
-        If ``name`` is already registered to a different function.
-    """
+    """Register ``func(args, logger)`` as the worker for ``task_type`` ``name``; a second function under one name raises."""
     existing = TASKS.get(name)
     if existing is not None and existing is not func:
         raise ValueError(f"task {name!r} is already registered")
@@ -1599,31 +1135,16 @@ def register_task(name: str, func) -> None:
 
 
 def load_plugin_tasks() -> None:
-    """
-    Register worker functions contributed by entry-point pipelines.
-
-    A pipeline widget class may expose ``task_type`` and ``task_func``; the
-    pair is registered here so the worker subprocess can dispatch to it
-    without mbo_utilities importing the plugin by name. Cached.
-    """
+    """Register every entry-point pipeline widget's ``task_type`` and ``task_func`` pair, once per process."""
     global _PLUGIN_TASKS_LOADED
     if _PLUGIN_TASKS_LOADED:
         return
     _PLUGIN_TASKS_LOADED = True
 
-    try:
-        from mbo_utilities.pipeline_registry import load_entry_point_pipelines
+    from mbo_utilities.pipeline_registry import load_entry_point_pipelines
 
-        classes = load_entry_point_pipelines()
-    except Exception:
-        return
-
-    for cls in classes:
+    for cls in load_entry_point_pipelines():
         name = getattr(cls, "task_type", None)
         func = getattr(cls, "task_func", None)
-        if not name or func is None:
-            continue
-        try:
+        if name and func is not None:
             register_task(name, func)
-        except ValueError:
-            continue

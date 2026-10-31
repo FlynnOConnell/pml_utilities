@@ -30,15 +30,9 @@ from mbo_utilities.gui._imgui_helpers import (
 from mbo_utilities.gui.widgets.progress_bar import reset_progress_state
 from mbo_utilities.gui.widgets.widget_toggles import widget_enabled
 
-# accent color for the currently-active z-plane in tables and plots.
-# matches the idle "Run" button green so the highlight is consistent with
-# the rest of the GUI's run-state palette.
-_ACTIVE_Z_COLOR = (0.13, 0.55, 0.13, 1.00)
+_ACTIVE_Z_COLOR = (0.13, 0.55, 0.13, 1.00)  # the idle Run button's green
 
-# seconds the stats worker sleeps after each read point, ceding the GIL so the
-# main render/event loop gets a scheduling window (UI stays responsive during
-# background compute). Negligible vs the per-point read cost.
-_ZSTATS_YIELD_S = 0.001
+_ZSTATS_YIELD_S = 0.001  # the stats worker sleeps this long after each read so the render loop gets the GIL
 
 
 def _slider_labels(parent: Any) -> dict[str, str]:
@@ -61,19 +55,18 @@ def _spec_for(parent: Any, arr: Any) -> SummaryStatsSpec:
     indexes, the series preference, and the live slider labels. Falls back to
     the default builder if the array predates the hooks.
     """
-    dims = tuple(getattr(arr, "dims", None) or ())
+    dims = tuple(arr.dims)
     shape = tuple(arr.shape)
     if not dims or len(dims) != len(shape):
         from mbo_utilities.arrays.features._dim_labels import DEFAULT_DIMS
 
         dims = DEFAULT_DIMS.get(len(shape), tuple("TCZYX"[: len(shape)]))
 
-    # piezo arrays: enable averaging so per-z-slice stats are meaningful
     if hasattr(arr, "num_slices") and hasattr(arr, "average_frames"):
         if not arr.average_frames and getattr(arr, "can_average", False):
             arr.average_frames = True
 
-    pref = str(getattr(parent, "_stats_axis_pref", "z")).lower()
+    pref = str(parent._stats_axis_pref).lower()
     labels = _slider_labels(parent)
     spec_fn = getattr(arr, "summary_stats_spec", None)
     if callable(spec_fn):
@@ -118,8 +111,6 @@ def _read_stat_point(
     if spec.spatial_bin > 1 and data.ndim >= 2:
         data = data[..., :: spec.spatial_bin, :: spec.spatial_bin]
 
-    # series + group axes are int-indexed (squeezed away); what remains is
-    # (reduce axes..., Yb, Xb). Collapse to 3D so the caller can axis-0 reduce.
     if data.ndim == 2:
         data = data[np.newaxis, ...]
     elif data.ndim > 3:
@@ -141,16 +132,10 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
     by the group-combo tuple (``()`` when there is no group), and
     ``_zstats_spec[idx-1]`` holds the spec used to map sliders back to a combo.
     """
-    # phase correction is irrelevant for the metrics and expensive per chunk
-    # under the shared _tiff_lock — turn it off for all reads here.
-    arr.fix_phase = False
+    arr.fix_phase = False  # NOTE: phase correction means nothing to the metrics and serialises every chunk under _tiff_lock
     t_total_start = time.perf_counter()
 
     spec = _spec_for(parent, arr)
-    if not hasattr(parent, "_zstats_spec"):
-        parent._zstats_spec = [None] * max(
-            idx, int(getattr(parent, "num_graphics", idx))
-        )
     parent._zstats_spec[idx - 1] = spec
     parent.logger.debug(f"[zstats] start array={idx} {spec.describe()}")
 
@@ -164,13 +149,9 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
     has_reduce = spec.has_reduce
     series_key = spec.series.name.lower() if spec.series else "z"
 
-    # record the 1-based series numbers actually sampled so the table/plot
-    # axes stay truthful when the series axis is subsampled.
-    if not hasattr(parent, "_zstats_z_indices"):
-        parent._zstats_z_indices = [None] * max(
-            idx, int(getattr(parent, "num_graphics", idx))
-        )
-    parent._zstats_z_indices[idx - 1] = [int(s) + 1 for s in series_indices]
+    parent._zstats_z_indices[idx - 1] = [
+        int(s) + 1 for s in series_indices
+    ]  # 1-based, so a subsampled axis is labelled with the planes read
 
     combos = list(product(*[g.indices for g in spec.groups])) if spec.groups else [()]
     total_steps = max(1, len(combos) * n_slices)
@@ -204,7 +185,6 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
             total_compute_ms += (t_after_compute - t_after_read) * 1000.0
             total_bytes += int(stack.nbytes)
 
-            # cede the GIL between heavy reads so the GUI loop gets a window.
             time.sleep(_ZSTATS_YIELD_S)
 
         parent._zstats[idx - 1][combo] = stats
@@ -222,8 +202,6 @@ def compute_zstats_single_array(parent: Any, idx: int, arr: Any):
         f"slices={n_slices}"
     )
 
-    # Persist the full per-combo stats (+ mean stack) to the backing zarr
-    # store so the next open hydrates instead of recomputing.
     _persist_stats(parent, idx, arr, spec)
 
 
@@ -261,7 +239,7 @@ def _persist_stats(parent: Any, idx: int, arr: Any, spec: SummaryStatsSpec) -> N
             spec.series.name if spec.series else None,
             [m.key for m in spec.metrics],
         ),
-        "series_pref": str(getattr(parent, "_stats_axis_pref", "z")).lower(),
+        "series_pref": str(parent._stats_axis_pref).lower(),
         "series_indices": [int(s) for s in (parent._zstats_z_indices[idx - 1] or [])],
         "spatial_bin": int(spec.spatial_bin),
         "combos": [[int(v) for v in c] for c in combos],
@@ -269,12 +247,9 @@ def _persist_stats(parent: Any, idx: int, arr: Any, spec: SummaryStatsSpec) -> N
     }
     means = None
     means_map = parent._zstats_means[idx - 1]
-    try:
-        stacks = [means_map.get(c) for c in combos]
-        if stacks and all(s is not None for s in stacks):
-            means = np.stack([np.asarray(s, dtype=np.float32) for s in stacks])
-    except Exception:
-        means = None
+    stacks = [means_map.get(c) for c in combos]
+    if stacks and all(s is not None for s in stacks):
+        means = np.stack([np.asarray(s, dtype=np.float32) for s in stacks])
     try:
         if save(payload, means):
             parent.logger.debug(
@@ -354,7 +329,7 @@ def hydrate_zstats(parent: Any) -> list[bool]:
 
 
 def signal_quality_enabled() -> bool:
-    """Whether Signal Quality is on; off, its stats are never read."""
+    """True while Signal Quality is on; off, its stats are never read."""
     return widget_enabled("signal_quality")
 
 
@@ -372,18 +347,22 @@ def compute_zstats(parent: Any, only: list[int] | None = None):
         return
 
     arrays = list(enumerate(parent.image_widget.data, start=1))
+    threading.Thread(
+        target=_compute_zstats_worker, args=(parent, arrays, only), daemon=True
+    ).start()
 
-    def _run():
-        for idx, arr in arrays:
-            if only is not None and (idx - 1) not in only:
-                continue
-            try:
-                compute_zstats_single_array(parent, idx, arr)
-            except Exception as e:
-                parent._zstats_running[idx - 1] = False
-                parent.logger.debug(f"[zstats] array={idx} failed: {e}")
 
-    threading.Thread(target=_run, daemon=True).start()
+def _compute_zstats_worker(parent: Any, arrays: list, only: list[int] | None) -> None:
+    for idx, arr in arrays:
+        if only is not None and (idx - 1) not in only:
+            continue
+        try:
+            compute_zstats_single_array(parent, idx, arr)
+        except (
+            Exception
+        ) as e:  # NOTE: a worker thread's exception would otherwise die silently
+            parent._zstats_running[idx - 1] = False
+            parent.logger.debug(f"[zstats] array={idx} failed: {e}")
 
 
 def refresh_zstats(parent: Any):
@@ -396,13 +375,8 @@ def refresh_zstats(parent: Any):
     if not parent.image_widget:
         return
 
-    # Use num_graphics which matches len(iw.graphics)
     n = parent.num_graphics
 
-    # Reset z-stats state. Per-array slots are dicts keyed by the group-combo
-    # tuple (``()`` when there is no group), populated by
-    # `compute_zstats_single_array`; ``_zstats_spec[i]`` holds that array's
-    # `SummaryStatsSpec` so the display can map sliders back to a combo.
     parent._zstats = [{} for _ in range(n)]
     parent._zstats_means = [{} for _ in range(n)]
     parent._zstats_mean_scalar = [{} for _ in range(n)]
@@ -413,26 +387,18 @@ def refresh_zstats(parent: Any):
     parent._zstats_current_z = [0] * n
     parent._zstats_z_indices = [None] * n
 
-    # Reset progress state for each graphic to allow new progress display
     for i in range(n):
         reset_progress_state(f"zstats_{i}")
 
-    # lowercase both sides: dims labels are not normalized, and a missed Z falls
-    # through to shape[1], which on a 5D TCZYX array is C
     arr = parent.image_widget.data[0] if parent.image_widget.data else None
-    dims = getattr(arr, "dims", None) if arr is not None else None
-    dims_lower = tuple(d.lower() for d in dims) if dims else None
+    dims = arr.dims if arr is not None else None
+    dims_lower = (
+        tuple(d.lower() for d in dims) if dims else None
+    )  # dims labels are not normalised
     if dims_lower is not None and "z" in dims_lower:
-        z_idx = dims_lower.index("z")
-        parent.nz = parent.shape[z_idx]
-    elif arr is not None and hasattr(arr, "nz"):
-        # lazy arrays carry a canonical Z size (.nz) even when dims
-        # don't expose a "z" label — prefer that over a positional guess.
+        parent.nz = parent.shape[dims_lower.index("z")]
+    elif arr is not None:
         parent.nz = int(arr.nz)
-    elif len(parent.shape) >= 4:
-        parent.nz = parent.shape[1]
-    elif len(parent.shape) == 3:
-        parent.nz = 1
     else:
         parent.nz = 1
 
@@ -447,7 +413,7 @@ def refresh_zstats(parent: Any):
 
 def _ref_spec(parent: Any) -> SummaryStatsSpec | None:
     """First populated `SummaryStatsSpec` across graphics (labels / radios)."""
-    specs = getattr(parent, "_zstats_spec", None)
+    specs = parent._zstats_spec
     if not specs:
         return None
     for s in specs:
@@ -464,11 +430,11 @@ def current_breakout_key(parent: Any, idx: int) -> tuple:
     though only a strided subset of tiles/cameras was computed. Returns
     ``()`` when the array has no group axes.
     """
-    specs = getattr(parent, "_zstats_spec", None)
+    specs = parent._zstats_spec
     spec = specs[idx] if specs and idx < len(specs) else None
     if spec is None or not spec.groups:
         return ()
-    on_screen = getattr(parent, "slice", None)
+    on_screen = parent.slice
     key: list[int] = []
     for g in spec.groups:
         v = on_screen.of(_slider_role(g.name)) if on_screen is not None else None
@@ -505,7 +471,7 @@ def _combo_caption(spec: SummaryStatsSpec | None, key: tuple) -> str:
 
 def _draw_axis_pick(parent: Any, spec: SummaryStatsSpec) -> None:
     """Radio to pick which scrollable dim drives the series (e.g. Zplane vs Timepoint)."""
-    pref = str(getattr(parent, "_stats_axis_pref", "z")).lower()
+    pref = str(parent._stats_axis_pref).lower()
     cur = spec.series.name.lower() if spec.series else pref
     imgui.text("Series axis:")
     changed = False
@@ -535,13 +501,11 @@ def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
     stats_list = parent._zstats
     spec = _ref_spec(parent)
     n_stat = (
-        len(spec.series.indices)
-        if spec is not None and spec.series
-        else int(getattr(parent, "nz", 1))
+        len(spec.series.indices) if spec is not None and spec.series else int(parent.nz)
     )
     stat_label = spec.series.label if spec is not None and spec.series else "Z-Plane"
-    is_single_zplane = n_stat == 1  # Single bar for 1 series point
-    is_dual_zplane = n_stat == 2  # Grouped bars for 2 series points
+    is_single_zplane = n_stat == 1
+    is_dual_zplane = n_stat == 2
 
     if table:
         if is_single_zplane or is_dual_zplane:
@@ -553,25 +517,20 @@ def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
                 imgui.ImVec4(0.8, 1.0, 0.2, 1.0), f"{stat_label} Summary Stats"
             )
 
-        # more than one series candidate -> pick which drives the x-axis
         if spec is not None and spec.both_series:
             _draw_axis_pick(parent, spec)
 
-    # ROI selector — show a graphic only when it has a populated series.
     array_labels = [
         f"graphic {i + 1}"
         for i in range(len(stats_list))
         if _series_for(parent, i)[0] is not None
     ]
-    # Only show "Combined" if there are multiple arrays
     if len(array_labels) > 1:
         array_labels.append("Combined")
 
-    # Ensure selected array is within bounds
     if parent._selected_array >= len(array_labels):
         parent._selected_array = 0
 
-    # only draw the selector when there are multiple graphics to choose between
     if table and len(array_labels) > 1:
         avail = imgui.get_content_region_avail().x
         xpos = 0
@@ -592,8 +551,6 @@ def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
 
         imgui.separator()
 
-    # Caption the displayed group combo (it follows the sliders, snapped to
-    # the nearest sampled tile/camera/etc.).
     if table and spec is not None and spec.groups:
         sel = 0 if parent._selected_array >= len(stats_list) else parent._selected_array
         _, key = _series_for(parent, sel)
@@ -601,7 +558,6 @@ def draw_stats_section(parent: Any, *, table: bool = True, plot: bool = True):
         if caption:
             imgui.text_disabled(caption)
 
-    # Check if "Combined" view is selected (only valid if there are multiple arrays)
     has_combined = len(array_labels) > 1 and array_labels[-1] == "Combined"
     is_combined = has_combined and parent._selected_array == len(array_labels) - 1
 
@@ -625,7 +581,7 @@ def _z_axis_values(parent: Any, array_idx: int | None, n: int) -> np.ndarray:
     Falls back to a contiguous 1..n when no record matches (channel-stats
     mode, or a length mismatch).
     """
-    idxs = getattr(parent, "_zstats_z_indices", None)
+    idxs = parent._zstats_z_indices
     picked = None
     if idxs:
         if array_idx is not None and 0 <= array_idx < len(idxs) and idxs[array_idx]:
@@ -654,7 +610,7 @@ def _active_stat(parent: Any, spec: SummaryStatsSpec | None) -> int | None:
 
 
 def _slider_role(axis: str) -> str:
-    """What to ask the slice for an axis name: ``t`` / ``c`` / ``z`` for a
+    """The slice role for an axis name: ``t`` / ``c`` / ``z`` for a
     T, C or Z spelling, else the name itself (a tile or camera dim).
     """
     canon = canonical_axis(axis)
@@ -716,12 +672,9 @@ def _draw_array_stats(
     std_vals = np.ascontiguousarray(
         np.asarray(stats.get("std", np.zeros(n)), dtype=np.float64)[:n]
     )
-    # series x positions: real (possibly subsampled) 1-based numbers.
     z_vals = _z_axis_values(parent, array_idx, n)
     mean_vals = np.ascontiguousarray(mean_vals[:n])
 
-    # the current series position (1-based) drives the table-row highlight and
-    # the in-plot accent line, so the two halves stay in step
     active_z = _active_stat(parent, spec)
     if is_single_zplane or is_dual_zplane:
         if table:
@@ -874,7 +827,6 @@ def _draw_zplane_stats_table(
             imgui.text(tips)
             imgui.end_tooltip()
 
-        # green tint for the active row, white text on the tint stays readable.
         row_bg = imgui.color_convert_float4_to_u32(
             imgui.ImVec4(
                 _ACTIVE_Z_COLOR[0], _ACTIVE_Z_COLOR[1], _ACTIVE_Z_COLOR[2], 0.25
@@ -914,7 +866,6 @@ def _draw_signal_comparison_chart(
     plot_width = imgui.get_content_region_avail().x
 
     if is_dual_zplane:
-        # Grouped bar chart for 2 series points
         per_r = [_series_for(parent, r)[0] for r in range(parent.num_graphics)]
         graphic_means_z1 = [
             np.asarray(s["mean"][0], float)
@@ -953,7 +904,6 @@ def _draw_signal_comparison_chart(
                     implot.ImAxis_.x1.value, x_pos.tolist(), labels, False
                 )
 
-                # series-point 1 bars (offset left)
                 x_z1 = x_pos - bar_width / 2
                 heights_z1 = np.array(graphic_means_z1, dtype=np.float64)
                 implot.plot_bars(
@@ -964,7 +914,6 @@ def _draw_signal_comparison_chart(
                     implot.Spec(fill_alpha=0.8, fill_color=(0.2, 0.6, 0.9, 0.8)),
                 )
 
-                # series-point 2 bars (offset right)
                 x_z2 = x_pos + bar_width / 2
                 heights_z2 = np.array(graphic_means_z2, dtype=np.float64)
                 implot.plot_bars(
@@ -978,7 +927,6 @@ def _draw_signal_comparison_chart(
             finally:
                 implot.end_plot()
     else:
-        # Single series point: simple bar chart
         per_r = [_series_for(parent, r)[0] for r in range(parent.num_graphics)]
         graphic_means = [
             np.asarray(s["mean"][0], float)
@@ -1017,7 +965,6 @@ def _draw_signal_comparison_chart(
                     implot.Spec(fill_alpha=0.8, fill_color=(0.2, 0.6, 0.9, 0.8)),
                 )
 
-                # Add mean line
                 mean_line = np.full_like(heights, mean_vals[0])
                 implot.plot_line(
                     "Average",
@@ -1062,7 +1009,6 @@ def _draw_signal_metrics_chart(
             )
 
             if is_dual_zplane:
-                # Grouped bars for Z1 and Z2
                 bar_width = 0.35
                 x_z1 = x_pos - bar_width / 2
                 x_z2 = x_pos + bar_width / 2
@@ -1090,7 +1036,6 @@ def _draw_signal_metrics_chart(
                     implot.Spec(fill_alpha=0.8, fill_color=(0.9, 0.4, 0.2, 0.8)),
                 )
             else:
-                # Single bars for single series point
                 heights = np.array(
                     [mean_vals[0], std_vals[0], snr_vals[0]], dtype=np.float64
                 )
@@ -1124,7 +1069,6 @@ def _draw_combined_zplane_plot(
         True,
     )
 
-    # build per-graphic series at the current breakout combo
     graphic_series = [
         np.asarray(s["mean"], float)
         for s in (_series_for(parent, r)[0] for r in range(parent.num_graphics))
@@ -1143,11 +1087,9 @@ def _draw_combined_zplane_plot(
     upper = mean_vals + std_vals
 
     plot_width = imgui.get_content_region_avail().x
-    # bold the plot's axis tick labels (and any other in-plot text) when a
-    # bold font was loaded — implot doesn't support per-tick font styling,
-    # so this is the cleanest way to render the bracketed active label
-    # `[N]` in bold along with the rest of the axis.
-    pushed_bold = push_font_safe(getattr(parent, "_bold_font", None))
+    pushed_bold = push_font_safe(
+        parent._bold_font
+    )  # NOTE: implot has no per-tick font, so the bracketed active label is bold with every other in-plot text
     if implot.begin_plot(
         "Z-Plane Plot (Combined)",
         _plot_size(plot_width),
@@ -1163,11 +1105,9 @@ def _draw_combined_zplane_plot(
             )
 
             implot.setup_axis_limits(implot.ImAxis_.x1.value, float(z[0]), float(z[-1]))
-            # custom ticks so the active plane's label can be bracketed.
-            # only swap to custom labels when there are <= 32 z-planes;
-            # past that, integer auto-ticks read better than a forced label
-            # at every z.
-            if len(z) <= 32:
+            if (
+                len(z) <= 32
+            ):  # custom ticks bracket the active plane; past 32 the integer auto-ticks read better
                 tick_vals = z.tolist()
                 tick_labels = [
                     (
@@ -1183,8 +1123,6 @@ def _draw_combined_zplane_plot(
             else:
                 implot.setup_axis_format(implot.ImAxis_.x1.value, "%g")
 
-            # per-ROI traces — slightly more saturated than before so they
-            # don't disappear into the dark background.
             for i, ys in enumerate(graphic_series):
                 label = f"ROI {i + 1}##roi{i}"
                 implot.plot_line(
@@ -1194,7 +1132,6 @@ def _draw_combined_zplane_plot(
                     implot.Spec(line_weight=1, line_color=(0.65, 0.70, 0.78, 0.55)),
                 )
 
-            # shaded mean±std band
             implot.plot_shaded(
                 "Mean ± Std##band",
                 z,
@@ -1203,8 +1140,6 @@ def _draw_combined_zplane_plot(
                 implot.Spec(fill_color=(0.30, 0.55, 0.95, 0.28)),
             )
 
-            # mean line — heavier and brighter, with circle markers when the
-            # plane count is small enough that markers don't clutter.
             mean_spec = implot.Spec(
                 line_weight=2.5, line_color=(0.40, 0.75, 1.00, 1.00)
             )
@@ -1215,14 +1150,12 @@ def _draw_combined_zplane_plot(
                 mean_spec.marker_line_color = imgui.ImVec4(0.13, 0.15, 0.18, 1.00)
             implot.plot_line("Mean##line", z, mean_vals, mean_spec)
 
-            # accent line + annotation for the active z-plane
             if active_z is not None and z[0] <= active_z <= z[-1]:
                 implot.plot_inf_lines(
                     "Active plane##active_z",
                     np.array([float(active_z)], dtype=np.float64),
                     implot.Spec(line_weight=2.0, line_color=_ACTIVE_Z_COLOR),
                 )
-                # the label sits on the sampled point nearest the active plane
                 _idx = int(np.argmin(np.abs(np.asarray(z, float) - active_z)))
                 short = stat_label[:1].upper() or "Z"
                 implot.annotation(
@@ -1261,9 +1194,7 @@ def _draw_zplane_signal_plot(
     style_seaborn_dark()
     imgui.text(f"{stat_label} Signal: Mean ± Std")
     plot_width = imgui.get_content_region_avail().x
-    pushed_bold = push_font_safe(
-        getattr(parent, "_bold_font", None) if parent is not None else None
-    )
+    pushed_bold = push_font_safe(parent._bold_font if parent is not None else None)
     if implot.begin_plot(
         f"Z-Plane Signal {array_idx}",
         _plot_size(plot_width),
@@ -1278,7 +1209,9 @@ def _draw_zplane_signal_plot(
             )
 
             z = np.asarray(z_vals, float)
-            if len(z) <= 32:
+            if (
+                len(z) <= 32
+            ):  # custom ticks bracket the active plane; past 32 the integer auto-ticks read better
                 tick_vals = z.tolist()
                 tick_labels = [
                     (
@@ -1298,8 +1231,6 @@ def _draw_zplane_signal_plot(
                 f"Mean ± Std {array_idx}", z_vals, mean_vals, std_vals
             )
 
-            # mean line — match the combined plot palette (sky-blue, heavier)
-            # so both plots feel like the same family.
             mean_spec = implot.Spec(
                 line_weight=2.5, line_color=(0.40, 0.75, 1.00, 1.00)
             )
@@ -1310,7 +1241,6 @@ def _draw_zplane_signal_plot(
                 mean_spec.marker_line_color = imgui.ImVec4(0.13, 0.15, 0.18, 1.00)
             implot.plot_line(f"Mean {array_idx}", z_vals, mean_vals, mean_spec)
 
-            # accent line + annotation for the active z-plane
             if (
                 active_z is not None
                 and len(z) > 0

@@ -20,9 +20,6 @@ from .metadata.io import _build_ome_metadata
 logger = log.get("writers")
 
 
-# metadata serialization helpers (moved from _parsing.py)
-
-
 def _is_disabled_si_module(value) -> bool:
     """Check if a scanimage module dict has enable=false."""
     if not isinstance(value, dict):
@@ -47,7 +44,6 @@ def _filter_disabled_modules(metadata: dict, recursive: bool = True) -> dict:
     return result
 
 
-# drop ndarrays larger than this from serialized output
 _MAX_NDARRAY_NBYTES = 1 * 1024 * 1024
 
 
@@ -93,18 +89,13 @@ def _convert_paths_to_strings(obj, filter_disabled: bool = True):
 
 warnings.filterwarnings("ignore")
 
-ARRAY_METADATA = ["dtype", "shape", "nbytes", "size"]
 CHUNKS = {0: "auto", 1: -1, 2: -1}
 
 
 def _get_mbo_version():
-    """Get mbo_utilities version string."""
-    try:
-        from . import __version__
+    from . import __version__
 
-        return __version__
-    except Exception:
-        return "unknown"
+    return __version__
 
 
 def add_processing_step(
@@ -186,69 +177,60 @@ def add_processing_step(
     return metadata
 
 
+_BIN_WRITERS: dict[str, Any] = {}
+_BIN_OFFSETS: dict[str, int] = {}
+_NPY_ARRAYS: dict[str, np.memmap] = {}
+_NPY_OFFSETS: dict[str, int] = {}
+_NPY_METADATA: dict[str, dict] = {}
+_H5_INITIALIZED: dict[Path, bool] = {}
+_H5_OFFSETS: dict[Path, int] = {}
+_H5_DATASET_NAMES: dict[Path, str] = {}
+_TIFF_WRITERS: dict[Path, TiffWriter] = {}
+_TIFF_FIRST_WRITE: dict[Path, bool] = {}
+_TIFF_IMAGEJ_MODE: dict[Path, bool] = {}
+_ZARR_ARRAYS: dict = {}
+_ZARR_OFFSETS: dict = {}
+_ZARR_GROUPS: dict = {}
+
+
 def _close_specific_bin_writer(filepath):
-    """Close a specific binary writer by filepath (thread-safe)."""
-    if hasattr(_write_bin, "_writers"):
-        key = str(Path(filepath))
-        if key in _write_bin._writers:
-            _write_bin._writers[key].close()
-            _write_bin._writers.pop(key, None)
-            _write_bin._offsets.pop(key, None)
+    key = str(Path(filepath))
+    if key in _BIN_WRITERS:
+        _BIN_WRITERS.pop(key).close()
+        _BIN_OFFSETS.pop(key, None)
 
 
 def _close_specific_tiff_writer(filepath):
-    """Close a specific TIFF writer by filepath (thread-safe)."""
-    if hasattr(_write_tiff, "_writers"):
-        # Key must match the type used in _write_tiff (Path object, not string)
-        key = Path(filepath).with_suffix(".tif")
-        if key in _write_tiff._writers:
-            _write_tiff._writers[key].close()
-            _write_tiff._writers.pop(key, None)
-            if hasattr(_write_tiff, "_first_write"):
-                _write_tiff._first_write.pop(key, None)
-            if hasattr(_write_tiff, "_imagej_mode"):
-                _write_tiff._imagej_mode.pop(key, None)
+    key = Path(filepath).with_suffix(".tif")
+    if key in _TIFF_WRITERS:
+        _TIFF_WRITERS.pop(key).close()
+        _TIFF_FIRST_WRITE.pop(key, None)
+        _TIFF_IMAGEJ_MODE.pop(key, None)
 
 
 def _close_specific_npy_writer(filepath):
-    """Close a specific .npy memory-mapped writer by filepath (thread-safe).
-
-    Packages the data with metadata into a single .npy file using np.savez format.
-    """
-    if hasattr(_write_npy, "_arrays"):
-        key = str(Path(filepath).with_suffix(".npy"))
-        if key in _write_npy._arrays:
-            mmap = _write_npy._arrays[key]
-            metadata = _write_npy._metadata.get(key, {})
-
-            # Read data from memmap before closing
-            data = np.array(mmap)
-
-            # Flush and close the memmap
-            if hasattr(mmap, "flush"):
-                mmap.flush()
-            if hasattr(mmap, "_mmap") and mmap._mmap is not None:
-                mmap._mmap.close()
-
-            # Remove temp file
-            temp_path = Path(key).with_suffix(".npy.tmp")
-            if temp_path.exists():
-                temp_path.unlink()
-
-            # Save as npz with data and metadata, but use .npy extension
-            final_path = Path(key)
-            # np.savez saves as .npz, so we save to .npz then rename
-            npz_path = final_path.with_suffix(".npz")
-            np.savez(npz_path, data=data, metadata=np.array(metadata, dtype=object))
-
-            # Rename .npz to .npy (unconventional but works with np.load)
-            if final_path.exists():
-                final_path.unlink()
-            npz_path.rename(final_path)
-
-            _write_npy._arrays.pop(key, None)
-            _write_npy._offsets.pop(key, None)
-            _write_npy._metadata.pop(key, None)
+    """Package a finished .npy memmap with its metadata into one np.savez file."""
+    key = str(Path(filepath).with_suffix(".npy"))
+    if key not in _NPY_ARRAYS:
+        return
+    mmap = _NPY_ARRAYS.pop(key)
+    metadata = _NPY_METADATA.pop(key, {})
+    _NPY_OFFSETS.pop(key, None)
+    data = np.array(mmap)
+    mmap.flush()
+    if mmap._mmap is not None:
+        mmap._mmap.close()
+    temp_path = Path(key).with_suffix(".npy.tmp")
+    if temp_path.exists():
+        temp_path.unlink()
+    final_path = Path(key)
+    npz_path = final_path.with_suffix(".npz")
+    np.savez(npz_path, data=data, metadata=np.array(metadata, dtype=object))
+    if final_path.exists():
+        final_path.unlink()
+    npz_path.rename(
+        final_path
+    )  # NOTE: np.savez writes .npz; the rename keeps the .npy suffix np.load expects
 
 
 def _write_plane(
@@ -478,14 +460,10 @@ def _get_file_writer(ext, overwrite):
 
 
 def _write_bin(path, data, *, overwrite: bool = False, metadata=None, **kwargs):
-    # import here to avoid circular import
     from .arrays.bin import BinArray
 
     if metadata is None:
         metadata = {}
-
-    if not hasattr(_write_bin, "_writers"):
-        _write_bin._writers, _write_bin._offsets = {}, {}
 
     fname = Path(path)
     fname.parent.mkdir(exist_ok=True)
@@ -493,17 +471,14 @@ def _write_bin(path, data, *, overwrite: bool = False, metadata=None, **kwargs):
     key = str(fname)
     first_write = False
 
-    # drop cached writer if file was deleted externally
-    if key in _write_bin._writers and not Path(key).exists():
-        _write_bin._writers.pop(key, None)
-        _write_bin._offsets.pop(key, None)
+    if key in _BIN_WRITERS and not Path(key).exists():
+        _BIN_WRITERS.pop(key, None)
+        _BIN_OFFSETS.pop(key, None)
 
-    # Only overwrite if this is a brand new write session (file doesn't exist in cache)
-    # Don't delete during active chunked writing
-    if overwrite and key not in _write_bin._writers and fname.exists():
+    if overwrite and key not in _BIN_WRITERS and fname.exists():
         fname.unlink()
 
-    if key not in _write_bin._writers:
+    if key not in _BIN_WRITERS:
         Ly, Lx = data.shape[-2], data.shape[-1]
         nframes = metadata.get("nframes")
         if nframes is None:
@@ -511,30 +486,28 @@ def _write_bin(path, data, *, overwrite: bool = False, metadata=None, **kwargs):
         if nframes is None:
             raise ValueError("Metadata must contain 'nframes' or 'num_frames'.")
 
-        # stamp the ACTUAL chunk dims into metadata so write_ops records
-        # what's really on disk. the array's 5D shape and the
-        # metadata["shape"] from _imwrite_base can differ from the chunk —
-        # e.g. ScanImage's shape uses ROI metadata (550) but process_rois
-        # returns the real stitched height (542). when axial shifts are applied, the
-        # chunk already has padded dims, so this is correct for both cases.
         metadata["Ly"] = Ly
         metadata["Lx"] = Lx
-        metadata["shape"] = (nframes, Ly, Lx)
+        metadata["shape"] = (
+            nframes,
+            Ly,
+            Lx,
+        )  # NOTE: the chunk's own dims: ScanImage reports the ROI height (550) where the stitched frame is 542
 
-        _write_bin._writers[key] = BinArray(
+        _BIN_WRITERS[key] = BinArray(
             filename=key,
             shape=(nframes, Ly, Lx),
             dtype=np.int16,
         )
-        _write_bin._offsets[key] = 0
+        _BIN_OFFSETS[key] = 0
         first_write = True
 
-    bf = _write_bin._writers[key]
-    off = _write_bin._offsets[key]
+    bf = _BIN_WRITERS[key]
+    off = _BIN_OFFSETS[key]
 
     bf[off : off + data.shape[0]] = data
     bf.flush()
-    _write_bin._offsets[key] = off + data.shape[0]
+    _BIN_OFFSETS[key] = off + data.shape[0]
 
     if first_write:
         write_ops(metadata, fname, **kwargs)
@@ -550,28 +523,20 @@ def _write_npy(path, data, *, overwrite: bool = False, metadata=None, **kwargs):
     if metadata is None:
         metadata = {}
 
-    if not hasattr(_write_npy, "_arrays"):
-        _write_npy._arrays = {}
-        _write_npy._offsets = {}
-        _write_npy._metadata = {}
-
     fname = Path(path).with_suffix(".npy")
     fname.parent.mkdir(parents=True, exist_ok=True)
 
     key = str(fname)
 
-    # Drop cached array if file was deleted externally
-    if key in _write_npy._arrays and not fname.exists():
-        _write_npy._arrays.pop(key, None)
-        _write_npy._offsets.pop(key, None)
-        _write_npy._metadata.pop(key, None)
+    if key in _NPY_ARRAYS and not fname.exists():
+        _NPY_ARRAYS.pop(key, None)
+        _NPY_OFFSETS.pop(key, None)
+        _NPY_METADATA.pop(key, None)
 
-    # Only overwrite if this is a brand new write session
-    if overwrite and key not in _write_npy._arrays and fname.exists():
+    if overwrite and key not in _NPY_ARRAYS and fname.exists():
         fname.unlink()
 
-    if key not in _write_npy._arrays:
-        # Get target shape from metadata
+    if key not in _NPY_ARRAYS:
         nframes = metadata.get("nframes") or metadata.get("num_frames")
         if nframes is None:
             raise ValueError("Metadata must contain 'nframes' or 'num_frames'.")
@@ -579,26 +544,24 @@ def _write_npy(path, data, *, overwrite: bool = False, metadata=None, **kwargs):
         h, w = data.shape[-2], data.shape[-1]
         shape = (int(nframes), h, w)
 
-        # Use a temporary file for chunked writing, then package with metadata at close
         temp_fname = fname.with_suffix(".npy.tmp")
 
-        # Create memory-mapped array for chunked writing
         mmap = np.lib.format.open_memmap(
             temp_fname,
             mode="w+",
             dtype=data.dtype,
             shape=shape,
         )
-        _write_npy._arrays[key] = mmap
-        _write_npy._offsets[key] = 0
-        _write_npy._metadata[key] = _make_json_serializable(metadata)
+        _NPY_ARRAYS[key] = mmap
+        _NPY_OFFSETS[key] = 0
+        _NPY_METADATA[key] = _make_json_serializable(metadata)
 
-    mmap = _write_npy._arrays[key]
-    off = _write_npy._offsets[key]
+    mmap = _NPY_ARRAYS[key]
+    off = _NPY_OFFSETS[key]
 
     mmap[off : off + data.shape[0]] = data
     mmap.flush()
-    _write_npy._offsets[key] = off + data.shape[0]
+    _NPY_OFFSETS[key] = off + data.shape[0]
 
 
 def _write_h5(path, data, *, overwrite=True, metadata=None, **kwargs):
@@ -606,16 +569,9 @@ def _write_h5(path, data, *, overwrite=True, metadata=None, **kwargs):
         metadata = {}
 
     filename = Path(path).with_suffix(".h5")
-    # Default to "mov" — matches H5Array auto-detect, suite2p, caiman.
-    # Callers can override via the dataset_name kwarg flowing from imwrite.
     dataset_name = kwargs.get("dataset_name") or "mov"
 
-    if not hasattr(_write_h5, "_initialized"):
-        _write_h5._initialized = {}
-        _write_h5._offsets = {}
-        _write_h5._dataset_names = {}
-
-    if filename not in _write_h5._initialized:
+    if filename not in _H5_INITIALIZED:
         nframes = metadata.get("num_frames")
         if nframes is None:
             raise ValueError("Metadata must contain 'nframes' or 'nun_frames'.")
@@ -625,7 +581,11 @@ def _write_h5(path, data, *, overwrite=True, metadata=None, **kwargs):
                 dataset_name,
                 shape=(nframes, h, w),
                 maxshape=(None, h, w),
-                chunks=(1, h, w),
+                chunks=(
+                    1,
+                    h,
+                    w,
+                ),  # one Y x X plane per chunk, one plane per fixed-(t, c, z) read
                 dtype=data.dtype,
                 compression=None,
             )
@@ -633,20 +593,17 @@ def _write_h5(path, data, *, overwrite=True, metadata=None, **kwargs):
                 for k, v in metadata.items():
                     f.attrs[k] = v if np.isscalar(v) else str(v)
 
-        _write_h5._initialized[filename] = True
-        _write_h5._offsets[filename] = 0
-        _write_h5._dataset_names[filename] = dataset_name
+        _H5_INITIALIZED[filename] = True
+        _H5_OFFSETS[filename] = 0
+        _H5_DATASET_NAMES[filename] = dataset_name
 
-    offset = _write_h5._offsets[filename]
-    # use the dataset name registered on first write so chunked appends
-    # always target the same dataset, even if a later call passes a
-    # different (or no) dataset_name kwarg.
-    active_name = _write_h5._dataset_names[filename]
+    offset = _H5_OFFSETS[filename]
+    active_name = _H5_DATASET_NAMES[filename]
 
     with h5py.File(filename, "a") as f:
         f[active_name][offset : offset + data.shape[0]] = data
 
-    _write_h5._offsets[filename] = offset + data.shape[0]
+    _H5_OFFSETS[filename] = offset + data.shape[0]
 
 
 def _build_imagej_metadata(metadata: dict, shape: tuple) -> tuple[dict, tuple]:
@@ -679,38 +636,29 @@ def _build_imagej_metadata(metadata: dict, shape: tuple) -> tuple[dict, tuple]:
     """
     from mbo_utilities.metadata import get_param, get_voxel_size
 
-    # get voxel size
     vs = get_voxel_size(metadata)
     dx, dy, dz = vs.dx, vs.dy, vs.dz
 
-    # resolution is pixels per unit (inverse of um/pixel)
-    # ImageJ uses these values directly with the 'unit' field
-    # so if dx=0.5 um/pixel, resolution should be 2 pixels/um
-    res_x = 1.0 / dx if dx and dx > 0 else 1.0
+    res_x = 1.0 / dx if dx and dx > 0 else 1.0  # ImageJ resolution is pixels per unit
     res_y = 1.0 / dy if dy and dy > 0 else 1.0
     resolution = (res_x, res_y)
 
-    # build imagej metadata dict
     ij_meta = {
         "unit": "um",
         "loop": False,
     }
 
-    # always 5D TCZYX
     ij_meta["frames"] = shape[0]
     ij_meta["slices"] = shape[2]
     ij_meta["channels"] = shape[1]
 
-    # z-spacing (for hyperstacks with Z dimension)
     if dz is not None:
         ij_meta["spacing"] = dz
 
-    # frame interval (seconds between frames)
     fs = get_param(metadata, "fs")
     if fs and fs > 0:
         ij_meta["finterval"] = 1.0 / float(fs)
 
-    # optional min/max for display range (if present)
     if "min" in metadata:
         ij_meta["min"] = float(metadata["min"])
     if "max" in metadata:
@@ -743,17 +691,8 @@ def _write_tiff(path, data, overwrite=True, metadata=None, imagej=True, **kwargs
 
     filename = Path(path).with_suffix(".tif")
 
-    if not hasattr(_write_tiff, "_writers"):
-        _write_tiff._writers = {}
-    if not hasattr(_write_tiff, "_first_write"):
-        _write_tiff._first_write = {}
-    if not hasattr(_write_tiff, "_imagej_mode"):
-        _write_tiff._imagej_mode = {}
+    is_new_session = filename not in _TIFF_WRITERS
 
-    # Check if we're starting a new write session (no writer exists yet)
-    is_new_session = filename not in _write_tiff._writers
-
-    # Handle overwrite logic ONLY at the start of a new write session
     if is_new_session:
         if filename.exists() and not overwrite:
             logger.warning(
@@ -762,8 +701,6 @@ def _write_tiff(path, data, overwrite=True, metadata=None, imagej=True, **kwargs
             return
 
         if filename.exists() and overwrite:
-            # Delete existing file before creating new writer
-            # On Windows, retry if file is locked by another process
             import time
 
             max_retries = 5
@@ -780,53 +717,39 @@ def _write_tiff(path, data, overwrite=True, metadata=None, imagej=True, **kwargs
                     else:
                         raise
 
-        # Store imagej mode for this file
-        _write_tiff._imagej_mode[filename] = imagej
+        _TIFF_IMAGEJ_MODE[filename] = imagej
 
-        # Create new writer - use imagej mode if requested
         if imagej:
-            _write_tiff._writers[filename] = TiffWriter(
-                filename, bigtiff=True, imagej=True
-            )
+            _TIFF_WRITERS[filename] = TiffWriter(filename, bigtiff=True, imagej=True)
         else:
-            _write_tiff._writers[filename] = TiffWriter(filename, bigtiff=True)
-        _write_tiff._first_write[filename] = True
+            _TIFF_WRITERS[filename] = TiffWriter(filename, bigtiff=True)
+        _TIFF_FIRST_WRITE[filename] = True
 
-    writer = _write_tiff._writers[filename]
-    is_first = _write_tiff._first_write.get(filename, True)
-    use_imagej = _write_tiff._imagej_mode.get(filename, imagej)
+    writer = _TIFF_WRITERS[filename]
+    is_first = _TIFF_FIRST_WRITE.get(filename, True)
+    use_imagej = _TIFF_IMAGEJ_MODE.get(filename, imagej)
 
     if use_imagej:
-        # imagej mode: reshape data and use imagej-compatible metadata
         ij_meta = None
         resolution = None
         extratags = None
 
         if is_first:
-            # build imagej-compatible metadata only on first write
             target_shape = metadata.get("shape", data.shape)
             ij_meta, resolution = _build_imagej_metadata(metadata, target_shape)
 
-            # store filtered metadata as JSON in custom TIFF tag 50839.
-            # strip_for_export drops suite2p-only fields (regPC, meanImg,
-            # xoff/yoff, pipeline settings, etc.) — those belong only in
-            # ops.npy. without this filter, regPC alone can balloon the
-            # tag to 500+ MB after JSON expansion.
             import json
 
             from .metadata.base import strip_for_export
 
+            # NOTE: regPC alone would balloon the Info tag past 500 MB
             json_meta = _make_json_serializable(strip_for_export(metadata))
             json_bytes = json.dumps(json_meta).encode("utf-8")
-            # extratags format: (code, dtype, count, value, writeonce)
-            # dtype 2 = ASCII string
             extratags = [(50839, 2, len(json_bytes), json_bytes, True)]
 
-        # data is always 5D TCZYX; transpose to TZCYX for imagej page ordering
-        data_5d = np.moveaxis(data, 1, 2)  # TCZYX -> TZCYX
+        data_5d = np.moveaxis(data, 1, 2)
 
         for frame in data_5d:
-            # frame is (Z, C, Y, X) after TZCYX transpose
             writer.write(
                 frame,
                 contiguous=True,
@@ -837,7 +760,6 @@ def _write_tiff(path, data, overwrite=True, metadata=None, imagej=True, **kwargs
             )
             is_first = False
     else:
-        # standard tifffile mode with JSON metadata
         for frame in data:
             writer.write(
                 frame,
@@ -847,7 +769,7 @@ def _write_tiff(path, data, overwrite=True, metadata=None, imagej=True, **kwargs
             )
             is_first = False
 
-    _write_tiff._first_write[filename] = False
+    _TIFF_FIRST_WRITE[filename] = False
 
 
 def _write_volumetric_tiff(
@@ -912,7 +834,6 @@ def _write_volumetric_tiff(
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
 
-    # build selections dict for ArraySlicing
     selections = {}
     if frames is not None:
         selections["T"] = [frames] if isinstance(frames, int) else frames
@@ -921,10 +842,8 @@ def _write_volumetric_tiff(
     if channels is not None:
         selections["C"] = [channels] if isinstance(channels, int) else channels
 
-    # create slicing state (handles dim normalization, 1-based conversion)
     slicing = ArraySlicing.from_array(data, selections=selections, one_based=True)
 
-    # build output filename from dims
     suffix = output_suffix or ""
     output_fn = OutputFilename.from_array(
         data, planes=planes, frames=frames, channels=channels, suffix=suffix
@@ -943,17 +862,13 @@ def _write_volumetric_tiff(
     n_channels = slicing.selections["C"].count if "C" in slicing.selections else 1
     Ly, Lx = slicing.spatial_shape
 
-    # always 5D TZCYX for imagej page ordering
     target_shape = (n_frames, n_planes, n_channels, Ly, Lx)
 
-    # update metadata for imagej using OutputMetadata for reactive values
     from mbo_utilities.arrays.features import get_dims
     from mbo_utilities.metadata import OutputMetadata
 
-    # get dims from array
     source_dims = get_dims(data)
 
-    # build selections dict with 0-based indices
     output_selections = {}
     if "T" in slicing.selections:
         output_selections["T"] = slicing.selections["T"].indices
@@ -974,18 +889,15 @@ def _write_volumetric_tiff(
     md["Lx"] = Lx
     md["Ly"] = Ly
 
-    # build imagej metadata with adjusted dz and finterval
     ij_meta, resolution = out_meta.to_imagej(target_shape)
 
-    # store filtered metadata as JSON in ImageJ's Info field. strip
-    # suite2p-only fields first — regPC/tPC/meanImg/etc. belong in
-    # ops.npy, not stamped into every tiff page header.
     import json
 
     from tifffile import imagej_metadata_tag
 
     from .metadata.base import strip_for_export
 
+    # NOTE: regPC alone would balloon the Info tag past 500 MB
     json_meta = _make_json_serializable(strip_for_export(md))
     json_str = json.dumps(json_meta)
     ij_extratags = imagej_metadata_tag({"Info": json_str}, "<")
@@ -1005,7 +917,6 @@ def _write_volumetric_tiff(
                 f"  Z-step factor: {out_meta.z_step_factor}x (saving every {out_meta.z_step_factor} plane)"
             )
 
-    # setup pyramids if requested
     if pyramid:
         pyramid_config = PyramidConfig(
             max_layers=pyramid_max_layers,
@@ -1019,11 +930,9 @@ def _write_volumetric_tiff(
     else:
         pyramid_levels = None
 
-    # open writer
     with TiffWriter(filename, bigtiff=True, imagej=not pyramid, ome=pyramid) as writer:
         first_write = True
 
-        # iterate over chunks using unified slicing
         pbar = None
         if show_progress:
             total_pages = n_frames * n_planes * n_channels
@@ -1032,20 +941,20 @@ def _write_volumetric_tiff(
         for chunk_info in slicing.iter_chunks(chunk_dim="T", target_mb=target_chunk_mb):
             chunk_data = read_chunk(data, chunk_info, slicing.dims)
 
-            # always 5D TCZYX input → transpose to TZCYX for ImageJ page order
-            chunk_data = chunk_data.transpose(0, 2, 1, 3, 4)
+            chunk_data = chunk_data.transpose(
+                0, 2, 1, 3, 4
+            )  # TCZYX -> TZCYX, ImageJ page order
             chunk_data = np.ascontiguousarray(chunk_data)
 
-            chunk_5d = chunk_data  # (T, Z, C, Y, X)
+            chunk_5d = chunk_data
 
-            # write each frame (T) with all its Z slices
             for t in range(chunk_5d.shape[0]):
-                frame_data = chunk_5d[t]  # (Z, C, Y, X)
+                frame_data = chunk_5d[t]
 
                 if pyramid and pyramid_levels and len(pyramid_levels) > 1:
                     frame_pyramid = []
                     current = frame_data
-                    scale_factors_frame = (1, 1, 2, 2)  # Z, C, Y, X
+                    scale_factors_frame = (1, 1, 2, 2)
 
                     for _ in range(1, len(pyramid_levels)):
                         current = downsample_block(
@@ -1168,7 +1077,6 @@ def _write_volumetric_h5(
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
 
-    # build selections dict for ArraySlicing — same idiom as the zarr writer
     selections = {}
     if frames is not None:
         selections["T"] = [frames] if isinstance(frames, int) else frames
@@ -1191,7 +1099,6 @@ def _write_volumetric_h5(
     if filename.exists():
         filename.unlink()
 
-    # target shape after selection — same n_channels==1 enforcement as zarr
     n_frames = slicing.selections["T"].count if "T" in slicing.selections else 1
     n_planes = slicing.selections["Z"].count if "Z" in slicing.selections else 1
     n_channels = slicing.selections["C"].count if "C" in slicing.selections else 1
@@ -1202,11 +1109,6 @@ def _write_volumetric_h5(
     n_planes = int(n_planes)
     n_channels = int(n_channels)
 
-    # Single-channel data stays 4D TZYX — that is what every existing mbo h5
-    # holds and what suite2p-adjacent consumers expect. Multi-channel data
-    # (dual-PMT MESc, two-colour ScanImage) keeps the canonical 5D TCZYX
-    # instead of being silently reduced to channel 0; H5Array reads a 5D
-    # dataset back as TCZYX unchanged.
     multichannel = n_channels > 1
     if multichannel:
         out_dims = ("T", "C", "Z", "Y", "X")
@@ -1217,7 +1119,6 @@ def _write_volumetric_h5(
         target_shape = (n_frames, n_planes, Ly_out, Lx_out)
         inner_chunk = (1, 1, Ly_out, Lx_out)
 
-    # update metadata using OutputMetadata for reactive dz/fs values
     source_dims = get_dims(data)
     output_selections: dict[str, list[int]] = {}
     if "T" in slicing.selections:
@@ -1247,12 +1148,6 @@ def _write_volumetric_h5(
             f"  Output metadata: dz={out_meta.dz}, fs={out_meta.fs}, contiguous={out_meta.is_contiguous}"
         )
 
-    # h5 chunking — one Y×X plane per chunk (see inner_chunk above) so a
-    # fixed-(t, c, z) GUI scrub pulls exactly that plane off disk. Packing
-    # every Z layer into one chunk forces the whole volume to decompress for
-    # any single-plane read — the same Z-bunching bug the zarr writers fixed.
-
-    # h5 compression knobs
     h5_compression = None
     h5_compression_opts = None
     if compression is not None and compression_level > 0:
@@ -1320,6 +1215,38 @@ def _write_volumetric_h5(
         logger.info(f"Wrote {filename} ({filename.stat().st_size / 1e9:.2f} GB)")
 
     return filename
+
+
+def _build_inner_codecs(
+    name: str, level: int, itemsize: int, shuffle: str | None = None
+) -> list:
+    from zarr.codecs import BytesCodec, GzipCodec
+
+    name = (name or "none").lower()
+    if name == "none" or level == 0:
+        return [BytesCodec()]
+    if name == "gzip":
+        return [BytesCodec(), GzipCodec(level=level)]
+    if name == "zstd":
+        from zarr.codecs import ZstdCodec
+
+        return [BytesCodec(), ZstdCodec(level=level)]
+    if name in ("blosc-lz4", "blosc-zstd"):
+        from zarr.codecs import BloscCodec
+
+        cname = "lz4" if name == "blosc-lz4" else "zstd"
+        blosc_kwargs = {
+            "cname": cname,
+            "clevel": level,
+            "typesize": itemsize,
+        }
+        if shuffle is not None:
+            blosc_kwargs["shuffle"] = shuffle
+        return [BytesCodec(), BloscCodec(**blosc_kwargs)]
+    raise ValueError(
+        f"unknown compressor {name!r}; expected one of "
+        "'none', 'gzip', 'zstd', 'blosc-lz4', 'blosc-zstd'"
+    )
 
 
 def _write_volumetric_zarr(
@@ -1398,39 +1325,7 @@ def _write_volumetric_zarr(
         "mode" (webknossos labels/masks), "mean", "nearest", "gaussian".
     """
     import zarr
-    from zarr.codecs import BytesCodec, Crc32cCodec, GzipCodec, ShardingCodec
-
-    def _build_inner_codecs(name: str, level: int, shuffle: str | None = None) -> list:
-        # build the codec chain that sits inside a shard (or replaces the
-        # whole chain when sharded=False). bytescodec is always the first
-        # stage; compressor is appended unless name == "none".
-        # `shuffle` only applies to blosc-* and must be one of
-        # "noshuffle", "shuffle", "bitshuffle", or None (= blosc default).
-        name = (name or "none").lower()
-        if name == "none" or level == 0:
-            return [BytesCodec()]
-        if name == "gzip":
-            return [BytesCodec(), GzipCodec(level=level)]
-        if name == "zstd":
-            from zarr.codecs import ZstdCodec
-
-            return [BytesCodec(), ZstdCodec(level=level)]
-        if name in ("blosc-lz4", "blosc-zstd"):
-            from zarr.codecs import BloscCodec
-
-            cname = "lz4" if name == "blosc-lz4" else "zstd"
-            blosc_kwargs = {
-                "cname": cname,
-                "clevel": level,
-                "typesize": np.dtype(data.dtype).itemsize,
-            }
-            if shuffle is not None:
-                blosc_kwargs["shuffle"] = shuffle
-            return [BytesCodec(), BloscCodec(**blosc_kwargs)]
-        raise ValueError(
-            f"unknown compressor {name!r}; expected one of "
-            "'none', 'gzip', 'zstd', 'blosc-lz4', 'blosc-zstd'"
-        )
+    from zarr.codecs import BytesCodec, Crc32cCodec, ShardingCodec
 
     from mbo_utilities.arrays.features import (
         ArraySlicing,
@@ -1448,7 +1343,6 @@ def _write_volumetric_zarr(
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
 
-    # build selections dict for ArraySlicing
     selections = {}
     if frames is not None:
         selections["T"] = [frames] if isinstance(frames, int) else frames
@@ -1457,10 +1351,8 @@ def _write_volumetric_zarr(
     if channels is not None:
         selections["C"] = [channels] if isinstance(channels, int) else channels
 
-    # create slicing state (handles dim normalization, 1-based conversion)
     slicing = ArraySlicing.from_array(data, selections=selections, one_based=True)
 
-    # build output filename from dims
     suffix = output_suffix or ""
     output_fn = OutputFilename.from_array(
         data, planes=planes, frames=frames, channels=channels, suffix=suffix
@@ -1474,34 +1366,24 @@ def _write_volumetric_zarr(
     if filename.exists():
         shutil.rmtree(filename)
 
-    # get target shape after selection
     n_frames = slicing.selections["T"].count if "T" in slicing.selections else 1
     n_planes = slicing.selections["Z"].count if "Z" in slicing.selections else 1
     n_channels = slicing.selections["C"].count if "C" in slicing.selections else 1
     Ly, Lx = slicing.spatial_shape
 
-    # coerce to plain python int — `slicing.spatial_shape` returns np.int
-    # from `arr.shape`. zarr v3's `parse_shapelike` rejects np.int64 with
-    # a TypeError, so normalize here and use the cleaned values for every
-    # downstream tuple.
     Ly_out, Lx_out = int(Ly), int(Lx)
     n_frames = int(n_frames)
     n_planes = int(n_planes)
     n_channels = int(n_channels)
 
-    # 5D output when the source carries a real C axis with >1 entries; otherwise
-    # collapse C to keep 4D TZYX so the existing on-disk layout is unchanged.
     output_5d = "C" in slicing.selections and n_channels > 1
     if output_5d:
         target_shape = (n_frames, n_channels, n_planes, Ly_out, Lx_out)
     else:
         target_shape = (n_frames, n_planes, Ly_out, Lx_out)
 
-    # update metadata using OutputMetadata for reactive values
-    # get dims from array
     source_dims = get_dims(data)
 
-    # build selections dict from slicing
     output_selections: dict[str, list[int]] = {}
     if "T" in slicing.selections:
         output_selections["T"] = list(slicing.selections["T"].indices)
@@ -1531,11 +1413,6 @@ def _write_volumetric_zarr(
                 f"  Z-step factor: {out_meta.z_step_factor}x (saving every {out_meta.z_step_factor} plane)"
             )
 
-    # inner chunk shape: one Y×X plane per chunk. This is the unit fpl/the
-    # GUI scrub fetches, so any larger chunk forces zarr to decompress
-    # extra data per frame. For 5D the chunk pins (t, c, z); for 4D it
-    # pins (t, z). Benchmark (D:/demo/zarr_chunking_benchmark): this chunk
-    # shape is ~22x faster than the legacy Z-major (1, 1, Z, 64, 64).
     itemsize = np.dtype(data.dtype).itemsize
     if output_5d:
         inner_chunk = (1, 1, 1, Ly_out, Lx_out)
@@ -1544,15 +1421,17 @@ def _write_volumetric_zarr(
 
     bytes_per_yx = Ly_out * Lx_out * itemsize
 
-    # build codec chain
-    inner_codecs = _build_inner_codecs(compressor, compression_level, shuffle=shuffle)
+    inner_codecs = _build_inner_codecs(
+        compressor, compression_level, itemsize, shuffle=shuffle
+    )
 
     if sharded:
-        # one shard per (c, z) at all T, so a fixed-(c, z) scrub opens exactly one file
         target_bytes = target_chunk_mb * 1024 * 1024
         max_shard_t = max(1, target_bytes // max(1, bytes_per_yx))
         shard_t = min(n_frames, max_shard_t)
-        if output_5d:
+        if (
+            output_5d
+        ):  # one shard per (c, z) over all T: a fixed-(c, z) scrub opens one file
             shard_shape = (shard_t, 1, 1, Ly_out, Lx_out)
         else:
             shard_shape = (shard_t, 1, Ly_out, Lx_out)
@@ -1568,23 +1447,15 @@ def _write_volumetric_zarr(
         codecs = inner_codecs
         chunks = inner_chunk
 
-    # create zarr v3 group with OME-NGFF structure
     root = zarr.open_group(str(filename), mode="w", zarr_format=3)
 
-    # OME-NGFF axes order: TZYX for 4D, TCZYX for 5D
     output_dims = ("T", "C", "Z", "Y", "X") if output_5d else ("T", "Z", "Y", "X")
     ome_meta = out_meta.to_ome_ngff(dims=output_dims)
     base_scale = ome_meta["coordinateTransformations"][0]["scale"]
     dimension_names = [d.lower() for d in output_dims]
 
-    # store dims in metadata for readers
     md["dims"] = output_dims
 
-    # pyramid factors via the webknossos anisotropic-mag algorithm: each step
-    # doubles the axis with the smallest physical size (mag * voxel), so
-    # anisotropic volumes converge toward isotropy before downsampling. Z is
-    # downsampled at deep levels, unlike a fixed YX-only scheme. base_scale's
-    # last three entries are the (z, y, x) voxel size for both 4D and 5D.
     if pyramid:
         nz_p, ny_p, nx_p = (int(s) for s in target_shape[-3:])
         voxel_zyx = tuple(float(v) for v in base_scale[-3:])
@@ -1601,9 +1472,6 @@ def _write_volumetric_zarr(
         pyramid_mags = None
         level_spatial = None
 
-    # create the array as "0" (full resolution level). dimension_names is a
-    # top-level zarr v3 array metadata field (not an attribute) per the
-    # NGFF 0.5 / zarr v3 spec.
     z = zarr.create(
         store=root.store,
         path="0",
@@ -1615,9 +1483,6 @@ def _write_volumetric_zarr(
         overwrite=True,
     )
 
-    # ngff 0.5 multiscale entry. version lives on the parent `ome` object
-    # only — having it here too is invalid in 0.5. `metadata` is required by
-    # the strict schema; it documents how the pyramid was generated.
     multiscale_metadata = {
         "method": pyramid_method,
         "description": (
@@ -1630,7 +1495,6 @@ def _write_volumetric_zarr(
     if pyramid_mags:
         datasets = []
         for lvl_idx, (mz, my, mx) in enumerate(pyramid_mags):
-            # level scale = level-0 voxel size * cumulative mag on (z, y, x)
             physical_scale = list(base_scale)
             physical_scale[-3] = base_scale[-3] * mz
             physical_scale[-2] = base_scale[-2] * my
@@ -1672,32 +1536,24 @@ def _write_volumetric_zarr(
         ]
 
     ome_content = {
-        "version": "0.5",
+        "version": "0.5",  # NOTE: version lives here only; a copy in the multiscale entry is invalid in 0.5
         "multiscales": multiscales,
     }
 
-    # set OME metadata on the group
     root.attrs["ome"] = ome_content
 
-    # also store filtered metadata as JSON-serializable attrs. strip
-    # suite2p-only fields first — those belong in ops.npy, not in the
-    # zarr group attrs where every reader has to load them.
     from .metadata.base import strip_for_export
 
     serializable_md = _make_json_serializable(strip_for_export(md))
     for k, v in serializable_md.items():
-        # never let a carried source OME block (or the reader-stamped
-        # _ome_time_scale) overwrite the freshly computed one above — a
-        # decimated re-save would otherwise persist the source time scale
-        if k in ("ome", "multiscales", "_ome_time_scale"):
+        if (
+            k in ("ome", "multiscales", "_ome_time_scale")
+        ):  # NOTE: a carried source OME block would keep the source time scale on a decimated re-save
             continue
         root.attrs[k] = v
 
-    # napari-compatible scale on level 0 array (dimension_names is set as
-    # a top-level zarr v3 field via zarr.create above, not in attrs)
     z.attrs["scale"] = base_scale
 
-    # write data in chunks
     pbar = None
     total_work = n_frames * (len(pyramid_mags) if pyramid_mags else 1)
     if show_progress:
@@ -1709,8 +1565,6 @@ def _write_volumetric_zarr(
         for chunk_info in slicing.iter_chunks(chunk_dim="T", target_mb=target_chunk_mb):
             chunk_data = read_chunk(data, chunk_info, slicing.dims)
 
-            # collapse the singleton C only for 4D TZYX output. read_chunk
-            # always returns 5D TCZYX, so the 5D writer keeps it as-is.
             if not output_5d and chunk_data.ndim == 5:
                 chunk_data = chunk_data[:, 0, :, :, :]
 
@@ -1719,10 +1573,8 @@ def _write_volumetric_zarr(
             t_start = t_offset
             t_end = t_start + chunk_data.shape[0]
 
-            # write to zarr level 0 — leading-axis slice works for 4D and 5D
             z[t_start:t_end] = chunk_data
 
-            # update offset
             t_offset = t_end
 
             if pbar:
@@ -1736,13 +1588,10 @@ def _write_volumetric_zarr(
         if pbar:
             pbar.close()
 
-    # record the scan-phase offsets baked into these pixels as group-level
-    # provenance (cheap; mirrors the .bin sidecar).
     _sp_attrs = _scanphase_zarr_attrs(data, frames, planes, channels)
     if _sp_attrs is not None:
         root.attrs["scanphase"] = _make_json_serializable(_sp_attrs)
 
-    # generate pyramid levels from level 0 data
     if pyramid_mags and len(pyramid_mags) > 1:
         if show_progress:
             pbar = tqdm(
@@ -1754,13 +1603,9 @@ def _write_volumetric_zarr(
         for lvl_idx in range(1, len(pyramid_mags)):
             prev_path = str(lvl_idx - 1)
 
-            # read previous level data
             prev_z = root[prev_path]
             prev_data = prev_z[:]
 
-            # per-level factor from realized parent/child spatial shapes,
-            # clamped to >=1 so a singleton axis is never reduced to 0. T
-            # (and C) are never downsampled.
             pz, py, px = level_spatial[lvl_idx - 1]
             cz, cy, cx = level_spatial[lvl_idx]
             zf, yf, xf = max(1, pz // cz), max(1, py // cy), max(1, px // cx)
@@ -1768,7 +1613,6 @@ def _write_volumetric_zarr(
 
             level_data = downsample_block(prev_data, factor, pyramid_method)
 
-            # level 0's chunk recipe, else a pyramid level is one huge chunk and T-scrub breaks
             lvl_shape = level_data.shape
             lvl_Y = lvl_shape[-2]
             lvl_X = lvl_shape[-1]
@@ -1778,7 +1622,7 @@ def _write_volumetric_zarr(
                 lvl_inner = (1, 1, lvl_Y, lvl_X)
 
             lvl_inner_codecs = _build_inner_codecs(
-                compressor, compression_level, shuffle=shuffle
+                compressor, compression_level, itemsize, shuffle=shuffle
             )
 
             if sharded:
@@ -1812,10 +1656,8 @@ def _write_volumetric_zarr(
                 overwrite=True,
             )
 
-            # write data
             lvl_z[:] = level_data
 
-            # napari-compatible scale: level-0 voxel size * cumulative mag
             mz, my, mx = pyramid_mags[lvl_idx]
             physical_scale = list(base_scale)
             physical_scale[-3] = base_scale[-3] * mz
@@ -1833,7 +1675,6 @@ def _write_volumetric_zarr(
             pbar.close()
 
     if debug:
-        # estimate size (zarr stores are directories)
         total_size = sum(f.stat().st_size for f in filename.rglob("*") if f.is_file())
         logger.info(f"Wrote {filename} ({total_size / 1e9:.2f} GB)")
 
@@ -1851,64 +1692,48 @@ def _write_zarr(
     sharded = kwargs.get("sharded", True)
     ome = kwargs.get("ome", True)
     level = kwargs.get("level", 1)
-    # chunk configuration: shard_frames is outer (shard) size, chunk_shape is inner
-    # chunk_shape can be tuple (t, y, x) or None for default (1, h, w)
-    shard_frames = kwargs.get("shard_frames")  # frames per shard
-    chunk_shape = kwargs.get("chunk_shape")  # inner chunk shape (t, y, x)
+    shard_frames = kwargs.get("shard_frames")
+    chunk_shape = kwargs.get("chunk_shape")
 
     if metadata is None:
         metadata = {}
 
     filename = Path(path)
-    if not hasattr(_write_zarr, "_arrays"):
-        _write_zarr._arrays = {}
-        _write_zarr._offsets = {}
-        _write_zarr._groups = {}
 
-    # Only overwrite if this is a brand new write session (file doesn't exist in cache)
-    # Don't delete during active chunked writing
-    if overwrite and filename not in _write_zarr._arrays and filename.exists():
+    if overwrite and filename not in _ZARR_ARRAYS and filename.exists():
         shutil.rmtree(filename)
 
-    if filename not in _write_zarr._arrays:
+    if filename not in _ZARR_ARRAYS:
         import zarr
         from zarr.codecs import BytesCodec, Crc32cCodec, GzipCodec, ShardingCodec
 
         nframes = int(metadata["num_frames"])
         h, w = data.shape[-2:]
 
-        # build codec chain based on compression level
         if level == 0:
-            # no compression
             inner_codecs = [BytesCodec()]
         else:
             inner_codecs = [BytesCodec(), GzipCodec(level=level)]
 
         if sharded:
-            # determine inner chunk shape first (needed for shard alignment)
             if chunk_shape is not None:
                 inner = chunk_shape
             else:
-                inner = (1, h, w)  # default: 1 frame per chunk
+                inner = (1, h, w)
 
             inner_t = inner[0]
 
-            # determine shard size (outer chunks)
-            # shard must be divisible by inner chunk time dimension
             if shard_frames is not None:
                 shard_t = min(nframes, shard_frames)
             else:
-                # default: one shard per file — keeps file count to a small
-                # constant even for long recordings. Aligns with the GUI's
-                # fixed-(c, z) T-scrub pattern (one shard open, all T inside).
                 shard_t = nframes
 
-            # ensure shard is divisible by inner chunk (zarr requirement)
-            if inner_t > 1 and shard_t % inner_t != 0:
-                # round down to nearest multiple of inner_t
+            if (
+                inner_t > 1 and shard_t % inner_t != 0
+            ):  # zarr requires the shard to be a multiple of the inner chunk
                 shard_t = (shard_t // inner_t) * inner_t
                 if shard_t == 0:
-                    shard_t = inner_t  # minimum: one inner chunk per shard
+                    shard_t = inner_t
 
             outer = (shard_t, h, w)
 
@@ -1920,24 +1745,15 @@ def _write_zarr(
             codecs = [codec]
             chunks = outer
         else:
-            # non-sharded mode: each chunk is a file
             codecs = inner_codecs
             chunks = chunk_shape if chunk_shape is not None else (1, h, w)
 
         if ome:
-            # Create OME-Zarr using NGFF v0.5 with Zarr v3
-            # Structure: my_image.zarr/ (group) -> 0/ (array)
-
-            # Create Zarr v3 group
             root = zarr.open_group(str(filename), mode="w", zarr_format=3)
 
-            # use the codecs/chunks computed above
             array_codecs = codecs
             array_chunks = chunks
 
-            # Create the array as "0" (full resolution level). 3D (T, Y, X)
-            # for the per-plane writer path; matches the axes/scale produced
-            # by _build_ome_metadata for ndim==3.
             z = zarr.create(
                 store=root.store,
                 path="0",
@@ -1949,20 +1765,17 @@ def _write_zarr(
                 overwrite=True,
             )
 
-            # Build and set OME metadata on the GROUP
             ome_metadata = _build_ome_metadata(
                 shape=(nframes, h, w),
                 dtype=data.dtype,
                 metadata=metadata or {},
             )
 
-            # Set metadata on the group
             for key, value in ome_metadata.items():
                 root.attrs[key] = value
 
-            _write_zarr._groups[filename] = root
+            _ZARR_GROUPS[filename] = root
         else:
-            # Standard non-OME zarr (backward compatible)
             z = zarr.create(
                 store=str(filename),
                 shape=(nframes, h, w),
@@ -1972,20 +1785,18 @@ def _write_zarr(
                 overwrite=True,
             )
 
-            # Standard metadata (backward compatible)
-            # Ensure metadata is JSON-serializable for Zarr
             serializable_metadata = _make_json_serializable(metadata or {})
             for k, v in serializable_metadata.items():
                 z.attrs[k] = v
 
-        _write_zarr._arrays[filename] = z
-        _write_zarr._offsets[filename] = 0
+        _ZARR_ARRAYS[filename] = z
+        _ZARR_OFFSETS[filename] = 0
 
-    z = _write_zarr._arrays[filename]
-    offset = _write_zarr._offsets[filename]
+    z = _ZARR_ARRAYS[filename]
+    offset = _ZARR_OFFSETS[filename]
 
     z[offset : offset + data.shape[0]] = data
-    _write_zarr._offsets[filename] = offset + data.shape[0]
+    _ZARR_OFFSETS[filename] = offset + data.shape[0]
 
 
 def _try_generic_writers(
@@ -2006,16 +1817,13 @@ def _try_generic_writers(
     if outpath.exists():
         if not overwrite:
             raise FileExistsError(f"{outpath} already exists and overwrite=False")
-        # Remove existing file or directory to allow overwrite
         if outpath.is_dir():
             shutil.rmtree(outpath)
         else:
-            # Force garbage collection to release any open file handles
             gc.collect()
             try:
                 outpath.unlink()
             except PermissionError:
-                # Windows file locking - wait briefly and retry
                 time.sleep(0.1)
                 gc.collect()
                 outpath.unlink()
@@ -2024,10 +1832,8 @@ def _try_generic_writers(
         if metadata is None:
             np.save(outpath, data)
         else:
-            # Convert Path objects to strings for cross-platform compatibility
             np.savez(outpath, data=data, metadata=_convert_paths_to_strings(metadata))
     elif outpath.suffix.lower() in {".tif", ".tiff"}:
-        # use imagej-compatible format for proper Fiji detection
         target_shape = metadata.get("shape", data.shape)
         ij_meta, resolution = _build_imagej_metadata(metadata, target_shape)
         tiff_imwrite(
@@ -2039,10 +1845,6 @@ def _try_generic_writers(
             photometric="minisblack",
         )
     elif outpath.suffix.lower() in {".h5", ".hdf5"}:
-        # Default to "mov" — matches the streaming `_write_h5` path,
-        # suite2p / caiman convention, and the auto-detect order in
-        # `H5Array.__init__` (mov → data → scan_corrections). Callers
-        # who need the legacy name can pass `dataset_name="data"`.
         h5_dataset = dataset_name if dataset_name is not None else "mov"
         with h5py.File(outpath, "w" if overwrite else "a") as f:
             f.create_dataset(h5_dataset, data=data)
@@ -2050,18 +1852,13 @@ def _try_generic_writers(
                 for k, v in metadata.items():
                     f.attrs[k] = v if np.isscalar(v) else str(v)
     elif outpath.suffix.lower() == ".bin":
-        # Suite2p binary format - write data + ops.npy
         arr = np.asarray(data)
         if arr.dtype != np.int16:
             arr = arr.astype(np.int16)
 
-        # Write binary data
         with open(outpath, "wb") as f:
             arr.tofile(f)
 
-        # Write ops.npy alongside. All timepoint aliases must be set
-        # consistently from the actual chunk size; otherwise downstream
-        # readers see stale source values for keys we forgot to update.
         if metadata:
             ops = metadata.copy()
             ops["Ly"] = arr.shape[-2]
@@ -2074,18 +1871,11 @@ def _try_generic_writers(
             ops["timepoints"] = nt
             ops["T"] = nt
             ops["nt"] = nt
-            # Convert Path objects to strings for cross-platform compatibility
             np.save(
                 outpath.parent / "ops.npy",
                 normalize_ops_arrays(_convert_paths_to_strings(ops)),
             )
     elif outpath.suffix.lower() == ".zarr":
-        # Zarr v3 format for numpy arrays. Match the layout produced by
-        # `_write_volumetric_zarr` so generic-writer output behaves the
-        # same in the GUI (one chunk per Y×X plane, one shard per (c,z)
-        # at all T). Without this, raw numpy arrays got T*C*Z chunk
-        # files instead of C*Z shard files, and the GUI's T-scrub
-        # had no per-frame fast path.
         import zarr
         from zarr.codecs import (
             BytesCodec,
@@ -2097,17 +1887,11 @@ def _try_generic_writers(
         arr = np.asarray(data)
 
         if arr.ndim < 3:
-            # 2D: one chunk, sharding adds no value
             create_kwargs = dict(
                 chunks=arr.shape,
                 codecs=[BytesCodec(), GzipCodec(level=5)],
             )
         else:
-            # ≥3D: chunks=(1,...,1,Y,X) per Y×X plane;
-            # shards=(T,1,...,1,Y,X) so a fixed-(c,z) T-scrub opens
-            # exactly one shard file. Compression off by default to
-            # match _imwrite_base; callers needing it can compress
-            # before calling.
             Y, X = arr.shape[-2], arr.shape[-1]
             inner = (1,) * (arr.ndim - 2) + (Y, X)
             shard = (arr.shape[0],) + (1,) * (arr.ndim - 3) + (Y, X)
@@ -2132,7 +1916,6 @@ def _try_generic_writers(
         )
         z[:] = arr
 
-        # Add metadata as attributes if provided
         if metadata:
             for k, v in metadata.items():
                 try:
@@ -2174,14 +1957,8 @@ def write_ops(metadata, raw_filename, **kwargs):
     chan = 2 if structural or "data_chan2.bin" in str(filename) else 1
     logger.debug(f"Detected channel {chan}")
 
-    # Always use parent directory - raw_filename should be a file path like data_raw.bin
-    # The old check `filename.is_file()` failed when file was just created but not yet flushed
-    if filename.suffix:
-        # Has a file extension, use parent as root
-        root = filename.parent
-    else:
-        # No extension, assume it's a directory path (backward compatibility)
-        root = filename if filename.is_dir() else filename.parent
+    # NOTE: never is_file(): a file just created and not yet flushed reports False
+    root = filename.parent if filename.suffix or not filename.is_dir() else filename
     ops_path = root / "ops.npy"
     logger.info(f"Writing ops file to {ops_path}")
 
@@ -2190,9 +1967,8 @@ def write_ops(metadata, raw_filename, **kwargs):
         shape[0],
         shape[-2],
         shape[-1],
-    )  # shape is (T, Y, X), so [-2]=Ly, [-1]=Lx
+    )
 
-    # Check if num_frames was explicitly set (takes precedence over shape)
     if "num_frames" in metadata:
         nt_metadata = int(metadata["num_frames"])
         if nt_metadata != shape[0]:
@@ -2216,12 +1992,10 @@ def write_ops(metadata, raw_filename, **kwargs):
         nt = nt_metadata
         logger.debug(f"Using explicit nframes={nt} from metadata")
 
-    # use get_param for consistent alias handling
     from mbo_utilities.metadata import get_param, get_voxel_size
 
     fs = get_param(metadata, "fs")
     if fs is None:
-        # check finterval (ImageJ format) and convert to fs
         finterval = get_param(metadata, "finterval")
         if finterval is not None and finterval > 0:
             fs = 1.0 / finterval
@@ -2232,7 +2006,6 @@ def write_ops(metadata, raw_filename, **kwargs):
     voxel_size = get_voxel_size(metadata)
     dx, dy, dz = voxel_size.dx, voxel_size.dy, voxel_size.dz
 
-    # Load or initialize ops
     if ops_path.exists():
         ops = load_npy(ops_path).item()
     else:
@@ -2240,29 +2013,23 @@ def write_ops(metadata, raw_filename, **kwargs):
 
         ops = default_ops()
 
-    # Update shared core fields - ensure all resolution aliases are consistent
     ops.update(
         {
             "Ly": Ly,
             "Lx": Lx,
             "fs": metadata["fs"],
-            # Canonical resolution keys
             "dx": dx,
             "dy": dy,
             "dz": dz,
-            # Suite2p aliases (must match canonical)
             "umPerPixX": dx,
             "umPerPixY": dy,
             "umPerPixZ": dz,
-            # legacy compatibility
             "pixel_resolution": (dx, dy),
             "z_step": dz,
             "ops_path": str(ops_path),
         }
     )
 
-    # Channel-specific entries
-    # Use the potentially overridden nt (from num_frames or nframes)
     if chan == 1:
         ops["nframes_chan1"] = nt
         ops["raw_file"] = str(filename)
@@ -2272,11 +2039,7 @@ def write_ops(metadata, raw_filename, **kwargs):
 
     ops["align_by_chan"] = chan
 
-    # Set top-level frame-count fields consistently from `nt`. We
-    # protect these from the metadata-merge below to prevent stale
-    # source values from clobbering the truncated count, but that means
-    # we MUST set every alias here — otherwise they end up missing /
-    # None in ops.npy and downstream readers get inconsistent values.
+    # NOTE: every frame-count alias is set from nt and shielded from the metadata merge below; a stale source value here reaches ops.npy
     ops["nframes"] = nt
     ops["num_frames"] = nt
     ops["num_timepoints"] = nt
@@ -2285,10 +2048,7 @@ def write_ops(metadata, raw_filename, **kwargs):
     ops["T"] = nt
     ops["nt"] = nt
 
-    # Merge extra metadata, but DON'T overwrite fields we've already set consistently
-    # This prevents inconsistency between resolution aliases and frame counts
     protected_keys = {
-        # Frame count fields — every alias is set explicitly above
         "nframes",
         "nframes_chan1",
         "nframes_chan2",
@@ -2298,7 +2058,6 @@ def write_ops(metadata, raw_filename, **kwargs):
         "timepoints",
         "T",
         "nt",
-        # Resolution fields (we've already set these consistently)
         "dx",
         "dy",
         "dz",
@@ -2312,9 +2071,7 @@ def write_ops(metadata, raw_filename, **kwargs):
         if key not in protected_keys:
             ops[key] = value
 
-    # Convert Path objects to strings for cross-platform compatibility, and
-    # images / per-frame vectors back to arrays: metadata merged in above may
-    # have come through JSON as lists, which suite2p indexes with .shape
+    # NOTE: metadata merged from JSON carries images as lists; suite2p indexes them with .shape
     np.save(ops_path, normalize_ops_arrays(_convert_paths_to_strings(ops)))
     logger.debug(
         f"Ops file written to {ops_path} with nframes={ops['nframes']}, nframes_chan1={ops.get('nframes_chan1')}"

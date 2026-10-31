@@ -1,9 +1,8 @@
-"""
-Common helpers and base utilities for array types.
-"""
+"""Shared helpers for the array readers: 5D key mapping, the writer entry point, reductions."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,7 +22,6 @@ CHUNKS_3D = {0: 1, 1: -1, 2: -1}
 
 
 def get_dtype(dtype):
-    """Ensure input is a valid numpy.dtype object."""
     if isinstance(dtype, np.dtype):
         return dtype
     try:
@@ -32,23 +30,15 @@ def get_dtype(dtype):
         return np.dtype(str(dtype))
 
 
-# canonical 5D dimension order (OME-NGFF 0.5)
 DIMS = ("T", "C", "Z", "Y", "X")
 
 
 class Shape5DMixin(LazyArray):
-    """Backwards-compatible alias for the 5D accessors, now on `LazyArray`.
-
-    The accessors (`_shape5d`, `nt`/`nc`/`nz`/`ny`/`nx`,
-    `source_path`) were folded into `LazyArray` in v4. This subclass is
-    retained so existing `class FooArray(..., Shape5DMixin)` declarations
-    keep working and become `LazyArray` instances; it is removed once every
-    array class inherits `LazyArray` directly.
-    """
+    """Compatibility alias of `LazyArray`, kept until every reader subclasses it directly."""
 
 
 def _normalize_key(key, ndim):
-    """Normalize an indexing key: wrap in tuple, expand Ellipsis, strip trailing Ellipsis."""
+    """Wraps ``key`` in a tuple and expands an Ellipsis to ``ndim`` axes."""
     if not isinstance(key, tuple):
         key = (key,)
     # identity, not ==: an ndarray in the key would compare elementwise
@@ -59,25 +49,20 @@ def _normalize_key(key, ndim):
     return key
 
 
-# axes of canonical 5D TCZYX that a natural-rank array of the given ndim
-# does NOT have (front-padded as singletons by _shape5d). used to map a
-# 5D index onto the underlying lower-rank array.
-_SKIP_BY_RAW_NDIM = {
+_SKIP_BY_RAW_NDIM = {  # 5D axes a natural-rank source lacks, by its ndim
     5: (),
-    4: (1,),  # C
-    3: (1, 2),  # C, Z
-    2: (0, 1, 2),  # T, C, Z
-    1: (0, 1, 2, 3),  # T, C, Z, Y
+    4: (1,),
+    3: (1, 2),
+    2: (0, 1, 2),
+    1: (0, 1, 2, 3),
 }
 
 
 def _index_5d_into_raw(data, key, raw_ndim):
-    """Index a natural-rank `data` with a 5D TCZYX `key`.
+    """Indexes natural-rank ``data`` with a 5D key, keeping numpy 5D semantics on the result.
 
-    The array presents singleton T/C/Z axes that `data` lacks; those axes
-    are dropped from the key before indexing, then re-inserted (size 1) on
-    the result for any that were sliced rather than integer-indexed, so the
-    output keeps numpy 5D semantics.
+    The singleton axes ``data`` lacks are dropped from the key and re-inserted
+    on the result wherever the key sliced rather than integer-indexed them.
     """
     key = _normalize_key(key, 5)
     key = key + (slice(None),) * (5 - len(key))
@@ -87,7 +72,7 @@ def _index_5d_into_raw(data, key, raw_ndim):
     out_axis = 0
     for i in range(5):
         if isinstance(key[i], (int, np.integer)):
-            continue  # integer index drops this axis
+            continue
         if i in skip:
             out = np.expand_dims(out, axis=out_axis)
         out_axis += 1
@@ -95,26 +80,18 @@ def _index_5d_into_raw(data, key, raw_ndim):
 
 
 def supports_roi(obj):
-    """
-    Check if object supports ROI operations.
-
-    .. deprecated::
-        Use ``hasattr(obj, 'roi_mode')`` for duck typing instead.
-        This function is kept for backward compatibility.
-    """
-    # Modern check: duck typing via roi_mode attribute
+    """Deprecated; ``hasattr(obj, "roi_mode")`` is the check."""
     if hasattr(obj, "roi_mode"):
         return True
-    # Legacy check for backwards compatibility
     return hasattr(obj, "roi") and hasattr(obj, "num_rois")
 
 
 def normalize_roi(value):
-    """Return ROI as None, int, or list[int] with consistent semantics."""
+    """Returns the ROI selection as None, an int or a list of ints; True is 0, split all."""
     if value in (None, (), [], False):
         return None
     if value is True:
-        return 0  # "split ROIs" GUI flag
+        return 0
     if isinstance(value, int):
         return value
     if isinstance(value, (list, tuple)):
@@ -123,25 +100,11 @@ def normalize_roi(value):
 
 
 def iter_rois(obj):
-    """
-    Yield ROI indices based on MBO semantics.
-
-    .. deprecated::
-        Use ``arr.iter_rois()`` method on arrays with RoiFeatureMixin instead.
-        Check support with ``hasattr(arr, 'roi_mode')``.
-        This function is kept for backward compatibility.
-
-    - roi=None -> yield None (stitched full-FOV image)
-    - roi=0 -> yield each ROI index from 1..num_rois (split all)
-    - roi=int > 0 -> yield that ROI only
-    - roi=list/tuple -> yield each element (as given)
-    """
-    # Modern approach: use object's own iter_rois method if available
+    """Deprecated; ``arr.iter_rois()`` yields None (stitched), 1..num_rois (``roi=0``) or the ROIs selected."""
     if hasattr(obj, "roi_mode") and hasattr(obj, "iter_rois"):
         yield from obj.iter_rois()
         return
 
-    # Legacy fallback
     if not supports_roi(obj):
         yield None
         return
@@ -164,65 +127,25 @@ def iter_rois(obj):
 
 
 def _normalize_planes(planes, num_planes: int) -> list[int]:
-    """
-    Normalize planes argument to 0-indexed list.
-
-    Parameters
-    ----------
-    planes : int | list | tuple | None
-        Planes to write (1-based indexing from user).
-    num_planes : int
-        Total number of planes available.
-
-    Returns
-    -------
-    list[int]
-        0-indexed plane indices.
-    """
+    """1-based plane selection (None is every plane) to a 0-based list."""
     if planes is None:
         return list(range(num_planes))
     if isinstance(planes, int):
-        return [planes - 1]  # 1-based to 0-based
+        return [planes - 1]
     return [p - 1 for p in planes]
 
 
 def _sanitize_suffix(suffix: str) -> str:
-    """
-    Sanitize a filename suffix to prevent invalid filenames.
-
-    Parameters
-    ----------
-    suffix : str
-        Raw suffix string from user input.
-
-    Returns
-    -------
-    str
-        Sanitized suffix safe for use in filenames.
-    """
+    """Makes a user suffix safe in a filename: no path characters, no trailing extension, one leading underscore."""
     if not suffix:
         return ""
-
-    # Remove illegal characters for Windows/Unix filenames
-    illegal_chars = '<>:"/\\|?*'
-    for char in illegal_chars:
+    for char in '<>:"/\\|?*':
         suffix = suffix.replace(char, "")
-
-    # Remove any file extension patterns (e.g., ".bin", ".tiff")
-    # This prevents issues like "plane01_stitched.bin.bin"
-    import re
-
     suffix = re.sub(r"\.[a-zA-Z0-9]+$", "", suffix)
-
-    # Ensure suffix starts with underscore if not empty and doesn't already
     if suffix and not suffix.startswith("_"):
         suffix = "_" + suffix
-
-    # Remove any double underscores
     while "__" in suffix:
         suffix = suffix.replace("__", "_")
-
-    # Strip trailing underscores
     return suffix.rstrip("_")
 
 
@@ -233,19 +156,25 @@ def _sanitize_value(v):
         return [_sanitize_value(x) for x in v]
     if isinstance(v, (Path, np.dtype, type)):
         return str(v)
-    if hasattr(v, "dtype") or hasattr(v, "item"):  # numpy scalars/arrays
-        if hasattr(v, "ndim") and v.ndim == 0:
-            return v.item()
-        if hasattr(v, "tolist"):
-            return v.tolist()
-        if hasattr(v, "item"):
-            return v.item()
+    if isinstance(v, np.ndarray):
+        return v.item() if v.ndim == 0 else v.tolist()
+    if isinstance(v, np.generic):
+        return v.item()
     return v
 
 
 def _sanitize_metadata(md: dict) -> dict:
-    """Recursively sanitize metadata for JSON serialization."""
+    """Metadata with every numpy, Path and dtype value turned into a JSON-serializable one."""
     return _sanitize_value(md)
+
+
+def _selection_list(val):
+    """1-based selection kwarg as a list of ints; None stays None (every index)."""
+    if val is None:
+        return None
+    if isinstance(val, (int, np.integer)):
+        return [int(val)]
+    return [int(v) for v in val if v is not None]
 
 
 def _imwrite_base(
@@ -262,46 +191,12 @@ def _imwrite_base(
     show_progress: bool = True,
     **kwargs,
 ) -> Path:
+    """Writes ``arr`` into ``outpath`` in the format ``ext`` names (AGENTS.md §5.6).
+
+    Selections are 1-based. tiff, zarr, h5 and mp4 write the volume in one
+    pass; bin and npy write one file per (channel, plane). A split ROI
+    selection fans out into one ``roiNN/`` directory per ROI.
     """
-    Write array to file.
-
-    For tiff output, writes volumetric TZYX data as single ImageJ hyperstack.
-    For other formats (zarr, bin, h5), uses streaming per-plane writes.
-
-    Parameters
-    ----------
-    arr : LazyArrayProtocol
-        Array to write. Must have shape, metadata, and support indexing.
-    outpath : Path | str
-        Output directory.
-    planes : int | list | tuple | None
-        Planes to write (1-based indexing). None means all planes.
-    frames : int | list | tuple | None
-        Frames to write (1-based indexing). None means all frames.
-    channels : int | list | tuple | None
-        Channels to write (1-based indexing). None means all channels.
-    ext : str
-        Output format extension (e.g., '.tiff', '.bin', '.zarr').
-    overwrite : bool
-        Whether to overwrite existing files.
-    target_chunk_mb : int
-        Target chunk size in MB for streaming writes.
-    progress_callback : callable | None
-        Progress callback function.
-    debug : bool
-        Enable debug output.
-    show_progress : bool
-        Show progress bar.
-    **kwargs
-        Additional arguments passed to format-specific writers.
-
-    Returns
-    -------
-    Path
-        Output path (file for tiff, directory for other formats).
-    """
-    # imported here, not at module top, to avoid a circular import:
-    # _writers -> metadata -> arrays -> _base -> _writers
     from mbo_utilities._writers import (
         _scanphase_record,
         _write_plane,
@@ -315,10 +210,6 @@ def _imwrite_base(
 
     ext_clean = ext.lower().lstrip(".")
 
-    # roi=0 ("split all") or roi=[...] ("these ROIs") means one output per
-    # ROI. The format writers below each operate on a single volume, so fan
-    # out here: recurse once per ROI into a roiNN/ subdir, then restore the
-    # original selection. roi=N (single int) falls through to a normal write.
     _roi_sel = getattr(arr, "roi", None)
     _split = isinstance(_roi_sel, (list, tuple)) or (
         _roi_sel == 0 and getattr(arr, "num_rois", 1) > 1
@@ -348,15 +239,11 @@ def _imwrite_base(
         arr.roi = _roi_sel
         return outpath
 
-    # get metadata
     md = dict(arr.metadata) if arr.metadata else {}
 
     if debug:
-        from mbo_utilities import log
-
-        _logger = log.get("writers")
-        _n_shifts = len(md.get("plane_shifts", [])) if "plane_shifts" in md else 0
-        _logger.info(f"_imwrite_base: plane_shifts={_n_shifts} planes")
+        n_shifts = len(md.get("plane_shifts", []))
+        logger.info(f"_imwrite_base: plane_shifts={n_shifts} planes")
 
     if "metadata_overrides" in kwargs:
         overrides = kwargs.pop("metadata_overrides", None)
@@ -366,42 +253,25 @@ def _imwrite_base(
     md = _sanitize_metadata(md)
 
     num_planes = arr._shape5d()[2]
-    # The C axis: prefer num_views (IsoView cameras — its num_color_channels
-    # now counts wavelengths, not the C axis), then num_color_channels
-    # (ScanImage), then the always-5D `.nc` accessor (TiffArray and other
-    # readers only expose the latter — the old `getattr(..., 1)` silently
-    # wrote channel 0 only).
+    # NOTE: IsoView's num_color_channels counts wavelengths; its C axis is num_views
     num_channels = getattr(arr, "num_views", None)
     if num_channels is None:
         num_channels = getattr(arr, "num_color_channels", None)
     if num_channels is None:
-        num_channels = getattr(arr, "nc", 1)
+        num_channels = arr.nc
 
-    def _norm_sel(val):
-        """Normalize a selection kwarg to list[int] or None (=all)."""
-        if val is None:
-            return None
-        if isinstance(val, (int, np.integer)):
-            return [int(val)]
-        return [int(v) for v in val if v is not None]
+    planes_list = _selection_list(planes)
+    frames_list = _selection_list(frames)
+    channels_list = _selection_list(channels)
 
-    planes_list = _norm_sel(planes)
-    frames_list = _norm_sel(frames)
-    channels_list = _norm_sel(channels)
-
-    # num_frames=N truncates to the first N timepoints. the per-plane (.bin/
-    # .npy) path reads it from kwargs, but the volumetric writers only honor an
-    # explicit `frames` list — so synthesize one when num_frames is given and
-    # no explicit frame selection was made.
+    # the volumetric writers take num_frames only as an explicit frames list
     if ext_clean in ("tiff", "tif", "zarr", "h5", "hdf5") and frames_list is None:
         _num_frames = kwargs.get("num_frames")
         if _num_frames is not None:
             total_T = int(arr._shape5d()[0])
             frames_list = list(range(1, min(int(_num_frames), total_T) + 1))
 
-    # tiff: use volumetric writer
     if ext_clean in ("tiff", "tif"):
-        # extract output_suffix from kwargs if present
         output_suffix = kwargs.pop("output_suffix", None)
         result = _write_volumetric_tiff(
             arr,
@@ -419,15 +289,10 @@ def _imwrite_base(
         )
         return result
 
-    # zarr: use volumetric writer
     if ext_clean == "zarr":
         output_suffix = kwargs.pop("output_suffix", None)
         sharded = kwargs.pop("sharded", True)
-        # default to no compression — scrubbing decompresses one chunk
-        # per frame, so gzip-1 added ~5 ms/frame of CPU work to
-        # interactive viewing for ~60% storage savings. for imaging data
-        # the trade is the wrong way; users who want compression can pass
-        # `compressor="gzip"|"blosc-lz4"|"zstd"` and `compression_level`.
+        # NOTE: uncompressed by default; gzip-1 cost ~5 ms per frame when scrubbing
         compression_level = kwargs.pop("compression_level", 0)
         compressor = kwargs.pop("compressor", "none")
         shuffle = kwargs.pop("shuffle", None)
@@ -457,9 +322,6 @@ def _imwrite_base(
         )
         return result
 
-    # h5: single-file volumetric writer (matches zarr behavior — one file
-    # for the whole volume rather than the per-plane streaming output of
-    # the legacy `_write_plane` path).
     if ext_clean in ("h5", "hdf5"):
         from mbo_utilities._writers import _write_volumetric_h5
 
@@ -486,7 +348,6 @@ def _imwrite_base(
         )
         return result
 
-    # video: one file per (z, channel).
     if ext_clean == "mp4":
         from mbo_utilities.arrays.mp4 import MP4Array
 
@@ -525,25 +386,18 @@ def _imwrite_base(
             scalebar=bool(kwargs.pop("scalebar", False)),
         )
 
-    # _shape5d(), not .shape: BinArray and _ChannelView report a different rank
     if channels_list is not None:
         channels_0idx = [c - 1 for c in channels_list]
     else:
         channels_0idx = list(range(num_channels))
 
-    s5 = arr._shape5d()
-    nframes = s5[0]  # T
+    s5 = arr._shape5d()  # BinArray and _ChannelView report another rank on .shape
+    nframes = s5[0]
     Ly, Lx = s5[3], s5[4]
+    num_planes = min(num_planes, s5[2])
 
-    # validate num_planes against Z dimension
-    actual_z_size = s5[2]
-    if num_planes > actual_z_size:
-        num_planes = actual_z_size
-
-    # use OutputMetadata for reactive dz/fs values
     from mbo_utilities.metadata import OutputMetadata
 
-    # convert 1-based selections to 0-based indices for OutputMetadata
     frame_indices_0 = None
     plane_indices_0 = None
     if frames_list is not None:
@@ -559,10 +413,8 @@ def _imwrite_base(
         source_num_planes=num_planes,
     )
 
-    # get adjusted metadata dict with reactive dz/fs values
     md = out_meta.to_dict()
 
-    # every timepoint alias follows the selection, else readers disagree on T
     truncated_n = kwargs.get("num_frames")
     has_frame_selection = bool(frame_indices_0)
     if has_frame_selection and out_meta.num_frames is not None:
@@ -574,7 +426,7 @@ def _imwrite_base(
     else:
         effective_nt = int(nframes)
 
-    # OutputMetadata already carries Ly/Lx; re-stamping them loses lsp's padded dims
+    # NOTE: Ly/Lx stay OutputMetadata's; restamping them loses lsp's padded dims
     md["num_timepoints"] = effective_nt
     md["nframes"] = effective_nt
     md["num_frames"] = effective_nt
@@ -583,17 +435,13 @@ def _imwrite_base(
     md["nt"] = effective_nt
     md["timepoints"] = effective_nt
 
-    # normalize planes to 0-indexed list for iteration
     planes_0idx = _normalize_planes(planes_list, num_planes)
 
-    # 0-based source frames written, in output order — aligns recorded
-    # scan-phase offsets to the registered/written frame index on replay.
     if frames_list is not None:
         written_frames_0 = [f - 1 for f in frames_list]
     else:
         written_frames_0 = list(range(effective_nt))
 
-    # extract output_name if provided (e.g., "data_raw.bin" for suite2p)
     output_name = kwargs.pop("output_name", None)
 
     for c_idx in channels_0idx:
@@ -604,17 +452,12 @@ def _imwrite_base(
                 OutputFilename,
             )
 
-            # build per-plane Z + T tags once — used for both the
-            # Suite2p-layout plane dir name (.bin) and the generic
-            # `tp...zplaneNN.ext` filename (.npy etc.).
             z_tag = DimensionTag.from_dim_size(
                 TAG_REGISTRY["Z"], num_planes, [plane_idx + 1]
             )
             t_tag = DimensionTag.from_dim_size(TAG_REGISTRY["T"], nframes, frames_list)
 
             if output_name:
-                # caller supplied an explicit filename (e.g. LSP writes
-                # "data_raw.bin" into a plane dir it already chose).
                 target = outpath / output_name
             elif ext_clean == "bin":
                 # suite2p reads data_raw.bin by exact name, so only the dir carries tags
@@ -631,7 +474,6 @@ def _imwrite_base(
                 logger.warning(f"File {target} already exists. Skipping write.")
                 continue
 
-            # build plane-specific metadata
             plane_md = md.copy()
             plane_md["plane"] = plane_idx + 1
 
@@ -651,32 +493,34 @@ def _imwrite_base(
                 **kwargs,
             )
 
-            # record the scan-phase offsets applied during this write so the
-            # registered movie can be rebuilt from raw + reg_outputs after the
-            # binary is deleted. functional channel's plane dir only.
             if ext_clean == "bin" and c_idx == 0:
                 _write_scanphase_sidecar(
                     target.parent,
                     _scanphase_record(arr, written_frames_0, c_idx, plane_idx),
                 )
 
-    # signal completion
     if progress_callback:
         progress_callback(1.0, "Complete")
 
     return outpath
 
 
+def _axis_slice(ndim, axis, start, end):
+    slices = [slice(None)] * ndim
+    slices[axis] = slice(start, end)
+    return tuple(slices)
+
+
 def temporal_mean(arr, progress_callback=None) -> np.ndarray:
     """``arr``'s per-pixel mean over T as ``(C, Z, Y, X)`` float32.
 
-    Uses the array's own ``temporal_mean`` when it has one (a reader that can
-    read its source in one pass, like `MescArray`), else streams T blocks.
+    A reader's own ``temporal_mean`` wins (`MescArray` reads each channel once);
+    otherwise T is streamed in 64 MB blocks.
     """
     own = getattr(arr, "temporal_mean", None)
     if own is not None:
         return own(progress_callback=progress_callback)
-    nt, nc, nz, ny, nx = arr._shape5d() if hasattr(arr, "_shape5d") else arr.shape
+    nt, nc, nz, ny, nx = arr._shape5d()
     frame_bytes = nc * nz * ny * nx * np.dtype(arr.dtype).itemsize
     step = max(1, (64 * 1024 * 1024) // max(1, frame_bytes))
     acc = np.zeros((nc, nz, ny, nx), dtype=np.float64)
@@ -690,41 +534,18 @@ def temporal_mean(arr, progress_callback=None) -> np.ndarray:
 
 
 class TiffReaderMixin:
-    """
-    Mixin providing common functionality for all TIFF array readers.
-
-    Adds shared methods:
-    - astype(): lazy dtype conversion
-    - vmin/vmax: cached display range from first frame
-    - __array__(): return first frame for fast preview
-    - _imwrite(): delegate to _imwrite_base
-    - save(): alias for _imwrite
-    - imshow(): fastplotlib viewer
-
-    Required attributes (duck-typed):
-        shape : tuple[int, ...]
-        dtype : np.dtype
-        __getitem__ : callable
-    """
+    """Lazy ``astype``, a one-frame ``__array__``, ``_imwrite`` and ``imshow`` for the TIFF readers."""
 
     _target_dtype = None
-    # _cached_vmin/_cached_vmax and vmin/vmax/_compute_frame_vminmax now
-    # live on ReductionMixin so every lazy array class gets them
-    # uniformly, not just TIFF readers.
 
     def astype(self, dtype, copy=True):
-        """Set target dtype for lazy conversion on read."""
+        """Sets the dtype reads are converted to; nothing is read."""
         self._target_dtype = np.dtype(dtype)
         return self
 
     def __array__(self, dtype=None, copy=None):
-        """Return a representative (Y, X) frame (prevents accidental full load).
-
-        v4 arrays are always 5D TCZYX, so the first frame is self[0, 0, 0].
-        for legacy natural-rank shapes: 2D is the whole image; 3D/4D take
-        the first slice along the outer dim.
-        """
-        ndim = getattr(self, "ndim", None)
+        """The first (Y, X) frame, never the whole array."""
+        ndim = self.ndim
         if ndim == 5:
             data = np.asarray(self[0, 0, 0])
         elif ndim == 2:
@@ -746,7 +567,6 @@ class TiffReaderMixin:
         planes=None,
         **kwargs,
     ):
-        """Write array to disk."""
         return _imwrite_base(
             self,
             outpath,
@@ -760,11 +580,10 @@ class TiffReaderMixin:
         )
 
     def save(self, outpath, **kwargs):
-        """Save array to disk (alias for _imwrite)."""
         return self._imwrite(outpath, **kwargs)
 
     def imshow(self, **kwargs):
-        """Display array using fastplotlib ImageWidget."""
+        """Opens the array in the Studio's fastplotlib viewer."""
         histogram_widget = kwargs.get("histogram_widget", True)
         figure_kwargs = kwargs.get("figure_kwargs", {"size": (800, 1000)})
         window_funcs = kwargs.get("window_funcs")
@@ -781,56 +600,21 @@ class TiffReaderMixin:
 
 
 class ReductionMixin:
-    """
-    Mixin providing numpy-compatible reduction methods for arrays.
+    """numpy's ``mean`` ``max`` ``min`` ``std`` ``var`` ``sum`` for any array-like with ``shape``, ``dtype`` and ``__getitem__``.
 
-    Adds mean, max, min, std, sum methods that work like numpy does. For lazy
-    arrays, uses chunked processing to avoid loading everything into memory.
-    For numpy arrays or memmaps, delegates directly to numpy.
-
-    The API matches numpy exactly - same parameters, same behavior. No custom
-    defaults for axis (axis=None reduces over entire array, just like numpy).
-
-    Required attributes (duck-typed):
-        shape : tuple[int, ...]
-            Array dimensions
-        dtype : np.dtype
-            Data type
-        __getitem__ : callable
-            Slicing support
-
-    Usage
-    -----
-    class MyArray(ReductionMixin):
-        # ... array implementation with shape, dtype, __getitem__ ...
-        pass
-
-    arr = MyArray(path)
-    scalar = arr.mean()           # Mean of all elements (like numpy)
-    volume = arr.mean(axis=0)     # Mean over first axis
+    Above 100M elements the reduction streams chunks along the reduced axis;
+    a numpy array or memmap goes straight to numpy. Also holds the cached
+    display range ``vmin`` / ``vmax`` of the representative frame.
     """
 
-    # prevent numpy/xarray from implicitly converting lazy arrays
-    __array_ufunc__ = None
+    __array_ufunc__ = None  # numpy and xarray must not coerce a lazy array
     __array_function__ = None
 
-    # display-range cache, populated lazily by _compute_frame_vminmax.
-    # lives here (not on TiffReaderMixin) because every lazy array class
-    # needs vmin/vmax for the viewer histogram and they all already inherit
-    # ReductionMixin. previously each non-tiff class re-implemented this
-    # locally and the copies drifted out of sync — that's how the zarr
-    # vminmax crash slipped in after the natural-rank refactor.
     _cached_vmin = None
     _cached_vmax = None
 
     def _compute_frame_vminmax(self):
-        """Compute and cache vmin/vmax via __array__.
-
-        delegates to each subclass's __array__ so the result honors that
-        class's lazy-read strategy and reported rank. do NOT hardcode
-        index counts here (e.g. self[0,0,0]) — that breaks any class
-        whose __getitem__ doesn't tolerate over-long keys.
-        """
+        # NOTE: np.asarray(self) is each class's own representative frame; never index here
         if self._cached_vmin is None:
             frame = np.asarray(self)
             self._cached_vmin = float(frame.min())
@@ -838,48 +622,24 @@ class ReductionMixin:
 
     @property
     def vmin(self) -> float:
-        """Minimum value from a representative frame (cached)."""
         self._compute_frame_vminmax()
         return self._cached_vmin
 
     @property
     def vmax(self) -> float:
-        """Maximum value from a representative frame (cached)."""
         self._compute_frame_vminmax()
         return self._cached_vmax
 
     def _is_numpy_like(self) -> bool:
-        """Check if this array can be reduced directly by numpy."""
-        # numpy arrays, memmaps, and anything with __array__ that's small enough
         return isinstance(self, (np.ndarray, np.memmap))
 
     def _get_array_info(self) -> tuple[tuple, np.dtype, int]:
-        """
-        Get shape, dtype, ndim from array using duck typing.
-
-        Returns
-        -------
-        tuple
-            (shape, dtype, ndim)
-
-        Raises
-        ------
-        TypeError
-            If required attributes are missing
-        """
-        shape = getattr(self, "shape", None)
-        dtype = getattr(self, "dtype", None)
-
-        if shape is None:
-            raise TypeError(
-                f"{type(self).__name__} missing required 'shape' attribute for reductions"
-            )
-
-        ndim = len(shape)
+        """``(shape, dtype, ndim)``; dtype is float64 when the array reports None."""
+        shape = self.shape
+        dtype = self.dtype
         if dtype is None:
-            dtype = np.float64  # fallback
-
-        return shape, dtype, ndim
+            dtype = np.float64
+        return shape, dtype, len(shape)
 
     def _reduce(
         self,
@@ -890,42 +650,17 @@ class ReductionMixin:
         out: np.ndarray | None = None,
         **kwargs,
     ) -> np.ndarray:
-        """
-        Apply reduction function with numpy-compatible semantics.
-
-        Parameters
-        ----------
-        func : str
-            Reduction function name: 'mean', 'max', 'min', 'std', 'sum', 'var'
-        axis : int | tuple[int, ...] | None
-            Axis or axes to reduce over. None reduces over all elements.
-        dtype : np.dtype | None
-            Output dtype.
-        keepdims : bool
-            If True, reduced axes are left with size 1.
-        out : np.ndarray | None
-            Output array (numpy compatibility, used if provided).
-        **kwargs
-            Additional arguments passed to numpy (e.g., ddof for std/var).
-
-        Returns
-        -------
-        np.ndarray or scalar
-            Reduced result.
-        """
+        """Applies numpy's ``func`` with numpy's semantics, chunked above 100M elements."""
         shape, _arr_dtype, ndim = self._get_array_info()
 
-        # For numpy arrays/memmaps, just delegate directly
         if self._is_numpy_like():
             np_func = getattr(np, func)
-            # Not all numpy functions accept dtype (max/min don't)
-            if func in ("max", "min"):
+            if func in ("max", "min"):  # they take no dtype
                 return np_func(self, axis=axis, keepdims=keepdims, out=out, **kwargs)
             return np_func(
                 self, axis=axis, dtype=dtype, keepdims=keepdims, out=out, **kwargs
             )
 
-        # Normalize axis
         if axis is not None:
             if isinstance(axis, int):
                 if axis < 0:
@@ -933,31 +668,20 @@ class ReductionMixin:
                 if axis < 0 or axis >= ndim:
                     raise AxisError(axis, ndim)
             else:
-                # tuple of axes
                 axis = tuple(ax if ax >= 0 else ndim + ax for ax in axis)
                 for ax in axis:
                     if ax < 0 or ax >= ndim:
                         raise AxisError(ax, ndim)
 
-        # Determine if we can just load and compute (small arrays)
-        total_elements = int(np.prod(shape))
-        chunk_threshold = 100_000_000  # ~100M elements, ~800MB for float64
-
-        if total_elements <= chunk_threshold:
-            # Small enough to load entirely - use explicit slicing, not np.asarray
-            # (np.asarray only returns single frame for fast preview)
-            data = self[:]
+        if int(np.prod(shape)) <= 100_000_000:
+            data = self[:]  # np.asarray(self) is one frame only
             np_func = getattr(np, func)
-            # Not all numpy functions accept dtype (max/min don't)
             if func in ("max", "min"):
-                result = np_func(data, axis=axis, keepdims=keepdims, out=out, **kwargs)
-            else:
-                result = np_func(
-                    data, axis=axis, dtype=dtype, keepdims=keepdims, out=out, **kwargs
-                )
-            return result
+                return np_func(data, axis=axis, keepdims=keepdims, out=out, **kwargs)
+            return np_func(
+                data, axis=axis, dtype=dtype, keepdims=keepdims, out=out, **kwargs
+            )
 
-        # Large array - use chunked reduction
         return self._chunked_reduce(
             func, axis=axis, dtype=dtype, keepdims=keepdims, out=out, **kwargs
         )
@@ -972,14 +696,12 @@ class ReductionMixin:
         chunk_size: int = 100,
         **kwargs,
     ) -> np.ndarray:
-        """Apply reduction function over axis, processing in chunks for large arrays."""
+        """``func`` over ``axis`` in blocks of ``chunk_size`` along it (along axis 0 for a full reduction)."""
         from tqdm.auto import tqdm
 
         shape, arr_dtype, ndim = self._get_array_info()
 
-        # axis=None means reduce over all - load in chunks along axis 0
         if axis is None:
-            # Reduce everything to a scalar
             n = shape[0]
             if func == "mean":
                 total_sum = 0.0
@@ -1011,7 +733,6 @@ class ReductionMixin:
                     chunk_min = np.min(chunk)
                     result = chunk_min if result is None else min(result, chunk_min)
             elif func in ("std", "var"):
-                # Two-pass for numerical stability
                 mean_val = self._chunked_reduce(
                     "mean", axis=None, chunk_size=chunk_size
                 )
@@ -1037,17 +758,10 @@ class ReductionMixin:
                 return out
             return result
 
-        # Single axis reduction
         if isinstance(axis, int):
             ax = axis
             n = shape[ax]
-
-            # Determine output shape
-            out_shape = list(shape)
-            out_shape.pop(ax)
-            out_shape = tuple(out_shape)
-
-            # Determine dtype
+            out_shape = shape[:ax] + shape[ax + 1 :]
             if dtype is None:
                 if func in ("mean", "std", "var"):
                     reduce_dtype = np.float64
@@ -1056,17 +770,11 @@ class ReductionMixin:
             else:
                 reduce_dtype = dtype
 
-            # Build slicing helper
-            def make_slice(start, end):
-                slices = [slice(None)] * ndim
-                slices[ax] = slice(start, end)
-                return tuple(slices)
-
             if func == "mean":
                 accumulator = np.zeros(out_shape, dtype=np.float64)
                 for start in tqdm(range(0, n, chunk_size), desc=f"Computing {func}"):
                     end = min(start + chunk_size, n)
-                    chunk = np.asarray(self[make_slice(start, end)])
+                    chunk = np.asarray(self[_axis_slice(ndim, ax, start, end)])
                     accumulator += np.sum(chunk, axis=ax, dtype=np.float64)
                 result = (accumulator / n).astype(reduce_dtype)
 
@@ -1074,29 +782,29 @@ class ReductionMixin:
                 accumulator = np.zeros(out_shape, dtype=reduce_dtype)
                 for start in tqdm(range(0, n, chunk_size), desc=f"Computing {func}"):
                     end = min(start + chunk_size, n)
-                    chunk = np.asarray(self[make_slice(start, end)])
+                    chunk = np.asarray(self[_axis_slice(ndim, ax, start, end)])
                     accumulator += np.sum(chunk, axis=ax)
                 result = accumulator
 
             elif func == "max":
-                chunk = np.asarray(self[make_slice(0, min(chunk_size, n))])
+                chunk = np.asarray(self[_axis_slice(ndim, ax, 0, min(chunk_size, n))])
                 accumulator = np.max(chunk, axis=ax)
                 for start in tqdm(
                     range(chunk_size, n, chunk_size), desc=f"Computing {func}"
                 ):
                     end = min(start + chunk_size, n)
-                    chunk = np.asarray(self[make_slice(start, end)])
+                    chunk = np.asarray(self[_axis_slice(ndim, ax, start, end)])
                     accumulator = np.maximum(accumulator, np.max(chunk, axis=ax))
                 result = accumulator.astype(reduce_dtype)
 
             elif func == "min":
-                chunk = np.asarray(self[make_slice(0, min(chunk_size, n))])
+                chunk = np.asarray(self[_axis_slice(ndim, ax, 0, min(chunk_size, n))])
                 accumulator = np.min(chunk, axis=ax)
                 for start in tqdm(
                     range(chunk_size, n, chunk_size), desc=f"Computing {func}"
                 ):
                     end = min(start + chunk_size, n)
-                    chunk = np.asarray(self[make_slice(start, end)])
+                    chunk = np.asarray(self[_axis_slice(ndim, ax, start, end)])
                     accumulator = np.minimum(accumulator, np.min(chunk, axis=ax))
                 result = accumulator.astype(reduce_dtype)
 
@@ -1105,7 +813,9 @@ class ReductionMixin:
                 variance = np.zeros(out_shape, dtype=np.float64)
                 for start in tqdm(range(0, n, chunk_size), desc=f"Computing {func}"):
                     end = min(start + chunk_size, n)
-                    chunk = np.asarray(self[make_slice(start, end)]).astype(np.float64)
+                    chunk = np.asarray(self[_axis_slice(ndim, ax, start, end)]).astype(
+                        np.float64
+                    )
                     mean_expanded = np.expand_dims(mean_val, axis=ax)
                     variance += np.sum((chunk - mean_expanded) ** 2, axis=ax)
                 ddof = kwargs.get("ddof", 0)
@@ -1124,9 +834,7 @@ class ReductionMixin:
                 return out
             return result
 
-        # Multi-axis reduction - reduce one at a time
-        # Sort axes in descending order so indices don't shift
-        axes = sorted(axis, reverse=True)
+        axes = sorted(axis, reverse=True)  # highest first so the lower indices hold
         result = self
         for ax in axes:
             result = (
@@ -1150,27 +858,7 @@ class ReductionMixin:
         keepdims: bool = False,
         **kwargs,
     ) -> np.ndarray:
-        """
-        Compute mean along axis.
-
-        Identical to numpy.mean() - axis=None reduces over all elements.
-
-        Parameters
-        ----------
-        axis : int | tuple[int, ...] | None
-            Axis or axes to reduce. None reduces all elements.
-        dtype : np.dtype | None
-            Output dtype. Defaults to float64.
-        out : np.ndarray | None
-            Output array.
-        keepdims : bool
-            Keep reduced dimensions as size 1.
-
-        Returns
-        -------
-        np.ndarray or scalar
-            Mean value(s).
-        """
+        """``numpy.mean`` over ``axis``; None reduces every element."""
         return self._reduce(
             "mean", axis=axis, dtype=dtype, out=out, keepdims=keepdims, **kwargs
         )
@@ -1182,25 +870,7 @@ class ReductionMixin:
         keepdims: bool = False,
         **kwargs,
     ) -> np.ndarray:
-        """
-        Compute maximum along axis.
-
-        Identical to numpy.max() - axis=None finds global maximum.
-
-        Parameters
-        ----------
-        axis : int | tuple[int, ...] | None
-            Axis or axes to reduce. None reduces all elements.
-        out : np.ndarray | None
-            Output array.
-        keepdims : bool
-            Keep reduced dimensions as size 1.
-
-        Returns
-        -------
-        np.ndarray or scalar
-            Maximum value(s).
-        """
+        """``numpy.max`` over ``axis``; None reduces every element."""
         return self._reduce("max", axis=axis, out=out, keepdims=keepdims, **kwargs)
 
     def min(
@@ -1210,25 +880,7 @@ class ReductionMixin:
         keepdims: bool = False,
         **kwargs,
     ) -> np.ndarray:
-        """
-        Compute minimum along axis.
-
-        Identical to numpy.min() - axis=None finds global minimum.
-
-        Parameters
-        ----------
-        axis : int | tuple[int, ...] | None
-            Axis or axes to reduce. None reduces all elements.
-        out : np.ndarray | None
-            Output array.
-        keepdims : bool
-            Keep reduced dimensions as size 1.
-
-        Returns
-        -------
-        np.ndarray or scalar
-            Minimum value(s).
-        """
+        """``numpy.min`` over ``axis``; None reduces every element."""
         return self._reduce("min", axis=axis, out=out, keepdims=keepdims, **kwargs)
 
     def std(
@@ -1240,29 +892,7 @@ class ReductionMixin:
         keepdims: bool = False,
         **kwargs,
     ) -> np.ndarray:
-        """
-        Compute standard deviation along axis.
-
-        Identical to numpy.std() - axis=None computes over all elements.
-
-        Parameters
-        ----------
-        axis : int | tuple[int, ...] | None
-            Axis or axes to reduce. None reduces all elements.
-        dtype : np.dtype | None
-            Output dtype. Defaults to float64.
-        out : np.ndarray | None
-            Output array.
-        ddof : int
-            Delta degrees of freedom (divisor is N - ddof).
-        keepdims : bool
-            Keep reduced dimensions as size 1.
-
-        Returns
-        -------
-        np.ndarray or scalar
-            Standard deviation.
-        """
+        """``numpy.std`` over ``axis``; None reduces every element."""
         return self._reduce(
             "std",
             axis=axis,
@@ -1282,29 +912,7 @@ class ReductionMixin:
         keepdims: bool = False,
         **kwargs,
     ) -> np.ndarray:
-        """
-        Compute variance along axis.
-
-        Identical to numpy.var() - axis=None computes over all elements.
-
-        Parameters
-        ----------
-        axis : int | tuple[int, ...] | None
-            Axis or axes to reduce. None reduces all elements.
-        dtype : np.dtype | None
-            Output dtype. Defaults to float64.
-        out : np.ndarray | None
-            Output array.
-        ddof : int
-            Delta degrees of freedom (divisor is N - ddof).
-        keepdims : bool
-            Keep reduced dimensions as size 1.
-
-        Returns
-        -------
-        np.ndarray or scalar
-            Variance.
-        """
+        """``numpy.var`` over ``axis``; None reduces every element."""
         return self._reduce(
             "var",
             axis=axis,
@@ -1323,27 +931,7 @@ class ReductionMixin:
         keepdims: bool = False,
         **kwargs,
     ) -> np.ndarray:
-        """
-        Compute sum along axis.
-
-        Identical to numpy.sum() - axis=None sums all elements.
-
-        Parameters
-        ----------
-        axis : int | tuple[int, ...] | None
-            Axis or axes to reduce. None reduces all elements.
-        dtype : np.dtype | None
-            Output dtype.
-        out : np.ndarray | None
-            Output array.
-        keepdims : bool
-            Keep reduced dimensions as size 1.
-
-        Returns
-        -------
-        np.ndarray or scalar
-            Sum.
-        """
+        """``numpy.sum`` over ``axis``; None reduces every element."""
         return self._reduce(
             "sum", axis=axis, dtype=dtype, out=out, keepdims=keepdims, **kwargs
         )

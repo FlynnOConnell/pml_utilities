@@ -1,76 +1,12 @@
 """Manual ROI drawing, labeling and traces, laid out and keyed like masknmf's curation viewer.
 
-Toggled from ``Widgets > Manual ROI Labeling`` in the preview GUI (``mbo
-<path> --widget manualroi`` opens with it on). The ROIs tab of the
-right-hand widget (``widgets/tabs.py``) is masknmf's Tools panel: the guide
-and keybinds buttons on top, then a Curation tab (OVERLAY, SELECTION,
-LABELS, RUN) and an ROIs tab (the filter over the table of drawn and algo
-ROIs); the Traces tab holds the trace table. The trace plot is masknmf's
-:class:`~masknmf.visualization.imgui.TracePlot`, a panel on the figure's
-top strip, with the recording's motion correction as a panel of its own and
-its behavior log as a raster row over them. The keys are masknmf's
-``DEMIXING`` table plus its 1-9 / 0 / u labeling keys and a few of this
-tool's own (:data:`ROI_KEYS`); while the tool is on it takes those keys from
-the viewer's global shortcuts.
-
-The state is a :class:`~mbo_utilities.annotation.RoiModel`: the
-``RoiLabelStore`` (one record per ROI, its pixels and weights on one plane,
-so ROIs may overlap; each keeps a persistent ``uid`` and a ``source`` naming
-where it came from; ``label_image(plane)`` is derived on demand), the
-``RoiTraceTable`` (one row per measurement, keyed by ROI uid, z-plane,
-channel and engine) and the slider position. The widget subscribes to the
-model's events and redraws from them.
-
-This module is the glue: construction, the slider and playhead wiring,
-``add_roi``, loading runs as derived sets, promotion and the rois zarr
-persistence. Everything else is a mixin in ``gui/roi/`` (keys, overlay,
-selection, jobs, traces_panel, trace_table, curation), each a plain class
-over the widget's own attributes; ``gui/roi/_shared`` holds the constants
-and keybinds. The ROIs tab's exchange row exports the drawn ROIs as a
-``RoiSet.zip`` for Fiji, imports one, and exports the trace table as a CSV
-(``annotation/imagej``).
-
-Draw (a) arms a polygon: click its vertices on the image, click the first
-one to close it. While it is there it selects every ROI in view on this
-slice whose center is inside it (or outside, per its switch), live as it is
-drawn and dragged. Add ROI (r) fills it into the store as a drawn ROI on
-the exact slice the viewer shows (every scrolling dim except time keys its
-own plane of masks); with ``auto_trace`` on its mean trace is computed at
-once; ROIs may overlap. Annotations stay in memory until Save, or as they
-change with autosave on (off by default: data is often opened where nothing
-should be written), as the rois zarr (``<stem>.rois.zarr``,
-``mbo_utilities.annotation.RoiFile``: the ROIs, the quick traces, the loaded
-runs with their curation, and an OME-NGFF 0.5 label image) in the dataset's
-ROI folder: beside the data, or a folder the user picks (``roi_folder``).
-They are restored from there, or from beside the data, on relaunch. A file
-holding several recordings (a ``.mesc``) gets one per recording
-(``<stem>_MSession_0_MUnit_3.rois.zarr``; the run files likewise), and
-switching recordings swaps the whole widget, so the ROIs, runs and traces on
-screen are the shown one's.
-
-Runs read an ROI's mask where it was drawn and its pixels wherever the RUN
-section points them (``run_z`` / ``run_c`` / ``run_tp``, "as drawn" by
-default), through :meth:`run_rois`, writing one results zarr
-(``<stem>.<tag>.<stamp>.manual.zarr``) into the ROI folder; a run of the
-same ROI at the same coordinates with the same engine replaces its row.
-Suite2p, masknmf and vnoiser runs load as derived sets, rows of the table,
-whose components can be promoted into the drawn store (y). Delete (d)
-removes a drawn ROI and marks an algo one for deletion: it stays listed at
-the top of the table and red on the image until it is unmarked; the run's
-files are never written to, the curation stays with the ROIs.
-
-Masks draw as masknmf's feathered footprints: every ROI at the masks
-opacity, the selection and its group at their own with a white rim, each
-in the color its trace takes; contours outline every other ROI. Clicking
-selects what is under the cursor, a drawn ROI before an algo one; clicking
-the selection again, or the background, deselects. Ctrl+click (in the
-image or the table) toggles an ROI in the group and shift+click adds it (a
-row range in the table): the group's traces share the plot, one color per
-member, and class labels apply to every member. With pixel traces on (p) a
-click on an empty pixel adds the movie's 5x5 average there to the plot as a
-group member. Ctrl+z undoes the last drawn or deleted ROI, mark, pixel
-average or deselect. Selecting a listed ROI on another plane jumps every
-slider that plane encodes. Only the first subplot is drawable.
+``ManualRoiWidget`` is one view of a :class:`~mbo_utilities.annotation.RoiModel`
+(the ``RoiLabelStore``, the ``RoiTraceTable`` and the slider position) over
+a ``MboNDViewer``. This module is the glue: construction, the slider and
+playhead wiring, ``add_roi``, loading runs as derived sets, promotion and
+the rois zarr persistence. Everything else is a mixin in ``gui/roi/`` over
+the widget's own attributes; ``gui/roi/_shared`` holds the constants and
+keybinds. AGENTS.md §7.6 is the contract.
 """
 
 from __future__ import annotations
@@ -112,6 +48,32 @@ from mbo_utilities.gui.imgui import (
 from mbo_utilities.gui.imgui.behavior import BehaviorPlot
 from mbo_utilities.gui.imgui.motion import MotionPlot
 from mbo_utilities.gui.playhead import Playhead, TimeAxis
+from mbo_utilities.gui.roi._shared import (
+    BEHAVIOR_PLOT_HEIGHT,
+    COLOR_BY,
+    COLORMAPS,
+    CONTOUR_SHAPES,
+    DEFAULT_LABEL_NAMES,
+    ENGINE_HELP,
+    KEYBINDS,
+    MIN_ROI_PIXELS,
+    MOTION_PANEL_HEIGHT,
+    PANEL_HEIGHT,
+    POSITION_KEYS,
+    ROI_KEYS,
+    TRACE_COLUMNS,
+    _PlaneOrder,
+    help_markdown,
+    roi_widgets_available,
+    unit_key,
+)
+from mbo_utilities.gui.roi.curation import CurationMixin
+from mbo_utilities.gui.roi.jobs import JobsMixin
+from mbo_utilities.gui.roi.keys import KeysMixin
+from mbo_utilities.gui.roi.overlay import OverlayMixin
+from mbo_utilities.gui.roi.selection import SelectionMixin
+from mbo_utilities.gui.roi.trace_table import TraceTableMixin
+from mbo_utilities.gui.roi.traces_panel import TracesPanelMixin
 from mbo_utilities.gui.roi_runs import (
     DerivedSet,
     RoiRunManager,
@@ -135,32 +97,6 @@ from mbo_utilities.roi_workflow import (
     detection_algo,
     labels_path,
     roi_folder,
-)
-from mbo_utilities.gui.roi.keys import KeysMixin
-from mbo_utilities.gui.roi.overlay import OverlayMixin
-from mbo_utilities.gui.roi.selection import SelectionMixin
-from mbo_utilities.gui.roi.jobs import JobsMixin
-from mbo_utilities.gui.roi.traces_panel import TracesPanelMixin
-from mbo_utilities.gui.roi.trace_table import TraceTableMixin
-from mbo_utilities.gui.roi.curation import CurationMixin
-from mbo_utilities.gui.roi._shared import (
-    BEHAVIOR_PLOT_HEIGHT,
-    COLOR_BY,
-    COLORMAPS,
-    CONTOUR_SHAPES,
-    DEFAULT_LABEL_NAMES,
-    ENGINE_HELP,
-    help_markdown,
-    KEYBINDS,
-    MIN_ROI_PIXELS,
-    MOTION_PANEL_HEIGHT,
-    PANEL_HEIGHT,
-    _PlaneOrder,
-    POSITION_KEYS,
-    ROI_KEYS,
-    roi_widgets_available,
-    TRACE_COLUMNS,
-    unit_key,
 )
 
 __all__ = [
@@ -192,35 +128,15 @@ class ManualRoiWidget(
     TraceTableMixin,
     CurationMixin,
 ):
-    """Freehand ROI painting, labeling and run curation on a ``MboNDViewer``.
+    """Freehand ROI painting, labeling and run curation on a ``MboNDViewer``'s first subplot.
 
-    Parameters
-    ----------
-    iw : MboNDViewer
-        The viewer to draw on. Only its first subplot is drawable.
-    fpath : path-like, optional
-        The data path. Annotations, quick traces and the loaded runs are
-        saved to ``<stem>.rois.zarr`` in its ROI folder (``roi_folder``
-        under the ``roi_folder`` preference, beside the data when unset) on
-        Save, or as they change when the ``roi_autosave`` preference is on,
-        and restored on construction.
-    label_names : iterable of str
-        Class labels to seed the label set with.
-    store : RoiLabelStore, optional
-        Adopt this in-memory store instead of starting empty / restoring
-        from disk (how ROIs survive an off/on toggle).
-    runs : dict, optional
-        State from :meth:`park_runs` of the previous widget (how loaded
-        runs, traces and live background work survive an off/on toggle).
-    strip : TopStrip, optional
-        The figure's shared top strip to hang the Traces panel off; it also
-        runs the per-frame hook. Omit to own one (standalone use).
-    host : PreviewDataWidget, optional
-        The widget that owns the viewer's display settings; the trace plot
-        follows its window function. Omit when running standalone.
-    auto_trace : bool
-        Trace every ROI the moment it is drawn (its mean at the slice on
-        screen), so drawing a cell shows its trace without another click.
+    ROI work is saved to ``<stem>.rois.zarr`` in ``fpath``'s ROI folder on
+    Save (or as it changes with autosave on) and restored on construction.
+    ``store`` and ``runs`` (:meth:`park_runs`) carry the previous widget's
+    state across an off/on toggle; ``strip`` is the figure's shared top
+    strip, ``host`` the ``PreviewDataWidget`` whose display settings the
+    trace plot follows; both are owned here when omitted. ``auto_trace``
+    traces every ROI the moment it is drawn.
     """
 
     def __init__(
@@ -238,16 +154,17 @@ class ManualRoiWidget(
         self.host = host
         self.figure = iw.figure
         self.fpath = Path(fpath) if fpath is not None else None
-        # where ROI work is saved (None = beside the data) and whether it is
-        # written as it changes; both are the user's, nothing is written unasked
-        self.root = Path(get_roi_folder()) if get_roi_folder() else None
+        self.root = (
+            Path(get_roi_folder()) if get_roi_folder() else None
+        )  # None saves beside the data
         self.autosave = get_roi_autosave()
         self._folder_dialog = None
-        # ("export_roiset" | "import_roiset" | "export_traces", the pfd dialog)
-        self._file_dialog: tuple[str, Any] | None = None
-        # a file holding several recordings (a .mesc) keeps ROIs, runs and
-        # traces per recording: every saved file is named after the one shown
-        self.unit_key = unit_key(iw)
+        self._file_dialog: tuple[str, Any] | None = (
+            None  # (exchange kind, the pfd dialog)
+        )
+        self.unit_key = unit_key(
+            iw
+        )  # a .mesc keeps ROIs, runs and traces per recording
         self.tag = self.unit_key.strip("/").replace("/", "_")
         self.unit = self.unit_key.rsplit("/", 1)[-1]
         self.logger = log.get("gui.manual_roi")
@@ -260,9 +177,7 @@ class ManualRoiWidget(
         self.roles = viewer_roles(iw)
         self.tdim, self.cdim, self.zdim = (self._axis_for(r) for r in ("t", "c", "z"))
         self._bind_recording()
-        # every scrolling dim except time keys its own mask plane, so masks
-        # follow the channel / z / any extra slider; z sits last in the flat
-        # order so a z-only store keeps plane == z and old stores restore
+        # every scrolling dim but time keys its own mask plane; z last, so a z-only store keeps plane == z
         axes = []
         for name in iw.dim_names:
             if name == self.tdim:
@@ -286,41 +201,34 @@ class ManualRoiWidget(
         store.axis_roles = self.axis_roles
         for name in label_names:
             store.add_label_name(name)
-        # store + trace table + slider position; the Process tab reads the same object
-        self.model = RoiModel(store)
+        self.model = RoiModel(store)  # the Process tab reads the same object
 
         self.selected = -1
         self.selected_derived: tuple[int, int] | None = None
-        # the spike-average windows the Traces panel started, until they exit
-        self._windows: list = []
-        # ctrl / shift click builds a group here; its traces share the plot
-        # and label actions apply to every member. Entries are (si, k), si -1 = drawn.
-        self.buffer: list[tuple[int, int]] = []
-        # pixel averages (p): (store plane, row, col) -> trace key, newest
-        # first; those in pixel_group plot with the group, delete drops the active one
-        self.pixels: OrderedDict[tuple, tuple] = OrderedDict()
+        self._windows: list = []  # spike-average windows the Traces panel started
+        self.buffer: list[
+            tuple[int, int]
+        ] = []  # the group: (si, k), si -1 for a drawn ROI
+        self.pixels: OrderedDict[tuple, tuple] = (
+            OrderedDict()
+        )  # (store plane, row, col) -> trace key, newest first
         self.pixel_group: list[tuple] = []
         self.active_pixel: tuple | None = None
         self.pixel_traces = False
         self.status = "draw (a) a region, add it as an ROI (r)"
         self._save_error: str | None = None
         self._run_error: str | None = None
-        # the rois zarr the data wants when the saved one was for another
-        # shape: "" normally, "<nz>x<ny>x<nx>" after a mismatch
-        self._save_suffix = ""
+        self._save_suffix = (
+            ""  # "<nz>x<ny>x<nx>" when the saved rois zarr is for another shape
+        )
         self.new_label = ""
         self._note_buf = ""
         self.scroll_to_selection = False
-        self.follow = False  # center the shown ROI; labeling then advances
+        self.follow = False
         self.keybinds_open = False
-        # ctrl+z steps, newest last: a store snapshot, the drawn ROIs' traces,
-        # the marks and the selection as they were before the step
-        self._undo: list[dict] = []
+        self._undo: list[dict] = []  # ctrl+z steps, newest last (_push_undo)
         self._panel_hovered = -2
 
-        # masknmf's OVERLAY: every mask at one opacity, weighted by its trace's
-        # peak or its own; the selection and group at their own with a white
-        # rim; contours of every other ROI, and of the selection in its color
         self.show_masks = True
         self.opacity = 0.5
         self.masks_by_peak = True
@@ -331,7 +239,6 @@ class ManualRoiWidget(
         self.show_selected_contours = True
         self.selected_contour_opacity = 0.7
         self.contour_shape = CONTOUR_SHAPES[0]
-        # the trace table lists the slice on screen; "all slices" lifts it
         self.traces_this_slice = True
 
         self._feathers: dict[int, tuple] = {}
@@ -341,16 +248,13 @@ class ManualRoiWidget(
         self.derived: list[DerivedSet] = []
         self.classes = LabelSet(0, self.store.label_names)
         self.order = _PlaneOrder({"del": np.zeros(0, np.int8)}, self.classes.labels, 0)
-        # the plane's footprints as drawn last: (key, rows, FootprintSet)
-        self._footprints: tuple | None = None
-        # the ROIs table's filter: apply makes the rows on the switch's side of
-        # the range the group, and keeps it there while the range moves
-        self.filter_select = False
+        self._footprints: tuple | None = None  # (key, rows, FootprintSet) as drawn last
+        self.filter_select = (
+            False  # apply: the rows on the switch's side of the range are the group
+        )
         self.filter_outside = True
 
-        # one time and one slice for every view of the recording: the host's
-        # when it has them, fed by its handler on the sliders; a widget on a
-        # bare viewer makes its own and feeds them itself
+        # the host's playhead and slice when it has them; a widget on a bare viewer feeds its own
         self.playhead = getattr(host, "playhead", None)
         self.slice = getattr(host, "slice", None)
         self._own_slice = self.slice is None
@@ -373,13 +277,11 @@ class ManualRoiWidget(
             alpha_mode="blend",
             offset=(0, 0, 1),
         )
-        # literal RGBA bytes: auto-ranging off the all-zero start saturates every colour to white
+        # NOTE: literal RGBA bytes; auto-ranging off the all-zero start saturates every colour to white
         self.overlay.vmin, self.overlay.vmax = 0, 255
         for tile in self.overlay.world_object.children:
             tile.material.pick_write = False
-        # the contours: one line, every ROI's path in one buffer split by NaN
-        # rows, per-vertex colors; thickness in screen pixels, so a hairline
-        # stays one at any zoom
+        # every ROI's contour in one buffer split by NaN rows; screen-space thickness keeps a hairline at any zoom
         self.outline = self.subplot.add_line(
             np.zeros((5, 3), np.float32),
             colors=np.zeros((5, 4), np.float32),
@@ -391,104 +293,88 @@ class ManualRoiWidget(
         )
         self.outline.world_object.material.pick_write = False
 
-        # the drawn region (a): a polygon that selects what it holds until
-        # Add ROI (r) keeps it or esc drops it
-        self.region_selector = None
+        self.region_selector = (
+            None  # the drawn polygon (a) until Add ROI (r) keeps it or esc drops it
+        )
         self.region_outside = False
         self._region_key = None
         self._region_hits: list | None = None
-        # its bounding box (y0, y1, x0, x1): where Find in region looks
-        # the last press on the image: a click travelling further is a pan
-        self._press: tuple[float, float] | None = None
+        self._press: tuple[float, float] | None = (
+            None  # a click travelling further is a pan
+        )
         self._press_drawn = False
         renderer = self.subplot.renderer
         renderer.add_event_handler(self._pointer_down, "pointer_down")
         renderer.add_event_handler(self._pointer_up, "pointer_up")
         self.summary = SummaryImageViewer(iw.figure, title="Full FOV")
 
-        # the last ROI a trace landed for
-        self.trace_uid = 0
+        self.trace_uid = 0  # the last ROI a trace landed for
         self._trace_results: queue.Queue = queue.Queue()
         self._trace_threads: list[threading.Thread] = []
-        # the trace table's highlighted rows: the selection's own, or the rows
-        # picked there (trace_picked), which the plot then shows instead
-        self.trace_sel: set[tuple] = set()
+        self.trace_sel: set[tuple] = (
+            set()
+        )  # the highlighted trace rows: the selection's, or picked in the table
         self.trace_picked = False
         self._trace_stats: dict[tuple, tuple] = {}
         self._trace_display: dict[tuple, np.ndarray] = {}
         self._trace_deflection = (False, False)
-        # one entry: the last windowed line, so panning does not recompute it
         self._trace_window_cache: dict[tuple, np.ndarray] = {}
-        # what the plot shows of each row (a DISPLAY_KINDS name); None lets
-        # every row's pipeline pick, and a kind a row lacks falls back the same way
-        self._kind: str | None = None
+        self._kind: str | None = (
+            None  # a DISPLAY_KINDS name; None lets every row's pipeline pick
+        )
         self._flip = False
-        # the panel's own dF/F baseline and z-score for rows that compute one;
-        # None keeps each pipeline's
-        self.dff: DffSettings | None = None
-        # mean subtraction and inversion of what was measured (DEFLECTION_MODES):
-        # "viewer" follows the image's Mean Subtraction / Invert Deflection
-        self.trace_subtract = "viewer"
+        self.dff: DffSettings | None = None  # None keeps each pipeline's
+        self.trace_subtract = "viewer"  # DEFLECTION_MODES
         self.trace_invert = "viewer"
-        # the vnoiser run of the recording on screen, a panel of its own under
-        # the traces: shown, and the kind it plots (None: the run's default)
-        self.show_vnoiser = True
+        self.show_vnoiser = (
+            True  # the vnoiser run of the recording on screen, a panel under the traces
+        )
         self._vnoiser_kind: str | None = None
         self._vnoiser_lines_key = None
         self._trace_unit: tuple = (None, False)
-        # the trace table's sortable order over the keys it lists
         self.trace_order = RoiOrder({}, 0)
         self._trace_keys: list[tuple] = []
-        # plot the selection's traces; off, selecting only highlights (masknmf's show selected traces)
-        self.show_traces = True
-        # the recording's motion correction as a panel of the plot, its
-        # behavior log as a raster row over it
+        self.show_traces = (
+            True  # off, selecting only highlights (masknmf's show selected traces)
+        )
         self.show_motion = True
         self.show_behavior = True
-        # masknmf's stacked trace panels, rebuilt when the frames or panels change
         self.trace_plot: TracePlot | None = None
         self._motion_panel = False
         self._plot_frames: tuple | None = None
         self._plot_lines_key = None
         self._motion_key = None
-        # drawn on the tab in place of "no traces" while a host computes them
-        self.pending_traces = None
+        self.pending_traces = (
+            None  # drawn in place of "no traces" while a host computes them
+        )
         self._fs_value: float | None = None
         self._fs_read = False
-        # the Curation tab's color by: the id palette, else a store column or the trace peak through a colormap
         self.color_by = COLOR_BY[0]
         self.color_cmap = COLORMAPS[0]
 
-        # run_tp is the 0-based frame list parse_timepoint_selection gives; None = every frame
         self.engine = ENGINES[0]
         self.run_where = "drawn"
         self.run_z: int | None = None
         self.run_c: int | None = None
-        self.run_tp: list[int] | None = None
+        self.run_tp: list[int] | None = (
+            None  # 0-based frames from parse_timepoint_selection; None every frame
+        )
         self.auto_trace = bool(auto_trace)
-        # empty: the box shows DEFAULT_RUN_TAG as a hint, so what is
-        # typed there is the user's own tag and nothing else
-        self.run_tag = ""
+        self.run_tag = ""  # empty shows DEFAULT_RUN_TAG as the box's hint
         self.manager = RoiRunManager()
-        # loaded runs the derived sets do not stand for: a manual run merged
-        # into the trace table, a run that could not load; saved with the ROIs
-        self._registry_extra: list[dict] = []
+        self._registry_extra: list[
+            dict
+        ] = []  # loaded runs no derived set stands for, saved with the ROIs
         self._saved_runs: list[dict] = []
-        # pids of finished pipeline runs already pulled in by
-        # _adopt_finished_runs, and when it last looked
-        self._adopted: set[int] = set()
+        self._adopted: set[int] = set()  # pids _adopt_finished_runs already pulled in
         self._adopt_checked = 0.0
-        # results files (mbo_utilities.results) already loaded, by path
         self._results_loaded: set[str] = set()
         self._restoring = False
 
-        # the top edge is shared (menu row, Signal Quality plot, this Traces
-        # panel) and runs the per-frame hook whatever is up; standalone use,
-        # tests and a bare viewer, gets its own strip
+        # the shared top edge runs the per-frame hook whatever is up; a bare viewer gets its own strip
         self._own_strip = strip is None
         self.strip = TopStrip(iw.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
-        # kept so the panel can ask for more height once the motion panel shows
         self._traces_panel = TopPanel(
             "traces", "Traces", self.draw_traces, PANEL_HEIGHT, 11
         )
@@ -505,25 +391,16 @@ class ManualRoiWidget(
         self.refresh_overlay()
 
     def _bind_recording(self) -> None:
-        """The recording's facets for the Traces tab: its motion correction,
-        its behavior log (found beside it on first use) and where each of
-        its scanned lines sits (an AOD unit's ``line_positions``, by ROI
-        index; empty for anything else).
-        """
-        data = getattr(self.iw, "data", None)
-        arr = base_array(data[0]) if data else None
+        """The recording's facets for the Traces tab: motion correction, behavior log, line positions (an AOD unit's, by ROI index) and results."""
+        # the viewer may hold a bare ndarray, which has none of the LazyArray facets
+        arr = base_array(self.iw.data[0]) if self.iw.data else None
         self.motion = MotionPlot(getattr(arr, "motion_correction", None))
         self.behavior = BehaviorPlot(behavior_for(arr) if arr is not None else None)
         self.line_positions = list(getattr(arr, "line_positions", None) or [])
-        # what the pipeline that wrote the data found (a suite2p run's planes)
         self.results = getattr(arr, "results", None)
 
     def _line_position(self, trace: RoiTrace) -> dict:
-        """Where the line a row was read on sits: the recording's placement
-        of that ROI (its ``line`` in ``extra``, else its z on an AOD unit,
-        whose Z axis is the ROI index) under the row's own record; empty
-        without geometry.
-        """
+        """The position of the line a row was read on (its ``line`` in ``extra``, else its z), under the row's own record; empty without geometry."""
         line = trace.extra.get("line")
         if line is None and trace.stands_for_roi:
             line = trace.z
@@ -548,33 +425,17 @@ class ManualRoiWidget(
         self._closed = True
         self._drop_region()
         renderer = self.subplot.renderer
-        for fn, kind in (
-            (self._pointer_down, "pointer_down"),
-            (self._pointer_up, "pointer_up"),
-        ):
-            try:
-                renderer.remove_event_handler(fn, kind)
-            except (KeyError, ValueError):
-                pass
+        renderer.remove_event_handler(self._pointer_down, "pointer_down")
+        renderer.remove_event_handler(self._pointer_up, "pointer_up")
         if self._own_slice:
-            try:
-                self.iw.ndwidget.indices.remove_event_handler(self._on_indices)
-            except (KeyError, ValueError, AttributeError):
-                pass
+            self.iw.ndwidget.indices.remove_event_handler(self._on_indices)
         self.slice.remove_event_handler(self._on_slice)
         self.playhead.remove_event_handler(self._on_playhead)
-        # the parked store and table must not keep calling into a closed widget
-        self.model.close()
+        self.model.close()  # the parked store and table must not call into a closed widget
         for graphic in (self.overlay, self.outline):
-            try:
-                self.subplot.delete_graphic(graphic)
-            except (KeyError, ValueError):
-                pass
-        try:
-            self.summary.close()
-            self.summary.cleanup()
-        except Exception:
-            self.logger.debug("summary viewer cleanup failed", exc_info=True)
+            self.subplot.delete_graphic(graphic)
+        self.summary.close()
+        self.summary.cleanup()
         self.strip.remove_hook(self._frame)
         self.strip.unregister("traces")
         if self._own_strip:
@@ -582,9 +443,7 @@ class ManualRoiWidget(
         self.strip = None
 
     def park_runs(self) -> dict:
-        """State handed to the next attach: the live run manager, loaded
-        sets, registry leftovers and the trace table.
-        """
+        """The state the next attach adopts: the live run manager, loaded sets, registry leftovers and the trace table."""
         return {
             "manager": self.manager,
             "derived": self.derived,
@@ -614,10 +473,7 @@ class ManualRoiWidget(
         return next((name for name, r in self.roles.items() if r == role), None)
 
     def axis_label(self, role: str) -> str:
-        """What the ``role`` axis is called on this data: the slider's own
-        name when it is a word (``ROI`` on an AOD unit, whose Z axis is the
-        line index; ``Zplane``, ``Channel``, ``View``), else the letter.
-        """
+        """The ``role`` axis's name on this data: the slider's own when it is a word (``ROI`` on an AOD unit, ``Zplane``, ``View``), else the letter."""
         name = self._axis_for(role)
         return name if name is not None and len(name) > 1 else role
 
@@ -636,9 +492,7 @@ class ManualRoiWidget(
         }
 
     def _view_pos(self) -> dict[str, int]:
-        """The slider position over the dims that key mask planes."""
-        # a unit switch (MESc) can drop a scroll dim the store was keyed on;
-        # that dim then sits at plane 0 rather than taking the GUI down
+        """The slider position over the dims that key mask planes; a dim a unit switch dropped sits at 0."""
         return {name: self.slice.positions.get(name, 0) for name, _n in self.plane_axes}
 
     def _plane_pos(self, plane: int) -> dict[str, int]:
@@ -723,8 +577,7 @@ class ManualRoiWidget(
         ):
             self.apply_color_by()
         self.refresh_overlay()
-        # a note saves when its box loses focus, not per keystroke
-        if action != "note":
+        if action != "note":  # a note saves when its box loses focus
             self._autosave()
 
     def _on_traces(self, _event):
@@ -733,15 +586,10 @@ class ManualRoiWidget(
             self.apply_color_by()
 
     def current_frame(self) -> int:
-        """The viewer's T index; 0 without a T slider (or while a unit switch
-        has dropped it, until :meth:`rebind`).
-        """
-        if self.tdim is None:
+        """The viewer's T index; 0 without a T slider, or while a unit switch has dropped it."""
+        if self.tdim is None or self.tdim not in self.iw.dim_names:
             return 0
-        try:
-            return int(self.iw.indices[self.tdim])
-        except KeyError:
-            return 0
+        return int(self.iw.indices[self.tdim])
 
     def set_frame(self, frame: int):
         """Move the viewer's t; the trace cursor drag scrubs the movie with this."""
@@ -773,12 +621,7 @@ class ManualRoiWidget(
         )
 
     def _resync(self):
-        """Rebuild the combined rows, label set and table order from the
-        store and the loaded derived sets. Drawn rows come first so table
-        ids match store indices; promoted rows are recomputed from the
-        store's ``source`` strings. Algo rows marked for deletion stay
-        listed, ``del`` set, and the table pins them on top.
-        """
+        """Rebuild the rows, label set and table order from the store and the derived sets; drawn rows first, so table ids match store indices."""
         rois = self.store.rois
         self._promoted = {}
         for i, r in enumerate(rois):
@@ -818,8 +661,7 @@ class ManualRoiWidget(
         self.classes = LabelSet(len(self.rows), self.store.label_names, labels)
         self.store.label_names = self.classes.names
         planes = np.asarray(planes, np.int64)
-        # in the order the filter combo lists them
-        columns = {
+        columns = {  # in the filter combo's order
             "label": self.classes.labels,
             "source": np.asarray(sources, np.int64),
             "area": np.asarray(areas, np.int64),
@@ -842,7 +684,7 @@ class ManualRoiWidget(
         if order.range_column not in columns:
             order.set_range_column("area")
         else:
-            # the span follows the rows; limits the user narrowed stay, inside it
+            # the span follows the rows; limits the user narrowed stay inside it
             span, limits = order.range_span, order.range_limits
             order.set_range_column(order.range_column)
             lo, hi = order.range_span
@@ -932,11 +774,10 @@ class ManualRoiWidget(
         colors=None,
         iscell=None,
     ) -> DerivedSet | None:
-        """Wrap one pixel unit of a results file as a derived set keyed by
-        ``path`` (replacing an earlier load of the same path) and merge the
-        traces its rows carry. ``z`` is the plane of the array shown the
-        unit sits on (its own ``attrs["z"]``, else its plane number, when
-        None); ``iscell`` overrides the unit's own accept / reject flags.
+        """Wrap one pixel unit as a derived set keyed by ``path`` (replacing an earlier load of it) and merge its rows' traces.
+
+        ``z`` None takes the unit's ``attrs["z"]``, else its plane number;
+        ``iscell`` overrides the unit's own accept / reject flags.
         """
         path = Path(path)
         shape = (
@@ -970,8 +811,7 @@ class ManualRoiWidget(
                 discarded = set(discarded) | old.discarded
                 classes = {**old.classes, **classes}
                 colors = {**old.colors, **colors}
-                # rows promoted out of the old load stay with their drawn rois
-                promoted_traces = [
+                promoted_traces = [  # rows promoted out of the old load stay with their drawn rois
                     t for t in self.traces.from_source(old.name) if t.stands_for_roi
                 ]
                 self.unload_set(si)
@@ -994,8 +834,9 @@ class ManualRoiWidget(
                 s.accepted[int(k)] = bool(on)
         self.derived.append(s)
         if self.store.nz > 1 and len(self.derived) == 1 and self.order.plane is None:
-            # per-plane results: the ROI table opens on the plane on screen
-            self.order.plane = self.z
+            self.order.plane = (
+                self.z
+            )  # per-plane results open the ROI table on the plane on screen
         self._merge_run_traces(unit, s.name, path)
         for k in range(len(s)):
             if k not in s.discarded and (s.name, k) not in self._promoted:
@@ -1025,22 +866,13 @@ class ManualRoiWidget(
     def load_run(
         self, path, discarded=(), classes=None, colors=None, iscell=None
     ) -> bool:
-        """Read one run into the widget: a results file
-        (``mbo_utilities.results``), one unit inside one
-        (``<file>.zarr/zplane01``), a suite2p plane dir, a masknmf run
-        folder or a vnoiser ``PF`` folder, all through ``Results.open``.
+        """Read one run (a results file, one unit of one, a plane dir, a masknmf run folder or a vnoiser PF folder) through ``Results.open``.
 
-        A pixel unit loads as a derived set (every row, the rejected ones
-        included - curation happens here), except a manual run's unit whose
-        rows stand for drawn ROIs still in the store: those merge into the
-        trace table keyed by uid. A line unit (the vnoiser pipeline's scans)
-        goes straight to the Traces tab, one row per ROI plotting its
-        denoised trace and one per member line plotting the line's raw
-        trace; with a MESc unit on screen only the scan that processed it
-        loads, without the member lines, which are the recording's own rows.
-        Every row is named by its ROI (``roi3``, ``roi3 (raw)``; a line of a
-        multi-line ROI adds itself, ``roi3 line 12 (raw)``) and carries the
-        line it was read from on Z and the pipeline's channel on C. Returns
+        A pixel unit loads as a derived set, every row included; a manual
+        run's unit whose rows stand for drawn ROIs still in the store merges
+        into the trace table by uid. A line unit goes to the Traces tab, one
+        row per ROI and one per member line; with a MESc unit on screen only
+        the scan that processed it loads, without the member lines. Returns
         True when anything loaded.
         """
         from mbo_utilities.arrays.mesc import MescArray
@@ -1060,14 +892,12 @@ class ManualRoiWidget(
         except Exception as e:  # noqa: BLE001 - shown in the status row
             self._run_error = f"could not load {path.name}: {e}"
             return False
-        data = getattr(self.iw, "data", None)
-        src = base_array(data[0]) if data else None
+        src = base_array(self.iw.data[0]) if self.iw.data else None
         on_screen = (
             unit_for_source(results, src.unit_key)
             if isinstance(src, MescArray)
             else None
         )
-        # the plane dir the movie on screen IS sits on z 0 whatever it recorded
         own = self.fpath is not None and roi_folder(self.fpath) in (file, file.parent)
         algo = (
             detection_algo(results.metadata)
@@ -1150,8 +980,7 @@ class ManualRoiWidget(
                 )
             return False
         self._results_loaded.add(str(file))
-        # line units stand in the trace table only, so the file is listed
-        # for the next session; a derived set lists itself
+        # line units stand in the trace table only, so the file is listed for the next session
         if lines and not any(str(e["path"]) == str(file) for e in self._registry_extra):
             self._registry_extra.append({"path": str(file)})
         self._autosave()
@@ -1163,20 +992,17 @@ class ManualRoiWidget(
     def _line_unit_rows(
         self, results, unit, file: Path, with_members: bool = True
     ) -> list[RoiTrace]:
-        """One trace-table row per ROI of a results line unit (every kind it
-        wrote: ``raw`` as F, ``dff`` as norm, the rest under ``kinds``), then
-        with ``with_members`` one per member line plotting that line's raw trace.
-        """
+        """One trace-table row per ROI of a line unit (``raw`` as F, ``dff`` as norm, the rest under ``kinds``), then one per member line with ``with_members``."""
         name = f"{file.name}/{unit.name}"
         rows: list[RoiTrace] = []
         n = unit.n_rois
         lines = unit.member_kind == "line"
         channel = int(results.source.get("channel") or 0)
-        # a run over a frame window: its traces sit where they were recorded
-        window = results.source.get("frames")
+        window = results.source.get(
+            "frames"
+        )  # a frame-window run's traces sit where they were recorded
         frames = None if not window else (int(window[0]), int(window[1]), 1)
-        # a line's position comes from the reader's geometry, when the
-        # shown recording is the scan these results came from
+        # the reader's geometry places the lines when the shown recording is the scan these results came from
         src = base_array(self.iw.data[0])
         positions = (
             getattr(src, "line_positions", None)
@@ -1185,8 +1011,7 @@ class ManualRoiWidget(
             else None
         ) or []
         for k, roi in enumerate(unit.roi_names):
-            # the run's own names, which the spike-average window opens the ROI by
-            entry = {
+            entry = {  # the run's own names, which the spike-average window opens the ROI by
                 "label": str(roi),
                 "fs": unit.fs,
                 "c": channel,
@@ -1205,10 +1030,10 @@ class ManualRoiWidget(
                 if int(members[0]) < len(positions):
                     entry["extra"].update(positions[int(members[0])])
             elif lines and len(members):
-                # a domain of several lines or patches is listed on its first
-                entry["z"] = int(members[0])
+                entry["z"] = int(
+                    members[0]
+                )  # a domain of several lines is listed on its first
                 entry["extra"]["lines"] = [int(m) for m in members]
-            # every kind the unit wrote, under the row's field for it
             for kind, arr in unit.traces.items():
                 row = np.asarray(arr[k], np.float32)
                 if kind == "raw":
@@ -1292,9 +1117,7 @@ class ManualRoiWidget(
         return self._promoted.get((self.derived[si].name, k))
 
     def _promote(self, si: int, k: int) -> int | None:
-        """Copy one derived component into the store; None with a status
-        message when it cannot land.
-        """
+        """Copy one derived component into the store; None, with the reason in the status, when it cannot land."""
         s = self.derived[si]
         if k in s.discarded:
             self.status = f"{s.name} row {k} is discarded"
@@ -1318,8 +1141,9 @@ class ManualRoiWidget(
         self._promoted[(s.name, k)] = index
         if k in s.classes:
             self.store.set_class(index, s.classes[k])
-        # the component's trace becomes the drawn ROI's, keyed by its uid
-        trace = self.traces.remove(("member", s.name, k)) or self._member_trace(s, k)
+        trace = self.traces.remove(("member", s.name, k)) or self._member_trace(
+            s, k
+        )  # becomes the drawn ROI's
         if trace is not None:
             trace.uid, trace.member = self.store.rois[index].uid, None
             self.traces.add(trace)
@@ -1361,7 +1185,6 @@ class ManualRoiWidget(
             self.store.block_events(False)
         self._resync()
         self.refresh_overlay()
-        self.refresh_overlay()
         self._autosave()
         self.status = f"{s.name}: promoted {promoted} / skipped {skipped}"
 
@@ -1381,7 +1204,7 @@ class ManualRoiWidget(
 
     @property
     def folder(self) -> Path | None:
-        """Where this dataset's ROI work is saved (``roi_folder``)."""
+        """The folder this dataset's ROI work is saved in (``roi_folder``)."""
         return None if self.fpath is None else roi_folder(self.fpath, self.root)
 
     def _save_target(self) -> Path:
@@ -1389,17 +1212,14 @@ class ManualRoiWidget(
         return labels_path(self.fpath, tag, self.root)
 
     def _restore(self):
-        """Adopt the rois zarr saved for this data, from the ROI folder, else
-        from beside the data, if any: its ROIs, its quick traces and the
-        list of runs to load (``_restore_runs``). One saved for data of
-        another shape (the same file read with other ``dims``) is left as
-        it is and this data saves under a name carrying its shape.
+        """Adopt the rois zarr saved for this data (the ROI folder, else beside the data): its ROIs, quick traces and run list.
+
+        One saved for data of another shape is left alone and this data saves
+        under a name carrying its shape.
         """
-        if self.fpath is None:
-            return
-        if self._adopted_store:
-            # the parked store is the in-session truth; the zarr can be
-            # behind it when an autosave failed
+        if (
+            self.fpath is None or self._adopted_store
+        ):  # the parked store is the in-session truth
             return
         found = None
         for target in dict.fromkeys(
@@ -1453,9 +1273,7 @@ class ManualRoiWidget(
         self.refresh_overlay()
 
     def _restore_runs(self, parked: dict | None):
-        """Adopt the previous widget's parked runs, else re-load every
-        surviving run the rois zarr lists.
-        """
+        """Adopt the previous widget's parked runs, else re-load every surviving run the rois zarr lists."""
         if parked is not None:
             manager = parked.get("manager")
             if manager is not None:
@@ -1470,9 +1288,7 @@ class ManualRoiWidget(
                 ]
                 self._registry_extra = list(parked.get("extra") or [])
                 return
-            # the parked sets and traces key uids of the previous data's
-            # store; fall through to this data's own list of runs
-        self._restoring = True
+        self._restoring = True  # parked sets of another store key its uids; this data's own runs load instead
         try:
             for entry in self._saved_runs:
                 path = Path(entry["path"])
@@ -1490,14 +1306,7 @@ class ManualRoiWidget(
             self._restoring = False
 
     def _load_array_results(self) -> None:
-        """Show what the pipeline that wrote the data on screen found: one
-        derived set per pixel unit of the array's ``results`` (a suite2p
-        volume's planes each land on their own z), keyed by the plane dir the
-        unit was read from. A line unit (a vnoiser run of the scan on screen)
-        becomes one trace-table row per domain carrying every kind the run
-        wrote; the lines' raw means are the recording's own rows. An array
-        with no results that sits in a run dir still shows that dir's ROIs.
-        """
+        """Load the array's own ``results``: one derived set per pixel unit (each on its z, keyed by plane dir), one trace row per domain of a line unit; an array in a run dir with no results shows that dir's ROIs."""
         from mbo_utilities.results import unit_for_source
 
         results = self.results
@@ -1509,7 +1318,7 @@ class ManualRoiWidget(
                 self.load_run(own)
             return
         file = Path(results.path or self.fpath or results.pipeline)
-        src = base_array(self.iw.data[0]) if getattr(self.iw, "data", None) else None
+        src = base_array(self.iw.data[0]) if self.iw.data else None
         shown = unit_for_source(results, str(getattr(src, "unit_key", "") or ""))
         algo = detection_algo(results.metadata) if results.metadata else ""
         for unit in results.units.values():
@@ -1531,8 +1340,7 @@ class ManualRoiWidget(
             )
             if any(s.path == path for s in self.derived):
                 continue
-            # the movie on screen IS this plane, whatever z the unit recorded
-            self._add_derived(
+            self._add_derived(  # a single-plane movie is this plane whatever z the unit recorded
                 unit,
                 path,
                 results.pipeline,
@@ -1574,9 +1382,8 @@ class ManualRoiWidget(
         return entries
 
     def _source_block(self) -> dict:
-        """What the rois zarr records about the recording it annotates."""
-        data = getattr(self.iw, "data", None)
-        arr = base_array(data[0]) if data else None
+        """The rois zarr's record of the recording it annotates."""
+        arr = base_array(self.iw.data[0]) if self.iw.data else None
         return {
             "path": str(self.fpath),
             "reader_kwargs": dict(getattr(arr, "reader_kwargs", None) or {}),
@@ -1584,11 +1391,8 @@ class ManualRoiWidget(
         }
 
     def _write_rois(self) -> Path:
-        """Write the store, the quick traces and the run list to the rois
-        zarr; raises ``OSError`` when the folder cannot be written.
-        """
-        data = getattr(self.iw, "data", None)
-        arr = base_array(data[0]) if data else None
+        """Write the store, the quick traces and the run list to the rois zarr; ``OSError`` when the folder cannot be written."""
+        arr = base_array(self.iw.data[0]) if self.iw.data else None
         target = self._save_target()
         RoiFile(target).save(
             self.store,
@@ -1611,9 +1415,7 @@ class ManualRoiWidget(
             self._save_error = f"autosave failed: {e}"
 
     def save(self):
-        """Write the drawn ROIs, the quick traces and the loaded runs to the
-        rois zarr in the ROI folder.
-        """
+        """Write the drawn ROIs, the quick traces and the loaded runs to the rois zarr in the ROI folder."""
         if self.fpath is None:
             self.status = "no data path to save for"
             return
@@ -1627,19 +1429,14 @@ class ManualRoiWidget(
         self.logger.info(f"saved {self.n_rois} ROIs to {target}")
 
     def set_autosave(self, on: bool):
-        """Turn autosave on or off, remembered for every dataset; turning it
-        on saves everything now.
-        """
+        """Turn autosave on or off, remembered for every dataset; on saves everything now."""
         self.autosave = bool(on)
         set_roi_autosave(self.autosave)
         if self.autosave:
             self.save()
 
     def set_folder(self, root):
-        """Save into ``root`` (one folder per dataset under it), or beside the
-        data when None; remembered for every dataset. Saves there now when
-        autosave is on.
-        """
+        """Save into ``root`` (one folder per dataset under it), or beside the data when None; remembered for every dataset."""
         self.root = Path(root) if root else None
         set_roi_folder(self.root or "")
         if self.autosave:
@@ -1649,29 +1446,21 @@ class ManualRoiWidget(
 
 
 def attach_roi_widget(parent: Any, focus: bool = False) -> ManualRoiWidget | None:
-    """Turn the ROI widget on for a ``PreviewDataWidget``; ROIs and runs from
-    an earlier toggle this session are adopted. Returns None (logged) when it
-    cannot be built.
-    """
-    widget = getattr(parent, "manual_roi", None)
+    """Turn the ROI widget on for a ``PreviewDataWidget``, adopting the ROIs and runs of an earlier toggle this session."""
+    widget = parent.manual_roi
     if widget is not None:
         widget.focus_tab = widget.focus_tab or focus
         return widget
     fpath = parent.fpath[0] if isinstance(parent.fpath, list) else parent.fpath
-    try:
-        widget = ManualRoiWidget(
-            parent.image_widget,
-            fpath,
-            label_names=DEFAULT_LABEL_NAMES,
-            store=getattr(parent, "_manual_roi_store", None),
-            runs=getattr(parent, "_manual_roi_runs", None),
-            strip=getattr(parent, "top_strip", None),
-            host=parent,
-        )
-    except Exception:
-        parent.logger.warning("manual ROI widget unavailable", exc_info=True)
-        parent.manual_roi = None
-        return None
+    widget = ManualRoiWidget(
+        parent.image_widget,
+        fpath,
+        label_names=DEFAULT_LABEL_NAMES,
+        store=getattr(parent, "_manual_roi_store", None),
+        runs=getattr(parent, "_manual_roi_runs", None),
+        strip=parent.top_strip,
+        host=parent,
+    )
     widget.focus_tab = focus
     parent.manual_roi = widget
     return widget
@@ -1679,7 +1468,7 @@ def attach_roi_widget(parent: Any, focus: bool = False) -> ManualRoiWidget | Non
 
 def detach_roi_widget(parent: Any) -> None:
     """Turn the ROI widget off, keeping its store and runs for the next toggle."""
-    widget = getattr(parent, "manual_roi", None)
+    widget = parent.manual_roi
     if widget is None:
         return
     parent._manual_roi_store = widget.store

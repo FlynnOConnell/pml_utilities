@@ -1,19 +1,17 @@
-"""
-File dialog handlers and data loading.
-
-This module contains file/folder dialog handling and data loading logic.
-"""
+"""The Studio's open dialogs, and loading what they return into the running viewer."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from imgui_bundle import imgui
+import numpy as np
 from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities.arrays import ScanImageArray
 from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
+from mbo_utilities.lazy_array import base_array
+from mbo_utilities.metadata.base import PROVENANCE_PATH_KEYS
 from mbo_utilities.preferences import add_recent_file, get_last_dir, set_last_dir
 from mbo_utilities.reader import imread
 
@@ -100,207 +98,136 @@ def _draw_open_prompts(parent: Any) -> None:
         load_new_data(parent, str(p))
 
 
-def _resolve_plane_dir(p: Path) -> Path | None:
-    """Return the plane directory for `p` if it looks like a suite2p output.
-
-    Accepts:
-      - `…/plane_dir/data.bin` or `…/plane_dir/data_raw.bin` → `plane_dir`
-      - `…/plane_dir/` itself (contains ops.npy / settings.npy / data.bin)
-      - `…/volume_root/` (contains one or more `plane*/` subdirs) →
-        first plane subdir (settings/db.npy are identical across planes
-        — they were passed into lsp.pipeline once)
-    """
+def _resolve_plane_dir(p: Path | None) -> Path | None:
+    """The suite2p plane dir ``p`` names: a ``data.bin``'s folder, the plane dir itself, or the first plane child of a volume root."""
+    if p is None:
+        return None
     if p.is_file() and p.name in ("data.bin", "data_raw.bin"):
         return p.parent
-    if p.is_dir():
-        if any(
-            (p / n).is_file()
-            for n in ("ops.npy", "settings.npy", "data.bin", "data_raw.bin")
-        ):
-            return p
-        try:
-            for child in sorted(p.iterdir()):
-                if child.is_dir() and (child / "ops.npy").is_file():
-                    return child
-        except (OSError, PermissionError):
-            return None
+    if not p.is_dir():
+        return None
+    if any(
+        (p / n).is_file()
+        for n in ("ops.npy", "settings.npy", "data.bin", "data_raw.bin")
+    ):
+        return p
+    for child in sorted(p.iterdir()):
+        if child.is_dir() and (child / "ops.npy").is_file():
+            return child
     return None
 
 
-def _try_hydrate_s2p_from_binary(parent: Any, path: str | Path) -> bool:
-    """If `path` points at suite2p output (data.bin file, plane dir, or
-    volumetric root containing plane*/ subdirs), hydrate parent.s2p /
-    parent.s2p_db from the plane folder's settings files AND point
-    parent._s2p_outdir at the suite2p output ROOT so re-running the
-    pipeline recreates the same layout in the same place.
+def _npy_dict(fp: Path) -> dict | None:
+    arr = np.load(str(fp), allow_pickle=True)
+    d = arr.item() if arr.ndim == 0 else arr
+    return d if isinstance(d, dict) else None
 
-    Source-of-truth preference:
-      1. settings.npy + db.npy (canonical upstream-shape pair, exactly
-         what was passed into lsp.pipeline)
-      2. ops.npy (flat fused dict — may have been mutated by reactive
-         fs/dz rescaling, includes detection outputs)
 
-    No-op when the path doesn't resolve to a plane dir or none of the
-    sibling settings files exist. Returns True iff settings were applied.
+def _stale_recorded_path(records: list[dict]) -> str | None:
+    """The first provenance path in ``records`` that does not exist on this machine."""
+    for record in records:
+        for key in PROVENANCE_PATH_KEYS:
+            value = record.get(key)
+            entries = value if isinstance(value, (list, tuple)) else [value]
+            for entry in entries:
+                s = str(entry) if isinstance(entry, (str, Path)) else ""
+                if ("/" in s or "\\" in s) and not Path(s).exists():
+                    return s
+    return None
+
+
+def _try_hydrate_s2p_from_binary(parent: Any, path: str | Path | None) -> bool:
+    """Fill ``parent.s2p`` / ``parent.s2p_db`` from a suite2p plane dir's ``settings.npy`` + ``db.npy`` (else ``ops.npy``) and point ``parent._s2p_outdir`` at its run root, so a re-run lands beside it.
+
+    True when any setting was applied. Nothing happens when ``path`` is not
+    suite2p output, has no settings files, or suite2p is not installed.
     """
-    plane_dir = _resolve_plane_dir(Path(path))
+    from mbo_utilities.gui.widgets.pipelines._s2p_schema import (
+        from_flat,
+        from_structured,
+        warm_up_suite2p_schema,
+    )
+
+    plane_dir = _resolve_plane_dir(None if path is None else Path(path))
     if plane_dir is None:
         return False
-    settings_file = plane_dir / "settings.npy"
-    db_file = plane_dir / "db.npy"
-    ops_file = plane_dir / "ops.npy"
+    s2p, s2p_db, s2p_extras = parent.s2p, parent.s2p_db, parent.s2p_extras
+    if s2p is None or s2p_db is None:
+        parent.logger.info("suite2p hydrate: suite2p not installed, skipping")
+        return False
 
-    import numpy as np  # local — keep _dialogs.py import surface tight
-
-    def _load_npy_dict(fp: Path) -> dict | None:
-        try:
-            arr = np.load(str(fp), allow_pickle=True)
-            d = arr.item() if hasattr(arr, "item") and arr.ndim == 0 else arr
-            return d if isinstance(d, dict) else None
-        except Exception as e:
-            parent.logger.warning(f"suite2p hydrate: failed to read {fp}: {e}")
-            return None
+    # `is_default` answers True while the schema is unloaded, so nothing would show as modified
+    warm_up_suite2p_schema()
 
     loaded: dict = {}
     sources: list[str] = []
-    try:
-        from mbo_utilities.gui.widgets.pipelines._s2p_schema import (
-            from_flat as _from_flat,
-        )
-        from mbo_utilities.gui.widgets.pipelines._s2p_schema import (
-            from_structured as _from_structured,
-        )
-        from mbo_utilities.gui.widgets.pipelines._s2p_schema import (
-            warm_up_suite2p_schema as _warm_up_schema,
-        )
-    except Exception as e:
-        parent.logger.warning(f"suite2p hydrate: schema import failed: {e}")
-        return False
-    # `is_default` answers True while the schema is unloaded, so nothing would
-    # show as modified until some later import
-    try:
-        _warm_up_schema()
-    except Exception as e:
-        parent.logger.warning(f"suite2p hydrate: schema warm-up failed: {e}")
-
-    raw_db: dict | None = None
-    raw_ops: dict | None = None
-    if settings_file.is_file():
-        d = _load_npy_dict(settings_file)
-        if d:
-            loaded.update(_from_structured(d))
-            sources.append("settings.npy")
-    if db_file.is_file():
-        d = _load_npy_dict(db_file)
-        if d:
-            raw_db = d
-            # db.npy is flat (paths/nplanes/keep_movie_raw at top level),
-            # so route via from_flat — it covers keep_movie_raw and any
-            # other db fields with entries in _FLAT_TO_MBO.
-            loaded.update(_from_flat(d))
-            sources.append("db.npy")
-    # ops.npy alone carries lsp's dff knobs; setdefault, because settings.npy is
-    # canonical for everything the two share
-    if ops_file.is_file():
-        d = _load_npy_dict(ops_file)
-        if d:
-            raw_ops = d
-            ops_view = _from_flat(d)
-            new_keys = []
-            for k, v in ops_view.items():
-                if k not in loaded:
-                    loaded[k] = v
-                    new_keys.append(k)
-            if new_keys:
-                if "ops.npy" not in sources:
-                    sources.append("ops.npy")
-                parent.logger.debug(
-                    f"suite2p hydrate: ops.npy contributed {len(new_keys)} fields "
-                    f"not in settings.npy/db.npy: {sorted(new_keys)}"
-                )
-
+    records: list[dict] = []
+    settings = (
+        _npy_dict(plane_dir / "settings.npy")
+        if (plane_dir / "settings.npy").is_file()
+        else None
+    )
+    if settings:
+        loaded.update(from_structured(settings))
+        sources.append("settings.npy")
+    db = _npy_dict(plane_dir / "db.npy") if (plane_dir / "db.npy").is_file() else None
+    if db:
+        records.append(db)
+        loaded.update(from_flat(db))
+        sources.append("db.npy")
+    ops = (
+        _npy_dict(plane_dir / "ops.npy") if (plane_dir / "ops.npy").is_file() else None
+    )
+    if ops:
+        records.append(ops)
+        # ops.npy alone carries lsp's dff knobs; settings.npy is canonical for everything they share
+        new_keys = [k for k in from_flat(ops) if k not in loaded]
+        loaded.update({k: from_flat(ops)[k] for k in new_keys})
+        if new_keys:
+            sources.append("ops.npy")
+            parent.logger.debug(
+                f"suite2p hydrate: ops.npy contributed {len(new_keys)} fields "
+                f"not in settings.npy/db.npy: {sorted(new_keys)}"
+            )
     if not loaded:
         parent.logger.info(
-            f"suite2p hydrate: no settings/db/ops sibling files at {plane_dir}; "
+            f"suite2p hydrate: no settings/db/ops files at {plane_dir}; "
             "leaving pipeline settings untouched."
         )
         return False
 
-    # The Skip / Run / Force gates say what one past run did, not what the
-    # user wants next. A registration pass writes roidetect=0 into the plane
-    # dir's ops.npy (register() runs suite2p with detection off), so
-    # hydrating that key turned Detection to Skip for every later run and
-    # suite2p quietly regenerated figures instead of finding ROIs
-    # ("Suite2p disabled by user toggles"). Restore parameters, not gates.
-    for _gate in ("do_detection", "do_registration"):
-        if _gate in loaded:
-            loaded.pop(_gate)
-            parent.logger.debug(
-                f"suite2p hydrate: ignoring {_gate} from the run's records; "
-                "the Skip/Run/Force gates stay where the user left them"
+    # NOTE: a registration-only pass writes roidetect=0; restoring it turned Detection to Skip for
+    # every later run. the Skip/Run/Force gates stay where the user left them.
+    for gate in ("do_detection", "do_registration"):
+        loaded.pop(gate, None)
+    # cellpose_model doubles as a bare model name ('cpsam'), so only a value with a separator is a path
+    for key in ("classifier_path", "cellpose_model"):
+        value = loaded.get(key)
+        if (
+            isinstance(value, str)
+            and ("/" in value or "\\" in value)
+            and not Path(value).exists()
+        ):
+            loaded.pop(key)
+            parent.logger.info(
+                f"suite2p hydrate: dropping {key}={value!r} (path does not exist on this machine)"
             )
 
-    # dead custom file paths recorded on another machine fail deep inside
-    # suite2p later; drop them so the run falls back to defaults.
-    # cellpose_model doubles as a bare model NAME ('cpsam'), so only
-    # separator-containing values are treated as paths and validated.
-    for _pf in ("classifier_path", "cellpose_model"):
-        try:
-            v = loaded.get(_pf)
-            if (
-                isinstance(v, str)
-                and v
-                and ("/" in v or "\\" in v)
-                and not Path(v).exists()
-            ):
-                loaded.pop(_pf)
-                parent.logger.info(
-                    f"suite2p hydrate: dropping {_pf}={v!r} "
-                    "(path does not exist on this machine)"
-                )
-        except Exception:
-            pass
-
-    # access via lazy properties so the dataclasses get instantiated
-    # if they haven't been touched yet.
-    s2p = getattr(parent, "s2p", None)
-    s2p_db = getattr(parent, "s2p_db", None)
-    s2p_extras = getattr(parent, "s2p_extras", None)
-    if s2p is None or s2p_db is None:
-        parent.logger.info(
-            "suite2p hydrate: Suite2pSettings/Suite2pDB unavailable "
-            "(suite2p not installed?), skipping."
-        )
-        return False
-
-    n_settings = 0
-    n_db = 0
-    n_extras = 0
+    n_applied = 0
     skipped: list[str] = []
+    targets = [t for t in (s2p, s2p_db, s2p_extras) if t is not None]
     for field, value in loaded.items():
-        target = None
-        if hasattr(s2p, field):
-            target = s2p
-        elif hasattr(s2p_db, field):
-            target = s2p_db
-        elif s2p_extras is not None and hasattr(s2p_extras, field):
-            target = s2p_extras
-        else:
+        target = next((t for t in targets if hasattr(t, field)), None)
+        if target is None:
             skipped.append(field)
             continue
-        # a leaked ndarray would crash bool()/int()/float(); best-effort, a failure
-        # leaves the well-typed default
+        if isinstance(value, np.ndarray) and value.size > 1:
+            parent.logger.debug(
+                f"suite2p hydrate: skipping {field}: got ndarray size={value.size}, expected scalar"
+            )
+            continue
         cur = getattr(target, field)
         if value is not None and cur is not None:
-            # defensive: skip multi-element arrays — they shouldn't
-            # reach a scalar field, but if they do, leaving the
-            # default is safer than raising.
-            if type(value).__name__ == "ndarray" and getattr(value, "size", 1) > 1:
-                parent.logger.debug(
-                    f"suite2p hydrate: skipping {field}: got ndarray "
-                    f"size={value.size}, expected scalar"
-                )
-                continue
             try:
                 if isinstance(cur, bool):
                     value = bool(value)
@@ -310,67 +237,24 @@ def _try_hydrate_s2p_from_binary(parent: Any, path: str | Path) -> bool:
                     value = float(value)
                 elif isinstance(cur, str):
                     value = str(value)
-            except Exception as e:
+            except (TypeError, ValueError) as e:
                 parent.logger.debug(
                     f"suite2p hydrate: type-coerce skipped for {field}: {e}"
                 )
                 continue
-        try:
-            setattr(target, field, value)
-            if target is s2p:
-                n_settings += 1
-            elif target is s2p_db:
-                n_db += 1
-            else:
-                n_extras += 1
-        except Exception as e:
-            parent.logger.debug(
-                f"suite2p hydrate: could not set {field}={value!r}: {e}"
-            )
+        setattr(target, field, value)
+        n_applied += 1
 
-    # plane_dir is e.g. .../res/zplane01_tp00001-01574 — the ROOT is its
-    # parent (.../res). re-running with output=ROOT recreates the same
-    # plane subdir in place.
+    # plane_dir is <root>/zplane01_tp00001-01574; re-running with output=<root> recreates it in place
     parent._s2p_outdir = str(plane_dir.parent)
-
-    # one-line heads-up when the run dir was copied from another machine:
-    # its recorded paths are dead here, and re-runs target _s2p_outdir.
-    try:
-        from mbo_utilities.metadata.base import PROVENANCE_PATH_KEYS
-
-        stale_example = None
-        for src in (raw_db, raw_ops):
-            if not isinstance(src, dict):
-                continue
-            for key in PROVENANCE_PATH_KEYS:
-                v = src.get(key)
-                entries = v if isinstance(v, (list, tuple)) else [v]
-                for entry in entries:
-                    s = str(entry) if isinstance(entry, (str, Path)) else ""
-                    if not s or ("/" not in s and "\\" not in s):
-                        continue
-                    try:
-                        dead = not Path(s).exists()
-                    except OSError:
-                        dead = True
-                    if dead:
-                        stale_example = s
-                        break
-                if stale_example:
-                    break
-            if stale_example:
-                break
-        if stale_example:
-            parent.logger.info(
-                f"suite2p hydrate: run was recorded on another machine "
-                f"({stale_example}); outputs rebased to {parent._s2p_outdir}"
-            )
-    except Exception:
-        pass
-
+    stale = _stale_recorded_path(records)
+    if stale:
+        parent.logger.info(
+            f"suite2p hydrate: run was recorded on another machine ({stale}); "
+            f"outputs rebased to {parent._s2p_outdir}"
+        )
     parent.logger.debug(
-        f"suite2p hydrate: loaded {n_settings} settings + {n_db} db + "
-        f"{n_extras} mbo-extras fields from {' + '.join(sources)}; "
+        f"suite2p hydrate: loaded {n_applied} fields from {' + '.join(sources)}; "
         f"output dir set to {parent._s2p_outdir}"
         + (f" (skipped {len(skipped)} unmapped keys)" if skipped else "")
     )
@@ -382,14 +266,12 @@ def check_file_dialogs(parent: Any):
     _draw_open_prompts(parent)
     file_prompt, folder_prompt = open_prompts(parent)
 
-    # Check file dialog
     if parent._file_dialog is not None and parent._file_dialog.ready():
         result = parent._file_dialog.result()
         parent.logger.info(f"File dialog result: {result}")
-        if result and len(result) > 0:
+        if result:
             file_prompt.open = False
             file_prompt.path = result[0]
-            # Save to recent files and context-specific preferences
             add_recent_file(result[0], file_type="file")
             set_last_dir("open_file", result[0])
             load_new_data(parent, result[0])
@@ -397,13 +279,11 @@ def check_file_dialogs(parent: Any):
             parent.logger.info("File dialog cancelled or empty result")
         parent._file_dialog = None
 
-    # Check folder dialog
     if parent._folder_dialog is not None and parent._folder_dialog.ready():
         result = parent._folder_dialog.result()
         if result:
             folder_prompt.open = False
             folder_prompt.path = result
-            # Save to recent files and context-specific preferences
             add_recent_file(result, file_type="folder")
             set_last_dir("open_folder", result)
             load_new_data(parent, result)
@@ -411,295 +291,131 @@ def check_file_dialogs(parent: Any):
 
 
 def _reset_per_data_state(parent: Any) -> None:
-    """Clear per-dataset display/widget state that must not carry across loads.
+    """Put every per-dataset display setting back to its launch default.
 
-    Widget controls in the side panel bind to attributes on the parent
-    (e.g. `parent.gaussian_sigma`), not on the widget instance. The
-    widget objects themselves are reconstructed by `_refresh_widgets()`
-    on every load, but the bound parent attributes persist unless
-    explicitly cleared here. Without this, opening a new file leaves
-    the previous file's gaussian sigma, projection mode, window size,
-    frame averaging, auto-contrast toggle, and mean-subtraction checkbox in
-    place.
-
-    Mirror the defaults in `PreviewDataWidget._init_state` so a reload
-    starts in the same state as initial launch.
-
-    Lives as a standalone helper so the reset contract can be
-    unit-tested without spinning up the full GUI module-load chain.
+    The side panel's controls bind to attributes on the parent, which
+    ``_refresh_widgets`` does not rebuild; ``PreviewDataWidget._init_state``
+    uses the same defaults.
     """
-    # spatial functions
     parent._mean_subtraction = False
     parent._invert_deflection = False
     parent._mean_images = {}
     parent._gaussian_sigma = 0.0
-    # window functions
     parent._proj = "mean"
     parent._window_size = 1
-    # frame averaging: off, and the un-averaged array it would restore is
-    # the old file's, so it goes too
     parent._frame_average = 1
-    parent._frame_average_source = None
-    # the per-run binning options follow the viewer; a new file starts raw
+    parent._frame_average_source = None  # the un-averaged array is the old file's
     parent._saveas_frame_average = 1
     parent._s2p_frame_average = 1
     parent._masknmf_frame_average = 1
-    # contrast
     parent._auto_contrast_on_z = False
-    # save-as dialog selections
     parent._saveas_selected_roi = set()
     parent._saveas_rois = False
 
 
 def swap_viewer_array(parent: Any, arr, title: str | None = None) -> None:
-    """Show ``arr`` in the running viewer in place of the current array.
+    """Show ``arr`` (a sibling of the open recording, say another MESc unit) in place of the current array, keeping the viewer.
 
-    For a sibling of what is open (another MESc unit): the file dialog path in `load_new_data` rebuilds the viewer,
-    this only re-derives the per-dataset display state. Stale closures are
-    dropped before the swap (the spatial func captured the previous array's
-    mean image and would be fed a differently shaped frame), then the
-    widget re-derives its dimensions from the new array.
+    The spatial func captured the previous array's mean image, so it is
+    rebuilt before the swap; the slider labels are re-stamped with the data
+    since a swap can change both their count and meaning.
     """
-    from mbo_utilities.gui.run_gui import _ScrubTimingProxy, _SqueezeSingletonDims
+    from mbo_utilities.arrays.features import get_slider_dims
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
+    from mbo_utilities.gui.viewers import TimeSeriesViewer
 
     iw = parent.image_widget
-
     _reset_per_data_state(parent)
     parent._rebuild_spatial_func()
-    for proc in getattr(iw, "_image_processors", []) or []:
-        proc.window_funcs = None
-        proc.window_sizes = None
-        proc.window_order = None
 
-    display = arr
-    shape = getattr(arr, "shape", ())
-    if len(shape) == 5 and any(shape[i] == 1 for i in range(3)):
-        display = _SqueezeSingletonDims(arr)
-    display = _ScrubTimingProxy(display)
+    display = _squeeze_for_viewer(arr)
     iw.data[0] = display
-    # slider labels are a plain attribute on the widget; a swap can change
-    # both the count and the meaning (Z-plane vs ROI, pages on T vs Z), so
-    # they have to be re-stamped alongside the data, as on open
-    from mbo_utilities.arrays.features import get_slider_dims
-
     custom_labels = getattr(arr, "slider_dim_labels", None)
     iw._slider_dim_names = (
         tuple(custom_labels) if custom_labels else get_slider_dims(arr)
     ) or None
-    if getattr(iw, "n_sliders", 0) > 0:
+    if iw.n_sliders > 0:
         iw.indices = [0] * iw.n_sliders
 
     parent.shape = display.shape
-    _, nc, nz, _, _ = arr.shape
-    parent.nc, parent.nz = nc, nz
+    _, parent.nc, parent.nz = arr.shape[:3]
     parent._custom_metadata = {}
     parent._update_window_funcs()
     parent.set_context_info()
-
     if title:
-        try:
-            iw.figure[0, 0].title = title
-        except Exception:
-            parent.logger.debug("subplot title update skipped", exc_info=True)
-
-    # summary images / projections cache per-dataset statistics; the new
-    # array's are unrelated to the old one's.
-    try:
-        from mbo_utilities.gui.viewers import TimeSeriesViewer
-
-        if isinstance(getattr(parent, "_viewer", None), TimeSeriesViewer):
-            parent.refresh_zstats()
-    except Exception:
-        parent.logger.debug("zstats refresh skipped", exc_info=True)
-
-    # widget support can differ between arrays (a snapshot has no time axis,
-    # a z-stack no scan-phase). Rebinds parent._widgets to a new list; the
-    # frame currently iterating the old one finishes safely.
+        iw.figure[0, 0].title = title
+    if isinstance(parent._viewer, TimeSeriesViewer):
+        parent.refresh_zstats()
     parent._refresh_widgets()
 
 
 def load_new_data(parent: Any, path: str):
-    """
-    Load new data from the specified path using iw-array API.
-
-    Uses iw.set_data() to swap data arrays, which handles shape changes.
-    """
+    """Open ``path`` in the running viewer: new array, viewer class, widgets and ROI tool; the status line reports the outcome."""
     from mbo_utilities.arrays import TiffArray
-    from mbo_utilities.gui.run_gui import (
-        _ScrubTimingProxy,
-        _SqueezeSingletonDims,
-    )
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer, _wrap_for_viewer
+    from mbo_utilities.gui.viewers import TimeSeriesViewer, get_viewer_class
+    from mbo_utilities.gui.widgets.pipelines.isoview import maybe_spawn_raw_projections
 
     path_obj = Path(path)
     if not path_obj.exists():
         parent.logger.error(f"Path does not exist: {path}")
-        parent._load_status_msg = "Error: Path does not exist"
-        parent._load_status_color = imgui.ImVec4(1.0, 0.3, 0.3, 1.0)
         return
 
     try:
         parent.logger.info(f"Loading data from: {path}")
-        parent._load_status_msg = "Loading..."
-        parent._load_status_color = imgui.ImVec4(1.0, 0.8, 0.2, 1.0)
-
-        parent.logger.debug(f"Calling imread on: {path}")
-        raw_data = imread(path)
-        parent.logger.debug(
-            f"imread returned: type={type(raw_data).__name__}, shape={getattr(raw_data, 'shape', 'N/A')}"
-        )
-
-        # Apply per-plane axial shifts on read when present, matching the
-        # initial-launch path (_launch_standard_viewer). Without this, opening
-        # or reloading a register_z output through the file dialog showed the
-        # raw planes instead of the aligned view.
-        try:
-            from mbo_utilities.arrays._registration import (
-                validate_axial_shifts,
-                with_axial_shifts,
-            )
-
-            _md = getattr(raw_data, "metadata", None)
-            _nz = int(raw_data._shape5d()[2]) if hasattr(raw_data, "_shape5d") else None
-            if validate_axial_shifts(_md, _nz):
-                raw_data = with_axial_shifts(raw_data)
-                parent.logger.info(f"axial alignment applied ({_nz} planes)")
-        except Exception as e:
-            parent.logger.debug(f"axial alignment skipped: {e}")
-
-        # Apply the same singleton-dim squeeze that _create_image_widget
-        # uses on initial launch, so reload via file dialog produces the
-        # same natural-rank view. Without this, a 5D Suite2pArray (T,1,Z,Y,X)
-        # reload would expose Z at index 2 here, but at index 1 on initial
-        # launch — different code paths giving different shapes for the
-        # same file. Squeeze keeps them in lockstep.
-        if (
-            hasattr(raw_data, "shape")
-            and len(raw_data.shape) == 5
-            and any(raw_data.shape[i] == 1 for i in range(3))
-        ):
-            new_data = _SqueezeSingletonDims(raw_data)
-        else:
-            new_data = raw_data
-        new_data = _ScrubTimingProxy(new_data)
-
+        raw_data = _wrap_for_viewer(imread(path), parent.logger)
+        new_data = _squeeze_for_viewer(raw_data)
         _reset_per_data_state(parent)
 
-        # The manual ROI widget is bound to the old data's shape, store and
-        # graphics; tear it down while the old scene is still intact and
-        # drop the parked state (it belongs to the old file, and a same-shape
-        # new file would silently adopt it).
-        roi_was_on = getattr(parent, "manual_roi", None) is not None
+        # the ROI widget is bound to the old data's shape and graphics, so it goes before the swap;
+        # its parked state goes too, or a same-shape file would adopt it
+        roi_was_on = parent.manual_roi is not None
         if roi_was_on:
             from mbo_utilities.gui.manual_roi import detach_roi_widget
 
-            try:
-                detach_roi_widget(parent)
-            except Exception:
-                parent.logger.debug("manual ROI teardown failed", exc_info=True)
-                parent.manual_roi = None
+            detach_roi_widget(parent)
         parent._manual_roi_store = None
         parent._manual_roi_runs = None
 
-        # the swap clears window and spatial funcs and starts every slider at 0
-        parent.image_widget.data[0] = new_data
-        if hasattr(parent, "_rebuild_spatial_func"):
-            parent._rebuild_spatial_func()
-
-        # Update internal state
+        parent.image_widget.data[0] = (
+            new_data  # clears window and spatial funcs, every slider at 0
+        )
+        parent._rebuild_spatial_func()
         parent.fpath = path
         parent.shape = new_data.shape
-
-        # Check if this is MBO data (ScanImage or volumetric TIFF).
-        # Peel _SqueezeSingletonDims so the wrapper doesn't hide the
-        # underlying class from isinstance.
-        underlying = getattr(new_data, "_arr", new_data)
-        parent.is_mbo_scan = isinstance(underlying, ScanImageArray) or isinstance(
-            underlying, TiffArray
+        parent.is_mbo_scan = isinstance(
+            base_array(raw_data), (ScanImageArray, TiffArray)
         )
-
-        # If the loaded file is a suite2p binary, hydrate Suite2pSettings
-        # / Suite2pDB from the sibling ops.npy and point _s2p_outdir at
-        # the output ROOT so the user can re-run the exact same config
-        # (with whatever tweaks) and land the new run alongside the old
-        # one. Otherwise fall back to the generic "suggest output dir".
-        first_path = path[0] if isinstance(path, (list, tuple)) else path
-        if not _try_hydrate_s2p_from_binary(parent, first_path):
-            if not parent._s2p_outdir:
-                parent._s2p_outdir = str(Path(first_path).parent / "suite2p")
-
-        # Update nz/nc for z-plane and channel counts
-        if len(parent.shape) == 5:
-            # TCZYX: shape[1]=C, shape[2]=Z
-            parent.nc = parent.shape[1]
-            parent.nz = parent.shape[2]
-        elif len(parent.shape) == 4:
-            parent.nz = parent.shape[1]
-            parent.nc = 1
-        else:
-            parent.nz = 1
-            parent.nc = 1
-
-        parent._load_status_msg = f"Loaded: {path_obj.name}"
-        parent._load_status_color = imgui.ImVec4(0.3, 1.0, 0.3, 1.0)
-        parent.logger.debug(f"Loaded successfully, shape: {new_data.shape}")
+        if not _try_hydrate_s2p_from_binary(parent, path) and not parent._s2p_outdir:
+            parent._s2p_outdir = str(path_obj.parent / "suite2p")
+        _, parent.nc, parent.nz = raw_data._shape5d()[:3]
         parent.set_context_info()
 
-        # update image widget subplot title with new filename
-        try:
-            base_name = path_obj.stem
-            # for suite2p arrays (data.bin), use parent folder name
-            if base_name in ("data", "data_raw"):
-                base_name = path_obj.parent.name
-            if len(base_name) > 24:
-                base_name = base_name[:21] + "..."
-            parent.image_widget.figure[0, 0].title = base_name
-        except Exception:
-            pass  # ignore if subplot title update fails
+        base_name = (
+            path_obj.parent.name
+            if path_obj.stem in ("data", "data_raw")
+            else path_obj.stem
+        )
+        if len(base_name) > 24:
+            base_name = base_name[:21] + "..."
+        parent.image_widget.figure[0, 0].title = base_name
 
-        # refresh widgets based on new data capabilities
         parent._refresh_widgets()
-
-        # clear stale metadata overrides from previous file
         parent._custom_metadata = {}
-
-        # Reinitialize viewer based on new data type (new architecture)
-        from mbo_utilities.gui.viewers import TimeSeriesViewer, get_viewer_class
-
-        if hasattr(parent, "_viewer") and parent._viewer:
+        if parent._viewer:
             parent._viewer.cleanup()
-        viewer_cls = get_viewer_class(new_data)
-        parent._viewer = viewer_cls(parent.image_widget, parent.fpath, parent=parent)
+        parent._viewer = get_viewer_class(new_data)(
+            parent.image_widget, parent.fpath, parent=parent
+        )
         parent._viewer.on_data_loaded()
         parent.logger.debug(f"Viewer switched to: {parent._viewer.name}")
-
-        # rebuild the ROI widget against the new data (fresh store, or the
-        # new file's saved rois zarr)
         if roi_was_on:
             from mbo_utilities.gui.manual_roi import attach_roi_widget
 
             attach_roi_widget(parent)
-
-        # seed the playback rate from the new dataset's frame rate
-        # (never overrides an fps the user typed).
-        try:
-            parent._seed_playback_fps()
-        except Exception:
-            parent.logger.debug("playback fps seed skipped", exc_info=True)
-
-        try:
-            from mbo_utilities.gui.widgets.pipelines.isoview import (
-                maybe_spawn_raw_projections,
-            )
-
-            maybe_spawn_raw_projections(parent)
-        except Exception:
-            parent.logger.debug("raw projection prefetch skipped", exc_info=True)
-
-        # Automatically recompute z-stats for new data (only for time series)
+        parent._seed_playback_fps()
+        maybe_spawn_raw_projections(parent)
         if isinstance(parent._viewer, TimeSeriesViewer):
             parent.refresh_zstats()
-
     except Exception as e:
         parent.logger.exception(f"Error loading data: {e}")
-        parent._load_status_msg = f"Error: {e!s}"
-        parent._load_status_color = imgui.ImVec4(1.0, 0.3, 0.3, 1.0)

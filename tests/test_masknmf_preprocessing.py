@@ -67,6 +67,11 @@ def host(tmp_path):
         invert_deflection=True,
         nz=1,
         nc=1,
+        frame_average=1,
+        _masknmf_frame_average=1,
+        _custom_metadata={},
+        _bold_font=None,
+        _frame_average_source=None,
     )
 
 

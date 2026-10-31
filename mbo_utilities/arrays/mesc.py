@@ -113,23 +113,14 @@ MODALITY_NAMES: dict[int, str] = {
     11: "multicube",
 }
 
-# Modalities whose ROIs are unpacked by cropping boxes off the raw page.
-_BOX_MODALITIES = frozenset({9, 10})
-# Modalities whose ROIs are tiled contiguously along X of the raw page.
-_TILED_MODALITIES = frozenset({8})
-# Modalities whose temporal frames are packed into the Y axis of a 1-frame page.
-_PACKED_MODALITIES = frozenset({6, 7})
-# Modalities where axis 0 interleaves z-slices within each timepoint
-# (frame i = timepoint i//Slices, slice i%Slices).
-_VOLUME_MODALITIES = frozenset({11})
-# Layouts whose Z axis holds AOD ROIs scanned within one frame period: the
-# lines of a line scan, the patches of a chessboard, the boxes of a ribbon
-# scan. The vnoiser pipeline and the curation widget take any of them.
+_BOX_MODALITIES = frozenset({9, 10})  # ROIs cropped as boxes off the raw page
+_TILED_MODALITIES = frozenset({8})  # ROIs tiled contiguously along X of the raw page
+_PACKED_MODALITIES = frozenset(
+    {6, 7}
+)  # temporal frames packed into Y of a one-frame page
+_VOLUME_MODALITIES = frozenset({11})  # axis 0 interleaves slices within each timepoint
 ROI_LAYOUTS = frozenset({"packed", "tiled", "boxes"})
-# chessboard and ribbon scans: AOD patches, one of which can be the whole frame
 PATCH_MODALITIES = _TILED_MODALITIES | _BOX_MODALITIES
-# shortest single-frame-ROI recording (a one-patch chessboard, a raster) the
-# voltage pipeline takes; a snapshot or a 4-frame calibration is not a trace
 MIN_TRACE_FRAMES = 100
 
 
@@ -151,15 +142,9 @@ def is_trace_unit(unit: dict) -> bool:
     )
 
 
-# Y is flipped on read for these, matching lab4.convert. The flip corrects
-# MEScan's save orientation; whether it also belongs on linescan/multiline is
-# unsettled upstream (see `flip_y` in the class docstring), so the default
-# reproduces the reference converter rather than guessing. Multicube (11) is
-# left out: lab4.convert never handled it, so there is no reference behaviour
-# to reproduce.
+# NOTE: lab4.convert flips Y for these, undoing MEScan's save orientation; linescan and multiline are unsettled upstream, multicube was never handled
 _FLIP_Y_BY_MODALITY: dict[int, bool] = {8: True, 9: True, 10: True}
 
-# Timing curves worth keeping; the rest are scanner internals.
 CURVE_NAMES = frozenset(
     {
         "PatternSeq_AO1",
@@ -172,10 +157,6 @@ CURVE_NAMES = frozenset(
     }
 )
 
-# Real-time motion correction curves MEScan writes when RTMC ran: the
-# correction applied per axis, "total" (cumulative) or "intercycle" (per
-# cycle), and one per layer for a z-stack. A unit that armed RTMC without
-# it ever moving carries the curve with a single sample.
 _RTMC_NAME = re.compile(
     r"^RTMC ([XYZ]) correction \((total|intercycle)\)(?: layer (\d+))?$"
 )
@@ -183,18 +164,15 @@ _RTMC_NAME = re.compile(
 SYNC_KEY_DEFAULT = "DiI2"
 SYNC_EDGE_DEFAULT = "falling"
 
-# dichroic light-path codes in the DichroSw_AO1 curve
 _GREEN_LP = 1
 _RED_LP = 2
 
 _MEAN_BLOCK_BYTES = 64 * 1024 * 1024
 
-# lab4.convert stamps acquisition times in US Eastern standard offset. Kept
-# explicit (and echoed in metadata as `start_time_tz`) rather than implied.
-_ACQ_TZ = timezone(timedelta(hours=-5))
+_ACQ_TZ = timezone(
+    timedelta(hours=-5)
+)  # NOTE: lab4.convert stamps acquisition times at US Eastern standard offset; echoed as start_time_tz
 
-# attrs holding large embedded JSON; parsed products are exposed instead so
-# the metadata panel doesn't have to render a multi-megabyte blob.
 _JSON_ATTRS = (
     "MultiROIProtocolJSON",
     "CoordinateMapJSON",
@@ -320,10 +298,8 @@ def _multicube_geometry(unit) -> dict:
         ("xySize", "xy_size_um"),
         ("zSize", "z_size_um"),
     ):
-        try:
+        if src in pattern:
             out[dst] = float(pattern[src])
-        except (KeyError, TypeError, ValueError):
-            pass
     doc = _json_attr(unit, "CoordinateMapJSON")
     if doc:
         try:
@@ -384,6 +360,11 @@ def _guideline_center(guideline, drift_length=None) -> list[float]:
     return ((start + start + direction * drift_length) / 2).tolist()
 
 
+def _as_points(points) -> list[list]:
+    pts = np.asarray(points).tolist()
+    return pts if pts and isinstance(pts[0], list) else [pts]
+
+
 def _spatial_info(unit, modality: int) -> dict:
     """ROI centroids, rotations and pixel size for one unit.
 
@@ -396,12 +377,8 @@ def _spatial_info(unit, modality: int) -> dict:
     if pattern is None:
         return blank
 
-    def _as_points(points):
-        pts = np.asarray(points).tolist()
-        return pts if pts and isinstance(pts[0], list) else [pts]
-
     try:
-        if modality in (6, 9):  # guideline-defined: linescan, ribbon transverse
+        if modality in (6, 9):
             centroids = _as_points(np.mean(pattern["guideLine"], axis=2).tolist())
             key = "pixelSize" if modality == 6 else "pixelSizeL"
             return {
@@ -411,7 +388,7 @@ def _spatial_info(unit, modality: int) -> dict:
                 ],
                 "pixel_size_um": _extend_to_rois(pattern[key], len(centroids))[0],
             }
-        if modality == 10:  # ribbon longitudinal: guidelines shortened by drift
+        if modality == 10:
             drift = pattern.get("driftLength")
             centroids = [_guideline_center(g, drift) for g in pattern["guideLine"]]
             return {
@@ -423,7 +400,7 @@ def _spatial_info(unit, modality: int) -> dict:
                     0
                 ],
             }
-        if modality == 7:  # multiline
+        if modality == 7:
             centroids = _as_points(np.asarray(pattern["centerPoints"]).T.tolist())
             return {
                 "centroids": centroids,
@@ -432,12 +409,13 @@ def _spatial_info(unit, modality: int) -> dict:
                     0
                 ],
             }
-        if modality in (8, 11):  # chessboard, multicube
+        if modality in (8, 11):
             centroids = _as_points(np.asarray(pattern["centerPoints"]).T.tolist())
             n = len(centroids)
-            # 4.6.0 wraps the quaternion as {"e": [...]}, 4.6.2 stores the list
             rotation = pattern["rotation"]
-            rotation = rotation["e"] if isinstance(rotation, dict) else rotation
+            rotation = (
+                rotation["e"] if isinstance(rotation, dict) else rotation
+            )  # 4.6.0 wraps the quaternion as {"e": [...]}, 4.6.2 stores the list
             return {
                 "centroids": centroids,
                 "rotations": _extend_to_rois(rotation, n),
@@ -482,7 +460,7 @@ def _parse_curves(unit) -> dict[str, dict]:
                 )
                 values = values * scale + offset
             curves[name] = {
-                "timestamps": ts * delta,  # ms
+                "timestamps": ts * delta,
                 "values": values,
             }
         except (KeyError, TypeError, ValueError):
@@ -546,9 +524,9 @@ def _find_sync_frame(curves, frame_period_ms, sync_key, sync_edge) -> int:
         return 0
     if sync_edge == "falling":
         if vs[0] == 1:
-            time_ms = ts[1]  # first falling edge
+            time_ms = ts[1]
         elif len(ts) > 2:
-            time_ms = ts[2]  # curve opened low; the second event is the fall
+            time_ms = ts[2]
         else:
             return 0
     elif vs[0] == 0:
@@ -625,7 +603,6 @@ def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
     common = {"nc": nc, "flip_y": bool(flip_y), "raw_shape": raw, "frame_maps": None}
 
     if modality == 2:
-        # axis 0 is depth; there is no time axis at all.
         return _Layout(
             kind="zstack",
             nt=1,
@@ -651,7 +628,6 @@ def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
                 b for b in boxes if b["row1"] > b["row0"] and b["col1"] > b["col0"]
             ]
             if len(cubes) <= 1:
-                # single cube: the page is one z-slice of the volume
                 return _Layout(
                     kind="multicube",
                     nt=n0 // slices,
@@ -683,17 +659,11 @@ def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
             f"reading axis 0 as time."
         )
 
-    # Frames packed into Y: one raw "frame" holding T*n_lines rows. Detected
-    # from the shape rather than the modality table, which disagrees.
     if modality in _PACKED_MODALITIES and boxes and n0 == 1:
         rois = []
         for box in boxes:
             n_lines = box["row1"] - box["row0"]
-            # BreakView/CoordinateMap pixel coords are in the scanner's
-            # configured canvas, which can run wider than what actually got
-            # written to the raw page for a given ROI (chessboard/ribbon
-            # scans in particular) -- clamp so `_read_packed`'s col0:col1
-            # slice never runs past the real page and comes back empty.
+            # NOTE: the scanner canvas can run wider than the raw page; unclamped, the col0:col1 slice comes back empty
             col0 = max(0, min(box["col0"], page_x))
             col1 = max(col0, min(box["col1"], page_x))
             width = col1 - col0
@@ -712,10 +682,6 @@ def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
         if rois:
             nt = min(r["nframes"] for r in rois)
             frame_maps = None
-            # Dichroic switching interleaves light paths: green frames land on
-            # Channel_0, red on Channel_1, at different timepoints. Each channel
-            # therefore reads a different subset of source frames, and the
-            # effective T is roughly halved.
             dichro = curves.get("DichroSw_AO1")
             if modality == 7 and dichro is not None and nc >= 2:
                 values = np.asarray(dichro["values"])
@@ -753,9 +719,6 @@ def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
             )
 
     if modality in _TILED_MODALITIES or (modality in _BOX_MODALITIES and not boxes):
-        # ROIs occupy contiguous, equal-width column blocks of the raw page.
-        # A single-ROI scan has nothing to unpack — the page already is the
-        # ROI — so it falls through to the framed read below without comment.
         n_rois = len(_spatial_info(unit, modality)["centroids"]) or 1
         if n_rois > 1:
             if page_x % n_rois == 0:
@@ -785,8 +748,6 @@ def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
                 f"single FOV."
             )
 
-    # timeseries and every unrecognised modality: axis 0 is time, the page is
-    # one FOV.
     if modality not in MODALITY_NAMES:
         logger.warning(
             f"{unit.name}: unknown MethodType {modality}; reading axis 0 as time."
@@ -807,10 +768,7 @@ def _iso_time(posix_seconds) -> str | None:
     """ISO-8601 acquisition time, or None when the attribute is missing."""
     if posix_seconds in (None, 0):
         return None
-    try:
-        return datetime.fromtimestamp(float(posix_seconds), _ACQ_TZ).isoformat()
-    except (OSError, OverflowError, ValueError):
-        return None
+    return datetime.fromtimestamp(float(posix_seconds), _ACQ_TZ).isoformat()
 
 
 def list_mesc_units(path: Path | str) -> list[dict]:
@@ -878,15 +836,9 @@ def list_mesc_units(path: Path | str) -> list[dict]:
                 except (ValueError, KeyError) as e:
                     logger.warning(f"skipping {session_key}/{munit_key}: {e}")
                     continue
-                try:
-                    step_ms = float(_attr(unit, "TStepInMs") or 0)
-                except (TypeError, ValueError):
-                    step_ms = 0.0
+                step_ms = float(_attr(unit, "TStepInMs") or 0)
                 fs = 1000.0 / step_ms if step_ms > 0 else None
-                try:
-                    planned_ms = float(_attr(unit, "MeasurementLengthInMs") or 0)
-                except (TypeError, ValueError):
-                    planned_ms = 0.0
+                planned_ms = float(_attr(unit, "MeasurementLengthInMs") or 0)
                 maps = (_json_attr(unit, "CoordinateMapJSON") or {}).get("maps") or []
                 outlines = maps[0] if maps else {}
                 if outlines.get("driftEndPoints"):
@@ -1156,12 +1108,10 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             self._unit, self.modality, self._curves, flip_y=flip_y
         )
 
-        frame_period_ms = _attr(self._unit, "TStepInMs")
+        frame_period_ms = _attr(
+            self._unit, "TStepInMs"
+        )  # NOTE: ticks once per raw frame; convert before using it as a raw frame index
         self._frame_period_ms = float(frame_period_ms) if frame_period_ms else None
-        # `TStepInMs` ticks once per *raw* scanner frame, so the sync search
-        # lands on a raw frame index. Dichroic switching makes one layout
-        # timepoint span several raw frames, so convert before it is used as a
-        # crop -- rounding up keeps the crop at or after the sync edge.
         self._sync_frame_raw = _find_sync_frame(
             self._curves,
             self._frame_period_ms,
@@ -1187,7 +1137,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             )
             self._layout.nc = max(1, len(self._channels))
 
-        # ROI interface: one entry per Z slot when Z means "ROI".
         self._rois = self._build_roi_slices()
         self._roi = None
         if roi is not None:
@@ -1212,8 +1161,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             f"{path.name} [{self.unit_key}] {self._layout.describe()} "
             f"start_frame={self._start_frame}"
         )
-
-    # -- construction helpers -------------------------------------------
 
     def _select_unit(self, unit, session, munit) -> dict:
         """Resolve the unit selector against the file's unit list."""
@@ -1271,8 +1218,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         for i, roi in enumerate(self._layout.rois):
             height = roi.get("n_lines", roi["row1"] - roi["row0"])
             width = roi.get("width", roi["col1"] - roi["col0"])
-            # After padding to the array's (ny, nx) and the Y flip, valid rows
-            # sit at the bottom of the frame; record where they actually land.
             y0 = self._layout.ny - height if self._layout.flip_y else 0
             out.append(
                 {
@@ -1294,12 +1239,8 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         layout = self._layout
         info = _spatial_info(self._unit, self.modality)
         pixel_size = info["pixel_size_um"]
-        # `TStepInMs` is the raw scanner frame period. Dichroic switching hands
-        # each light path every Nth raw frame, so a channel's own timepoints
-        # arrive N times slower than the scanner runs -- and it is those
-        # timepoints the T axis counts. Reporting the raw rate here would make
-        # `num_timepoints / fs` claim half the duration actually recorded.
         raw_fs = 1000.0 / self._frame_period_ms if self._frame_period_ms else None
+        # NOTE: TStepInMs is the raw scanner period; dichroic switching hands each light path every Nth frame, so a channel's own timepoints arrive N times slower
         fs = raw_fs / layout.light_paths if raw_fs else None
         geo = _multicube_geometry(self._unit) if self.modality == 11 else None
         dz = geo["voxel_size_z_um"] if geo else None
@@ -1315,14 +1256,10 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             ]
 
         md: dict = {
-            # canonical
             "fs": fs,
             "frame_rate": fs,
             "dx": float(pixel_size) if pixel_size else None,
             "dy": float(pixel_size) if pixel_size else None,
-            # AOD ROIs are not a uniform depth series and dz stays None there;
-            # multicube slices are a real uniform depth series, so dz carries
-            # the protocol's voxelSizeZ.
             "dz": dz,
             "num_timepoints": self._nt,
             "num_zplanes": layout.nz,
@@ -1332,7 +1269,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             "Lx": layout.nx,
             "dtype": np.dtype(self._dtype).name,
             "num_mrois": layout.nz if layout.z_meaning == "roi_index" else 1,
-            # mesc specifics
             "mesc_file": str(self.filenames[0]),
             "mesc_unit": self.unit_key,
             "mesc_unit_index": next(
@@ -1359,11 +1295,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             "mesc_raw_frame_rate": raw_fs,
             "mesc_light_paths": layout.light_paths,
             "mesc_curves": sorted(self._curves),
-            # MESc stores each channel as uint16 with a linear conversion to
-            # its real value (``raw * scale + offset``); the offset is the
-            # detector's zero (about -1000 on the AOD rigs). Pixels are
-            # returned raw; readers needing photon-level zero apply this.
-            "mesc_channel_conversion": [
+            "mesc_channel_conversion": [  # raw * scale + offset; the offset is the detector zero, about -1000 on the AOD rigs
                 {
                     "scale": float(
                         _attr(
@@ -1399,13 +1331,10 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             md["mesc_slice_z_offsets_um"] = geo["slice_z_offsets_um"]
             md["mesc_cube_xy_size_um"] = geo["xy_size_um"]
             md["mesc_cube_z_size_um"] = geo["z_size_um"]
-        # raw unit attrs, minus the large embedded JSON documents
         md["mesc_attrs"] = {
             k: _attr(self._unit, k) for k in self._unit.attrs if k not in _JSON_ATTRS
         }
         return md
-
-    # -- identity / dispatch --------------------------------------------
 
     @classmethod
     def can_open(cls, file: Path | str) -> bool:
@@ -1424,8 +1353,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
     def reader_kwargs(self) -> dict:
         """Kwargs `imread` needs to re-open this exact unit in another process."""
         return {"unit": self.unit_key}
-
-    # -- shape / dtype ---------------------------------------------------
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
         layout = self._layout
@@ -1472,7 +1399,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         """
         nt, nc, nz, _, _ = self._shape5d()
         if self.roi is not None:
-            nz = 1  # every rendered subplot carries a single ROI
+            nz = 1
         z_label = {
             "roi_index": "ROI",
             "depth": "Z-plane",
@@ -1486,8 +1413,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         if nz > 1:
             labels.append(z_label)
         return tuple(labels)
-
-    # -- metadata --------------------------------------------------------
 
     @property
     def curves(self) -> dict[str, dict]:
@@ -1560,9 +1485,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         """Unit metadata merged with any in-memory overrides. Always a dict."""
         md = dict(self._metadata)
         md.update(self._metadata_overlay)
-        # dimension counts follow the current ROI selection, not the file's
-        # full extent — a single-ROI view really is one plane deep, and the
-        # writer reads these keys rather than re-deriving them from shape.
         nt, nc, nz, ny, nx = self._shape5d()
         md.update(
             {
@@ -1588,10 +1510,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
     def metadata(self, value: dict):
         if not isinstance(value, dict):
             raise TypeError(f"metadata must be a dict, got {type(value)}")
-        # the file is opened read-only; overrides live in memory.
         self._metadata_overlay.update(value)
-
-    # -- reading ---------------------------------------------------------
 
     def _source_frames(self, c: int, frames: Sequence[int]) -> np.ndarray:
         """Map requested timepoints onto source frame indices for channel `c`."""
@@ -1608,7 +1527,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         kind = layout.kind
 
         if kind == "zstack":
-            # axis 0 is depth; T is a singleton, so every timepoint is one plane
             plane = dataset[int(z)][None, ...]
             block = plane if len(frames) == 1 else np.repeat(plane, len(frames), axis=0)
         elif kind == "packed":
@@ -1619,7 +1537,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             raw = _take_axis0(dataset, self._source_frames(c, frames))
             if kind == "frames":
                 block = raw
-            else:  # tiled / boxes: crop the ROI box off the page
+            else:
                 roi = layout.rois[z]
                 block = raw[:, roi["row0"] : roi["row1"], roi["col0"] : roi["col1"]]
 
@@ -1636,13 +1554,12 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         """Unpack frames stored as consecutive row blocks of a single raw page."""
         roi = self._layout.rois[z]
         n_lines, col0, col1 = roi["n_lines"], roi["col0"], roi["col1"]
-        # the layout clamps col0/col1 to Channel_0's width at open time, but a
-        # different channel index can point at a narrower physical dataset
-        # (dichroic switching, mismatched Channel_N shapes) -- reclamp here so
-        # a stale bound can't slice past this dataset's actual width.
         page_cols = dataset.shape[2]
         if col1 > page_cols:
-            col0, col1 = min(col0, page_cols), page_cols
+            col0, col1 = (
+                min(col0, page_cols),
+                page_cols,
+            )  # NOTE: a channel can point at a narrower dataset than Channel_0 clamped at open
         src = self._source_frames(c, frames)
         if src.size == 0:
             return np.empty((0, n_lines, col1 - col0), dtype=dataset.dtype)
@@ -1665,10 +1582,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         """
         layout = self._layout
         z = int(z)
-        # The 5D layer already mapped in-range negatives to 0..nz-1
-        # (``listify_index`` adds ``nz`` once), so anything still negative --
-        # like anything >= nz -- is out of bounds. Without this check divmod
-        # would silently wrap it onto a wrong (cube, slice) pair.
         if not 0 <= z < layout.nz:
             raise IndexError(
                 f"index {z} is out of bounds for axis 2 (Z) with size {layout.nz}"
@@ -1805,7 +1718,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         selected = listify_index(z_key, self._shape5d()[2])
         roi = self.roi
         if isinstance(roi, (int, np.integer)) and roi > 0:
-            # a single-ROI view exposes one Z slot, backed by ROI `roi`
             return [int(roi) - 1 for _ in selected]
         return [int(z) for z in selected]
 
@@ -1840,7 +1752,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         return out
 
     def __array__(self, dtype=None, copy=None):
-        # one representative (Y, X) frame -- never an accidental full load
         data = np.asarray(self[0, 0, 0])
         if self._target_dtype is not None:
             data = data.astype(self._target_dtype)

@@ -20,10 +20,12 @@ identical; the input statistic differs.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import tifffile
 from imgui_bundle import icons_fontawesome_6 as fa
 from imgui_bundle import imgui
 from scipy.ndimage import median_filter
@@ -43,7 +45,8 @@ _TINT_RGB = (1.0, 0.35, 0.85)
 _SLIDER_W = 220
 _DISPLAY_DRAG_W = 110
 _MAX_FILTER_CACHE = 8
-_TARGET_PROJ_PX = 512  # preview math runs at <= this longest side
+# preview math runs at <= this longest side
+_TARGET_PROJ_PX = 512
 
 
 def _downsample_max(
@@ -68,7 +71,7 @@ def _downsample_max(
 
 
 def _camera_view_map(arr: Any) -> dict[int, int]:
-    meta = getattr(arr, "metadata", None) or {}
+    meta = arr.metadata or {}
     m = meta.get("camera_view_map")
     if isinstance(m, dict):
         return {int(k): int(v) for k, v in m.items()}
@@ -105,12 +108,8 @@ def _tp_label(slot, arr=None) -> str:
     """Display label for a tiled projection slot: the tile's specimen_name
     grid token (e.g. TL010) when the array can resolve it, else SPM##.
     """
-    fn = getattr(arr, "tile_label", None)
-    if callable(fn):
-        try:
-            return fn(slot)
-        except Exception:
-            pass
+    if arr is not None:
+        return arr.tile_label(slot)
     return f"SPM{slot:02d}" if isinstance(slot, int) else str(slot)
 
 
@@ -285,10 +284,10 @@ class _GpuRGBA:
             self.destroy()
             self.h, self.w = int(rgba.shape[0]), int(rgba.shape[1])
             self._upload(rgba)
+            # Same size: write into the existing texture, keeping the view and
+            # backend registration so we don't churn a GPU alloc + re-register
+            # every frame a slider moves.
             return
-        # Same size: write into the existing texture, keeping the view and
-        # backend registration so we don't churn a GPU alloc + re-register
-        # every frame a slider moves.
         self._write(rgba)
 
     def destroy(self) -> None:
@@ -307,81 +306,28 @@ class _GpuRGBA:
             self._texture = None
 
 
-def _ensure_state(parent: Any) -> None:
-    if not hasattr(parent, "_show_iso_dp_window"):
-        parent._show_iso_dp_window = False
-    if not hasattr(parent, "_iso_dp_window_open"):
-        parent._iso_dp_window_open = False
-    if not hasattr(parent, "_iso_dp_snapshot"):
-        parent._iso_dp_snapshot: dict[str, float] | None = None
-    if not hasattr(parent, "_iso_dp_cache_key"):
-        parent._iso_dp_cache_key = None
-    if not hasattr(parent, "_iso_dp_proj_index"):
-        parent._iso_dp_proj_index: dict[int, dict[int, Path]] = {}
-    if not hasattr(parent, "_iso_dp_timepoints"):
-        parent._iso_dp_timepoints: list[int] = []
-    if not hasattr(parent, "_iso_dp_current_tp"):
-        parent._iso_dp_current_tp = 0
-    if not hasattr(parent, "_iso_dp_proj_cache"):
-        parent._iso_dp_proj_cache: dict[tuple[int, int], np.ndarray] = {}
-    if not hasattr(parent, "_iso_dp_mask_cache"):
-        parent._iso_dp_mask_cache: dict[tuple, tuple[np.ndarray, float, float]] = {}
-        parent._iso_dp_mask_lru: list[tuple] = []
-    if not hasattr(parent, "_iso_dp_gpu"):
-        parent._iso_dp_gpu: dict[int, _GpuRGBA] = {}
-        parent._iso_dp_compose_key: dict[int, tuple] = {}
-    if not hasattr(parent, "_iso_dp_vmin"):
-        parent._iso_dp_vmin = 0.0
-    if not hasattr(parent, "_iso_dp_vmax"):
-        parent._iso_dp_vmax = 1.0
-    if not hasattr(parent, "_iso_dp_display_inited"):
-        parent._iso_dp_display_inited = False
-    if not hasattr(parent, "_iso_dp_dragging"):
-        parent._iso_dp_dragging = False
-    if not hasattr(parent, "_iso_dp_shown"):
-        # view -> last computed {tp, bg, kernel, enabled, mask, t_abs,
-        # t_rel}; held while a slider is dragged so the expensive median
-        # filter defers to release.
-        parent._iso_dp_shown: dict[int, dict] = {}
-
-
 def _get_iso_array(parent: Any) -> Any | None:
-    iw = getattr(parent, "image_widget", None)
+    iw = parent.image_widget
     if iw is None or not iw.data:
         return None
-    arr = iw.data[0]
-    try:
-        from mbo_utilities.gui.widgets.pipelines.isoview import _unwrap_array
+    from mbo_utilities.gui.widgets.pipelines.isoview import _unwrap_array
 
-        return _unwrap_array(arr)
-    except Exception:
-        return arr
+    return _unwrap_array(iw.data[0])
 
 
 def _get_iso_widget(parent: Any) -> Any | None:
-    instances = getattr(parent, "_pipeline_instances", None) or {}
-    return instances.get("Isoview")
+    return parent._pipeline_instances.get("Isoview")
 
 
 def _get_backend(parent: Any) -> Any | None:
-    iw = getattr(parent, "image_widget", None)
+    iw = parent.image_widget
     if iw is None:
         return None
-    try:
-        return iw.figure.imgui_renderer.backend
-    except AttributeError:
-        return None
+    return iw.figure.imgui_renderer.backend
 
 
 def _load_projection(path: Path) -> np.ndarray | None:
-    try:
-        import tifffile
-    except ImportError:
-        return None
-    try:
-        a = tifffile.imread(str(path))
-    except Exception:
-        return None
+    a = tifffile.imread(str(path))
     if a.ndim == 3:
         a = a.max(axis=0)
     if a.ndim != 2:
@@ -390,11 +336,8 @@ def _load_projection(path: Path) -> np.ndarray | None:
 
 
 def _destroy_gpu(parent: Any) -> None:
-    for gpu in (getattr(parent, "_iso_dp_gpu", None) or {}).values():
-        try:
-            gpu.destroy()
-        except Exception:
-            pass
+    for gpu in parent._iso_dp_gpu.values():
+        gpu.destroy()
     parent._iso_dp_gpu = {}
     parent._iso_dp_compose_key = {}
 
@@ -443,15 +386,12 @@ def _get_mask(
     key = (int(view), tp, round(float(background), 3), int(kernel), factor)
     cache = parent._iso_dp_mask_cache
     if key in cache:
-        try:
-            parent._iso_dp_mask_lru.remove(key)
-        except ValueError:
-            pass
+        parent._iso_dp_mask_lru.remove(key)
         parent._iso_dp_mask_lru.append(key)
+        # When downsampling, floor the scaled window to 3 so the median stays
+        # a real filter (a scaled kernel of 1 would be an identity and flag
+        # nothing). At native resolution keep the user's kernel exactly.
         return cache[key]
-    # When downsampling, floor the scaled window to 3 so the median stays
-    # a real filter (a scaled kernel of 1 would be an identity and flag
-    # nothing). At native resolution keep the user's kernel exactly.
     if factor > 1:
         k = max(3, int(round(int(kernel) / factor)))
     else:
@@ -466,7 +406,7 @@ def _get_mask(
 
 
 def _ensure_loaded_for(parent: Any, arr: Any) -> None:
-    key = (id(arr), getattr(arr, "scan_root", None))
+    key = (id(arr), arr.scan_root)
     if parent._iso_dp_cache_key == key and parent._iso_dp_proj_index:
         return
     parent._iso_dp_cache_key = key
@@ -477,14 +417,9 @@ def _ensure_loaded_for(parent: Any, arr: Any) -> None:
     parent._iso_dp_mask_cache = {}
     parent._iso_dp_mask_lru = []
     parent._iso_dp_shown = {}
-    parent._iso_dp_display_inited = False
     _destroy_gpu(parent)
 
-    try:
-        projections = arr.projections() if hasattr(arr, "projections") else None
-    except Exception:
-        projections = None
-    parent._iso_dp_proj_index = _build_projection_index(arr, projections)
+    parent._iso_dp_proj_index = _build_projection_index(arr, arr.projections())
     parent._iso_dp_timepoints = _common_timepoints(parent._iso_dp_proj_index)
     if parent._iso_dp_timepoints:
         parent._iso_dp_current_tp = parent._iso_dp_timepoints[0]
@@ -492,11 +427,9 @@ def _ensure_loaded_for(parent: Any, arr: Any) -> None:
     vmin, vmax = _initial_display_range(parent)
     parent._iso_dp_vmin = vmin
     parent._iso_dp_vmax = vmax
-    parent._iso_dp_display_inited = True
 
 
 def open_window(parent: Any) -> None:
-    _ensure_state(parent)
     iso = _get_iso_widget(parent)
     if iso is not None:
         parent._iso_dp_snapshot = {
@@ -508,7 +441,7 @@ def open_window(parent: Any) -> None:
 
 
 def _restore_snapshot(parent: Any) -> None:
-    snap = getattr(parent, "_iso_dp_snapshot", None)
+    snap = parent._iso_dp_snapshot
     if not snap:
         return
     iso = _get_iso_widget(parent)
@@ -535,7 +468,6 @@ def _apply_button_style():
 
 
 def draw_window(parent: Any) -> None:
-    _ensure_state(parent)
 
     was_open = parent._iso_dp_window_open
     if parent._show_iso_dp_window:
@@ -613,43 +545,39 @@ def draw_window(parent: Any) -> None:
         imgui.end()
 
 
+def _drag_vmin(parent: Any, speed: float) -> None:
+    _, parent._iso_dp_vmin = imgui.drag_float(
+        "##iso_dp_vmin", float(parent._iso_dp_vmin), speed, 0.0, 0.0, "%.0f"
+    )
+
+
+def _drag_vmax(parent: Any, speed: float) -> None:
+    _, parent._iso_dp_vmax = imgui.drag_float(
+        "##iso_dp_vmax", float(parent._iso_dp_vmax), speed, 0.0, 0.0, "%.0f"
+    )
+
+
+def _auto_range(parent: Any) -> None:
+    if imgui.button("Auto##iso_dp_auto"):
+        parent._iso_dp_vmin, parent._iso_dp_vmax = _initial_display_range(parent)
+
+
+def _tp_slider(parent: Any, tps: list[int], cur_idx: int, value_fmt: str) -> None:
+    ch, v = imgui.slider_int("##iso_dp_tp", cur_idx, 0, max(0, len(tps) - 1), value_fmt)
+    if ch:
+        parent._iso_dp_current_tp = tps[max(0, min(v, len(tps) - 1))]
+
+
 def _draw_display_controls(parent: Any) -> None:
     speed = max(1.0, abs(parent._iso_dp_vmax - parent._iso_dp_vmin) / 200.0)
-
-    def _vmin():
-        _, parent._iso_dp_vmin = imgui.drag_float(
-            "##iso_dp_vmin",
-            float(parent._iso_dp_vmin),
-            speed,
-            0.0,
-            0.0,
-            "%.0f",
-        )
-
-    def _vmax():
-        _, parent._iso_dp_vmax = imgui.drag_float(
-            "##iso_dp_vmax",
-            float(parent._iso_dp_vmax),
-            speed,
-            0.0,
-            0.0,
-            "%.0f",
-        )
-
-    def _auto():
-        if imgui.button("Auto##iso_dp_auto"):
-            lo, hi = _initial_display_range(parent)
-            parent._iso_dp_vmin = lo
-            parent._iso_dp_vmax = hi
-
     items = [
-        ("Min", _DISPLAY_DRAG_W, _vmin),
-        ("Max", _DISPLAY_DRAG_W, _vmax),
-        (None, button_width("Auto"), _auto),
+        ("Min", _DISPLAY_DRAG_W, partial(_drag_vmin, parent, speed)),
+        ("Max", _DISPLAY_DRAG_W, partial(_drag_vmax, parent, speed)),
+        (None, button_width("Auto"), partial(_auto_range, parent)),
     ]
 
     arr = _get_iso_array(parent)
-    tiled = bool(getattr(arr, "is_tiled", False))
+    tiled = arr is not None and arr.is_tiled
     tps = parent._iso_dp_timepoints
     if tps:
         try:
@@ -663,18 +591,9 @@ def _draw_display_controls(parent: Any) -> None:
             else f"TM{tps[cur_idx]:06d}  ({cur_idx + 1}/{len(tps)})"
         )
 
-        def _tp():
-            ch, v = imgui.slider_int(
-                "##iso_dp_tp",
-                cur_idx,
-                0,
-                max(0, len(tps) - 1),
-                value_fmt,
-            )
-            if ch:
-                parent._iso_dp_current_tp = tps[max(0, min(v, len(tps) - 1))]
-
-        items.append((label, 220.0, _tp))
+        items.append(
+            (label, 220.0, partial(_tp_slider, parent, tps, cur_idx, value_fmt))
+        )
 
     draw_toolbar_row(items)
     if parent._iso_dp_vmax <= parent._iso_dp_vmin:
@@ -757,10 +676,10 @@ def _draw_view_previews(parent: Any, iso: Any) -> None:
     spacing = 12.0
 
     avail = imgui.get_content_region_avail()
-    text_h = imgui.get_text_line_height_with_spacing()
     # per cell: label line above, image box, two info lines below
-    cell_text_h = text_h * 3.5
+    text_h = imgui.get_text_line_height_with_spacing()
     # leave room for the separator + button row drawn after the previews
+    cell_text_h = text_h * 3.5
     reserve_bottom = imgui.get_frame_height_with_spacing() + text_h
     cell_w_h = (avail.x - spacing * (ncols - 1)) / ncols
     cell_w_v = (avail.y - reserve_bottom - spacing * (nrows - 1)) / nrows - cell_text_h
@@ -802,7 +721,7 @@ def _draw_one_view(
     # While a param slider is dragged, reuse the last computed mask instead
     # of re-running the (slow) median filter every frame; recompute on
     # release. A timepoint or enable change always recomputes.
-    dragging = bool(getattr(parent, "_iso_dp_dragging", False))
+    dragging = parent._iso_dp_dragging
     shown = parent._iso_dp_shown.get(view)
     stale = (
         shown is None
@@ -858,17 +777,9 @@ def _draw_one_view(
         )
         gpu = parent._iso_dp_gpu.get(view)
         if gpu is None:
-            try:
-                gpu = _GpuRGBA(backend, rgba)
-            except Exception:
-                gpu = None
-            if gpu is not None:
-                parent._iso_dp_gpu[view] = gpu
+            parent._iso_dp_gpu[view] = _GpuRGBA(backend, rgba)
         else:
-            try:
-                gpu.reupload(rgba)
-            except Exception:
-                pass
+            gpu.reupload(rgba)
         parent._iso_dp_compose_key[view] = compose_key
 
     gpu = parent._iso_dp_gpu.get(view)

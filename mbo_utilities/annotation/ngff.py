@@ -48,14 +48,16 @@ NGFF_VERSION = "0.5"
 ROIS_VERSION = 1
 ROIS_ATTR = "mbo_rois"
 LABEL_IMAGE = "drawn"
-# the trace rows a rois zarr keeps: what was measured here and nowhere else
-SAVED_SOURCES = ("quick", "pixel")
+SAVED_SOURCES = (
+    "quick",
+    "pixel",
+)  # the trace rows a rois zarr keeps: measured here and nowhere else
 _COMPRESSION_LEVEL = 4
 
 
 @dataclass
 class RoiFileContents:
-    """What :meth:`RoiFile.load` gives back."""
+    """A rois zarr's contents as :meth:`RoiFile.load` returns them."""
 
     store: RoiLabelStore
     traces: list[RoiTrace] = field(default_factory=list)

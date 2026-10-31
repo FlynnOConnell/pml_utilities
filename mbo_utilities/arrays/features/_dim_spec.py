@@ -1,22 +1,12 @@
-"""
-dimension specification system for arrays.
-
-provides a formal way for arrays to declare their dimension structure:
-- spatial dimensions (Y, X): the 2D image plane
-- iteratable dimensions (T, Z, C): slider/scroll dimensions
-- batch dimensions (camera, trial): separate output files
-
-this enables reactive metadata computation where output dimensions
-are adjusted based on selections/slicing.
-"""
+"""Per-dimension role, size, scale and unit of an array: spatial Y/X, iteratable T/Z/C, batch camera/trial."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 
-class DimRole(str, Enum):
+class DimRole(StrEnum):
     """Role of a dimension in the array structure."""
 
     SPATIAL = "spatial"
@@ -30,7 +20,6 @@ class DimRole(str, Enum):
 
     @classmethod
     def from_dim_name(cls, name: str) -> DimRole:
-        """Infer role from dimension name."""
         name_upper = name.upper()
         if name_upper in ("Y", "X"):
             return cls.SPATIAL
@@ -39,14 +28,13 @@ class DimRole(str, Enum):
         return cls.ITERATABLE
 
 
-# map dimension names to default units
 DIM_UNITS: dict[str, str | None] = {
     "T": "second",
     "Z": "micrometer",
     "Y": "micrometer",
     "X": "micrometer",
-    "C": None,  # channel has no unit
-    "V": "micrometer",  # volume (piezo)
+    "C": None,
+    "V": "micrometer",  # piezo volume
     "R": "micrometer",  # roi
     "B": "micrometer",  # beamlet
     "S": "micrometer",  # slice
@@ -55,29 +43,7 @@ DIM_UNITS: dict[str, str | None] = {
 
 @dataclass
 class DimensionSpec:
-    """
-    specification for a single dimension.
-
-    Parameters
-    ----------
-    name : str
-        canonical dimension name: "T", "Z", "Y", "X", "C", etc.
-    role : DimRole
-        whether this is spatial, iteratable, or batch
-    size : int
-        current size in this dimension
-    scale : float or None
-        physical size per index (dz=15um, dt=0.033s, dx=0.5um); None when
-        the source stored no value for an iteratable axis
-    unit : str | None
-        physical unit: "second", "micrometer", None (for channels)
-
-    Examples
-    --------
-    >>> spec = DimensionSpec("Z", DimRole.ITERATABLE, size=28, scale=15.0)
-    >>> spec.unit
-    'micrometer'
-    """
+    """One dimension: upper-case name, role, size, physical size per index (``dz``, ``1 / fs``, ``dx``; None when the source stored none) and unit (``DIM_UNITS`` when not given)."""
 
     name: str
     role: DimRole
@@ -86,9 +52,7 @@ class DimensionSpec:
     unit: str | None = field(default=None)
 
     def __post_init__(self):
-        # normalize name to uppercase
         self.name = self.name.upper()
-        # set default unit if not provided
         if self.unit is None:
             self.unit = DIM_UNITS.get(self.name)
 
@@ -107,50 +71,22 @@ class DimensionSpec:
 
 @dataclass
 class DimensionSpecs:
-    """
-    ordered collection of dimension specifications.
-
-    provides convenient access to dimensions by name or role.
-
-    Parameters
-    ----------
-    specs : list of DimensionSpec
-        ordered dimension specs matching array shape
-
-    Examples
-    --------
-    >>> specs = DimensionSpecs.from_array(arr)
-    >>> specs.num_timepoints
-    300
-    >>> specs.spatial_dims
-    ('Y', 'X')
-    """
+    """An array's dimensions in axis order, indexable by position or name."""
 
     specs: list[DimensionSpec]
-
-    def __post_init__(self):
-        # validate: must have at least Y, X
-        names = [s.name for s in self.specs]
-        if "Y" not in names or "X" not in names:
-            pass  # allow for flexibility, but log warning?
 
     def __getitem__(self, idx: int | str) -> DimensionSpec:
         if isinstance(idx, int):
             return self.specs[idx]
-        # lookup by name
-        for spec in self.specs:
-            if spec.name == idx.upper():
-                return spec
-        raise KeyError(f"No dimension named '{idx}'")
+        spec = self.get(idx)
+        if spec is None:
+            raise KeyError(f"No dimension named '{idx}'")
+        return spec
 
     def get(
         self, name: str, default: DimensionSpec | None = None
     ) -> DimensionSpec | None:
-        """Get dimension spec by name, or default if not found."""
-        try:
-            return self[name]
-        except KeyError:
-            return default
+        return next((s for s in self.specs if s.name == name.upper()), default)
 
     @classmethod
     def from_array(
@@ -191,8 +127,7 @@ class DimensionSpecs:
             role = DimRole.from_dim_name(name)
             size = shape[i] if i < len(shape) else 1
 
-            # pixel size defaults to 1.0 (the registry's default); a z-step or
-            # rate nobody stored is None, never a placeholder
+            # pixel size defaults to the registry's 1.0; a z-step or rate nobody stored is None
             scale = 1.0
             if name == "X":
                 scale = get_param(metadata, "dx", default=1.0) or 1.0
@@ -215,50 +150,40 @@ class DimensionSpecs:
 
         return cls(specs)
 
-    # convenience properties for common dimensions
-
     @property
     def spatial_dims(self) -> tuple[str, ...]:
-        """Names of spatial dimensions."""
         return tuple(s.name for s in self.specs if s.is_spatial)
 
     @property
     def iteratable_dims(self) -> tuple[str, ...]:
-        """Names of iteratable dimensions."""
         return tuple(s.name for s in self.specs if s.is_iteratable)
 
     @property
     def batch_dims(self) -> tuple[str, ...]:
-        """Names of batch dimensions."""
         return tuple(s.name for s in self.specs if s.is_batch)
 
     @property
     def num_timepoints(self) -> int:
-        """Size of T dimension (1 if no T)."""
         spec = self.get("T")
         return spec.size if spec else 1
 
     @property
     def num_zplanes(self) -> int:
-        """Size of Z dimension (1 if no Z)."""
         spec = self.get("Z")
         return spec.size if spec else 1
 
     @property
     def num_channels(self) -> int:
-        """Size of C dimension (1 if no C)."""
         spec = self.get("C")
         return spec.size if spec else 1
 
     @property
     def dx(self) -> float:
-        """Pixel size in X."""
         spec = self.get("X")
         return spec.scale if spec else 1.0
 
     @property
     def dy(self) -> float:
-        """Pixel size in Y."""
         spec = self.get("Y")
         return spec.scale if spec else 1.0
 

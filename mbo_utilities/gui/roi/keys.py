@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from imgui_bundle import imgui
 from masknmf.visualization.imgui import (
     draw_keybinds_popup,
@@ -10,7 +9,6 @@ from masknmf.visualization.imgui import (
 from masknmf.visualization.imgui.keybinds import pressed
 
 from mbo_utilities.gui._keyboard import claim_keys
-
 from mbo_utilities.gui.roi._shared import (
     _CLAIMED_KEYS,
     ROI_KEYS,

@@ -1,11 +1,4 @@
-"""
-Suite2p binary array reader.
-
-This module provides Suite2pArray for reading Suite2p binary output files
-(data.bin, data_raw.bin) with their associated ops.npy metadata.
-
-Automatically detects single-plane vs multi-plane (volume) directories.
-"""
+"""Suite2p output (``data.bin`` / ``data_raw.bin`` + ``ops.npy``) as a lazy array; plane dirs stack on Z."""
 
 from __future__ import annotations
 
@@ -32,7 +25,6 @@ from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-# register suite2p pipeline info
 _SUITE2P_INFO = PipelineInfo(
     name="suite2p",
     description="Suite2p binary output files (registered/raw)",
@@ -62,7 +54,7 @@ logger = log.get("arrays.suite2p")
 
 
 def _extract_plane_number(name: str) -> int | None:
-    """Extract plane number from directory name like 'plane01_stitched' or 'plane14'."""
+    """The N of ``planeN`` anywhere in ``name`` (``plane01_stitched``, ``plane14``)."""
     match = re.search(r"plane(\d+)", name, re.IGNORECASE)
     if match:
         return int(match.group(1))
@@ -89,41 +81,26 @@ def find_suite2p_reg_tif_files(plane_dir: Path, channel: int = 0) -> list[Path]:
 
 
 def find_suite2p_plane_dirs(directory: Path) -> list[Path]:
-    """
-    Find Suite2p plane directories in a parent directory.
-
-    Looks for subdirectories carrying their ops (``ops.npy``, or suite2p 1.0's
-    ``settings.npy``) and a movie, sorted by plane number.
-
-    Parameters
-    ----------
-    directory : Path
-        Parent directory to search.
-
-    Returns
-    -------
-    list[Path]
-        List of plane directories sorted by plane number.
-    """
+    """The subdirs of ``directory`` holding plane ops (``ops.npy``, or suite2p 1.0's ``settings.npy``) and a movie, sorted by plane number; unnumbered dirs last."""
     plane_dirs = []
     for subdir in directory.iterdir():
-        if subdir.is_dir():
-            # an ops.npy alone is not a plane: ROI-subset outputs
-            # (roi_workflow's rois_<tag>/) carry one without a movie
-            has_movie = (
-                (subdir / "data.bin").exists()
-                or _raw_bin(subdir).exists()
-                or (subdir / "reg_tif").is_dir()
-            )
-            if has_plane_ops(subdir) and has_movie:
-                plane_dirs.append(subdir)
-
-    # Sort by plane number extracted from directory name
-    def sort_key(p):
-        num = _extract_plane_number(p.name)
-        return num if num is not None else float("inf")
-
-    return sorted(plane_dirs, key=sort_key)
+        if not subdir.is_dir():
+            continue
+        # an ops.npy alone is not a plane: roi_workflow's rois_<tag>/ carries one without a movie
+        has_movie = (
+            (subdir / "data.bin").exists()
+            or _raw_bin(subdir).exists()
+            or (subdir / "reg_tif").is_dir()
+        )
+        if has_plane_ops(subdir) and has_movie:
+            plane_dirs.append(subdir)
+    return sorted(
+        plane_dirs,
+        key=lambda p: (
+            _extract_plane_number(p.name) is None,
+            _extract_plane_number(p.name) or 0,
+        ),
+    )
 
 
 def _raw_bin(plane_dir: Path) -> Path:
@@ -162,20 +139,16 @@ def registration_shifts(planes, fs, volume: bool) -> MotionCorrection | None:
 
 
 class _SinglePlaneReader:
-    """Internal reader for a single Suite2p plane."""
+    """One plane's binary as (T, Y, X) int16, memory mapped."""
 
     def __init__(self, ops_path: Path, use_raw: bool = False):
         self.ops_path = ops_path
-        # an ops.npy written before the images were normalized holds them as
-        # JSON lists; everything downstream (the summary-image widget,
-        # suite2p's own plotting) indexes them as arrays
+        # an older ops.npy holds the summary images as json lists; everything downstream indexes arrays
         self.metadata = normalize_ops_arrays(load_plane_ops(ops_path.parent))
 
         ops_dir = ops_path.parent
         self.raw_file = _raw_bin(ops_dir)
         self.reg_file = ops_dir / "data.bin"
-
-        # choose which file to use
         if use_raw and self.raw_file.exists():
             self.active_file = self.raw_file
         elif self.reg_file.exists():
@@ -194,7 +167,6 @@ class _SinglePlaneReader:
         self.Lx = get_param(self.metadata, "Lx")
         self.dtype = np.int16
 
-        # calculate actual frame count from file size (ops.npy may have stale nframes)
         actual_bytes = self.active_file.stat().st_size
         bytes_per_frame = self.Ly * self.Lx * np.dtype(self.dtype).itemsize
         actual_nframes = actual_bytes // bytes_per_frame
@@ -208,8 +180,6 @@ class _SinglePlaneReader:
 
         self.nframes = actual_nframes
         self.shape = (self.nframes, self.Ly, self.Lx)
-
-        # warn if file has leftover bytes
         expected_bytes = int(np.prod(self.shape)) * np.dtype(self.dtype).itemsize
         if actual_bytes > expected_bytes:
             leftover = actual_bytes - expected_bytes
@@ -239,11 +209,7 @@ class _SinglePlaneReader:
 
 
 class _Suite2pRegTifPlaneReader:
-    """Internal reader for a Suite2p plane backed by reg_tif/ instead of data.bin.
-
-    Presents the same surface as `_SinglePlaneReader` so `Suite2pArray` can hold
-    either type interchangeably.
-    """
+    """One plane read from its ``reg_tif/`` tiffs, with ``_SinglePlaneReader``'s surface."""
 
     def __init__(self, ops_path: Path, channel: int = 0):
         from mbo_utilities.arrays.tiff import _SingleTiffPlaneReader
@@ -289,30 +255,24 @@ class _Suite2pRegTifPlaneReader:
 
 
 def _load_scanphase_sidecar(plane_dir: Path) -> dict | None:
-    """Load the scan-phase replay record (scanphase.npy) if present."""
+    """The scan-phase replay record ``scanphase.npy`` wrote, None when the plane has none."""
     sp_file = plane_dir / "scanphase.npy"
     if not sp_file.exists():
         return None
-    try:
-        return load_npy(sp_file).item()
-    except Exception as e:
-        logger.warning(f"Could not read {sp_file}: {e}")
-        return None
+    return load_npy(sp_file).item()
 
 
 def _resolve_reconstruct_raw_source(
     sp: dict | None, ops: dict, plane_dir: Path | None = None
 ):
-    """Open the raw movie the run registered from, as a 5D lazy array.
+    """Open the raw movie the run registered from, as ``(array, reader_kwargs)``; ``(None, reader_kwargs)`` when no candidate opens.
 
-    Tries, in order: the scan-phase sidecar's raw_source dir then its file
-    list, then ops['raw_source'] / ops['data_path'] (a list in vanilla
-    suite2p and our worker's ops; a scalar in streamed runs). When
-    ``plane_dir`` is given, dead recorded paths are additionally rebased
-    by basename against the plane dir, its three ancestors, and their
-    ``raw/`` subdirectories (run dirs copied from another machine embed
-    that machine's paths, but the raw movie usually travels with the
-    share). Returns (array, reader_kwargs) or (None, {}).
+    Candidates in order: the scan-phase sidecar's ``raw_source`` then its
+    ``raw_files``, then ``ops["raw_source"]`` and ``ops["data_path"]``. With
+    ``plane_dir``, a dead recorded path is also rebased by basename against
+    the plane dir, its ancestors and their ``raw/`` subdirs
+    (``metadata.base._rebase_dirs``), since a run dir copied from another
+    machine embeds that machine's paths while the raw movie travels with it.
     """
     from mbo_utilities import imread
 
@@ -330,15 +290,9 @@ def _resolve_reconstruct_raw_source(
         cands.append(ops["raw_source"])
     dp = ops.get("data_path")
     if dp:
-        # vanilla suite2p (and our worker's write_ops) store data_path as a
-        # LIST of dirs/files; streamed runs store a scalar. Treat each entry
-        # as its own candidate — Path(list) is a TypeError.
-        entries = dp if isinstance(dp, (list, tuple)) else [dp]
-        for entry in entries:
-            try:
-                p = Path(entry)
-            except TypeError:
-                continue
+        # vanilla suite2p stores data_path as a list of dirs or files, a streamed run as one path
+        for entry in dp if isinstance(dp, (list, tuple)) else [dp]:
+            p = Path(entry)
             if p.suffix and p.parent != p:
                 cands.append(p.parent)
             cands.append(p)
@@ -352,12 +306,9 @@ def _resolve_reconstruct_raw_source(
             entries = c if isinstance(c, list) else [c]
             fixed = []
             for entry in entries:
-                try:
-                    if Path(entry).exists():
-                        fixed.append(Path(entry))
-                        continue
-                except OSError:
-                    pass
+                if Path(entry).exists():
+                    fixed.append(Path(entry))
+                    continue
                 found = _rebase_one(entry, search_dirs)
                 if found is None:
                     break
@@ -375,14 +326,11 @@ def _resolve_reconstruct_raw_source(
         if key in seen:
             continue
         seen.add(key)
-        try:
-            exists = (
-                all(Path(x).exists() for x in c)
-                if isinstance(c, list)
-                else Path(c).exists()
-            )
-        except Exception:
-            exists = False
+        exists = (
+            all(Path(x).exists() for x in c)
+            if isinstance(c, list)
+            else Path(c).exists()
+        )
         if not exists:
             continue
         try:
@@ -399,18 +347,26 @@ def _resolve_reconstruct_raw_source(
 
 
 def _apply_registration(frames, yoff, xoff, yoff1, xoff1, blocks, device):
-    """Apply suite2p rigid (+ nonrigid) shifts to int16 frames.
+    """Apply suite2p's rigid (and nonrigid) shifts to int16 frames.
 
     No bidiphase: mbo's scan-phase correction is the bidirectional step.
-    Uses suite2p's `shift_frames` when available; falls back to a rigid numpy
-    roll (matching suite2p's `-dy,-dx` convention) with a warning if nonrigid
-    shifts were requested but suite2p is missing.
+    Without suite2p the frames get a rigid numpy roll (suite2p's ``-dy, -dx``
+    convention) and the nonrigid shifts are skipped with a warning.
     """
     frames = np.ascontiguousarray(frames)
     try:
         import torch
         from suite2p.registration import register
-
+    except ImportError as e:
+        if yoff1 is not None:
+            logger.warning(
+                f"suite2p unavailable ({e}); applying rigid shifts only "
+                "(nonrigid skipped, frames approximate)."
+            )
+        out = np.empty_like(frames)
+        for k in range(len(frames)):
+            out[k] = np.roll(frames[k], (-int(yoff[k]), -int(xoff[k])), axis=(0, 1))
+    else:
         fr = torch.from_numpy(frames)
         if device is not None:
             fr = fr.to(device)
@@ -426,53 +382,30 @@ def _apply_registration(frames, yoff, xoff, yoff1, xoff1, blocks, device):
                 device=dev,
             )
         )
-    except Exception as e:
-        if yoff1 is not None:
-            logger.warning(
-                f"suite2p unavailable ({e}); applying rigid shifts only "
-                "(nonrigid skipped, frames approximate)."
-            )
-        out = np.empty_like(frames)
-        for k in range(len(frames)):
-            out[k] = np.roll(frames[k], (-int(yoff[k]), -int(xoff[k])), axis=(0, 1))
     if out.ndim == 2:
         out = out[np.newaxis]
     return out.astype(np.int16, copy=False)
 
 
 def _resolve_replay_device(recorded):
-    """Torch device for the reconstitution: the run's recorded device, else
-    auto (cuda if available, else cpu). None when torch is absent.
-    """
+    """The run's recorded torch device, else cuda when available, else cpu; None without torch."""
     try:
         import torch
-    except Exception:
+    except ImportError:
         return None
     if recorded:
-        try:
-            dev = torch.device(recorded)
-            if dev.type == "cuda" and not torch.cuda.is_available():
-                return torch.device("cpu")
-            if dev.type == "cuda":
-                torch.zeros(1, device=dev)
+        dev = torch.device(recorded)
+        if dev.type != "cuda" or torch.cuda.is_available():
             return dev
-        except Exception:
-            pass
-    try:
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-    except Exception:
-        pass
-    return torch.device("cpu")
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class _Suite2pReconstructReader:
-    """Rebuild a registered suite2p plane from raw + reg_outputs (no binary).
+    """A registered plane rebuilt on read from the raw movie and ``reg_outputs.npy`` when no binary is on disk.
 
-    Reconstitutes, on read, the registered frames suite2p wrote to data.bin:
-    the raw movie read with the scan-phase correction recorded at write time,
-    then the saved registration shifts applied. Presents the same surface as
-    `_SinglePlaneReader` so `Suite2pArray` holds it interchangeably.
+    Each frame is the raw frame read with the scan-phase correction recorded
+    at write time, then shifted by the saved registration offsets; the
+    surface is ``_SinglePlaneReader``'s.
     """
 
     def __init__(self, ops_path: Path):
@@ -523,10 +456,8 @@ class _Suite2pReconstructReader:
             )
             self._channel_index = int(sp.get("channel_index", 0))
         else:
-            # no offsets recorded (streamed run, or an already-corrected
-            # source like zarr/h5): read the raw as imread returns it and
-            # apply only the registration shifts. viewing-grade — the run's
-            # exact per-frame scan-phase isn't recoverable without the sidecar.
+            # no sidecar (a streamed run, or an already-corrected zarr/h5): the raw as imread
+            # returns it plus the registration shifts; the run's per-frame scan-phase is lost
             self._offsets = None
             self._frame_map = None
             self._plane_index = (
@@ -536,8 +467,6 @@ class _Suite2pReconstructReader:
             )
             self._channel_index = 0
 
-        # pin the recorded scan-phase so reads reproduce the registered binary
-        # (the array's fixed-shift path); without a sidecar, leave it untouched.
         if self._offsets is not None and hasattr(self._raw, "fix_phase"):
             self._raw.fix_phase = True
             if hasattr(self._raw, "use_fft"):
@@ -548,13 +477,13 @@ class _Suite2pReconstructReader:
         if self._nonrigid and self._reg["yoff1"] is not None:
             try:
                 from suite2p.registration import nonrigid as s2p_nonrigid
-
+            except ImportError as e:
+                logger.warning(f"nonrigid block layout unavailable ({e})")
+            else:
                 block_size = self.metadata.get("block_size") or (128, 128)
                 self._blocks = s2p_nonrigid.make_blocks(
                     self.Ly, self.Lx, (int(block_size[0]), int(block_size[1]))
                 )
-            except Exception as e:
-                logger.warning(f"nonrigid block layout unavailable ({e})")
 
     def _source_frame(self, i: int) -> int:
         return int(self._frame_map[i]) if self._frame_map is not None else int(i)
@@ -564,8 +493,7 @@ class _Suite2pReconstructReader:
         idx = np.asarray(idx, dtype=np.int64)
         raw = np.empty((len(idx), self.Ly, self.Lx), dtype=np.int16)
         c, z = self._channel_index, self._plane_index
-        # group consecutive frames that share a source-contiguous run and a
-        # constant pinned offset into one slice read.
+        # consecutive frames with contiguous sources and one pinned offset are one slice read
         k = 0
         n = len(idx)
         while k < n:
@@ -614,70 +542,25 @@ class _Suite2pReconstructReader:
         else:
             idx = [int(i) for i in t_key]
 
-        out = self._read_registered(idx)  # (N, Ly, Lx)
-        out = out[:, y_key, x_key]
+        out = self._read_registered(idx)[:, y_key, x_key]  # (N, Ly, Lx)
         return out[0] if t_is_int else out
 
     def close(self):
-        close = getattr(self._raw, "close", None)
-        if callable(close):
-            try:
-                close()
-            except Exception:
-                pass
+        self._raw.close()
 
 
 class Suite2pArray(ReductionMixin, Shape5DMixin):
+    """A suite2p run as (T, 1, Z, Y, X) int16: one plane dir, or a folder of them stacked on Z.
+
+    ``filename`` is an ``ops.npy``, a ``.bin`` (that plane only) or a
+    directory. ``use_raw`` prefers ``data_raw.bin``; ``use_reg_tif`` reads
+    ``reg_tif/`` (chan0) even when a binary exists, otherwise ``reg_tif/``
+    and then a rebuild from the raw movie are the fallbacks for a plane
+    with no binary. ``metadata`` is the first plane's ops; T is the
+    binary's size, never ``ops["nframes"]``.
     """
-    Lazy array reader for Suite2p binary output files.
 
-    Auto-detects single-plane vs multi-plane (volumetric) data:
-    - Single plane: reads ops.npy + data.bin from one directory → 3D (T, Y, X)
-    - Volume: reads multiple plane directories → 4D (T, Z, Y, X)
-
-    Parameters
-    ----------
-    filename : str or Path
-        Path to ops.npy, a .bin file, or a directory containing plane subdirs.
-    use_raw : bool, optional
-        If True, prefer data_raw.bin over data.bin. Default False.
-        Ignored when reading reg_tif/ (no raw_tif equivalent).
-    use_reg_tif : bool, optional
-        If True, force loading from ``plane_dir/reg_tif/`` even when
-        ``data.bin`` is present. When False (default), reg_tif is used only
-        as a fallback when no binary file exists. Currently chan0 only.
-    dims : str | Sequence[str] | None, optional
-        Dimension labels. If None, inferred from shape (TZYX or TYX).
-
-    Attributes
-    ----------
-    shape : tuple
-        Shape as (T, Y, X) for single plane or (T, Z, Y, X) for volume.
-    dtype : np.dtype
-        Data type (always np.int16 for Suite2p).
-    metadata : dict
-        Contents of ops.npy (first plane for volumes).
-    is_volumetric : bool
-        True if this represents multi-plane data.
-    num_planes : int
-        Number of Z-planes (1 for single plane).
-    dims : tuple[str, ...]
-        Dimension labels.
-
-    Examples
-    --------
-    >>> # Single plane
-    >>> arr = Suite2pArray("suite2p_output/plane0/ops.npy")
-    >>> arr.shape
-    (10000, 512, 512)
-
-    >>> # Volume (auto-detected from directory structure)
-    >>> arr = Suite2pArray("suite2p_output/")
-    >>> arr.shape
-    (10000, 14, 512, 512)
-    >>> arr.is_volumetric
-    True
-    """
+    _target_dtype = None
 
     @classmethod
     def can_open(cls, file: Path | str) -> bool:
@@ -708,30 +591,23 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         self._results = None
         self._results_read = False
 
-        # determine if this is a volume or single plane
         if path.is_dir():
-            # check for plane subdirectories
             plane_dirs = find_suite2p_plane_dirs(path)
             if plane_dirs:
                 self._init_volume(plane_dirs, use_raw)
+            elif has_plane_ops(path):
+                self._init_single_plane(path / "ops.npy", use_raw)
             else:
-                # maybe directory is a plane itself
-                if has_plane_ops(path):
-                    self._init_single_plane(path / "ops.npy", use_raw)
-                else:
-                    raise ValueError(
-                        f"Directory {path} has no plane subdirectories or ops.npy"
-                    )
+                raise ValueError(
+                    f"Directory {path} has no plane subdirectories or ops.npy"
+                )
         elif path.suffix == ".npy" and path.stem == "ops":
-            # check if parent has sibling plane directories (volume)
-            parent = path.parent.parent
-            plane_dirs = find_suite2p_plane_dirs(parent)
+            plane_dirs = find_suite2p_plane_dirs(path.parent.parent)
             if len(plane_dirs) > 1:
                 self._init_volume(plane_dirs, use_raw)
             else:
                 self._init_single_plane(path, use_raw)
         elif path.suffix == ".bin":
-            # user explicitly selected a .bin file - load only that plane
             if not has_plane_ops(path.parent):
                 raise FileNotFoundError(f"Missing ops.npy near {path}")
             self._init_single_plane(path.with_name("ops.npy"), use_raw)
@@ -740,17 +616,12 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
 
     @property
     def source_path(self) -> Path:
-        # volume: parent of the plane subdirs (suite2p root).
-        # single plane: the plane's directory (containing ops.npy).
-        # must be a directory — imread treats a bare `.bin` path as
-        # raw BinArray, not Suite2pArray.
+        """The run root for a volume, the plane dir for one plane; a directory, since ``imread`` opens a bare ``.bin`` as ``BinArray``."""
         ops_parent = self._planes[0].ops_path.parent
         return ops_parent.parent if self._is_volumetric else ops_parent
 
     def _make_plane_reader(self, ops_path: Path):
-        """Pick reg_tif vs binary reader for one plane based on what's on
-        disk and the use_raw / use_reg_tif flags.
-        """
+        """The binary, ``reg_tif/`` or rebuilt reader for one plane, per what is on disk and ``use_reg_tif``."""
         plane_dir = ops_path.parent
         has_bin = (plane_dir / "data.bin").exists() or _raw_bin(plane_dir).exists()
         has_reg_tif = bool(find_suite2p_reg_tif_files(plane_dir, channel=0))
@@ -765,7 +636,6 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
             return _SinglePlaneReader(ops_path, use_raw=self._use_raw)
         if has_reg_tif:
             return _Suite2pRegTifPlaneReader(ops_path, channel=0)
-        # no pixels on disk: rebuild registered frames from raw + reg_outputs.
         if (plane_dir / "reg_outputs.npy").exists():
             return _Suite2pReconstructReader(ops_path)
         raise FileNotFoundError(
@@ -773,7 +643,6 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         )
 
     def _init_single_plane(self, ops_path: Path, use_raw: bool):
-        """Initialize as single-plane array."""
         self._is_volumetric = False
         reader = self._make_plane_reader(ops_path)
         self._planes = [reader]
@@ -788,15 +657,11 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         self.filenames = [reader.active_file]
 
     def _init_volume(self, plane_dirs: list[Path], use_raw: bool):
-        """Initialize as volumetric array."""
         self._is_volumetric = True
+        self._planes = [
+            self._make_plane_reader(pdir / "ops.npy") for pdir in plane_dirs
+        ]
 
-        for pdir in plane_dirs:
-            ops_file = pdir / "ops.npy"
-            reader = self._make_plane_reader(ops_file)
-            self._planes.append(reader)
-
-        # validate consistent shapes
         shapes = [(p.Ly, p.Lx) for p in self._planes]
         if len(set(shapes)) != 1:
             raise ValueError(f"Inconsistent spatial shapes across planes: {shapes}")
@@ -813,10 +678,9 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         self._ly, self._lx = shapes[0]
         self._dtype = self._planes[0].dtype
 
-        # aggregate metadata from first plane
         self._metadata = dict(self._planes[0].metadata)
         self._metadata["nplanes"] = self._nz
-        self._metadata["num_planes"] = self._nz  # alias for backward compat
+        self._metadata["num_planes"] = self._nz
         self._metadata["plane_dirs"] = [str(p.ops_path.parent) for p in self._planes]
         self.num_rois = get_param(self._metadata, "num_rois", default=1)
         self.filenames = [p.active_file for p in self._planes]
@@ -845,12 +709,10 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
 
     @property
     def is_volumetric(self) -> bool:
-        """True if this array represents multi-plane data."""
         return self._is_volumetric
 
     @property
     def num_planes(self) -> int:
-        """Number of Z-planes."""
         return len(self._planes)
 
     @property
@@ -898,22 +760,16 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
     def dtype(self):
         from mbo_utilities.arrays._base import get_dtype
 
-        return (
-            self._target_dtype
-            if hasattr(self, "_target_dtype") and self._target_dtype
-            else get_dtype(self._dtype)
-        )
+        return self._target_dtype or get_dtype(self._dtype)
 
     @property
     def size(self) -> int:
         return int(np.prod(self.shape))
 
     def astype(self, dtype, copy=True):
-        """Set target dtype for lazy conversion on data access."""
+        """Set the dtype reads are converted to."""
         self._target_dtype = np.dtype(dtype)
         return self
-
-    # _compute_frame_vminmax / vmin / vmax inherited from ReductionMixin
 
     def __len__(self) -> int:
         return self._nframes
@@ -924,7 +780,6 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
 
         t_key, c_key, z_key, y_key, x_key = key
 
-        # normalize t_key
         if isinstance(t_key, slice):
             start, stop, step = t_key.indices(self._nframes)
             t_key = slice(start, stop, step)
@@ -937,7 +792,6 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
                     f"Time index {t_key} out of bounds for {self._nframes} frames"
                 )
 
-        # handle z indexing
         if isinstance(z_key, (int, np.integer)):
             z_key = int(z_key)
             if z_key < 0:
@@ -954,45 +808,30 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
                 z_indices = range(self._nz)
 
             arrs = [self._planes[i][t_key, y_key, x_key] for i in z_indices]
-            # each arr may be 2D (Y,X) if t_key was int, or 3D (T,Y,X) if slice
             if arrs and arrs[0].ndim == 2:
-                # int t_key: stack on axis=0 -> (Z, Y, X)
-                out = np.stack(arrs, axis=0)
+                out = np.stack(arrs, axis=0)  # (Z, Y, X), t was an int
             else:
                 out = np.stack(arrs, axis=1)  # (T, Z, Y, X)
 
-        # ensure 5D: insert missing dims
         if out.ndim == 2:
-            # single t + single z -> (Y, X)
-            out = out[np.newaxis, np.newaxis, np.newaxis, :, :]
+            out = out[np.newaxis, np.newaxis, np.newaxis]  # (1, 1, 1, Y, X)
+        elif out.ndim == 3 and isinstance(z_key, (int, np.integer)):
+            out = out[:, np.newaxis, np.newaxis]  # (T, 1, 1, Y, X)
         elif out.ndim == 3:
-            if isinstance(z_key, (int, np.integer)):
-                # (T, Y, X) - z was squeezed by int index
-                out = out[:, np.newaxis, np.newaxis, :, :]
-            else:
-                # (Z, Y, X) - t was int-indexed, add T and C dims
-                out = out[np.newaxis, np.newaxis, :, :, :]
+            out = out[np.newaxis, np.newaxis]  # (1, 1, Z, Y, X)
         elif out.ndim == 4:
-            # (T, Z, Y, X) - insert C=1
-            out = out[:, np.newaxis, :, :, :]
+            out = out[:, np.newaxis]  # (T, 1, Z, Y, X)
 
-        # squeeze integer-indexed dimensions (accept numpy integer scalars)
-        squeeze_axes = []
-        if isinstance(key[0], (int, np.integer)):
-            squeeze_axes.append(0)
-        if isinstance(key[1], (int, np.integer)):
-            squeeze_axes.append(1)
-        if isinstance(key[2], (int, np.integer)):
-            squeeze_axes.append(2)
+        squeeze_axes = [i for i in range(3) if isinstance(key[i], (int, np.integer))]
         for ax in sorted(squeeze_axes, reverse=True):
             out = np.squeeze(out, axis=ax)
 
-        if hasattr(self, "_target_dtype") and self._target_dtype is not None:
+        if self._target_dtype is not None:
             out = out.astype(self._target_dtype)
         return out
 
     def __array__(self, dtype=None, copy=None) -> np.ndarray:
-        # return single frame for fast histogram/preview (prevents accidental full load)
+        """The first frame of every plane, never the whole movie."""
         if self._is_volumetric:
             arrs = [p[0] for p in self._planes]
             data = np.stack(arrs, axis=0)
@@ -1003,8 +842,8 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         return data
 
     def switch_channel(self, use_raw: bool = False):
-        """Switch all planes between raw and registered data."""
-        if any(not hasattr(p, "switch_channel") for p in self._planes):
+        """Point every plane at its raw or its registered binary."""
+        if any(not isinstance(p, _SinglePlaneReader) for p in self._planes):
             raise NotImplementedError(
                 "switch_channel is only supported for binary-backed planes "
                 "(data.bin / data_raw.bin); reg_tif/ has no raw/registered split."
@@ -1014,7 +853,6 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         self.filenames = [p.active_file for p in self._planes]
 
     def close(self):
-        """Close all memory-mapped files."""
         for plane in self._planes:
             plane.close()
 
@@ -1029,7 +867,6 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         planes=None,
         **kwargs,
     ):
-        """Write Suite2pArray to disk in various formats."""
         return _imwrite_base(
             self,
             outpath,
@@ -1043,55 +880,21 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
         )
 
     def imshow(self, **kwargs):
-        """Display array using fastplotlib ImageWidget."""
+        """An ``MboNDViewer`` of the array; a binary-backed single plane shows raw and registered side by side."""
         arrays = []
         names = []
-
-        if not self._is_volumetric:
-            # single plane - try to show both raw and registered
-            plane = self._planes[0]
-            # reg_tif-backed planes have no raw/reg binary split; skip dual-display
-            has_binary_split = hasattr(plane, "raw_file") and hasattr(plane, "reg_file")
-            if has_binary_split and plane.raw_file.exists():
-                try:
-                    raw_reader = _SinglePlaneReader(plane.ops_path, use_raw=True)
-                    raw_arr = Suite2pArray.__new__(Suite2pArray)
-                    raw_arr._planes = [raw_reader]
-                    raw_arr._is_volumetric = False
-                    raw_arr._nframes = raw_reader.nframes
-                    raw_arr._ly = raw_reader.Ly
-                    raw_arr._lx = raw_reader.Lx
-                    raw_arr._dtype = raw_reader.dtype
-                    raw_arr._metadata = {}
-                    raw_arr._results, raw_arr._results_read = None, True
-                    arrays.append(raw_arr)
-                    names.append("raw")
-                except Exception as e:
-                    logger.warning(f"Could not open raw file: {e}")
-
-            if has_binary_split and plane.reg_file.exists():
-                try:
-                    reg_reader = _SinglePlaneReader(plane.ops_path, use_raw=False)
-                    reg_arr = Suite2pArray.__new__(Suite2pArray)
-                    reg_arr._planes = [reg_reader]
-                    reg_arr._is_volumetric = False
-                    reg_arr._nframes = reg_reader.nframes
-                    reg_arr._ly = reg_reader.Ly
-                    reg_arr._lx = reg_reader.Lx
-                    reg_arr._dtype = reg_reader.dtype
-                    reg_arr._metadata = {}
-                    reg_arr._results, reg_arr._results_read = None, True
-                    arrays.append(reg_arr)
-                    names.append("registered")
-                except Exception as e:
-                    logger.warning(f"Could not open registered file: {e}")
-
-            if not arrays:
-                arrays.append(self)
-                names.append(self._planes[0].active_file.name)
-        else:
+        plane = self._planes[0]
+        if self._is_volumetric:
             arrays.append(self)
             names.append("volume")
+        elif isinstance(plane, _SinglePlaneReader):
+            for use_raw, name in ((True, "raw"), (False, "registered")):
+                if (plane.raw_file if use_raw else plane.reg_file).exists():
+                    arrays.append(_plane_array(plane.ops_path, use_raw))
+                    names.append(name)
+        if not arrays:
+            arrays.append(self)
+            names.append(plane.active_file.name)
 
         figure_kwargs = kwargs.get("figure_kwargs", {"size": (800, 1000)})
         histogram_widget = kwargs.get("histogram_widget", True)
@@ -1108,6 +911,22 @@ class Suite2pArray(ReductionMixin, Shape5DMixin):
             graphic_kwargs={"vmin": -300, "vmax": 4000},
             window_funcs=window_funcs,
         )
+
+
+def _plane_array(ops_path: Path, use_raw: bool) -> Suite2pArray:
+    """A one-plane ``Suite2pArray`` over the raw or the registered binary, with no metadata or results."""
+    reader = _SinglePlaneReader(ops_path, use_raw=use_raw)
+    arr = Suite2pArray.__new__(Suite2pArray)
+    arr._planes = [reader]
+    arr._is_volumetric = False
+    arr._nframes = reader.nframes
+    arr._nz = 1
+    arr._ly = reader.Ly
+    arr._lx = reader.Lx
+    arr._dtype = reader.dtype
+    arr._metadata = {}
+    arr._results, arr._results_read = None, True
+    return arr
 
 
 def _add_suite2p_labels(
@@ -1163,7 +982,7 @@ def _add_suite2p_labels(
 
 
 def load_ops(ops_input: str | Path | list[str | Path]):
-    """Simple utility to load a suite2p npy file."""
+    """The ops dict of a suite2p ``.npy`` file; a dict passes through, anything else gives ``{}``."""
     if isinstance(ops_input, (str, Path)):
         return load_npy(ops_input).item()
     if isinstance(ops_input, dict):
@@ -1172,6 +991,5 @@ def load_ops(ops_input: str | Path | list[str | Path]):
     return {}
 
 
-# priority above IsoviewArray (90): a suite2p folder living inside a
-# .corrected/.fused tree must resolve to Suite2pArray, not IsoviewArray.
+# above IsoviewArray (90): a suite2p folder inside a .corrected/.fused tree is suite2p's
 register_array_class(Suite2pArray, priority=100)

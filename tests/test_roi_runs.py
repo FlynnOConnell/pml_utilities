@@ -8,6 +8,7 @@ here imports masknmf or opens a figure.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from pathlib import Path
@@ -136,14 +137,35 @@ def test_submit_success_and_single_poll(pm):
     assert not mgr.busy and mgr.poll(pm) == []
 
 
+def _boom(job):
+    raise ValueError("boom")
+
+
+class _HydrateParent:
+    """What ``_try_hydrate_s2p_from_binary`` needs of the preview widget."""
+
+    logger = logging.getLogger("test.hydrate")
+
+    def __init__(self, s2p, s2p_db):
+        self.s2p, self.s2p_db, self.s2p_extras = s2p, s2p_db, None
+
+
+class _GatedJob:
+    """A job that logs its start, waits on ``gate``, then logs its end."""
+
+    def __init__(self, gate, order):
+        self.gate, self.order = gate, order
+
+    def __call__(self, job):
+        self.order.append("a")
+        assert self.gate.wait(5)
+        self.order.append("a-done")
+
+
 def test_submit_failure_lands_on_run_and_job(pm):
     mgr = rr.RoiRunManager(pm)
     run = rr.RoiRun(kind="demix", tag="b", description="demix rois_b")
-
-    def boom(job):
-        raise ValueError("boom")
-
-    mgr.submit(run, boom)
+    mgr.submit(run, _boom)
     ((got, payload),) = _drain(mgr, pm)
     assert got is run and payload is None
     # the message names the frame that raised, so a failure deep in a
@@ -156,14 +178,10 @@ def test_heavy_runs_serialize_on_the_gpu_lock(pm):
     mgr = rr.RoiRunManager(pm)
     gate = threading.Event()
     order = []
-
-    def slow(job):
-        order.append("a")
-        assert gate.wait(5)
-        order.append("a-done")
-
     ra = mgr.submit(
-        rr.RoiRun(kind="demix", tag="a", description="demix a"), slow, heavy=True
+        rr.RoiRun(kind="demix", tag="a", description="demix a"),
+        _GatedJob(gate, order),
+        heavy=True,
     )
     assert _until(lambda: order == ["a"])
     rb = mgr.submit(
@@ -519,6 +537,7 @@ class _Host:
     """Stand-in for the PreviewDataWidget that owns the Process tab's settings."""
 
     def __init__(self, s2p=None, s2p_db=None, masknmf=None):
+        self._pipeline_instances = {}
         if s2p is not None:
             self.s2p = s2p
         if s2p_db is not None:
@@ -545,8 +564,6 @@ class TestSuite2pHydrate:
 
     @staticmethod
     def _parent():
-        import logging
-
         try:
             from mbo_utilities.gui.widgets.pipelines.settings import (
                 Suite2pDB,
@@ -554,16 +571,7 @@ class TestSuite2pHydrate:
             )
         except Exception as error:  # suite2p / cellpose not importable here
             pytest.skip(f"suite2p settings unavailable: {error}")
-
-        class _Parent:
-            logger = logging.getLogger("test.hydrate")
-
-            def __init__(self):
-                self.s2p = Suite2pSettings()
-                self.s2p_db = Suite2pDB()
-                self.s2p_extras = None
-
-        return _Parent()
+        return _HydrateParent(Suite2pSettings(), Suite2pDB())
 
     def test_a_registered_dir_does_not_switch_detection_off(self, tmp_path):
         from mbo_utilities.gui._dialogs import _try_hydrate_s2p_from_binary

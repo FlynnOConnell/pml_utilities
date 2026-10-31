@@ -1,10 +1,9 @@
-"""Which axis a single-file TIFF's pages are on: time, z-planes or channels.
+"""The Page Axis panel reopens a single-file TIFF with its pages on the axis the user names: time, z-planes or channels.
 
 A plain stack carries no axis labels, ImageJ writes ``slices`` for any stack
-and tifffile's ImageJ default writes ``channels``; the reader's guess is on
-the file, not the experiment. This panel reopens the file with the pages on
-the axis the user names (``imread(..., dims=...)``), the same ``dims`` a
-worker gets through ``reader_kwargs``.
+and tifffile's ImageJ default writes ``channels``, so the reader's guess is
+about the file, not the experiment. The pick is ``imread(..., dims=...)``,
+the same ``dims`` a worker gets through ``reader_kwargs``.
 """
 
 from __future__ import annotations
@@ -26,10 +25,8 @@ PAGE_AXES = {"time": "TYX", "z-planes": "ZYX", "channels": "CYX"}
 
 
 def page_axis_tiff(parent: Any) -> TiffArray | None:
-    """The shown array when it is one TIFF file whose pages all sit on one
-    of T, C or Z, else None.
-    """
-    data = getattr(parent.image_widget, "data", None) or []
+    """The shown array when it is one TIFF file whose pages all sit on one of T, C or Z, else None."""
+    data = parent.image_widget.data
     if not data:
         return None
     arr = base_array(data[0])
@@ -40,7 +37,7 @@ def page_axis_tiff(parent: Any) -> TiffArray | None:
 
 
 def page_axis_reading(arr: TiffArray) -> str:
-    """Which ``PAGE_AXES`` key the pages are on now."""
+    """The ``PAGE_AXES`` key the pages are on now."""
     if arr.nc > 1:
         return "channels"
     if arr.nz > 1:
@@ -60,7 +57,7 @@ def reread_pages(parent: Any, reading: str) -> None:
 
     arr = base_array(parent.image_widget.data[0])
     kwargs = {**source_reader_kwargs(arr), "dims": PAGE_AXES[reading]}
-    roi_on = getattr(parent, "manual_roi", None) is not None
+    roi_on = parent.manual_roi is not None
     if roi_on:
         detach_roi_widget(parent)
     reopened = _wrap_for_viewer(imread(arr.source_path, **kwargs), logger)

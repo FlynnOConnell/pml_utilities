@@ -69,6 +69,7 @@ class FakeImageWidget:
 class FakeParent:
     def __init__(self, data, dim_names=(), z=0):
         self.image_widget = FakeImageWidget(data, dim_names, z)
+        self._pipeline_applies_cache = None
 
 
 def draw_frames(widget, n=2):

@@ -113,19 +113,15 @@ def parse_selection(
     if selection is None:
         return list(range(dim_size))
 
-    # handle string format "start:stop:step"
     if isinstance(selection, str):
         parts = selection.split(":")
         if len(parts) == 1:
-            # single index as string
             return parse_selection(int(parts[0]), dim_size, one_based)
         elif len(parts) == 2:
-            # start:stop
             start = int(parts[0]) if parts[0] else (1 if one_based else 0)
             stop = int(parts[1]) if parts[1] else dim_size
             return parse_selection(slice(start, stop), dim_size, one_based)
         elif len(parts) == 3:
-            # start:stop:step
             start = int(parts[0]) if parts[0] else (1 if one_based else 0)
             stop = int(parts[1]) if parts[1] else dim_size
             step = int(parts[2]) if parts[2] else 1
@@ -145,23 +141,18 @@ def parse_selection(
         step = selection.step or 1
 
         if one_based:
-            start = start - 1
-            # stop is inclusive in 1-based, exclusive in 0-based
-            # so stop stays the same when converting
-        else:
-            # 0-based slice, stop is already exclusive
-            pass
+            start = (
+                start - 1
+            )  # NOTE: stop is inclusive 1-based and exclusive 0-based, so it stays
 
         return list(range(max(0, start), min(stop, dim_size), step))
 
-    # list/sequence of indices
     indices = list(selection)
     if one_based:
         indices = [i - 1 for i in indices]
     # filter to valid range instead of clamping (clamping causes duplicate frames)
     valid_indices = [i for i in indices if 0 <= i < dim_size]
     if len(valid_indices) < len(indices):
-        # log warning about out-of-range indices being filtered
         import logging
 
         logging.getLogger("mbo_utilities").warning(
@@ -175,10 +166,10 @@ def parse_selection(
 class TimeSelection:
     """parsed timepoint selection with include/exclude ranges."""
 
-    include_indices: list[int]  # 0-based indices to include
-    exclude_indices: list[int]  # 0-based indices that were excluded
-    include_str: str  # original include string (e.g., "1:100:1")
-    exclude_str: str | None  # original exclude string (e.g., "50:60")
+    include_indices: list[int]
+    exclude_indices: list[int]
+    include_str: str
+    exclude_str: str | None
 
     @property
     def final_indices(self) -> list[int]:
@@ -271,15 +262,12 @@ def parse_timepoint_selection(
     """
     selection_str = selection_str.strip()
 
-    # split on comma for include,exclude
     parts = selection_str.split(",")
     include_str = parts[0].strip()
     exclude_str = parts[1].strip() if len(parts) > 1 else None
 
-    # parse include range
     include_indices = parse_selection(include_str, dim_size, one_based=one_based)
 
-    # parse exclude range if present
     exclude_indices = []
     if exclude_str:
         exclude_indices = parse_selection(exclude_str, dim_size, one_based=one_based)
@@ -291,7 +279,6 @@ def parse_timepoint_selection(
         exclude_str=exclude_str,
     )
 
-    # validate: exclude must overlap with include
     if exclude_str and not result.has_overlap():
         raise ValueError(
             f"exclude range '{exclude_str}' has no overlap with include range '{include_str}'"
@@ -304,10 +291,10 @@ def parse_timepoint_selection(
 class DimSelection:
     """selection state for a single dimension."""
 
-    dim_key: str  # the axis letter (T, Z, C, ...)
-    dim_index: int  # position in shape tuple
-    dim_size: int  # total size of dimension
-    indices: list[int]  # 0-based selected indices
+    dim_key: str
+    dim_index: int
+    dim_size: int
+    indices: list[int]
 
     @property
     def count(self) -> int:
@@ -324,9 +311,9 @@ class ArraySlicing:
     utilities for chunked iteration.
     """
 
-    dims: tuple[str, ...]  # normalized dimension labels
-    shape: tuple[int, ...]  # array shape
-    selections: dict[str, DimSelection]  # dim_key -> selection
+    dims: tuple[str, ...]
+    shape: tuple[int, ...]
+    selections: dict[str, DimSelection]
     dtype: np.dtype
 
     @classmethod
@@ -454,7 +441,6 @@ class ArraySlicing:
         chunk_dim = normalize_dim_key(chunk_dim)
 
         if chunk_dim not in self.selections:
-            # dimension not in array, yield single chunk with all selections
             yield ChunkInfo(
                 chunk_index=0,
                 total_chunks=1,
@@ -475,7 +461,6 @@ class ArraySlicing:
             end = min(start + chunk_size, len(indices))
             chunk_indices = indices[start:end]
 
-            # build selections dict for this chunk
             chunk_selections = {}
             for k, v in self.selections.items():
                 if k == chunk_dim:
@@ -496,7 +481,7 @@ class ChunkInfo:
 
     chunk_index: int
     total_chunks: int
-    selections: dict[str, list[int]]  # dim_key -> 0-based indices for this chunk
+    selections: dict[str, list[int]]
 
     @property
     def progress(self) -> float:
@@ -540,7 +525,6 @@ def read_chunk(
     np.ndarray
         chunk data with shape (T_chunk, Z_sel, Y, X) or (T_chunk, Y, X)
     """
-    # always 5D TCZYX — use slice indexing for contiguous ranges
     t_indices = chunk_info.selections.get("T")
     c_indices = chunk_info.selections.get("C")
     z_indices = chunk_info.selections.get("Z")
@@ -554,6 +538,10 @@ def read_chunk(
 
     if c_indices is None:
         c_sel = slice(None)
+    # numpy broadcasts multiple advanced (list) indices against each other, so a
+    # single arr[t_list, c, z_list] read fails when two axes are non-contiguous.
+    # With 0-1 list indices one combined read is correct and minimal; with 2+ we
+    # apply T (plus any slice subsets) first, then peel each list axis in turn.
     elif _is_contiguous(c_indices):
         c_sel = slice(c_indices[0], c_indices[-1] + 1)
     else:
@@ -566,10 +554,6 @@ def read_chunk(
     else:
         z_sel = z_indices
 
-    # numpy broadcasts multiple advanced (list) indices against each other, so a
-    # single arr[t_list, c, z_list] read fails when two axes are non-contiguous.
-    # With 0-1 list indices one combined read is correct and minimal; with 2+ we
-    # apply T (plus any slice subsets) first, then peel each list axis in turn.
     advanced = [not isinstance(s, slice) for s in (t_sel, c_sel, z_sel)]
     if sum(advanced) <= 1:
         return np.asarray(arr[t_sel, c_sel, z_sel, :, :])

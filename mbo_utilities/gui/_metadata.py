@@ -6,40 +6,31 @@ This is the comprehensive metadata viewer used in the sidebar.
 
 from collections.abc import Mapping, Sequence
 
+from imgui_bundle import icons_fontawesome as fa
 from imgui_bundle import imgui, imgui_ctx
 
 from ._imgui_helpers import fmt_multivalue, fmt_value
 
-# Font awesome icons (with fallback)
-try:
-    from imgui_bundle import icons_fontawesome as fa
+ICON_SEARCH = fa.ICON_FA_SEARCH
 
-    ICON_SEARCH = fa.ICON_FA_SEARCH
-except (ImportError, AttributeError):
-    ICON_SEARCH = "\uf002"
-
-# Colors
 _NAME_COLORS = (
-    imgui.ImVec4(0.95, 0.80, 0.30, 1.0),  # gold/yellow for names
-    imgui.ImVec4(0.60, 0.95, 0.40, 1.0),  # green for indices
+    imgui.ImVec4(0.95, 0.80, 0.30, 1.0),
+    imgui.ImVec4(0.60, 0.95, 0.40, 1.0),
 )
 _VALUE_COLOR = imgui.ImVec4(0.85, 0.85, 0.85, 1.0)
-_TREE_NODE_COLOR = imgui.ImVec4(0.40, 0.80, 0.95, 1.0)  # cyan for tree nodes
-_ALIAS_COLOR = imgui.ImVec4(0.5, 0.5, 0.5, 0.8)  # muted gray for aliases
+_TREE_NODE_COLOR = imgui.ImVec4(0.40, 0.80, 0.95, 1.0)
+_ALIAS_COLOR = imgui.ImVec4(0.5, 0.5, 0.5, 0.8)
 
-# Category-specific colors for metadata
-_IMAGING_COLOR = imgui.ImVec4(0.4, 0.9, 0.6, 1.0)  # bright green for imaging params
-_ACQUISITION_COLOR = imgui.ImVec4(0.9, 0.6, 0.4, 1.0)  # orange for acquisition params
-_OTHER_COLOR = imgui.ImVec4(0.75, 0.85, 0.95, 1.0)  # light blue for uncategorized
-_DISABLED_COLOR = imgui.ImVec4(0.9, 0.4, 0.4, 1.0)  # red for disabled modules
+_IMAGING_COLOR = imgui.ImVec4(0.4, 0.9, 0.6, 1.0)
+_ACQUISITION_COLOR = imgui.ImVec4(0.9, 0.6, 0.4, 1.0)
+_OTHER_COLOR = imgui.ImVec4(0.75, 0.85, 0.95, 1.0)
+_DISABLED_COLOR = imgui.ImVec4(0.9, 0.4, 0.4, 1.0)
 
-# Custom tooltips for specific metadata keys
 METADATA_TOOLTIPS: dict[str, str] = {
     "roi_groups": "ROI scan regions defined in ScanImage. Each group contains position, size, and scan parameters for a multi-ROI acquisition.",
     "roi_mode": "How multi-ROI data is handled: concat_y stitches ROIs horizontally, separate keeps them as individual files.",
 }
 
-# Module-level state for metadata search
 _metadata_search_filter = ""
 _metadata_search_active = False
 _metadata_search_focus_requested = False
@@ -66,9 +57,6 @@ def _matches_filter_shallow(key: str, value, filter_text: str) -> bool:
     return False
 
 
-# the memo holds each value, not just its id: metadata dicts are rebuilt every
-# frame and a recycled id would answer for a different object. depth is in the
-# key because a False cached at max depth must not answer a near-root query.
 _MATCH_MAX_ITEMS = 64
 _MATCH_MAX_DEPTH = 6
 _MATCH_CACHE_MAX = 4096
@@ -98,7 +86,10 @@ def _matches_filter_recursive(
     result = _matches_filter_walk(key, value, filter_text, _depth)
     if len(_match_cache) >= _MATCH_CACHE_MAX:
         _match_cache.clear()
-    _match_cache[cache_key] = (value, result)
+    _match_cache[cache_key] = (
+        value,
+        result,
+    )  # NOTE: holds the value, not just its id: metadata dicts are rebuilt every frame and a recycled id would answer for another object; depth is in the key because a False at max depth must not answer a near-root query
     return result
 
 
@@ -115,13 +106,13 @@ def _matches_filter_walk(key: str, value, filter_text: str, depth: int) -> bool:
             if _matches_filter_recursive(k, v, filter_text, depth + 1):
                 return True
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        # sequences too large to render show only the hidden-summary row;
-        # let the filter hit that exact text — but ONLY for those, or
-        # filters like 'e'/'n'/'=' would match every inline-rendered list
-        if _sequence_too_large(value) and (
-            filter_text.lower()
-            in f"<list len={len(value)} — hidden (too large to display)>".lower()
-        ):
+        if (
+            _sequence_too_large(value)
+            and (
+                filter_text.lower()
+                in f"<list len={len(value)} — hidden (too large to display)>".lower()
+            )
+        ):  # NOTE: only the summary row is searchable for a hidden list, else 'e' or '=' would match every inline list
             return True
         for i, v in enumerate(value):
             if i >= _MATCH_MAX_ITEMS:
@@ -132,9 +123,6 @@ def _matches_filter_walk(key: str, value, filter_text: str, depth: int) -> bool:
     return False
 
 
-# sequence display limits: above _SEQ_HIDE_LEN entries (or an estimated
-# _SEQ_HIDE_ELEMENTS nested elements) a list renders as a summary row
-# only; expandable lists page at _SEQ_PAGE rendered rows.
 _SEQ_HIDE_LEN = 512
 _SEQ_HIDE_ELEMENTS = 8192
 _SEQ_PAGE = 100
@@ -423,7 +411,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
             shown_keys = set()
             value_col = 180
 
-            # Centered header with help tooltip
             avail_width = imgui.get_content_region_avail().x
             header_text = "Metadata (?)"
             text_width = imgui.calc_text_size(header_text).x
@@ -442,11 +429,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                 imgui.pop_text_wrap_pos()
                 imgui.end_tooltip()
 
-            # Keyboard shortcuts. Shift+L opens (or re-focuses) the search
-            # bar — matches the convention in the keybinds popup. We
-            # always set focus_requested so a second Shift+L while the
-            # field is already open puts the cursor back in it instead
-            # of doing nothing. Esc closes the search and clears it.
             io = imgui.get_io()
             if io.key_shift and imgui.is_key_pressed(imgui.Key.l):
                 _metadata_search_active = True
@@ -455,7 +437,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                 _metadata_search_active = False
                 _metadata_search_filter = ""
 
-            # Search button
             imgui.same_line(avail_width - 24)
             search_color = (
                 _TREE_NODE_COLOR
@@ -471,9 +452,10 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                     _metadata_search_filter = ""
             imgui.pop_style_color()
             if imgui.is_item_hovered():
-                imgui.set_tooltip("Search metadata (Shift+L)")
+                imgui.set_tooltip(
+                    "Search metadata (Shift+L)"
+                )  # Shift+L refocuses an open field; Esc closes and clears it
 
-            # Search input field
             if _metadata_search_active:
                 if _metadata_search_focus_requested:
                     imgui.set_keyboard_focus_here()
@@ -487,7 +469,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
 
             imgui.spacing()
 
-            # File info section
             source_path = (
                 metadata.get("source_path")
                 or metadata.get("path")
@@ -518,7 +499,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
             is_isoview = str(metadata.get("stack_type", "")).startswith("isoview")
             is_tiled = bool(getattr(data_array, "is_tiled", False))
 
-            # Imaging section header
             imgui.text_colored(_TREE_NODE_COLOR, "Imaging")
             imgui.separator()
 
@@ -528,15 +508,11 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                     continue
 
                 value = metadata.get(param.canonical)
-                # isoview has no real fs; its fps/vps reference rates are
-                # fs aliases, so skip alias resolution and treat fs as a
-                # user-supplied field (like LBM's dz).
-                skip_alias = is_isoview and param.canonical == "fs"
+                skip_alias = (
+                    is_isoview and param.canonical == "fs"
+                )  # NOTE: isoview has no fs; get_param would show its fps/vps reference rates, or an interval, as the rate
                 if value is None and not skip_alias:
                     if param.canonical == "fs":
-                        # get_param resolves aliases AND transform aliases
-                        # (finterval -> 1/fs); the plain alias walk would
-                        # display an interval verbatim as a rate.
                         value = get_param(metadata, "fs")
                     else:
                         for alias in param.aliases:
@@ -598,7 +574,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                     imgui.same_line(value_col)
                     imgui.text_disabled("—")
 
-            # ROI mode for LBM with multiple ROIs
             num_mrois = metadata.get("num_mrois", 1) or 1
             if is_lbm and num_mrois > 1:
                 roi_mode_val = metadata.get("roi_mode")
@@ -612,7 +587,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                             imgui.set_tooltip(METADATA_TOOLTIPS.get("roi_mode", ""))
                         _clickable_value("roi_mode", roi_mode_val, value_col)
 
-            # Acquisition mode section
             acq_fields = [
                 ("stack_type", "Acquisition stack type: lbm, piezo, or single_plane"),
                 ("lbm_stack", "Light Beads Microscopy acquisition mode"),
@@ -743,7 +717,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                     )
                     _clickable_value(key, display_value, value_col)
 
-            # Views section
             views = metadata.get("views")
             if views and isinstance(views, dict):
                 views_match = not _metadata_search_filter
@@ -778,7 +751,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                             imgui.tree_pop()
                 shown_keys.add("views")
 
-            # Tiles section (tiled acquisitions only)
             tiles = metadata.get("tiles")
             if tiles and isinstance(tiles, dict):
                 tiles_match = not _metadata_search_filter
@@ -812,8 +784,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                             imgui.tree_pop()
                 shown_keys.add("tiles")
 
-            # processing-only isoview identifiers/maps: kept in arr.metadata for
-            # the pipeline widgets + BigStitcher export, hidden from the viewer.
             if is_isoview:
                 shown_keys.update(
                     {
@@ -825,7 +795,6 @@ def draw_metadata_inspector(metadata: dict, data_array=None):
                     }
                 )
 
-            # Other metadata section
             remaining = {k: v for k, v in metadata.items() if k not in shown_keys}
             if _metadata_search_filter:
                 remaining = {

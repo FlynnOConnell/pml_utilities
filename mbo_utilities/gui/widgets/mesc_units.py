@@ -55,9 +55,8 @@ IMAGE_ICON = fa.ICON_FA_IMAGE
 _ACCENT = imgui.ImVec4(0.8, 0.8, 0.2, 1.0)
 _ERROR = imgui.ImVec4(1.0, 0.4, 0.4, 1.0)
 
-# (header, hidden by default); columns fit their content and the table scrolls
-# sideways; right-click a header to show or hide one
-UNIT_COLUMNS = (
+UNIT_COLUMNS = (  # (header, hidden by default); columns fit their content and the table scrolls
+    # sideways; right-click a header to show or hide one
     ("session", False),
     ("unit", False),
     ("modality", False),
@@ -88,8 +87,8 @@ RTMC_COLUMN = next(
     i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "RTMC"
 )
 
-# what each column means, on its header
 COLUMN_HELP = {
+    # what each column means, on its header
     "session": (
         "MESc groups recordings into sessions. MSession_0 holds what the operator "
         "ran. MEScan saves the picture and the RTMC reference pixels of each scan "
@@ -165,10 +164,10 @@ MODALITY_HELP = {
     "multicube": "An AOD scan of small volumes, each scanned slice by slice, so Z is real depth.",
 }
 
-# the help page the (?) opens, under assets/docs
 MESC_DOC = "mesc.md"
 
 
+# the help page the (?) opens, under assets/docs
 def mesc_array_of(obj):
     """The `MescArray` behind a viewer array, or None.
 
@@ -348,18 +347,18 @@ class MescTabWidget(Widget):
         self._error: str | None = None
         self._note: str | None = None
         self._sort = (0, True)
-        # pictures and RTMC reference units as rows of their own, not cells
         self._show_companions = False
-        # the Manual ROI state of every unit left for another, by (file, unit)
+        # pictures and RTMC reference units as rows of their own, not cells
         self._parked: dict[tuple[str, str], tuple] = {}
+        # the Manual ROI state of every unit left for another, by (file, unit)
+        self._reference: ReferenceView | None = None
         # the reference-image popup, drawn from the strip's hook whatever tab
         # is up; the host offers it wherever a recording's ROIs are on screen
-        self._reference: ReferenceView | None = None
-        # a unit the popup's button asked for, applied once it has drawn
         self._pending: tuple[dict, int | None] | None = None
+        # a unit the popup's button asked for, applied once it has drawn
+        self._curation: tuple[str, Path | None] | None = None
         # the vnoiser run beside the open file the curation window can take,
         # looked up once per file: (file, PF folder or results file, or None)
-        self._curation: tuple[str, Path | None] | None = None
         parent.reference_view = self.open_reference
         strip = getattr(parent, "top_strip", None)
         if strip is not None:
@@ -374,8 +373,8 @@ class MescTabWidget(Widget):
     def _frame(self) -> None:
         if self._reference is not None:
             self._reference.draw()
-        # switching rebuilds the panel widgets, so never inside the popup's draw
         if self._pending is not None:
+            # switching rebuilds the panel widgets, so never inside the popup's draw
             info, z = self._pending
             self._pending = None
             self._switch(info, z)
@@ -461,9 +460,9 @@ class MescTabWidget(Widget):
         unit = arr.unit_key.rsplit("/", 1)[-1]
         swap_viewer_array(parent, arr, title=f"{Path(path).stem[:16]} · {unit}")
 
+        zdim = roi_slider(parent.image_widget.dim_names) if z is not None else None
         # a Z-stack opened from a scan's row lands on the slice its ROIs sit
         # on; the swap reset the sliders, so this follows it
-        zdim = roi_slider(parent.image_widget.dim_names) if z is not None else None
         if zdim is not None:
             parent.image_widget.indices[zdim] = int(z)
 
@@ -501,16 +500,16 @@ class MescTabWidget(Widget):
                 return
             units = mesc.units
             by_key = {u["key"]: u for u in units}
+            self._cache().setdefault(mesc.unit_key, mesc)
             # the unit opened at launch belongs in the cache too, so switching
             # away and back reuses it instead of opening the file a second time
-            self._cache().setdefault(mesc.unit_key, mesc)
+            split = len(self.parent.image_widget.data) > 1
             # `--roi 0` fans the ROIs of one unit across several subplots;
             # swapping would replace only the first and strand the rest
-            split = len(self.parent.image_widget.data) > 1
             paired = companions(units)
             folded = {} if self._show_companions else paired
-            # a folded picture or reference unit on screen highlights its scan's row
             owner = folded.get(mesc.unit_key)
+            # a folded picture or reference unit on screen highlights its scan's row
             highlight = owner or mesc.unit_key
             shown = mesc.unit_key.rsplit("/", 1)[-1]
             if owner is not None:
@@ -535,9 +534,9 @@ class MescTabWidget(Widget):
                 "column reads. Every column header and most cells carry their own tip.",
                 show_mark=False,
             )
+            unit_name = shown_name(self.parent)
             # every pipeline that can set itself to the unit on screen gets a
             # button here; the pipeline decides, the tab names none
-            unit_name = shown_name(self.parent)
             for cls in quick_pipelines(self.parent):
                 imgui.same_line(0, 12)
                 if imgui.small_button(f"{cls.name} on {unit_name}##quick_{cls.name}"):
@@ -549,8 +548,8 @@ class MescTabWidget(Widget):
                 )
             path = Path(mesc.filenames[0])
             if self._curation is None or self._curation[0] != str(path):
-                # this file's newest vnoiser results file, else a PF folder beside it
                 runs = [
+                    # this file's newest vnoiser results file, else a PF folder beside it
                     p
                     for p in path.parent.glob(f"{glob.escape(path.stem)}.*.zarr")
                     if results_pipeline(p) == "vnoiser"
@@ -567,9 +566,9 @@ class MescTabWidget(Widget):
             if HAS_VNOISER and self._curation[1] is not None:
                 imgui.same_line(0, 12)
                 if imgui.small_button("Load curation viewer##mesc_curate"):
-                    # its module brings hello_imgui; the window is its own process
                     from mbo_utilities.gui.curation_viewer import launch_curation_window
 
+                    # its module brings hello_imgui; the window is its own process
                     launch_curation_window(self._curation[1])
                 set_tooltip(
                     f"Open {self._curation[1].name} in the curation window, its own "
@@ -610,28 +609,31 @@ class MescTabWidget(Widget):
                 | imgui.TableFlags_.sizing_fixed_fit
             )
             avail = imgui.get_content_region_avail()
-            # a new table id whenever the columns change: imgui restores a
-            # saved layout by column index, so the old widths would land on
-            # the wrong columns
             if not imgui.begin_table(
-                "##mesc_units_v5", len(UNIT_COLUMNS), flags, imgui.ImVec2(0, avail.y)
+                # a new table id whenever the columns change: imgui restores a
+                # saved layout by column index, so the old widths would land on
+                # the wrong columns
+                "##mesc_units_v5",
+                len(UNIT_COLUMNS),
+                flags,
+                imgui.ImVec2(0, avail.y),
             ):
                 return
-            # the header row and the session and unit columns stay put while scrolling
             imgui.table_setup_scroll_freeze(2, 1)
+            # the header row and the session and unit columns stay put while scrolling
             for i, (name, hidden) in enumerate(UNIT_COLUMNS):
                 column_flags = imgui.TableColumnFlags_.width_fixed
                 if i == 0:
-                    # the row's selectable lives here; hidden, a row takes no clicks
                     column_flags |= (
+                        # the row's selectable lives here; hidden, a row takes no clicks
                         imgui.TableColumnFlags_.default_sort
                         | imgui.TableColumnFlags_.no_hide
                     )
                 if hidden:
                     column_flags |= imgui.TableColumnFlags_.default_hide
                 imgui.table_setup_column(name, column_flags)
-            # the header row by hand, so each header carries its column's meaning
             imgui.table_next_row(imgui.TableRowFlags_.headers)
+            # the header row by hand, so each header carries its column's meaning
             for i, (name, _hidden) in enumerate(UNIT_COLUMNS):
                 if not imgui.table_set_column_index(i):
                     continue
@@ -667,9 +669,9 @@ class MescTabWidget(Widget):
                 clicked, _ = imgui.selectable(
                     f"{cells[0]}##unit_{info['key']}",
                     info["key"] == highlight,
+                    imgui.SelectableFlags_.span_all_columns
                     # the row spans the buttons' columns too; without overlap
                     # it takes the hover and a button never sees a click
-                    imgui.SelectableFlags_.span_all_columns
                     | imgui.SelectableFlags_.allow_overlap,
                 )
                 if clicked and not split and info["key"] != mesc.unit_key:
@@ -732,8 +734,8 @@ class MescTabWidget(Widget):
                         imgui.set_tooltip(info["comment"])
             imgui.end_table()
 
-            # swapping rebuilds the panel widgets; finish the frame on the old ones
             if picked is not None:
+                # swapping rebuilds the panel widgets; finish the frame on the old ones
                 self._switch(*picked)
             if reference is not None:
                 if reference["key"] != mesc.unit_key:

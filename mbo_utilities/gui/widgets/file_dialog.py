@@ -14,7 +14,7 @@ from imgui_bundle import (
 )
 
 from mbo_utilities import log as _mbo_log
-from mbo_utilities.gui import _setup  # triggers setup on import
+from mbo_utilities.gui import _setup
 from mbo_utilities.gui._files import NATIVE_DIALOGS, no_dialog_hint
 from mbo_utilities.install import Status, check_installation, gpu_summary
 from mbo_utilities.preferences import (
@@ -27,11 +27,9 @@ from mbo_utilities.preferences import (
     set_last_dir,
 )
 
-# re-export for backwards compatibility
 setup_imgui = _setup.setup_imgui
 __all__ = ["FileDialog", "setup_imgui"]
 
-# dark theme
 COL_BG = imgui.ImVec4(0.11, 0.11, 0.12, 1.0)
 COL_BG_CARD = imgui.ImVec4(0.16, 0.16, 0.17, 1.0)
 COL_ACCENT = imgui.ImVec4(0.20, 0.50, 0.85, 1.0)
@@ -47,11 +45,9 @@ COL_OK = imgui.ImVec4(0.4, 1.0, 0.4, 1.0)
 COL_WARN = imgui.ImVec4(1.0, 0.8, 0.2, 1.0)
 COL_ERR = imgui.ImVec4(1.0, 0.4, 0.4, 1.0)
 COL_NA = imgui.ImVec4(0.5, 0.5, 0.5, 1.0)
-# the dependency popup sits below the window and the formats card in tone
 COL_BG_POPUP = imgui.ImVec4(0.06, 0.06, 0.07, 1.0)
 COL_ROW_ALT = imgui.ImVec4(0.10, 0.10, 0.11, 1.0)
 
-# launcher table rows, in order; the CLI prints every feature
 _DEP_ROWS = (
     "PyTorch",
     "LBM-Suite2p-Python",
@@ -77,7 +73,6 @@ def _get_install_source() -> str:
 
         dist = importlib.metadata.distribution("pml_utilities")
 
-        # check direct_url.json (pip install from git url or editable)
         direct_url_text = dist.read_text("direct_url.json")
         if direct_url_text:
             info = json.loads(direct_url_text)
@@ -92,8 +87,7 @@ def _get_install_source() -> str:
                 return _git_branch() or "editable"
             return "local"
 
-        # editable egg-info installs (uv run, pip install -e .)
-        if hasattr(dist, "_path") and ".egg-info" in str(dist._path):
+        if ".egg-info" in str(dist._path):  # uv run, pip install -e
             return _git_branch() or "editable"
 
         return "PyPI"
@@ -144,15 +138,14 @@ def pop_button_style():
     imgui.pop_style_color(4)
 
 
-# Tooltips and copy in this dialog must respect the dialog's 340 px width.
-# wrapped_tooltip() does NOT auto-wrap, so anything longer than a few
-# words runs off the side of the screen on this layout. The helpers below
-# always wrap to ~30 em (roughly the dialog width minus margins).
 _TOOLTIP_WRAP_EM = 24.0
 
 
 def wrapped_tooltip(text: str, wrap_em: float = _TOOLTIP_WRAP_EM) -> None:
-    """Tooltip whose text wraps to ``wrap_em`` em units wide."""
+    """Tooltip whose text wraps to ``wrap_em`` em units wide.
+
+    imgui's own tooltip never wraps, and this dialog is 340 px wide.
+    """
     imgui.begin_tooltip()
     try:
         imgui.push_text_wrap_pos(hello_imgui.em_size(wrap_em))
@@ -184,7 +177,6 @@ def icon_button(icon: str, label: str, size: imgui.ImVec2, tooltip: str = "") ->
     bool
         True if button was clicked
     """
-    # Style: dark gray bg, blue border, blue text
     imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.18, 0.18, 0.20, 1.0))
     imgui.push_style_color(
         imgui.Col_.button_hovered, imgui.ImVec4(0.22, 0.22, 0.25, 1.0)
@@ -197,11 +189,9 @@ def icon_button(icon: str, label: str, size: imgui.ImVec2, tooltip: str = "") ->
     imgui.push_style_var(imgui.StyleVar_.frame_rounding, 6.0)
     imgui.push_style_var(imgui.StyleVar_.frame_border_size, 1.5)
 
-    # Combine icon and label
     button_text = f"{icon}  {label}"
     clicked = imgui.button(button_text, size)
 
-    # Show tooltip on hover (wrapped so it fits the dialog width)
     if tooltip and imgui.is_item_hovered():
         wrapped_tooltip(tooltip)
 
@@ -216,7 +206,6 @@ class FileDialog:
         self.selected_path = None
         self._open_multi = None
         self._select_folder = None
-        # the typed route: works where no native dialog can be drawn
         self._typed_path = ""
         self._typed_status = ""
         self._widget_enabled = True
@@ -224,12 +213,10 @@ class FileDialog:
         self.split_rois = False
         self._default_dir = str(get_default_open_dir())
         self._install_source = _get_install_source()
-        # cached install status (computed in background)
         self._install_status = None
         self._check_thread = None
         self._show_deps_popup = False
 
-        # GUI Modes (pollen calibration auto-detected, not user-selectable)
         self.gui_modes = [
             "Fastplotlib viewer (default)",
             "Napari viewer",
@@ -238,20 +225,13 @@ class FileDialog:
         ]
         self.selected_mode_index = 0
 
-        # GPU adapter selection. -1 == wgpu auto-pick; otherwise an index
-        # into self._gpu_adapter_labels. Lazily populated on first render
-        # so importing FileDialog doesn't force fastplotlib import.
-        self._gpu_adapters = None  # list[wgpu adapter]
+        self._gpu_adapters = None
         self._gpu_adapter_labels: list[str] = []
-        # Seed from persisted preferences so re-opens remember the user's choice.
         self.selected_gpu_index: int = get_gpu_index()
         self.debug_logging: bool = get_debug_logging()
         self._show_options_popup: bool = False
-        # nvidia-smi compute devices for the Compute GPU combo; refreshed once
-        # per popup-open (subprocess), not per frame.
         self._compute_devices: list = []
 
-        # start dependency check immediately in background
         self._start_dependency_check()
 
     def _ensure_gpu_list(self) -> None:
@@ -269,7 +249,7 @@ class FileDialog:
         self._gpu_adapters = list(get_adapters())
         labels = ["auto (default)"]
         for i, a in enumerate(self._gpu_adapters):
-            info = getattr(a, "info", {}) or {}
+            info = a.info
             name = info.get("device", info.get("description", f"adapter {i}"))
             type_ = info.get("adapter_type", info.get("device_type", "?"))
             labels.append(f"{i}: {name} [{type_}]")
@@ -281,14 +261,10 @@ class FileDialog:
         Both settings are persisted to ~/.mbo/settings/preferences.json on
         change so the choice survives restarts.
         """
-        if self._show_options_popup:
-            try:
-                from mbo_utilities.gpu import gpu_devices
+        if self._show_options_popup:  # nvidia-smi once per open, not per frame
+            from mbo_utilities.gpu import gpu_devices
 
-                self._compute_devices = gpu_devices()
-            except Exception:
-                self._compute_devices = []
-            # re-read prefs on open; they may have changed elsewhere
+            self._compute_devices = gpu_devices()
             from mbo_utilities.gui._options_popup import sync_memory_options
             from mbo_utilities.preferences import get_linescan_auto_traces
 
@@ -316,7 +292,7 @@ class FileDialog:
                     "the next dataset you open."
                 )
             imgui.set_next_item_width(hello_imgui.em_size(20))
-            ui_idx = self.selected_gpu_index + 1  # 0 == "auto"
+            ui_idx = self.selected_gpu_index + 1
             changed, new_ui_idx = imgui.combo(
                 "##gpu_adapter", ui_idx, self._gpu_adapter_labels
             )
@@ -326,7 +302,6 @@ class FileDialog:
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.3))
 
-            # Compute GPU (suite2p / cellpose) — persisted + applied to new runs.
             from mbo_utilities.gui._options_popup import (
                 apply_compute_gpu,
                 compute_gpu_current_index,
@@ -364,7 +339,6 @@ class FileDialog:
             if changed:
                 self.debug_logging = new_debug
                 set_debug_logging(self.debug_logging)
-                # applies now, and to every worker spawned after
                 _mbo_log.set_debug(self.debug_logging)
 
             draw_memory_options(self, tooltip=wrapped_tooltip)
@@ -393,25 +367,24 @@ class FileDialog:
         """Probe dependencies once, on a thread, from the cache when it is fresh."""
         if self._check_thread is not None:
             return
-
-        def _run_check():
-            try:
-                from mbo_utilities.env_cache import (
-                    build_full_cache_with_install_status,
-                    get_cached_install_status,
-                    save_cache,
-                )
-
-                cached = get_cached_install_status()
-                if cached is None:
-                    save_cache(build_full_cache_with_install_status())
-                    cached = get_cached_install_status()
-                self._install_status = cached or check_installation()
-            except Exception:
-                self._install_status = check_installation()
-
-        self._check_thread = threading.Thread(target=_run_check, daemon=True)
+        self._check_thread = threading.Thread(target=self._run_check, daemon=True)
         self._check_thread.start()
+
+    def _run_check(self) -> None:
+        try:
+            from mbo_utilities.env_cache import (
+                build_full_cache_with_install_status,
+                get_cached_install_status,
+                save_cache,
+            )
+
+            cached = get_cached_install_status()
+            if cached is None:
+                save_cache(build_full_cache_with_install_status())
+                cached = get_cached_install_status()
+            self._install_status = cached or check_installation()
+        except Exception:  # a stale or unwritable cache falls back to a live probe
+            self._install_status = check_installation()
 
     def _dep_rows(self) -> list:
         """Features the launcher table shows, in ``_DEP_ROWS`` order."""
@@ -430,12 +403,10 @@ class FileDialog:
 
     def _draw_formats_card_content(self):
         """Draw supported formats - always shown immediately."""
-        # version line (shows ? while loading)
         self._draw_version_status()
 
         imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))
 
-        # supported formats section - always visible
         imgui.text_colored(COL_ACCENT, "Supported Formats")
         imgui.same_line()
         push_button_style(primary=False)
@@ -451,7 +422,6 @@ class FileDialog:
 
         imgui.dummy(hello_imgui.em_to_vec2(0, 0.1))
 
-        # calculate table width to fit content
         col1_width = hello_imgui.em_size(6)
         col2_width = hello_imgui.em_size(9)
         table_width = col1_width + col2_width
@@ -491,7 +461,6 @@ class FileDialog:
 
         imgui.dummy(hello_imgui.em_to_vec2(0, 0.3))
 
-        # dependency status - small inline section
         self._draw_dependency_status_line()
 
     def _draw_dependency_status_line(self):
@@ -523,7 +492,6 @@ class FileDialog:
         if self._show_deps_popup:
             imgui.open_popup("##deps_popup")
             self._show_deps_popup = False
-        # darker than the formats card so the two surfaces read as different
         imgui.push_style_color(imgui.Col_.popup_bg, COL_BG_POPUP)
         imgui.push_style_color(imgui.Col_.border, COL_ACCENT)
         imgui.push_style_color(imgui.Col_.table_row_bg_alt, COL_ROW_ALT)
@@ -637,7 +605,6 @@ class FileDialog:
         )
 
     def render(self):
-        # global style
         imgui.push_style_color(imgui.Col_.window_bg, COL_BG)
         imgui.push_style_color(imgui.Col_.child_bg, imgui.ImVec4(0, 0, 0, 0))
         imgui.push_style_color(imgui.Col_.text, COL_TEXT)
@@ -668,7 +635,6 @@ class FileDialog:
         ):
             imgui.push_id("pfd")
 
-            # header
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.3))
             self._center_text("Miller Brain Observatory", COL_ACCENT)
             self._center_text("Data Preview & Utilities", COL_TEXT_DIM)
@@ -677,12 +643,10 @@ class FileDialog:
             imgui.separator()
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.3))
 
-            # action buttons - use full available width minus padding
             avail_w = imgui.get_content_region_avail().x
             btn_w = min(avail_w - hello_imgui.em_size(2), hello_imgui.em_size(16))
             btn_h = hello_imgui.em_size(1.8)
 
-            # Mode Selector
             self._center_widget(btn_w)
             imgui.set_next_item_width(btn_w)
 
@@ -692,8 +656,6 @@ class FileDialog:
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))
 
-            # native dialogs, disabled where nothing can draw one (a linux
-            # box without zenity/kdialog); the typed field below always works
             if not NATIVE_DIALOGS:
                 imgui.begin_disabled()
             self._center_widget(btn_w)
@@ -727,7 +689,6 @@ class FileDialog:
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.2))
 
-            # typed path: file or folder, opened on enter or the button
             self._center_widget(btn_w)
             imgui.set_next_item_width(btn_w - hello_imgui.em_size(3.2))
             entered, self._typed_path = imgui.input_text_with_hint(
@@ -744,7 +705,6 @@ class FileDialog:
 
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.4))
 
-            # card - use available width minus small margin
             avail_w = imgui.get_content_region_avail().x
             card_w = avail_w - hello_imgui.em_size(1)
             self._center_widget(card_w)
@@ -755,7 +715,6 @@ class FileDialog:
                 imgui.StyleVar_.cell_padding, hello_imgui.em_to_vec2(0.4, 0.2)
             )
 
-            # auto-resize height to content, no scrollbar
             child_flags = imgui.ChildFlags_.borders | imgui.ChildFlags_.auto_resize_y
             window_flags = imgui.WindowFlags_.no_scrollbar
 
@@ -776,11 +735,8 @@ class FileDialog:
             imgui.pop_style_var(2)
             imgui.pop_style_color()
 
-            # Options popup is drawn here but only renders when opened
-            # via the button on the bottom row.
             self._draw_options_popup()
 
-            # file/folder completion
             if self._open_multi and self._open_multi.ready():
                 self.selected_path = self._open_multi.result()
                 if self.selected_path:
@@ -803,8 +759,6 @@ class FileDialog:
                     hello_imgui.get_runner_params().app_shall_exit = True
                 self._select_folder = None
 
-            # Options + Quit on a centered row so both remain visible
-            # regardless of how tall the formats card grew.
             imgui.dummy(hello_imgui.em_to_vec2(0, 0.3))
             opt_w = hello_imgui.em_size(7)
             quit_w = hello_imgui.em_size(6)
@@ -812,7 +766,6 @@ class FileDialog:
             row_w = opt_w + quit_w + spacing
             self._center_widget(row_w)
             btn_h = hello_imgui.em_size(1.5)
-            # Options uses secondary style for visual parity with Quit
             push_button_style(primary=False)
             if imgui.button(f"{fa.ICON_FA_GEARS}  Options", imgui.ImVec2(opt_w, btn_h)):
                 self._show_options_popup = True

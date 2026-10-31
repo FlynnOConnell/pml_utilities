@@ -1,40 +1,26 @@
-"""
-base class for pipeline widgets.
-
-each pipeline is self-contained with its own settings dataclass and config ui.
-"""
+"""``PipelineWidget``: the one class that registers a pipeline with the Run tab (AGENTS.md §7.2)."""
 
 from abc import ABC, abstractmethod
 from typing import Any
 
 from mbo_utilities.pipeline_registry import PipelineInfo
 
-# how a pipeline consumes each non-spatial axis: a start:stop "range", "all" of
-# it (row disabled), "none" (row hidden) or "select-one" index
-AXIS_MODES = ("range", "all", "none", "select-one")
-
-# Reproduces the pre-existing behaviour for every widget that does not
-# override it, so suite2p / masknmf / isoview are unaffected.
+AXIS_MODES = (
+    "range",
+    "all",
+    "none",
+    "select-one",
+)  # a start:stop range, the whole axis (row disabled), hidden, one index
 DEFAULT_AXES_CONSUMED: dict[str, str] = {"T": "range", "Z": "range", "C": "range"}
 
 
 class PipelineWidget(ABC):
-    """base class for pipeline widgets."""
+    """One pipeline's Run-tab widget: its selector label, availability, ``PipelineInfo`` and per-axis consumption."""
 
-    # human-readable name shown in pipeline selector
     name: str = "Pipeline"
-
-    # whether this pipeline's dependencies are installed
     is_available: bool = False
-
-    # install command to show when not available
     install_command: str = 'uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"'
-
-    # file patterns / marker files, registered when the widget is discovered
-    # through the ``mbo_utilities.pipelines`` entry-point group
     info: PipelineInfo | None = None
-
-    # per-axis consumption mode; see AXIS_MODES
     axes_consumed: dict[str, str] = DEFAULT_AXES_CONSUMED
 
     def __init__(self, parent: Any):
@@ -42,15 +28,7 @@ class PipelineWidget(ABC):
 
     @classmethod
     def axis_mode(cls, axis: str) -> str:
-        """
-        How this pipeline consumes ``axis`` ("T", "Z" or "C").
-
-        Returns
-        -------
-        str
-            One of :data:`AXIS_MODES`; "range" for an axis the pipeline
-            does not declare.
-        """
+        """The ``AXIS_MODES`` entry for ``axis`` ("T", "Z" or "C"); "range" for an axis the pipeline does not declare."""
         mode = cls.axes_consumed.get(axis.upper(), "range")
         if mode not in AXIS_MODES:
             raise ValueError(
@@ -60,80 +38,40 @@ class PipelineWidget(ABC):
         return mode
 
     def draw(self) -> None:
-        """Draw the pipeline widget."""
         self.draw_config()
 
     @abstractmethod
-    def draw_config(self) -> None:
-        """Draw the configuration/processing ui."""
-        ...
+    def draw_config(self) -> None: ...
 
     @classmethod
     def applies_to(cls, arr: Any) -> bool:
-        """True iff this pipeline can be run against ``arr``.
-
-        Called by the Run-tab selector BEFORE instantiation, so it
-        must be safe to call without spinning up the widget. Override
-        for pipelines tied to a specific array type (e.g. Isoview
-        consolidator only applies to ``IsoviewArray`` instances).
-
-        ``arr`` may be ``None`` when no data is loaded.
-
-        Default: returns ``True`` (pipeline works on any data).
-        """
+        """True when the pipeline runs on ``arr``; the Run tab asks before instantiation, and ``arr`` is None with no data loaded."""
         return True
 
-    #: whether :meth:`extract_traces` is implemented. The manual-ROI widget
-    #: offers "Extract trace" only for pipelines that set this.
-    extracts_traces: bool = False
+    extracts_traces: bool = (
+        False  # the manual-ROI widget offers "Extract trace" only when set
+    )
 
     @classmethod
     def extract_traces(cls, movie: Any, labels: Any) -> dict | None:
-        """Extract one trace per mask, using this pipeline's own extraction.
+        """One trace per hand-drawn mask through the pipeline's own extraction step.
 
-        Called with masks the user drew by hand rather than ones the
-        pipeline detected, so a pipeline only needs its extraction step,
-        not its detection step.
-
-        Parameters
-        ----------
-        movie
-            ``(T, Y, X)`` array-like; indexable by an int or a slice on the
-            first axis, as ``suite2p``'s extractor expects.
-        labels
-            ``(Y, X)`` uint16 label image; 0 is background, mask ``i`` is
-            ``i + 1``.
-
-        Returns
-        -------
-        dict or None
-            ``{"F": (n_masks, T) float32}`` plus whatever else the pipeline
-            produces (``"Fneu"`` for suite2p). None when the pipeline cannot
-            extract, which is the default.
+        ``movie`` is ``(T, Y, X)``, indexable by int or slice on T; ``labels`` is a
+        ``(Y, X)`` uint16 label image with mask ``i`` at ``i + 1``. Returns
+        ``{"F": (n_masks, T) float32}`` plus what the pipeline adds (``"Fneu"``
+        for suite2p), or None when it cannot extract.
         """
         return None
 
-    #: whether :meth:`seed_from_view` is implemented. A surface showing a
-    #: recording (the MESc tab) offers "open set to what is on screen" only
-    #: for pipelines that set this.
-    seeds_from_view: bool = False
+    seeds_from_view: bool = (
+        False  # the MESc tab offers "open set to what is on screen" only when set
+    )
 
     def seed_from_view(self) -> None:
-        """Set the selection to what the viewer shows: the recording on
-        screen and the slice its sliders are on. Everything else stays as
-        seeded (a previous run's domains and settings).
-        """
+        """Set the selection to the recording on screen and the slice its sliders are on; everything else stays seeded."""
 
     def poll(self) -> None:
-        """Called by the host every frame, whatever tab is showing. A widget
-        that watches a worker it started (the vnoiser tab loading its run
-        when the worker finishes) does it here, never in ``draw_config``,
-        which only runs while the tab is on screen.
-        """
+        """Runs every frame whatever tab is showing; a widget watching a worker it started does it here, never in ``draw_config``."""
 
     def cleanup(self) -> None:
-        """Clean up resources when widget is destroyed.
-
-        override in subclasses to release resources like open windows,
-        background threads, file handles, etc.
-        """
+        """Release windows, threads and file handles when the widget is destroyed."""

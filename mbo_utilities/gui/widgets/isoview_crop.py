@@ -22,10 +22,12 @@ fused output.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import tifffile
 from imgui_bundle import icons_fontawesome_6 as fa
 from imgui_bundle import imgui
 
@@ -41,7 +43,6 @@ _CAMERA_COLORS = {
     3: (0.5, 0.75, 1.0, 1.0),
 }
 
-# Compact drag widths — replaces the wide slider_int from the v1 layout.
 _DRAG_W = 78
 _DISPLAY_DRAG_W = 110
 
@@ -52,7 +53,7 @@ _MAX_GPU_TEXTURES = 16
 
 
 def _camera_view_map(arr: Any) -> dict[int, int]:
-    meta = getattr(arr, "metadata", None) or {}
+    meta = arr.metadata or {}
     m = meta.get("camera_view_map")
     if isinstance(m, dict):
         return {int(k): int(v) for k, v in m.items()}
@@ -69,24 +70,15 @@ def cameras_for_crop(arr: Any) -> list[int]:
     """
     out: list[int] = []
     for v in getattr(arr, "views", None) or []:
-        if isinstance(v, tuple) and v:
-            out.append(int(v[0]))
-        else:
-            try:
-                out.append(int(v))
-            except (TypeError, ValueError):
-                pass
+        out.append(int(v[0]) if isinstance(v, tuple) and v else int(v))
     if out:
         return sorted(set(out))
     cv = _camera_view_map(arr)
     return sorted(cv.keys()) if cv else [0, 1, 2, 3]
 
 
-def _view_shape(arr: Any) -> tuple[int, int, int] | None:
-    shape = getattr(arr, "shape", None)
-    if not shape or len(shape) != 5:
-        return None
-    _, _, nz, ny, nx = shape
+def _view_shape(arr: Any) -> tuple[int, int, int]:
+    _, _, nz, ny, nx = arr.shape
     return int(nz), int(ny), int(nx)
 
 
@@ -116,12 +108,8 @@ def _tp_label(slot, arr=None) -> str:
     """Display label for a tiled projection slot: the tile's specimen_name
     grid token (e.g. TL010) when the array can resolve it, else SPM##.
     """
-    fn = getattr(arr, "tile_label", None)
-    if callable(fn):
-        try:
-            return fn(slot)
-        except Exception:
-            pass
+    if arr is not None:
+        return arr.tile_label(slot)
     return f"SPM{slot:02d}" if isinstance(slot, int) else str(slot)
 
 
@@ -174,71 +162,24 @@ def _common_timepoints(index: dict[int, dict[int, Path]]) -> list[int]:
     return sorted(tps)
 
 
-def _ensure_window_state(parent: Any) -> None:
-    if not hasattr(parent, "_show_iso_crop_window"):
-        parent._show_iso_crop_window = False
-    if not hasattr(parent, "_iso_crop_window_open"):
-        parent._iso_crop_window_open = False
-    if not hasattr(parent, "_iso_crop_cache_key"):
-        parent._iso_crop_cache_key = None
-    if not hasattr(parent, "_iso_crop_shapes"):
-        parent._iso_crop_shapes: dict[int, tuple[int, int, int]] = {}
-    # Widget-local edits — only committed to crop_state on Apply.
-    # Keyed by (tile, camera); tile is None when non-tiled, else the SPM int.
-    # Values are dicts with z/y/x tuples.
-    if not hasattr(parent, "_iso_crop_pending"):
-        parent._iso_crop_pending: dict[tuple, dict[str, tuple[int, int]]] = {}
-    if not hasattr(parent, "_iso_crop_proj_index"):
-        parent._iso_crop_proj_index: dict[int, dict[int, Path]] = {}
-    if not hasattr(parent, "_iso_crop_timepoints"):
-        parent._iso_crop_timepoints: list[int] = []
-    if not hasattr(parent, "_iso_crop_current_tp"):
-        parent._iso_crop_current_tp = 0
-    if not hasattr(parent, "_iso_crop_gpu"):
-        # keyed by (view, timepoint)
-        parent._iso_crop_gpu: dict[tuple[int, int], Any] = {}
-    if not hasattr(parent, "_iso_crop_gpu_lru"):
-        parent._iso_crop_gpu_lru: list[tuple[int, int]] = []
-    if not hasattr(parent, "_iso_crop_vmin"):
-        parent._iso_crop_vmin = 0.0
-    if not hasattr(parent, "_iso_crop_vmax"):
-        parent._iso_crop_vmax = 1.0
-    if not hasattr(parent, "_iso_crop_display_inited"):
-        parent._iso_crop_display_inited = False
-
-
 def _get_iso_array(parent: Any) -> Any | None:
-    iw = getattr(parent, "image_widget", None)
+    iw = parent.image_widget
     if iw is None or not iw.data:
         return None
-    arr = iw.data[0]
-    try:
-        from mbo_utilities.gui.widgets.pipelines.isoview import _unwrap_array
+    from mbo_utilities.gui.widgets.pipelines.isoview import _unwrap_array
 
-        return _unwrap_array(arr)
-    except Exception:
-        return arr
+    return _unwrap_array(iw.data[0])
 
 
 def _get_backend(parent: Any) -> Any | None:
-    iw = getattr(parent, "image_widget", None)
+    iw = parent.image_widget
     if iw is None:
         return None
-    try:
-        return iw.figure.imgui_renderer.backend
-    except AttributeError:
-        return None
+    return iw.figure.imgui_renderer.backend
 
 
 def _load_projection(path: Path) -> np.ndarray | None:
-    try:
-        import tifffile
-    except ImportError:
-        return None
-    try:
-        a = tifffile.imread(str(path))
-    except Exception:
-        return None
+    a = tifffile.imread(str(path))
     if a.ndim == 3:
         a = a.max(axis=0)
     if a.ndim != 2:
@@ -247,12 +188,8 @@ def _load_projection(path: Path) -> np.ndarray | None:
 
 
 def _destroy_gpu_images(parent: Any) -> None:
-    cache = getattr(parent, "_iso_crop_gpu", None) or {}
-    for gpu in cache.values():
-        try:
-            gpu.destroy()
-        except Exception:
-            pass
+    for gpu in parent._iso_crop_gpu.values():
+        gpu.destroy()
     parent._iso_crop_gpu = {}
     parent._iso_crop_gpu_lru = []
 
@@ -262,10 +199,7 @@ def _evict_lru(parent: Any) -> None:
         old_key = parent._iso_crop_gpu_lru.pop(0)
         gpu = parent._iso_crop_gpu.pop(old_key, None)
         if gpu is not None:
-            try:
-                gpu.destroy()
-            except Exception:
-                pass
+            gpu.destroy()
 
 
 def _get_or_upload(parent: Any, view: int, timepoint: int) -> Any | None:
@@ -278,11 +212,7 @@ def _get_or_upload(parent: Any, view: int, timepoint: int) -> Any | None:
     key = (view, timepoint)
     gpu = parent._iso_crop_gpu.get(key)
     if gpu is not None:
-        # Refresh LRU position
-        try:
-            parent._iso_crop_gpu_lru.remove(key)
-        except ValueError:
-            pass
+        parent._iso_crop_gpu_lru.remove(key)
         parent._iso_crop_gpu_lru.append(key)
         gpu.reupload_if_changed(
             "gray",
@@ -303,16 +233,13 @@ def _get_or_upload(parent: Any, view: int, timepoint: int) -> Any | None:
         return None
     from mbo_utilities.gui.widgets.summary_image import _GpuImage
 
-    try:
-        gpu = _GpuImage(
-            backend,
-            proj,
-            "gray",
-            float(parent._iso_crop_vmin),
-            float(parent._iso_crop_vmax),
-        )
-    except Exception:
-        return None
+    gpu = _GpuImage(
+        backend,
+        proj,
+        "gray",
+        float(parent._iso_crop_vmin),
+        float(parent._iso_crop_vmax),
+    )
     parent._iso_crop_gpu[key] = gpu
     parent._iso_crop_gpu_lru.append(key)
     _evict_lru(parent)
@@ -342,9 +269,7 @@ def _pending_tile(parent: Any, arr: Any):
     """Active tile key for pending crops: current tile token when tiled,
     else None.
     """
-    if bool(getattr(arr, "is_tiled", False)):
-        return parent._iso_crop_current_tp
-    return None
+    return parent._iso_crop_current_tp if arr.is_tiled else None
 
 
 def _ensure_loaded_for(parent: Any, arr: Any) -> None:
@@ -352,7 +277,7 @@ def _ensure_loaded_for(parent: Any, arr: Any) -> None:
     changes. Seeds full-extent crops, picks a sensible initial display
     range, and clears any cached textures from a prior dataset.
     """
-    key = (id(arr), getattr(arr, "scan_root", None))
+    key = (id(arr), arr.scan_root)
     if parent._iso_crop_cache_key == key and parent._iso_crop_shapes:
         return
     parent._iso_crop_cache_key = key
@@ -360,21 +285,14 @@ def _ensure_loaded_for(parent: Any, arr: Any) -> None:
     parent._iso_crop_proj_index = {}
     parent._iso_crop_timepoints = []
     parent._iso_crop_current_tp = 0
-    parent._iso_crop_display_inited = False
     _destroy_gpu_images(parent)
 
     shp = _view_shape(arr)
-    if shp is None:
-        return
     cameras = cameras_for_crop(arr)
     for cam in cameras:
         parent._iso_crop_shapes[cam] = shp
 
-    try:
-        projections = arr.projections() if hasattr(arr, "projections") else None
-    except Exception:
-        projections = None
-    parent._iso_crop_proj_index = _build_projection_index(arr, projections)
+    parent._iso_crop_proj_index = _build_projection_index(arr, arr.projections())
     parent._iso_crop_timepoints = _common_timepoints(parent._iso_crop_proj_index)
     if parent._iso_crop_timepoints:
         parent._iso_crop_current_tp = parent._iso_crop_timepoints[0]
@@ -383,7 +301,7 @@ def _ensure_loaded_for(parent: Any, arr: Any) -> None:
     # datasets; for tiled it is each SPM that has a projection, so every tile
     # carries its own per-camera crop.
     parent._iso_crop_pending = {}
-    if bool(getattr(arr, "is_tiled", False)):
+    if arr.is_tiled:
         tile_crops = crop_state.get_tile_crops(arr)
         tiles = parent._iso_crop_timepoints or [parent._iso_crop_current_tp]
         for tile in tiles:
@@ -404,7 +322,6 @@ def _ensure_loaded_for(parent: Any, arr: Any) -> None:
     vmin, vmax = _initial_display_range(parent, arr)
     parent._iso_crop_vmin = vmin
     parent._iso_crop_vmax = vmax
-    parent._iso_crop_display_inited = True
 
 
 def open_window(parent: Any) -> None:
@@ -414,7 +331,6 @@ def open_window(parent: Any) -> None:
     crop_state — keeps the floating window reactive to manual edits
     made in the Parameters popup between opens.
     """
-    _ensure_window_state(parent)
     parent._show_iso_crop_window = True
     parent._iso_crop_cache_key = None
 
@@ -423,8 +339,6 @@ def draw_window(parent: Any) -> None:
     """Render the crop editor. Call once per frame from the main
     preview-widget render loop (alongside the other floating windows).
     """
-    _ensure_window_state(parent)
-
     was_open = parent._iso_crop_window_open
     if parent._show_iso_crop_window:
         parent._iso_crop_window_open = True
@@ -512,7 +426,7 @@ def draw_window(parent: Any) -> None:
         imgui.end_child()
 
         imgui.separator()
-        tiled = bool(getattr(arr, "is_tiled", False))
+        tiled = arr.is_tiled
         if tiled and len(parent._iso_crop_timepoints) > 1:
             cur = parent._iso_crop_current_tp
             if imgui.button(
@@ -573,45 +487,45 @@ def draw_window(parent: Any) -> None:
         imgui.end()
 
 
+def _drag_vmin(parent: Any, speed: float) -> None:
+    _, parent._iso_crop_vmin = imgui.drag_float(
+        "##iso_crop_vmin", float(parent._iso_crop_vmin), speed, 0.0, 0.0, "%.0f"
+    )
+
+
+def _drag_vmax(parent: Any, speed: float) -> None:
+    _, parent._iso_crop_vmax = imgui.drag_float(
+        "##iso_crop_vmax", float(parent._iso_crop_vmax), speed, 0.0, 0.0, "%.0f"
+    )
+
+
+def _auto_range(parent: Any, arr: Any) -> None:
+    if imgui.button("Auto##iso_crop_auto"):
+        parent._iso_crop_vmin, parent._iso_crop_vmax = _initial_display_range(
+            parent, arr
+        )
+
+
+def _tp_slider(parent: Any, tps: list[int], cur_idx: int, value_fmt: str) -> None:
+    ch, v = imgui.slider_int(
+        "##iso_crop_tp", cur_idx, 0, max(0, len(tps) - 1), value_fmt
+    )
+    if ch:
+        parent._iso_crop_current_tp = tps[max(0, min(v, len(tps) - 1))]
+
+
 def _draw_display_controls(parent: Any, arr: Any) -> None:
     """Shared vmin/vmax + timepoint scrubber. Both apply to every view."""
     # Loose drag bounds — keep some headroom over the current dataset
     # so users can over-pull (e.g. to wash out bright fiducials).
     speed = max(1.0, abs(parent._iso_crop_vmax - parent._iso_crop_vmin) / 200.0)
-
-    def _vmin():
-        _, parent._iso_crop_vmin = imgui.drag_float(
-            "##iso_crop_vmin",
-            float(parent._iso_crop_vmin),
-            speed,
-            0.0,
-            0.0,
-            "%.0f",
-        )
-
-    def _vmax():
-        _, parent._iso_crop_vmax = imgui.drag_float(
-            "##iso_crop_vmax",
-            float(parent._iso_crop_vmax),
-            speed,
-            0.0,
-            0.0,
-            "%.0f",
-        )
-
-    def _auto():
-        if imgui.button("Auto##iso_crop_auto"):
-            lo, hi = _initial_display_range(parent, arr)
-            parent._iso_crop_vmin = lo
-            parent._iso_crop_vmax = hi
-
     items = [
-        ("Min", _DISPLAY_DRAG_W, _vmin),
-        ("Max", _DISPLAY_DRAG_W, _vmax),
-        (None, button_width("Auto"), _auto),
+        ("Min", _DISPLAY_DRAG_W, partial(_drag_vmin, parent, speed)),
+        ("Max", _DISPLAY_DRAG_W, partial(_drag_vmax, parent, speed)),
+        (None, button_width("Auto"), partial(_auto_range, parent, arr)),
     ]
 
-    tiled = bool(getattr(arr, "is_tiled", False))
+    tiled = arr.is_tiled
     tps = parent._iso_crop_timepoints
     if tps:
         # Scrubber — use the index into the common-tile/timepoint list so it's
@@ -627,18 +541,9 @@ def _draw_display_controls(parent: Any, arr: Any) -> None:
             else f"TM{tps[cur_idx]:06d}  ({cur_idx + 1}/{len(tps)})"
         )
 
-        def _tp():
-            ch, v = imgui.slider_int(
-                "##iso_crop_tp",
-                cur_idx,
-                0,
-                max(0, len(tps) - 1),
-                value_fmt,
-            )
-            if ch:
-                parent._iso_crop_current_tp = tps[max(0, min(v, len(tps) - 1))]
-
-        items.append((label, 220.0, _tp))
+        items.append(
+            (label, 220.0, partial(_tp_slider, parent, tps, cur_idx, value_fmt))
+        )
 
     draw_toolbar_row(items)
     if parent._iso_crop_vmax <= parent._iso_crop_vmin:
@@ -689,11 +594,12 @@ def _draw_camera_section(
     try:
         avail_x = imgui.get_content_region_avail().x
         # Compact drag column on the left; preview eats whatever's left.
-        controls_w = 2 * _DRAG_W + 56  # 2 drags + label + spacing per row
-        preview_w = max(220.0, avail_x - controls_w - 16.0)
+        # 2 drags + label + spacing per row
+        controls_w = 2 * _DRAG_W + 56
         # Cap preview height so every camera section fits the scroll region;
         # without this the preview scales to its full width and one camera
         # can be ~600px tall, pushing the rest off-window.
+        preview_w = max(220.0, avail_x - controls_w - 16.0)
         header_h = imgui.get_text_line_height_with_spacing()
         preview_h = (
             preview_w

@@ -8,26 +8,20 @@ that only happens when using immapp.run() (not fastplotlib).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from imgui_bundle import ImVec2, imgui
 
-from mbo_utilities.gui._imgui_helpers import PopupAutoSize
-
-# cached doc content
 _doc_cache: dict[str, str] = {}
 
-# available docs: (display_name, filename)
 DOCS = [
     ("Quick Start", "gui_quickstart.md"),
     ("File Formats", "file_formats.md"),
 ]
 
-# not a file: the ROI tool writes its own guide, so it stays next to the
-# code it documents instead of drifting in a shipped markdown file
 ROI_DOC = "::roi::"
-# what a .mesc holds; the MESc tab's (?) opens it
 MESC_DOC = "mesc.md"
 
 
@@ -37,11 +31,11 @@ def docs_for(parent: Any) -> list[tuple[str, str]]:
     that widget is on. One Help button for the whole app.
     """
     docs = list(DOCS)
-    data = getattr(getattr(parent, "image_widget", None), "data", None) or []
-    md = getattr(data[0], "metadata", None) if len(data) else None
+    data = parent.image_widget.data if parent.image_widget is not None else []
+    md = data[0].metadata if len(data) else None
     if isinstance(md, dict) and "mesc_unit" in md:
         docs.append(("MESc files", MESC_DOC))
-    if getattr(parent, "manual_roi", None) is not None:
+    if parent.manual_roi is not None:
         docs.append(("ROI Labeling", ROI_DOC))
     return docs
 
@@ -68,20 +62,11 @@ def load_doc(filename: str) -> str:
 
 def draw_help_popup(parent: Any) -> None:
     """Draw help viewer popup with markdown rendering."""
-    if not hasattr(parent, "_show_help_popup"):
-        parent._show_help_popup = False
-    if not hasattr(parent, "_help_selected_doc"):
-        parent._help_selected_doc = 0
-
-    if not hasattr(parent, "_help_sizer"):
-        parent._help_sizer = PopupAutoSize("Help##HelpViewer", auto_resize=False)
-
     if parent._show_help_popup:
         parent._help_sizer.before_open()
         imgui.open_popup("Help##HelpViewer")
         parent._show_help_popup = False
 
-    # default size on first use; top anchor comes from _help_sizer.
     io = imgui.get_io()
     screen_w, screen_h = io.display_size.x, io.display_size.y
     win_w, win_h = min(650, screen_w * 0.7), min(550, screen_h * 0.7)
@@ -98,10 +83,10 @@ def draw_help_popup(parent: Any) -> None:
         if not visible:
             imgui.close_current_popup()
         else:
-            # doc selector tabs
             docs = docs_for(parent)
-            # a widget's (?) asks for its page by file name, for one frame
-            wanted = getattr(parent, "_help_select_doc", None)
+            wanted = (
+                parent._help_select_doc
+            )  # a widget's (?) names its page for one frame
             if imgui.begin_tab_bar("##HelpTabs"):
                 for i, (name, filename) in enumerate(docs):
                     flags = (
@@ -118,21 +103,19 @@ def draw_help_popup(parent: Any) -> None:
             imgui.separator()
             imgui.spacing()
 
-            # content area
             avail = imgui.get_content_region_avail()
-            content_height = avail.y - 35  # space for close button
+            content_height = avail.y - 35
 
             if imgui.begin_child(
                 "##HelpContent", ImVec2(0, content_height), imgui.ChildFlags_.borders
             ):
-                # the ROI tab comes and goes with its widget, so the
-                # remembered index can outlive the tab it pointed at
-                _, filename = docs[min(parent._help_selected_doc, len(docs) - 1)]
+                _, filename = docs[
+                    min(parent._help_selected_doc, len(docs) - 1)
+                ]  # the ROI tab comes and goes with its widget
                 content = load_doc(filename)
                 _render_markdown(content)
                 imgui.end_child()
 
-            # close button
             imgui.separator()
             imgui.spacing()
             btn_width = 80
@@ -143,11 +126,8 @@ def draw_help_popup(parent: Any) -> None:
         imgui.end_popup()
 
 
-import re
-
-# colors for the renderer
 _C_NORMAL = imgui.ImVec4(0.85, 0.85, 0.85, 1.0)
-_C_BOLD = imgui.ImVec4(1.0, 1.0, 1.0, 1.0)  # brighter = "bold" surrogate
+_C_BOLD = imgui.ImVec4(1.0, 1.0, 1.0, 1.0)
 _C_CODE_INLINE = imgui.ImVec4(0.95, 0.75, 0.55, 1.0)
 _C_CODE_BLOCK = imgui.ImVec4(0.7, 0.9, 0.7, 1.0)
 _C_H1 = imgui.ImVec4(1.0, 0.9, 0.4, 1.0)
@@ -155,12 +135,8 @@ _C_H2 = imgui.ImVec4(0.6, 0.85, 1.0, 1.0)
 _C_H3 = imgui.ImVec4(0.85, 0.85, 0.85, 1.0)
 _C_BULLET_TERM = imgui.ImVec4(0.9, 0.9, 0.5, 1.0)
 
-# slack _render_inline keeps before it wraps, and a table column must grant
-# on top of the text it measures
-_WRAP_SLACK = 4.0
+_WRAP_SLACK = 4.0  # NOTE: _render_inline wraps this early, so a table column must grant it on top of the text it measures
 
-# Tokenizer for inline markdown spans:
-#   **bold** | `code` | plain
 _INLINE_RE = re.compile(r"(\*\*[^*]+\*\*|`[^`]+`)")
 
 
@@ -178,8 +154,7 @@ def _render_inline(text: str, base_color: imgui.ImVec4 = _C_NORMAL) -> None:
     and emit a virtual newline (no `same_line`) when the next word would
     overflow the available region.
     """
-    # 1. split into colored spans
-    spans = []  # list of (text, color)
+    spans = []
     for part in _INLINE_RE.split(text):
         if not part:
             continue
@@ -190,10 +165,8 @@ def _render_inline(text: str, base_color: imgui.ImVec4 = _C_NORMAL) -> None:
         else:
             spans.append((part, base_color))
 
-    # 2. tokenize each span into word + whitespace pieces; keep colors
-    tokens = []  # list of (text, color, is_space)
+    tokens = []
     for span_text, color in spans:
-        # match runs of whitespace OR runs of non-whitespace
         for m in re.finditer(r"\s+|\S+", span_text):
             piece = m.group(0)
             tokens.append((piece, color, piece.isspace()))
@@ -201,7 +174,6 @@ def _render_inline(text: str, base_color: imgui.ImVec4 = _C_NORMAL) -> None:
     if not tokens:
         return
 
-    # 3. emit tokens with manual wrapping
     avail = imgui.get_content_region_avail().x
     start_x = imgui.get_cursor_pos_x()
     cur_x = start_x
@@ -209,17 +181,12 @@ def _render_inline(text: str, base_color: imgui.ImVec4 = _C_NORMAL) -> None:
     space_pad = _WRAP_SLACK
 
     for piece, color, is_space in tokens:
-        # leading whitespace at the start of a wrapped line is dropped
         if first_on_line and is_space:
             continue
         w = imgui.calc_text_size(piece).x
-        # would this token overflow? if so, break to a new line first.
-        # never break before a whitespace (it just gets dropped).
         if not first_on_line and (cur_x + w) > (start_x + avail - space_pad):
             if is_space:
-                continue  # don't emit trailing whitespace at end of line
-            # force a newline by NOT calling same_line — the next text
-            # call lands on the next line at the natural cursor.
+                continue
             cur_x = start_x
             first_on_line = True
 
@@ -241,12 +208,10 @@ def _render_markdown(content: str) -> None:
         i += 1
         stripped = line.strip()
 
-        # code blocks
         if stripped.startswith("```"):
             in_code_block = not in_code_block
             continue
         if in_code_block:
-            # preserve leading whitespace and wrap long lines.
             imgui.push_style_color(imgui.Col_.text, _C_CODE_BLOCK)
             try:
                 imgui.push_text_wrap_pos(0.0)
@@ -258,27 +223,24 @@ def _render_markdown(content: str) -> None:
                 imgui.pop_style_color()
             continue
 
-        # empty lines
         if not stripped:
             imgui.spacing()
             continue
 
-        # headers
         if stripped.startswith("# "):
             imgui.spacing()
             imgui.text_colored(_C_H1, stripped[2:])
             imgui.separator()
             continue
-        if stripped.startswith("## "):
+        if stripped.startswith("# "):
             imgui.spacing()
             imgui.text_colored(_C_H2, stripped[3:])
             continue
-        if stripped.startswith("### "):
+        if stripped.startswith("## "):
             imgui.spacing()
             imgui.text_colored(_C_H3, stripped[4:])
             continue
 
-        # a pipe table: header row, a |---|---| rule, then body rows
         rule = lines[i].strip() if i < len(lines) else ""
         if (
             stripped.startswith("|")
@@ -293,8 +255,6 @@ def _render_markdown(content: str) -> None:
                 i += 1
             rows = [[c.strip() for c in r.strip("|").split("|")] for r in block]
             ncol = max(len(r) for r in rows)
-            # widths off the unwrapped text: an auto-fit column would measure
-            # what _render_inline just wrapped to it and never widen again
             pad = 2.0 * imgui.get_style().cell_padding.x + _WRAP_SLACK
             text = [
                 [
@@ -314,9 +274,6 @@ def _render_markdown(content: str) -> None:
                 )
                 for col in text
             ]
-            # the last column takes the rest and wraps; the others keep their
-            # own width, shrunk together when they crowd it out but never
-            # under the longest word they hold, which would wrap a label
             head = sum(natural[:-1])
             budget = imgui.get_content_region_avail().x * 0.6
             scale = min(1.0, budget / head) if head else 1.0
@@ -347,7 +304,6 @@ def _render_markdown(content: str) -> None:
             imgui.spacing()
             continue
 
-        # bullet points (definition style: - **term**: description)
         if stripped.startswith("- **") and "**:" in stripped:
             parts = stripped[2:].split("**:", 1)
             term = parts[0].replace("**", "")
@@ -365,5 +321,4 @@ def _render_markdown(content: str) -> None:
             _render_inline(stripped[2:])
             continue
 
-        # regular paragraph — wrap and apply inline spans
         _render_inline(stripped)

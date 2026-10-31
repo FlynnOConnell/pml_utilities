@@ -47,8 +47,7 @@ __all__ = [
 
 UNLABELED = -1
 
-# one color per class label (tab10, matched to masknmf's classification GUI
-# so shared label sets look the same in both tools), float rgb in 0-1
+# tab10, as masknmf's classification gui colors the same label set
 CLASS_COLORS: tuple[tuple[float, float, float], ...] = (
     (0.12, 0.47, 0.71),
     (1.00, 0.50, 0.05),
@@ -64,14 +63,12 @@ CLASS_COLORS: tuple[tuple[float, float, float], ...] = (
 
 
 def class_color(index: int) -> tuple[float, float, float]:
-    """Rgb in 0-1 for a class label index (wraps past the palette end)"""
+    """Rgb in 0-1 for a class label index; wraps past the palette end."""
     return CLASS_COLORS[index % len(CLASS_COLORS)]
 
 
 def _make_roi_colors() -> np.ndarray:
-    # one fully saturated color per unclassified ROI. hues are shuffled so
-    # consecutive ROIs contrast, and saturating them keeps fills readable
-    # over gnuplot2, which owns most of the pale end of the spectrum
+    """180 saturated hues in shuffled order: consecutive ROIs contrast, and full saturation stays readable over gnuplot2's pale end."""
     hues = np.random.default_rng(0).permutation(180)
     return np.array(
         [
@@ -82,9 +79,9 @@ def _make_roi_colors() -> np.ndarray:
     )
 
 
-# (180, 3) uint8 fill colors for ROIs with no class label; index with
-# ``roi_index % len(ROI_COLORS)``
-ROI_COLORS = _make_roi_colors()
+ROI_COLORS = (
+    _make_roi_colors()
+)  # (180, 3) uint8, indexed roi_index % 180 for unlabeled rois
 
 
 @dataclass
@@ -171,8 +168,7 @@ class RoiLabelStore(Observable):
             ):
                 raise ValueError(f"pixels outside a {ny}x{nx} frame")
         self.label_names: tuple[str, ...] = tuple(str(n) for n in label_names)
-        # what the plane axis means: ((dim name, size), ...) over the data's
-        # scrolling dims with z last, so nz == product; empty = plain z planes
+        # ((dim name, size), ...) over the scrolling dims keying planes, z last; empty is plain z planes
         self.plane_axes: tuple[tuple[str, int], ...] = ()
         self.axis_roles: dict[str, str] = {}
         self.tint: dict[int, tuple[int, int, int]] = {}
@@ -216,7 +212,7 @@ class RoiLabelStore(Observable):
         return find_slider_name(names, role)
 
     def axis_size(self, role: str) -> int:
-        """How many positions the ``role`` axis keys; 1 when it is not keyed."""
+        """The number of positions the ``role`` axis keys; 1 when it is not keyed."""
         name = self.axis_name(role)
         return dict(self.plane_axes).get(name, 1) if name is not None else 1
 

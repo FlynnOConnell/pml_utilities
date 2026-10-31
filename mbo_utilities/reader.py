@@ -1,9 +1,4 @@
-"""
-imread - Lazy load imaging data from supported file types.
-
-This module provides the imread() function for loading imaging data from
-various file formats as lazy arrays.
-"""
+"""``imread``: open imaging data of any supported format as a lazy array."""
 
 from __future__ import annotations
 
@@ -42,9 +37,14 @@ if TYPE_CHECKING:
 
 logger = log.get("reader")
 
-# UI dropdown shows these formats (excludes .tif to avoid duplication)
-MBO_SUPPORTED_FTYPES = [".tiff", ".zarr", ".bin", ".h5", ".klb", ".mp4"]
-# reading accepts .tif as alias for .tiff
+MBO_SUPPORTED_FTYPES = [
+    ".tiff",
+    ".zarr",
+    ".bin",
+    ".h5",
+    ".klb",
+    ".mp4",
+]  # the save-as dropdown
 MBO_READABLE_FTYPES = [
     ".tiff",
     ".tif",
@@ -57,19 +57,14 @@ MBO_READABLE_FTYPES = [
     ".mp4",
 ]
 
-# extensions that require an optional third-party package. when the package
-# isn't importable we drop the extension from the GUI dropdown so the user
-# can't pick a format that would fail at write time.
 _OPTIONAL_PKG_BY_EXT = {".klb": "pyklb"}
 
-MBO_AVAILABLE_FTYPES = [
+MBO_AVAILABLE_FTYPES = [  # the dropdown without the formats whose optional package is missing
     ext
     for ext in MBO_SUPPORTED_FTYPES
     if _OPTIONAL_PKG_BY_EXT.get(ext) is None
     or importlib.util.find_spec(_OPTIONAL_PKG_BY_EXT[ext]) is not None
 ]
-
-# Re-export PIPELINE_TAGS for backward compatibility (canonical location is file_io.py)
 
 
 def source_reader_kwargs(arr) -> dict:
@@ -96,44 +91,18 @@ def widget_reader_kwargs(image_widget) -> dict:
 
 @lru_cache(maxsize=32)
 def _get_init_params(cls: type) -> set[str]:
-    """
-    Get the set of parameter names accepted by a class's __init__.
-
-    Uses inspect.signature for dynamic introspection rather than hardcoded
-    mappings. Results are cached for performance.
-
-    Parameters
-    ----------
-    cls : type
-        The class to inspect.
-
-    Returns
-    -------
-    set[str]
-        Set of parameter names (excluding 'self').
-    """
-    try:
-        sig = inspect.signature(cls.__init__)
-        # Exclude 'self' and collect all parameter names
-        return {
-            name
-            for name, param in sig.parameters.items()
-            if name != "self"
-            and param.kind
-            not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-        }
-    except (ValueError, TypeError):
-        # Fallback for classes without inspectable __init__
-        return set()
+    """The named parameters of ``cls.__init__``, without ``self``."""
+    sig = inspect.signature(cls.__init__)
+    return {
+        name
+        for name, param in sig.parameters.items()
+        if name != "self"
+        and param.kind
+        not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    }
 
 
 def _filter_kwargs(cls, kwargs):
-    """
-    Filter kwargs to only those accepted by cls.__init__.
-
-    Uses dynamic introspection via _get_init_params rather than
-    hardcoded mappings.
-    """
     allowed = _get_init_params(cls)
     return {k: v for k, v in kwargs.items() if k in allowed}
 
@@ -211,15 +180,8 @@ def imread(
     >>> arr = imread(data)  # Returns NumpyArray
     >>> imwrite(arr, "output", ext=".zarr")  # Full write support
     """
-    # Pull single-channel wrapping out so every return path benefits.
-    # Stored as ``channel`` (zero-based) — picklable through reader_kwargs
-    # so subprocess workers can re-create the wrap after their own imread.
     channel = kwargs.pop("channel", None)
     squeeze = kwargs.pop("squeeze", False)
-    # temporal binning is a read-time view too, and like ``channel`` it
-    # round-trips through reader_kwargs so a worker re-opening the path gets
-    # the binned array the user was looking at. Wrapped before the channel
-    # view so that view keeps its 4D surface on top.
     frame_average = kwargs.pop("frame_average", None)
     inverted = kwargs.pop("invert_deflection", False)
     arr = _imread_impl(inputs, **kwargs)
@@ -231,10 +193,11 @@ def imread(
         from mbo_utilities.arrays._inverted_view import invert_deflection
 
         arr = invert_deflection(arr)
+    # the channel view goes on last so its 4D surface stays on top
     if channel is not None:
         from mbo_utilities.arrays._channel_view import _ChannelView
 
-        if not hasattr(arr, "shape") or len(arr.shape) < 5:
+        if len(arr.shape) < 5:
             logger.debug(
                 "imread(channel=%r): underlying array is %dD, returning unwrapped",
                 channel,
@@ -278,21 +241,13 @@ def _imread_impl(
     inputs: str | Path | np.ndarray | Sequence[str | Path],
     **kwargs,
 ):
-    """Internal imread that returns the raw lazy array without channel wrapping."""
-    # Wrap numpy arrays in NumpyArray for full imwrite/protocol support
+    """The lazy array for ``inputs`` before the read-time views (§5.5 dispatch, then the legacy chain)."""
     if isinstance(inputs, np.ndarray):
-        logger.debug(f"Wrapping numpy array with shape {inputs.shape} as NumpyArray")
-        # NumpyArray logs the resolved dims + 5D shape on construction
-        # (see _apply_dim_order), so no extra hint is needed here.
         return NumpyArray(inputs, **_filter_kwargs(NumpyArray, kwargs))
-    # A SqueezedView is a display lens over a canonical 5D array; normalize
-    # back to that base so imread()/pipeline() operate on the real 5D array
-    # (the view drops axes the writer/pipeline rely on).
     from mbo_utilities.squeeze import SqueezedView
 
     if isinstance(inputs, SqueezedView):
         return inputs.base
-    # Pass through already-loaded lazy arrays (has _imwrite method)
     if hasattr(inputs, "_imwrite") and hasattr(inputs, "shape"):
         return inputs
 
@@ -301,9 +256,7 @@ def _imread_impl(
         if not p.exists():
             raise ValueError(f"Input path does not exist: {p}")
 
-        # redirect an inner-zarr path (zarr.json / chunk file) to the store
-        # root so can_open() sees the store directory, matching the legacy
-        # redirect further down.
+        # file pickers hand back the zarr.json or a chunk file inside a store
         if not p.is_dir():
             for ancestor in p.parents:
                 if ancestor.suffix.lower() == ".zarr" and ancestor.is_dir():
@@ -313,10 +266,6 @@ def _imread_impl(
                     p = ancestor
                     break
 
-        # v4 dispatch: the highest-PRIORITY registered class (built-in or a
-        # third-party plugin) whose can_open() accepts the path wins. Falls
-        # through to the legacy detection below for inputs no class claims
-        # (multi-file lists, .bin/.klb/.mp4, reg_tif folders, mixed dirs).
         cls = _dispatch(p)
         if cls is not None:
             logger.debug(f"Dispatch selected {cls.__name__} for {p}")
@@ -340,27 +289,11 @@ def _imread_impl(
                 )
                 return Suite2pArray(p)
 
-        # Isoview detection runs before file-vs-dir dispatch so "Open File"
-        # on `<root>.corrected/SPM##/TM######/*.zarr`, "Open Folder" on
-        # `<root>.corrected/SPM##`, and `mbo <root>.corrected/` all resolve
-        # to the enclosing stack root via parent-walk.
+        # detect_isoview_kind walks up to the stack root from a file, an SPM## folder or the root itself
         iso_kind = detect_isoview_kind(p)
         if iso_kind is not None:
             logger.info(f"Detected isoview-{iso_kind} tree at {p}")
             return IsoviewArray(p, kind=iso_kind)
-
-        # if the user (or a file dialog) handed us a path inside a .zarr v3
-        # store, redirect to the store root. file pickers default to selecting
-        # the inner zarr.json/zgroup.json/zarray rather than the .zarr folder
-        # itself, and that previously failed with "no supported files".
-        if not p.is_dir():
-            for ancestor in p.parents:
-                if ancestor.suffix.lower() == ".zarr" and ancestor.is_dir():
-                    logger.debug(
-                        f"Redirecting {p.name} -> parent zarr store {ancestor}"
-                    )
-                    p = ancestor
-                    break
 
         if p.suffix.lower() == ".zarr" and p.is_dir():
             paths = [p]
@@ -374,33 +307,6 @@ def _imread_impl(
                 )
                 paths = zarrs
             else:
-                # Check for Suite2p structure (ops.npy or plane subdirs)
-                # unified Suite2pArray handles both single plane and volume
-                ops_file = p / "ops.npy"
-                if ops_file.exists():
-                    logger.info(f"Detected Suite2p directory at {p}")
-                    return Suite2pArray(p)
-
-                # Pointed at a suite2p reg_tif/ folder directly. Route to the
-                # parent plane via Suite2pArray with use_reg_tif=True so files
-                # are sorted by numeric frame_start, not lexicographically
-                # (suite2p uses variable-width filenames).
-                if p.name == "reg_tif" and (p.parent / "ops.npy").exists():
-                    logger.info(f"Detected Suite2p reg_tif folder at {p}")
-                    return Suite2pArray(p.parent / "ops.npy", use_reg_tif=True)
-
-                # Check for plane subdirectories (volumetric suite2p)
-                plane_subdirs = [
-                    d for d in p.iterdir() if d.is_dir() and (d / "ops.npy").exists()
-                ]
-                if plane_subdirs:
-                    logger.info(
-                        f"Detected Suite2p volume with {len(plane_subdirs)} planes in {p}"
-                    )
-                    return Suite2pArray(p)
-
-                # Check for TIFF volume structure (planeXX.tiff files)
-                # unified TiffArray handles both single files and plane volumes
                 plane_tiffs = sorted(p.glob("plane*.tif*"))
                 if plane_tiffs:
                     logger.info(
@@ -408,8 +314,7 @@ def _imread_impl(
                     )
                     return TiffArray(p)
 
-                # a folder of whole recordings (a Bruker h5, a MESc each): the
-                # first by name opens through its own class
+                # a folder of whole recordings (a Bruker h5, a MESc each): the first by name opens
                 opened = _open_first_recording(sorted(p.iterdir()), p, kwargs)
                 if opened is not None:
                     return opened
@@ -421,12 +326,8 @@ def _imread_impl(
     elif isinstance(inputs, (list, tuple)):
         if not inputs:
             raise ValueError("Input list is empty")
-
-        # Check if all items are ndarrays
         if all(isinstance(item, np.ndarray) for item in inputs):
             return inputs
-
-        # Check if all items are paths
         if not all(isinstance(item, (str, Path)) for item in inputs):
             raise TypeError(
                 f"Mixed input types in list. Expected all paths or all ndarrays. "
@@ -434,7 +335,6 @@ def _imread_impl(
             )
 
         paths = [Path(p) for p in inputs]
-        # a list of whole recordings: the first listed opens through its own class
         opened = _open_first_recording(paths, "the list", kwargs)
         if opened is not None:
             return opened
@@ -450,22 +350,17 @@ def _imread_impl(
             f"No supported files in {inputs}. \n"
             f"Supported file types are: {MBO_READABLE_FTYPES}"
         )
-    paths = filtered
-
-    # filter out pollen calibration result files (*_pollen.h5)
-    # these are output files, not source data
-    paths = [p for p in paths if not p.name.endswith("_pollen.h5")]
+    paths = [
+        p for p in filtered if not p.name.endswith("_pollen.h5")
+    ]  # pollen results are outputs
     if not paths:
         raise ValueError(
             f"No source data files found in {inputs}. "
             f"Only pollen calibration result files (*_pollen.h5) were found."
         )
 
-    parent = paths[0].parent if paths else None
-    ops_file = parent / "ops.npy" if parent else None
-
-    # Suite2p ops file
-    if ops_file and ops_file.exists():
+    ops_file = paths[0].parent / "ops.npy"
+    if ops_file.exists():
         if len(paths) == 1 and paths[0].suffix.lower() == ".bin":
             logger.debug(f"Ops.npy detected - reading specific binary {paths[0]}.")
             return Suite2pArray(paths[0])
@@ -483,8 +378,7 @@ def _imread_impl(
         raise ValueError(f"Multiple file types found in input: {exts!r}")
 
     if first.suffix in [".tif", ".tiff"]:
-        # Check if list of files represents multiple distinct planes
-        # (this takes priority over type detection - it's a structural choice)
+        # planeNN files stack on Z whatever their kind
         if len(paths) > 1:
             plane_nums = {_extract_tiff_plane_number(p.name) for p in paths}
             plane_nums.discard(None)
@@ -494,24 +388,18 @@ def _imread_impl(
                 )
                 return TiffArray(paths, **_filter_kwargs(TiffArray, kwargs))
 
-        # Try array classes in priority order (most specific first)
-        # Each class's can_open() checks if it can handle the file
-        TIFF_ARRAY_CLASSES = [
-            # Specialized ScanImage subclasses (most specific)
+        TIFF_ARRAY_CLASSES = [  # most specific first; TiffArray takes whatever is left
             (LBMArray, "LBM stack"),
             (PiezoArray, "piezo stack"),
             (LBMPiezoArray, "LBM+piezo stack"),
             (SinglePlaneArray, "single-plane ScanImage"),
-            # Generic ScanImage (raw acquisition data)
             (ScanImageArray, "raw ScanImage"),
-            # Fallback: TiffArray handles both standard TIFFs and ImageJ hyperstacks
             (TiffArray, "TIFF"),
         ]
 
         for array_cls, description in TIFF_ARRAY_CLASSES:
             if array_cls.can_open(first):
-                # filter to only files this class can open, so saved
-                # outputs or unrelated tiffs in the same folder are excluded
+                # saved outputs or unrelated tiffs in the same folder are left out
                 if len(paths) > 1:
                     valid = [p for p in paths if array_cls.can_open(p)]
                     if not valid:
@@ -547,8 +435,6 @@ def _imread_impl(
         return H5Array(first, **_filter_kwargs(H5Array, kwargs))
 
     if first.suffix == ".mesc":
-        # reached only for directory / multi-file inputs; a direct .mesc path
-        # is claimed by MescArray.can_open() in the dispatch above.
         from mbo_utilities.arrays.mesc import MescArray
 
         if len(paths) > 1:
@@ -564,13 +450,10 @@ def _imread_impl(
         return MP4Array(first, **_filter_kwargs(MP4Array, kwargs))
 
     if first.suffix == ".zarr":
-        # Case 1: nested zarrs inside
         sub_zarrs = list(first.glob("*.zarr"))
         if sub_zarrs:
             logger.info("Detected nested zarr stores, loading as ZarrArray.")
             return ZarrArray(sub_zarrs, **_filter_kwargs(ZarrArray, kwargs))
-
-        # Case 2: flat zarr store with zarr.json
         if (first / "zarr.json").exists():
             logger.info("Detected zarr.json, loading as ZarrArray.")
             return ZarrArray(paths, **_filter_kwargs(ZarrArray, kwargs))
@@ -585,7 +468,6 @@ def _imread_impl(
         return ZarrArray(first.parent, **_filter_kwargs(ZarrArray, kwargs))
 
     if first.suffix == ".npy":
-        # Check for PMD demixer arrays
         if (first.parent / "pmd_demixer.npy").is_file():
             raise NotImplementedError("PMD Arrays are not yet supported.")
 
@@ -595,7 +477,6 @@ def _imread_impl(
     if first.suffix == ".klb":
         import pyklb
 
-        # if only one KLB file specified, read it directly
         if len(paths) == 1:
             logger.info(f"Loading KLB file: {first}")
             data = pyklb.readfull(str(first))

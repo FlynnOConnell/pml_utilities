@@ -125,7 +125,17 @@ def fake_host(mesc, unit_key, roi=0, channel=None):
         names = ("Timepoint", "Channel", "ROI")
         indices["Channel"] = channel
     return SimpleNamespace(
-        fpath=mesc, image_widget=FakeImageWidget([shown], names, indices)
+        fpath=mesc,
+        image_widget=FakeImageWidget([shown], names, indices),
+        _pipeline_instances={},
+        _selected_pipeline_name=None,
+        _pipeline_applies_cache=None,
+        _force_run_tab=False,
+        invert_deflection=False,
+        _custom_metadata={},
+        _bold_font=None,
+        manual_roi=None,
+        slice=None,
     )
 
 
@@ -335,7 +345,7 @@ def test_shown_name_is_the_unit_else_the_file(roi_mesc, tmp_path):
         fpath=tmp_path / "x.tif", image_widget=FakeImageWidget([SimpleNamespace()])
     )
     assert shown_name(plain) == "x.tif"
-    assert shown_name(SimpleNamespace(image_widget=None)) == ""
+    assert shown_name(SimpleNamespace(image_widget=None, fpath=None)) == ""
 
 
 def test_quick_pipelines_are_the_view_seeded_ones_that_apply(roi_mesc, tmp_path):
@@ -352,6 +362,7 @@ def test_quick_pipelines_are_the_view_seeded_ones_that_apply(roi_mesc, tmp_path)
         image_widget=FakeImageWidget(
             [SimpleNamespace(filenames=[tmp_path / "x.tif"], metadata={})]
         ),
+        _pipeline_applies_cache=None,
     )
     assert quick_pipelines(other) == []
 
@@ -368,6 +379,7 @@ def test_the_mesc_tab_offers_the_button(roi_mesc):
         image_widget=FakeImageWidget(
             [display_wrap(arr)], ("Timepoint", "ROI"), {"Timepoint": 0, "ROI": 1}
         ),
+        _pipeline_applies_cache=None,
     )
     widget = MescTabWidget(host)
     BUTTONS.clear()

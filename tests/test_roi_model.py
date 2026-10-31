@@ -46,12 +46,17 @@ class _Recorder:
         return [e.info.get("action") for e in self.events]
 
 
+class _ThingAB(Observable):
+    events = ("a", "b")
+
+
+class _ThingA(Observable):
+    events = ("a",)
+
+
 class TestObservable:
     def test_handlers_get_typed_events_once(self):
-        class Thing(Observable):
-            events = ("a", "b")
-
-        thing = Thing()
+        thing = _ThingAB()
         seen = _Recorder()
         thing.add_event_handler(seen, "a")
         thing.add_event_handler(seen, "a")  # a repeat registration is a no-op
@@ -64,10 +69,7 @@ class TestObservable:
         assert len(seen.events) == 1
 
     def test_unknown_types_are_refused_and_blocking_silences(self):
-        class Thing(Observable):
-            events = ("a",)
-
-        thing = Thing()
+        thing = _ThingA()
         with pytest.raises(ValueError):
             thing.add_event_handler(lambda e: None, "nope")
         seen = _Recorder()

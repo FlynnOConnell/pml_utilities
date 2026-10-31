@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import numpy as np
 from fastplotlib.graphics.selectors._polygon import point_in_polygon
 from imgui_bundle import imgui
@@ -13,6 +12,10 @@ from masknmf.visualization.imgui import (
 from masknmf.visualization.imgui import THEME as MTHEME
 from masknmf.visualization.rois import MARKED_COLOR, FootprintSet
 
+from mbo_utilities.gui.roi._shared import (
+    COLOR_BY,
+    CONTOUR_SHAPES,
+)
 from mbo_utilities.gui.roi_runs import (
     component_color,
     outline_data,
@@ -21,20 +24,12 @@ from mbo_utilities.roi_workflow import (
     feather_mask,
 )
 
-from mbo_utilities.gui.roi._shared import (
-    COLOR_BY,
-    CONTOUR_SHAPES,
-)
-
 
 class OverlayMixin:
     """The mask / contour overlay on the image, region drawing, picking, color by."""
 
     def apply_color_by(self):
-        """Tint every drawn ROI by ``color_by`` through ``color_cmap``: a
-        store column, or the peak of its traces; the id palette restores the
-        class / hue colors.
-        """
+        """Tint every drawn ROI by ``color_by`` through ``color_cmap`` (a store column, or its traces' peak); the id palette restores the class / hue colors."""
         if self.color_by == COLOR_BY[0]:
             self.model.colorize(None)
             return
@@ -68,9 +63,7 @@ class OverlayMixin:
         )
 
     def _feather(self, index: int) -> tuple:
-        """``(ypix, xpix, lam)`` of one drawn mask, soft-edged; cached by
-        uid (a mask's pixels never change once drawn).
-        """
+        """``(ypix, xpix, lam)`` of one drawn mask, soft-edged; cached by uid since a mask's pixels never change."""
         record = self.store.rois[index]
         got = self._feathers.get(record.uid)
         if got is None:
@@ -81,11 +74,12 @@ class OverlayMixin:
         return got
 
     def refresh_overlay(self):
-        """Masknmf's masks and contours over the plane on screen, drawn and
-        algo ROIs alike: every mask at the masks opacity (weighted by its
-        trace's peak, or its own), the selection and the group at the sel
-        masks opacity with a white rim, marked rows red; every other ROI's
-        contour in white, the selection's and the group's in their color.
+        """Masknmf's masks and contours over the plane on screen, drawn and algo ROIs alike.
+
+        Every mask at the masks opacity (weighted by its trace's peak), the
+        selection and the group at the sel masks opacity with a white rim,
+        marked rows red; other contours white, the selection's and the
+        group's in their color.
         """
         rows = [row for row in range(len(self.rows)) if self._row_plane(row) == self.z]
         key = (self.z, tuple(rows))
@@ -102,8 +96,9 @@ class OverlayMixin:
         )
         finite = np.isfinite(peaks) & (peaks > 0)
         top = float(peaks[finite].max()) if finite.any() else 1.0
-        # a row without a trace draws as if at the field's peak
-        footprints.peaks = np.where(finite, peaks, top).astype(np.float32)
+        footprints.peaks = np.where(finite, peaks, top).astype(
+            np.float32
+        )  # no trace: the field's peak
         position = {self.rows[row]: i for i, row in enumerate(rows)}
         group = self._group_colors()
         picks = [position[pair] for pair in self.buffer if pair in position]
@@ -156,21 +151,14 @@ class OverlayMixin:
         self.outline.visible = True
 
     def _center_on(self, ypix, xpix):
-        """Pan the camera onto one mask, holding the zoom the user set.
-
-        Framing every ROI with ``show_rect`` re-zoomed the view on each
-        step, always to the same wide rect, so a review pass fought the
-        camera the whole way. The view only moves; it widens only when the
-        mask cannot fit in it (or when there is no view yet).
-        """
+        """Pan the camera onto one mask, holding the zoom the user set; it widens only when the mask cannot fit (or there is no view yet)."""
         if not len(ypix):
             return
         y0, y1 = float(np.min(ypix)), float(np.max(ypix))
         x0, x1 = float(np.min(xpix)), float(np.max(xpix))
         cy, cx = (y0 + y1) / 2, (x0 + x1) / 2
         cam = self.subplot.camera
-        # a little air around the mask, so "does it fit" is not pixel-exact
-        need_w, need_h = (x1 - x0) * 1.5, (y1 - y0) * 1.5
+        need_w, need_h = (x1 - x0) * 1.5, (y1 - y0) * 1.5  # some air around the mask
         width, height = float(cam.width), float(cam.height)
         if width <= 0 or height <= 0 or need_w > width or need_h > height:
             half = max(need_w, need_h, 40.0) / 2
@@ -189,9 +177,7 @@ class OverlayMixin:
             self._center_on(ypix, xpix)
 
     def toggle_follow(self):
-        """Center (f): every view on the selection, following it as it moves;
-        a label then steps to the next ROI, like masknmf's classification GUI.
-        """
+        """Center (f): the view follows the selection, and a label steps to the next ROI, like masknmf's classification GUI."""
         self.follow = not self.follow
         if self.follow:
             self._center_selection()
@@ -234,10 +220,7 @@ class OverlayMixin:
         self.status = "click on the image to add points; click the first point to close"
 
     def _poll_region(self):
-        """The region selects the ROIs in view on this slice whose centers it
-        holds, following it as it is drawn or dragged. Left with under three
-        vertices, or once the selection is edited by hand, it is dropped.
-        """
+        """The region selects the ROIs in view on this slice whose centers it holds, as it is drawn or dragged; under three vertices, or a hand-edited selection, drops it."""
         selector = self.region_selector
         if selector is None:
             return
@@ -325,10 +308,7 @@ class OverlayMixin:
         return float(np.mean(xpix)) + 0.5, float(np.mean(ypix)) + 0.5
 
     def _row_rgb(self, row: int) -> tuple[float, float, float]:
-        """One row's color in 0-1, shared by its mask, its table row and its
-        trace: its group color in a group of two or more, red when marked,
-        else its own.
-        """
+        """One row's color in 0-1 for its mask, table row and trace: its group color in a group, red when marked, else its own."""
         group = self._group_colors()
         pair = self.rows[row]
         if pair in group:
@@ -346,9 +326,9 @@ class OverlayMixin:
         if not members:
             return {}
         if len(members) == 1:
-            # a lone pixel average has no color of its own: the first group
-            # color, never the deletion red its callers fall back to
-            return {members[0]: GROUP_COLORS[0]}
+            return {
+                members[0]: GROUP_COLORS[0]
+            }  # a lone pixel average has no color of its own
         return {m: GROUP_COLORS[i % len(GROUP_COLORS)] for i, m in enumerate(members)}
 
     def _pointer_down(self, ev):

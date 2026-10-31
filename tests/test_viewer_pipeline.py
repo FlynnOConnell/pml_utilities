@@ -51,7 +51,7 @@ class FakeParent:
 
 # truth table for the 8 combinations of T/C/Z ∈ {1, >1}
 SINGLETON_PATTERNS = [
-    # (full_shape, expected_squeezed_shape, label)
+    # columns: full shape, expected squeezed shape, label
     ((1, 1, 1, 64, 48), (64, 48), "all singleton (2D image)"),
     ((20, 1, 1, 64, 48), (20, 64, 48), "T only"),
     ((1, 4, 1, 64, 48), (4, 64, 48), "C only"),
@@ -114,7 +114,7 @@ class TestSqueezeWrapperNumpyLeak:
 
 
 GATING_CASES = [
-    # (shape, dims, expect_window, expect_spatial, label)
+    # columns: shape, dims, expect window, expect spatial, label
     ((64, 48), ("Y", "X"), False, False, "2D image"),
     ((100, 64, 48), ("T", "Y", "X"), True, True, "3D time series"),
     ((37, 64, 48), ("Z", "Y", "X"), False, True, "3D z-stack no time"),
@@ -189,26 +189,22 @@ class TestInvertDeflection:
     FRAME = np.arange(16, dtype=np.uint16).reshape(4, 4)
 
     def test_invert_keeps_the_mean(self):
-        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+        from mbo_utilities.gui.widgets.preview_data import _spatial_func
 
-        func = PreviewDataWidget._make_spatial_func(
-            None, self.MEAN, None, subtract=False, invert=True
-        )
-        assert np.allclose(func(self.FRAME), 2 * self.MEAN - self.FRAME)
+        out = _spatial_func(self.FRAME, self.MEAN, None, subtract=False, invert=True)
+        assert np.allclose(out, 2 * self.MEAN - self.FRAME)
 
     def test_invert_with_mean_subtraction(self):
-        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+        from mbo_utilities.gui.widgets.preview_data import _spatial_func
 
-        func = PreviewDataWidget._make_spatial_func(
-            None, self.MEAN, None, subtract=True, invert=True
-        )
-        assert np.allclose(func(self.FRAME), self.MEAN - self.FRAME)
+        out = _spatial_func(self.FRAME, self.MEAN, None, subtract=True, invert=True)
+        assert np.allclose(out, self.MEAN - self.FRAME)
 
     def test_subtraction_alone_is_unchanged(self):
-        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+        from mbo_utilities.gui.widgets.preview_data import _spatial_func
 
-        func = PreviewDataWidget._make_spatial_func(None, self.MEAN, None)
-        assert np.allclose(func(self.FRAME), self.FRAME - self.MEAN)
+        out = _spatial_func(self.FRAME, self.MEAN, None, subtract=True, invert=False)
+        assert np.allclose(out, self.FRAME - self.MEAN)
 
 
 class TestPerDataStateReset:
@@ -427,7 +423,7 @@ class TestCustomMetadataPropagation:
         import mbo_utilities.gui.widgets.pipelines.settings as settings_mod
 
         src = Path(settings_mod.__file__).read_text()
-        assert '"custom_metadata": dict(getattr(self, "_custom_metadata"' in src, (
+        assert '"custom_metadata": dict(self._custom_metadata)' in src, (
             "thread-path job config must snapshot _custom_metadata"
         )
 
@@ -443,9 +439,9 @@ class TestCustomMetadataPropagation:
         src = Path(settings_mod.__file__).read_text()
         # there are two snapshot sites (thread + spawn) — at least one
         # must be inside a worker_args dict
-        assert (
-            "worker_args" in src and 'dict(getattr(self, "_custom_metadata"' in src
-        ), "spawn-process worker_args must snapshot _custom_metadata"
+        assert "worker_args" in src and "dict(self._custom_metadata)" in src, (
+            "spawn-process worker_args must snapshot _custom_metadata"
+        )
 
     def test_task_suite2p_applies_custom_metadata_to_ops(self):
         """`task_suite2p` (the spawn-process subprocess entry point)

@@ -11,6 +11,7 @@ from imgui_bundle import (
 )
 from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
+from masknmf.visualization.imgui import THEME as MTHEME
 from masknmf.visualization.imgui import (
     button_colors,
     draw_help_buttons,
@@ -25,7 +26,6 @@ from masknmf.visualization.imgui import (
     switch_width,
     tooltip,
 )
-from masknmf.visualization.imgui import THEME as MTHEME
 from masknmf.visualization.rois import MARKED_COLOR
 
 from mbo_utilities.annotation import (
@@ -38,10 +38,6 @@ from mbo_utilities.gui.imgui import (
     UNLABEL_ALL,
     draw_label_editor,
 )
-from mbo_utilities.roi_workflow import (
-    roi_folder,
-)
-
 from mbo_utilities.gui.roi._shared import (
     _CAPTIONS,
     COLOR_BY,
@@ -51,16 +47,16 @@ from mbo_utilities.gui.roi._shared import (
     ROI_KEYS,
     RUN_WHERE,
 )
+from mbo_utilities.roi_workflow import (
+    roi_folder,
+)
 
 
 class CurationMixin:
     """The ROIs tab: labels, on-disk and exchange rows, the Curation and ROIs sub-tabs."""
 
     def draw_rois(self):
-        """The ROIs tab: masknmf's Tools panel. The Full FOV button and the
-        guide and keybinds buttons, then the Curation and ROIs tabs, each a
-        child that scrolls on its own.
-        """
+        """The ROIs tab, masknmf's Tools panel: Full FOV, guide and keybinds buttons, then the Curation and ROIs tabs, each scrolling on its own."""
         self._note_hover()
         if imgui.button(f"{fa.ICON_FA_IMAGE} Full FOV"):
             self.open_full_fov()
@@ -122,13 +118,7 @@ class CurationMixin:
             self.assign_class(picked)
 
     def _draw_label_columns(self):
-        """The unlabel actions pinned across the top, then one button per
-        class, split into columns filled evenly.
-
-        Class buttons carry two columns of their own, the count then the
-        name, each left-aligned, so the names line up down the column
-        instead of drifting with however wide the counts happen to be.
-        """
+        """The unlabel actions across the top, then one button per class in evenly filled columns; each button's count and name are left-aligned columns so the names line up."""
         if not self.classes.names:
             return None
         picked = self._draw_unlabel_row()
@@ -163,25 +153,17 @@ class CurationMixin:
         return picked
 
     def _count_text(self, i: int) -> str:
-        """The count column of a class button. "n=3", not "(3)": the (1-9)
-        that follows the button is the keybind, and a bare count beside it
-        read as one too.
-        """
+        """A class button's count as ``n=3``; a bare ``(3)`` read as a keybind beside the real ``(1-9)``."""
         return f"n={self.classes.count(i)}"
 
     def _draw_label_button_text(self, i: int, count_w: float) -> None:
-        """Paint one class button's two text columns over the button just
-        drawn. imgui centres a button's own label, which left the names
-        starting at a different x on every row.
-        """
+        """Paint one class button's count and name columns over the button just drawn; imgui centres a button's own label."""
         lo, hi = imgui.get_item_rect_min(), imgui.get_item_rect_max()
         pad = imgui.get_style().frame_padding.x
         y = lo.y + (hi.y - lo.y - imgui.get_text_line_height()) * 0.5
         draw = imgui.get_window_draw_list()
         color = imgui.get_color_u32(imgui.Col_.text)
-        # a long name is clipped to its button rather than bleeding into the
-        # column beside it
-        draw.push_clip_rect(
+        draw.push_clip_rect(  # a long name clips to its button
             imgui.ImVec2(lo.x, lo.y), imgui.ImVec2(hi.x - 1, hi.y), True
         )
         draw.add_text(imgui.ImVec2(lo.x + pad, y), color, self._count_text(i))
@@ -191,9 +173,7 @@ class CurationMixin:
         draw.pop_clip_rect()
 
     def _draw_unlabel_row(self):
-        """Unlabel at the top left, unlabel all at the top right: two small
-        buttons that stay put however many classes there are.
-        """
+        """Unlabel at the top left, unlabel all at the top right."""
         picked = None
         x0 = imgui.get_cursor_pos_x()
         avail = imgui.get_content_region_avail().x
@@ -270,9 +250,7 @@ class CurationMixin:
         imgui.end_tooltip()
 
     def _draw_exchange_buttons(self, g):
-        """Fiji and CSV exchange: export the drawn ROIs as a RoiSet.zip,
-        import one, export the trace table's rows as a CSV.
-        """
+        """Fiji and CSV exchange: export the drawn ROIs as a RoiSet.zip, import one, export the trace table's rows as a CSV."""
         g.row("exchange")
         start = str(self.folder if self.fpath is not None else Path.home())
         busy = self._file_dialog is not None
@@ -332,10 +310,7 @@ class CurationMixin:
             self.exchange(kind, picked)
 
     def exchange(self, kind: str, path) -> None:
-        """Run one exchange action on ``path``: ``export_roiset``,
-        ``import_roiset`` (adds the ROIs, one undo step) or ``export_traces``
-        (the rows the trace table lists). Errors land in the status row.
-        """
+        """Run one exchange action on ``path``: ``export_roiset``, ``import_roiset`` (one undo step) or ``export_traces`` (the listed rows); errors land in the status row."""
         path = Path(path)
         try:
             if kind == "export_roiset":
@@ -359,9 +334,7 @@ class CurationMixin:
             self._run_error = f"{kind.replace('_', ' ')} failed: {e}"
 
     def draw_tab(self):
-        """Masknmf's Signals tab for ROIs: the filter, then the drawn, algo
-        and pixel-average rows in one sortable table, the selection under it.
-        """
+        """Masknmf's Signals tab for ROIs: the filter, one sortable table of drawn, algo and pixel-average rows, the selection under it."""
         if self.order.range_column is not None:
             self._draw_filter()
         footer = imgui.get_frame_height_with_spacing() * 2.5
@@ -740,7 +713,7 @@ class CurationMixin:
         )
 
     def _selection_status(self) -> str:
-        """Masknmf's footer: what is grouped or selected, else how to start."""
+        """Masknmf's footer names the group or the selection, else the first step."""
         if len(self.buffer) > 1 or self.pixel_group:
             drawn = sorted(k for si, k in self.buffer if si < 0)
             algo = [self._row_index[p] for p in self.buffer if p[0] >= 0]
@@ -771,9 +744,7 @@ class CurationMixin:
         return {self.rows[int(row)] for row in np.flatnonzero(side)}
 
     def _draw_filter(self):
-        """Masknmf's filter over the table: its column, apply with its side
-        switch, the range, then this tool's label, source and slice filters.
-        """
+        """Masknmf's filter over the table (column, apply, side switch, range), then this tool's label, source and slice filters."""
         order = self.order
         g = grid(_CAPTIONS)
         right = imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x

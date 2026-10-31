@@ -390,9 +390,9 @@ class TestOpenPrompts:
         monkeypatch.setattr(
             _dialogs,
             "draw_path_prompt",
-            lambda prompt: (str(f), False)
-            if prompt is folder_prompt
-            else (None, False),
+            lambda prompt: (
+                (str(f), False) if prompt is folder_prompt else (None, False)
+            ),
         )
         folder_prompt.start()
         _dialogs.check_file_dialogs(parent)
@@ -444,9 +444,11 @@ class TestLauncherTypedPath:
         monkeypatch.setattr(
             fd.hello_imgui,
             "get_runner_params",
-            lambda: SimpleNamespace(app_shall_exit=False)
-            if not exits.append(True)
-            else None,
+            lambda: (
+                SimpleNamespace(app_shall_exit=False)
+                if not exits.append(True)
+                else None
+            ),
         )
         dlg = fd.FileDialog.__new__(fd.FileDialog)
         dlg._typed_path = ""

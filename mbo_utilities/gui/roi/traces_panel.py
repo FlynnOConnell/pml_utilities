@@ -1,8 +1,4 @@
-"""The Traces panel.
-
-masknmf's TracePlot over the viewer's frames, the motion and behavior rows, the
-kind and dF/F settings.
-"""
+"""The Traces panel: masknmf's TracePlot over the viewer's frames, the motion and behavior rows, the kind and dF/F settings."""
 
 from __future__ import annotations
 
@@ -33,21 +29,20 @@ from mbo_utilities.annotation.display import DFF_METHODS
 from mbo_utilities.gui._theme import em
 from mbo_utilities.gui.imgui.behavior import EPOCH_COLORS, BehaviorPlot
 from mbo_utilities.gui.imgui.motion import MOTION_COLORS
+from mbo_utilities.gui.roi._shared import (
+    _TRACE_MODES,
+    BEHAVIOR_PLOT_HEIGHT,
+    DEFLECTION_MODES,
+    MOTION_PANEL_HEIGHT,
+    NOISE_LABELS,
+    PANEL_HEIGHT,
+)
 from mbo_utilities.gui.roi_runs import (
     component_color,
 )
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.results import (
     results_pipeline,
-)
-
-from mbo_utilities.gui.roi._shared import (
-    BEHAVIOR_PLOT_HEIGHT,
-    DEFLECTION_MODES,
-    MOTION_PANEL_HEIGHT,
-    NOISE_LABELS,
-    PANEL_HEIGHT,
-    _TRACE_MODES,
 )
 
 
@@ -86,33 +81,27 @@ class TracesPanelMixin:
         return [t.key for t in self.traces.for_roi(self.store.rois[self.selected].uid)]
 
     def _sync_trace_sel(self):
-        """Point the trace table's picks at the selection, so the rows it
-        highlights are the ROI the image is showing.
-        """
+        """Point the trace table's picks at the selection, so it highlights the ROI the image shows."""
         self.trace_sel = set(self._selection_trace_keys())
         self.trace_picked = False
         self._plot_lines_key = None
 
     def _binning_tag(self, key) -> str:
-        """`` x10`` when a trace was taken at a different frame averaging than
-        the data now shows — those traces are on another time base.
-        """
+        """`` x10`` when a trace was taken at another frame averaging than the data now shows (another time base)."""
         trace = self.traces.get(key)
         taken = int(trace.frame_average if trace is not None else 1) or 1
         now = int(getattr(self.host, "frame_average", 1) or 1)
         return f" x{taken}" if taken != now and taken > 1 else ""
 
     def fs(self) -> float | None:
-        """Raw sampling rate of the recording behind the view in Hz, or None.
-
-        Read once from the array ``imread`` returned, under any frame
-        averaging, since every ``TimeAxis`` applies the binning itself;
-        without one the trace plot can only offer frame units.
-        """
+        """The recording's raw sampling rate in Hz, or None; read once under any frame averaging, since every ``TimeAxis`` bins itself."""
         if not self._fs_read:
             self._fs_read = True
-            data = getattr(self.iw, "data", None)
-            rate = getattr(base_array(data[0]), "fs", None) if data else None
+            rate = (
+                getattr(base_array(self.iw.data[0]), "fs", None)
+                if self.iw.data
+                else None
+            )
             self._fs_value = float(rate) if rate else None
         return self._fs_value
 
@@ -129,7 +118,7 @@ class TracesPanelMixin:
 
     @property
     def flip(self) -> bool:
-        """Whether the plot turns every row over (``display_trace``'s ``flip``)."""
+        """The plot turns every row over (``display_trace``'s ``flip``)."""
         return self._flip
 
     @flip.setter
@@ -139,9 +128,7 @@ class TracesPanelMixin:
             self._redisplay()
 
     def kind_options(self, rows) -> tuple[str, ...]:
-        """The kinds on offer for ``rows``: every kind any of them can show,
-        in ``DISPLAY_KINDS`` order.
-        """
+        """Every kind any of ``rows`` can show, in ``DISPLAY_KINDS`` order."""
         offered = {kind for trace in rows for kind in available_kinds(trace)}
         return tuple(kind for kind in DISPLAY_KINDS if kind in offered)
 
@@ -169,13 +156,10 @@ class TracesPanelMixin:
         The preview trace gets the same window the image does, so what the
         plot shows is what the frame on screen shows.
         """
-        host = self.host
-        if host is None:
-            return "mean", 1
-        try:
-            return str(host.proj), max(1, int(host.window_size))
-        except Exception:
-            return "mean", 1
+        return (
+            str(getattr(self.host, "proj", "mean")),
+            max(1, int(getattr(self.host, "window_size", 1))),
+        )
 
     def _windowed(self, y):
         """``y`` under the viewer's rolling window; the raw array at size 1."""
@@ -190,8 +174,6 @@ class TracesPanelMixin:
         view = np.lib.stride_tricks.sliding_window_view(padded, size)
         func = {"max": np.max, "std": np.std}.get(proj, np.mean)
         out = np.ascontiguousarray(func(view, axis=-1), np.float32)
-        # one entry per plotted array and window, so several lines never
-        # recompute each other's window every frame
         if len(self._trace_window_cache) > 256:
             self._trace_window_cache.clear()
         self._trace_window_cache[(id(y), proj, size)] = out
@@ -205,10 +187,7 @@ class TracesPanelMixin:
         )
 
     def deflection(self) -> tuple[bool, bool]:
-        """``(mean subtraction, invert)`` of what the rows measured: the
-        panel's own ``trace_subtract`` / ``trace_invert`` when ``"on"`` or
-        ``"off"``, else the viewer's, so the plot reads like the image.
-        """
+        """``(mean subtraction, invert)`` applied to measured rows: the panel's ``trace_subtract`` / ``trace_invert`` when set, else the viewer's."""
         return tuple(
             seen if mode == "viewer" else mode == "on"
             for mode, seen in zip(
@@ -224,8 +203,7 @@ class TracesPanelMixin:
         """
         from mbo_utilities.results import results_stamp
 
-        data = getattr(self.iw, "data", None)
-        src = base_array(data[0]) if data else None
+        src = base_array(self.iw.data[0]) if self.iw.data else None
         tail = str(getattr(src, "unit_key", "") or "").rsplit("/", 1)[-1]
         runs: dict = {}
         for t in self.traces:
@@ -248,10 +226,7 @@ class TracesPanelMixin:
         return holding, runs[run], run
 
     def _display(self, key) -> np.ndarray | None:
-        """The cached display array for one trace key, in the panel's kind,
-        dF/F settings and the viewer's deflection (``annotation.display``);
-        None when the row is gone or carries nothing.
-        """
+        """The cached display array of one trace key in the panel's kind, dF/F settings and deflection; None when the row is gone or empty."""
         deflection = self.deflection()
         if deflection != self._trace_deflection:
             self._trace_deflection = deflection
@@ -275,9 +250,7 @@ class TracesPanelMixin:
         return None
 
     def _key_to_pair(self, key) -> tuple[int, int] | None:
-        """``(si, k)`` behind one trace key, or None when the ROI is gone
-        (a results file's rows stand for no ROI).
-        """
+        """``(si, k)`` behind one trace key, or None when the ROI is gone or the row stands for none."""
         trace = self.traces.get(key)
         if trace is None:
             return None
@@ -288,9 +261,7 @@ class TracesPanelMixin:
         return (hit[0], int(trace.member)) if hit is not None else None
 
     def _trace_color(self, key) -> tuple[float, float, float] | None:
-        """The mask color of the ROI behind one trace key, so plot lines and
-        table rows match the overlay.
-        """
+        """The mask color of the ROI behind one trace key, shared with the overlay."""
         pair = self._key_to_pair(key)
         if pair is None:
             return None
@@ -658,17 +629,15 @@ class TracesPanelMixin:
             self.playhead.seek(self.viewer_axis().seconds(moved), source="trace_plot")
 
     def _shows_trace_unit(self) -> bool:
-        """Whether the recording on screen is a MESc scan vnoiser can run on
-        and this widget sits in a viewer that has a Process tab.
-        """
+        """True when the recording on screen is a MESc scan vnoiser can run on and the widget sits in a viewer with a Process tab."""
         from mbo_utilities.arrays.mesc import MescArray, is_trace_unit, list_mesc_units
 
-        data = getattr(self.iw, "data", None)
-        src = base_array(data[0]) if data else None
+        src = base_array(self.iw.data[0]) if self.iw.data else None
         if self.host is None or not isinstance(src, MescArray):
             return False
-        # the file's unit table is read once per recording shown, not per frame
-        if self._trace_unit[0] is not src:
+        if (
+            self._trace_unit[0] is not src
+        ):  # the unit table is read once per recording shown
             rows = list_mesc_units(src.filenames[0])
             row = next((u for u in rows if u["key"] == src.unit_key), None)
             self._trace_unit = (src, row is not None and is_trace_unit(row))
@@ -806,13 +775,8 @@ class TracesPanelMixin:
         return keys[-1] if keys else None
 
     def _plot_axis(self) -> tuple[int, np.ndarray | None]:
-        """``(frames, seconds of each frame or None)``: the viewer's T axis, what the plot spans."""
-        nt = 1
-        if self.tdim is not None:
-            try:
-                nt = max(int(self.iw.data[0].shape[0]), 1)
-            except (AttributeError, IndexError, TypeError):
-                nt = 1
+        """``(frames, seconds of each frame or None)``: the viewer's T axis, which the plot spans."""
+        nt = max(int(self.iw.data[0].shape[0]), 1) if self.tdim is not None else 1
         if not self.fs() or nt < 2:
             return nt, None
         axis = self.viewer_axis()
@@ -889,10 +853,11 @@ class TracesPanelMixin:
             self.show_behavior,
         )
         if self.trace_plot is None:
-            # no autofit, as in masknmf: the zoom set on one ROI's traces is kept while selecting others
+            # no autofit, as in masknmf: the zoom set on one ROI's traces holds while selecting others
             self.trace_plot = TracePlot(panels, nt, timings, autofit=False)
-            # seconds whenever the data has a rate; timings equal to the frames are frames
-            self.trace_plot._use_time = self.trace_plot._time is not None
+            self.trace_plot._use_time = (
+                self.trace_plot._time is not None
+            )  # seconds whenever there is a rate
         elif key != self._plot_frames:
             same_frames = (
                 self._plot_frames is not None and key[:2] == self._plot_frames[:2]
@@ -900,13 +865,10 @@ class TracesPanelMixin:
             span = self.trace_plot._x_span
             self.trace_plot.reset(panels, nt, timings)
             if same_frames and span is not None:
-                # only the panels changed (a row with another y label was
-                # selected): the x zoom holds, the new panel starts on it
-                # and is not refit when its lines land
+                # only the panels changed: the x zoom holds and the new panel is not refit when its lines land
                 self.trace_plot._x_span = span
                 self.trace_plot._fitted = set(panels)
-            # a rate that stays keeps the unit picked
-            if (
+            if (  # a rate that stays keeps the unit picked
                 timings is None
                 or self._plot_frames is None
                 or self._plot_frames[1] is None

@@ -19,19 +19,10 @@ def source_timepoints(widget) -> int:
     down to a single frame and squeezed), so count the array the binning was
     applied to when there is one.
     """
-    source = getattr(widget, "_frame_average_source", None)
+    source = widget._frame_average_source
     if source is None:
-        try:
-            source = widget.image_widget.data[0]
-        except (IndexError, AttributeError, TypeError):
-            return 1
-    if hasattr(source, "_shape5d"):
-        shape = tuple(source._shape5d())
-    else:
-        shape = tuple(getattr(source, "shape", None) or ())
-    if len(shape) < 3:
-        return 1
-    return int(shape[0])
+        source = widget.image_widget.data[0]
+    return int(source._shape5d()[0])
 
 
 def draw_frame_average_input(
@@ -98,7 +89,7 @@ def resolve_dim_labels(parent) -> tuple[str, str, str]:
 
     Returns ``(tp_label, z_label, c_label)``.
     """
-    iw = getattr(parent, "image_widget", None)
+    iw = parent.image_widget
     # sliders are the array's T, C, Z axes by position; aliases only for a host without dim names
     positional = tuple(getattr(iw, "dim_names", None) or ()) if iw is not None else ()
     roles = {role: name for name, role in slider_roles(positional).items()}
@@ -123,7 +114,6 @@ def _parse_range_selection(text: str, max_val: int) -> tuple[int, int, int, str]
     parts = text.split(":")
     try:
         if len(parts) == 1:
-            # single value
             val = int(parts[0])
             if val < 1 or val > max_val:
                 return 1, max_val, 1, f"value {val} out of range 1-{max_val}"
@@ -239,16 +229,13 @@ def draw_selection_table(
     if c_mode == "all":
         setattr(parent, f"{c_attr}_selection", f"1:{num_channels}")
         setattr(parent, f"{c_attr}_error", "")
-    # get/set attributes dynamically
     tp_selection = getattr(parent, f"{tp_attr}_selection", f"1:{max_frames}")
     tp_error = getattr(parent, f"{tp_attr}_error", "")
     tp_parsed = getattr(parent, f"{tp_attr}_parsed", None)
 
-    # z-plane selection as text (convert from old start/stop/step if needed)
     z_selection_attr = f"{z_attr}_selection"
     z_error_attr = f"{z_attr}_error"
     if not hasattr(parent, z_selection_attr):
-        # initialize from old format or default
         z_start = getattr(parent, f"{z_attr}_start", 1)
         z_stop = getattr(parent, f"{z_attr}_stop", num_planes)
         z_step = getattr(parent, f"{z_attr}_step", 1)
@@ -262,10 +249,8 @@ def draw_selection_table(
     z_selection = getattr(parent, z_selection_attr)
     z_error = getattr(parent, z_error_attr, "")
 
-    # parse current z selection
     z_start, z_stop, z_step, _ = _parse_z_selection(z_selection, num_planes)
 
-    # channel selection as text (similar to z-plane)
     c_selection_attr = f"{c_attr}_selection"
     c_error_attr = f"{c_attr}_error"
     if not hasattr(parent, c_selection_attr):
@@ -282,7 +267,6 @@ def draw_selection_table(
     c_selection = getattr(parent, c_selection_attr)
     c_error = getattr(parent, c_error_attr, "")
 
-    # parse current channel selection
     c_start, c_stop, c_step, _ = _parse_channel_selection(c_selection, num_channels)
 
     INPUT_WIDTH = hello_imgui.em_size(13)
@@ -291,7 +275,6 @@ def draw_selection_table(
         imgui.TableFlags_.sizing_fixed_fit | imgui.TableFlags_.no_borders_in_body
     )
     if imgui.begin_table(f"selection_table{id_suffix}", 4, table_flags):
-        # column widths for alignment
         imgui.table_setup_column(
             "dim", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(7)
         )
@@ -307,7 +290,6 @@ def draw_selection_table(
             _tp_disabled = tp_mode == "all"
             if _tp_disabled:
                 imgui.begin_disabled()
-            # timepoints row
             imgui.table_next_row()
             imgui.table_next_column()
             imgui.text(tp_label)
@@ -315,7 +297,6 @@ def draw_selection_table(
             imgui.table_next_column()
             imgui.set_next_item_width(INPUT_WIDTH)
 
-            # red border if error
             had_error = bool(tp_error)
             if had_error:
                 imgui.push_style_color(
@@ -352,7 +333,6 @@ def draw_selection_table(
                 tp_parsed = parsed
 
             imgui.table_next_column()
-            # frame count info
             if tp_parsed:
                 n_frames = tp_parsed.count
                 if tp_parsed.exclude_str:
@@ -376,7 +356,6 @@ def draw_selection_table(
             if _tp_disabled:
                 imgui.end_disabled()
 
-        # z-planes row (only if multi-plane)
         if num_planes > 1 and z_mode != "none":
             _z_disabled = z_mode == "all"
             if _z_disabled:
@@ -388,7 +367,6 @@ def draw_selection_table(
             imgui.table_next_column()
             imgui.set_next_item_width(INPUT_WIDTH)
 
-            # red border if error
             had_z_error = bool(z_error)
             if had_z_error:
                 imgui.push_style_color(
@@ -401,7 +379,6 @@ def draw_selection_table(
                 z_start, z_stop, z_step, err = _parse_z_selection(new_val, num_planes)
                 setattr(parent, z_error_attr, err)
                 z_error = err
-                # update old-style attrs for compatibility
                 setattr(parent, f"{z_attr}_start", z_start)
                 setattr(parent, f"{z_attr}_stop", z_stop)
                 setattr(parent, f"{z_attr}_step", z_step)
@@ -436,7 +413,6 @@ def draw_selection_table(
             if _z_disabled:
                 imgui.end_disabled()
 
-        # channels row (only if multi-channel)
         if num_channels > 1 and c_mode != "none":
             _c_disabled = c_mode == "all"
             if _c_disabled:
@@ -448,7 +424,6 @@ def draw_selection_table(
             imgui.table_next_column()
             imgui.set_next_item_width(INPUT_WIDTH)
 
-            # red border if error
             had_c_error = bool(c_error)
             if had_c_error:
                 imgui.push_style_color(
@@ -485,7 +460,6 @@ def draw_selection_table(
                 )
                 setattr(parent, c_error_attr, err)
                 c_error = err
-                # update old-style attrs for compatibility
                 setattr(parent, f"{c_attr}_start", c_start)
                 setattr(parent, f"{c_attr}_stop", c_stop)
                 setattr(parent, f"{c_attr}_step", c_step)
@@ -520,7 +494,6 @@ def draw_selection_table(
             if _c_disabled:
                 imgui.end_disabled()
 
-        # suffix row (optional)
         if suffix_attr:
             imgui.table_next_row()
             imgui.table_next_column()
@@ -534,7 +507,6 @@ def draw_selection_table(
                 setattr(parent, suffix_attr, new_suffix)
 
             imgui.table_next_column()
-            # empty - no "All" button for suffix
 
             imgui.table_next_column()
             imgui.text_disabled("(?)")
@@ -550,5 +522,4 @@ def draw_selection_table(
 
         imgui.end_table()
 
-    # return parsed selection info for caller
     return tp_parsed, z_start, z_stop, z_step, c_start, c_stop, c_step

@@ -21,6 +21,7 @@ Figure failures log and continue; QC never aborts a run, matching lsp.
 """
 
 import importlib.util
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -52,15 +53,16 @@ _LSP_RENAMES = {
 # shot noise; residual RMS in the signal-decomposition figure is the honest
 # noise readout for demixed data.
 _LSP_DROP = (
-    "01_correlation.png",  # superseded by the native 01a/01b pair
+    # superseded by the native 01a/01b pair
+    "01_correlation.png",
     "04b_rejected_segmentation.png",
     "09_traces_rejected.png",
     "10_shot_noise_accepted.png",
-    "11_shot_noise_rejected.png",
     # lsp's own trace stacks. Its "raw" panel labels the y-axis "a.u." and its
     # "norm" panel is a z-score or a rolling-percentile dF/F — none of which
     # is masknmf's format. `plot_demixed_traces` redraws them with the same
     # `lsp.plot_traces` styling but calibrated dF/F on the axis.
+    "11_shot_noise_rejected.png",
     "07a_traces_raw_20.png",
     "07b_traces_raw_50.png",
     "07c_traces_raw_100.png",
@@ -106,7 +108,6 @@ _LEGACY_FIGURES = (
     "13_demixed_traces_dff.png",
     "14_roi_signal_decomposition.png",
     "15_footprints_regional_zoom.png",
-    # the raw-"a.u." / z-score trace stacks, before calibration
     "08a_demixed_traces_20.png",
     "08b_demixed_traces_50.png",
     "08c_demixed_traces_100.png",
@@ -338,8 +339,8 @@ def plot_roi_signal_decomposition(
     nonnegative component.
     """
     plt = _agg_plt()
-    pmd_avg, bkgd_avg, resid_avg = _roi_averages(results)
-    c = _np(results.temporal_demixed)  # (T, K)
+    pmd_avg, bkgd_avg, resid_avg = _roi_averages(results)  # (T, K)
+    c = _np(results.temporal_demixed)
     pix, roi, lam = _sparse_footprints(results)
     n_rois = c.shape[1]
 
@@ -442,8 +443,8 @@ def _calibrated_dff(results, pmd):
     """
     from mbo_utilities.masknmf import outputs as _outputs
 
-    pix, roi, lam = _sparse_footprints(results)
-    c = _np(results.temporal_demixed)  # (T, K)
+    pix, roi, lam = _sparse_footprints(results)  # (T, K)
+    c = _np(results.temporal_demixed)
     n_rois = c.shape[1]
     footprints = _outputs.split_sparse_footprints(np.stack([pix, roi]), lam, n_rois)
     gain, f0 = _outputs.roi_calibration(
@@ -502,8 +503,8 @@ def plot_demixed_traces(
         "08b_demixed_traces_dff_50.png",
         "08c_demixed_traces_dff_100.png",
     )
+    # smallest count always renders, even with fewer ROIs than requested
     for n_cells, name in zip(counts, names):
-        # smallest count always renders, even with fewer ROIs than requested
         if n_rois < n_cells and n_cells != counts[0]:
             continue
         shown = min(n_cells, n_rois)
@@ -597,14 +598,14 @@ def plot_registration_summary(
     """Shift traces + displacement histogram for rigid or piecewise shifts."""
     plt = _agg_plt()
     shifts = np.asarray(shifts)
-    if shifts.ndim == 4:  # piecewise: (T, K1, K2, 2)
+    if shifts.ndim == 4:  # piecewise (T, K1, K2, 2); rigid is (T, 2)
         per_frame = shifts.reshape(shifts.shape[0], -1, 2)
         dy, dx = per_frame[..., 0], per_frame[..., 1]
         dy_mean, dx_mean = dy.mean(axis=1), dx.mean(axis=1)
         dy_max = np.abs(dy).max(axis=1)
         dx_max = np.abs(dx).max(axis=1)
         kind = "piecewise-rigid"
-    else:  # rigid: (T, 2)
+    else:
         dy_mean, dx_mean = shifts[:, 0], shifts[:, 1]
         dy_max = dx_max = None
         kind = "rigid"
@@ -724,6 +725,19 @@ def _rename_lsp_outputs(plane_dir: Path, logger) -> None:
                 pass
 
 
+def _lsp_roi_stats(plane_dir: Path, fs) -> None:
+    from lbm_suite2p_python.postprocessing import compute_roi_stats
+
+    compute_roi_stats(plane_dir, fs=fs)
+
+
+def _lsp_zplane_figures(plane_dir: Path) -> None:
+    from lbm_suite2p_python.zplane import plot_zplane_figures
+
+    # NOTE: norm_method only drives lsp's own trace panels, which _LSP_DROP removes for plot_demixed_traces; "dff" keeps the label lsp bakes into anything else honest
+    plot_zplane_figures(plane_dir, norm_method="dff", correct_neuropil=False)
+
+
 def plot_plane_figures(
     plane_dir: str | Path,
     shifts: np.ndarray | None = None,
@@ -739,22 +753,8 @@ def plot_plane_figures(
     _clear_previous(plane_dir)
 
     if results is not None and _has_lsp() and (plane_dir / "stat.npy").exists():
-
-        def _roi_stats():
-            from lbm_suite2p_python.postprocessing import compute_roi_stats
-
-            compute_roi_stats(plane_dir, fs=fs)
-
-        def _zplane_figs():
-            from lbm_suite2p_python.zplane import plot_zplane_figures
-
-            # norm_method only drives lsp's own trace panels, which _LSP_DROP
-            # removes in favour of plot_demixed_traces. Kept at "dff" so the
-            # label lsp bakes into anything else it draws is the honest one.
-            plot_zplane_figures(plane_dir, norm_method="dff", correct_neuropil=False)
-
-        _try(logger, "roi stats", _roi_stats)
-        _try(logger, "zplane figures", _zplane_figs)
+        _try(logger, "roi stats", partial(_lsp_roi_stats, plane_dir, fs))
+        _try(logger, "zplane figures", partial(_lsp_zplane_figures, plane_dir))
         _rename_lsp_outputs(plane_dir, logger)
     elif results is not None and not _has_lsp():
         logger.info(

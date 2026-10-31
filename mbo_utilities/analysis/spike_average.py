@@ -278,9 +278,11 @@ class SpikeSource:
                 kind: np.asarray(found.traces[kind][k], np.float64)
                 for kind in sorted(
                     found.traces,
-                    key=lambda kind: TRACE_ORDER.index(kind)
-                    if kind in TRACE_ORDER
-                    else len(TRACE_ORDER),
+                    key=lambda kind: (
+                        TRACE_ORDER.index(kind)
+                        if kind in TRACE_ORDER
+                        else len(TRACE_ORDER)
+                    ),
                 )
             },
             spikes=spikes,

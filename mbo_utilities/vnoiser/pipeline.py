@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import platform
+import shutil
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -395,10 +396,7 @@ def write_domains_template(
 
 
 def default_pf_dir(mesc_path) -> Path:
-    """Where a ``pkl`` run's PF folder goes: ``<animal>/<expt>/PF`` for the
-    archive's ``<animal>/<expt>/<expt>/<expt>.mesc`` layout, else ``PF``
-    beside the file.
-    """
+    """The PF folder of a ``pkl`` run: ``<animal>/<expt>/PF`` for the archive's ``<animal>/<expt>/<expt>/<expt>.mesc`` layout, else ``PF`` beside the file."""
     mesc_path = Path(mesc_path)
     if (
         mesc_path.parent.name == mesc_path.stem
@@ -627,8 +625,7 @@ def run_vnoiser_pipeline(
         raise ValueError("no domains to process")
     names = [d.name for d in traced]
     domain_rois = {d.name: list(d.rois) for d in found}
-    # a zarr run works in a scratch folder the pipeline's own writers need and
-    # folds it into the results file at the end; a pkl run works in PF itself
+    # a zarr run works in a scratch folder and folds it into the results file at the end
     as_zarr = settings.runtime.output_format == "zarr"
     results_path = default_results_path(mesc_path, out) if as_zarr else None
     pf_dir = (
@@ -740,8 +737,7 @@ def run_vnoiser_pipeline(
         for k, scan in enumerate(scans):
             sid = scan.scan_id
             ex = extracted[sid]
-            # one domain at a time: each row of dF/F and z is independent of the others, and the
-            # baseline filters take about ten seconds per domain on a five-minute scan
+            # one domain at a time: the baseline filters take about ten seconds per domain on a five-minute scan
             dfof_rows, z_rows = [], []
             for row, name in enumerate(names):
                 if progress_callback is not None:
@@ -954,8 +950,6 @@ def run_vnoiser_pipeline(
         )
         prov = _write_timing(pf_dir, usage)
         if as_zarr:
-            import shutil
-
             from mbo_utilities.results import Results, pipeline_files
 
             if progress_callback is not None:
@@ -964,9 +958,7 @@ def run_vnoiser_pipeline(
             results_path = Results.from_pf(pf_dir).write(results_path, overwrite=True)
             usage.end(f"wrote {results_path.name}")
             prov = _write_timing(pf_dir, usage)
-            # the results file replaces the pickles; everything else the run
-            # made moves into its own folder inside it, named after the
-            # pipeline, so one path is the whole output
+            # the run's other files move into the results file's own folder, so one path is the whole output
             own = pipeline_files(results_path)
             own.mkdir()
             paths = {}
@@ -1010,10 +1002,7 @@ def run_vnoiser_pipeline(
 def _write_traces_only(
     pf_dir, info, scans, names, domain_rois, first_env, normalized
 ) -> dict:
-    """What a run without denoising leaves for ``Results.from_pf``: ``test.h5``
-    (dF/F and z per scan) and the ``pipeline.json`` PfWriter would write,
-    with no pickles.
-    """
+    """The files a run without denoising leaves for ``Results.from_pf``: ``test.h5`` (dF/F and z per scan) and the ``pipeline.json`` PfWriter would write, no pickles."""
     with h5py.File(pf_dir / DFOF_FILE, "w") as f:
         for s in scans:
             grp = f.create_group(s.scan_id)
@@ -1046,7 +1035,7 @@ def preview_domain(
     channel: int = 0,
     frames=None,
 ) -> dict:
-    """What a run would make of one domain on one scan, over ``frames``.
+    """One domain's traces on one scan over ``frames``, as a run would make them.
 
     ``domains`` is the run's table (``{name: entry}``, so a background
     domain is there too); only ``name`` and the background are read. The

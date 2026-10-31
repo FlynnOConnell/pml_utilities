@@ -26,7 +26,6 @@ if sys.platform == "darwin":
         os.environ.setdefault("PYGLFW_LIBRARY", str(_glfw_lib))
 
 
-# Define what's available for lazy loading
 __all__ = [
     "AxialShiftView",
     "MBO_SUPPORTED_FTYPES",
@@ -37,14 +36,11 @@ __all__ = [
     "get_all_input_patterns",
     "get_all_marker_files",
     "get_all_output_patterns",
-    # Pipeline registry
     "get_all_pipelines",
     "get_files",
     "get_last_open_dir",
     "get_last_save_dir",
-    # File utilities
     "get_mbo_dirs",
-    # Memory monitoring
     "MemoryMonitor",
     "mem_snapshot",
     "memory_monitor",
@@ -52,27 +48,21 @@ __all__ = [
     "stop_memory_monitor",
     "get_metadata",
     "get_pipeline_info",
-    # Preferences
     "get_recent_files",
     "get_voxel_size",
-    # Core I/O
     "imread",
     "imwrite",
-    # Pluggable array API
     "LazyArray",
     "register_array_class",
-    # Metadata
     "is_raw_scanimage",
     "load_npy",
     "load_ops",
     "merge_zarr_zplanes",
     "normalize_resolution",
     "select_files",
-    # File/folder selection (GUI)
     "select_folder",
     "set_last_open_dir",
     "set_last_save_dir",
-    # Visualization
     "DataVis",
     "run_gui",
     "to_video",
@@ -93,9 +83,8 @@ def __getattr__(name):
                 return version(dist)
             except PackageNotFoundError:
                 continue
-        return "0.0.0"  # editable install / metadata unavailable
+        return "0.0.0"
 
-    # Core I/O
     if name == "imread":
         from .reader import imread
 
@@ -109,7 +98,6 @@ def __getattr__(name):
 
         return MBO_SUPPORTED_FTYPES
 
-    # Pluggable array API (dependency-light; safe to import early)
     if name in ("LazyArray", "register_array_class"):
         from .lazy_array import LazyArray, register_array_class
 
@@ -120,7 +108,6 @@ def __getattr__(name):
 
         return get_mbo_dirs
 
-    # Memory monitoring (psutil-backed; cheap import)
     if name in (
         "MemoryMonitor",
         "mem_snapshot",
@@ -137,19 +124,16 @@ def __getattr__(name):
 
         return files_to_dask
 
-    # Axial plane-shift apply/remove (read-time, non-destructive)
     if name in ("with_axial_shifts", "AxialShiftView"):
         from .arrays import AxialShiftView, with_axial_shifts
 
         return with_axial_shifts if name == "with_axial_shifts" else AxialShiftView
 
-    # Read-time bidirectional phase correction (non-destructive)
     if name == "with_phasecorr":
         from .arrays import with_phasecorr
 
         return with_phasecorr
 
-    # File utilities (file_io -> tifffile, zarr)
     if name in (
         "get_files",
         "expand_paths",
@@ -159,7 +143,6 @@ def __getattr__(name):
 
         return getattr(file_io, name)
 
-    # Suite2p ops utilities
     if name == "load_ops":
         from .arrays.suite2p import load_ops
 
@@ -169,7 +152,6 @@ def __getattr__(name):
 
         return write_ops
 
-    # Metadata (metadata -> tifffile)
     if name in (
         "is_raw_scanimage",
         "get_metadata",
@@ -181,7 +163,6 @@ def __getattr__(name):
 
         return getattr(metadata, name)
 
-    # Preferences (lightweight, no heavy deps)
     if name in (
         "get_recent_files",
         "add_recent_file",
@@ -199,7 +180,6 @@ def __getattr__(name):
 
         return load_npy
 
-    # Video export (_writers -> imageio)
     if name == "to_video":
         from ._writers import to_video
 
@@ -218,13 +198,11 @@ def __getattr__(name):
 
         return DataVis
 
-    # File/folder selection (widgets -> imgui, wgpu)
     if name in ("select_folder", "select_files"):
         from .gui.widgets.simple_selector import select_files, select_folder
 
         return select_folder if name == "select_folder" else select_files
 
-    # Pipeline registry (triggers array module imports to register pipelines)
     if name in (
         "get_all_pipelines",
         "get_pipeline_info",
@@ -232,11 +210,9 @@ def __getattr__(name):
         "get_all_output_patterns",
         "get_all_marker_files",
     ):
-        # first register all pipelines
         from .arrays import register_all_pipelines
 
         register_all_pipelines()
-        # then return the requested function
         from . import pipeline_registry
 
         return getattr(pipeline_registry, name)

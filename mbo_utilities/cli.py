@@ -11,7 +11,6 @@ Usage patterns:
   mbo /path/to/data --metadata  # Show only metadata
   mbo convert INPUT OUTPUT      # Convert with CLI args
   mbo info INPUT                # Show array info (CLI only)
-  mbo linescan FILE.mesc        # Per-ROI traces from AOD line-scan units
 """
 
 import logging
@@ -20,16 +19,13 @@ import threading
 import time
 from pathlib import Path
 
-# set windows appusermodelid immediately for taskbar icon grouping
 if sys.platform == "win32":
-    try:
-        import ctypes
+    import ctypes
 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "mbo.utilities.gui.1.0"
-        )
-    except Exception:
-        pass
+    # the taskbar groups windows by this id, so it is set before any window exists
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+        "mbo.utilities.gui.1.0"
+    )
 
 import click
 
@@ -37,62 +33,39 @@ from mbo_utilities import log
 
 
 class PathAwareGroup(click.Group):
-    """Custom click Group that routes file paths to the 'view' command.
-
-    This allows `mbo /path/to/data` to work the same as `mbo view /path/to/data`.
-    """
+    """A click group where a first argument that is not a command but looks like a path (separator, suffix, or exists) runs ``view`` on it."""
 
     def resolve_command(self, ctx, args):
-        """Override to check if first arg looks like a path instead of a command."""
-        if args:
+        if args and args[0] not in self.commands:
             first_arg = args[0]
-            # First check if it's a known command
-            if first_arg in self.commands:
-                return super().resolve_command(ctx, args)
-
-            # Not a known command - check if it looks like a file path
-            # (contains path separators, has file extension, or exists on disk)
             if (
                 "/" in first_arg
                 or "\\" in first_arg
                 or "." in first_arg
                 or Path(first_arg).exists()
             ):
-                # Route to 'view' command with this path as argument
-                view_cmd = self.commands.get("view")
-                if view_cmd:
-                    return "view", view_cmd, args
-
+                return "view", self.commands["view"], args
         return super().resolve_command(ctx, args)
 
 
 def _get_marker_path() -> Path:
-    """Get path to first-run marker file."""
     from mbo_utilities import get_mbo_dirs
 
     return get_mbo_dirs()["base"] / ".initialized"
 
 
 def _is_first_run() -> bool:
-    """Check if this is the first run (no marker file exists)."""
-    try:
-        return not _get_marker_path().exists()
-    except Exception:
-        return False
+    return not _get_marker_path().exists()
 
 
 def _mark_initialized() -> None:
-    """Create marker file to indicate successful initialization."""
-    try:
-        marker = _get_marker_path()
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.touch()
-    except Exception:
-        pass
+    marker = _get_marker_path()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
 
 
 class LoadingSpinner:
-    """simple terminal spinner for loading feedback."""
+    """A terminal spinner on stdout while heavy imports run."""
 
     def __init__(self, message: str = "Loading"):
         self.message = message
@@ -112,8 +85,7 @@ class LoadingSpinner:
         sys.stdout.flush()
 
     def _spin(self):
-        # ascii spinner for windows compatibility (cp1252 can't encode unicode spinners)
-        chars = "|/-\\"
+        chars = "|/-\\"  # ascii: a cp1252 console cannot encode the unicode spinners
         i = 0
         while self._running:
             sys.stdout.write(f"\r{chars[i % len(chars)]} {self.message}...")
@@ -123,20 +95,12 @@ class LoadingSpinner:
 
 
 def _get_version_info() -> str:
-    """Get version string with install location info (cached)."""
+    """The version, interpreter and install kind (uv tool, environment, conda, system), the kind from the cache when it has one."""
     from mbo_utilities import __version__
+    from mbo_utilities.env_cache import get_cached_install_type
 
-    # try cache first for install type
-    install_type = None
-    try:
-        from mbo_utilities.env_cache import get_cached_install_type
-
-        install_type = get_cached_install_type()
-    except Exception:
-        pass
-
+    install_type = get_cached_install_type()
     if not install_type:
-        # compute install type from executable path
         exe_str = sys.executable.lower()
         if ".local" in exe_str or ("uv" in exe_str and "tools" in exe_str):
             install_type = "uv tool"
@@ -151,7 +115,6 @@ def _get_version_info() -> str:
 
 
 def _version_callback(ctx: click.Context, param: click.Parameter, value: bool) -> None:
-    """Custom version callback to show extended version info."""
     if not value or ctx.resilient_parsing:
         return
     click.echo(_get_version_info())
@@ -207,7 +170,7 @@ def main(
     gpu_index_arg=None,
     debug=None,
 ):
-    """
+    r"""
     MBO Utilities - preview and process imaging data.
 
     \b
@@ -233,7 +196,6 @@ def main(
 
         _log.set_debug(debug)
 
-    # handle --clear-cache early
     if clear_cache:
         from mbo_utilities.env_cache import clear_cache as do_clear
         from mbo_utilities.env_cache import get_cache_path
@@ -246,7 +208,6 @@ def main(
         return
 
     if check_install:
-        # force full cache rebuild including install status
         from mbo_utilities.env_cache import (
             build_full_cache_with_install_status,
             save_cache,
@@ -278,44 +239,30 @@ def main(
             f"{info.get('device', info.get('description', '?'))} "
             f"(persisted to ~/.mbo/settings/preferences.json)"
         )
-        # run_gui.py reads the persisted index on launch, so a path that
-        # routes to `view` will pick this up automatically.
+        # run_gui reads the persisted index on launch, so `view` picks it up
         if ctx.invoked_subcommand is None:
             return
 
-    # If a subcommand is invoked, skip main logic
     if ctx.invoked_subcommand is not None:
         return
 
-    # show first-run warning
     first_run = _is_first_run()
     if first_run:
         click.secho(
             "First run detected - initial startup may take longer while caches are built.",
             fg="yellow",
         )
-
-    # ensure environment cache exists (build if missing/invalid)
     if not no_cache:
-        try:
-            from mbo_utilities.env_cache import ensure_cache
+        from mbo_utilities.env_cache import ensure_cache
 
-            ensure_cache()
-        except Exception:
-            pass  # don't crash if cache fails
+        ensure_cache()
 
-    # show loading spinner while importing heavy dependencies
     spinner = LoadingSpinner("Loading GUI")
     spinner.start()
     try:
         from mbo_utilities.gui.run_gui import run_gui
-
+    finally:
         spinner.stop()
-    except Exception:
-        spinner.stop()
-        raise
-
-    # mark as initialized after successful import
     if first_run:
         _mark_initialized()
 
@@ -487,8 +434,7 @@ def view(
             f"Using GPU {gpu_index}: {info.get('device', info.get('description', '?'))}"
         )
 
-    # a masknmf demixing result opens in one of masknmf's viewers: ask which
-    # before anything heavy loads
+    # a masknmf demixing result opens in one of masknmf's viewers: ask which before anything heavy loads
     if vis is None and data_in and not metadata and not qc:
         from mbo_utilities.arrays.demixing import has_demixing_results
         from mbo_utilities.arrays.masknmf_run import run_demixing
@@ -504,25 +450,18 @@ def view(
                 )
     vis = vis or "demixing"
 
-    # show first-run warning
     first_run = _is_first_run()
     if first_run:
         click.secho(
             "First run detected - initial startup may take longer while caches are built.",
             fg="yellow",
         )
-
-    # show loading spinner while importing
     spinner = LoadingSpinner("Loading GUI")
     spinner.start()
     try:
         from mbo_utilities.gui.run_gui import run_gui
-
+    finally:
         spinner.stop()
-    except Exception:
-        spinner.stop()
-        raise
-
     if first_run:
         _mark_initialized()
 
@@ -790,7 +729,6 @@ def convert(
       mbo convert /data/raw output/ -e .npy -p 1 -p 7   # Export planes as NPY
       mbo convert /data/raw output/ --fix-phase     # With phase correction
     """
-    # If no input provided, could open a conversion GUI in the future
     if input_path is None:
         click.echo(
             "Conversion GUI not yet implemented. Please provide INPUT_PATH and OUTPUT_PATH."
@@ -807,7 +745,6 @@ def convert(
 
     from mbo_utilities import imread, imwrite
 
-    # Parse ROI argument
     parsed_roi = None
     if roi is not None:
         roi = roi.strip()
@@ -829,7 +766,6 @@ def convert(
 
     click.echo(f"Reading: {input_path}")
 
-    # Build imread kwargs
     imread_kwargs = {}
     if fix_phase is not None:
         imread_kwargs["fix_phase"] = fix_phase
@@ -846,21 +782,12 @@ def convert(
     if parsed_roi is not None and parsed_roi != 0:
         imread_kwargs["roi"] = parsed_roi
 
-    # Read data
     data = imread(input_path, **imread_kwargs)
     click.echo(f"  Shape: {data.shape}, dtype: {data.dtype}")
 
-    # Configure array-specific options
-    if hasattr(data, "fix_phase") and fix_phase is not None:
-        data.fix_phase = fix_phase
-    if hasattr(data, "phasecorr_method") and phasecorr_method:
-        data.phasecorr_method = phasecorr_method
-
-    # Determine output extension
     output_ext = ext or ".tiff"
     click.echo(f"Writing: {output_path} (format: {output_ext})")
 
-    # Build imwrite kwargs
     imwrite_kwargs = {
         "ext": output_ext,
         "overwrite": overwrite,
@@ -879,8 +806,7 @@ def convert(
     if num_zplanes:
         imwrite_kwargs["num_zplanes"] = num_zplanes
 
-    # ROI: any explicit --roi implies separate handling (concat_y ignores
-    # roi). --roi-mode overrides. 0=split all, N=specific, "1,3"=multiple.
+    # an explicit --roi implies separate outputs (concat_y ignores roi); --roi-mode overrides
     roi_mode_kw = roi_mode
     if roi_mode_kw is None and parsed_roi is not None:
         roi_mode_kw = "separate"
@@ -967,36 +893,24 @@ def _info_dim_sizes(data):
     return out
 
 
+_INFO_SKIP_SUFFIXES = {".zarr", ".corrected", ".fused", ".registered"}
+
+
 def _info_find_ops_dirs(root, max_depth=2):
-    """Directories at/under root (inclusive) that contain ops.npy."""
-    from pathlib import Path
-
-    skip_suffixes = {".zarr", ".corrected", ".fused", ".registered"}
-    found = []
-    seen = set()
-
-    def _add(p):
-        if p not in seen:
-            seen.add(p)
-            found.append(p)
-
-    try:
-        if (root / "ops.npy").exists():
-            _add(root)
-
-        def _walk(d, depth):
-            if depth > max_depth:
-                return
-            for child in sorted(d.iterdir()):
-                if not child.is_dir() or child.suffix.lower() in skip_suffixes:
-                    continue
-                if (child / "ops.npy").exists():
-                    _add(child)
-                _walk(child, depth + 1)
-
-        _walk(Path(root), 1)
-    except (OSError, PermissionError):
-        pass
+    """Directories at or under ``root`` (inclusive, ``max_depth`` levels) that contain ``ops.npy``, in walk order."""
+    root = Path(root)
+    found = [root] if (root / "ops.npy").exists() else []
+    pending = [(root, 1)]
+    while pending:
+        d, depth = pending.pop(0)
+        if depth > max_depth:
+            continue
+        for child in sorted(d.iterdir()):
+            if not child.is_dir() or child.suffix.lower() in _INFO_SKIP_SUFFIXES:
+                continue
+            if (child / "ops.npy").exists() and child not in found:
+                found.append(child)
+            pending.append((child, depth + 1))
     return found
 
 
@@ -1009,18 +923,12 @@ def _info_segmentation_counts(ops_dir):
     stat_path = ops_dir / "stat.npy"
     if not stat_path.exists():
         return None, None
-    try:
-        n_rois = len(load_npy(stat_path))
-    except Exception:
-        return None, None
+    n_rois = len(load_npy(stat_path))
     n_cells = None
     iscell_path = ops_dir / "iscell.npy"
     if iscell_path.exists():
-        try:
-            iscell = np.asarray(load_npy(iscell_path))
-            n_cells = int(iscell[:, 0].astype(bool).sum())
-        except Exception:
-            n_cells = None
+        iscell = np.asarray(load_npy(iscell_path))
+        n_cells = int(iscell[:, 0].astype(bool).sum())
     return n_rois, n_cells
 
 
@@ -1159,8 +1067,7 @@ def info(input_path, metadata, show_all, unit):
         _info_kv("Stack type", _info_md(md, "stack_type"))
 
         if is_isoview:
-            # view_names are the VW labels (VW00, VW90, ...); `views` holds
-            # raw camera keys, so prefer the labels for display.
+            # view_names are the VW labels (VW00, VW90, ...); `views` holds raw camera keys
             view_labels = (
                 getattr(data, "view_names", None) or getattr(data, "views", None) or []
             )
@@ -1184,12 +1091,9 @@ def info(input_path, metadata, show_all, unit):
 
             avg = None
             if isinstance(md.get("si"), dict):
-                try:
-                    from mbo_utilities.metadata.scanimage import get_log_average_factor
+                from mbo_utilities.metadata.scanimage import get_log_average_factor
 
-                    avg = get_log_average_factor(md)
-                except Exception:
-                    avg = None
+                avg = get_log_average_factor(md)
 
             _info_kv("Timepoints", _info_num(timepoints))
             _info_kv("Z-planes", _info_num(zplanes))
@@ -1200,29 +1104,20 @@ def info(input_path, metadata, show_all, unit):
             if fs and timepoints:
                 _info_kv("Duration", f"{timepoints / fs:.1f}", "s")
 
-    try:
-        vmin = data.vmin
-        vmax = data.vmax
-        if vmin is not None and vmax is not None:
-            _info_kv(
-                "Value range", f"[{_info_num(float(vmin))}, {_info_num(float(vmax))}]"
-            )
-    except Exception:
-        pass
+    if data.vmin is not None and data.vmax is not None:
+        _info_kv(
+            "Value range",
+            f"[{_info_num(float(data.vmin))}, {_info_num(float(data.vmax))}]",
+        )
 
     filenames = getattr(data, "filenames", None)
     if filenames:
-        names = [Path(f).name for f in filenames]
-        collide = len(set(names)) < len(names)
-
-        def _file_label(f):
-            p = Path(f)
-            return f"{p.parent.name}/{p.name}" if collide else p.name
-
+        paths = [Path(f) for f in filenames]
+        collide = len({p.name for p in paths}) < len(paths)
         click.secho(f"\nFiles ({len(filenames)})", fg="cyan")
-        shown = filenames if len(filenames) <= 5 else filenames[:3]
-        for f in shown:
-            click.echo(f"  - {_file_label(f)}")
+        shown = paths if len(paths) <= 5 else paths[:3]
+        for p in shown:
+            click.echo(f"  - {f'{p.parent.name}/{p.name}' if collide else p.name}")
         if len(filenames) > 5:
             click.echo(f"  ... and {len(filenames) - 3} more")
 
@@ -1344,7 +1239,7 @@ def list_formats():
     help="Save output to docs/_images/scanphase/ for documentation.",
 )
 def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_size):
-    """
+    r"""
     Scan-phase analysis for bidirectional scanning data.
 
     Analyzes phase offset to determine optimal correction parameters.
@@ -1370,14 +1265,11 @@ def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_
     from mbo_utilities.analysis.scanphase import run_scanphase_analysis
 
     try:
-        # handle --docs flag: override output_dir to docs/_images/scanphase/
         if docs:
-            # find the repo root (where docs/ folder is)
             repo_root = Path(__file__).parent.parent
             output_dir = str(repo_root / "docs" / "_images" / "scanphase")
             click.echo(f"--docs flag: saving to {output_dir}")
 
-        # handle num_tifs for folder input
         actual_input = input_path
         if input_path is not None:
             input_path_obj = Path(input_path)
@@ -1390,7 +1282,6 @@ def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_
                 click.echo(f"Using {len(tiffs)} tiff files from {input_path}")
                 actual_input = tiffs
 
-        # determine output directory for display
         if output_dir is not None:
             actual_output_dir = Path(output_dir)
         elif input_path is not None:
@@ -1410,9 +1301,7 @@ def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_
         )
 
         if results is None:
-            return  # user cancelled file selection
-
-        # print summary
+            return
         summary = results.get_summary()
         meta = summary.get("metadata", {})
 
@@ -1427,7 +1316,6 @@ def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_
         click.echo(f"analysis time: {meta.get('analysis_time', 0):.1f}s")
         click.echo(f"output: {actual_output_dir}")
 
-        # fft stats
         if "fft" in summary:
             stats = summary["fft"]
             click.echo("")
@@ -1439,7 +1327,6 @@ def scanphase(input_path, output_dir, num_tifs, image_format, show, docs, patch_
                 f"  range:  [{stats.get('min', 0):.2f}, {stats.get('max', 0):.2f}] px"
             )
 
-        # int stats
         if "int" in summary:
             stats = summary["int"]
             click.echo("")
@@ -1507,7 +1394,6 @@ def processes(kill_all, kill, cleanup):
             click.secho(f"Process {kill} not found or could not be killed.", fg="red")
         return
 
-    # list all processes
     all_procs = pm.get_all()
     if not all_procs:
         click.echo("No tracked background processes.")
@@ -1703,7 +1589,7 @@ def download_models(force):
 @main.command("shortcut")
 @click.option(
     "--name",
-    default="Miller Brain Studio",
+    default="The Studio",
     help="Shortcut name.",
 )
 def shortcut(name):
@@ -1725,314 +1611,6 @@ def shortcut(name):
     except Exception as e:
         raise click.ClickException(str(e))
     click.secho(f"Created: {path}", fg="green")
-
-
-@main.command("netcheck")
-@click.option(
-    "--host",
-    default="lab-research",
-    help="SSH host or ssh_config alias to test against.",
-)
-@click.option(
-    "--path",
-    "remote_path",
-    default=None,
-    help="Remote file to measure storage read/metadata against. Skipped if omitted.",
-)
-@click.option(
-    "--size",
-    "size_mb",
-    type=int,
-    default=512,
-    help="MiB to transfer per throughput probe (default 512).",
-)
-@click.option(
-    "--streams",
-    type=int,
-    default=4,
-    help="Concurrent SSH streams for the aggregate-bandwidth probe.",
-)
-@click.option(
-    "--quick",
-    is_flag=True,
-    help="Latency + single-stream throughput only; skip parallel and end-to-end.",
-)
-@click.option(
-    "--json",
-    "as_json",
-    is_flag=True,
-    help="Emit raw measurements as JSON.",
-)
-def netcheck(host, remote_path, size_mb, streams, quick, as_json):
-    r"""
-    Measure latency, bandwidth, and storage speed on the remote data path.
-
-    Reports the SSH link to the server and the storage mount behind it as
-    separate legs, so a slow remote dataset can be traced to the one that is
-    actually limiting it. Read-only: nothing is written to the remote host.
-
-    \b
-    Examples:
-      mbo netcheck
-      mbo netcheck --quick
-      mbo netcheck --path /biohpc/data4/rudra/eunji/mini2p/x.tif
-      mbo netcheck --host lab4 --size 1024
-      mbo netcheck --json > netcheck-$(date +%F).json
-    """
-    from mbo_utilities import netcheck as nc
-
-    if not nc.ssh_available():
-        raise click.ClickException(
-            "ssh not found on PATH - install OpenSSH client, then retry."
-        )
-
-    # --path names a file on a Linux host, so a drive letter here means the
-    # shell rewrote it: git-bash/MSYS turns /biohpc/... into C:/Program
-    # Files/Git/biohpc/... on its way to a native exe. Caught here because the
-    # remote probe would otherwise just report the file as unreadable.
-    if remote_path and len(remote_path) > 1 and remote_path[1] == ":":
-        raise click.ClickException(
-            f"--path was rewritten by the shell into a Windows path:\n"
-            f"    {remote_path}\n"
-            f"It names a file on {host}, so it must stay POSIX. Either run this "
-            f"from PowerShell, prefix the path with a second slash "
-            f"(//biohpc/...), or set MSYS_NO_PATHCONV=1 for the command."
-        )
-
-    # probes take tens of seconds; without progress it reads as a hang
-    def _progress(msg):
-        if not as_json:
-            click.echo(f"  ... {msg}", err=True)
-
-    if not as_json:
-        click.echo(f"Probing {host} (this takes ~30-60s)...", err=True)
-
-    results = nc.run_checks(
-        host,
-        path=remote_path,
-        size_mb=size_mb,
-        streams=streams,
-        quick=quick,
-        on_progress=_progress,
-    )
-
-    if as_json:
-        import json as _json
-
-        click.echo(_json.dumps(results, indent=2))
-        return
-
-    click.echo("")
-    click.echo(nc.format_report(results))
-    if not results.get("reachable"):
-        raise click.Abort
-
-
-def _csv_ints(_ctx, _param, value):
-    if not value:
-        return None
-    try:
-        return [int(v) for v in value.split(",") if v.strip()]
-    except ValueError as e:
-        raise click.BadParameter(
-            f"expected comma-separated integers, got {value!r}"
-        ) from e
-
-
-@main.command("linescan")
-@click.argument("mesc_path", type=click.Path(exists=True))
-@click.option(
-    "-o",
-    "--output",
-    "out_root",
-    type=click.Path(),
-    default=None,
-    help="Root for the per-unit output dirs (<root>/<MUnit_n>/). "
-    "Default: rois_<tag>/<MUnit_n>/ beside the .mesc file.",
-)
-@click.option(
-    "--unit",
-    "units",
-    multiple=True,
-    help="Only this unit, e.g. MUnit_3 (repeatable). Default: every linescan unit.",
-)
-@click.option(
-    "--channel", type=int, default=0, show_default=True, help="Channel to average."
-)
-@click.option(
-    "--dfof-window",
-    type=float,
-    default=5.0,
-    show_default=True,
-    help="Rolling max-min baseline window for dF/F, in seconds.",
-)
-@click.option("--no-dfof", is_flag=True, default=False, help="Skip dfof.npy.")
-@click.option(
-    "--no-figures",
-    is_flag=True,
-    default=False,
-    help="Skip the numbered PNG figure set.",
-)
-@click.option(
-    "--flip-y",
-    is_flag=True,
-    default=False,
-    help="Mirror the lines vertically on the reference Z-stack figure.",
-)
-@click.option(
-    "--tag", default="linescan", show_default=True, help="Output dir name: rois_<tag>/."
-)
-@click.option(
-    "--view",
-    is_flag=True,
-    default=False,
-    help="Open the line-scan + Z-stack viewer (with vnoiser curation when installed) "
-    "instead of writing outputs. Same as `mbo scan.mesc` and picking the unit.",
-)
-@click.option(
-    "--zstack", default=None, help="With --view: the Z-stack unit, e.g. MUnit_3."
-)
-@click.option(
-    "--zstack-file",
-    type=click.Path(exists=True, dir_okay=False),
-    default=None,
-    help="With --view: the .mesc holding the Z-stack when saved separately "
-    "(default: <name>_zstack.mesc beside the file, else the file itself).",
-)
-def linescan(
-    mesc_path,
-    out_root,
-    units,
-    channel,
-    dfof_window,
-    no_dfof,
-    no_figures,
-    flip_y,
-    tag,
-    view,
-    zstack,
-    zstack_file,
-):
-    """Per-ROI traces from every AOD line-scan unit of a Femtonics .mesc file.
-
-    Each line the scientist drew is its own ROI; its kymograph is averaged
-    over the line (cropped to the line's true, unpadded extent) into one
-    trace per timepoint. Writes suite2p-style F/Fneu/stat/ops/iscell plus
-    dfof.npy, binned kymographs, every other channel's traces, the
-    photostimulation frames and a numbered PNG figure set per unit (lines on
-    the reference Z-stack, line profiles, kymographs, traces, stimulus-
-    aligned response, per-ROI metrics, motion correction). Ribbon,
-    chessboard, Z-stack and other units in the same file are skipped.
-
-    MESC_PATH may also be an experiment folder laid out the curation
-    notebook's way (<expt>/<expt>/<expt>.mesc with PF/ beside it): its line
-    scan is used.
-
-    \b
-      mbo linescan scan.mesc
-      mbo linescan scan.mesc -o results/linescan --unit MUnit_3 --channel 1
-      mbo linescan scan.mesc --view --unit MUnit_35
-      mbo linescan X:/data/asako/stan112/stan112_expt12 --view
-    """
-    if Path(mesc_path).is_dir():
-        from mbo_utilities.analysis.linescan import experiment_linescan_mesc
-
-        found = experiment_linescan_mesc(mesc_path)
-        if found is None:
-            raise click.BadParameter(
-                f"{mesc_path} is a folder with no <name>/<name>.mesc line scan in it",
-                param_hint="MESC_PATH",
-            )
-        click.echo(f"line scan: {found}")
-        mesc_path = str(found)
-    if view:
-        from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
-
-        if len(units) > 1:
-            raise click.BadParameter(
-                "--view opens one unit; pass a single --unit", param_hint="--unit"
-            )
-        open_linescan_viewer(
-            mesc_path,
-            ref_key=units[0] if units else None,
-            zstack_key=zstack,
-            zstack_path=zstack_file,
-            channel=channel,
-            flip_y=flip_y,
-        )
-        return
-
-    from mbo_utilities.roi_workflow import extract_linescan_units
-
-    try:
-        outputs = extract_linescan_units(
-            mesc_path,
-            channel=channel,
-            out_root=out_root,
-            units=list(units) or None,
-            compute_dfof=not no_dfof,
-            dfof_window_s=dfof_window,
-            tag=tag,
-            figures=not no_figures,
-            flip_y=flip_y,
-        )
-    except (ValueError, KeyError, IndexError, FileNotFoundError) as e:
-        click.echo(f"error: {e}", err=True)
-        raise click.Abort
-    if not outputs:
-        click.echo(f"no linescan units in {mesc_path}")
-        return
-    import numpy as np
-
-    for unit_key, out in outputs.items():
-        F = np.load(out / "F.npy")
-        stat = np.load(out / "stat.npy", allow_pickle=True)
-        ops = np.load(out / "ops.npy", allow_pickle=True).item()
-        fs = ops.get("fs")
-        widths = ", ".join(str(int(r["width"])) for r in stat)
-        click.echo(
-            f"{unit_key}: {len(stat)} ROI(s) x {F.shape[1]} timepoints"
-            f"{f' at {fs:.1f} Hz' if fs else ''} -> {out}"
-        )
-        click.echo(f"  widths px: {widths}")
-        click.echo(f"  F mean {F.mean():.1f}  min {F.min():.1f}  max {F.max():.1f}")
-        if not no_dfof:
-            dfof = np.load(out / "dfof.npy")
-            click.echo(
-                "  dF/F per ROI max: "
-                + ", ".join(f"{v:.2f}" for v in np.nanmax(dfof, axis=1))
-            )
-        info = ops.get("roi_workflow") or {}
-        if info.get("stim_onsets_s"):
-            onsets = ", ".join(f"{t:.3f}" for t in info["stim_onsets_s"])
-            click.echo(
-                f"  stimulus: {info['stim_n_pulses']} pulse(s), train onset(s) at {onsets} s;"
-                "  peak dF/F after stim: "
-                + ", ".join(f"{r.get('peak_dfof', float('nan')):.2f}" for r in stat)
-            )
-        else:
-            click.echo("  no photostimulation found in this unit")
-        bg = info.get("background_image")
-        if bg:
-            click.echo(
-                f"  drawn on snapshot: {bg['munit']} ({bg['width']:.0f} um FOV at z {bg['z']:.2f})"
-            )
-        ref = info.get("reference_zstack")
-        if ref:
-            click.echo(
-                f"  reference z-stack: {ref['munit']} at {ref['um_per_px']:.2f} um/px "
-                f"({ref['xy_fraction']:.0%} of lines in its field, {ref['z_fraction']:.0%} within its depth range"
-                f"{'; COARSE, no stack resolves the lines' if ref.get('coarse') else ''})"
-            )
-        figs = sorted(out.glob("[0-9][0-9]*_*.png"))
-        if figs:
-            click.echo(f"  figures: {len(figs)} ({figs[0].name} .. {figs[-1].name})")
-
-
-# hpc subcommand group (light import: heavy deps load lazily inside the commands).
-from mbo_utilities.hpc.cli import hpc as _hpc_group  # noqa: E402
-
-main.add_command(_hpc_group)
 
 
 @main.command("curate")
@@ -2139,7 +1717,7 @@ def curate(path, serve, host, port, channel):
 def serve(
     path, host, port, max_sessions, idle_timeout, widget, quality, token, no_token
 ):
-    """Serve Miller Brain Studio to browsers from this machine.
+    r"""Serve The Studio to browsers from this machine.
 
     Each browser session runs the Studio in a process of its own on this
     machine's GPU and data, streamed to the browser over a websocket. The
@@ -2184,7 +1762,7 @@ def serve(
         token=token,
         quality=quality,
     )
-    click.echo(f"Miller Brain Studio: {gateway.link()}")
+    click.echo(f"The Studio: {gateway.link()}")
     if path:
         session = gateway.open(path, widget)
         click.echo(f"  {Path(path).name}: {gateway.link(session.url)}")
@@ -2484,7 +2062,7 @@ def vnoiser(
     no_denoise,
     timepoints,
 ):
-    """The vnoiser pipeline on a .mesc: domain traces, dF/F and z-score,
+    r"""The vnoiser pipeline on a .mesc: domain traces, dF/F and z-score,
     wavelet denoising, peaks, written as one
     `<input>.<timestamp>.vnoiser.zarr` beside the input that `mbo curate`
     opens.
@@ -2673,7 +2251,7 @@ def vnoiser(
     "--overwrite", is_flag=True, default=False, help="Replace an existing results file."
 )
 def results(path, out, overwrite):
-    """Write a pipeline's output folder as one results zarr.
+    r"""Write a pipeline's output folder as one results zarr.
 
     PATH is a suite2p or masknmf output folder (one plane dir, or a folder
     of zplaneNN dirs) or the vnoiser pipeline's PF folder. The file holds
@@ -2738,7 +2316,7 @@ def results(path, out, overwrite):
     "--overwrite", is_flag=True, default=False, help="Replace an existing results.hdf5."
 )
 def reg_denoise(path, unit, channel, first_frame, max_shift, out, overwrite):
-    """Pre-registration denoising: compress, register to the compression, compress again.
+    r"""Pre-registration denoising: compress, register to the compression, compress again.
 
     Writes one results.hdf5 holding the compression of the raw movie, the
     registration estimated on it and the compression of the registered
@@ -2823,7 +2401,7 @@ def asap7(
     device,
     out,
 ):
-    """ASAP7 spine run: compress, register to the compression, compress and denoise
+    r"""ASAP7 spine run: compress, register to the compression, compress and denoise
     with a detrender, demix spines and the dendrite.
 
     The raw movie is inverted (ASAP7 dims on depolarisation), compressed, and

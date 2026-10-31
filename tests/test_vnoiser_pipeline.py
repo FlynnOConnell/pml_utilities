@@ -408,7 +408,9 @@ def test_one_roi_of_one_channel_runs_and_belongs_to_its_file(tmp_path):
     assert newest_results(tmp_path, "vnoiser") == run
     assert newest_results(tmp_path, "vnoiser", source=other) is None
 
-    widget = VnoiserPipelineWidget(SimpleNamespace(fpath=mesc, image_widget=None))
+    widget = VnoiserPipelineWidget(
+        SimpleNamespace(fpath=mesc, image_widget=None, invert_deflection=False)
+    )
     widget._ensure_state()
     assert widget._last_status.startswith("Loaded the previous run")
     assert [(r.name, r.rois) for r in widget._domains] == [
@@ -416,7 +418,9 @@ def test_one_roi_of_one_channel_runs_and_belongs_to_its_file(tmp_path):
         ("roi1", [1]),
         ("roi2", [2]),
     ]
-    widget = VnoiserPipelineWidget(SimpleNamespace(fpath=other, image_widget=None))
+    widget = VnoiserPipelineWidget(
+        SimpleNamespace(fpath=other, image_widget=None, invert_deflection=False)
+    )
     widget._ensure_state()
     assert widget._last_status == ""
     assert [(r.name, r.rois) for r in widget._domains] == [
@@ -916,7 +920,9 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
         )
     )
 
-    widget = VnoiserPipelineWidget(SimpleNamespace(fpath=mesc, image_widget=None))
+    widget = VnoiserPipelineWidget(
+        SimpleNamespace(fpath=mesc, image_widget=None, invert_deflection=False)
+    )
     widget._ensure_state()
     assert widget._status_color is not _MISSING_COLOR, widget._last_status
     assert widget._last_status.startswith("Loaded the previous run")
@@ -974,7 +980,9 @@ def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     )
 
     shown = SimpleNamespace(unit_key="MSession_0/MUnit_5")
-    parent = SimpleNamespace(fpath=mesc, image_widget=SimpleNamespace(data=[shown]))
+    parent = SimpleNamespace(
+        fpath=mesc, image_widget=SimpleNamespace(data=[shown]), invert_deflection=False
+    )
     widget = VnoiserPipelineWidget(parent)
     widget._ensure_state()
     assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}

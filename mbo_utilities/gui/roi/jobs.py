@@ -23,6 +23,14 @@ from mbo_utilities.arrays.features._dim_tags import (
 )
 from mbo_utilities.arrays.features._slicing import index_window
 from mbo_utilities.gui import roi_runs
+from mbo_utilities.gui.roi._shared import (
+    _STAGE_NAMES,
+    ADOPT_INTERVAL_S,
+    DEFAULT_RUN_TAG,
+    PIXEL_RADIUS,
+    _frames_of,
+    _RunSpec,
+)
 from mbo_utilities.gui.roi_runs import (
     RoiRun,
     finished_dirs,
@@ -44,15 +52,6 @@ from mbo_utilities.roi_workflow import (
     write_run,
 )
 
-from mbo_utilities.gui.roi._shared import (
-    ADOPT_INTERVAL_S,
-    DEFAULT_RUN_TAG,
-    _frames_of,
-    PIXEL_RADIUS,
-    _RunSpec,
-    _STAGE_NAMES,
-)
-
 
 class JobsMixin:
     """Quick and pixel traces, the mean / suite2p / masknmf runs, their adoption."""
@@ -63,14 +62,11 @@ class JobsMixin:
     def movie(
         self, plane: int | None = None, *, z: int | None = None, c: int | None = None
     ) -> PlaneMovie | None:
-        """``(T, Y, X)`` view of the viewer's array.
+        """``(T, Y, X)`` view of the viewer's array behind store ``plane`` (the one on screen when None).
 
-        By default the pixels behind store ``plane`` (the plane on screen
-        when None): the z-plane and channel that plane encodes, the
-        viewer's channel when channels do not key planes. ``z`` / ``c``
-        read another z-plane or channel instead, with the same mask (a
+        ``z`` / ``c`` read another z-plane or channel with the same mask (a
         cell drawn on the structural channel, traced on the functional
-        one). None when the array cannot be wrapped.
+        one). None when the array has no (T, Y, X) movie to wrap.
         """
         pos = self._plane_pos(self.z if plane is None else int(plane))
         zname, cname = self.store.axis_name("z"), self.store.axis_name("c")
@@ -86,11 +82,7 @@ class JobsMixin:
             return None
 
     def _coords(self, z=None, c=None, frames=None) -> tuple:
-        """The read coordinates a run uses: the explicit ones, else what
-        ``run_where`` says (the slice on screen, the fixed ``run_z`` /
-        ``run_c``, or None for where each ROI was drawn) and ``run_tp``
-        (0-based frames, None = every frame).
-        """
+        """``(z, c, frames)`` a run reads: the explicit ones, else ``run_where``'s (None reads where each ROI was drawn) and ``run_tp``."""
         if self.run_where == "screen":
             base_z, base_c = self.model.z, self.model.c
         elif self.run_where == "fixed":
@@ -104,7 +96,7 @@ class JobsMixin:
         )
 
     def _where_label(self) -> str:
-        """Where a run reads its pixels, as the tooltips say it."""
+        """The place a run reads its pixels from, worded as the tooltips say it."""
         if self.run_where == "screen":
             where = f"slice on screen ({self._plane_label(self.z)})"
         elif self.run_where == "fixed":
@@ -127,9 +119,7 @@ class JobsMixin:
         return where
 
     def _frame_select(self, movie: PlaneMovie | None, tp) -> PlaneMovie | None:
-        """``movie`` over the 0-based frames ``tp`` it has; the movie itself
-        for None, nothing usable, or every frame.
-        """
+        """``movie`` cut to the 0-based frames ``tp`` it has; the movie itself for None or every frame."""
         if movie is None or tp is None:
             return movie
         nt = int(movie.shape[0])
@@ -145,15 +135,13 @@ class JobsMixin:
 
     @property
     def busy(self) -> bool:
-        """Anything still working: runs in the manager or trace threads"""
         return self.trace_busy or self.manager.busy
 
     def has_traces(self) -> bool:
-        """Anything the Traces tab could plot"""
         return bool(self.traces)
 
     def trace_disabled(self, index: int) -> str | None:
-        """Why drawn ROI ``index`` cannot be traced right now, or None."""
+        """The reason drawn ROI ``index`` cannot be traced now, or None."""
         movie = self.movie()
         if movie is None or int(movie.shape[0]) < 2:
             return "no (T, Y, X) movie behind this view"
@@ -171,14 +159,11 @@ class JobsMixin:
         c: int | None = None,
         frames=None,
     ):
-        """Mean-trace drawn ROIs on one background job.
+        """Mean-trace drawn ROIs on one background thread.
 
-        Each mask is read from the z-plane / channel / frame window given
-        (else ``run_z`` / ``run_c`` / ``run_tp``, else where it was
-        drawn) and lands as a ``mean`` row of the trace table, replacing an
-        earlier row at the same coordinates. The ROIs are traced one after
-        another on a single thread, so running a long list never spawns a
-        thread per ROI.
+        Each mask is read at the coordinates given (else ``_coords``) and
+        lands as a ``mean`` row of the trace table, replacing an earlier row
+        at the same coordinates.
         """
         z, c, tp = self._coords(z, c, frames)
         work = []
@@ -194,8 +179,6 @@ class JobsMixin:
             if indices:
                 self.status = "nothing to trace"
             return
-        # traces taken at different binnings live on different time bases;
-        # record it so the table can say so
         averaged = int(getattr(self.host, "frame_average", 1) or 1)
         description = (
             f"quick trace - ROI {work[0][0].index}"
@@ -214,9 +197,7 @@ class JobsMixin:
         thread.start()
 
     def _run_quick(self, work: list[tuple], job, averaged: int) -> None:
-        """The quick-trace thread: ``measure_mean`` of each ROI in ``work``,
-        one ``quick`` row per ROI queued for the draw thread.
-        """
+        """The quick-trace thread: one ``quick`` row per ROI in ``work``, queued for the draw thread."""
         frames_done = 0
         for n, (target, mask, exclude, movie) in enumerate(work):
             try:
@@ -255,10 +236,10 @@ class JobsMixin:
         self._footprints = None
 
     def _merge_run_traces(self, unit, name: str, path) -> int:
-        """Add a run unit's rows to the trace table under source ``name``,
-        keyed by the store uids the unit's ``uids`` attr names; rows whose
-        ROI is gone are skipped. A run that did not record where it read
-        gets the ROI's own z-plane and channel. Returns how many landed.
+        """Add a run unit's rows to the trace table under source ``name``, keyed by the store uids its ``uids`` attr names.
+
+        Rows whose ROI is gone are skipped; a run that did not record where
+        it read gets the ROI's own z-plane and channel. Returns how many landed.
         """
         uids = unit.attrs.get("uids")
         if not uids or len(uids) != unit.n_rois:
@@ -288,18 +269,12 @@ class JobsMixin:
         return merged
 
     def pipeline_for(self, engine: str | None = None) -> str | None:
-        """Which pipeline's parameters an engine runs on, or None for one
-        that takes none (the numpy mean extractor).
-        """
+        """The pipeline whose parameters ``engine`` runs on; None for the numpy mean extractor."""
         engine = self.engine if engine is None else engine
         return engine if engine in ("masknmf", "suite2p") else None
 
     def masknmf_settings(self) -> dict | None:
-        """The masknmf parameters set in the Process tab, or None for defaults.
-
-        Runs started here go through the same settings the Process tab edits, so
-        there is one place to change them rather than two that disagree.
-        """
+        """The masknmf parameters set in the Process tab, or None for defaults."""
         return roi_runs.masknmf_settings(self.host)
 
     def _pipeline_summary(self, kind: str) -> tuple[str, str]:
@@ -341,22 +316,17 @@ class JobsMixin:
             f"{name}:{_STAGE_NAMES[int(getattr(s2p, attr, 1)) % 3]}"
             for name, attr in (("reg", "do_registration"), ("detect", "do_detection"))
         )
-        try:
-            changed = collect_modified_params(
-                s2p,
-                getattr(self.host, "s2p_db", None),
-                getattr(self.host, "s2p_extras", None),
-            )
-        except Exception:
-            changed = []
+        changed = collect_modified_params(
+            s2p,
+            getattr(self.host, "s2p_db", None),
+            getattr(self.host, "s2p_extras", None),
+        )
         label = f"suite2p: {len(changed)} changed" if changed else "suite2p: defaults"
         detail = "\n".join(f"{row[0]} = {row[1]}" for row in changed[:12])
         return label, f"{stages}\n{detail}" if detail else stages
 
     def open_pipeline_params(self, kind: str):
-        """Jump to the Process tab with ``kind`` selected - that is where these
-        parameters are edited.
-        """
+        """Bring the Process tab forward with ``kind`` selected, where its parameters are edited."""
         if self.host is None:
             self.status = "no Process tab to open"
             return
@@ -367,10 +337,7 @@ class JobsMixin:
         self.status = f"{kind} parameters are in the Process tab"
 
     def _run_out_path(self, tag: str) -> Path | None:
-        """Where a run with ``tag`` goes: ``<stem>.<tag>.<stamp>.manual.zarr``
-        in the ROI folder (the recording's own tag first when its file holds
-        several); None, with the reason in the status, when it cannot.
-        """
+        """``<stem>.<tag>.<stamp>.manual.zarr`` in the ROI folder (the recording's own tag first); None, with the reason in the status."""
         if self.fpath is None:
             self.status = "no data path to write beside"
             return None
@@ -393,17 +360,12 @@ class JobsMixin:
         frames=None,
         engine: str | None = None,
     ):
-        """Send drawn ROIs through an extraction engine on the viewer's own
-        array, writing one results zarr (``<stem>.<tag>.<stamp>.manual.zarr``)
-        in the ROI folder.
+        """Run drawn ROIs through an extraction engine on the viewer's array, into one results zarr in the ROI folder.
 
         Each mask stays on the plane it was drawn on; its pixels come from
-        ``z`` / ``c`` / ``frames`` (else ``run_z`` / ``run_c`` / ``run_tp``,
-        else where the ROI was drawn). ROIs read from more than one z-plane
-        or channel get one unit each (``zplane02``, ``ch01_zplane02``). A
-        finished run's rows replace earlier rows at the same coordinates with
-        the same engine. The run closes over a store snapshot, so drawing on
-        is safe while it works.
+        ``z`` / ``c`` / ``frames`` (else ``_coords``). Each z-plane and
+        channel read is one unit (``zplane02``, ``ch01_zplane02``). The run
+        closes over a store snapshot, so drawing on is safe while it works.
         """
         indices = [int(i) for i in indices if 0 <= int(i) < self.n_rois]
         if not indices:
@@ -459,8 +421,8 @@ class JobsMixin:
         self.status = f"{run.description} started"
 
     def _run_job(self, job, spec: _RunSpec) -> Path | None:
-        """The run thread: one unit per slice read, written as one results
-        zarr; masknmf's native files move into its ``manual/`` folder.
+        """The run thread: one unit per slice read, written as one results zarr; masknmf's native files move into its ``manual/`` folder.
+
         Returns the file, or None when no ROI was on any plane read.
         """
         units = []
@@ -493,9 +455,9 @@ class JobsMixin:
                 continue
             unit.name = name
             while any(u.name == unit.name for u in units):
-                # two store planes read at the same slice (masks drawn on
-                # two channels, traced on one): a unit each
-                unit.name += f"_p{plane}"
+                unit.name += (
+                    f"_p{plane}"  # masks drawn on two channels, traced on one slice
+                )
             units.append(unit)
         if not units:
             return None
@@ -521,11 +483,7 @@ class JobsMixin:
         return grouped or ([self.selected] if self.selected >= 0 else [])
 
     def run_selection(self, indices: list[int] | None = None):
-        """Run the selection through the engine the Process tab's ROIs pipeline is set to.
-
-        One ROI goes to its own ``rois_roiNN/`` as the row button does; a group
-        goes to the tab's tag in one job, as picking "selected" there does.
-        """
+        """Run the selection through the widget's engine: one ROI into its own ``roiNN`` run, a group into one run under the tag."""
         indices = self.selection_indices() if indices is None else indices
         if not indices:
             self.status = "select an ROI first"
@@ -543,7 +501,7 @@ class JobsMixin:
 
     @property
     def effective_tag(self) -> str:
-        """The tag a run will actually use: what was typed, else the default."""
+        """The typed run tag, else the default."""
         return (self.run_tag or "").strip() or DEFAULT_RUN_TAG
 
     def listed_drawn(self) -> list[int]:
@@ -561,7 +519,7 @@ class JobsMixin:
         self.trace_rois(self.listed_drawn())
 
     def _poll_jobs(self):
-        """Drain finished traces and runs; called once per frame from the panel."""
+        """Drain finished traces and runs, once per frame from the panel."""
         while True:
             try:
                 target, trace, error = self._trace_results.get_nowait()
@@ -596,8 +554,7 @@ class JobsMixin:
                     run.out_dirs = [Path(o) for o in payload]
                 outs = [d for d in run.out_dirs if run_dir_complete(d)]
             else:
-                # spawned pipelines may suffix the plane dir name, so
-                # resolve the real dirs from disk instead of the guess
+                # a spawned pipeline may suffix the plane dir name, so the guessed dirs are replaced from disk
                 outs = finished_dirs(run.out_root, run.planes) if run.out_root else []
                 if outs:
                     guessed = {str(d) for d in run.out_dirs}
@@ -615,8 +572,6 @@ class JobsMixin:
                     f"roi run done: {names}" + (f" in {took}" if took else "")
                 )
                 self.status = f"done: {names}"
-                # the run browser is gone: its timing and outputs belong on the
-                # job, which the status button and process console already show
                 if run.job is not None:
                     run.job.status_message = f"{names} · {took}"
             elif not outs:
@@ -626,15 +581,7 @@ class JobsMixin:
         self._adopt_finished_runs()
 
     def _adopt_finished_runs(self):
-        """Load the ROIs of pipeline runs this widget did not start.
-
-        A suite2p / masknmf run launched from the Process tab writes its
-        plane dirs beside the data like any other run, but nothing was
-        watching for them: its components only showed up after a restart,
-        when the widget rebuilds from the registry. Rows arrive with the
-        run's own iscell, so accepted and rejected land in the table the
-        same way a run started here does.
-        """
+        """Load the runs the Process tab's workers finish beside this data, with their own iscell."""
         now = time.monotonic()
         if now - self._adopt_checked < ADOPT_INTERVAL_S:
             return
@@ -663,8 +610,7 @@ class JobsMixin:
             ):
                 continue  # another dataset's run
             if info.task_type == "vnoiser":
-                # a vnoiser run leaves one results file beside the data, or
-                # (``--pkl``) a PF folder of pickles
+                # one results file beside the data, or (--pkl) a PF folder
                 from mbo_utilities.results import newest_results, results_dir_of
 
                 found = newest_results(out, "vnoiser") or results_dir_of(out)
@@ -675,9 +621,7 @@ class JobsMixin:
                     for d in finished_dirs(out, args.get("planes"))
                     if str(d) not in loaded
                 ]
-            # a volume run writes a dir per plane and this widget shows one:
-            # the planes it cannot take are the Process tab's business, not
-            # an error to put in front of the user here
+            # a volume run's other planes are not this widget's error
             held = self._run_error
             took = [d for d in dirs if self.load_run(d)]
             self._run_error = held
@@ -691,10 +635,7 @@ class JobsMixin:
                 )
 
     def add_pixel(self, row: int, col: int, toggle: bool = False):
-        """A pixel average (p): the movie's 5x5 mean around ``(row, col)`` on
-        the slice on screen, joining the group and the plot; ctrl on one
-        already grouped takes it out.
-        """
+        """A pixel average (p): the movie's 5x5 mean around ``(row, col)`` on the slice on screen joins the group and the plot; ctrl on a grouped one takes it out."""
         pid = (self.z, int(row), int(col))
         if toggle and pid in self.pixel_group:
             self.pixel_group.remove(pid)
@@ -712,8 +653,7 @@ class JobsMixin:
         self._seed_buffer()
         if pid not in self.pixel_group:
             self.pixel_group.append(pid)
-        # the pixel is the one active thing now; the ROI stays in the group
-        self.selected = -1
+        self.selected = -1  # the ROI stays in the group
         self.selected_derived = None
         self._note_buf = ""
         self.active_pixel = pid

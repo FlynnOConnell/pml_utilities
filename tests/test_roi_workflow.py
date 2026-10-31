@@ -489,23 +489,21 @@ def test_cached_pmd_crop_reuses_plane_compression(tmp_path, store):
     assert rw._cached_pmd_crop(plane, crop, s.compression, logger) is None
 
 
+class _NamedArray:
+    """A numpy array with ``dims``, the way a labelled lazy array presents itself."""
+
+    def __init__(self, data, dims):
+        self.data, self.dims, self.shape, self.ndim = data, dims, data.shape, data.ndim
+
+    def __getitem__(self, key):
+        return self.data[key]
+
+
 def test_plane_movie_resolves_axes_by_name():
     from mbo_utilities.roi_workflow import PlaneMovie, movie_dims
 
-    class Named:
-        def __init__(self, data, dims):
-            self.data, self.dims, self.shape, self.ndim = (
-                data,
-                dims,
-                data.shape,
-                data.ndim,
-            )
-
-        def __getitem__(self, key):
-            return self.data[key]
-
     data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(3, 2, 4, 5)
-    arr = Named(data, ("Z", "T", "Y", "X"))
+    arr = _NamedArray(data, ("Z", "T", "Y", "X"))
     assert movie_dims(arr) == ("Z", "T", "Y", "X")
     movie = PlaneMovie(arr, z=2)
     assert movie.shape == (2, 4, 5) and movie.nz == 3

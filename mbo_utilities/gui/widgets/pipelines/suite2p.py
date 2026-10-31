@@ -18,7 +18,6 @@ from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import set_last_dir
 
-# lazy availability check cache
 _HAS_LSP: bool | None = None
 
 
@@ -36,14 +35,11 @@ def _check_lsp_available() -> bool:
 
 
 def _patch_pyqt6_slider():
-    """Apply PyQt6 compatibility fix for suite2p GUI (call before opening GUI)."""
-    try:
-        from PyQt6.QtWidgets import QSlider
+    """Give QSlider the ``NoTicks`` name suite2p's gui reads; PyQt6 moved it onto ``TickPosition``."""
+    from PyQt6.QtWidgets import QSlider
 
-        if not hasattr(QSlider, "NoTicks"):
-            QSlider.NoTicks = QSlider.TickPosition.NoTicks
-    except ImportError:
-        pass
+    if not hasattr(QSlider, "NoTicks"):
+        QSlider.NoTicks = QSlider.TickPosition.NoTicks
 
 
 class Suite2pPipelineWidget(PipelineWidget):
@@ -85,13 +81,10 @@ class Suite2pPipelineWidget(PipelineWidget):
                 {
                     "ypix": ypix.astype(np.int32),
                     "xpix": xpix.astype(np.int32),
-                    # hand-drawn masks carry no per-pixel weight, so every
-                    # pixel counts equally and F is the plain mask mean
                     "lam": np.ones(npix, np.float32),
                     "npix": npix,
                     "med": [int(np.median(ypix)), int(np.median(xpix))],
                     "radius": float(np.sqrt(npix / np.pi)),
-                    # a label image cannot overlap, by construction
                     "overlap": np.zeros(npix, bool),
                 }
             )
@@ -106,54 +99,30 @@ class Suite2pPipelineWidget(PipelineWidget):
     def __init__(self, parent: Any):
         super().__init__(parent)
 
-        # import settings from settings module
-        from mbo_utilities.gui.widgets.pipelines.settings import (
-            MboSuite2pExtras,
-            Suite2pDB,
-            Suite2pSettings,
-        )
-
-        self.settings = Suite2pSettings()
-        self.db = Suite2pDB()
-        self.extras = MboSuite2pExtras()
-
-        # config state
-        self._saveas_outdir = ""  # for save_as dialog
-        self._s2p_outdir = ""  # for suite2p run/load (separate from save_as)
-        self._install_error = False
-        self._frames_initialized = False
-        self._last_max_frames = 1000
-        self._selected_planes = set()
-        self._show_plane_popup = False
-
-        # scan-phase correction for suite2p run (separate from display, default True)
-        self._s2p_fix_phase = True
-        self._s2p_use_fft = True
-        self._savepath_flash_start = None
-        self._show_savepath_popup = False
-
-        # diagnostics popup state (lazy init); the unit of the plane on screen it shows
         self._diagnostics_widget = None
         self._show_diagnostics_popup = False
         self._diagnostics_popup_open = False
         self._diagnostics_unit = None
         self._file_dialog = None
 
-        # grid search viewer state (lazy init)
         self._grid_search_widget = None
         self._show_grid_search_popup = False
         self._grid_search_popup_open = False
         self._grid_search_dialog = None
 
-        # external GUI integration (suite2p or cellpose)
         self._external_gui_window = None
-        self._external_gui_type = None  # "suite2p" or "cellpose"
+        self._external_gui_type = None
         self._last_suite2p_ichosen = None
         self._last_poll_time = 0.0
-        self._poll_interval = 0.1  # 100ms polling interval
+        self._poll_interval = 0.1
 
-        # gui choice: 0 = suite2p, 1 = cellpose
         self._gui_choice = 0
+        self._diagnostics_sizer = PopupAutoSize(
+            "Trace Quality Statistics", auto_resize=False
+        )
+        self._grid_search_sizer = PopupAutoSize(
+            "Grid Search Results", auto_resize=False
+        )
 
     def _get_diagnostics_widget(self):
         """Get diagnostics widget (lazy init)."""
@@ -173,10 +142,8 @@ class Suite2pPipelineWidget(PipelineWidget):
 
     def _check_suite2p_gui(self) -> bool:
         """Check if suite2p GUI is available (requires rastermap)."""
-        # always re-check using find_spec (fast, no actual import)
         import importlib.util
 
-        # suite2p GUI requires rastermap
         return (
             importlib.util.find_spec("suite2p.gui") is not None
             and importlib.util.find_spec("rastermap") is not None
@@ -184,7 +151,6 @@ class Suite2pPipelineWidget(PipelineWidget):
 
     def _check_cellpose_gui(self) -> bool:
         """Check if cellpose GUI is available."""
-        # always re-check using find_spec (fast, no actual import)
         import importlib.util
 
         return importlib.util.find_spec("cellpose.gui") is not None
@@ -195,58 +161,16 @@ class Suite2pPipelineWidget(PipelineWidget):
 
         imgui.spacing()
 
-        # sync widget state to parent before drawing
-        # ONLY set parent values if parent doesn't already have a value set
-        # This prevents overwriting values set by the Browse dialog
-        if self._saveas_outdir and not getattr(self.parent, "_saveas_outdir", ""):
-            self.parent._saveas_outdir = self._saveas_outdir
-        if self._s2p_outdir and not getattr(self.parent, "_s2p_outdir", ""):
-            self.parent._s2p_outdir = self._s2p_outdir
-        self.parent._install_error = self._install_error
-        self.parent._frames_initialized = self._frames_initialized
-        self.parent._last_max_frames = self._last_max_frames
-        self.parent._selected_planes = self._selected_planes
-        self.parent._show_plane_popup = self._show_plane_popup
-        self.parent._s2p_savepath_flash_start = self._savepath_flash_start
-        self.parent._s2p_show_savepath_popup = self._show_savepath_popup
         self.parent._current_pipeline = "suite2p"
-        self.parent._s2p_fix_phase = self._s2p_fix_phase
-        self.parent._s2p_use_fft = self._s2p_use_fft
-
         draw_section_suite2p(self.parent)
 
-        # sync back from parent - always read latest values
-        # use parent value if set, otherwise keep widget value
-        parent_saveas = getattr(self.parent, "_saveas_outdir", "")
-        parent_s2p = getattr(self.parent, "_s2p_outdir", "")
-        if parent_saveas:
-            self._saveas_outdir = parent_saveas
-        if parent_s2p:
-            self._s2p_outdir = parent_s2p
-        self._install_error = self.parent._install_error
-        self._frames_initialized = getattr(self.parent, "_frames_initialized", False)
-        self._last_max_frames = getattr(self.parent, "_last_max_frames", 1000)
-        self._selected_planes = getattr(self.parent, "_selected_planes", set())
-        self._show_plane_popup = getattr(self.parent, "_show_plane_popup", False)
-        self._savepath_flash_start = getattr(
-            self.parent, "_s2p_savepath_flash_start", None
-        )
-        self._show_savepath_popup = getattr(
-            self.parent, "_s2p_show_savepath_popup", False
-        )
-        self._s2p_fix_phase = getattr(self.parent, "_s2p_fix_phase", True)
-        self._s2p_use_fft = getattr(self.parent, "_s2p_use_fft", True)
-
-        # Poll suite2p for selection changes
         self._poll_suite2p_selection()
 
-        # Draw popup windows (managed separately from config)
         self._draw_diagnostics_popup()
         self._draw_grid_search_popup()
 
     def _poll_suite2p_selection(self):
         """Poll suite2p window for selection changes."""
-        # only poll for suite2p gui (cellpose doesn't sync selections)
         if self._external_gui_type != "suite2p" or self._external_gui_window is None:
             return
 
@@ -255,7 +179,6 @@ class Suite2pPipelineWidget(PipelineWidget):
             return
         self._last_poll_time = current_time
 
-        # check if window was closed by user
         try:
             if not self._external_gui_window.isVisible():
                 self._external_gui_window = None
@@ -263,7 +186,6 @@ class Suite2pPipelineWidget(PipelineWidget):
                 self._last_suite2p_ichosen = None
                 return
         except RuntimeError:
-            # window was deleted (Qt object wrapped C++ deleted)
             self._external_gui_window = None
             self._external_gui_type = None
             self._last_suite2p_ichosen = None
@@ -275,10 +197,8 @@ class Suite2pPipelineWidget(PipelineWidget):
         ):
             return
 
-        # get current selection from suite2p
         ichosen = getattr(self._external_gui_window, "ichosen", None)
 
-        # check if selection changed
         if ichosen != self._last_suite2p_ichosen:
             self._last_suite2p_ichosen = ichosen
             self._on_suite2p_cell_selected(ichosen)
@@ -294,12 +214,9 @@ class Suite2pPipelineWidget(PipelineWidget):
         if cell_idx is None:
             return
 
-        # Update diagnostics widget selection
-        # Map the global cell index to visible index if showing only cells
         diag = self._get_diagnostics_widget()
         visible = diag.visible_indices
         if len(visible) > 0:
-            # Find where cell_idx is in visible indices
             matches = np.where(visible == cell_idx)[0]
             if len(matches) > 0:
                 diag.selected_roi = int(matches[0])
@@ -309,10 +226,10 @@ class Suite2pPipelineWidget(PipelineWidget):
         run's output with a plane dir to write curation back to; else None.
         """
         host = self.parent
-        on_screen = getattr(host, "slice", None)
-        data = getattr(getattr(host, "image_widget", None), "data", None)
-        results = getattr(base_array(data[0]), "results", None) if data else None
-        if results is None or on_screen is None:
+        on_screen = host.slice
+        data = host.image_widget.data
+        results = base_array(data[0]).results if data else None
+        if results is None:
             return None
         return next(
             (
@@ -327,7 +244,6 @@ class Suite2pPipelineWidget(PipelineWidget):
 
     def _draw_diagnostics_popup(self):
         """Draw the diagnostics popup window if open."""
-        # the data on screen is a run's output: its plane's diagnostics, following the Z slider
         unit = self._screen_unit()
         if unit is not None:
             if imgui.button("Diagnostics of the plane on screen"):
@@ -345,32 +261,16 @@ class Suite2pPipelineWidget(PipelineWidget):
                     unit, Path(unit.attrs["plane_dir"])
                 )
                 self._diagnostics_unit = unit
-        # Check if file dialog has a result
         if self._file_dialog is not None and self._file_dialog.ready():
             result = self._file_dialog.result()
             if result and len(result) > 0:
                 stat_path = Path(result[0])
-                # Save the directory for next time
                 set_last_dir("suite2p_stat", stat_path)
                 if stat_path.name == "stat.npy" and stat_path.exists():
-                    try:
-                        # Load results from the directory containing stat.npy
-                        plane_dir = stat_path.parent
-                        self._get_diagnostics_widget().load_results(plane_dir)
-                        self._show_diagnostics_popup = True
-
-                        # Open external GUI based on user choice (optional)
-                        self._open_external_gui(stat_path)
-                    except Exception:
-                        pass
-                else:
-                    pass
+                    self._get_diagnostics_widget().load_results(stat_path.parent)
+                    self._show_diagnostics_popup = True
+                    self._open_external_gui(stat_path)
             self._file_dialog = None
-
-        if not hasattr(self, "_diagnostics_sizer"):
-            self._diagnostics_sizer = PopupAutoSize(
-                "Trace Quality Statistics", auto_resize=False
-            )
 
         if self._show_diagnostics_popup:
             self._diagnostics_popup_open = True
@@ -378,7 +278,6 @@ class Suite2pPipelineWidget(PipelineWidget):
             imgui.open_popup("Trace Quality Statistics")
             self._show_diagnostics_popup = False
 
-        # Set popup size; top anchor comes from _diagnostics_sizer.
         viewport = imgui.get_main_viewport()
         popup_width = min(1200, viewport.size.x * 0.9)
         popup_height = min(800, viewport.size.y * 0.85)
@@ -394,17 +293,14 @@ class Suite2pPipelineWidget(PipelineWidget):
 
         if opened:
             if not visible:
-                # User closed the popup via X button
                 self._diagnostics_popup_open = False
                 imgui.close_current_popup()
             else:
-                # Draw the diagnostics content
                 try:
                     self._get_diagnostics_widget().draw()
                 except Exception as e:
                     imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), f"Error: {e}")
 
-                # Close button at bottom
                 imgui.spacing()
                 imgui.separator()
                 if imgui.button("Close", imgui.ImVec2(100, 0)):
@@ -435,7 +331,6 @@ class Suite2pPipelineWidget(PipelineWidget):
     def _open_suite2p_gui(self, statfile: Path):
         """Open suite2p GUI with the given stat.npy file."""
         try:
-            # apply PyQt6 compatibility fix before importing suite2p GUI
             _patch_pyqt6_slider()
             from PyQt6.QtCore import QRect
             from PyQt6.QtWidgets import QApplication
@@ -444,7 +339,6 @@ class Suite2pPipelineWidget(PipelineWidget):
             self._external_gui_window = Suite2pMainWindow(statfile=str(statfile))
             self._external_gui_type = "suite2p"
 
-            # position windows side-by-side
             screen = QApplication.primaryScreen()
             if screen:
                 screen_geom = screen.availableGeometry()
@@ -473,11 +367,8 @@ class Suite2pPipelineWidget(PipelineWidget):
             self._external_gui_window.show()
             self._external_gui_window.showNormal()
             self._last_suite2p_ichosen = None
-
-        except ImportError:
-            pass
         except Exception:
-            pass
+            self.parent.logger.exception("suite2p gui failed to open")
 
     def _open_cellpose_gui(self, statfile: Path):
         """Open cellpose GUI with Suite2p results.
@@ -493,27 +384,21 @@ class Suite2pPipelineWidget(PipelineWidget):
             from PyQt6.QtCore import QRect
             from PyQt6.QtWidgets import QApplication
 
-            # patch QCheckBox for Qt5/Qt6 compatibility
             from mbo_utilities.analysis import _patch_qt_checkbox
 
             _patch_qt_checkbox()
 
             plane_dir = statfile.parent
 
-            # Ensure _seg.npy file exists (creates if needed)
             seg_file = ensure_cellpose_format(plane_dir)
 
-            # Create cellpose MainW window (without image - we'll load via _load_seg)
             self._external_gui_window = MainW()
             self._external_gui_type = "cellpose"
 
-            # Use cellpose's native _load_seg to properly load everything
-            # This handles image loading, mask initialization, outlines, colors, etc.
             cellpose_io._load_seg(
                 self._external_gui_window, filename=str(seg_file), load_3D=False
             )
 
-            # Position window side-by-side with MBO window
             screen = QApplication.primaryScreen()
             if screen:
                 screen_geom = screen.availableGeometry()
@@ -539,17 +424,8 @@ class Suite2pPipelineWidget(PipelineWidget):
                 )
 
             self._external_gui_window.show()
-
-            self._external_gui_window.ncells.get() if hasattr(
-                self._external_gui_window.ncells, "get"
-            ) else 0
-
-        except ImportError:
-            pass
         except Exception:
-            import traceback
-
-            traceback.print_exc()
+            self.parent.logger.exception("cellpose gui failed to open")
 
     def _reposition_mbo_window(self, x: int, y: int, width: int, height: int):
         """Reposition the MBO window to the specified geometry.
@@ -564,49 +440,31 @@ class Suite2pPipelineWidget(PipelineWidget):
         width, height : int
             Window size
         """
-        try:
-            from PyQt6.QtCore import QRect
+        from PyQt6.QtCore import QRect
 
-            # Access the canvas through the parent widget hierarchy
-            # parent -> PreviewDataWidget -> image_widget -> figure -> canvas
-            if hasattr(self.parent, "image_widget"):
-                canvas = self.parent.image_widget.figure.canvas
-                # Get the top-level window containing the canvas
-                if hasattr(canvas, "window"):
-                    # rendercanvas provides window() method
-                    window = canvas.window()
-                    if window:
-                        window.setGeometry(QRect(x, y, width, height))
-                        return
-                # Fallback: traverse Qt parent hierarchy to find top-level window
-                widget = canvas
-                while widget is not None:
-                    if widget.isWindow():
-                        widget.setGeometry(QRect(x, y, width, height))
-                        return
-                    widget = widget.parent()
-        except Exception:
-            # Silently fail - window positioning is not critical
-            pass
+        canvas = self.parent.image_widget.figure.canvas
+        if not hasattr(canvas, "isWindow"):  # not a qt canvas
+            return
+        window = canvas.window()
+        if window:
+            window.setGeometry(QRect(x, y, width, height))
+            return
+        widget = canvas
+        while widget is not None:
+            if widget.isWindow():
+                widget.setGeometry(QRect(x, y, width, height))
+                return
+            widget = widget.parent()
 
     def _draw_grid_search_popup(self):
         """Draw the grid search viewer popup window if open."""
-        # Check if folder dialog has a result
         if self._grid_search_dialog is not None and self._grid_search_dialog.ready():
             result = self._grid_search_dialog.result()
             if result:
-                try:
-                    set_last_dir("grid_search", result)
-                    self._get_grid_search_widget().load_results(Path(result))
-                    self._show_grid_search_popup = True
-                except Exception:
-                    pass
+                set_last_dir("grid_search", result)
+                self._get_grid_search_widget().load_results(Path(result))
+                self._show_grid_search_popup = True
             self._grid_search_dialog = None
-
-        if not hasattr(self, "_grid_search_sizer"):
-            self._grid_search_sizer = PopupAutoSize(
-                "Grid Search Results", auto_resize=False
-            )
 
         if self._show_grid_search_popup:
             self._grid_search_popup_open = True
@@ -614,7 +472,6 @@ class Suite2pPipelineWidget(PipelineWidget):
             imgui.open_popup("Grid Search Results")
             self._show_grid_search_popup = False
 
-        # Set popup size; top anchor comes from _grid_search_sizer.
         viewport = imgui.get_main_viewport()
         popup_width = min(1200, viewport.size.x * 0.9)
         popup_height = min(800, viewport.size.y * 0.85)
@@ -652,15 +509,13 @@ class Suite2pPipelineWidget(PipelineWidget):
         Should be called when the parent GUI is closing to ensure
         proper cleanup of Qt windows and other resources.
         """
-        # Close suite2p window if open
         if self._suite2p_window is not None:
             try:
                 self._suite2p_window.close()
             except (RuntimeError, AttributeError):
-                pass  # Window already deleted
+                pass
             self._suite2p_window = None
             self._last_suite2p_ichosen = None
 
-        # Clear file dialogs (they are async and may be pending)
         self._file_dialog = None
         self._grid_search_dialog = None

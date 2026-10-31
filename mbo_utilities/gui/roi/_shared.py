@@ -24,23 +24,20 @@ from mbo_utilities.roi_workflow import (
     PlaneMovie,
 )
 
-# height the Traces panel asks the top strip for (the strip adds the menu
-# row and its tab bar on top of this); a motion panel and the behavior
-# raster each add their own
-PANEL_HEIGHT = 200
+PANEL_HEIGHT = (
+    200  # the traces panel's height below the top strip's menu row and tab bar
+)
 MOTION_PANEL_HEIGHT = 300
 BEHAVIOR_PLOT_HEIGHT = 140
 
-# how often to look for finished pipeline runs started outside this widget;
-# the check reads one progress file per tracked process, so not every frame
-ADOPT_INTERVAL_S = 1.0
-# the Traces panel's mean subtraction and inversion: the viewer's own toggle, or set here
+ADOPT_INTERVAL_S = 1.0  # the finished-run check reads one progress file per process, so not every frame
 DEFLECTION_MODES = ("viewer", "off", "on")
-# the panel's names for the noise a z-score computed here divides by (NOISE_ESTIMATES)
-NOISE_LABELS = {"sd": "SD", "mad": "robust SD (MAD)"}
+NOISE_LABELS = {
+    "sd": "SD",
+    "mad": "robust SD (MAD)",
+}  # panel names for NOISE_ESTIMATES
 
-# the trace table's columns after its id: (name, sortable, hidden by default)
-TRACE_COLUMNS = (
+TRACE_COLUMNS = (  # (name, sortable, hidden by default), after the id column
     ("z", True, False),
     ("c", True, False),
     ("source", False, True),
@@ -49,8 +46,7 @@ TRACE_COLUMNS = (
     ("peak", True, False),
 )
 
-# what a row may carry in ``extra`` about the line it was read on
-# (``mesc_geometry.line_positions``); a row's own record wins over the recording's
+# a row's ``extra`` keys from ``mesc_geometry.line_positions``; the row's own record wins over the recording's
 POSITION_KEYS = (
     "start_um",
     "end_um",
@@ -64,16 +60,12 @@ POSITION_KEYS = (
     "in_stack",
 )
 
-# tri-state stage toggles, shared by both pipelines: 0 skip, 1 run, 2 force
-_STAGE_NAMES = ("skip", "run", "force")
+_STAGE_NAMES = ("skip", "run", "force")  # suite2p's 0 / 1 / 2
 
 MIN_ROI_PIXELS = 9
-# the box a pixel trace averages around the clicked pixel: masknmf's 5x5
-PIXEL_RADIUS = 2
-# no seeded class labels: the label set starts empty, the user names their own
+PIXEL_RADIUS = 2  # masknmf's 5x5 pixel average
 DEFAULT_LABEL_NAMES: tuple[str, ...] = ()
-# what each extraction engine (annotation.ENGINES) gives back, for tooltips
-ENGINE_HELP = {
+ENGINE_HELP = {  # tooltips for annotation.ENGINES
     "mean": "mean - the raw mean of the pixels in each mask, frame by "
     "frame, plus a neuropil ring around it. No pipeline needed.",
     "suite2p": "suite2p - suite2p's own extractor: F from the mask and "
@@ -82,16 +74,17 @@ ENGINE_HELP = {
     "masknmf": "masknmf - seeded NMF: each mask's demixed signal, with light "
     "from overlapping neurons and background pulled back out.",
 }
-# where a run reads each ROI's pixels: where it was drawn, or the slice on screen
 RUN_WHERE = ("drawn", "screen")
-
-# the tag a run gets when the box is left empty; shown as the box hint
 DEFAULT_RUN_TAG = "manual"
-
-# the Curation tab's color by: masknmf's id palette, a store column or the trace peak
-COLOR_BY = ("roi id", "class", "z", "c", "area", "peak")
+COLOR_BY = (
+    "roi id",
+    "class",
+    "z",
+    "c",
+    "area",
+    "peak",
+)  # masknmf's id palette, a store column, or the trace peak
 COLORMAPS = ("viridis", "plasma", "turbo", "coolwarm", "tab10")
-# contours trace each ROI's border, or ring it without covering it (o)
 CONTOUR_SHAPES = ("outline", "circle")
 
 # every grid's captions, so the caption column is one width across the sections and tabs
@@ -118,12 +111,11 @@ _CAPTIONS = (
     "range",
 )
 
-# behind the traces, naming what the lines are: near-black with nothing shown, forest green for a selection
-_TRACE_MODES = {
+_TRACE_MODES = {  # the plot background: near-black with nothing shown, forest green for a selection
     "normal": (0.02, 0.02, 0.03, 1.0),
     "selection": (0.05, 0.14, 0.08, 1.0),
 }
-_UNDO_DEPTH = 50  # ctrl+z steps kept
+_UNDO_DEPTH = 50
 
 _OWN_KEYS: Mapping[str, Bind] = {
     "click": Bind(
@@ -204,20 +196,18 @@ _OWN_KEYS: Mapping[str, Bind] = {
         shift=True,
     ),
 }
-# masknmf leaves shift open so the arrows can read it as a stride; every other
-# unmodified key must stay unmodified here, or shift+m toggles the masks as
-# well as firing the viewer's own shift+m
+# NOTE: masknmf leaves shift open so the arrows read it as a stride; every other key must pin
+# shift=False here, or shift+m toggles the masks as well as firing the viewer's own shift+m
 _STRIDE_KEYS = ("up", "down", "left", "right")
-# masknmf's DEMIXING keys, worded for drawn and algo ROIs, with its labeling
-# keys and this tool's own; every handler and the keybinds popup read this
-ROI_KEYS: Mapping[str, Bind] = {
+ROI_KEYS: Mapping[
+    str, Bind
+] = {  # masknmf's DEMIXING keys and this tool's own; every handler and the popup read it
     name: bind._replace(shift=False)
     if bind.shift is None and name not in _STRIDE_KEYS
     else bind
     for name, bind in {**DEMIXING, **_OWN_KEYS}.items()
 }
-# the keys the viewer's global shortcuts leave alone while the tool is on
-_CLAIMED_KEYS = (
+_CLAIMED_KEYS = (  # the viewer's global shortcuts leave these alone while the tool is on
     "up_arrow",
     "down_arrow",
     "left_arrow",
@@ -229,7 +219,6 @@ _CLAIMED_KEYS = (
     "k",
     "o",
 )
-# the menu bar's keybinds cheat sheet lists the same rows
 KEYBINDS = tuple((bind.label, bind.action) for bind in ROI_KEYS.values())
 
 _HELP_STEPS = (
@@ -263,7 +252,7 @@ _HELP_FILES = (
 
 
 def help_markdown() -> str:
-    """This tool's guide, as markdown for the app's help viewer.
+    """The tool's guide, as markdown for the app's help viewer.
 
     The guide button (h) opens the app's help viewer on this section; the
     keys are not repeated here, the keybinds button (k) lists them.
@@ -279,9 +268,7 @@ def help_markdown() -> str:
 
 
 def _frames_of(movie) -> dict:
-    """The frame fields of a row read through ``movie``: the window when
-    the frames are one, else the index list.
-    """
+    """The frame fields of a row read through ``movie``: ``frames`` when the indices are a window, else ``tp_indices``."""
     indices = movie.t_indices
     window = index_window(indices)
     if indices is None or window is not None:
@@ -290,11 +277,8 @@ def _frames_of(movie) -> dict:
 
 
 def unit_key(iw) -> str:
-    """The key of the recording a viewer shows when its file holds several
-    (a MESc unit, ``MSession_0/MUnit_3``), else ``""``.
-    """
-    data = getattr(iw, "data", None)
-    arr = base_array(data[0]) if data else None
+    """The recording's key when the viewer's file holds several (a MESc unit, ``MSession_0/MUnit_3``), else ``""``."""
+    arr = base_array(iw.data[0]) if iw.data else None
     return str(getattr(arr, "unit_key", None) or "")
 
 
@@ -319,7 +303,7 @@ def _cleared_note(cleared) -> str:
 
 @dataclass
 class _RunSpec:
-    """What one manual run reads and writes, handed to the job thread."""
+    """One manual run's inputs and outputs, handed to the job thread."""
 
     groups: dict[tuple[int, int, int], list[int]]
     movies: dict[tuple[int, int, int], PlaneMovie]
@@ -345,7 +329,9 @@ class _PlaneOrder(RoiOrder):
         self.filter_label = FILTER_ALL
         self.plane: int | None = None
         self.planes = np.zeros(0, np.int64)
-        self.source: int | None = None  # None = all, 0 = drawn, 1 + si = a set
+        self.source: int | None = (
+            None  # None every source, 0 drawn, 1 + i the i-th derived set
+        )
         self.sources = np.zeros(0, np.int64)
 
     def rebuild(self):
@@ -414,8 +400,7 @@ class _PlaneOrder(RoiOrder):
         filter has just dropped the row that was labeled, the cursor already
         sits on the next candidate and stepping past it would skip one.
         """
-        # only drawn rows can take a label, so u never lands on a derived one
-        hits = np.flatnonzero(
+        hits = np.flatnonzero(  # only drawn rows take a label
             (self.labels[self.order] < 0) & (self.sources[self.order] == 0)
         )
         if not len(hits):

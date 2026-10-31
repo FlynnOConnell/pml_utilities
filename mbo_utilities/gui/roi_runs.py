@@ -56,9 +56,9 @@ __all__ = [
     "unit_trace",
 ]
 
-SELECTED_ALPHA = 0.9  # matches the manual overlay's selection opacity
+SELECTED_ALPHA = 0.9  # the manual overlay's selection opacity
 
-# per-set overlay hues, bright against gnuplot2 and the class colors
+# bright against gnuplot2 and the class colors
 SET_COLORS: tuple[tuple[float, float, float], ...] = (
     (1.00, 0.85, 0.10),
     (0.10, 0.90, 0.90),
@@ -103,6 +103,26 @@ def _raised_at(error: BaseException) -> str:
     return f" ({Path(last.filename).name}:{last.lineno})"
 
 
+def _run_in_thread(manager: RoiRunManager, run: RoiRun, fn, heavy: bool) -> None:
+    """``fn(job)`` on the manager's gpu lock when ``heavy``; the payload or the error goes on the results queue."""
+    job = run.job
+    try:
+        if heavy:
+            job.set_progress(0.0, "waiting for gpu")
+            with manager._heavy:
+                payload = fn(job)
+        else:
+            payload = fn(job)
+    except Exception as error:  # noqa: BLE001 - reported on the job
+        manager.logger.exception(f"{run.description} failed")
+        message = f"{type(error).__name__}: {error}{_raised_at(error)}"
+        job.fail(message)
+        manager._results.put((run, None, message))
+        return
+    job.done()
+    manager._results.put((run, payload, None))
+
+
 class RoiRunManager:
     """Submit, poll and stop the ROI widget's background runs.
 
@@ -133,26 +153,12 @@ class RoiRunManager:
         """
         pm = self._pm or get_process_manager()
         run.job = pm.start_job(run.kind, run.description)
-
-        def work():
-            job = run.job
-            try:
-                if heavy:
-                    job.set_progress(0.0, "waiting for gpu")
-                    with self._heavy:
-                        payload = fn(job)
-                else:
-                    payload = fn(job)
-            except Exception as error:  # noqa: BLE001 - reported on the job
-                self.logger.exception(f"{run.description} failed")
-                message = f"{type(error).__name__}: {error}{_raised_at(error)}"
-                job.fail(message)
-                self._results.put((run, None, message))
-                return
-            job.done()
-            self._results.put((run, payload, None))
-
-        thread = threading.Thread(target=work, name=f"roi-run-{run.tag}", daemon=True)
+        thread = threading.Thread(
+            target=_run_in_thread,
+            args=(self, run, fn, heavy),
+            name=f"roi-run-{run.tag}",
+            daemon=True,
+        )
         thread.start()
         self.runs.append(run)
         return run
@@ -196,17 +202,14 @@ class RoiRunManager:
             for run in spawned:
                 info = by_pid.get(run.pid)
                 if info is None:
-                    # a completed entry is pruned from the console after a
-                    # few minutes; outputs on disk mean the run succeeded
+                    # the console prunes a completed entry after a few minutes; outputs on disk mean success
                     if run.out_root is None or not finished_dirs(
                         run.out_root, run.planes
                     ):
                         run.error = "process stopped"
-                elif info.status == "completed":
-                    pass
                 elif info.status == "error":
                     run.error = info.status_message or "process failed"
-                else:
+                elif info.status != "completed":
                     continue
                 run.finished = True
                 done.append((run, None))
@@ -459,9 +462,7 @@ def ring(cx: float, cy: float, r: float, segments: int = RING_SEGMENTS) -> np.nd
     return np.column_stack([cx + r * np.cos(t), cy + r * np.sin(t)])
 
 
-# The corners bounding each edge, as (dx, dy) off the top-left corner of
-# pixel (row, col) - which in world coordinates is (col, row). One row per
-# side, in the order the sides are stacked below.
+# each side's end corners as (dx, dy) off pixel (row, col)'s top-left, which is world (col, row)
 _EDGE_FROM = np.array([(0, 0), (0, 1), (0, 0), (1, 0)], np.float32)
 _EDGE_TO = np.array([(1, 0), (1, 1), (0, 1), (1, 1)], np.float32)
 
@@ -585,7 +586,7 @@ def derived_comps(
     selected: tuple[DerivedSet, int] | None = None,
     grouped: frozenset | set = frozenset(),
 ) -> tuple[list, tuple | None, list]:
-    """What one plane's derived sets draw: ``(comps, selected, halo)``.
+    """``(comps, selected, halo)``: one plane's derived sets as both renderers draw them.
 
     ``comps`` are the ``(ypix, xpix, lam, rgb, fill)`` tuples both renderers
     take, one per visible, undiscarded row - rejected rows dimmed, group
@@ -749,21 +750,7 @@ def finished_dirs(out_root, planes=None) -> list[Path]:
     return out
 
 
-def _default_masknmf_settings() -> dict:
-    from mbo_utilities.masknmf.params import MasknmfSettings
-
-    return MasknmfSettings().to_dict()
-
-
 def masknmf_settings(host) -> dict | None:
-    """The masknmf settings the Run tab is holding, or None when it has not
-    built that pipeline yet.
-    """
-    instances = getattr(host, "_pipeline_instances", None) or {}
-    settings = getattr(instances.get("MaskNMF"), "settings", None)
-    if settings is None:
-        return None
-    try:
-        return settings.to_dict()
-    except Exception:
-        return None
+    """The masknmf settings the Run tab is holding, or None when it has not built that pipeline yet."""
+    widget = None if host is None else host._pipeline_instances.get("MaskNMF")
+    return None if widget is None else widget.settings.to_dict()

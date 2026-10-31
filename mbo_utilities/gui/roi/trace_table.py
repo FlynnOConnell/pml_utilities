@@ -9,15 +9,14 @@ from imgui_bundle import (
     icons_fontawesome_6 as fa,
 )
 from imgui_bundle import imgui
+from masknmf.visualization.imgui import THEME as MTHEME
 from masknmf.visualization.imgui import (
     button_colors,
     draw_roi_table,
     tooltip,
 )
-from masknmf.visualization.imgui import THEME as MTHEME
 
 from mbo_utilities.gui._theme import em
-
 from mbo_utilities.gui.roi._shared import (
     PIXEL_RADIUS,
     TRACE_COLUMNS,

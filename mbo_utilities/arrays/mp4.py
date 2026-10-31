@@ -79,10 +79,9 @@ def _draw_scalebar(frame_rgb: np.ndarray, dx_um: float) -> None:
     bar_um = bar_px * dx_um
 
     text = f"{bar_um:.3g} um"
-    # smaller font than before — h/900 instead of h/600, capped at 0.6
     font_scale = max(0.3, min(0.6, h / 900.0))
     font_thickness = 1
-    (text_w, text_h), text_baseline = cv2.getTextSize(
+    (text_w, text_h), _ = cv2.getTextSize(
         text,
         cv2.FONT_HERSHEY_SIMPLEX,
         font_scale,
@@ -90,12 +89,11 @@ def _draw_scalebar(frame_rgb: np.ndarray, dx_um: float) -> None:
     )
 
     bar_h = max(2, int(round(h * 0.010)))
-    gap = max(2, int(round(h * 0.012)))  # space between bar and label
+    gap = max(2, int(round(h * 0.012)))
     pad_x = max(4, int(round(w * 0.025)))
     pad_y = max(4, int(round(h * 0.020)))
-    outline_pad = font_thickness + 1  # the +2 outline added per putText call
+    outline_pad = font_thickness + 1
 
-    # lay out from the bottom up so the label baseline sits inside the frame
     label_baseline_y = h - pad_y - outline_pad
     label_top_y = label_baseline_y - text_h
     bar_bottom_y = label_top_y - gap
@@ -104,13 +102,10 @@ def _draw_scalebar(frame_rgb: np.ndarray, dx_um: float) -> None:
     bar_x0 = pad_x
     bar_x1 = bar_x0 + bar_px
 
-    # text centered on bar, but never off the left edge
     text_x = bar_x0 + (bar_px - text_w) // 2
     text_x = max(pad_x, text_x)
-    # also keep right edge inside the frame
     text_x = min(text_x, w - pad_x - text_w)
 
-    # black backing under the bar for contrast on bright cmaps
     cv2.rectangle(
         frame_rgb,
         (bar_x0 - 1, bar_top_y - 1),
@@ -179,18 +174,13 @@ def _draw_time_overlay(frame_rgb: np.ndarray, t_seconds: float) -> None:
     )
 
 
-# Encoder tiers, fast/small -> slow/exact. The pix_fmt matters more than the
-# crf: the yuvj* variants are full range, the plain yuv* ones squeeze 0-255 RGB
-# into 16-235 and back, which costs ~2 dB PSNR at every crf. Measured
-# round-trip error on 512x512 x 60 frames of sharp structure:
-#
+# crf tiers, fast and small to slow and exact; measured round trip on 512x512 x 60 frames of sharp structure:
 #   preview            PSNR 36.2 dB   max err 74/255
 #   high               PSNR 38.5 dB   max err 64/255
 #   visually lossless  PSNR 54.7 dB   max err  8/255
 #   lossless           bit-exact      max err  0
-#
-# "lossless" is High 4:4:4 Predictive, which only ffmpeg-based players decode;
-# "visually lossless" is the one that opens in a browser or a slide deck.
+# NOTE: yuvj* is full range; plain yuv* squeezes 0-255 into 16-235 and costs ~2 dB at every crf
+# NOTE: lossless is High 4:4:4 Predictive, which browsers and Windows Photos refuse; only ffmpeg players open it
 _X264_TIERS = {
     "preview": {"rate": ["-crf", "23"], "preset": "veryfast", "pix_fmt": "yuvj420p"},
     "high": {"rate": ["-crf", "17"], "preset": "medium", "pix_fmt": "yuvj420p"},
@@ -202,8 +192,6 @@ _X264_TIERS = {
     "lossless": {"rate": ["-qp", "0"], "preset": "veryslow", "pix_fmt": "yuvj444p"},
 }
 
-# x264's lossless mode forces the High 4:4:4 Predictive profile regardless of
-# chroma layout, and that profile is what browsers and Windows Photos refuse.
 _LIMITED_PLAYBACK_TIERS = ("lossless",)
 
 _MPEG4_QSCALE_TABLE = {
@@ -261,8 +249,6 @@ def _build_video_output_params(
     return ["-q:v", str(_MPEG4_QSCALE_TABLE[preset])], None
 
 
-# integer nearest-neighbour upscale: exact, and it gives the overlays a pixel
-# budget to draw into on a small FOV
 _UPSCALE_TARGET_SHORT_SIDE = 480
 _UPSCALE_MAX_LONG_SIDE = 2048
 
@@ -281,10 +267,20 @@ def _resolve_upscale(height: int, width: int, upscale: int | None) -> int:
             raise ValueError(f"upscale must be >= 1, got {upscale!r}")
         return f
     short, long = min(height, width), max(height, width)
-    f = -(-_UPSCALE_TARGET_SHORT_SIDE // short)  # ceil division
+    f = -(-_UPSCALE_TARGET_SHORT_SIDE // short)
     while f > 1 and long * f > _UPSCALE_MAX_LONG_SIDE:
         f -= 1
     return max(1, f)
+
+
+def _plane_frame(data, ndim: int, channel: int, plane_idx: int, t: int) -> np.ndarray:
+    if ndim == 3:
+        f = data[t]
+    elif ndim == 4:
+        f = data[t, plane_idx]
+    else:
+        f = data[t, channel, plane_idx]
+    return np.asarray(f, dtype=np.float32)
 
 
 def to_video(
@@ -442,9 +438,6 @@ def to_video(
             f"use .mkv (or pick codec='libx264' for .mp4)."
         )
 
-    # resolve scalebar pixel size before frame reads. arr.dx (LazyArray) or
-    # get_param on a metadata dict both resolve every alias incl. the
-    # ScanImage pixel_resolution tuple.
     if scalebar and pixel_size_um is None:
         pixel_size_um = _resolve_pixel_size_um(data)
     if scalebar and (pixel_size_um is None or pixel_size_um <= 0):
@@ -456,9 +449,6 @@ def to_video(
     elif scalebar:
         logger.info(f"Scalebar enabled with pixel_size_um={pixel_size_um}")
 
-    # read frames lazily from the source array (no upfront full-load). branch
-    # the per-frame accessor on natural rank so zarr/tiff/bin arrays stream one
-    # frame per read instead of materializing the whole stack.
     if not hasattr(data, "shape"):
         data = np.asarray(data)
     shape = tuple(data.shape)
@@ -472,16 +462,6 @@ def to_video(
         raise ValueError(f"plane={plane_idx} but array only has {n_planes} planes")
     height, width = shape[-2], shape[-1]
 
-    def _read_frame(t):
-        if ndim == 3:
-            f = data[t]
-        elif ndim == 4:
-            f = data[t, plane_idx]
-        else:
-            f = data[t, channel, plane_idx]
-        return np.asarray(f, dtype=np.float32)
-
-    # resolve frame iteration order — one lazy read per frame
     if frame_indices is not None:
         order = [int(x) for x in frame_indices]
     else:
@@ -491,7 +471,6 @@ def to_video(
     n_frames = len(order)
     logger.info(f"Exporting plane {plane_idx}: {n_frames} frames, {height}x{width}")
 
-    # Calculate output fps based on speed factor
     output_fps = int(fps * speed_factor)
     duration = n_frames / output_fps
 
@@ -500,20 +479,18 @@ def to_video(
         f"(speed_factor={speed_factor}x, duration={duration:.1f}s)"
     )
 
-    # Determine intensity range from sample frames. When mean_subtract is on,
-    # percentile must be computed on subtracted samples so contrast matches
-    # what gets rendered.
     if vmin is None or vmax is None:
         n_samples = min(50, n_frames)
         sample_positions = np.linspace(0, n_frames - 1, n_samples, dtype=int)
         samples = []
         for pos in sample_positions:
-            frame = _read_frame(order[pos])
+            frame = _plane_frame(data, ndim, channel, plane_idx, order[pos])
             if mean_subtract is not None:
                 frame = frame - np.asarray(mean_subtract, dtype=np.float32)
             samples.append(frame)
         sample_stack = np.stack(samples)
 
+        # percentiles of the subtracted samples, so the contrast matches what is rendered
         if vmin is None:
             vmin = float(np.percentile(sample_stack, vmin_percentile))
         if vmax is None:
@@ -521,15 +498,10 @@ def to_video(
 
     logger.info(f"Intensity range: [{vmin:.1f}, {vmax:.1f}]")
 
-    # Setup colormap if requested
     if cmap is not None:
-        try:
-            import matplotlib.pyplot as plt
+        import matplotlib.pyplot as plt
 
-            colormap = plt.get_cmap(cmap)
-        except ImportError:
-            logger.warning("matplotlib not available, using grayscale")
-            colormap = None
+        colormap = plt.get_cmap(cmap)
     else:
         colormap = None
 
@@ -552,15 +524,8 @@ def to_video(
             f"upscaling {height}x{width} -> {out_h}x{out_w} "
             f"(nearest-neighbour x{factor}, exact); overlays drawn at output size"
         )
-    # the scalebar sizes itself off the frame it is handed, so it needs the
-    # per-*output*-pixel size or the bar would claim `factor`x its real length
     overlay_dx = pixel_size_um / factor if pixel_size_um else pixel_size_um
 
-    # 4:2:0 needs even dimensions. Left alone, imageio bicubic-*rescales* the
-    # whole frame to reach them (macro_block_size), softening every pixel
-    # including the scalebar and clock. Replicate the edge row/column instead
-    # so the real data is bit-for-bit untouched, and switch the block
-    # alignment off now that the size is already valid.
     needs_even = pix_fmt is None or pix_fmt.endswith("420p")
     pad_y = out_h % 2 if needs_even else 0
     pad_x = out_w % 2 if needs_even else 0
@@ -597,14 +562,14 @@ def to_video(
         str(output_path),
         fps=output_fps,
         codec=codec,
-        macro_block_size=1,
+        macro_block_size=1,  # NOTE: imageio would otherwise bicubic-rescale the frame to a 16 px grid, blurring the scalebar and clock; the edge replication above already makes the size even
         output_params=output_params,
         **writer_kwargs,
     )
 
     try:
         for i in tqdm(range(n_frames), desc="Writing video", unit="frames"):
-            frame = _read_frame(order[i])
+            frame = _plane_frame(data, ndim, channel, plane_idx, order[i])
 
             if mean_sub_2d is not None:
                 frame = frame - mean_sub_2d
@@ -618,32 +583,25 @@ def to_video(
             if spatial_smooth > 0:
                 frame = gaussian_filter(frame, sigma=spatial_smooth)
 
-            # Normalize to 0-1
             frame = np.clip((frame - vmin) / (vmax - vmin), 0, 1)
 
-            # Gamma correction
             if gamma != 1.0:
                 frame = np.power(frame, gamma)
 
-            # Convert to RGB
             if colormap is not None:
-                # Apply colormap (returns RGBA)
                 frame_rgb = (colormap(frame)[:, :, :3] * 255).astype(np.uint8)
             else:
-                # Grayscale -> RGB
                 frame_uint8 = (frame * 255).astype(np.uint8)
                 frame_rgb = np.stack([frame_uint8] * 3, axis=-1)
 
-            # magnify before the overlays so the text is rasterised at the
-            # output resolution. np.repeat on both axes is plain pixel
-            # replication -- the source values survive exactly.
-            if factor > 1:
+            if (
+                factor > 1
+            ):  # NOTE: magnify before the overlays, so the text is rasterised at output resolution; np.repeat keeps the source values exact
                 frame_rgb = np.repeat(
                     np.repeat(frame_rgb, factor, axis=0), factor, axis=1
                 )
 
             if time_overlay or scalebar:
-                # cv2 draws in-place; ensure the array is contiguous and writable
                 frame_rgb = np.ascontiguousarray(frame_rgb)
                 if time_overlay:
                     _draw_time_overlay(frame_rgb, i / fps)
@@ -700,7 +658,7 @@ class MP4Array(ReductionMixin, Shape5DMixin):
 
         try:
             nframes = int(self._reader.count_frames())
-        except Exception:
+        except Exception:  # NOTE: imageio's ffmpeg reader cannot count every container; fall back to the header
             nframes = int(meta.get("nframes", 0) or 0)
             if not np.isfinite(nframes) or nframes <= 0:
                 duration = meta.get("duration") or 0
@@ -723,11 +681,10 @@ class MP4Array(ReductionMixin, Shape5DMixin):
 
     @property
     def shape(self) -> tuple[int, int, int]:
-        # MP4Array stays 3D (T, Y, X); it is not part of the 5D dispatch set.
         return self._raw_shape
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
-        s = self._raw_shape  # always (T, Y, X)
+        s = self._raw_shape
         return (s[0], 1, 1, s[1], s[2])
 
     @property
@@ -786,7 +743,6 @@ class MP4Array(ReductionMixin, Shape5DMixin):
         return data
 
     def __array__(self, dtype=None, copy=None):
-        # return first frame for fast histogram/preview (no full load)
         data = self._read_gray(0)
         if self._target_dtype is not None:
             data = data.astype(self._target_dtype)
@@ -796,10 +752,7 @@ class MP4Array(ReductionMixin, Shape5DMixin):
 
     def close(self) -> None:
         """Close the underlying video reader."""
-        try:
-            self._reader.close()
-        except Exception:
-            pass
+        self._reader.close()
 
     def _imwrite(
         self,
@@ -879,7 +832,6 @@ class MP4Array(ReductionMixin, Shape5DMixin):
 
         s5 = arr._shape5d()
         num_planes = s5[2]
-        # C axis = num_views for IsoView (cameras), else num_color_channels
         num_channels = getattr(arr, "num_views", None) or getattr(
             arr, "num_color_channels", s5[1]
         )
@@ -897,7 +849,6 @@ class MP4Array(ReductionMixin, Shape5DMixin):
 
         suffix = output_suffix.lstrip("_") if output_suffix else "movie"
 
-        # carry dx through to to_video for the scalebar.
         pixel_size_um = None
         if scalebar:
             pixel_size_um = _resolve_pixel_size_um(arr)
