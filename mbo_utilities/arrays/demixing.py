@@ -27,11 +27,6 @@ logger = log.get("arrays.demixing")
 
 GROUP = "DemixingResults"
 VIEWS = ("pmd", "demixed", "residual")
-VIEW_LABELS = {
-    "pmd": "PMD movie: the compressed, motion-corrected data",
-    "demixed": "demixed signals: every ROI's footprint times its trace",
-    "residual": "residual: PMD minus demixed signals and background",
-}
 CHANNELS = ("calcium", "glutamate")
 
 _DEMIXING_INFO = PipelineInfo(

@@ -52,43 +52,6 @@ class PipelineResults:
     def add_timing(self, operation: str, fmt: str, elapsed_ms: float, **details):
         self.timings.append(TimingResult(operation, fmt, elapsed_ms, details))
 
-    def print_summary(self):
-        print("\n" + "=" * 70)
-        print("PIPELINE TIMING SUMMARY")
-        print("=" * 70)
-
-        # group by operation
-        ops = {}
-        for t in self.timings:
-            if t.operation not in ops:
-                ops[t.operation] = []
-            ops[t.operation].append(t)
-
-        for op, timings in ops.items():
-            print(f"\n{op}:")
-            for t in timings:
-                print(f"  {t.format:6s}: {t.elapsed_ms:8.1f} ms")
-
-        # totals per format
-        print("\n" + "-" * 40)
-        print("TOTAL TIME PER FORMAT:")
-        fmt_totals = {}
-        for t in self.timings:
-            if t.format not in fmt_totals:
-                fmt_totals[t.format] = 0
-            fmt_totals[t.format] += t.elapsed_ms
-
-        for fmt, total in sorted(fmt_totals.items(), key=lambda x: x[1]):
-            print(f"  {fmt:6s}: {total:8.1f} ms ({total / 1000:.2f} s)")
-
-        if self.errors:
-            print("\n" + "-" * 40)
-            print("ERRORS:")
-            for err in self.errors:
-                print(f"  - {err}")
-
-        print("=" * 70)
-
 
 def time_operation(func, *args, **kwargs):
     """Time a function call, return (result, elapsed_ms)."""

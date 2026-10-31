@@ -1,11 +1,4 @@
-"""``roi_workflow`` linescan contract tests.
-
-A linescan MESc unit already puts each ROI on its own Z-index, ragged
-widths padded to a shared ``Lx`` (see ``tests/test_mesc.py``). These tests
-check that the extractor crops each ROI back to its true, unpadded extent
-before averaging -- the padding bug this function exists to avoid -- and
-that a non-linescan unit is rejected outright.
-"""
+"""``linescan_roi_means`` applies the channel conversion and ``pair_reference_zstack`` finds the stack a line scan was drawn on."""
 
 from __future__ import annotations
 
@@ -17,12 +10,9 @@ import pytest
 from mbo_utilities.analysis.linescan import (
     background_image,
     pair_reference_zstack,
-    stim_events,
 )
 from mbo_utilities.arrays.mesc import MescArray
 from mbo_utilities.roi_workflow import (
-    extract_linescan_traces,
-    extract_linescan_units,
     linescan_roi_means,
     linescan_roi_read,
 )
@@ -324,151 +314,6 @@ def stim_path(tmp_path):
     return path, fs, stim_frames
 
 
-def test_crops_padding_before_averaging(linescan_path):
-    arr = MescArray(linescan_path, unit=0)
-    extents = arr.metadata["mesc_roi_extents"]
-    assert (extents[0]["height"], extents[0]["width"]) == (4, 12)
-    assert (extents[1]["height"], extents[1]["width"]) == (4, 18)
-
-    out = extract_linescan_traces(arr, compute_dfof=True)
-    F = np.load(out / "F.npy")
-    Fneu = np.load(out / "Fneu.npy")
-    dfof = np.load(out / "dfof.npy")
-    stat = np.load(out / "stat.npy", allow_pickle=True)
-
-    assert F.shape == (2, 8)
-    assert np.array_equal(Fneu, np.zeros_like(F))
-    assert dfof.shape == F.shape
-    assert np.all(np.isfinite(dfof))
-    assert [int(s["width"]) for s in stat] == [12, 18]
-
-    # the reference: crop each ROI to its *true* extent before averaging --
-    # arr[t, 0, z] without cropping would still include ROI 0's zero padding
-    for z, ext in enumerate(extents):
-        h, w = ext["height"], ext["width"]
-        expected = np.array(
-            [arr[t, 0, z][:h, :w].mean() for t in range(8)], dtype=np.float32
-        )
-        assert np.allclose(F[z], expected)
-        # padded columns are real zeros in the unpadded array too -- confirm
-        # they would have pulled the mean down if left in, so this is a
-        # real assertion and not a no-op for a full-width ROI
-        if w < arr.shape[-1]:
-            padded_mean = np.array(
-                [arr[t, 0, z][:h].mean() for t in range(8)], dtype=np.float32
-            )
-            assert not np.allclose(F[z], padded_mean)
-
-
-def test_non_linescan_unit_rejected(linescan_path):
-    arr = MescArray(linescan_path, unit=1)
-    assert arr.metadata["mesc_layout"] != "packed"
-    with pytest.raises(ValueError, match="linescan"):
-        extract_linescan_traces(arr)
-
-
-def test_dfof_window_scales_with_fs(linescan_path):
-    """A window sized in seconds must actually use fs, not a fixed frame count."""
-    arr = MescArray(linescan_path, unit=0)
-    out_short = extract_linescan_traces(
-        arr, out_dir=arr.filenames[0].parent / "rois_a", dfof_window_s=0.001
-    )
-    out_long = extract_linescan_traces(
-        arr, out_dir=arr.filenames[0].parent / "rois_b", dfof_window_s=50.0
-    )
-    dfof_short = np.load(out_short / "dfof.npy")
-    dfof_long = np.load(out_long / "dfof.npy")
-    assert not np.allclose(dfof_short, dfof_long)
-
-
-def test_roi_means_matches_written_F(linescan_path):
-    arr = MescArray(linescan_path, unit=0)
-    seen = []
-    F = linescan_roi_means(arr, progress=lambda i, k, s: seen.append((i, k)))
-    assert seen == [(0, 2), (1, 2)]
-    out = extract_linescan_traces(arr, out_dir=linescan_path.parent / "rois_m")
-    assert np.array_equal(F, np.load(out / "F.npy"))
-    # a batch smaller than T reads the same numbers
-    assert np.array_equal(F, linescan_roi_means(arr, batch_size=3))
-
-
-def test_units_in_one_file_get_their_own_default_dirs(linescan_path):
-    """Two linescan units of one .mesc must not overwrite each other."""
-    outputs = extract_linescan_units(linescan_path)
-    assert sorted(outputs) == ["MSession_0/MUnit_0", "MSession_0/MUnit_2"]
-    dirs = set(outputs.values())
-    assert len(dirs) == 2
-    assert (
-        outputs["MSession_0/MUnit_0"]
-        == linescan_path.parent / "rois_linescan" / "MUnit_0"
-    )
-    assert (
-        outputs["MSession_0/MUnit_2"]
-        == linescan_path.parent / "rois_linescan" / "MUnit_2"
-    )
-    assert np.load(outputs["MSession_0/MUnit_0"] / "F.npy").shape == (2, 8)
-    assert np.load(outputs["MSession_0/MUnit_2"] / "F.npy").shape == (1, 20)
-    # the single-unit entry point nests the same way when no out_dir is given
-    assert (
-        extract_linescan_traces(MescArray(linescan_path, unit=2))
-        == outputs["MSession_0/MUnit_2"]
-    )
-
-
-def test_units_filter_and_out_root(linescan_path, tmp_path):
-    out_root = tmp_path / "results"
-    outputs = extract_linescan_units(
-        linescan_path, out_root=out_root, units=["MUnit_2"]
-    )
-    assert list(outputs) == ["MSession_0/MUnit_2"]
-    assert outputs["MSession_0/MUnit_2"] == out_root / "MUnit_2"
-    assert not (out_root / "MUnit_0").exists()
-    # full keys work too
-    assert list(
-        extract_linescan_units(
-            linescan_path, out_root=out_root, units=["MSession_0/MUnit_0"]
-        )
-    ) == ["MSession_0/MUnit_0"]
-    # naming a non-linescan unit is an error, not a silent skip
-    with pytest.raises(ValueError, match="not a linescan"):
-        extract_linescan_units(linescan_path, out_root=out_root, units=["MUnit_1"])
-
-
-def test_nonpositive_baseline_warns(linescan_path):
-    """A ROI whose baseline is <= 0 gets a warning, not a silent bad dF/F."""
-    import logging
-
-    class _Catch(logging.Handler):
-        def __init__(self):
-            super().__init__()
-            self.messages = []
-
-        def emit(self, record):
-            self.messages.append(record.getMessage())
-
-    catch = _Catch()
-    logger = logging.getLogger("test_linescan_warn")
-    logger.addHandler(catch)
-    logger.setLevel(logging.INFO)
-
-    with h5py.File(linescan_path, "r+") as f:
-        f["MSession_0/MUnit_2/Channel_0"][...] = 0
-    arr = MescArray(linescan_path, unit=2)
-    out = extract_linescan_traces(
-        arr, out_dir=linescan_path.parent / "rois_zero", logger=logger
-    )
-    assert any("baseline <= 0" in m and "[0]" in m for m in catch.messages)
-    assert (out / "dfof.npy").exists()
-
-    catch.messages.clear()
-    extract_linescan_traces(
-        MescArray(linescan_path, unit=0),
-        out_dir=linescan_path.parent / "rois_ok",
-        logger=logger,
-    )
-    assert not any("baseline <= 0" in m for m in catch.messages)
-
-
 def test_conversion_offset_applied(stim_path, tmp_path):
     """F is in the file's converted counts (zero = no photons), not raw uint16."""
     path, fs, _ = stim_path
@@ -483,17 +328,6 @@ def test_conversion_offset_applied(stim_path, tmp_path):
     assert kymo.shape == (3, 40, 8) and abs(float(np.nanmean(kymo[2])) - 100.0) < 5
     F1, _ = linescan_roi_read(arr, channel=1)
     assert np.allclose(F1, 150.0)
-
-
-def test_stim_events_from_pattern_sequence(stim_path):
-    path, fs, stim_frames = stim_path
-    ev = stim_events(path, "MSession_0/MUnit_1", fs, 400)
-    assert ev["frames"].tolist() == stim_frames
-    assert len(ev["onsets_s"]) == 1 and abs(ev["onsets_s"][0] - 0.100) < 1e-6
-    assert len(ev["pulses_s"]) == 3 and ev["patterns"] == [2]
-    assert abs(ev["durations_s"][0] - 0.005) < 1e-6
-    # the zstack has no pattern sequence at all
-    assert stim_events(path, "MSession_0/MUnit_0", 1.0, 5) is None
 
 
 def test_reference_zstack_pairing(stim_path):
@@ -535,90 +369,3 @@ def test_reference_zstack_pairing(stim_path):
     )
     assert bg["shape"] == (1, 32, 32) and bg["width"] == 20.0
     assert background_image(path, "MSession_0/MUnit_0") is None
-
-
-def test_extraction_with_stimulus(stim_path, tmp_path):
-    path, fs, stim_frames = stim_path
-    out = extract_linescan_traces(MescArray(path, unit=1), out_dir=tmp_path / "rois")
-    assert np.load(out / "stim_frames.npy").tolist() == stim_frames
-    F = np.load(out / "F.npy")
-    # F.npy keeps the low stim frames as recorded; dfof is bridged over them
-    assert F[0, 102] < F[0, 101] - 20
-    dfof = np.load(out / "dfof.npy")
-    assert abs(dfof[0, 102] - dfof[0, 101]) < 0.05
-    # the 50-count step on ROI 1 shows as a ~50 % stimulus-aligned response
-    stat = np.load(out / "stat.npy", allow_pickle=True)
-    assert stat[1]["response_mode"] == "stim"
-    assert 0.4 < stat[1]["peak_dfof"] < 0.6 and stat[0]["peak_dfof"] < 0.1
-    assert stat[1]["snr"] > stat[0]["snr"]
-    assert (out / "F_chan1.npy").exists() and (out / "kymographs_chan1.npy").exists()
-    ops = np.load(out / "ops.npy", allow_pickle=True).item()["roi_workflow"]
-    assert ops["stim_n_pulses"] == 3 and ops["reference_zstack"]["munit"] == "MUnit_0"
-    assert (
-        ops["background_image"]["munit"] == "MUnit_0"
-        and ops["background_image"]["z"] == -98.0
-    )
-    names = sorted(p.name for p in out.glob("[0-9][0-9]*_*.png"))
-    assert names == [
-        "01a_background_snapshot_lines.png",
-        "01b_reference_zstack_lines.png",
-        "01c_line_zooms.png",
-        "02_line_profiles.png",
-        "03a_kymographs_green.png",
-        "03b_kymographs_red.png",
-        "04a_traces_raw.png",
-        "04b_traces_dfof.png",
-        "05_stim_response.png",
-        "06_roi_response_metrics.png",
-        "07_motion_correction.png",
-    ]
-    # rerunning replaces the figure set rather than accumulating
-    out2 = extract_linescan_traces(
-        MescArray(path, unit=1), out_dir=tmp_path / "rois", figures=False
-    )
-    assert out2 == out and not list(out.glob("*.png"))
-
-
-def test_no_stimulus_metrics(linescan_path):
-    out = extract_linescan_traces(
-        MescArray(linescan_path, unit=0), out_dir=linescan_path.parent / "ns"
-    )
-    stat = np.load(out / "stat.npy", allow_pickle=True)
-    assert all(s["response_mode"] == "spontaneous" for s in stat)
-    assert not (out / "stim_frames.npy").exists()
-    assert not (out / "05_stim_response.png").exists()
-    assert (out / "06_roi_response_metrics.png").exists()
-
-
-def test_cli_linescan(linescan_path, tmp_path):
-    from click.testing import CliRunner
-    from mbo_utilities.cli import main
-
-    out_root = tmp_path / "cli_out"
-    r = CliRunner().invoke(main, ["linescan", str(linescan_path), "-o", str(out_root)])
-    assert r.exit_code == 0, r.output
-    assert (out_root / "MUnit_0" / "F.npy").exists()
-    assert (out_root / "MUnit_2" / "dfof.npy").exists()
-    assert "MSession_0/MUnit_0: 2 ROI(s) x 8 timepoints at 500.0 Hz" in r.output
-    assert "widths px: 12, 18" in r.output
-
-    r = CliRunner().invoke(
-        main,
-        [
-            "linescan",
-            str(linescan_path),
-            "-o",
-            str(tmp_path / "one"),
-            "--unit",
-            "MUnit_2",
-            "--no-dfof",
-        ],
-    )
-    assert r.exit_code == 0, r.output
-    assert (tmp_path / "one" / "MUnit_2" / "F.npy").exists()
-    assert not (tmp_path / "one" / "MUnit_2" / "dfof.npy").exists()
-    assert not (tmp_path / "one" / "MUnit_0").exists()
-
-    r = CliRunner().invoke(main, ["linescan", str(linescan_path), "--unit", "MUnit_1"])
-    assert r.exit_code != 0
-    assert "not a linescan" in r.output

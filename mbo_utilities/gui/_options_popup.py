@@ -267,7 +267,7 @@ def draw_memory_options(obj: Any, tooltip: Any = None) -> None:
 
 
 def draw_linescan_options(parent: Any, tooltip=None) -> None:
-    """The line-scan viewer's background trace toggle; shared by both
+    """The Traces tab's background per-ROI trace toggle; shared by both
     options popups. ``tooltip`` wraps long tooltips when given.
     """
     if not hasattr(parent, "_options_linescan_auto"):
@@ -277,8 +277,8 @@ def draw_linescan_options(parent: Any, tooltip=None) -> None:
     )
     if imgui.is_item_hovered():
         text = (
-            "When a line-scan unit has no saved traces (an `mbo linescan` F.npy "
-            "or a PF folder), reduce every ROI to a trace on a background thread "
+            "When a line-scan unit has no saved traces (no vnoiser run beside "
+            "the file), reduce every ROI to a trace on a background thread "
             "as the viewer opens. Off on an imaging rig to keep the CPU and the "
             "file free: the viewer then shows a 'compute traces' button instead."
         )

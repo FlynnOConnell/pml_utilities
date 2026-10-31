@@ -112,7 +112,6 @@ def pipeline(
         )
         register_pipeline(info)
         # attach info to class for introspection
-        cls._pipeline_info = info
         return cls
 
     return decorator

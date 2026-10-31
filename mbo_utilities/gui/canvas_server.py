@@ -155,7 +155,6 @@ class BrowserCanvas(HttpRenderCanvas):
     ):
         self._last_array = None
         self._lossless_sent = False
-        self._quality = int(quality)
         self.max_pixel_ratio = float(max_pixel_ratio)
         super().__init__(*args, **kwargs)
 

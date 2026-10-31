@@ -21,7 +21,6 @@ class SimpleSelector:
         self.start_path = str(start_path) if start_path else str(Path.home())
         self.selected_path = None
         self.selected_paths = []
-        self.cancelled = False
 
     def draw(self):
         imgui.text(self.title)
@@ -33,8 +32,6 @@ class SimpleSelector:
                 result = pfd.select_folder(self.start_path)
                 if result:
                     self.selected_path = Path(result.result())
-                else:
-                    self.cancelled = True
 
         elif self.mode == "files" and imgui.button("Select File(s)"):
             result = pfd.open_file(
@@ -42,8 +39,6 @@ class SimpleSelector:
             )
             if result and result.result():
                 self.selected_paths = [Path(p) for p in result.result()]
-            else:
-                self.cancelled = True
 
         imgui.spacing()
 

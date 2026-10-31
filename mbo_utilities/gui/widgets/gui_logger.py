@@ -86,7 +86,6 @@ class GuiLogger:
         self.auto_scroll = True
         self.search_text = ""
         self.show_loggers = False  # collapsed by default
-        self.show_controls = True
 
     def add_message(self, timestamp, level, logger_name, message):
         """Add a message, enforcing max limit."""

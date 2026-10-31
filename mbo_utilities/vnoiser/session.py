@@ -605,9 +605,6 @@ class CurationSession:
     def short_snippet(self, index: int) -> np.ndarray:
         return self.dash.candidates.short_snippets[int(index)]
 
-    def aligned_index(self, index: int) -> int:
-        return int(self.dash.candidates.aligned_indices[int(index)])
-
     @property
     def pca_scores(self) -> np.ndarray:
         return self.dash.candidates.pca_scores

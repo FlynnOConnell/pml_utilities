@@ -1,156 +1,120 @@
-"""
-CLI entry point for mbo_utilities GUI.
-
-This module is designed for fast startup - heavy imports are deferred until needed.
-Operations like --check-install should be near-instant.
-"""
+"""``mbo`` opens the Studio; heavy imports stay inside the functions so ``--check-install`` is instant."""
 
 import contextlib
+import copy
 import functools
 import math
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 import click
 
+from mbo_utilities import log
 from mbo_utilities.gui._notebook import display_widget, in_notebook
 
-# Set AppUserModelID immediately for Windows
-try:
+if sys.platform == "win32":
     import ctypes
-    import sys
 
-    if sys.platform == "win32":
-        myappid = "mbo.utilities.gui.1.0"
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-except Exception:
-    pass
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+        "mbo.utilities.gui.1.0"
+    )
 
 
 def _set_qt_icon():
-    """Set the Qt application window icon.
-
-    Must be called AFTER the canvas/window is created and shown.
-    Sets the icon on QApplication and all top-level windows including
-    native window handles for proper Windows taskbar display.
-    """
+    """Set the icon on the QApplication and every top-level window, native handles included, once the window is shown."""
     try:
         from PyQt6.QtGui import QIcon
         from PyQt6.QtWidgets import QApplication
+    except ImportError:
+        return
+    from mbo_utilities.gui._setup import get_package_assets_path
+    from mbo_utilities.preferences import get_mbo_dirs
 
-        from mbo_utilities.gui._setup import get_package_assets_path
-        from mbo_utilities.preferences import get_mbo_dirs
-
-        app = QApplication.instance()
-        if app is None:
-            return
-
-        # try package assets first, then user assets
-        icon_path = get_package_assets_path() / "app_settings" / "icon.png"
-        if not icon_path.exists():
-            icon_path = Path(get_mbo_dirs()["assets"]) / "app_settings" / "icon.png"
-
-        if not icon_path.exists():
-            return
-
-        icon = QIcon(str(icon_path))
-        app.setWindowIcon(icon)
-
-        # set on all top-level windows including native handles
-        for window in app.topLevelWidgets():
-            window.setWindowIcon(icon)
-            handle = window.windowHandle()
-            if handle:
-                handle.setIcon(icon)
-            app.processEvents()
-    except Exception:
-        pass
+    app = QApplication.instance()
+    if app is None:
+        return
+    icon_path = get_package_assets_path() / "app_settings" / "icon.png"
+    if not icon_path.exists():
+        icon_path = Path(get_mbo_dirs()["assets"]) / "app_settings" / "icon.png"
+    if not icon_path.exists():
+        return
+    icon = QIcon(str(icon_path))
+    app.setWindowIcon(icon)
+    for window in app.topLevelWidgets():
+        window.setWindowIcon(icon)
+        handle = window.windowHandle()
+        if handle:
+            handle.setIcon(icon)
+        app.processEvents()
 
 
 class SplashScreen:
-    """Simple splash screen using tkinter (always available on windows)."""
+    """A tkinter splash for desktop-shortcut launches; tkinter ships with every Windows python."""
 
     def __init__(self):
         self.root = None
         self._closed = False
 
     def show(self):
-        """Show splash screen with loading indicator."""
         try:
             import tkinter as tk
 
             self.root = tk.Tk()
-            self.root.overrideredirect(True)  # no title bar
-            self.root.attributes("-topmost", True)
-
-            # center on screen
-            width, height = 300, 120
-            x = (self.root.winfo_screenwidth() - width) // 2
-            y = (self.root.winfo_screenheight() - height) // 2
-            self.root.geometry(f"{width}x{height}+{x}+{y}")
-
-            # styling
-            self.root.configure(bg="#1e1e2e")
-
-            # title
-            title = tk.Label(
-                self.root,
-                text="MBO Utilities",
-                font=("Segoe UI", 16, "bold"),
-                fg="#89b4fa",
-                bg="#1e1e2e",
-            )
-            title.pack(pady=(20, 5))
-
-            # loading text
-            self.loading_label = tk.Label(
-                self.root,
-                text="Loading...",
-                font=("Segoe UI", 10),
-                fg="#a6adc8",
-                bg="#1e1e2e",
-            )
-            self.loading_label.pack(pady=(0, 10))
-
-            # simple progress animation
-            self.progress_frame = tk.Frame(self.root, bg="#1e1e2e")
-            self.progress_frame.pack(pady=5)
-
-            self.dots = []
-            for _i in range(5):
-                dot = tk.Label(
-                    self.progress_frame,
-                    text="●",
-                    font=("Segoe UI", 12),
-                    fg="#45475a",
-                    bg="#1e1e2e",
-                )
-                dot.pack(side=tk.LEFT, padx=3)
-                self.dots.append(dot)
-
-            self.current_dot = 0
-            self._animate()
-            self.root.update()
-
         except Exception:
-            self.root = None
+            # no tkinter, or tkinter.TclError without a display
+            return
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        width, height = 300, 120
+        x = (self.root.winfo_screenwidth() - width) // 2
+        y = (self.root.winfo_screenheight() - height) // 2
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.root.configure(bg="#1e1e2e")
+        title = tk.Label(
+            self.root,
+            text="MBO Utilities",
+            font=("Segoe UI", 16, "bold"),
+            fg="#89b4fa",
+            bg="#1e1e2e",
+        )
+        title.pack(pady=(20, 5))
+        self.loading_label = tk.Label(
+            self.root,
+            text="Loading...",
+            font=("Segoe UI", 10),
+            fg="#a6adc8",
+            bg="#1e1e2e",
+        )
+        self.loading_label.pack(pady=(0, 10))
+        self.progress_frame = tk.Frame(self.root, bg="#1e1e2e")
+        self.progress_frame.pack(pady=5)
+        self.dots = []
+        for _i in range(5):
+            dot = tk.Label(
+                self.progress_frame,
+                text="●",
+                font=("Segoe UI", 12),
+                fg="#45475a",
+                bg="#1e1e2e",
+            )
+            dot.pack(side=tk.LEFT, padx=3)
+            self.dots.append(dot)
+        self.current_dot = 0
+        self._animate()
+        self.root.update()
 
     def _animate(self):
-        """Animate the loading dots."""
         if self.root is None or self._closed:
             return
-        try:
-            for i, dot in enumerate(self.dots):
-                dot.configure(fg="#89b4fa" if i == self.current_dot else "#45475a")
-            self.current_dot = (self.current_dot + 1) % len(self.dots)
-            self.root.after(200, self._animate)
-        except Exception:
-            pass
+        for i, dot in enumerate(self.dots):
+            dot.configure(fg="#89b4fa" if i == self.current_dot else "#45475a")
+        self.current_dot = (self.current_dot + 1) % len(self.dots)
+        self.root.after(200, self._animate)
 
     def close(self):
-        """Close the splash screen."""
         self._closed = True
         if self.root is not None:
             with contextlib.suppress(Exception):
@@ -158,100 +122,7 @@ class SplashScreen:
             self.root = None
 
 
-def _get_version() -> str:
-    """Get the current mbo_utilities version."""
-    try:
-        import mbo_utilities
-
-        return getattr(mbo_utilities, "__version__", "unknown")
-    except ImportError:
-        return "unknown"
-
-
-def _check_for_upgrade() -> tuple[str, str | None]:
-    """Check pypi for newer version of mbo_utilities (cached for 1 hour).
-
-    returns (current_version, latest_version) or (current_version, None) if check fails.
-    """
-    import json
-    import urllib.request
-
-    current = _get_version()
-
-    # check cache first (1 hour expiry)
-    try:
-        from mbo_utilities.env_cache import get_cached_pypi_version, update_pypi_cache
-
-        cached = get_cached_pypi_version(max_age_hours=1)
-        if cached:
-            return current, cached
-    except Exception:
-        pass
-
-    # fetch from pypi
-    try:
-        url = "https://pypi.org/pypi/pml-utilities/json"
-        with urllib.request.urlopen(url, timeout=5) as response:
-            data = json.loads(response.read().decode())
-            latest = data["info"]["version"]
-            # update cache
-            try:
-                update_pypi_cache(latest)
-            except Exception:
-                pass
-            return current, latest
-    except Exception:
-        return current, None
-
-
-def _print_upgrade_status():
-    """Print upgrade status to console."""
-    current, latest = _check_for_upgrade()
-
-    click.echo(f"Current version: {current}")
-
-    if latest is None:
-        click.secho(
-            "Could not check for updates (network error or package not on PyPI)",
-            fg="yellow",
-        )
-        return
-
-    click.echo(f"Latest version:  {latest}")
-
-    if current == "unknown":
-        click.secho("Could not determine current version", fg="yellow")
-    elif current == latest:
-        click.secho("You are running the latest version!", fg="green")
-    else:
-        # simple version comparison (works for semver)
-        try:
-            from packaging.version import parse
-
-            if parse(current) < parse(latest):
-                click.secho("\nUpgrade available! Run:", fg="cyan")
-                click.secho(
-                    '  uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"',
-                    fg="cyan",
-                    bold=True,
-                )
-            else:
-                click.secho(
-                    "You are running a newer version than PyPI (dev build)", fg="green"
-                )
-        except ImportError:
-            # no packaging module, do string comparison
-            if current != latest:
-                click.secho("\nDifferent version on PyPI. To upgrade:", fg="cyan")
-                click.secho(
-                    '  uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"',
-                    fg="cyan",
-                    bold=True,
-                )
-
-
 def _check_installation():
-    """Verify that mbo_utilities and key dependencies are properly installed."""
     from mbo_utilities.install import check_installation, print_status_cli
 
     status = check_installation()
@@ -260,13 +131,11 @@ def _check_installation():
 
 
 def _select_file(runner_params: Any | None = None) -> tuple[Any, Any, Any, bool, str]:
-    """Show file selection dialog and return user choices."""
+    """Run the launcher and return its path, split-rois flag, widget flag, metadata-only flag and mode."""
     from imgui_bundle import hello_imgui, immapp
 
     from mbo_utilities.gui._setup import get_default_ini_path
-    from mbo_utilities.gui.widgets.file_dialog import (
-        FileDialog,
-    )  # triggers _setup import
+    from mbo_utilities.gui.widgets.file_dialog import FileDialog
 
     dlg = FileDialog()
 
@@ -275,7 +144,7 @@ def _select_file(runner_params: Any | None = None) -> tuple[Any, Any, Any, bool,
     if runner_params is None:
         params = hello_imgui.RunnerParams()
         params.app_window_params.window_title = (
-            f"Miller Brain Studio v{__version__} – Data Selection"
+            f"The Studio v{__version__} – Data Selection"
         )
         params.app_window_params.window_geometry.size = (340, 720)
         params.app_window_params.window_geometry.size_auto = False
@@ -283,13 +152,9 @@ def _select_file(runner_params: Any | None = None) -> tuple[Any, Any, Any, bool,
     else:
         params = runner_params
 
-    # always route the ini to the mbo settings folder, even when a caller
-    # (e.g. scripts/capture_docs.py) supplies its own runner_params; otherwise
-    # hello_imgui writes <window_title>.ini into the current directory
+    # without an ini path hello_imgui writes <window_title>.ini into the current directory
     if not params.ini_filename:
         params.ini_filename = get_default_ini_path("file_dialog")
-
-    # always override the gui callback to render our dialog
     params.callbacks.show_gui = dlg.render
 
     addons = immapp.AddOnsParams()
@@ -298,21 +163,16 @@ def _select_file(runner_params: Any | None = None) -> tuple[Any, Any, Any, bool,
     addons.with_implot3d = False
 
     immapp.run(runner_params=params, add_ons_params=addons)
-
-    # Get selected mode
-    mode = dlg.gui_modes[dlg.selected_mode_index]
-
     return (
         dlg.selected_path,
         dlg.split_rois,
         dlg.widget_enabled,
         dlg.metadata_only,
-        mode,
+        dlg.gui_modes[dlg.selected_mode_index],
     )
 
 
 def _show_metadata_viewer(metadata: dict) -> None:
-    """Show metadata in an ImGui window."""
     from imgui_bundle import hello_imgui, immapp
 
     from mbo_utilities import __version__
@@ -320,9 +180,7 @@ def _show_metadata_viewer(metadata: dict) -> None:
     from mbo_utilities.gui._setup import get_default_ini_path
 
     params = hello_imgui.RunnerParams()
-    params.app_window_params.window_title = (
-        f"Miller Brain Studio v{__version__} – Metadata"
-    )
+    params.app_window_params.window_title = f"The Studio v{__version__} – Metadata"
     params.app_window_params.window_geometry.size = (800, 800)
     params.ini_filename = get_default_ini_path("metadata_viewer")
     params.callbacks.show_gui = lambda: draw_metadata_inspector(metadata)
@@ -345,7 +203,6 @@ class _SqueezeSingletonDims:
         full = tuple(arr.shape)
         if len(full) != 5:
             raise ValueError(f"expected 5D TCZYX array, got shape {full}")
-        # keep non-spatial dims only if size > 1, always keep Y, X
         self._kept = [i for i in range(3) if full[i] > 1] + [3, 4]
         self._dropped = [i for i in range(3) if full[i] <= 1]
         self._shape = tuple(full[i] for i in self._kept)
@@ -374,10 +231,8 @@ class _SqueezeSingletonDims:
     def __getitem__(self, key):
         if not isinstance(key, tuple):
             key = (key,)
-        # pad short keys to wrapped ndim
         if len(key) < self.ndim:
             key = key + (slice(None),) * (self.ndim - len(key))
-        # rebuild a 5D key: 0 at dropped axes, user key at kept axes
         full_key = [None] * 5
         for d in self._dropped:
             full_key[d] = 0
@@ -390,7 +245,7 @@ class _SqueezeSingletonDims:
         return self._shape[0]
 
     def __array__(self, dtype=None, copy=None):
-        # the first (Y, X) frame, never the whole array
+        """The first (Y, X) frame, never the whole array."""
         import numpy as np
 
         arr = np.asarray(self[(0,) * (self.ndim - 2)])
@@ -404,7 +259,6 @@ class _SqueezeSingletonDims:
         return np.asarray(self).astype(dtype, *args, **kwargs)
 
     def __getattr__(self, name):
-        # reader attributes only; numpy protocol methods are defined above
         if name.startswith("__") and name.endswith("__"):
             raise AttributeError(name)
         return getattr(self._arr, name)
@@ -420,15 +274,13 @@ class _ScrubTimingProxy:
     def __init__(self, arr):
         import numpy as np
 
-        from mbo_utilities.log import get as get_logger
-
         self._wrapped = arr
         inner = arr
         while hasattr(inner, "_arr"):
             inner = inner._arr
         self._arr = inner
         self._np = np
-        self._logger = get_logger("gui.scrub")
+        self._logger = log.get("gui.scrub")
 
     @property
     def shape(self):
@@ -462,8 +314,6 @@ class _ScrubTimingProxy:
             )
         if not self._logger.isEnabledFor(logging.DEBUG):
             return self._wrapped[key]
-        import time
-
         t0 = time.perf_counter()
         out = self._wrapped[key]
         dt_ms = (time.perf_counter() - t0) * 1000.0
@@ -493,13 +343,9 @@ class _ScrubTimingProxy:
 
 
 def _squeeze_for_viewer(arr):
-    """Wrap `arr` the way the viewer wants it: singleton non-spatial dims
-    dropped, then the scrub timer.
+    """Drop the size-1 T, C, Z axes (fastplotlib wants ndim == sliders + 2), then add the scrub timer.
 
-    fastplotlib expects ndim == len(slider_dim_names) + 2, so any T/C/Z of
-    size 1 must be squeezed, not just C. Module level because anything that
-    swaps the viewer's array afterwards (frame averaging) has to reproduce
-    exactly this wrapping.
+    Frame averaging swaps the viewer's array later and reproduces exactly this wrapping.
     """
     if not hasattr(arr, "shape") or len(arr.shape) != 5:
         out = arr
@@ -511,8 +357,7 @@ def _squeeze_for_viewer(arr):
 
 
 _NOTEBOOK_SIZE = (1400, 900)
-# the PreviewDataWidget on the figure's right edge
-_PREVIEW_WIDTH = 340
+_PREVIEW_WIDTH = 340  # the PreviewDataWidget on the figure's right edge
 
 
 def screen_box() -> tuple[int, int] | None:
@@ -521,13 +366,12 @@ def screen_box() -> tuple[int, int] | None:
     """
     try:
         from PyQt6.QtGui import QGuiApplication
-
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:
-            return None
-        avail = screen.availableGeometry()
-    except Exception:
+    except ImportError:
         return None
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return None
+    avail = screen.availableGeometry()
     return max(400, avail.width() - 40), max(400, avail.height() - 100)
 
 
@@ -589,15 +433,13 @@ def _figure_kwargs_for_here(
     :func:`fit_figure_size`, sizes the canvas to the images within that room,
     and without either the canvas is the room itself, at most 1000 px a side.
     """
-    # every viewer asks here right before it builds its figure
+    # every viewer asks here right before it builds its figure, so this is where the fpl config lands
     from mbo_utilities.gui import _fpl_config  # noqa: F401
 
     if in_notebook():
         if size is None:
             size = fit_figure_size(_NOTEBOOK_SIZE, **fit) if fit else _NOTEBOOK_SIZE
         return {"canvas": "jupyter", "size": tuple(size)}
-
-    import os
 
     if os.environ.get("RENDERCANVAS_FORCE_OFFSCREEN"):
         # tests and headless capture: rendercanvas.auto already resolved to
@@ -612,7 +454,8 @@ def _figure_kwargs_for_here(
     else:
         try:
             from rendercanvas.pyqt6 import RenderCanvas
-        except (ImportError, RuntimeError):  # RuntimeError if qt is already selected
+        except (ImportError, RuntimeError):
+            # RuntimeError once another qt backend is selected
             RenderCanvas = None
 
     if size is None:
@@ -636,9 +479,7 @@ def _figure_kwargs_for_here(
     return {"size": tuple(size)}
 
 
-# the smallest image a subplot keeps, per side, in logical px; the window
-# stops shrinking there
-_MIN_VIEWPORT = 150
+_MIN_VIEWPORT = 150  # logical px per side of image a subplot keeps; the window stops shrinking there
 _NOTEBOOK_CANVASES = ("JupyterRenderCanvas", "AnywidgetRenderCanvas")
 _BROWSER_CANVASES = ("HttpRenderCanvas", "BrowserCanvas")
 
@@ -723,7 +564,7 @@ def _after_show(iw) -> None:
 
     canvas = iw.figure.canvas
     if hasattr(canvas, "set_title"):
-        canvas.set_title(f"Miller Brain Studio v{__version__}")
+        canvas.set_title(f"The Studio v{__version__}")
     _set_qt_icon()
     _hold_min_size(iw.figure)
 
@@ -734,20 +575,15 @@ def _create_image_widget(
     figure_kwargs_override=None,
     show: bool = True,
 ):
-    """Create fastplotlib ImageWidget with an optional side widget.
+    """Build the viewer with its side widget.
 
-    `widget` names which one to attach: "preview" (PreviewDataWidget),
-    "manualroi" (manual ROI drawing), or "none". True/False are the legacy
-    spellings of "preview"/"none".
-
-    `figure_kwargs_override` replaces the auto-selected canvas/size dict (used by
-    scripts/capture_docs.py to build an offscreen viewer for headless capture).
-
-    `show=False` builds everything but leaves showing to the caller; that is
-    how ``DataVis`` separates construction from ``show()``.
+    ``widget`` is ``"preview"`` (the PreviewDataWidget), ``"manualroi"`` (the
+    preview plus the ROI tool switched on) or ``"none"``; True and False are
+    the old spellings of the first and last. ``figure_kwargs_override``
+    replaces the canvas and size picked for this process (headless capture).
+    ``show=False`` leaves showing to the caller, which is how ``DataVis``
+    separates construction from ``show()``.
     """
-    import copy
-
     if isinstance(widget, bool) or widget is None:
         widget = "preview" if widget else "none"
     if widget not in ("preview", "manualroi", "none"):
@@ -755,12 +591,8 @@ def _create_image_widget(
             f"unknown widget {widget!r}, expected one of: preview, manualroi, none"
         )
 
-    # drawing needs the windowing controls to see anything, so the ROI
-    # ui takes the top strip and right-widget tabs alongside the preview
-    # widget, not instead of it. Flip the Widgets-menu toggle on for this session
-    # when asked for, or when this data has annotations or pipeline ROIs
-    # beside it; the widget builds itself from the toggle. Not persisted — the
-    # flag came from the command line or the disk, not the menu.
+    # the roi tool is a Widgets-menu toggle the preview widget builds from; it goes on for this
+    # session (never persisted) when asked for or when rois or a pipeline's rois sit beside the data
     manual_roi = signal_quality = False
     if widget != "none":
         from mbo_utilities.gui.manual_roi import labels_path
@@ -790,7 +622,6 @@ def _create_image_widget(
         )
         signal_quality = widget_enabled("signal_quality")
 
-    # Determine slider dimension names from array's dims property if available
     from mbo_utilities.arrays.features import get_slider_dims
 
     custom_labels = getattr(data_array, "slider_dim_labels", None)
@@ -799,26 +630,22 @@ def _create_image_widget(
     else:
         slider_dim_names = get_slider_dims(data_array)
 
-    def _is_isoview(arr) -> bool:
-        """IsoviewArray has a `kind` attribute set to raw/corrected/fused."""
-        return getattr(arr, "kind", None) in {"raw", "corrected", "fused", "clusterpt"}
+    # isoview fluorescence sits in the first few hundred counts; anything else starts at the frame's range
+    is_isoview = getattr(data_array, "kind", None) in {
+        "raw",
+        "corrected",
+        "fused",
+        "clusterpt",
+    }
+    graphic_kwargs = {"vmin": 0, "vmax": 1000} if is_isoview else {}
 
-    # isoview fluorescence sits in the 0..few-hundred-counts range; anything
-    # else starts at the first frame's min and max
-    graphic_kwargs = {"vmin": 0, "vmax": 1000} if _is_isoview(data_array) else {}
-
-    # Handle multi-ROI data (duck typing: check for roi_mode attribute)
     if hasattr(data_array, "roi_mode") and hasattr(data_array, "iter_rois"):
         arrays = []
         names = []
-        # get name from first filename if available, truncate if too long
         base_name = None
-        if hasattr(data_array, "filenames") and data_array.filenames:
-            from pathlib import Path
-
+        if getattr(data_array, "filenames", None):
             first_file = Path(data_array.filenames[0])
             base_name = first_file.stem
-            # for suite2p arrays (data.bin), use parent folder name instead
             if base_name in ("data", "data_raw"):
                 base_name = first_file.parent.name
             if len(base_name) > 24:
@@ -853,9 +680,7 @@ def _create_image_widget(
         top, right, min_width = 0, 0, 0.0
         if widget != "none":
             top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
-        # the strip is as tall as the tab that will be selected: the Traces
-        # panel registers first, else the Signal Quality plot once its stats
-        # are in; the ROI controls are a right-bar tab and need no width
+        # the strip is as tall as the tab that opens first: the Traces panel, else the Signal Quality plot
         if manual_roi:
             top = strip_height(PANEL_HEIGHT)
         elif signal_quality:
@@ -896,8 +721,7 @@ def _create_image_widget(
             fpath=data_array.source_path,
             size=_PREVIEW_WIDTH,
         )
-        # the EdgeWindow shim registers itself with the figure during
-        # __init__; add_gui exists only on mbo-fastplotlib
+        # the EdgeWindow shim registers itself during __init__; add_gui exists only on mbo-fastplotlib
         add_gui = getattr(iw.figure, "add_gui", None)
         if add_gui is not None:
             add_gui(gui)
@@ -925,52 +749,36 @@ def _run_gui_impl(
     motion_correction_path: str | Path | None = None,
     qc: bool = False,
 ):
-    """Internal implementation of run_gui with all heavy imports."""
-    # Apply persisted Options (GPU adapter, debug logging) before any
-    # fastplotlib Figure is created or the launch dialog renders. Also
-    # prime the adapter cache so the file_dialog's Options popup doesn't
-    # call enumerate_adapters() from inside the imgui frame (that
-    # initializes wgpu, which on Windows clears the current WGL context
-    # and makes the host window flicker — Glfw Error 65544).
-    try:
-        from mbo_utilities.gui import _gpu_cache
-        from mbo_utilities.preferences import get_debug_logging, get_gpu_index
+    """``run_gui`` after the heavy imports."""
+    from mbo_utilities.gui import _gpu_cache
+    from mbo_utilities.preferences import get_debug_logging, get_gpu_index
 
-        _gpu_cache.prime()
-        _gpu_idx = get_gpu_index()
-        _adapters = _gpu_cache.get_adapters()
-        if _gpu_idx >= 0 and 0 <= _gpu_idx < len(_adapters):
-            import fastplotlib as fpl
+    # enumerate_adapters() inside an imgui frame initializes wgpu, which on windows drops the
+    # current WGL context and flickers the window (glfw error 65544), so the cache is primed here
+    _gpu_cache.prime()
+    gpu_index = get_gpu_index()
+    adapters = _gpu_cache.get_adapters()
+    if 0 <= gpu_index < len(adapters):
+        import fastplotlib as fpl
 
-            fpl.select_adapter(_adapters[_gpu_idx])
-        # an explicit MBO_DEBUG (mbo --debug / --no-debug) wins over the preference
-        if get_debug_logging() and "MBO_DEBUG" not in os.environ:
-            from mbo_utilities import log as _mbo_log
+        fpl.select_adapter(adapters[gpu_index])
+    # an explicit MBO_DEBUG (mbo --debug / --no-debug) wins over the preference
+    if get_debug_logging() and "MBO_DEBUG" not in os.environ:
+        log.set_debug(True)
 
-            _mbo_log.set_debug(True)
-    except Exception:
-        pass
-
-    # show splash screen while loading (only for desktop shortcut launches)
     splash = None
-    if show_splash and not _is_jupyter():
+    if show_splash and not in_notebook():
         splash = SplashScreen()
         splash.show()
 
     try:
-        # Import heavy dependencies only when actually running GUI
-
-        # close splash before showing file dialog
         if splash:
             splash.close()
             splash = None
 
-        # Handle file selection if no path provided
         if data_in is None:
             if in_notebook():
-                # the launcher is a desktop window with native dialogs; it
-                # would open on the kernel's machine, which for a hub session
-                # is not the one the user is looking at
+                # the launcher is a desktop window; for a hub session it would open on the kernel's machine
                 raise ValueError(
                     "run_gui() needs a path in a notebook: the file picker is a "
                     "desktop window. Pass the file or folder, e.g. "
@@ -981,11 +789,9 @@ def _run_gui_impl(
             )
             if not data_in:
                 return None
-            # Use ROI from dialog if not specified in function call
             if roi is None:
                 roi = roi_from_dialog
 
-        # If select_only, just return the path
         if select_only:
             return data_in
 
@@ -1074,8 +880,7 @@ def _run_gui_impl(
 
             fpl.loop.run()
             return None
-        # a .mesc holding AOD ROI units opens on the first one with no prompt; any
-        # other .mesc prompts for its unit once, here
+        # a .mesc holding AOD ROI units opens on the first one
         if _is_mesc(data_in):
             if unit is None:
                 unit = _first_linescan_unit(data_in)
@@ -1084,67 +889,33 @@ def _run_gui_impl(
                 return None
             unit = mesc_kwargs.get("unit", unit)
 
-        # Dispatch based on Mode
-        # pollen calibration is auto-detected in the fastplotlib viewer via get_viewer_class()
         if mode == "Napari viewer":
             return _launch_napari(data_in, roi, unit, dims)
-        return _launch_standard_viewer(
-            data_in, roi, widget, metadata_only, unit, dims
-        )
-
+        return _launch_standard_viewer(data_in, roi, widget, metadata_only, unit, dims)
     finally:
-        # ensure splash is closed on any exit path
         if splash:
             splash.close()
 
 
-def _fmt_duration(seconds):
-    """Compact recording length: '' when unknown, seconds under a minute."""
-    if not seconds:
-        return ""
-    if seconds < 60:
-        return f"{seconds:.1f} s"
-    m, s = divmod(int(round(seconds)), 60)
-    return f"{m}m {s:02d}s"
-
-
 def _resolve_mesc_unit(data_in, unit):
-    """Reader kwargs selecting which MUnit of a ``.mesc`` to open.
+    """The reader kwargs naming the ``.mesc`` unit to open, and whether to proceed.
 
-    Every ``.mesc`` opens straight to its first measurement unit, no prompt.
-    A file with more than one MUnit (unrelated scans the operator ran back
-    to back) is switched between from the MESc tab
-    (``mbo_utilities.gui.widgets.mesc_units.MescTabWidget``), an ImGui
-    widget like the rest of the viewer — no Qt involved anywhere in this
-    path. An explicit ``unit`` is the deliberate bypass.
-
-    Returns ``({}, True)`` for anything that isn't a ``.mesc``. The second
-    element is kept (always True now) so existing callers that check for a
-    cancelled picker don't need to change.
+    A ``.mesc`` opens on its first unit with no prompt; the MESc tab switches
+    between them. ``({}, True)`` for anything else. The flag is always True
+    now and stays for the callers that check for a cancelled picker.
     """
-    from mbo_utilities.log import get as _get
-
-    logger = _get("gui.boot")
     if unit is not None:
         return {"unit": unit}, True
-    try:
-        path = Path(data_in)
-    except TypeError:
+    if not _is_mesc(data_in):
         return {}, True
-    if not (path.is_file() and path.suffix.lower() == ".mesc"):
-        return {}, True
-
     from mbo_utilities.arrays.mesc import list_mesc_units
 
-    try:
-        units = list_mesc_units(path)
-    except Exception as e:
-        logger.warning(f"could not list units in {path.name}: {e}")
-        return {}, True
+    path = Path(data_in)
+    units = list_mesc_units(path)
     if not units:
-        return {}, True  # let imread raise the real "nothing readable" error
+        return {}, True
     if len(units) > 1:
-        logger.info(
+        log.get("gui.boot").info(
             f"{path.name} holds {len(units)} measurement units; opening "
             f"{units[0]['key']} (switch from the MESc tab)."
         )
@@ -1152,55 +923,20 @@ def _resolve_mesc_unit(data_in, unit):
 
 
 def _is_mesc(path) -> bool:
-    try:
-        p = Path(path)
-    except TypeError:
+    if not isinstance(path, (str, Path)):
         return False
-    return p.is_file() and p.suffix.lower() == ".mesc"
-
-
-def _mesc_unit(path, unit) -> dict | None:
-    """The unit record ``unit`` names in the ``.mesc``: an index, a
-    ``MSession_0/MUnit_3`` key or a bare ``MUnit_3``; None picks the first.
-    """
-    from mbo_utilities.arrays.mesc import list_mesc_units
-
-    try:
-        units = list_mesc_units(path)
-    except Exception:
-        return None
-    if not units:
-        return None
-    if unit is None:
-        return units[0]
-    if isinstance(unit, int):
-        return units[unit] if 0 <= unit < len(units) else None
-    return next((u for u in units if unit in (u["key"], u["munit"])), None)
-
-
-def _is_linescan_unit(path, unit) -> bool:
-    """Whether the unit is an AOD line scan (a "packed" unit: one row per
-    line, one column per sample along it).
-    """
-    if unit is None:
-        return False
-    chosen = _mesc_unit(path, unit)
-    return chosen is not None and chosen.get("kind") == "packed"
+    return Path(path).is_file() and Path(path).suffix.lower() == ".mesc"
 
 
 def _first_linescan_unit(path) -> str | None:
-    """The key of the first AOD ROI unit (a line scan, chessboard or ribbon
-    scan: ``ROI_LAYOUTS``) in a ``.mesc``, or None. With a PF folder beside
-    the file (the vnoiser pipeline's output) the unit of its first scan wins,
-    so the viewer opens on a processed scan.
+    """The key of the first AOD ROI unit (``ROI_LAYOUTS``) in a ``.mesc``, or None.
+
+    A vnoiser run beside the file wins: the viewer opens on a processed scan.
     """
     from mbo_utilities.arrays.mesc import ROI_LAYOUTS, list_mesc_units
     from mbo_utilities.results import ResultsArray, newest_results, results_dir_of
 
-    try:
-        units = [u for u in list_mesc_units(path) if u.get("kind") in ROI_LAYOUTS]
-    except Exception:
-        return None
+    units = [u for u in list_mesc_units(path) if u.get("kind") in ROI_LAYOUTS]
     path = Path(path)
     for parent in (path.parent.parent, path.parent):
         found = newest_results(parent, "vnoiser", source=path) or results_dir_of(
@@ -1208,10 +944,7 @@ def _first_linescan_unit(path) -> str | None:
         )
         if found is None:
             continue
-        try:
-            run = ResultsArray(found, source=False)
-        except Exception:
-            break
+        run = ResultsArray(found, source=False)
         wanted = {
             str(u.attrs.get("source_unit", "")).rsplit("/", 1)[-1]
             for u in run.results.units.values()
@@ -1236,23 +969,19 @@ def _load_for_viewer(data_in, roi=None, unit=None, dims=None):
     correction on formats without a native control. Raises
     ``ViewerCancelled`` when the unit picker was dismissed.
     """
-    import time as _time
-
     from mbo_utilities.arrays import normalize_roi
-    from mbo_utilities.log import get as get_logger
     from mbo_utilities.reader import imread
 
-    logger = get_logger("gui.boot")
+    logger = log.get("gui.boot")
     roi = normalize_roi(roi)
-    # a .mesc holds many unrelated scans; pick one before opening anything
     mesc_kwargs, proceed = _resolve_mesc_unit(data_in, unit)
     if not proceed:
         raise ViewerCancelled(f"unit selection cancelled for {data_in}")
     if dims:
         mesc_kwargs["dims"] = dims
-    t0 = _time.perf_counter()
+    t0 = time.perf_counter()
     data_array = imread(data_in, roi=roi, **mesc_kwargs)
-    t_imread = _time.perf_counter() - t0
+    t_imread = time.perf_counter() - t0
     logger.debug(
         f"[boot] imread: {t_imread * 1000:.0f} ms  "
         f"type={type(data_array).__name__}  "
@@ -1263,60 +992,30 @@ def _load_for_viewer(data_in, roi=None, unit=None, dims=None):
 
 
 def _wrap_for_viewer(data_array, logger):
-    """Axial alignment and scan-phase wraps; both transparent to the caller."""
-    # if the dataset carries valid per-plane axial shifts (written by
-    # imwrite(register_z=True)), show the aligned view by default. transparent
-    # wrap: shape/dims/metadata/domain attrs forward to the source; only the
-    # (y, x) of each plane is remapped on read.
-    try:
-        from mbo_utilities.arrays._registration import (
-            validate_axial_shifts,
-            with_axial_shifts,
-        )
+    """Show the planes aligned when the data carries valid ``plane_shifts``, and give every time series without a native phase control a disabled scan-phase wrap the toggle can flip without re-reading."""
+    from mbo_utilities.arrays import with_phasecorr
+    from mbo_utilities.arrays._registration import (
+        validate_axial_shifts,
+        with_axial_shifts,
+    )
 
-        _md = getattr(data_array, "metadata", None)
-        _nz = int(data_array._shape5d()[2]) if hasattr(data_array, "_shape5d") else None
-        if validate_axial_shifts(_md, _nz):
-            try:
-                data_array = with_axial_shifts(data_array)
-                logger.info(f"axial alignment applied ({_nz} planes)")
-            except Exception as e:
-                # shifts are present but couldn't be applied: warn so the view
-                # isn't silently identical to the unregistered data.
-                logger.warning(f"plane_shifts present but not applied: {e}")
-    except Exception as e:
-        logger.debug(f"axial alignment skipped: {e}")
-
-    # offer scan-phase correction on any time-dimension array that lacks a
-    # native phase_correction feature (zarr, h5, npy, mp4, plain tiff). the
-    # wrap is transparent (disabled), so the GUI toggle flips it on/off without
-    # re-reading from disk, exactly like ScanImageArray's built-in control.
-    try:
-        if not hasattr(data_array, "phase_correction"):
-            from mbo_utilities.arrays import with_phasecorr
-
-            _s5 = data_array._shape5d() if hasattr(data_array, "_shape5d") else None
-            if _s5 and int(_s5[0]) > 1:
-                data_array = with_phasecorr(data_array)
-                logger.debug("scan-phase correction available (disabled)")
-    except Exception as e:
-        logger.debug(f"phasecorr wrap skipped: {e}")
+    nt, _, nz = data_array._shape5d()[:3]
+    if validate_axial_shifts(data_array.metadata, nz):
+        data_array = with_axial_shifts(data_array)
+        logger.info(f"axial alignment applied ({nz} planes)")
+    if not hasattr(data_array, "phase_correction") and nt > 1:
+        data_array = with_phasecorr(data_array)
+        logger.debug("scan-phase correction available (disabled)")
     return data_array
 
 
-def _launch_standard_viewer(
-    data_in, roi, widget, metadata_only, unit=None, dims=None
-):
+def _launch_standard_viewer(data_in, roi, widget, metadata_only, unit=None, dims=None):
     """Build a ``DataVis`` for the path and show it the way this process can.
 
     A terminal gets a window and the event loop; a notebook gets the canvas
     in the output cell and the ``DataVis`` back so the cell can close it.
     """
-    import time as _time
-
-    from mbo_utilities.log import get as get_logger
-
-    logger = get_logger("gui.boot")
+    logger = log.get("gui.boot")
 
     if metadata_only:
         try:
@@ -1331,13 +1030,13 @@ def _launch_standard_viewer(
 
     from mbo_utilities.gui.data_vis import DataVis
 
-    t1 = _time.perf_counter()
+    t1 = time.perf_counter()
     try:
         vis = DataVis(data_in, roi=roi, widget=widget, unit=unit, dims=dims)
     except ViewerCancelled:
         return None
     logger.debug(
-        f"[boot] DataVis (imread + widget): {(_time.perf_counter() - t1) * 1000:.0f} ms"
+        f"[boot] DataVis (imread + widget): {(time.perf_counter() - t1) * 1000:.0f} ms"
     )
 
     output = vis.show()
@@ -1352,27 +1051,17 @@ def _launch_standard_viewer(
 
 
 class _NapariArray:
-    """Wrapper that prevents napari from eagerly materializing lazy arrays.
+    """A lazy array as napari reads it: no ``__array__``, so napari slices through ``__getitem__`` instead of taking the first frame as the whole image.
 
-    mbo_utilities lazy arrays define __array__() returning the first frame.
-    Napari calls np.asarray() on the object when added, triggering materialization
-    of just that 2D frame instead of the full ND dataset, breaking the viewer.
-    By not defining __array__, we force napari to use __getitem__ to access slices.
-
-    When `c_index` is set, the wrapper presents the underlying 5D TCZYX
-    array as a 4D TZYX view by pinning C to that index. This is what
-    `_launch_napari` uses when the data is single-channel — passing the
-    raw 5D array makes napari see 5 dimensions and reject 4-element
-    `axis_labels`, while `channel_axis=1` would create a stray
-    one-channel split. Squeezing C here gets us a clean 4D view that
-    napari treats as a single (T, Z, Y, X) image layer.
+    ``c_index`` pins C and reports the 5D TCZYX array as 4D TZYX, so a
+    single-channel file gets one layer with four axis labels instead of a
+    stray one-channel split.
     """
 
     def __init__(self, arr, c_index: int | None = None):
         self._arr = arr
         self._c_index = c_index
         if c_index is not None:
-            # advertise 4D (T, Z, Y, X) by stripping the C axis at index 1
             full = tuple(arr.shape)
             if len(full) != 5:
                 raise ValueError(
@@ -1401,11 +1090,6 @@ class _NapariArray:
 
         if self._c_index is None:
             return np.asarray(self._arr[key])
-
-        # rebuild a 5D TCZYX key from the user's 4D TZYX key by inserting
-        # the pinned c_index at position 1. napari's slicing protocol
-        # passes a tuple of slices/ints; pad short keys with full slices
-        # the same way numpy does so partial indexes still work.
         if not isinstance(key, tuple):
             key = (key,)
         if len(key) < 4:
@@ -1414,45 +1098,17 @@ class _NapariArray:
         return np.asarray(self._arr[full_key])
 
 
-# napari layer defaults — used for every layer added by `_launch_napari`,
-# including the napari-ome-zarr plugin path (we set them post-add there).
-# If you want to change them globally, change them here, not at every
-# add_image call site.
-_NAPARI_DEFAULTS = {
-    "colormap": "gnuplot2",
-    "contrast_limits": (0, 400),
-}
+_NAPARI_DEFAULTS = {"colormap": "gnuplot2", "contrast_limits": (0, 400)}
 
 
 def _prompt_for_dz(default: float = 16.0) -> float | None:
-    """Pop a Qt input dialog asking the user for the z-spacing.
-
-    Used by `_launch_napari` when the source metadata doesn't supply `dz`
-    (LBM TIFFs are the common case — `dz` has to come from the user). The
-    napari Viewer is already running so its QApplication is alive; we
-    just need a modal QInputDialog on top of it.
-
-    Returns the entered value in micrometers, or None if the user
-    cancelled. The dialog uses QInputDialog.getDouble which validates
-    range and decimals natively, so we don't need a separate validator.
-
-    Range: 0.1 - 1000.0 µm. Anything outside that is almost certainly a
-    typo (sub-100nm pixels are nanoscale; >1mm is not light microscopy).
-    """
+    """Ask for the z-step in µm with a modal Qt dialog over napari's running QApplication; None when cancelled or without Qt."""
     try:
         from qtpy.QtWidgets import QApplication, QInputDialog
     except ImportError:
-        try:
-            from PyQt6.QtWidgets import QApplication, QInputDialog
-        except ImportError:
-            return None  # no Qt available — caller falls back to default
-
-    # need a QApplication instance to parent the dialog. napari's already
-    # running one by the time we get here, but be defensive.
-    app = QApplication.instance()
-    if app is None:
         return None
-
+    if QApplication.instance() is None:
+        return None
     value, ok = QInputDialog.getDouble(
         None,
         "Z-spacing required",
@@ -1460,19 +1116,30 @@ def _prompt_for_dz(default: float = 16.0) -> float | None:
             "No `dz` (z-step) found in source metadata.\n\n"
             "Enter the z-spacing in micrometers (\u00b5m):"
         ),
-        float(default),  # initial value
-        0.1,  # min
-        1000.0,  # max
-        3,  # decimals
+        float(default),
+        0.1,
+        1000.0,
+        3,
     )
     return float(value) if ok else None
 
 
+def _apply_napari_defaults(layers) -> None:
+    """Set the colormap and contrast on every image layer ``add_image`` or ``open`` returned."""
+    import napari
+
+    if layers is None:
+        return
+    if not isinstance(layers, (list, tuple)):
+        layers = [layers]
+    for layer in layers:
+        if isinstance(layer, napari.layers.Image):
+            layer.colormap = _NAPARI_DEFAULTS["colormap"]
+            layer.contrast_limits = _NAPARI_DEFAULTS["contrast_limits"]
+
+
 def _launch_napari(data_in, roi=None, unit=None, dims=None):
-    from mbo_utilities.log import get as get_logger
-
-    logger = get_logger("gui.napari")
-
+    logger = log.get("gui.napari")
     try:
         import napari
     except ImportError:
@@ -1481,211 +1148,93 @@ def _launch_napari(data_in, roi=None, unit=None, dims=None):
         )
         return None
 
-    try:
-        from pathlib import Path
+    from mbo_utilities.arrays import normalize_roi
+    from mbo_utilities.arrays.features._dim_labels import get_dims
+    from mbo_utilities.metadata.output import OutputMetadata
+    from mbo_utilities.reader import imread
 
-        from mbo_utilities.arrays import normalize_roi
-        from mbo_utilities.arrays.features._dim_labels import get_dims
-        from mbo_utilities.metadata.output import OutputMetadata
-        from mbo_utilities.reader import imread
+    mesc_kwargs, proceed = _resolve_mesc_unit(data_in, unit)
+    if not proceed:
+        return None
+    if dims:
+        mesc_kwargs["dims"] = dims
+    arr = imread(data_in, roi=normalize_roi(roi), **mesc_kwargs)
+    arr_dims = list(get_dims(arr))
+    nz = int(arr.shape[arr_dims.index("Z")]) if "Z" in arr_dims else 1
+    viewer = napari.Viewer(ndisplay=3 if nz > 1 else 2)
+    logger.info(f"napari viewer launched (ndisplay={viewer.dims.ndisplay})")
 
-        path_str = str(data_in)
-
-        # a .mesc holds many unrelated scans; pick one before opening anything
-        mesc_kwargs, proceed = _resolve_mesc_unit(data_in, unit)
-        if dims:
-            mesc_kwargs["dims"] = dims
-        if not proceed:
+    path_str = str(data_in)
+    if path_str.endswith(".zarr"):
+        try:
+            added = viewer.open(path_str, plugin="napari-ome-zarr")
+        except Exception as e:
+            # the plugin raises its own types for a store it cannot read; the layer is built below instead
+            logger.debug(f"napari-ome-zarr failed: {e}")
+            added = None
+        if added:
+            _apply_napari_defaults(added)
+            napari.run()
             return None
 
-        # Probe the source up front so we can pick the right viewer mode
-        # (3D when there's a real Z axis) and log the spatial scale we'll
-        # be passing to napari. We re-load below for the actual layer when
-        # falling out of the ome-zarr plugin path; the probe is cheap.
-        probe_arr = None
-        probe_dims = None
-        probe_z_size = 1
-        try:
-            probe_arr = imread(data_in, roi=normalize_roi(roi), **mesc_kwargs)
-            probe_dims = get_dims(probe_arr)
-            if "Z" in probe_dims:
-                probe_z_size = int(probe_arr.shape[probe_dims.index("Z")])
-        except Exception as e:
-            logger.debug(f"napari probe failed (will still try plugin path): {e}")
+    # napari rejects axis_labels shorter than the rank, so a size-1 C is pinned by _NapariArray
+    # and a real C is napari's channel_axis; either way C leaves the labels and the scale
+    channel_axis = None
+    squeeze_c_index = None
+    if "C" in arr_dims:
+        c_idx = arr_dims.index("C")
+        if int(arr.shape[c_idx]) > 1:
+            channel_axis = c_idx
+        else:
+            squeeze_c_index = 0
 
-        # 3D display when the data actually has multiple z-planes; otherwise
-        # 2D so the canvas isn't constantly switching back and forth.
-        ndisplay = 3 if probe_z_size > 1 else 2
-        viewer = napari.Viewer(ndisplay=ndisplay)
-        logger.info(f"napari viewer launched (ndisplay={ndisplay})")
+    om = OutputMetadata(
+        source=arr.metadata, source_shape=arr.shape, source_dims=arr_dims
+    )
+    vs = om.voxel_size
+    logger.info(f"napari scale source: dx={vs.dx}, dy={vs.dy}, dz={vs.dz}")
+    scale = list(om.to_napari_scale(arr_dims))
+    # without a dz napari uses 1.0 and squashes the 3D view
+    if vs.dz is None and nz > 1:
+        user_dz = _prompt_for_dz()
+        if user_dz is not None:
+            scale[arr_dims.index("Z")] = float(user_dz)
+            logger.info(f"napari scale: applied user-entered dz={user_dz} um")
+        else:
+            logger.warning(
+                "napari scale: user cancelled dz prompt; "
+                "falling back to dz=1.0 (z-axis will be squashed)"
+            )
+    axis_labels = list(arr_dims)
+    if "C" in arr_dims:
+        scale.pop(arr_dims.index("C"))
+        axis_labels.pop(arr_dims.index("C"))
 
-        def _apply_layer_defaults(layer):
-            """Force colormap + contrast on a layer, ignoring failures."""
-            try:
-                layer.colormap = _NAPARI_DEFAULTS["colormap"]
-            except Exception:
-                pass
-            try:
-                layer.contrast_limits = _NAPARI_DEFAULTS["contrast_limits"]
-            except Exception:
-                pass
-
-        # Try napari-ome-zarr plugin first for .zarr files
-        loaded = False
-        if path_str.endswith(".zarr"):
-            try:
-                added = viewer.open(path_str, plugin="napari-ome-zarr")
-                # `viewer.open` returns the list of layers it created
-                if added:
-                    for layer in added:
-                        _apply_layer_defaults(layer)
-                loaded = True
-            except Exception as e:
-                # OME-Zarr plugin failed, fall back to mbo_utilities
-                logger.debug(f"napari-ome-zarr failed: {e}")
-
-        if not loaded:
-            # Load via mbo_utilities and add as layer
-            try:
-                arr = (
-                    probe_arr
-                    if probe_arr is not None
-                    else imread(data_in, roi=normalize_roi(roi), **mesc_kwargs)
-                )
-                dims = probe_dims if probe_dims is not None else get_dims(arr)
-
-                # squeeze C rather than dropping it from axis_labels: napari rejects
-                # labels shorter than the array's rank
-                channel_axis = None
-                squeeze_c_index = None
-                if "C" in dims:
-                    c_idx = list(dims).index("C")
-                    c_size = int(arr.shape[c_idx]) if c_idx < len(arr.shape) else 1
-                    if c_size > 1:
-                        channel_axis = c_idx
-                    else:
-                        squeeze_c_index = 0
-
-                # Build scale via OutputMetadata.to_napari_scale, which
-                # already pulls dx/dy/dz off the source metadata via the
-                # voxel_size feature. Log the resolved values so the user
-                # can confirm the metadata was actually picked up rather
-                # than silently falling back to (1, 1, 1).
-                scale = None
-                resolved_dz = None
-                try:
-                    om = OutputMetadata(
-                        source=arr.metadata,
-                        source_shape=arr.shape,
-                        source_dims=dims,
-                    )
-                    vs = om.voxel_size
-                    logger.info(
-                        f"napari scale source: dx={vs.dx}, dy={vs.dy}, dz={vs.dz}"
-                    )
-                    scale = list(om.to_napari_scale(dims))
-                    resolved_dz = vs.dz
-                except Exception as e:
-                    logger.debug(f"Failed to build scale: {e}")
-
-                # without a dz napari falls back to 1.0 and squashes the 3D view
-                if (
-                    resolved_dz is None
-                    and "Z" in dims
-                    and probe_z_size > 1
-                    and scale is not None
-                ):
-                    user_dz = _prompt_for_dz()
-                    if user_dz is not None:
-                        z_idx = list(dims).index("Z")
-                        if z_idx < len(scale):
-                            scale[z_idx] = float(user_dz)
-                        logger.info(
-                            f"napari scale: applied user-entered dz={user_dz} um"
-                        )
-                    else:
-                        logger.warning(
-                            "napari scale: user cancelled dz prompt; "
-                            "falling back to dz=1.0 (z-axis will be squashed)"
-                        )
-
-                axis_labels = list(dims)
-                # Drop the C axis from scale and labels regardless of whether
-                # it's a real channel split — napari's `channel_axis` strips
-                # it from the displayed dims for us, and for the singleton
-                # case we collapsed it to None and want it gone anyway.
-                if "C" in dims:
-                    c_idx_for_strip = list(dims).index("C")
-                    if scale and len(scale) > c_idx_for_strip:
-                        scale.pop(c_idx_for_strip)
-                    if len(axis_labels) > c_idx_for_strip:
-                        axis_labels.pop(c_idx_for_strip)
-
-                layer_name = Path(path_str).stem
-
-                def _add_to_viewer(layer_arr, name):
-                    # squeeze the singleton C axis when there isn't a
-                    # real channel split — napari then sees a 4D
-                    # (T, Z, Y, X) view with rank matching axis_labels.
-                    n_arr = _NapariArray(layer_arr, c_index=squeeze_c_index)
-                    kwargs = {
-                        "name": name,
-                        "colormap": _NAPARI_DEFAULTS["colormap"],
-                        "contrast_limits": _NAPARI_DEFAULTS["contrast_limits"],
-                    }
-                    if scale:
-                        kwargs["scale"] = tuple(scale)
-                    if channel_axis is not None:
-                        kwargs["channel_axis"] = channel_axis
-
-                    try:
-                        added_layers = viewer.add_image(
-                            n_arr, axis_labels=tuple(axis_labels), **kwargs
-                        )
-                    except TypeError:
-                        # Older napari without axis_labels kwarg
-                        added_layers = viewer.add_image(n_arr, **kwargs)
-
-                    # add_image returns either a single layer or a list when
-                    # channel_axis is set; normalize and re-apply the
-                    # defaults in case napari overrode them after add.
-                    if added_layers is None:
-                        return
-                    if not isinstance(added_layers, (list, tuple)):
-                        added_layers = [added_layers]
-                    for layer in added_layers:
-                        _apply_layer_defaults(layer)
-
-                # Handle multi-ROI
-                if hasattr(arr, "roi_mode") and hasattr(arr, "iter_rois"):
-                    import copy
-
-                    for r in arr.iter_rois():
-                        r_arr = copy.copy(arr)
-                        r_arr.fix_phase = False
-                        r_arr.roi = r
-                        name = f"ROI {r}" if r else layer_name
-                        _add_to_viewer(r_arr, name)
-                else:
-                    _add_to_viewer(arr, layer_name)
-
-                loaded = True
-            except Exception as e:
-                logger.error(f"Failed to load via mbo_utilities: {e}")
-
-        if not loaded:
-            # Last resort: let napari try to open it directly
-            try:
-                added = viewer.open(path_str)
-                if added:
-                    for layer in added:
-                        _apply_layer_defaults(layer)
-            except Exception as e:
-                logger.error(f"Failed to open via napari default fallback: {e}")
-
-        napari.run()
-    except Exception as e:
-        logger.error(f"Error launching napari: {e}")
+    layer_kwargs = {
+        **_NAPARI_DEFAULTS,
+        "scale": tuple(scale),
+        "axis_labels": tuple(axis_labels),
+    }
+    if channel_axis is not None:
+        layer_kwargs["channel_axis"] = channel_axis
+    layer_name = Path(path_str).stem
+    if hasattr(arr, "roi_mode") and hasattr(arr, "iter_rois"):
+        for r in arr.iter_rois():
+            r_arr = copy.copy(arr)
+            r_arr.fix_phase = False
+            r_arr.roi = r
+            added = viewer.add_image(
+                _NapariArray(r_arr, c_index=squeeze_c_index),
+                name=f"ROI {r}" if r else layer_name,
+                **layer_kwargs,
+            )
+            _apply_napari_defaults(added)
+    else:
+        added = viewer.add_image(
+            _NapariArray(arr, c_index=squeeze_c_index), name=layer_name, **layer_kwargs
+        )
+        _apply_napari_defaults(added)
+    napari.run()
 
 
 def run_gui(
@@ -1783,9 +1332,7 @@ def run_gui(
         mbo path/to/data.tif --metadata-only
         mbo --select-only
     """
-    # resolve compute-GPU policy -> CUDA_VISIBLE_DEVICES before any torch/cupy
-    # import or worker spawn; detached workers inherit this environment. Env
-    # MBO_GPU overrides the persisted GUI preference.
+    # CUDA_VISIBLE_DEVICES has to be set before any torch or cupy import; spawned workers inherit it
     from mbo_utilities.gpu import apply_persisted_compute_gpu
 
     apply_persisted_compute_gpu()
@@ -1806,4 +1353,4 @@ def run_gui(
 
 
 if __name__ == "__main__":
-    run_gui()  # type: ignore # noqa
+    run_gui()

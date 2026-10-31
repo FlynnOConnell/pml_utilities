@@ -29,32 +29,28 @@ class DiagnosticsWidget:
     """
 
     def __init__(self):
-        # Data
         self.stat = None
         self.iscell = None
-        self.iscell_original = None  # Keep original for reset
+        self.iscell_original = None
         self.F = None
         self.Fneu = None
         self.ops = None
         self.loaded_path = None
+        self._save_path = None
 
-        # ROI selection
         self.selected_roi = 0
         self.show_only_cells = True
 
-        # dF/F baseline settings
-        self._baseline_method = 0  # 0 = percentile, 1 = median
+        self._baseline_method = 0
         self._baseline_percentile = 10.0
         self._neuropil_coeff = 0.7
 
-        # Computed metrics
         self._snr = None
         self._dff = None
         self._skewness = None
         self._activity = None
         self._shot_noise = None
 
-        # Filter thresholds (min values)
         self._snr_min = 0.0
         self._snr_max = 100.0
         self._shot_noise_min = 0.0
@@ -64,37 +60,32 @@ class DiagnosticsWidget:
         self._activity_min = 0.0
         self._activity_max = 1.0
 
-        # Current filter values
         self._filter_snr_min = 0.0
         self._filter_shot_noise_max = 1000.0
         self._filter_skewness_min = 0.0
         self._filter_activity_min = 0.0
 
-        # Layout
         self._trace_height_frac = 0.30
-        self._hist_height_frac = 0.70
         self._min_plot_height = 60
 
-        # Stats popup
         self._show_stats_popup = False
         self._stats_popup_open = False
+        self._stats_sizer = PopupAutoSize("ROI Statistics", auto_resize=False)
 
-        # Bi-directional sync settings
-        self._auto_save = True  # Auto-save iscell.npy when filters change
-        self._watch_for_changes = True  # Watch for external changes
-        self._last_iscell_mtime = None  # Track file modification time
-        self._last_check_time = 0  # Throttle file checks
-        self._check_interval = 1.0  # Check for changes every N seconds
-        self._last_save_time = 0  # Prevent reload immediately after our own save
+        self._auto_save = True
+        self._watch_for_changes = True
+        self._last_iscell_mtime = None
+        self._last_check_time = 0
+        self._check_interval = 1.0
+        self._last_save_time = 0
         self._save_cooldown = (
-            0.5  # Seconds to wait after save before checking for changes
+            0.5  # NOTE: our own save would otherwise be reloaded as an external change
         )
-        self._save_status_msg = ""  # Status message to display
-        self._save_status_time = 0  # When status was set
+        self._save_status_msg = ""
+        self._save_status_time = 0
 
-        # training export settings
         self._training_dir = None
-        self._exported_datasets = []  # list of paths to exported training data
+        self._exported_datasets = []
 
     def load_unit(self, unit, plane_dir: Path) -> None:
         """Show one pixel unit of a run's results (``results.ResultUnit``):
@@ -144,19 +135,15 @@ class DiagnosticsWidget:
 
         plane_dir = Path(plane_dir)
 
-        # Load ops.npy first to get save_path (may differ from plane_dir)
         if has_plane_ops(plane_dir):
             self.ops = load_plane_ops(plane_dir)
-            # Use save_path from ops if available, otherwise use plane_dir
             save_path = Path(self.ops.get("save_path", plane_dir))
-            # Handle cross-platform path issues - if save_path doesn't exist, use plane_dir
             if not save_path.exists():
                 save_path = plane_dir
         else:
             self.ops = None
             save_path = plane_dir
 
-        # Load required files using cross-platform loader
         stat_path = save_path / "stat.npy"
         iscell_path = save_path / "iscell.npy"
         f_path = save_path / "F.npy"
@@ -186,9 +173,8 @@ class DiagnosticsWidget:
             self.Fneu = None
 
         self.loaded_path = plane_dir
-        self._save_path = save_path  # Store the actual save path for iscell.npy
+        self._save_path = save_path
 
-        # Track iscell.npy modification time for bi-directional sync
         iscell_path = save_path / "iscell.npy"
         if iscell_path.exists():
             self._last_iscell_mtime = iscell_path.stat().st_mtime
@@ -208,12 +194,10 @@ class DiagnosticsWidget:
 
         n_rois = len(self.F)
 
-        # SNR from dF/F
         noise = np.std(self._dff, axis=1)
         signal = np.max(self._dff, axis=1) - np.min(self._dff, axis=1)
         self._snr = np.where(noise > 0, signal / noise, 0)
 
-        # Skewness, Activity, Shot Noise from stat
         self._skewness = np.zeros(n_rois)
         self._activity = np.zeros(n_rois)
         self._shot_noise = np.zeros(n_rois)
@@ -235,11 +219,11 @@ class DiagnosticsWidget:
         else:
             F_corrected = self.F
 
-        if self._baseline_method == 0:  # percentile
+        if self._baseline_method == 0:
             baseline = np.percentile(
                 F_corrected, self._baseline_percentile, axis=1, keepdims=True
             )
-        else:  # median
+        else:
             baseline = np.median(F_corrected, axis=1, keepdims=True)
 
         baseline = np.maximum(baseline, 1.0)
@@ -291,7 +275,6 @@ class DiagnosticsWidget:
             ):
                 passes = False
 
-            # Only modify if originally classified as cell
             orig_prob = (
                 self.iscell_original[i, 0]
                 if self.iscell_original.ndim > 1
@@ -309,23 +292,20 @@ class DiagnosticsWidget:
                         self.iscell[i] = new_val
                         changed = True
 
-        # Auto-save if enabled and changes were made
         if changed and self._auto_save:
             self._save_iscell()
 
     def _check_for_external_changes(self):
         """Check if iscell.npy was modified externally (e.g., by Suite2p GUI)."""
-        if not self._watch_for_changes or not hasattr(self, "_save_path"):
+        if not self._watch_for_changes or self._save_path is None:
             return
 
         current_time = time.time()
 
-        # Throttle checks
         if current_time - self._last_check_time < self._check_interval:
             return
         self._last_check_time = current_time
 
-        # Don't check immediately after we saved (to avoid reloading our own changes)
         if current_time - self._last_save_time < self._save_cooldown:
             return
 
@@ -333,22 +313,15 @@ class DiagnosticsWidget:
         if not iscell_path.exists():
             return
 
-        try:
-            current_mtime = iscell_path.stat().st_mtime
-            if (
-                self._last_iscell_mtime is not None
-                and current_mtime > self._last_iscell_mtime
-            ):
-                # File was modified externally - reload it
-                self._reload_iscell()
-        except OSError:
-            pass  # File might be locked by another process
+        current_mtime = iscell_path.stat().st_mtime
+        if (
+            self._last_iscell_mtime is not None
+            and current_mtime > self._last_iscell_mtime
+        ):
+            self._reload_iscell()
 
     def _reload_iscell(self):
         """Reload iscell.npy from disk (called when external changes detected)."""
-        if not hasattr(self, "_save_path"):
-            return
-
         from mbo_utilities.file_io import load_npy
 
         iscell_path = self._save_path / "iscell.npy"
@@ -357,12 +330,11 @@ class DiagnosticsWidget:
 
         try:
             new_iscell = load_npy(iscell_path)
-            if new_iscell is not None:
-                self.iscell = new_iscell
-                # Update modification time
-                self._last_iscell_mtime = iscell_path.stat().st_mtime
-        except Exception:
-            pass
+        except (OSError, ValueError):  # NOTE: suite2p may still be writing the file
+            return
+        if new_iscell is not None:
+            self.iscell = new_iscell
+            self._last_iscell_mtime = iscell_path.stat().st_mtime
 
     @property
     def n_rois(self):
@@ -391,13 +363,11 @@ class DiagnosticsWidget:
             self._draw_load_ui()
             return
 
-        # Check for external changes to iscell.npy (bi-directional sync)
         self._check_for_external_changes()
 
         avail = imgui.get_content_region_avail()
         left_width = min(280, avail.x * 0.28)
 
-        # Left panel - controls
         if imgui.begin_child(
             "DiagLeft", imgui.ImVec2(left_width, 0), imgui.ChildFlags_.borders
         ):
@@ -410,7 +380,6 @@ class DiagnosticsWidget:
 
         imgui.same_line()
 
-        # Right panel - trace and histograms
         if imgui.begin_child(
             "DiagRight", imgui.ImVec2(0, 0), imgui.ChildFlags_.borders
         ):
@@ -464,7 +433,6 @@ class DiagnosticsWidget:
             if imgui.button(">"):
                 self.selected_roi = min(len(visible) - 1, self.selected_roi + 1)
 
-            # Show current ROI info
             roi_idx = visible[self.selected_roi]
             imgui.text(f"ROI {roi_idx}")
             if self.iscell is not None:
@@ -523,7 +491,6 @@ class DiagnosticsWidget:
 
         if changed_method or changed_pct or changed_coeff:
             self._recompute_dff()
-            # Recompute SNR and activity since they depend on dF/F
             if self._dff is not None:
                 noise = np.std(self._dff, axis=1)
                 signal = np.max(self._dff, axis=1) - np.min(self._dff, axis=1)
@@ -548,7 +515,6 @@ class DiagnosticsWidget:
                 "Reload when iscell.npy is modified externally (e.g., by Suite2p GUI)"
             )
 
-        # Show save status message (fades after 3 seconds)
         if self._save_status_msg and time.time() - self._save_status_time < 3.0:
             if "error" in self._save_status_msg.lower():
                 imgui.text_colored(
@@ -561,7 +527,6 @@ class DiagnosticsWidget:
         elif self._auto_save:
             imgui.text_colored(imgui.ImVec4(0.5, 0.7, 0.5, 1.0), "Auto-save ON")
 
-        # Guidance for Suite2p GUI
         imgui.text_wrapped("Suite2p: File > Load to refresh")
         if imgui.is_item_hovered():
             imgui.set_tooltip(
@@ -572,7 +537,6 @@ class DiagnosticsWidget:
                 "Suite2p GUI doesn't auto-refresh from disk."
             )
 
-        # classifier training export
         imgui.separator()
         imgui.text("Classifier Training")
 
@@ -589,7 +553,6 @@ class DiagnosticsWidget:
         if imgui.is_item_hovered():
             imgui.set_tooltip("copy iscell.npy and stat.npy to training folder")
 
-        # show training status
         if self._training_dir:
             imgui.text_colored(
                 imgui.ImVec4(0.5, 0.8, 0.5, 1.0), f"Training: {self._training_dir.name}"
@@ -612,7 +575,6 @@ class DiagnosticsWidget:
         avail = imgui.get_content_region_avail()
         trace_height = max(self._min_plot_height, avail.y * self._trace_height_frac)
 
-        # dF/F trace section
         if imgui.begin_child(
             "TraceSection", imgui.ImVec2(-1, trace_height), imgui.ChildFlags_.none
         ):
@@ -621,7 +583,6 @@ class DiagnosticsWidget:
 
         imgui.separator()
 
-        # Histograms section
         if imgui.begin_child(
             "HistSection", imgui.ImVec2(-1, 0), imgui.ChildFlags_.none
         ):
@@ -637,7 +598,6 @@ class DiagnosticsWidget:
 
         roi_idx = visible[self.selected_roi]
 
-        # Header with metrics
         imgui.text(f"dF/F - ROI {roi_idx}")
         imgui.same_line()
         if self._snr is not None:
@@ -669,12 +629,10 @@ class DiagnosticsWidget:
         imgui.text("Filter Thresholds (adjust to modify cell classification)")
 
         avail = imgui.get_content_region_avail()
-        # Calculate height for each histogram (4 histograms + spacing)
         hist_height = max(80, (avail.y - 60) / 4)
 
         filters_changed = False
 
-        # SNR histogram with min threshold
         filters_changed |= self._draw_histogram_with_slider(
             "SNR",
             self._snr,
@@ -685,7 +643,6 @@ class DiagnosticsWidget:
             is_min_filter=True,
         )
 
-        # Shot Noise histogram with max threshold
         filters_changed |= self._draw_histogram_with_slider(
             "Shot Noise",
             self._shot_noise,
@@ -696,7 +653,6 @@ class DiagnosticsWidget:
             is_min_filter=False,
         )
 
-        # Skewness histogram with min threshold
         filters_changed |= self._draw_histogram_with_slider(
             "Skewness",
             self._skewness,
@@ -707,7 +663,6 @@ class DiagnosticsWidget:
             is_min_filter=True,
         )
 
-        # Activity histogram with min threshold
         filters_changed |= self._draw_histogram_with_slider(
             "Activity %",
             self._activity * 100,
@@ -740,12 +695,10 @@ class DiagnosticsWidget:
         if data is None or len(data) == 0:
             return False
 
-        # Get current filter value
         current_val = getattr(self, filter_attr)
         if scale != 1.0:
             current_val = current_val * scale
 
-        # Compute histogram
         n_bins = 50
         hist_data = data * scale if scale != 1.0 else data
         hist_min = data_min * scale if scale != 1.0 else data_min
@@ -757,15 +710,12 @@ class DiagnosticsWidget:
         counts, edges = np.histogram(hist_data, bins=n_bins, range=(hist_min, hist_max))
         bin_centers = (edges[:-1] + edges[1:]) / 2
 
-        # Use full available width - imgui handles slider grabber internally
         avail_width = imgui.get_content_region_avail().x
-        content_width = max(200, avail_width - 8)  # Small margin for safety
+        content_width = max(200, avail_width - 8)
 
-        # Draw label and value above the histogram
         filter_type = "Min" if is_min_filter else "Max"
         imgui.text(f"{label} ({filter_type}: {current_val:.2f})")
 
-        # Draw plot with histogram and threshold line
         if implot.begin_plot(
             f"##{label}",
             imgui.ImVec2(content_width, height - 25),
@@ -778,7 +728,6 @@ class DiagnosticsWidget:
                 implot.AxisFlags_.auto_fit,
             )
 
-            # Draw histogram bars
             bar_width = (hist_max - hist_min) / n_bins * 0.9
             implot.plot_bars(
                 label,
@@ -787,7 +736,6 @@ class DiagnosticsWidget:
                 bar_width,
             )
 
-            # Draw threshold line
             threshold_x = np.array([current_val, current_val], dtype=np.float64)
             threshold_y = np.array([0, np.max(counts) * 1.1], dtype=np.float64)
             implot.plot_line(
@@ -797,14 +745,11 @@ class DiagnosticsWidget:
                 implot.Spec(line_color=imgui.ImVec4(1.0, 0.3, 0.3, 1.0)),
             )
 
-            # Draw shaded region for excluded values
             if is_min_filter:
-                # Shade left of threshold (excluded)
                 shade_x = np.array(
                     [hist_min, current_val, current_val, hist_min], dtype=np.float64
                 )
             else:
-                # Shade right of threshold (excluded)
                 shade_x = np.array(
                     [current_val, hist_max, hist_max, current_val], dtype=np.float64
                 )
@@ -821,7 +766,6 @@ class DiagnosticsWidget:
 
             implot.end_plot()
 
-        # Slider for threshold - use same width as plot, format includes value on right
         imgui.set_next_item_width(content_width)
         slider_label = f"##{label}_slider"
         changed, new_val = imgui.slider_float(
@@ -842,15 +786,13 @@ class DiagnosticsWidget:
         if self.iscell is None:
             return
 
-        # Use _save_path if available (the actual suite2p output path), else loaded_path
-        save_path = getattr(self, "_save_path", self.loaded_path)
+        save_path = self._save_path
         if save_path is None:
             return
 
         iscell_path = save_path / "iscell.npy"
         try:
             np.save(iscell_path, self.iscell)
-            # Update tracking for bi-directional sync
             self._last_save_time = time.time()
             self._last_iscell_mtime = iscell_path.stat().st_mtime
             self._save_status_msg = "Saved! Reload in Suite2p"
@@ -866,16 +808,18 @@ class DiagnosticsWidget:
             self._save_status_time = time.time()
             return
 
-        save_path = getattr(self, "_save_path", self.loaded_path)
+        save_path = self._save_path
         if save_path is None:
             return
 
-        # create training subdirectory
         training_dir = save_path / "classifier_training"
         training_dir.mkdir(exist_ok=True)
 
-        # extract classifier features (suite2p default: npix_norm, compact, skew)
-        keys = ["npix_norm", "compact", "skew"]
+        keys = [
+            "npix_norm",
+            "compact",
+            "skew",
+        ]  # suite2p's default classifier features
         n_rois = len(self.stat)
 
         stats = np.zeros((n_rois, len(keys)), dtype=np.float32)
@@ -883,13 +827,11 @@ class DiagnosticsWidget:
             for j, k in enumerate(keys):
                 stats[i, j] = s.get(k, 0.0)
 
-        # get iscell labels
         if self.iscell.ndim == 2:
             iscell_labels = self.iscell[:, 0].astype(np.float32)
         else:
             iscell_labels = self.iscell.astype(np.float32)
 
-        # save in classifier format
         training_data = {
             "stats": stats,
             "iscell": iscell_labels,
@@ -909,14 +851,13 @@ class DiagnosticsWidget:
 
     def _mark_as_curated(self):
         """Mark current iscell.npy as manually curated (copy to training folder)."""
-        save_path = getattr(self, "_save_path", self.loaded_path)
+        save_path = self._save_path
         if save_path is None:
             return
 
         training_dir = save_path / "classifier_training"
         training_dir.mkdir(exist_ok=True)
 
-        # copy current files
         for fname in ["iscell.npy", "stat.npy"]:
             src = save_path / fname
             if src.exists():
@@ -935,7 +876,6 @@ class DiagnosticsWidget:
             self._save_status_time = time.time()
             return
 
-        # collect all training data
         all_stats = []
         all_iscell = []
         keys = None
@@ -957,8 +897,7 @@ class DiagnosticsWidget:
         combined_stats = np.vstack(all_stats)
         combined_iscell = np.concatenate(all_iscell)
 
-        # save classifier
-        save_path = getattr(self, "_save_path", self.loaded_path)
+        save_path = self._save_path
         if save_path is None:
             return
 
@@ -979,9 +918,6 @@ class DiagnosticsWidget:
 
     def _draw_stats_popup(self):
         """Draw ROI statistics popup."""
-        if not hasattr(self, "_stats_sizer"):
-            self._stats_sizer = PopupAutoSize("ROI Statistics", auto_resize=False)
-
         if self._show_stats_popup:
             self._stats_popup_open = True
             self._stats_sizer.before_open()
@@ -1014,7 +950,6 @@ class DiagnosticsWidget:
                     if imgui.begin_child(
                         "StatsScroll", imgui.ImVec2(0, -35), imgui.ChildFlags_.borders
                     ):
-                        # Classification
                         if imgui.collapsing_header(
                             "Classification", imgui.TreeNodeFlags_.default_open
                         ):
@@ -1039,7 +974,6 @@ class DiagnosticsWidget:
                                 imgui.text_colored(color, f"{prob:.4f}")
                                 imgui.text(f"Original probability: {orig_prob:.4f}")
 
-                        # Morphology
                         if imgui.collapsing_header(
                             "Morphology", imgui.TreeNodeFlags_.default_open
                         ):
@@ -1053,7 +987,6 @@ class DiagnosticsWidget:
                             imgui.text(f"Radius: {s.get('radius', 0):.2f}")
                             imgui.text(f"Aspect ratio: {s.get('aspect_ratio', 0):.2f}")
 
-                        # Signal metrics
                         if imgui.collapsing_header(
                             "Signal Metrics", imgui.TreeNodeFlags_.default_open
                         ):
@@ -1074,7 +1007,6 @@ class DiagnosticsWidget:
                                 )
                                 imgui.text(f"dF/F std: {np.std(dff):.4f}")
 
-                        # classifier features (suite2p default: npix_norm, compact, skew)
                         if imgui.collapsing_header(
                             "Classifier Features", imgui.TreeNodeFlags_.default_open
                         ):
@@ -1102,7 +1034,6 @@ class DiagnosticsWidget:
                                 "these 3 features are used by suite2p's default classifier"
                             )
 
-                        # Raw stat values
                         if imgui.collapsing_header("stat.npy values"):
                             for key, value in sorted(s.items()):
                                 if key in ("ypix", "xpix", "lam"):
