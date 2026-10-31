@@ -1,8 +1,4 @@
-"""
-HDF5 array reader.
-
-This module provides H5Array for reading HDF5 datasets as lazy arrays.
-"""
+"""``H5Array``: one HDF5 dataset as a lazy (T, C, Z, Y, X) array."""
 
 from __future__ import annotations
 
@@ -30,8 +26,7 @@ logger = log.get("arrays.h5")
 # dataset names probed (in order) when the caller doesn't pick one
 _PREFERRED_KEYS = ("mov", "data", "scan_corrections", "imaging/data", "raw")
 
-# positional dim labels for a natural-rank dataset; reproduces the classic
-# front-padded singleton mapping onto canonical 5D TCZYX
+# the rank guess (AGENTS §5.2); a dataset labeled this way reads through `_index_5d_into_raw`'s front padding
 _DEFAULT_RAW_DIMS = {
     1: ("X",),
     2: ("Y", "X"),
@@ -43,24 +38,21 @@ _DEFAULT_RAW_DIMS = {
 
 def _iter_h5_datasets(f) -> list[dict]:
     """Describe every dataset in an open HDF5 file, groups walked recursively."""
-    found: list[dict] = []
-
-    def _visit(name, obj):
-        if isinstance(obj, h5py.Dataset):
-            if obj.shape is None:
-                return  # h5py.Empty (null dataspace) -- nothing to read
-            found.append(
-                {
-                    "key": name,
-                    "shape": tuple(obj.shape),
-                    "dtype": obj.dtype,
-                    "ndim": obj.ndim,
-                    "nbytes": int(obj.nbytes),
-                }
-            )
-
-    f.visititems(_visit)
-    return found
+    names: list[str] = []
+    f.visit(names.append)
+    objs = [f[name] for name in names]
+    # a null dataspace (h5py.Empty) has shape None and nothing to read
+    return [
+        {
+            "key": name,
+            "shape": tuple(obj.shape),
+            "dtype": obj.dtype,
+            "ndim": obj.ndim,
+            "nbytes": int(obj.nbytes),
+        }
+        for name, obj in zip(names, objs, strict=True)
+        if isinstance(obj, h5py.Dataset) and obj.shape is not None
+    ]
 
 
 def _index_5d_into_labeled(data, key, raw_dims: tuple[str, ...]) -> np.ndarray:
@@ -91,32 +83,15 @@ def _index_5d_into_labeled(data, key, raw_dims: tuple[str, ...]) -> np.ndarray:
 
 
 def list_h5_datasets(path: Path | str) -> list[dict]:
-    """Describe every dataset in an HDF5 file.
+    """One dict per dataset in an HDF5 file, nested groups included, read from headers only.
 
-    Opens the file read-only and reads headers only -- no pixel data.
-
-    Parameters
-    ----------
-    path : Path or str
-        Path to the HDF5 file.
-
-    Returns
-    -------
-    list of dict
-        One entry per dataset (nested groups included), in ``visititems``
-        order, with keys ``key`` (full path, e.g. ``'imaging/data'``),
-        ``shape``, ``dtype``, ``ndim`` and ``nbytes``.
-
-    Examples
-    --------
-    >>> for d in list_h5_datasets("scan.h5"):  # doctest: +SKIP
-    ...     print(d["key"], d["shape"])
+    Keys: ``key`` (full path, ``imaging/data``), ``shape``, ``dtype``, ``ndim``,
+    ``nbytes``; in ``visit`` order.
     """
     with h5py.File(Path(path), "r") as f:
         return _iter_h5_datasets(f)
 
 
-# register hdf5 pipeline info
 _H5_INFO = PipelineInfo(
     name="hdf5",
     description="HDF5 datasets",
@@ -138,51 +113,20 @@ register_pipeline(_H5_INFO)
 
 
 class H5Array(ReductionMixin, Shape5DMixin):
-    """
-    Lazy array reader for HDF5 datasets.
+    """One HDF5 dataset as (T, C, Z, Y, X).
 
-    Wraps an h5py.Dataset to provide array-like access with lazy loading.
-    Auto-detects common dataset names ('mov', 'data', 'scan_corrections',
-    'imaging/data', 'raw'); when none match, falls back to the largest
-    >=3D dataset anywhere in the file (nested groups included).
-
-    Parameters
-    ----------
-    filenames : Path or str
-        Path to HDF5 file.
-    dataset : str, optional
-        Dataset name to open, nested paths accepted (e.g. ``'imaging/data'``).
-        If None, auto-detects as described above. Use
-        :func:`list_h5_datasets` to enumerate the choices without loading
-        pixel data.
-
-    Attributes
-    ----------
-    shape : tuple[int, ...]
-        Dataset shape.
-    dtype : np.dtype
-        Data type.
-    ndim : int
-        Number of dimensions.
-    dataset_name : str
-        Name of the opened dataset.
-
-    Examples
-    --------
-    >>> arr = H5Array("data.h5")
-    >>> arr.shape
-    (10000, 512, 512)
-    >>> frame = arr[0]  # Get first frame
+    ``dataset`` names it, nested paths accepted (``imaging/data``); without
+    one, the first of ``mov``, ``data``, ``scan_corrections``, ``imaging/data``,
+    ``raw`` that exists opens, else the largest >=3D dataset anywhere in the
+    file. ``list_h5_datasets`` lists the choices without reading pixels.
     """
 
     def __init__(self, filenames: Path | str, dataset: str | None = None):
-        # stored as a list for consistency with every other array class;
-        # consumers (incl. lbm_suite2p_python.run_plane) assume filenames[0].
+        # a list like every reader's: lbm_suite2p_python.run_plane reads filenames[0]
         self.filenames = [Path(filenames)]
         path = self.filenames[0]
         self._f = h5py.File(path, "r")
-        # file is read-only; metadata writes (e.g. imwrite stamping the source)
-        # accumulate here and shadow the on-disk attrs.
+        # the file is read-only; metadata writes (imwrite stamping the source) shadow its attrs here
         self._metadata_overlay: dict = {}
 
         try:
@@ -215,10 +159,7 @@ class H5Array(ReductionMixin, Shape5DMixin):
     def _autodetect_dataset(self, path: Path) -> str:
         """Pick a dataset: preferred names first, else the largest >=3D one."""
         for key in _PREFERRED_KEYS:
-            try:
-                obj = self._f.get(key)
-            except KeyError:
-                continue
+            obj = self._f.get(key)
             if isinstance(obj, h5py.Dataset):
                 if key == "scan_corrections":
                     logger.info(f"Detected pollen calibration file: {path.name}")
@@ -281,17 +222,12 @@ class H5Array(ReductionMixin, Shape5DMixin):
         self._target_dtype = np.dtype(dtype)
         return self
 
-    # _compute_frame_vminmax / vmin / vmax inherited from ReductionMixin
-
     @property
     def num_planes(self) -> int:
         """Number of Z-planes in the dataset (index 2 in 5D TCZYX)."""
-        # try to get from metadata first using canonical lookup
         nplanes = get_param(self.metadata, "nplanes")
         if nplanes is not None:
             return int(nplanes)
-
-        # special case: pollen scan_corrections (1D)
         if self.dataset_name == "scan_corrections" and len(self._d.shape) == 1:
             return int(self._d.shape[0])
 
@@ -305,16 +241,13 @@ class H5Array(ReductionMixin, Shape5DMixin):
         if self._raw_dims == _DEFAULT_RAW_DIMS.get(raw_ndim):
             out = _index_5d_into_raw(self._d, key, raw_ndim)
         else:
-            out = self._getitem_permuted(key)
+            out = _index_5d_into_labeled(self._d, key, self._raw_dims)
         if self._target_dtype is not None:
             out = out.astype(self._target_dtype)
         return out
 
-    def _getitem_permuted(self, key):
-        return _index_5d_into_labeled(self._d, key, self._raw_dims)
-
     def __array__(self, dtype=None, copy=None):
-        # representative (Y, X) frame for fast preview (no accidental full load)
+        # one representative (Y, X) frame, never the whole dataset (AGENTS §5.3)
         data = np.asarray(self[0, 0, 0])
         if self._target_dtype is not None:
             data = data.astype(self._target_dtype)
@@ -339,14 +272,11 @@ class H5Array(ReductionMixin, Shape5DMixin):
         path (root-first), then the dataset's own attrs, so the most specific
         source wins. Sibling groups are not consulted.
         """
-        md = dict(self._f.attrs) if self._f.attrs else {}
+        md = dict(self._f.attrs)
         parts = [p for p in self.dataset_name.split("/") if p]
         for i in range(1, len(parts)):
-            obj = self._f.get("/".join(parts[:i]))
-            if obj is not None and len(obj.attrs):
-                md.update(dict(obj.attrs))
-        if len(self._d.attrs):
-            md.update(dict(self._d.attrs))
+            md.update(self._f["/".join(parts[:i])].attrs)
+        md.update(self._d.attrs)
         md["h5_dataset"] = self.dataset_name
         md["h5_datasets"] = [
             {"key": d["key"], "shape": d["shape"], "dtype": str(d["dtype"])}
@@ -360,7 +290,6 @@ class H5Array(ReductionMixin, Shape5DMixin):
     def metadata(self, value: dict):
         if not isinstance(value, dict):
             raise TypeError(f"metadata must be a dict, got {type(value)}")
-        # the file is opened read-only; keep overrides in memory.
         self._metadata_overlay.update(value)
 
     def _imwrite(

@@ -1,9 +1,4 @@
-"""
-Binary array reader/writer.
-
-This module provides BinArray for reading and writing Suite2p-format binary files
-(.bin) without requiring ops.npy.
-"""
+"""``BinArray``: a suite2p raw binary (``.bin``) as a readable, writable memmap, no ``ops.npy`` required."""
 
 from __future__ import annotations
 
@@ -21,7 +16,6 @@ from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 logger = log.get("arrays.bin")
 
-# register binary pipeline info
 _BIN_INFO = PipelineInfo(
     name="binary",
     description="Raw binary files (.bin)",
@@ -41,13 +35,9 @@ register_pipeline(_BIN_INFO)
 
 @dataclass
 class BinArray(ReductionMixin, Shape5DMixin):
-    """
-    Read/write raw binary files (Suite2p format) without requiring ops.npy.
+    """One suite2p binary as a (T, Y, X) memmap, without the suite2p folder ``Suite2pArray`` needs.
 
-    This class provides a lightweight interface for working with raw binary
-    files (.bin) directly, without needing the full Suite2p context that
-    Suite2pArray provides. Useful for workflows that manipulate individual
-    binary files (e.g., data_raw.bin vs data.bin).
+    It reports the shape it was given, not 5D (AGENTS §5.4), because suite2p reads it 3D.
 
     Parameters
     ----------
@@ -82,7 +72,6 @@ class BinArray(ReductionMixin, Shape5DMixin):
         self.filename = Path(self.filename)
         self.dtype = np.dtype(self.dtype)
 
-        # If file exists and shape not provided, try to infer from ops.npy
         if self.filename.exists() and self.shape is None:
             ops_file = self.filename.parent / "ops.npy"
             if ops_file.exists():
@@ -93,7 +82,6 @@ class BinArray(ReductionMixin, Shape5DMixin):
                     nframes = ops.get("nframes", ops.get("n_frames"))
                     if all(x is not None for x in [Ly, Lx, nframes]):
                         self.shape = (nframes, Ly, Lx)
-                        # Optionally copy metadata from ops
                         self._metadata.update(ops)
                         logger.debug(f"Inferred shape from ops.npy: {self.shape}")
                 except Exception as e:
@@ -105,7 +93,6 @@ class BinArray(ReductionMixin, Shape5DMixin):
                     "Provide shape=(nframes, Ly, Lx) or ensure ops.npy exists."
                 )
 
-        # Creating new file
         if not self.filename.exists():
             if self.shape is None:
                 raise ValueError(
@@ -142,7 +129,7 @@ class BinArray(ReductionMixin, Shape5DMixin):
         return self.shape[0]
 
     def __array__(self, dtype=None, copy=None):
-        # return single frame for fast histogram/preview (prevents accidental full load)
+        # one representative (Y, X) frame, never the whole file (AGENTS §5.3)
         data = self._file[0]
         if dtype is not None:
             data = data.astype(dtype)
@@ -179,8 +166,7 @@ class BinArray(ReductionMixin, Shape5DMixin):
 
     def close(self):
         """Close the memmap file."""
-        if hasattr(self._file, "_mmap"):
-            self._file._mmap.close()
+        self._file._mmap.close()
 
     def __enter__(self):
         return self
@@ -208,16 +194,14 @@ class BinArray(ReductionMixin, Shape5DMixin):
 
         ext_clean = ext.lower().lstrip(".")
 
-        # Fast memmap copy only when no selection is requested. Any
-        # frames/planes/channels filter must go through _imwrite_base
-        # so the selection is honored.
+        # a straight memmap copy; any selection goes through _imwrite_base so it is honored
         if (
             ext_clean == "bin"
             and frames is None
             and planes is None
             and channels is None
         ):
-            md = dict(self.metadata) if self.metadata else {}
+            md = dict(self.metadata)
             md["Ly"] = self.Ly
             md["Lx"] = self.Lx
             md["num_timepoints"] = self.nframes
@@ -238,13 +222,11 @@ class BinArray(ReductionMixin, Shape5DMixin):
             else:
                 logger.info(f"Binary file already exists: {outfile}")
 
-            # Write ops.npy (convert Path objects to strings for cross-platform compatibility)
             ops_file = outpath / "ops.npy"
             np.save(ops_file, normalize_ops_arrays(_convert_paths_to_strings(md)))
             logger.info(f"Wrote ops.npy to {ops_file}")
             return outpath
 
-        # For other formats (or .bin with a selection), use common implementation
         return _imwrite_base(
             self,
             outpath,

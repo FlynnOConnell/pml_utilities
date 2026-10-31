@@ -19,7 +19,7 @@ import tomllib
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
-# suite2p ops overrides applied to every plane (was DEFAULT_OPS in run_pipeline.py).
+# suite2p ops overrides applied to every plane
 DEFAULT_OPS: dict = {
     "algorithm": "cellpose",
     "img": "max_proj",
@@ -68,8 +68,7 @@ class PipelineConfig:
     stage_input: bool = False
 
 
-# [parameters] keys routed to lbm pipeline() top-level kwargs; everything else
-# in [parameters] is treated as a suite2p ops key.
+# [parameters] keys routed to lbm pipeline() kwargs; every other key is a suite2p ops key
 _PIPELINE_PARAM_KEYS = frozenset(
     {
         "keep_reg",
@@ -93,9 +92,9 @@ _PIPELINE_PARAM_KEYS = frozenset(
         "frame_indices",  # deprecated aliases of timepoints
     }
 )
-# routed into writer_kwargs (read-time features: phase correction, binning).
+# routed into writer_kwargs (read-time features: phase correction, binning)
 _WRITER_PARAM_KEYS = frozenset({"fix_phase", "use_fft", "frame_average"})
-# owned by the runner / [pipeline]; rejected if set in [parameters].
+# owned by the runner / [pipeline]; rejected if set in [parameters]
 _MANAGED_PARAM_KEYS = frozenset(
     {
         "save_path",
@@ -112,7 +111,7 @@ _MANAGED_PARAM_KEYS = frozenset(
     }
 )
 
-# pipeline-behaviour defaults merged into every run (see from_dict).
+# pipeline-behaviour defaults merged into every run (see from_dict)
 DEFAULT_PIPELINE_PARAMS: dict = {
     "keep_reg": False,
     "keep_raw": False,
@@ -120,7 +119,7 @@ DEFAULT_PIPELINE_PARAMS: dict = {
     "use_fft": True,
 }
 
-# inline comments for the keys shown in the generated template.
+# inline comments for the [parameters] keys in the generated template
 PARAM_HELP: dict = {
     "algorithm": "ROI detection: cellpose (anatomical, GPU; recommended) | sparsery | sourcery",
     "img": "image cellpose segments: max_proj (recommended) | meanImg | 'max_proj / meanImg'",
@@ -137,9 +136,7 @@ PARAM_HELP: dict = {
     "frame_average": "average every N consecutive frames into one before processing; 1 = off",
 }
 
-# keys written into the generated [parameters] block. The rest of DEFAULT_OPS /
-# DEFAULT_PIPELINE_PARAMS still applies at runtime (from_dict seeds them); they're
-# just not surfaced in the file. Add any by hand to override.
+# keys the template lists; the rest of DEFAULT_OPS / DEFAULT_PIPELINE_PARAMS still applies (from_dict seeds them)
 TEMPLATE_PARAM_KEYS: tuple = (
     "algorithm",
     "img",
@@ -153,9 +150,7 @@ TEMPLATE_PARAM_KEYS: tuple = (
     "keep_raw",
 )
 
-# subset knobs surfaced as commented hints. "Everything" is the default,
-# expressed canonically as None (omit the key); a list restricts. [] is also
-# accepted. None / [] / omitted all mean every plane / every timepoint.
+# subset keys written commented out; omitted, None and [] all mean every plane / timepoint
 TEMPLATE_COMMENTED: tuple = (
     ("planes", "[1, 7, 13]", "z-planes (1-based); omit for all. None or [] = all"),
     ("num_zplanes", "3", "first N z-planes; omit for all"),
@@ -190,7 +185,7 @@ def split_parameters(params: dict) -> tuple[dict, dict]:
     return ops, pipe
 
 
-# Comment shown next to each key in the generated template.
+# inline comments for the [io], [slurm] and [pipeline] keys in the generated template
 HELP: dict = {
     "io": {
         "input": "raw ScanImage TIFF dir (or assembled .zarr/.tiff). REQUIRED",

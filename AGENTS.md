@@ -49,7 +49,7 @@ pml_utilities/
 ```
 
 `pip install -e .`, Python 3.12.7 to 3.13, `uv` for environments. Console scripts
-`mbo`, `pollen`. Extras: `hpc` (submitit), `server` (uvicorn, websockets), `napari`,
+`mbo`, `pollen`. Extras: `hpc` (submitit), `server` (uvicorn, websockets, av), `napari`,
 `notebooks`, `docs`, `all`. Every base dependency is imported somewhere under
 `mbo_utilities/`; a package one optional command needs is an extra, with the install
 hint in its `ImportError`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers),

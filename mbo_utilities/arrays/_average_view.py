@@ -6,13 +6,13 @@ along T, each the mean of its bin: ``T' = T // factor``, output frame ``t`` is
 Y and X pass straight through, so a spatial sub-key still reads only the
 pixels it asks for.
 
-This is the same shape of thing as ``PhaseCorrectedView``: a step applied on
-read, before anything downstream sees the data, so wrapping the array once in
-the viewer makes the display, the ROI traces, extraction, demixing and the
-writers all work on averaged frames without any of them knowing. Unlike phase
-correction it changes ``T``, so the size accessors come off ``_shape5d`` (via
-``LazyArray``) rather than the source, and ``metadata["fs"]`` is divided by
-the factor - every downstream window, detrend and trace axis is in seconds.
+Like ``PhaseCorrectedView`` it is a step applied on read, before anything
+downstream sees the data, so wrapping the array once in the viewer makes the
+display, the ROI traces, extraction, demixing and the writers all work on
+averaged frames without any of them knowing. Unlike phase correction it
+changes ``T``, so the size accessors come off ``_shape5d`` (via ``LazyArray``)
+rather than the source, and ``metadata["fs"]`` is divided by the factor: every
+downstream window, detrend and trace axis is in seconds.
 
 The view is meant to sit under the writers, which mutate the array they are
 given (``arr.roi = r`` per split ROI, ``arr.fix_phase = ...`` from the save
@@ -28,6 +28,7 @@ A trailing partial bin is dropped, so every frame really is the mean of
 from __future__ import annotations
 
 from collections import OrderedDict
+from functools import partial
 
 import numpy as np
 
@@ -37,8 +38,7 @@ from mbo_utilities.lazy_array import LazyArray
 
 __all__ = ["FrameAveragedView", "average_frames"]
 
-# bins kept from the last reads, so scrubbing one frame at a time does not
-# re-read `factor` source frames every time
+# bins kept from the last reads, so scrubbing one frame at a time does not re-read `factor` source frames
 _CACHE_BINS = 8
 
 
@@ -115,8 +115,7 @@ class FrameAveragedView(LazyArray):
         return _TCZYX
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
-        # read through every call: the writers change the source's ROI
-        # selection (and so its Y/X) while holding this view
+        # read every call: the writers change the source's ROI (and so its Y/X) while holding this view
         t, c, z, y, x = _validated_tczyx_shape(self._source)
         return (t // self._factor, c, z, y, x)
 
@@ -149,9 +148,8 @@ class FrameAveragedView(LazyArray):
 
     @metadata.setter
     def metadata(self, value):
-        # the writer does `arr.metadata = dict(arr.metadata, **overrides)`;
-        # what it hands back is already in binned time, so undo the scaling
-        # before storing on the source or the getter would scale it twice
+        # the writer hands back `dict(arr.metadata, **overrides)`, already in binned time;
+        # unscale it before storing on the source or the getter scales it twice
         from mbo_utilities.metadata import scale_frame_rate
 
         meta = scale_frame_rate(dict(value or {}), 1.0 / self._factor)
@@ -189,12 +187,9 @@ class FrameAveragedView(LazyArray):
             mean = np.rint(mean)
         return mean.astype(self._out_dtype)
 
-    def _whole_frame(self, rest) -> bool:
-        return all(k == slice(None) for k in rest)
-
     def _bin(self, t: int, rest) -> np.ndarray:
         """One averaged frame, from the cache when it is a whole one."""
-        whole = self._whole_frame(rest)
+        whole = all(k == slice(None) for k in rest)
         if whole:
             cached = self._cache.get(t)
             if cached is not None:
@@ -227,7 +222,7 @@ class FrameAveragedView(LazyArray):
             start, stop, step = t_key.indices(T)
             bins = list(range(start, stop, step))
             if bins and step == 1:
-                # contiguous: one source read, then bin-average in place
+                # a contiguous run is one source read
                 lo, hi = start * self._factor, stop * self._factor
                 block = np.asarray(self._source[(slice(lo, hi),) + rest])
                 return self._means(block, len(bins))
@@ -248,29 +243,18 @@ class FrameAveragedView(LazyArray):
         return np.asarray(self).astype(dtype, *args, **kwargs)
 
     def __getattr__(self, name):
-        # forward domain attributes (filenames, source_path, roi, ...) to the
-        # source. Everything T-shaped is defined above or comes off _shape5d,
-        # so the source's frame count never leaks through here; underscore
-        # names are not forwarded so __init__ stays recursion-safe.
+        # domain attributes (filenames, source_path, roi, ...) come from the source; everything
+        # T-shaped is defined above, and underscore names stay here so __init__ is recursion-safe
         if name.startswith("_"):
             raise AttributeError(name)
         source = object.__getattribute__(self, "_source")
         if name == "get_offset_at":
-            # the writers ask for the scan-phase offset of each *written*
-            # frame; a binned frame's offset is that of its first source frame
-            source_fn = getattr(source, name)
-            factor = self._factor
-
-            def get_offset_at(t, c, z):
-                return source_fn(int(t) * factor, c, z)
-
-            return get_offset_at
+            return partial(_binned_offset_at, getattr(source, name), self._factor)
         return getattr(source, name)
 
     def __setattr__(self, name, value):
-        # own state and own properties stay here; anything else is a reader
-        # setting (roi, fix_phase, use_fft, ...) and belongs to the source.
-        # cached bins were read under the old setting, so drop them.
+        # anything but own state and properties is a reader setting (roi, fix_phase, ...) for the
+        # source; the cached bins were read under the old setting
         if name.startswith("_") or isinstance(
             getattr(type(self), name, None), property
         ):
@@ -293,6 +277,11 @@ class FrameAveragedView(LazyArray):
             f"FrameAveragedView(shape={self.shape}, dtype={self.dtype}, "
             f"factor={self._factor}, source={type(self._source).__name__})"
         )
+
+
+def _binned_offset_at(source_offset_at, factor: int, t, c, z):
+    """The scan-phase offset of binned frame ``t``: its first source frame's."""
+    return source_offset_at(int(t) * factor, c, z)
 
 
 def average_frames(source, factor: int, *, dtype: str = "source"):

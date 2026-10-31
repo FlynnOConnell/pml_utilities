@@ -1,18 +1,16 @@
-"""ProjectionsViewer - browse XY/XZ/YZ projection TIFFs for a loaded isoview stack.
+"""The Projections panel browses the XY, XZ and YZ projection TIFFs of a loaded IsoView stack.
 
-The widget activates whenever the active array's ``projections()`` method
-returns a non-empty dict (see :class:`mbo_utilities.arrays.isoview.IsoviewArray`).
-Each stack subclass knows its own projection directory, so the widget no
-longer scans the dataset root — it just consumes what the array reports.
-
-Side panel: an "Open viewer" button plus a white-text overview of what the
-stack has (axes, views, timepoint count). The popup keeps the full
-contrast / cmap / pan-zoom / save UX.
+It shows whenever the active array's ``projections()`` returns a non-empty
+dict (:class:`mbo_utilities.arrays.isoview.IsoviewArray`, whose stack kinds
+each know their own projection folder). The side panel holds an Open viewer
+button and the stack's axes, views and timepoint count; the popup pans,
+zooms, colormaps, contrasts and saves a projection.
 """
 
 from __future__ import annotations
 
 from collections import OrderedDict
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +19,7 @@ import tifffile
 from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
+from mbo_utilities.gui._colormaps import listed_name
 from mbo_utilities.gui._imgui_helpers import (
     button_width,
     draw_toolbar_row,
@@ -33,6 +32,7 @@ from mbo_utilities.gui.widgets.summary_image import (
     _CONTRAST_MODES,
     _DEFAULT_COLORMAP,
     _DEFAULT_COLORMAPS,
+    _PIXEL_VALUES_MAX_CELLS,
     _PIXEL_VALUES_MIN_ZOOM,
     STATUS_ERROR_COLOR,
     STATUS_OK_COLOR,
@@ -54,11 +54,11 @@ _MAX_GPU_CACHE = 16
 
 
 def _timepoints_for_axis(group: dict, axis: str) -> list[int]:
-    """Union of tiles/timepoints across all views for ``axis``.
+    """Returns the tiles or timepoints of ``axis`` across all views, sorted.
 
-    Used for the slider so a tile acquired on only some cameras (e.g. a
-    dropped CM0/CM1) still appears; the image area shows "no projection
-    for current selection" when the active view lacks that tile.
+    The slider takes the union so a tile acquired on only some cameras (a
+    dropped CM0/CM1) still appears; the image area shows "no projection for
+    current selection" when the active view lacks that tile.
     """
     return sorted({t for (a, v, t) in group["files"] if a == axis})
 
@@ -83,25 +83,21 @@ class ProjectionsViewer(Widget):
         self._contrast_mode: int = _CONTRAST_AUTO
         self._show_pixel_values: bool = False
 
-        # selection
         self._axis: str | None = None
         self._view: str | None = None
         self._timepoint: int | None = None
 
-        # discovery cache (lazy, sourced from arr.projections())
         self._projections: dict | None = None
         self._stack_type: str | None = None
         self._is_tiled: bool = False
         self._iso_array: Any = None
 
-        # per-image state
         self._array_cache: OrderedDict[tuple, np.ndarray] = OrderedDict()
         self._gpu_cache: OrderedDict[tuple, _GpuImage] = OrderedDict()
         self._manual_lo: dict[tuple, float] = {}
         self._manual_hi: dict[tuple, float] = {}
         self._hist_cache: dict[tuple, np.ndarray] = {}
 
-        # save dialog
         self._save_dialog: Any = None
         self._pending_save_key: tuple | None = None
         self._last_save_msg: str = ""
@@ -153,7 +149,6 @@ class ProjectionsViewer(Widget):
         self._iso_array = arr
         self._stack_type = str((arr.metadata or {}).get("stack_type", ""))
         self._is_tiled = bool(getattr(arr, "is_tiled", False))
-        # initialize selection to the first plausible entry
         axes = result.get("axes") or []
         views = result.get("views") or []
         self._axis = axes[0] if axes else None
@@ -195,21 +190,14 @@ class ProjectionsViewer(Widget):
     def _sync_cmap_with_fpl(self) -> None:
         if self._cmap_synced_with_fpl:
             return
-        iw = getattr(self.parent, "image_widget", None)
-        if iw is None:
-            return
-        try:
-            graphics = list(iw.graphics)
-        except Exception:
-            return
+        graphics = self.parent.image_widget.graphics
         if not graphics:
             return
-        try:
-            cmap_name = str(graphics[0].cmap)
-        except Exception:
+        cmap = graphics[0].cmap
+        # None for an RGB image
+        if cmap is None:
             return
-        if not cmap_name:
-            return
+        cmap_name = listed_name(cmap)
         if cmap_name not in self._cmaps:
             self._cmaps = [cmap_name] + list(_DEFAULT_COLORMAPS)
         self._cmap_idx = self._cmaps.index(cmap_name)
@@ -271,11 +259,8 @@ class ProjectionsViewer(Widget):
         self._hist_cache[key] = h
         return h
 
-    def _on_selection_changed(self) -> None:
-        self._reset_view()
-
     def _draw_overview(self) -> None:
-        """Compact white-text summary of what projections this stack has."""
+        """Draws the stack's file count, axes, views and timepoints in white."""
         g = self._projections
         axes = g.get("axes") or []
         views = g.get("views") or []
@@ -295,7 +280,7 @@ class ProjectionsViewer(Widget):
         imgui.text_colored(_WHITE, f"{unit}: {max_t}")
 
     def _draw_popup_selectors(self) -> None:
-        """Axis / View / Timepoint selectors inside the popup viewer."""
+        """Draws the popup's axis, view and timepoint selectors."""
         g = self._projections
         axes = g.get("axes") or []
         views = g.get("views") or []
@@ -304,58 +289,33 @@ class ProjectionsViewer(Widget):
 
         if self._axis not in axes:
             self._axis = axes[0]
-            self._on_selection_changed()
+            self._reset_view()
         if self._view not in views:
             self._view = views[0]
-            self._on_selection_changed()
+            self._reset_view()
 
         axis_labels = [_AXIS_DISPLAY.get(a, a) for a in axes]
+        items = [
+            ("Axis", 120.0, partial(self._axis_combo, axes, axis_labels)),
+            ("View", 100.0, partial(self._view_combo, views)),
+        ]
 
-        def _axis():
-            ch, v = imgui.combo("##projaxis", axes.index(self._axis), axis_labels)
-            if ch:
-                self._axis = axes[v]
-                self._on_selection_changed()
-
-        def _view():
-            ch, v = imgui.combo("##projview", views.index(self._view), views)
-            if ch:
-                self._view = views[v]
-                self._on_selection_changed()
-
-        items = [("Axis", 120.0, _axis), ("View", 100.0, _view)]
-
-        # Union across views so a tile present on only some cameras is
-        # still reachable; the image area reports when the active view
-        # lacks the selected tile.
         tps = _timepoints_for_axis(g, self._axis)
         if tps:
             if self._timepoint not in tps:
                 self._timepoint = tps[0]
-                self._on_selection_changed()
+                self._reset_view()
             cur_pos = tps.index(self._timepoint)
             if self._is_tiled:
                 label = "Tile"
-                fn = getattr(self._iso_array, "tile_label", None)
-                cur = fn(tps[cur_pos]) if callable(fn) else str(tps[cur_pos])
+                cur = self._iso_array.tile_label(tps[cur_pos])
                 value_fmt = f"{cur}  ({cur_pos + 1}/{len(tps)})"
             else:
                 label = "T"
                 value_fmt = f"TM{tps[cur_pos]:06d}  ({cur_pos + 1}/{len(tps)})"
-
-            def _tp():
-                ch, v = imgui.slider_int(
-                    "##projtp",
-                    cur_pos,
-                    0,
-                    len(tps) - 1,
-                    value_fmt,
-                )
-                if ch:
-                    self._timepoint = tps[int(v)]
-                    self._on_selection_changed()
-
-            items.append((label, 220.0, _tp))
+            items.append(
+                (label, 220.0, partial(self._tp_slider, tps, cur_pos, value_fmt))
+            )
 
         draw_toolbar_row(items)
         if not tps:
@@ -363,6 +323,24 @@ class ProjectionsViewer(Widget):
                 STATUS_ERROR_COLOR,
                 f"no {self._axis} projections",
             )
+
+    def _axis_combo(self, axes: list[str], labels: list[str]) -> None:
+        ch, v = imgui.combo("##projaxis", axes.index(self._axis), labels)
+        if ch:
+            self._axis = axes[v]
+            self._reset_view()
+
+    def _view_combo(self, views: list[str]) -> None:
+        ch, v = imgui.combo("##projview", views.index(self._view), views)
+        if ch:
+            self._view = views[v]
+            self._reset_view()
+
+    def _tp_slider(self, tps: list[int], cur_pos: int, value_fmt: str) -> None:
+        ch, v = imgui.slider_int("##projtp", cur_pos, 0, len(tps) - 1, value_fmt)
+        if ch:
+            self._timepoint = tps[int(v)]
+            self._reset_view()
 
     def draw(self) -> None:
         if not self._ensure_projections():
@@ -386,36 +364,35 @@ class ProjectionsViewer(Widget):
         if self._popup_open:
             self._draw_popup()
 
+    def _cmap_combo(self) -> None:
+        ch, v = imgui.combo("##projcmap", self._cmap_idx, list(self._cmaps))
+        if ch:
+            self._cmap_idx = v
+
+    def _contrast_combo(self) -> None:
+        ch, v = imgui.combo(
+            "##projcontrast", self._contrast_mode, list(_CONTRAST_MODES)
+        )
+        if ch:
+            self._contrast_mode = v
+
+    def _reset_button(self) -> None:
+        if imgui.button("Reset##projections"):
+            self._reset_view()
+
+    def _save_button(self) -> None:
+        if imgui.button("Save...##projections"):
+            self._open_save_dialog()
+        set_tooltip("Save the colormapped projection as a PNG (native resolution).")
+
     def _draw_toolbar(self) -> None:
         self._draw_popup_selectors()
-
-        def _cmap():
-            ch, v = imgui.combo("##projcmap", self._cmap_idx, list(self._cmaps))
-            if ch:
-                self._cmap_idx = v
-
-        def _contrast():
-            ch, v = imgui.combo(
-                "##projcontrast", self._contrast_mode, list(_CONTRAST_MODES)
-            )
-            if ch:
-                self._contrast_mode = v
-
-        def _reset():
-            if imgui.button("Reset##projections"):
-                self._reset_view()
-
-        def _save():
-            if imgui.button("Save...##projections"):
-                self._open_save_dialog()
-            set_tooltip("Save the colormapped projection as a PNG (native resolution).")
-
         draw_toolbar_row(
             [
-                ("Cmap", 110.0, _cmap),
-                ("Contrast", 110.0, _contrast),
-                (None, button_width("Reset"), _reset),
-                (None, button_width("Save..."), _save),
+                ("Cmap", 110.0, self._cmap_combo),
+                ("Contrast", 110.0, self._contrast_combo),
+                (None, button_width("Reset"), self._reset_button),
+                (None, button_width("Save..."), self._save_button),
             ]
         )
 
@@ -496,7 +473,7 @@ class ProjectionsViewer(Widget):
         if x1_img <= x0_img or y1_img <= y0_img:
             return
         n = (x1_img - x0_img) * (y1_img - y0_img)
-        if n > 10_000:
+        if n > _PIXEL_VALUES_MAX_CELLS:
             return
 
         rgba = gpu.rgba
@@ -528,11 +505,10 @@ class ProjectionsViewer(Widget):
             return
         cmap = self._cmaps[self._cmap_idx]
         default = f"{path.stem}_{cmap}.png"
-        start_dir = str(path.parent) if path else ""
         try:
             self._save_dialog = pfd.save_file(
                 "Save projection as PNG",
-                str(Path(start_dir) / default) if start_dir else default,
+                str(path.parent / default),
                 ["PNG files", "*.png", "All files", "*"],
             )
         except Exception as e:
@@ -541,25 +517,14 @@ class ProjectionsViewer(Widget):
         self._pending_save_key = self._selection_key()
 
     def _poll_save_dialog(self) -> None:
-        if self._save_dialog is None:
+        if self._save_dialog is None or not self._save_dialog.ready(0):
             return
-        try:
-            ready = self._save_dialog.ready(0)
-        except TypeError:
-            ready = self._save_dialog.ready()
-        if not ready:
-            return
-        try:
-            target_str = self._save_dialog.result()
-        except Exception:
-            target_str = ""
+        target_str = self._save_dialog.result()
         self._save_dialog = None
         if not target_str:
             return
         try:
             key = self._pending_save_key
-            if key is None:
-                return
             path = self._projections["files"].get((key[1], key[2], key[3]))
             if path is None:
                 return
@@ -673,11 +638,7 @@ class ProjectionsViewer(Widget):
             px = int(mx / max(self._zoom, 1e-6))
             py = int(my / max(self._zoom, 1e-6))
             if 0 <= px < w and 0 <= py < h:
-                try:
-                    val = float(arr[py, px])
-                    readout = f"px ({py}, {px}) = {val:.4g}"
-                except Exception:
-                    readout = ""
+                readout = f"px ({py}, {px}) = {float(arr[py, px]):.4g}"
         imgui.end_child()
 
         amin, amax = _data_range(arr)

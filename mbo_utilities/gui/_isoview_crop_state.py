@@ -1,17 +1,13 @@
 """Per-dataset crop store for the IsoView pipeline.
 
-The crop is logically attached to the RAW acquisition (the source the user
-points correct_stack at). Both the corrected and fused outputs derive from
-that raw root, so we key crops by the raw path — opening the corrected
-or fused IsoviewArray later resolves to the same entry.
+A crop belongs to the raw acquisition the user points ``correct_stack`` at.
+The corrected and fused outputs derive from that raw root, so crops are keyed
+by the raw path, and opening the corrected or fused ``IsoviewArray`` later
+finds the same entry.
 
-Two consumers:
-- The Run tab's submit code: turns the store into
-  ``crop_left``/``crop_top``/``crop_front``/``crop_width``/``crop_height``/
-  ``crop_depth`` dicts (keyed by camera index) that go into isoview's
-  ``ProcessingConfig``.
-- The standalone crop window: reads + writes per-camera bounds as the user
-  drags sliders.
+The crop window writes per-camera bounds as the user drags its sliders; the
+Run tab turns them into isoview ``ProcessingConfig`` fields
+(``crop_left`` ... ``crop_depth``, each ``{camera: value}``).
 """
 
 from __future__ import annotations
@@ -19,26 +15,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-# crops[<raw_root_str>][camera_int] = {"z": (z0, z1), "y": (y0, y1), "x": (x0, x1),
-#                                      "shape": (nz, ny, nx)}
+# _STORE[<raw_root_str>][camera_int] = {"z": (z0, z1), "y": (y0, y1), "x": (x0, x1),
+#                                       "shape": (nz, ny, nx)}
 _STORE: dict[str, dict[int, dict[str, tuple]]] = {}
 
-# Per-tile crops (tiled acquisitions only). One entry per spatial tile (SPM),
-# each holding its own per-camera bounds. Emitted as isoview ``tile_crops``.
-# tiled[<raw_root_str>][tile_int][camera_int] = {"z":..., "y":..., "x":..., "shape":...}
+# tiled acquisitions only, emitted as isoview ``tile_crops``:
+# _TILE_STORE[<raw_root_str>][tile_int][camera_int] = {"z":..., "y":..., "x":..., "shape":...}
 _TILE_STORE: dict[str, dict[int, dict[int, dict[str, tuple]]]] = {}
 
 
 def _raw_root_for(arr: Any) -> Path | None:
-    """Resolve a stable per-acquisition key for ``arr``'s crops.
+    """Returns the raw acquisition root ``arr``'s crops are keyed by.
 
-    Logically the key is the raw acquisition root (where the
-    ``SPC##_TM##_*.stack`` files would live). When the raw stacks
-    aren't on disk we synthesize that same path by walking ancestors
-    of ``scan_root`` for the ``.corrected[_suffix]`` / ``.fused[_suffix]``
-    directory and stripping the suffix — yielding the path the raw root
-    WOULD have. This keeps the crop store keyed by acquisition identity
-    regardless of which downstream tree the user opened.
+    That is the folder the ``SPC##_TM##_*.stack`` files live in. When the raw
+    stacks are not on disk, the path they would have is derived from the
+    ``.corrected[_suffix]`` or ``.fused[_suffix]`` ancestor of ``scan_root``
+    with the suffix stripped, so every downstream tree of one acquisition
+    shares its crops.
     """
     if arr is None:
         return None
@@ -47,8 +40,7 @@ def _raw_root_for(arr: Any) -> Path | None:
         sr = getattr(arr, "scan_root", None)
         return Path(sr) if sr is not None else None
 
-    # First-choice: existing sibling raw root (works for legacy layouts
-    # where the raw acquisition is still alongside the .corrected/ tree).
+    # a raw acquisition still beside its .corrected/ tree (legacy layouts)
     try:
         from mbo_utilities.arrays.isoview.array import _sibling_raw_root
 
@@ -58,9 +50,6 @@ def _raw_root_for(arr: Any) -> Path | None:
     except Exception:
         pass
 
-    # Fallback: derive the canonical raw path by walking up from
-    # scan_root, finding the .corrected*/.fused* ancestor, and stripping
-    # that suffix. Stable even when the raw stacks have been deleted.
     sr = getattr(arr, "scan_root", None)
     if sr is None:
         return None
@@ -132,9 +121,7 @@ def set_tile_camera_bounds(
     x: tuple[int, int],
     shape: tuple[int, int, int],
 ) -> None:
-    """Record ``camera``'s crop within spatial ``tile`` (specimen_name grid
-    token, e.g. ``TL100``, else ``SPM##``).
-    """
+    """Record ``camera``'s crop within spatial ``tile`` (the specimen_name grid token, ``TL100``, else ``SPM##``)."""
     k = _key(arr)
     if k is None:
         return
@@ -154,8 +141,8 @@ def clear(arr: Any) -> None:
 
 
 def _is_full_extent(bounds: dict[str, tuple]) -> bool:
-    """True iff every axis spans the full source shape (i.e. no real crop)."""
-    nz, ny, nx = bounds.get("shape", (0, 0, 0))
+    """Returns True when every axis spans the full source shape, so nothing is cropped."""
+    nz, ny, nx = bounds["shape"]
     z0, z1 = bounds["z"]
     y0, y1 = bounds["y"]
     x0, x1 = bounds["x"]
@@ -165,19 +152,15 @@ def _is_full_extent(bounds: dict[str, tuple]) -> bool:
 def to_config_args(arr: Any) -> dict[str, dict[int, int]]:
     """Project the per-camera bounds onto isoview's ``ProcessingConfig`` fields.
 
-    Returns up to six keys:
-      crop_left / crop_top / crop_front  — starts
-      crop_width / crop_height / crop_depth — spans
-    Each is a ``{camera_int: value}`` dict. Cameras whose bounds match the
-    full source shape are omitted entirely (isoview leaves those fields
-    None, falling back to the source dims).
+    Returns up to six ``{camera_int: value}`` dicts: the starts
+    ``crop_left``, ``crop_top``, ``crop_front`` and the spans ``crop_width``,
+    ``crop_height``, ``crop_depth``. A camera whose bounds match the full
+    source shape is left out, so isoview falls back to the source dims; no
+    crops at all give ``{}``.
 
-    Returns ``{}`` when no crops are set (so callers can safely
-    ``args.update(to_config_args(arr))``).
-
-    For tiled acquisitions, returns ``{"tile_crops": {...}}`` instead —
-    one per-camera override block per spatial tile (SPM) — which isoview
-    applies per active specimen at fuse time.
+    A tiled acquisition gives ``{"tile_crops": {...}}`` instead, one
+    per-camera block per spatial tile, which isoview applies per specimen at
+    fuse time.
     """
     if bool(getattr(arr, "is_tiled", False)):
         return _tile_config_args(arr)
@@ -225,10 +208,9 @@ def to_config_args(arr: Any) -> dict[str, dict[int, int]]:
 def _tile_config_args(arr: Any) -> dict[str, dict]:
     """Build isoview ``tile_crops`` from the per-tile store.
 
-    ``{"tile_crops": {"<tile>": {crop_param: {camera: value}}}}`` where
-    ``<tile>`` is the specimen_name grid token (or SPM##). Tiles (and
-    cameras) whose bounds span the full source shape are omitted, so
-    untouched tiles stay uncropped.
+    Returns ``{"tile_crops": {"<tile>": {crop_param: {camera: value}}}}``,
+    ``<tile>`` the specimen_name grid token (or ``SPM##``). Tiles and cameras
+    whose bounds span the full source shape are left out.
     """
     tile_crops = get_tile_crops(arr)
     if not tile_crops:

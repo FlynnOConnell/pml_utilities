@@ -204,13 +204,13 @@ class TopStrip(ImguiWindow):
         self._resize()
 
     def _want_size(self) -> int:
-        """Menu row plus the selected panel, unless the user set a height.
+        """Returns the menu row plus the selected panel, unless the user set a height.
 
-        The strip is as tall as what it is *showing*, not as tall as the
-        tallest thing registered. It also leaves the images at least
-        ``MIN_RENDER_AREA`` after the other edge windows, so a tall panel
-        (the curation dashboard over the line traces) on a short window
-        shrinks instead of pushing the viewport negative. A drag on the
+        The strip is as tall as the panel it shows; a taller registered panel
+        does not stretch it. It leaves the images at least ``MIN_RENDER_AREA``
+        after the bottom edge window (the strip is the only top one), so a
+        tall panel (the curation dashboard over the line traces) on a short
+        window shrinks instead of pushing the viewport negative. A drag on the
         grab bar pins the height until :meth:`reset_size`.
         """
         if not self.panels:
@@ -223,25 +223,16 @@ class TopStrip(ImguiWindow):
         height = (
             panel.height if panel is not None else max(p.height for p in self.panels)
         )
-        try:
-            canvas_height = float(self.figure.canvas.get_logical_size()[1])
-        except Exception:
-            canvas_height = 0.0
+        canvas_height = float(self.figure.canvas.get_logical_size()[1])
         if canvas_height > 0:
             room = (
-                canvas_height - self._other_edges() - MIN_RENDER_AREA - strip_height(0)
+                canvas_height
+                - self.figure._edge_size("bottom")
+                - MIN_RENDER_AREA
+                - strip_height(0)
             )
             height = min(height, max(room, MIN_PANEL))
         return strip_height(height)
-
-    def _other_edges(self) -> float:
-        """Canvas height the other edge windows take (the bottom one; the
-        strip is the only top window).
-        """
-        try:
-            return float(self.figure._edge_size("bottom"))
-        except Exception:
-            return 0.0
 
     def _resize(self) -> None:
         want = self._want_size()
@@ -285,9 +276,7 @@ class TopStrip(ImguiWindow):
             self.figure.canvas.set_logical_size(want, height)
 
     def _draw_handle(self) -> None:
-        """The grab bar along the bottom edge: drag to resize, double click
-        to shut or reopen the panels.
-        """
+        """Draws the grab bar along the bottom edge: a drag resizes the strip, a double click shuts or reopens the panels."""
         thickness = float(self.handle_height)
         imgui.set_cursor_pos(imgui.ImVec2(0.0, imgui.get_window_height() - thickness))
         imgui.invisible_button(
@@ -312,7 +301,8 @@ class TopStrip(ImguiWindow):
             # but never past leaving the canvas too little to render into
             delta = imgui.get_mouse_drag_delta(0).y
             imgui.reset_mouse_drag_delta(0)
-            if delta > 0 and self._render_height() - delta < MIN_RENDER_AREA:
+            render_height = self.figure.get_pygfx_render_area()[3]
+            if delta > 0 and render_height - delta < MIN_RENDER_AREA:
                 delta = 0.0
             if delta:
                 self.resize_to(round(self.size + delta))
@@ -343,13 +333,6 @@ class TopStrip(ImguiWindow):
             self.figure.canvas.set_cursor(name)
         except Exception:
             pass
-
-    def _render_height(self) -> float:
-        """Canvas height left for pygfx, or a big number when unknown."""
-        try:
-            return float(self.figure.get_pygfx_render_area()[3])
-        except Exception:
-            return float("inf")
 
     def _draw_tabs(self) -> None:
         focus, self._focus = self._focus, None

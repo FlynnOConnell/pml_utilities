@@ -1,17 +1,7 @@
-"""
-Phase correction feature for arrays.
+"""Bidirectional scan-phase correction settings.
 
-Provides bidirectional scan phase correction settings.
-
-Classes
--------
-PhaseCorrMethod
-    Enum of available phase correction methods.
-PhaseCorrectionFeature
-    Standalone feature object for managing phase correction state.
-PhaseCorrectionMixin
-    Mixin class that adds phase correction properties to array classes.
-    Presence of `phase_correction` attribute indicates support (duck typing).
+``PhaseCorrectionFeature`` holds them for one array; ``PhaseCorrectionMixin``
+exposes them as array properties (``fix_phase``, ``use_fft``, ``offset``, ...).
 """
 
 from __future__ import annotations
@@ -29,7 +19,7 @@ class PhaseCorrMethod(str, Enum):
     mean = "mean"  # mean projection
     max = "max"  # max projection
     std = "std"  # std projection
-    mean_sub = "mean-sub"  # mean subtraction
+    mean_sub = "mean-sub"
 
     @classmethod
     def from_string(cls, value: str | None) -> PhaseCorrMethod:
@@ -46,10 +36,7 @@ class PhaseCorrMethod(str, Enum):
 
 
 class PhaseCorrectionFeature(ArrayFeature):
-    """
-    Phase correction feature for arrays.
-
-    Manages bidirectional scan phase correction settings.
+    """Bidirectional scan-phase correction settings for one array; toggling ``enabled`` emits an event.
 
     Parameters
     ----------
@@ -105,7 +92,6 @@ class PhaseCorrectionFeature(ArrayFeature):
 
     @enabled.setter
     def enabled(self, value: bool) -> None:
-        """Enable or disable correction."""
         old_enabled = self._enabled
         self._enabled = bool(value)
         if old_enabled != self._enabled:
@@ -122,7 +108,6 @@ class PhaseCorrectionFeature(ArrayFeature):
 
     @method.setter
     def method(self, value: PhaseCorrMethod | str) -> None:
-        """Set correction method."""
         if isinstance(value, str):
             self._method = PhaseCorrMethod.from_string(value)
         else:
@@ -135,7 +120,6 @@ class PhaseCorrectionFeature(ArrayFeature):
 
     @shift.setter
     def shift(self, value: float | None) -> None:
-        """Set fixed shift value."""
         self._shift = value
 
     @property
@@ -150,7 +134,6 @@ class PhaseCorrectionFeature(ArrayFeature):
 
     @use_fft.setter
     def use_fft(self, value: bool) -> None:
-        """Set FFT mode."""
         self._use_fft = bool(value)
 
     @property
@@ -160,7 +143,6 @@ class PhaseCorrectionFeature(ArrayFeature):
 
     @border.setter
     def border(self, value: int) -> None:
-        """Set border pixels."""
         self._border = max(0, int(value))
 
     @property
@@ -170,7 +152,6 @@ class PhaseCorrectionFeature(ArrayFeature):
 
     @max_offset.setter
     def max_offset(self, value: int) -> None:
-        """Set maximum offset."""
         self._max_offset = max(1, int(value))
 
     def __repr__(self) -> str:
@@ -181,147 +162,75 @@ class PhaseCorrectionFeature(ArrayFeature):
 
 
 class PhaseCorrectionMixin:
-    """
-    Mixin class that adds phase correction support to array classes.
+    """Array properties over the instance's ``phase_correction`` feature.
 
-    This mixin provides convenience properties that delegate to a
-    `phase_correction` PhaseCorrectionFeature instance. Feature detection
-    uses duck typing: presence of `phase_correction` attribute indicates
-    the array supports phase correction operations.
-
-    Usage
-    -----
-    Check for phase correction support::
-
-        if hasattr(arr, 'phase_correction'):
-            # array supports phase correction
-            arr.fix_phase = True
-            arr.use_fft = False
-
-    Required attributes (set by implementing class):
-        phase_correction : PhaseCorrectionFeature
-            The feature instance managing phase correction state
-
-    Properties provided (all delegate to phase_correction):
-        fix_phase : bool
-            Enable/disable phase correction
-        use_fft : bool
-            Use FFT-based subpixel correction
-        phasecorr_method : str
-            Current correction method name
-        border : int
-            Border pixels to exclude
-        max_offset : int
-            Maximum phase offset to search
-        offset : float | None
-            Current effective shift value
+    The host sets ``self.phase_correction`` (a ``PhaseCorrectionFeature``) in
+    ``__init__`` and defines ``_invalidate_offset_cache``, which the setters of
+    ``fix_phase``, ``use_fft``, ``border`` and ``max_offset`` call. An array
+    supports phase correction when it has a ``phase_correction`` attribute.
     """
 
     @property
     def fix_phase(self) -> bool:
         """Whether bidirectional phase correction is enabled."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            return pc.enabled
-        return False
+        return self.phase_correction.enabled
 
     @fix_phase.setter
     def fix_phase(self, value: bool):
-        """Enable or disable phase correction."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            pc.enabled = value
-            self._invalidate_phase_offset_cache()
+        self.phase_correction.enabled = value
+        self._invalidate_offset_cache()
 
     @property
     def use_fft(self) -> bool:
         """Whether FFT-based phase correlation is used."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            return pc.use_fft
-        return False
+        return self.phase_correction.use_fft
 
     @use_fft.setter
     def use_fft(self, value: bool):
-        """Set FFT mode."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            pc.use_fft = value
-            self._invalidate_phase_offset_cache()
-
-    def _invalidate_phase_offset_cache(self) -> None:
-        """Drop cached per-frame offsets when settings change.
-
-        Subclasses with a real cache override `_invalidate_offset_cache`;
-        this base method just calls into it if present so the mixin stays
-        decoupled from any specific reader's storage.
-        """
-        invalidate = getattr(self, "_invalidate_offset_cache", None)
-        if callable(invalidate):
-            invalidate()
+        self.phase_correction.use_fft = value
+        self._invalidate_offset_cache()
 
     @property
     def phasecorr_method(self) -> str:
         """Current phase correction method name."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            return pc.method.value
-        return "none"
+        return self.phase_correction.method.value
 
     @phasecorr_method.setter
     def phasecorr_method(self, value: str | None):
-        """Set phase correction method."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            if value is None:
-                pc.enabled = False
-            else:
-                pc.method = value
+        if value is None:
+            self.phase_correction.enabled = False
+        else:
+            self.phase_correction.method = value
 
     @property
     def border(self) -> int:
         """Border pixels to exclude from phase estimation."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            return pc.border
-        return 0
+        return self.phase_correction.border
 
     @border.setter
     def border(self, value: int):
-        """Set border pixels."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            pc.border = value
-            self._invalidate_phase_offset_cache()
+        self.phase_correction.border = value
+        self._invalidate_offset_cache()
 
     @property
     def max_offset(self) -> int:
         """Maximum phase offset to search."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            return pc.max_offset
-        return 4
+        return self.phase_correction.max_offset
 
     @max_offset.setter
     def max_offset(self, value: int):
-        """Set maximum offset."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            pc.max_offset = value
-            self._invalidate_phase_offset_cache()
+        self.phase_correction.max_offset = value
+        self._invalidate_offset_cache()
 
     @property
     def offset(self) -> float | None:
-        """Current effective phase shift value."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None and pc.effective_shift is not None:
-            return pc.effective_shift
-        # fallback to last computed offset from _read_pages
+        """The fixed phase shift, else the last one a read computed (None before any)."""
+        shift = self.phase_correction.effective_shift
+        if shift is not None:
+            return shift
+        # only ScanImageArray's reads set it
         return getattr(self, "_last_offset", None)
 
     @offset.setter
     def offset(self, value: float):
-        """Set fixed phase shift value."""
-        pc = getattr(self, "phase_correction", None)
-        if pc is not None:
-            pc.shift = value
+        self.phase_correction.shift = value

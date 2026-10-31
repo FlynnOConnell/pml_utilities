@@ -1,4 +1,4 @@
-"""Where a Femtonics AOD unit's drawn ROIs sit inside a Z-stack.
+"""Places a Femtonics AOD unit's drawn ROIs in the file's micron frame and on its Z-stacks.
 
 An AOD unit holds several ROIs, each a straight line (line scan) or a
 rectangular patch (chessboard, ribbon scan) the scientist drew on a
@@ -198,8 +198,7 @@ def roi_placements(
     depth: dict,
     sample_counts: list[int] | None = None,
 ) -> list[dict]:
-    """Everything a viewer needs to place and describe one ROI's outline
-    (a line's two ends, a patch's four corners).
+    """The slice, depth offset and length of each ROI's outline (a line's two ends, a patch's four corners).
 
     One dict per ROI, in ROI order::
 
@@ -425,11 +424,12 @@ def image_overlays(
 
 
 def zstack_contents(mesc_path, units: list[dict] | None = None) -> dict[str, list[str]]:
-    """Which scans each Z-stack of the file holds: stack key -> the keys of
-    every multi-ROI unit with at least one outline inside the stack's field
-    and depth range (:func:`image_overlays`), in unit order. A snapshot's
-    scans are its ``scans`` entry from ``list_mesc_units``; a stack has no
-    such link, only geometry.
+    """Maps each Z-stack's key to the multi-ROI units it holds, in unit order.
+
+    A stack holds a unit when at least one of its outlines falls inside the
+    stack's field and depth range (:func:`image_overlays`). A snapshot's scans
+    are its ``scans`` entry from ``list_mesc_units``; a stack has no such link,
+    only geometry.
     """
     if units is None:
         units = list_mesc_units(mesc_path)
@@ -445,8 +445,8 @@ def zstack_contents(mesc_path, units: list[dict] | None = None) -> dict[str, lis
 def line_positions(
     mesc_path, unit_key: str, sample_counts: list[int] | None = None
 ) -> list[dict] | None:
-    """Where each of a multi-ROI unit's scanned lines or patches sits, one
-    dict per ROI in ROI order, or None when the unit has no geometry.
+    """The position of each of a multi-ROI unit's scanned lines or patches,
+    one dict per ROI in ROI order, or None when the unit has no geometry.
 
     Everything is in the file's absolute micron frame (the one every
     ``ReferenceViewportJSON`` and ``driftEndPoints`` share)::
@@ -481,7 +481,6 @@ def line_positions(
         snapshot = _viewport_of(f[path]) if path and path in f else None
     out = []
     for i, seg in enumerate(outlines):
-        seg = np.asarray(seg, dtype=float)
         end = _far_end(seg)
         length = float(np.hypot(*(seg[:2, end] - seg[:2, 0])))
         n = (
@@ -505,7 +504,6 @@ def line_positions(
                 "in_stack": None,
             }
         )
-    # the first Z-stack whose field holds each line: its slice and offset
     units = list_mesc_units(mesc_path)
     key = str(unit_key).strip("/")
     for stack in (u["key"] for u in units if u["kind"] == "zstack"):

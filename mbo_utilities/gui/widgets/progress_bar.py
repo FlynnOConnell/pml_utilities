@@ -92,10 +92,10 @@ class _TeeWriter:
         full_key = self._tqdm_key(cleaned)
 
         if full_key:
-            # update last entry with same key in place to avoid log spam
+            # a tqdm bar redraws in place: replace its last line instead of adding one
             for i in range(len(self._buffer) - 1, -1, -1):
                 entry = self._buffer[i]
-                if len(entry) >= 4 and entry[3] == full_key:
+                if entry[3] == full_key:
                     self._buffer[i] = (timestamp, self._stream_name, cleaned, full_key)
                     return
             self._buffer.append((timestamp, self._stream_name, cleaned, full_key))
@@ -133,23 +133,19 @@ def reset_progress_state(key: str):
         }
 
 
-def _get_active_progress_items(self) -> list[dict]:
-    """Collect active progress operations from the widget state.
+def _get_active_progress_items(parent) -> list[dict]:
+    """Collect the viewer's running Save As, z-stats and z-registration jobs.
 
-    Returns list of dicts with: key, text, progress, done.
+    Returns one ``{key, text, progress, done}`` dict per job.
     """
     items = []
 
-    saveas_running = getattr(self, "_saveas_running", False)
-    saveas_progress = getattr(self, "_saveas_progress", 0.0)
-    saveas_current = getattr(self, "_saveas_current_index", 0)
-    saveas_done = getattr(self, "_saveas_done", False)
-
-    if saveas_running or (0.0 < saveas_progress < 1.0):
+    saveas_progress = parent._saveas_progress
+    if parent._saveas_running or (0.0 < saveas_progress < 1.0):
         text = (
             "Starting save..."
             if saveas_progress == 0.0
-            else f"Saving z-plane {saveas_current}"
+            else f"Saving z-plane {parent._saveas_current_index}"
         )
         items.append(
             {
@@ -159,7 +155,7 @@ def _get_active_progress_items(self) -> list[dict]:
                 "done": False,
             }
         )
-    elif saveas_done:
+    elif parent._saveas_done:
         items.append(
             {
                 "key": "saveas",
@@ -169,26 +165,12 @@ def _get_active_progress_items(self) -> list[dict]:
             }
         )
 
-    num_graphics = getattr(self, "num_graphics", 1)
-    zstats_running = getattr(self, "_zstats_running", [])
-    zstats_progress = getattr(self, "_zstats_progress", [])
-
-    for i in range(num_graphics):
-        running = (
-            zstats_running[i]
-            if isinstance(zstats_running, list) and i < len(zstats_running)
-            else False
-        )
-        progress = (
-            zstats_progress[i]
-            if isinstance(zstats_progress, list) and i < len(zstats_progress)
-            else 0.0
-        )
-
+    for i, (running, progress) in enumerate(
+        zip(parent._zstats_running, parent._zstats_progress)
+    ):
         if running or (0.0 < progress < 1.0):
-            # report the monotonic overall fraction, not the per-plane
-            # index — the latter resets each channel/camera and reads as
-            # the bar jumping backward.
+            # the overall fraction: a per-plane index restarts at each
+            # channel or camera and the bar would jump back
             text = (
                 f"Z-stats {i + 1}: starting..."
                 if progress == 0.0
@@ -203,12 +185,9 @@ def _get_active_progress_items(self) -> list[dict]:
                 }
             )
 
-    register_running = getattr(self, "_register_z_running", False)
-    register_progress = getattr(self, "_register_z_progress", 0.0)
-    register_msg = getattr(self, "_register_z_current_msg", None)
-    register_done = getattr(self, "_register_z_done", False)
-
-    if register_running or (0.0 < register_progress < 1.0):
+    register_progress = parent._register_z_progress
+    register_msg = parent._register_z_current_msg
+    if parent._register_z_running or (0.0 < register_progress < 1.0):
         msg = register_msg if register_msg else "Starting..."
         items.append(
             {
@@ -218,7 +197,7 @@ def _get_active_progress_items(self) -> list[dict]:
                 "done": False,
             }
         )
-    elif register_done and register_msg:
+    elif parent._register_z_done and register_msg:
         items.append(
             {
                 "key": "register_z",

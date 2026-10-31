@@ -17,8 +17,7 @@ from pathlib import Path
 MAX_RUNS = 10
 MAX_LOGS = 20
 
-# process-local monotonic counter: guarantees unique, creation-ordered record
-# filenames even when the OS clock (Windows: ~ms) repeats within a tight loop.
+# keeps record names unique and creation-ordered when the clock (Windows: ~ms) repeats
 _seq = 0
 
 
@@ -40,8 +39,7 @@ def prune_dir(directory, keep: int, pattern: str = "*") -> None:
         files = [f for f in d.glob(pattern) if f.is_file()]
     except OSError:
         return
-    # name as a tiebreak so a coarse-mtime filesystem still evicts deterministically
-    # (record filenames embed a high-res timestamp, so name order ~ chronological).
+    # name breaks mtime ties on a coarse-mtime filesystem; record names sort chronologically
     files.sort(key=lambda f: (_mtime(f), f.name), reverse=True)
     for f in files[keep:]:
         try:
@@ -73,30 +71,23 @@ def record_run(
     ``target`` is what ``watch`` / ``status`` resolve later — a SLURM job id when
     there is one, else the output dir. Best-effort: never raises.
     """
+    global _seq
+    target = target or job_id or output_dir
+    if not target:
+        return
+    rec = {
+        "time": time.time(),
+        "when": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "mode": mode,
+        "job_id": str(job_id) if job_id else None,
+        "output_dir": str(output_dir) if output_dir else None,
+        "config_path": str(config_path) if config_path else None,
+        "target": str(target),
+    }
+    _seq += 1
     try:
-        rec = {
-            "time": time.time(),
-            "when": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "mode": mode,
-            "job_id": str(job_id) if job_id else None,
-            "output_dir": str(output_dir) if output_dir else None,
-            "config_path": str(config_path) if config_path else None,
-            "target": (
-                str(target)
-                if target
-                else (
-                    str(job_id) if job_id else str(output_dir) if output_dir else None
-                )
-            ),
-        }
-        if rec["target"] is None:
-            return
-        global _seq
-        _seq += 1
         runs = _runs_dir()
-        # readable date + pid (cross-process unique) + monotonic seq (intra-process
-        # unique and creation-ordered, so the name tiebreak in last_run/prune_dir
-        # is chronological even when mtimes tie on a coarse-resolution fs).
+        # the pid keeps names unique across processes, _seq within one
         name = f"{time.strftime('%Y%m%d-%H%M%S')}_{os.getpid()}_{_seq:09d}.json"
         (runs / name).write_text(json.dumps(rec, indent=2), encoding="utf-8")
         prune_dir(runs, MAX_RUNS, "*.json")

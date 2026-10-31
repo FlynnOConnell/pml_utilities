@@ -51,8 +51,7 @@ def ensure_cellpose_model(
     path = Path(models.MODEL_DIR) / "cpsam"
     marker = path.with_name("cpsam.verified")
 
-    # fast path: a validation marker newer than the model file means a prior
-    # call already CRC-checked this exact file.
+    # a marker newer than the model file means an earlier call CRC-checked this file
     if not force and path.exists() and marker.exists():
         try:
             if marker.stat().st_mtime >= path.stat().st_mtime:
@@ -60,14 +59,13 @@ def ensure_cellpose_model(
         except OSError:
             pass
 
-    valid = _is_valid_checkpoint(path) if path.exists() else False
+    valid = _is_valid_checkpoint(path)
 
     if force or not valid:
         if path.exists():
             reason = "forced refresh" if force and valid else "corrupt"
             _log(logger, f"cellpose model {reason}; re-downloading cpsam")
-            # the cache call only downloads when the file is absent, so remove
-            # the bad/forced one first.
+            # the cache call only downloads when the file is absent
             try:
                 path.unlink()
             except OSError:

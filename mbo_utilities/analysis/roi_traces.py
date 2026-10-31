@@ -1,4 +1,4 @@
-"""Domain traces from a recording: which pixels, what is subtracted, which way up.
+"""Domain traces from a recording: pixel choice, background, reference channel and polarity.
 
 A domain is the pixels of one or more ROIs averaged into one trace: the lines
 of a soma, a chessboard patch, the part of a patch the cell covers. An ROI is
@@ -35,16 +35,11 @@ __all__ = [
     "roi_geometry",
 ]
 
-# how a domain picks pixels inside each of its ROIs: every pixel, the top
-# fraction by mean brightness, by fast fluctuation (SD after a high-pass) or by
-# correlation of that fluctuation with the ROI's mean; "mask" is a given set
+# pixels per ROI: every pixel, or the top fraction by mean, by high-passed SD or by correlation with the ROI's mean; "mask" is a given set
 PIXEL_RULES = ("all", "bright", "active", "correlated", "mask")
-# what is subtracted from a domain's F: nothing, the dimmest pixels of its ROIs
-# per frame (a percentile), the mean of its ROIs' pixels outside its mask, or
-# the F of another domain (the archive's "bg")
+# subtracted from F: nothing, a per-frame percentile of the ROI's pixels, the mean of its pixels outside the domain, or another domain's F (the archive's "bg")
 BACKGROUNDS = ("none", "dim", "outside", "domain")
-# a second channel recorded beside the indicator (mScarlet beside ASAP7): F is
-# divided by it, or the part of F it explains is removed
+# a channel recorded beside the indicator (mScarlet beside ASAP7): F is divided by it, or the part of F it explains is removed
 REFERENCES = ("none", "ratio", "regress")
 
 
@@ -133,7 +128,7 @@ def domains_from_json(spec) -> list[Domain]:
 
 @dataclass
 class TraceSettings:
-    """What happens to a domain's pixel mean before dF/F.
+    """The steps from a domain's pixel mean to the trace dF/F is taken of.
 
     ``convert`` applies the file's linear conversion (MESc's
     ``raw * scale + offset``) so zero means no photons; the archive worked
@@ -188,13 +183,14 @@ class ExtractedTraces:
 
     ``pixel_mean`` is the domain's pixel mean (converted); ``measured`` that
     after the background and the reference, the trace in the recording's
-    units; ``F`` what dF/F is taken of: ``measured``, inverted when the
-    settings say so. ``background`` and ``reference`` are what was
-    subtracted or divided by, per domain, when there was one. ``roi_mean`` holds every ROI
-    read, whole, converted (the members' raw traces). ``masks`` gives each
-    domain's flat ROI-local pixels per ROI, ``shapes`` each ROI's height and
-    width, ``images`` its mean, SD and correlation images over the scoring
-    window (only for ROIs a scored rule or the preview asked for).
+    units; ``F`` the trace dF/F is taken of: ``measured``, inverted when the
+    settings say so. ``background`` and ``reference`` are the terms
+    subtracted or divided by, per domain, when there was one. ``roi_mean``
+    holds every ROI read, whole, converted (the members' raw traces).
+    ``masks`` gives each domain's flat ROI-local pixels per ROI, ``shapes``
+    each ROI's height and width, ``images`` its mean, SD and correlation
+    images over the scoring window (only for ROIs a scored rule or the
+    preview asked for).
     """
 
     names: list[str]
@@ -216,11 +212,12 @@ class ExtractedTraces:
 
 
 def roi_geometry(arr) -> dict[int, tuple[int, int, int]]:
-    """``{roi: (y0, height, width)}``: where each ROI's valid pixels sit in
-    the array's frame. A MESc AOD unit's lines, patches or boxes come from
-    ``mesc_roi_extents`` (a ragged ROI is padded to the shared frame and, on
-    a Y-flipped layout, lands at the bottom); any other array's ROIs are its
-    Z planes, each the whole frame.
+    """``{roi: (y0, height, width)}``, the rows and width of each ROI's valid pixels in the array's frame.
+
+    A MESc AOD unit's lines, patches or boxes come from ``mesc_roi_extents``
+    (a ragged ROI is padded to the shared frame and, on a Y-flipped layout,
+    lands at the bottom); any other array's ROIs are its Z planes, each the
+    whole frame.
     """
     md = getattr(arr, "metadata", None) or {}
     extents = md.get("mesc_roi_extents") or []

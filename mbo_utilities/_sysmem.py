@@ -18,7 +18,13 @@ From a notebook::
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
+from pathlib import Path
 from typing import Any
+
+import psutil
 
 _GB = 1024**3
 
@@ -34,8 +40,6 @@ def mem_snapshot(proc: Any | None = None) -> dict[str, Any]:
         nproc     number of processes in that tree
         top       (pid, name, gb) of the largest single process, or None
     """
-    import psutil
-
     vm = psutil.virtual_memory()
     snap: dict[str, Any] = {
         "sys_pct": vm.percent,
@@ -76,12 +80,13 @@ def mem_snapshot(proc: Any | None = None) -> dict[str, Any]:
 
 def format_mem_line(snap: dict[str, Any]) -> str:
     """One-line human form of a snapshot for the task log."""
-    line = f"mem {snap['sys_pct']:.1f}% {snap['used_gb']:.1f}/{snap['total_gb']:.1f} GB"
-    if "proc_gb" in snap:
-        line += f" | pipeline {snap['proc_gb']:.2f} GB/{snap.get('nproc', 0)} proc"
-        top = snap.get("top")
-        if top:
-            line += f", top {top[0]} {top[1]} {top[2]:.2f} GB"
+    line = (
+        f"mem {snap['sys_pct']:.1f}% {snap['used_gb']:.1f}/{snap['total_gb']:.1f} GB"
+        f" | pipeline {snap['proc_gb']:.2f} GB/{snap['nproc']} proc"
+    )
+    top = snap["top"]
+    if top:
+        line += f", top {top[0]} {top[1]} {top[2]:.2f} GB"
     return line
 
 
@@ -140,11 +145,7 @@ class MemoryMonitor:
         self.warn_cooldown_s = max(0.0, float(warn_cooldown_s))
         self.csv_path = csv_path
         if logger is None:
-            # the "mbo" root is the logger that carries a console handler
-            # (log.get() sub-loggers don't propagate), so a monitor started
-            # from a notebook prints without any logging setup
-            import logging
-
+            # the "mbo" root carries the console handler (log.get() children do not propagate)
             from mbo_utilities import log as _log  # noqa: F401 - installs the handler
 
             logger = logging.getLogger("mbo")
@@ -166,16 +167,12 @@ class MemoryMonitor:
         warn = f", warn {self.warn_pct:g}%" if self.warn_pct else ""
         return f"MemoryMonitor({state}, tick {self.tick_s:g}s, log {log_s}{warn})"
 
-    # -- lifecycle ---------------------------------------------------------
-
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
     def start(self) -> MemoryMonitor:
         """Start the daemon sampling thread. No-op when already running."""
-        import threading
-
         if self.running:
             return self
         self._stop = threading.Event()
@@ -187,8 +184,6 @@ class MemoryMonitor:
 
     def stop(self, timeout: float = 5.0) -> None:
         """Signal the thread to finish the current tick and exit."""
-        import threading
-
         if self._stop is not None:
             self._stop.set()
         t = self._thread
@@ -202,18 +197,14 @@ class MemoryMonitor:
     def __exit__(self, *exc) -> None:
         self.stop()
 
-    # -- sampling ----------------------------------------------------------
-
     def sample(self) -> dict[str, Any]:
         """Take one snapshot now, updating ``last`` and ``peak_gb``."""
         s = mem_snapshot(self.proc)
         self.last = s
-        self.peak_gb = max(self.peak_gb, s.get("proc_gb", 0.0))
+        self.peak_gb = max(self.peak_gb, s["proc_gb"])
         return s
 
     def _run(self) -> None:
-        import time
-
         f = self._open_csv()
         start = time.time()
         last_log = 0.0
@@ -225,13 +216,10 @@ class MemoryMonitor:
                 try:
                     s = self.sample()
                 except Exception as e:
-                    # a snapshot that fails once fails every tick (no psutil,
-                    # denied process access) — say so and stop instead of
-                    # spinning silently.
+                    # a snapshot that fails once (denied process access) fails every tick
                     self.logger.warning("memory monitor stopping: %s", e)
                     return
                 now = time.time()
-
                 if f is not None:
                     self._write_row(f, s, now - start)
                 _call(self.on_sample, s)
@@ -246,7 +234,7 @@ class MemoryMonitor:
                         )
                         _call(self.on_warn, s)
 
-                pg = s.get("proc_gb", 0.0)
+                pg = s["proc_gb"]
                 new_peak = self.log_peaks and (first or pg > peak + self.peak_delta_gb)
                 due = self.log_s is None or (
                     self.log_s > 0 and now - last_log >= self.log_s
@@ -262,33 +250,29 @@ class MemoryMonitor:
             if f is not None:
                 try:
                     f.close()
-                except Exception:
+                except OSError:
                     pass
 
     def _open_csv(self):
         if not self.csv_path:
             return None
         try:
-            from pathlib import Path
-
             p = Path(self.csv_path)
             p.parent.mkdir(parents=True, exist_ok=True)
-            f = open(p, "a", encoding="utf-8")
+            f = p.open("a", encoding="utf-8")
             if f.tell() == 0:
                 f.write(
                     "t_iso,elapsed_s,sys_pct,used_gb,total_gb,"
                     "proc_gb,nproc,top_pid,top_name,top_gb\n"
                 )
             return f
-        except Exception:
+        except OSError:
             return None
 
     @staticmethod
     def _write_row(f, s: dict[str, Any], elapsed: float) -> None:
         """One csv row, flushed — the last sample must survive an OOM kill."""
-        import time
-
-        top = s.get("top")
+        top = s["top"]
         tp, tn, tgb = (
             (top[0], str(top[1]).replace(",", " "), top[2]) if top else ("", "", 0.0)
         )
@@ -296,7 +280,7 @@ class MemoryMonitor:
             f.write(
                 f"{time.strftime('%Y-%m-%dT%H:%M:%S')},{elapsed:.1f},"
                 f"{s['sys_pct']:.1f},{s['used_gb']:.3f},{s['total_gb']:.3f},"
-                f"{s.get('proc_gb', 0.0):.3f},{s.get('nproc', 0)},{tp},{tn},{tgb:.3f}\n"
+                f"{s['proc_gb']:.3f},{s['nproc']},{tp},{tn},{tgb:.3f}\n"
             )
             f.flush()
         except Exception:

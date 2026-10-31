@@ -1,33 +1,26 @@
-"""
-dimension tags for filename generation.
+"""Dimension tags: the vocabulary output filenames are written in and read back from.
 
-extensible system for labeling output files with dimension ranges.
-tags follow array dims order and use format: {label}{start}[-{stop}[-{step}]]
+Tags follow the array's dims order, each ``{label}{start}[-{stop}[-{step}]]``:
+``tp00001-10000_zplane01-14.tif`` (TZYX), ``zplane01-14.tif`` (ZYX, one
+timepoint), ``tp00001-10000.tif`` (TYX, one plane).
 
-Examples
---------
-    tp00001-10000_zplane01-14.tif  (TZYX)
-    zplane01-14.tif                (ZYX, single timepoint)
-    tp00001-10000.tif              (TYX, single plane)
-
-the same vocabulary reads tags back out of a filename (``filename_tags``):
-``mouse_V1_session1.tif`` carries ``session01``, ``plane_03.bin`` carries
-``zplane03``; results files are named from them (``mbo_utilities.results``).
+``filename_tags`` reads them back out of a name: ``mouse_V1_session1.tif``
+carries ``session01``, ``plane_03.bin`` carries ``zplane03``; results files are
+named from them (``mbo_utilities.results``).
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-# spatial dims that don't appear in filenames
 SPATIAL_DIMS = {"Y", "X"}
 
-# map dimension name aliases to canonical single-letter keys
 DIM_ALIASES: dict[str, str] = {
     "timepoints": "T",
     "timepoint": "T",
@@ -84,12 +77,11 @@ DIM_ALIASES: dict[str, str] = {
 class TagDefinition:
     """definition for a dimension tag type."""
 
-    label: str  # filename prefix: "tp", "zplane", "cam"
-    description: str  # human readable
-    zero_pad: int = 2  # pad with how many digits could this value be
+    label: str  # filename prefix: "tp", "zplane", "cm"
+    description: str
+    zero_pad: int = 2
 
 
-# built-in tag definitions
 TAG_REGISTRY: dict[str, TagDefinition] = {
     "T": TagDefinition("tp", "timepoint", zero_pad=5),
     "Z": TagDefinition("zplane", "z-plane", zero_pad=2),
@@ -97,7 +89,6 @@ TAG_REGISTRY: dict[str, TagDefinition] = {
     "V": TagDefinition("view", "view", zero_pad=2),
     "R": TagDefinition("roi", "region", zero_pad=2),
     "S": TagDefinition("session", "session", zero_pad=2),
-    # future extensions
     "B": TagDefinition("beamlet", "beamlet", zero_pad=2),
     "A": TagDefinition("cm", "camera", zero_pad=2),
 }
@@ -142,8 +133,6 @@ def filename_tags(path) -> list[DimensionTag]:
     ``plane_03.bin`` yields ``[zplane03]`` and ``tp00001-01574_zplane01-14.tif``
     yields both of its tags.
     """
-    from pathlib import Path
-
     name = Path(path).name
     stem = name[: -len(".zarr")] if name.endswith(".zarr") else Path(name).stem
     tags = [parse_tag(m.group(0)) for m in _TAG_TOKEN.finditer(stem)]
@@ -155,9 +144,9 @@ class DimensionTag:
     """single dimension tag instance with range information."""
 
     definition: TagDefinition
-    start: int  # 1-based start index
-    stop: int | None  # 1-based stop index (None = single value)
-    step: int = 1  # step size (default 1)
+    start: int  # 1-based
+    stop: int | None  # 1-based, inclusive; None for a single value
+    step: int = 1
 
     def to_string(self) -> str:
         """Format as filename component.
@@ -172,14 +161,9 @@ class DimensionTag:
         label = self.definition.label
 
         if self.stop is None or self.start == self.stop:
-            # single value
             return f"{label}{self.start:0{pad}d}"
-
         if self.step == 1:
-            # range without step
             return f"{label}{self.start:0{pad}d}-{self.stop:0{pad}d}"
-
-        # range with step
         return f"{label}{self.start:0{pad}d}-{self.stop:0{pad}d}-{self.step}"
 
     @classmethod
@@ -189,52 +173,34 @@ class DimensionTag:
         size: int,
         selection: slice | list | Sequence[int] | None = None,
     ) -> DimensionTag:
-        """Create from dimension size and optional selection.
+        """The tag for an axis of ``size``: the whole axis, or ``selection`` within it.
 
-        Parameters
-        ----------
-        definition : TagDefinition
-            tag type definition
-        size : int
-            total size of dimension
-        selection : slice | list | Sequence[int] | None
-            optional selection (indices are 1-based)
-
-        Returns
-        -------
-        DimensionTag
-            tag with appropriate range
+        A list holds 1-based indices; a slice is 0-based and half-open.
         """
         if selection is None:
-            # full range
             if size == 1:
                 return cls(definition, start=1, stop=None, step=1)
             return cls(definition, start=1, stop=size, step=1)
 
         if isinstance(selection, slice):
-            # convert slice to range
-            start = (selection.start or 0) + 1  # convert to 1-based
+            start = (selection.start or 0) + 1
             stop = selection.stop if selection.stop else size
             step = selection.step or 1
             if start == stop or (stop - start) <= step:
                 return cls(definition, start=start, stop=None, step=1)
             return cls(definition, start=start, stop=stop, step=step)
 
-        # list/sequence of indices (assumed 1-based)
         indices = list(selection)
         if len(indices) == 1:
             return cls(definition, start=indices[0], stop=None, step=1)
 
-        # check if contiguous with consistent step
-        if len(indices) >= 2:
-            step = indices[1] - indices[0]
-            is_uniform = all(
-                indices[i + 1] - indices[i] == step for i in range(len(indices) - 1)
-            )
-            if is_uniform and step > 0:
-                return cls(definition, start=indices[0], stop=indices[-1], step=step)
-
-        # non-uniform selection - use start-stop with step showing non-uniform
+        step = indices[1] - indices[0]
+        is_uniform = all(
+            indices[i + 1] - indices[i] == step for i in range(len(indices) - 1)
+        )
+        if is_uniform and step > 0:
+            return cls(definition, start=indices[0], stop=indices[-1], step=step)
+        # a gapped selection is named by its span
         return cls(definition, start=indices[0], stop=indices[-1], step=1)
 
 
@@ -246,14 +212,7 @@ class OutputFilename:
         self.suffix = suffix
 
     def build(self, ext: str = ".tif") -> str:
-        """Build filename string.
-
-        Returns
-        -------
-        str
-            filename like "tp00001-10000_zplane01-14.tif"; ``ext=""`` names a
-            folder ("ch01_zplane02")
-        """
+        """The tags joined by ``_`` plus ``ext``: ``tp00001-10000_zplane01-14.tif``; ``ext=""`` names a folder (``ch01_zplane02``)."""
         if ext and not ext.startswith("."):
             ext = "." + ext
 
@@ -273,26 +232,7 @@ class OutputFilename:
         channels: int | list | Sequence[int] | None = None,
         suffix: str = "",
     ) -> OutputFilename:
-        """Create from array and optional selections.
-
-        Parameters
-        ----------
-        arr : array-like
-            array with shape and dims
-        planes : int | list | None
-            z-plane selection (1-based indices)
-        frames : int | list | None
-            timepoint selection (1-based indices)
-        channels : int | list | None
-            channel selection (1-based indices)
-        suffix : str
-            filename suffix (default "" = no suffix)
-
-        Returns
-        -------
-        OutputFilename
-            builder with tags derived from array dims
-        """
+        """A tag per non-spatial axis of ``arr``, in its dims order, cut to the 1-based ``planes``, ``frames`` and ``channels``."""
         from mbo_utilities.arrays.features._dim_labels import get_dims
 
         dims = get_dims(arr)
@@ -303,16 +243,12 @@ class OutputFilename:
             if dim_name in SPATIAL_DIMS:
                 continue
 
-            # normalize dimension name to canonical key (T, Z, C, etc.)
             dim_key = DIM_ALIASES.get(dim_name.lower(), dim_name.upper())
-
             if dim_key not in TAG_REGISTRY:
                 continue
 
             definition = TAG_REGISTRY[dim_key]
             dim_size = shape[i]
-
-            # apply selection if matching dimension
             selection = None
             if dim_key == "Z" and planes is not None:
                 selection = [planes] if isinstance(planes, int) else planes
@@ -333,16 +269,6 @@ class OutputFilename:
 def normalize_dims(dims: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     """Convert descriptive dim names to canonical single-letter form.
 
-    Parameters
-    ----------
-    dims : tuple[str, ...] | list[str]
-        dimension labels like ("timepoints", "z-planes", "Y", "X")
-
-    Returns
-    -------
-    tuple[str, ...]
-        canonical form like ("T", "Z", "Y", "X")
-
     Examples
     --------
     >>> normalize_dims(("timepoints", "z-planes", "Y", "X"))
@@ -350,27 +276,11 @@ def normalize_dims(dims: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     >>> normalize_dims(("T", "C", "Z", "Y", "X"))
     ('T', 'C', 'Z', 'Y', 'X')
     """
-    result = []
-    for d in dims:
-        # check aliases first, then uppercase single letter
-        canonical = DIM_ALIASES.get(d.lower(), d.upper())
-        result.append(canonical)
-    return tuple(result)
+    return tuple(DIM_ALIASES.get(d.lower(), d.upper()) for d in dims)
 
 
 def get_ome_axis_type(dim: str) -> str:
-    """Get ome-zarr ngff axis type for a dimension.
-
-    Parameters
-    ----------
-    dim : str
-        canonical dimension label (T, C, Z, Y, X, etc.)
-
-    Returns
-    -------
-    str
-        "time", "channel", or "space"
-    """
+    """The OME-NGFF axis type of a canonical dim: ``time``, ``channel`` or ``space``."""
     dim = dim.upper()
     if dim == "T":
         return "time"
@@ -381,39 +291,17 @@ def get_ome_axis_type(dim: str) -> str:
 
 
 def get_ome_axis_unit(dim: str) -> str | None:
-    """Get ome-zarr ngff axis unit for a dimension.
-
-    Parameters
-    ----------
-    dim : str
-        canonical dimension label
-
-    Returns
-    -------
-    str | None
-        unit string or None if no unit (e.g., channel)
-    """
+    """The OME-NGFF unit of a canonical dim: ``second`` for T, ``micrometer`` for Z, Y, X, else None."""
     dim = dim.upper()
     if dim == "T":
         return "second"
     elif dim in ("Z", "Y", "X"):
         return "micrometer"
-    return None  # C, V, R, B have no unit
+    return None
 
 
 def dim_to_ome_axis(dim: str) -> dict:
-    """Build ome-zarr ngff axis definition from canonical dimension label.
-
-    Parameters
-    ----------
-    dim : str
-        canonical dimension label (T, C, Z, Y, X, etc.)
-
-    Returns
-    -------
-    dict
-        ome-zarr axis definition with name, type, and optional unit
-    """
+    """The OME-NGFF axis dict of a canonical dim: name, type, and unit when it has one."""
     dim = dim.upper()
     axis = {
         "name": dim.lower(),
@@ -426,17 +314,7 @@ def dim_to_ome_axis(dim: str) -> dict:
 
 
 def dims_to_ome_axes(dims: tuple[str, ...] | list[str] | str) -> list[dict]:
-    """Convert dimension labels to ome-zarr ngff axes list.
-
-    Parameters
-    ----------
-    dims : tuple[str, ...] | list[str] | str
-        dimension labels like ("T", "C", "Z", "Y", "X") or "TCZYX"
-
-    Returns
-    -------
-    list[dict]
-        list of ome-zarr axis definitions
+    """The OME-NGFF axes list for dim labels, a sequence or a string (``"TCZYX"``).
 
     Examples
     --------
@@ -448,6 +326,5 @@ def dims_to_ome_axes(dims: tuple[str, ...] | list[str] | str) -> list[dict]:
     """
     if isinstance(dims, str):
         dims = tuple(dims.upper())
-    # normalize first if needed
     canonical = normalize_dims(dims)
     return [dim_to_ome_axis(d) for d in canonical]

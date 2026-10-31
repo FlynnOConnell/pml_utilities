@@ -1,15 +1,7 @@
-"""
-v4 pluggable LazyArray base class and imread dispatch registry.
+"""``LazyArray``, the base of every array ``imread`` returns, and the dispatch registry.
 
-Dependency-light by design: imports only the standard library so it can be
-imported early (e.g. for ``isinstance(obj, LazyArray)`` checks in downstream
-packages such as lbm_suite2p_python) without pulling in numpy/tifffile/zarr.
-
-Phase 1 of the v4 rollout: this base carries the always-5D size accessors
-(folded in from the former ``Shape5DMixin``) plus the registration and
-dispatch plumbing. Per-class ``.shape``/``.ndim`` are locked to 5D and
-``imread()`` is switched to ``_dispatch()`` in later phases; nothing here
-changes existing behavior yet.
+Imports only the standard library, so ``isinstance(obj, LazyArray)`` in a
+downstream package (lbm_suite2p_python) never pulls in numpy, tifffile or zarr.
 """
 
 from __future__ import annotations
@@ -98,7 +90,7 @@ class LazyArray:
         from mbo_utilities import log
         from mbo_utilities.arrays.features._dim_labels import parse_dims
 
-        # never raise on a rank mismatch: warn and chain-guess by rank
+        # a rank mismatch warns and falls back to the rank guess, never raises
         self._declared_dims = parse_dims(value, self.ndim, strict=False)
         self.invalidate_dimension_specs()
         log.get().info("dims %s  shape %s", "".join(self._declared_dims), self.shape)
@@ -114,9 +106,7 @@ class LazyArray:
     def metadata(self, value: dict) -> None:
         if not isinstance(value, dict):
             raise TypeError(f"metadata must be a dict, got {type(value)}")
-        # `dims` is kept as plain metadata here; reported dims come from the
-        # array's rank. Classes that re-permute on dims (NumpyArray) override
-        # this setter. A stored `dims` of a different length must not raise.
+        # a `dims` key stays plain metadata, whatever its length; NumpyArray, which re-permutes on it, overrides this
         self._metadata = dict(value)
 
     @property
@@ -175,12 +165,12 @@ class LazyArray:
 
     @property
     def fs(self) -> float | None:
-        """Frame rate in Hz from metadata (None if unknown)."""
+        """Sampling rate of T in Hz from metadata (None if unknown)."""
         return self.dimension_specs.fs
 
     @property
     def finterval(self) -> float | None:
-        """Frame interval in seconds (None if unknown)."""
+        """Sampling interval of T in seconds (None if unknown)."""
         return self.dimension_specs.finterval
 
     @property
@@ -190,14 +180,12 @@ class LazyArray:
         return get_slider_dims(self)
 
     def summary_stats_dim_role(self, name: str):
-        """How a scrollable dim is treated by the summary-stats tab.
+        """``(is_series_candidate, off_role)`` of the summary-stats tab for the canonical axis ``name``.
 
-        Returns ``(is_series_candidate, off_role)`` where ``off_role`` is the
-        role the dim takes when it is not the chosen series axis. ``name`` is a
-        canonical axis label (``"Z"``/``"T"``/``"C"``/…). Override per array to
-        reclassify a dim (e.g. an array whose ``T`` axis holds spatial tiles
-        should return ``(False, GROUP)`` so tiles are broken out, not averaged).
-        See `mbo_utilities.arrays.features._summary_stats`.
+        ``off_role`` is the role the dim takes when it is not the chosen series
+        axis. Override per array to reclassify a dim: an array whose ``T`` axis
+        holds spatial tiles returns ``(False, GROUP)`` so tiles are broken out,
+        not averaged (`mbo_utilities.arrays.features._summary_stats`).
         """
         from mbo_utilities.arrays.features._summary_stats import default_dim_role
 
@@ -248,22 +236,14 @@ class LazyArray:
         return None
 
     def save_summary_stats(self, payload: dict, means=None) -> bool:
-        """Persist a computed summary-stats payload (+ optional mean stack).
-
-        Format-agnostic: writes into the backing zarr store via
-        `_summary_stats_store_path`. Returns False (no-op) when not disk-backed
-        or on any write error, so the caller never has to guard the format.
-        """
+        """Writes a summary-stats payload (and mean stack) into `_summary_stats_store_path`; False when not disk-backed."""
         path = self._summary_stats_store_path()
         if path is None:
             return False
         from mbo_utilities.arrays.features._summary_stats import write_stats_store
 
-        try:
-            write_stats_store(path, payload, means)
-            return True
-        except Exception:
-            return False
+        write_stats_store(path, payload, means)
+        return True
 
     def load_summary_stats(self):
         """Return cached ``(payload, means|None)`` from the store, or None."""
@@ -272,10 +252,7 @@ class LazyArray:
             return None
         from mbo_utilities.arrays.features._summary_stats import read_stats_store
 
-        try:
-            return read_stats_store(path)
-        except Exception:
-            return None
+        return read_stats_store(path)
 
     def dim_index(self, label: str) -> int | None:
         try:
@@ -335,8 +312,7 @@ class LazyArray:
         """
         filenames = getattr(self, "filenames", None)
         if filenames is None:
-            # fallback for arrays that use a different attribute name
-            # (NumpyArray → `.path`, IsoView* → `.base_path`).
+            # NumpyArray keeps `.path`, IsoView `.base_path`
             path = getattr(self, "path", None) or getattr(self, "base_path", None)
             return Path(path) if path else None
         if isinstance(filenames, (str, Path)):
@@ -393,12 +369,7 @@ def _load_entry_point_arrays() -> None:
     _ENTRY_POINTS_LOADED = True
     from importlib.metadata import entry_points
 
-    try:
-        eps = entry_points(group=_ENTRY_POINT_GROUP)
-    except TypeError:
-        # importlib.metadata < 3.10 has no group= selector
-        eps = entry_points().get(_ENTRY_POINT_GROUP, [])
-    for ep in eps:
+    for ep in entry_points(group=_ENTRY_POINT_GROUP):
         try:
             cls = ep.load()
         except Exception:

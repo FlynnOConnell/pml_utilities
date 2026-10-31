@@ -1,6 +1,4 @@
-"""
-Summary-stats descriptor: how an array's dimensions map onto the mbo-studio
-Signal Quality / summary-stats tab.
+"""The summary-stats spec maps an array's dimensions onto the Studio's Signal Quality tab.
 
 Every dimension is either an *image* dim (the 2D display plane, Y/X — stats
 are computed over these) or a *scrollable* dim. Each scrollable dim is
@@ -21,9 +19,10 @@ An array declares intent by overriding two ``LazyArray`` hooks:
   everything else ``-> (False, GROUP)``.
 - ``summary_stats_metrics()`` -> the metric columns. Default: mean, std, SNR.
 
-The GUI is a pure renderer of the resolved :class:`SummaryStatsSpec`; it never
-classifies dimensions itself. ``spec.describe()`` states exactly what the tab
-will show, so the contract is introspectable and testable.
+The GUI only renders the resolved :class:`SummaryStatsSpec`; it never
+classifies dimensions itself, and ``spec.describe()`` says in one line what the
+tab shows. Computed stats cache in the backing zarr store (``write_stats_store``)
+so they reload on reopen.
 """
 
 from __future__ import annotations
@@ -38,16 +37,15 @@ from mbo_utilities.arrays.features._dim_labels import _SLIDER_NAME_ALIASES
 
 
 class StatsDimRole(str, Enum):
-    """How a scrollable dimension is treated by the summary-stats tab."""
+    """The role a scrollable dimension plays in the summary-stats tab."""
 
     SERIES = "series"
     GROUP = "group"
     REDUCE = "reduce"
 
 
-# canonical display labels and the descriptive aliases not covered by
-# `_SLIDER_NAME_ALIASES`.
 _STAT_LABELS = {"Z": "Zplane", "T": "Timepoint", "C": "Channel"}
+# axis names `_SLIDER_NAME_ALIASES` lacks
 _EXTRA_CANON = {
     "zslices": "Z",
     "zslice": "Z",
@@ -89,13 +87,12 @@ def subsample_indices(n: int, max_count: int) -> list[int]:
 class SubsampleBudget:
     """Sampling caps that bound stats compute and stored memory.
 
-    Tunable code-level defaults (no UI). Spatial binning only applies when the
-    series is broken out into groups (many combos to store); the single-series
-    path keeps full resolution.
+    Spatial binning only applies when the series is broken out into groups
+    (many combos to store); the single-series path keeps full resolution.
     """
 
-    max_series_points: int = 40  # max sampled points on the x-axis
-    max_per_group: int = 12  # max sampled indices per group (selector) axis
+    max_series_points: int = 40
+    max_per_group: int = 12
     spatial_bin: int = 4  # Y/X stride for stored stats / mean-images
     avg_max_samples: int = 30  # max frames averaged per point over a reduce axis
 
@@ -109,10 +106,7 @@ def _metric_mean(stack: np.ndarray, mean_img: np.ndarray, has_reduce: bool) -> f
 
 
 def _metric_std(stack: np.ndarray, mean_img: np.ndarray, has_reduce: bool) -> float:
-    # mean per-pixel temporal std when there is a reduce axis to average over
-    # (the noise measure for time-series data); with a single frame per point
-    # (e.g. one image per tile/camera/zplane, where temporal std is identically
-    # zero) fall back to the spatial std of the plane so it stays meaningful.
+    # one frame per point (a tile, camera or plane image) has zero temporal std, so it gets the spatial std
     if has_reduce and stack.shape[0] > 1:
         return float(np.mean(np.std(stack, axis=0)))
     return float(np.std(mean_img))
@@ -133,12 +127,12 @@ def _metric_snr(stack: np.ndarray, mean_img: np.ndarray, has_reduce: bool) -> fl
 class StatsMetric:
     """One summary-stats column: a scalar reduced from a point's pixel stack."""
 
-    key: str  # stored key, e.g. "mean"
-    label: str  # full row label, e.g. "Mean Fluorescence"
-    unit: str  # display unit, e.g. "a.u."
+    key: str
+    label: str  # row label, "Mean Fluorescence"
+    unit: str
     reducer: Callable  # (stack, mean_img, has_reduce) -> float
-    short: str = ""  # compact column header, e.g. "Mean" (defaults to label)
-    tooltip: str = ""  # optional hover help (e.g. the SNR formula)
+    short: str = ""  # column header, "Mean"; empty uses the label's first word
+    tooltip: str = ""
 
     @property
     def header(self) -> str:
@@ -160,7 +154,7 @@ class StatsDim:
     """A scrollable dim's resolved place in the summary-stats layout."""
 
     name: str  # canonical "Z"/"T"/"C"
-    label: str  # display label, e.g. "Zplane"/"Tile"
+    label: str  # display label, "Zplane"/"Tile"
     size: int
     axis: int  # position in dims / shape
     candidate: bool  # may be chosen as the SERIES axis
@@ -174,7 +168,7 @@ class SummaryStatsSpec:
 
     image_dims: tuple[str, ...]  # ("Y", "X")
     series: StatsDim | None  # the x-axis dim (None -> single point)
-    series_candidates: tuple[StatsDim, ...]  # all dims that could be the series
+    series_candidates: tuple[StatsDim, ...]
     groups: tuple[StatsDim, ...]  # per-series selectors (follow sliders)
     reduce: tuple[StatsDim, ...]  # collapsed per point
     metrics: tuple[StatsMetric, ...]
@@ -217,8 +211,7 @@ def default_dim_role(name: str) -> tuple[bool, StatsDimRole]:
 
 
 def _label_for(canon: str, labels: dict | None) -> str:
-    # prefer a descriptive slider label (e.g. "Tile", "Cam", "Zplane"); a bare
-    # single-letter label ("z"/"t"/"c") reads worse than the canonical name.
+    # a one-letter slider label ("z") reads worse than the canonical name
     lab = labels.get(canon) if labels else None
     if lab and len(str(lab)) > 1:
         return str(lab)
@@ -262,7 +255,6 @@ def build_summary_stats_spec(
 
     image_dims = tuple(d for d in dims if canonical_axis(d) in ("Y", "X"))
 
-    # scrollable (non-spatial) dims with size > 1
     scroll = []  # (canon, axis, size)
     for ax, d in enumerate(dims):
         canon = canonical_axis(d)
@@ -309,22 +301,15 @@ def build_summary_stats_spec(
         metrics=metrics,
         dims=dims,
         shape=shape,
-        # bin only when grouped (many combos to store); the single-series path
-        # keeps full resolution so mean-subtraction is unchanged.
+        # the single-series path keeps full resolution so mean subtraction is unchanged
         spatial_bin=budget.spatial_bin if groups else 1,
         budget=budget,
     )
 
 
-# Persistence: computed summary stats are cached in the backing zarr store so
-# they auto-populate on reopen instead of recomputing. Layout is uniform across
-# every zarr dataset (LBM / isoview / generic): a `mbo_stats` child group holds
-# the scalar series in attrs and the binned mean-image stacks in a `means`
-# array. The same payload schema is read back by any reader.
-
-STATS_GROUP_NAME = "mbo_stats"  # child group inside the zarr store
-STATS_SUMMARY_ATTR = "summary"  # scalar payload, on the child group's attrs
-STATS_MEANS_ARRAY = "means"  # binned mean-image stack array
+STATS_GROUP_NAME = "mbo_stats"
+STATS_SUMMARY_ATTR = "summary"
+STATS_MEANS_ARRAY = "means"
 STATS_SUMMARY_VERSION = 1
 
 

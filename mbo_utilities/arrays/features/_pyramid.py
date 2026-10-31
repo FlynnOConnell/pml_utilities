@@ -1,9 +1,4 @@
-"""
-Pyramid generation for ome-zarr multiscale images.
-
-Provides functions for generating resolution pyramids compatible with
-ome-ngff v0.5 specification and napari-ome-zarr plugin.
-"""
+"""Resolution pyramids for OME-NGFF 0.5 multiscale zarr images (readable by napari-ome-zarr)."""
 
 from __future__ import annotations
 
@@ -23,8 +18,8 @@ class PyramidLevel:
 
     level: int  # 0 = full resolution
     shape: tuple[int, ...]
-    scale: tuple[float, ...]  # physical scale per axis
-    path: str  # zarr path (e.g., "0", "1", "2")
+    scale: tuple[float, ...]  # per axis, relative to level 0
+    path: str  # zarr array path, str(level)
 
 
 @dataclass
@@ -41,19 +36,19 @@ class PyramidConfig:
         per-axis downsampling factors. default (1, 1, 2, 2) for TZYX
         means T and Z unchanged, Y and X downsampled by 2 per level.
     method : DownsampleMethod
-        downsampling method: "mean" (default), "nearest", "gaussian", "local_mean"
+        downsampling method (``downsample_block``); "mean" by default.
     min_size : int
         stop adding levels when any spatial dimension falls below this.
         default 64 pixels.
     """
 
     max_layers: int = 4
-    scale_factors: tuple[int, ...] = (1, 1, 2, 2)  # TZYX: only downsample Y, X
+    scale_factors: tuple[int, ...] = (1, 1, 2, 2)
     method: DownsampleMethod = "mean"
     min_size: int = 64
 
     def get_scale_factors_for_ndim(self, ndim: int) -> tuple[int, ...]:
-        """Get scale factors padded/trimmed for array ndim."""
+        """Scale factors for an array of ``ndim``: the configured ones when they fit, else Y and X halved."""
         if ndim == len(self.scale_factors):
             return self.scale_factors
         if ndim == 3:
@@ -62,7 +57,6 @@ class PyramidConfig:
             return self.scale_factors
         if ndim == 5:
             return (1, 1, 1, 2, 2)
-        # fallback: only downsample last 2 dims
         return (1,) * (ndim - 2) + (2, 2)
 
 
@@ -70,20 +64,9 @@ def compute_pyramid_shapes(
     base_shape: tuple[int, ...],
     config: PyramidConfig | None = None,
 ) -> list[PyramidLevel]:
-    """
-    Compute shapes for all pyramid levels without generating data.
+    """Every level's shape and scale for ``base_shape``, level 0 first, without generating data.
 
-    Parameters
-    ----------
-    base_shape : tuple
-        shape of the full-resolution array (e.g., TZYX).
-    config : PyramidConfig, optional
-        pyramid configuration. uses defaults if not provided.
-
-    Returns
-    -------
-    list[PyramidLevel]
-        list of pyramid levels from level 0 (full res) to lowest resolution.
+    Levels stop before Y or X (the last two axes) falls below ``config.min_size``.
     """
     if config is None:
         config = PyramidConfig()
@@ -96,7 +79,6 @@ def compute_pyramid_shapes(
     base_scale = (1.0,) * ndim
 
     for level in range(config.max_layers + 1):
-        # compute cumulative scale (physical size per pixel at this level)
         cumulative_scale = tuple(
             base_scale[i] * (scale_factors[i] ** level) for i in range(ndim)
         )
@@ -110,13 +92,9 @@ def compute_pyramid_shapes(
             )
         )
 
-        # compute next level shape
         next_shape = tuple(
             max(1, s // scale_factors[i]) for i, s in enumerate(current_shape)
         )
-
-        # stop if any spatial dimension falls below min_size
-        # spatial dims are last 2 (Y, X)
         if any(next_shape[i] < config.min_size for i in range(-2, 0)):
             break
 
@@ -130,37 +108,20 @@ def downsample_block(
     factors: tuple[int, ...],
     method: DownsampleMethod = "mean",
 ) -> np.ndarray:
-    """
-    Downsample a data block by given factors per axis.
+    """Downsample ``data`` by one integer factor per axis.
 
-    Parameters
-    ----------
-    data : np.ndarray
-        input data block.
-    factors : tuple[int, ...]
-        downsampling factor per axis. must match data.ndim.
-    method : DownsampleMethod
-        "mean" - average pooling (best for intensity data)
-        "median" - windowed median (webknossos default for intensity)
-        "mode" - windowed mode (webknossos default for labels/masks)
-        "nearest" - nearest neighbor
-        "gaussian" - gaussian blur then subsample
-        "local_mean" - local mean with antialiasing
-
-    Returns
-    -------
-    np.ndarray
-        downsampled data.
+    ``method``: ``mean`` average pooling (intensity data), ``median`` windowed
+    median (webknossos' default for intensity), ``mode`` windowed mode
+    (webknossos' default for labels and masks), ``nearest`` nearest neighbor,
+    ``gaussian`` blur then subsample, ``local_mean`` skimage's local mean.
     """
     if len(factors) != data.ndim:
         raise ValueError(f"factors {factors} must match data.ndim {data.ndim}")
 
-    # skip if all factors are 1
     if all(f == 1 for f in factors):
         return data
 
     if method == "nearest":
-        # simple slicing - fastest
         slices = tuple(slice(None, None, f) for f in factors)
         return data[slices].copy()
 
@@ -183,24 +144,14 @@ def downsample_block(
 
 
 def _downsample_mean(data: np.ndarray, factors: tuple[int, ...]) -> np.ndarray:
-    """Downsample using mean pooling (reshape + mean approach)."""
-    # compute output shape
+    """Downsample using mean pooling: trim to whole blocks, split each axis into (blocks, factor), average the factor axes."""
     out_shape = tuple(s // f for s, f in zip(data.shape, factors, strict=True))
-
-    # reshape to group pixels for averaging
     new_shape = []
     for s, f in zip(out_shape, factors, strict=True):
         new_shape.extend([s, f])
-
-    # axes to average over (odd indices)
     axes_to_mean = tuple(range(1, 2 * len(factors), 2))
-
-    # trim data to be evenly divisible
     slices = tuple(slice(None, s * f) for s, f in zip(out_shape, factors, strict=True))
-    trimmed = data[slices]
-
-    # reshape and mean
-    reshaped = trimmed.reshape(new_shape)
+    reshaped = data[slices].reshape(new_shape)
     return reshaped.mean(axis=axes_to_mean).astype(data.dtype)
 
 
@@ -296,20 +247,14 @@ def _downsample_gaussian(data: np.ndarray, factors: tuple[int, ...]) -> np.ndarr
     """Downsample with gaussian blur for antialiasing."""
     from scipy.ndimage import gaussian_filter
 
-    # sigma proportional to downsampling factor
     sigma = tuple(0.5 * (f - 1) for f in factors)
     blurred = gaussian_filter(data.astype(np.float32), sigma=sigma)
-
-    # subsample
     slices = tuple(slice(None, None, f) for f in factors)
     return blurred[slices].astype(data.dtype)
 
 
 def _downsample_local_mean(data: np.ndarray, factors: tuple[int, ...]) -> np.ndarray:
-    """Downsample using skimage local_mean if available, else fall back to mean."""
-    try:
-        from skimage.transform import downscale_local_mean
+    """Downsample using skimage's ``downscale_local_mean``."""
+    from skimage.transform import downscale_local_mean
 
-        return downscale_local_mean(data, factors).astype(data.dtype)
-    except ImportError:
-        return _downsample_mean(data, factors)
+    return downscale_local_mean(data, factors).astype(data.dtype)

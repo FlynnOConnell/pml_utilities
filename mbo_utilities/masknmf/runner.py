@@ -15,6 +15,7 @@ masknmf imports are function-local: the package is optional, heavy to import,
 and its stage math runs in the spawned worker subprocess.
 """
 
+import copy
 import functools
 import hashlib
 import json
@@ -82,7 +83,7 @@ def _export_atomic(obj, path: Path, prov: dict | None = None) -> None:
 
 
 def _matches(previous: Path | None, group: str, prov: dict) -> bool:
-    """Whether the previous run's results file holds ``group`` made with ``prov``."""
+    """True when the previous run's results file holds ``group`` made with ``prov``."""
     if previous is None:
         return False
     with h5py.File(previous / RESULTS_FILE, "r") as f:
@@ -115,8 +116,10 @@ def _to_np(x) -> np.ndarray:
 
 
 def _cuda_usable(device: str = "cuda") -> bool:
-    """A torch build without this GPU's architecture reports cuda available
-    but fails at the first kernel launch; probe with a real kernel.
+    """True when a real kernel runs on ``device``.
+
+    A torch build without this GPU's architecture reports cuda available but
+    fails at the first kernel launch.
     """
     import torch
 
@@ -346,8 +349,6 @@ def clamp_background_downsampling(cfg, ly: int, lx: int, logger=None):
     narrower than 30 px hits — an LBM strip, a drawn crop, a test movie. Keep
     at least four pooled pixels on the short side.
     """
-    import copy
-
     want = max(
         1, min(int(cfg.background_downsampling_factor), min(int(ly), int(lx)) // 4)
     )

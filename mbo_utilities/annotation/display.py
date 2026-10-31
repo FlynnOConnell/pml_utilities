@@ -1,15 +1,15 @@
-"""How a pipeline's traces are shown (AGENTS.md §7.6, Trace display).
+"""Trace rows are shown through one profile per pipeline (AGENTS.md §7.6, Trace display).
 
-One :class:`TraceProfile` per pipeline says which kinds its rows can show
+A :class:`TraceProfile` lists the kinds a pipeline's rows can show
 (``DISPLAY_KINDS``: the trace kinds of the results zarr, plus ``SUBTRACTED``,
 the raw trace minus its neuropil, for a pipeline that measured a real
-``Fneu``), which one to show first, how a dF/F and a z-score are computed
-from raw when the row carries none (:class:`DffSettings`), and the unit its
-raw traces are in. The Traces panel and
-the trace table read every row through :func:`display_trace`; nothing else
-decides what a row's numbers mean. A pipeline outside this package registers its profile with
-:func:`register_trace_profile` when it registers its ``PipelineInfo``;
-an engine with no profile gets ``DEFAULT_TRACE_PROFILE``.
+``Fneu``), the one shown first, the :class:`DffSettings` for a dF/F and a
+z-score computed from raw when the row carries none, and the unit its raw
+traces are in. The Traces panel and the trace table read every row through
+:func:`display_trace`; nothing else decides what a row's numbers mean. A
+pipeline outside this package registers its profile with
+:func:`register_trace_profile` when it registers its ``PipelineInfo``; an
+engine with no profile gets ``DEFAULT_TRACE_PROFILE``.
 """
 
 from __future__ import annotations
@@ -49,9 +49,7 @@ __all__ = [
 # the one kind no file stores: the raw trace minus its neuropil, computed here
 SUBTRACTED = "raw - neuropil"
 
-# display kind -> y axis label, in selector order: the names of
-# results.TRACE_KINDS and SUBTRACTED. y_label adds the profile's unit (and
-# coefficient) to raw, neuropil and SUBTRACTED
+# results.TRACE_KINDS and SUBTRACTED -> y axis label, in selector order; y_label adds the unit to the MEASURED kinds
 DISPLAY_KINDS: dict[str, str] = {
     "dff": "dF/F (%)",
     "denoised": "denoised",
@@ -62,15 +60,13 @@ DISPLAY_KINDS: dict[str, str] = {
     "spikes": "spikes (a.u.)",
 }
 
-# what was measured from the pixels, in the profile's unit
+# measured from the pixels, in the profile's unit
 MEASURED = ("raw", "neuropil", SUBTRACTED)
 
-# kinds the panel computes from what was measured when a row carries none
+# computed here from the measured trace when a row carries none
 COMPUTED = ("dff", "zscore")
 
-# how a dF/F computed here finds F0 (DffSettings.method) -> its name in the
-# panel. Every one but the static percentile is sized in seconds and needs
-# the row's fs; a row without one gets the static percentile
+# DffSettings.method -> panel name; every method but percentile is sized in seconds, so a row without fs gets percentile
 DFF_METHODS: dict[str, str] = {
     "maxmin": "rolling max-min",
     "rolling": "rolling percentile",
@@ -83,7 +79,7 @@ DFF_METHODS: dict[str, str] = {
 
 @dataclass
 class DffSettings:
-    """How a dF/F and a z-score are computed from a measured trace.
+    """Baseline and noise settings for a dF/F and a z-score computed from a measured trace.
 
     ``method`` (:data:`DFF_METHODS`) finds F0: ``maxmin`` smooths by
     ``sigma_s`` and takes suite2p's rolling max of the rolling min over
@@ -119,10 +115,10 @@ class DffSettings:
 
 @dataclass(frozen=True)
 class TraceProfile:
-    """What one pipeline's rows can show and how. A pipeline that measured a
-    real neuropil lists ``neuropil`` and ``SUBTRACTED`` among its ``kinds``;
-    ``neuropil_coeff`` is what it subtracts with, ``unit`` what its raw
-    traces are in.
+    """One pipeline's display rules: the kinds its rows show, the default kind, its dF/F scale and raw unit.
+
+    A pipeline that measured a real neuropil lists ``neuropil`` and
+    ``SUBTRACTED`` among its ``kinds`` and subtracts it with ``neuropil_coeff``.
     """
 
     pipeline: str
@@ -139,9 +135,7 @@ DEFAULT_TRACE_PROFILE = TraceProfile(
 )
 
 TRACE_PROFILES: dict[str, TraceProfile] = {
-    # suite2p: F, Fneu, the deconvolved spks and lbm_suite2p_python's
-    # norm_traces, a dF/F as a fraction or (norm_method) a z-score. A dF/F
-    # computed here is its plot: F - 0.7 Fneu over a static 20th percentile
+    # norm_traces is a fraction (or a z-score per norm_method); a dF/F computed here is F - 0.7 Fneu over a static 20th percentile
     "suite2p": TraceProfile(
         pipeline="suite2p",
         kinds=("dff", "zscore", "raw", "neuropil", SUBTRACTED, "spikes"),
@@ -156,8 +150,7 @@ TRACE_PROFILES: dict[str, TraceProfile] = {
         default="dff",
         dff=DffSettings(method="percentile"),
     ),
-    # vnoiser: the curated (denoised) trace first, then the pipeline's own
-    # dfof_raw (a fraction), the z-score and the lines' raw means in counts
+    # the curated (denoised) trace first; dfof_raw is a fraction, raw the lines' means in counts
     "vnoiser": TraceProfile(
         pipeline="vnoiser",
         kinds=("denoised", "dff", "zscore", "raw"),
@@ -165,9 +158,7 @@ TRACE_PROFILES: dict[str, TraceProfile] = {
         dff_percent=False,
         unit="counts",
     ),
-    # the ROI tool's mean engine and a MESc unit's line and patch means: a
-    # mask mean (plus a neuropil ring for a drawn ROI), no pipeline; dF/F
-    # over the rolling baseline sized in seconds
+    # the ROI tool's mask means (with a neuropil ring for a drawn ROI) and a MESc unit's line and patch means
     "mean": TraceProfile(
         pipeline="mean",
         kinds=("dff", "zscore", "raw", "neuropil", SUBTRACTED),
@@ -352,8 +343,9 @@ def y_label(
     invert: bool = False,
     flip: bool = False,
 ) -> str:
-    """The y axis label of what :func:`display_trace` shows for the row. A
-    ``MEASURED`` kind is named with the viewer's deflection and its unit (the
+    """The y axis label for the row as :func:`display_trace` shows it.
+
+    A ``MEASURED`` kind is named with the viewer's deflection and its unit (the
     row's ``extra["unit"]``, else its profile's): ``F (a.u.)``, ``Fneu
     (a.u.)``, ``F - 0.7 Fneu (a.u.)``, ``mean - F (photons)``; a kind
     computed here from an inverted trace adds ``, inverted``; any other kind
@@ -369,7 +361,7 @@ def y_label(
         return f"-{DISPLAY_KINDS[shown]}"
     if shown in MEASURED:
         profile = trace_profile(trace.engine)
-        unit = (trace.extra or {}).get("unit") or profile.unit
+        unit = trace.extra.get("unit") or profile.unit
         name = DISPLAY_KINDS[shown]
         if shown == SUBTRACTED:
             name = f"F - {profile.neuropil_coeff:g} Fneu"

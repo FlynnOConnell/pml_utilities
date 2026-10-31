@@ -51,15 +51,15 @@ class StudioServer(CanvasServer):
         ``"preview"``, ``"manualroi"`` or ``"none"``, as ``DataVis``.
     unit : int or str, optional
         Which measurement unit of a ``.mesc`` to open; the first otherwise.
-    host, port : str, int
-        Where ``serve`` listens.
     size : (int, int)
         Canvas size until the first browser reports its window size.
     key : str, optional
         Accept only requests carrying it (the gateway's session key).
     quality : int
-        JPEG quality of the frames while the view changes; a still view is
-        sent lossless. 50 halves the bytes of the default 80.
+        JPEG quality while the view changes, for browsers without H.264.
+    bitrate : float
+        H.264 bitrate in Mbit/s while the view changes. A still view is sent
+        lossless either way.
     """
 
     def __init__(
@@ -73,6 +73,7 @@ class StudioServer(CanvasServer):
         size=DEFAULT_SIZE,
         key: str | None = None,
         quality: int = 80,
+        bitrate: float = 8.0,
     ):
         from masknmf.visualization.imgui.options import OPTIONS
 
@@ -82,13 +83,10 @@ class StudioServer(CanvasServer):
         # a second figure would open on this machine, where no one sees it
         OPTIONS.separate_image_window = False
         size = tuple(size)
-        vis = DataVis(
-            path,
-            widget=widget,
-            unit=unit,
-            size=size,
-            canvas=BrowserCanvas(size=size, max_fps=60.0, quality=quality),
+        canvas = BrowserCanvas(
+            size=size, max_fps=60.0, quality=quality, bitrate=bitrate
         )
+        vis = DataVis(path, widget=widget, unit=unit, size=size, canvas=canvas)
         name = Path(str(path[0] if isinstance(path, (list, tuple)) else path)).name
         super().__init__(
             vis,
@@ -100,36 +98,17 @@ class StudioServer(CanvasServer):
         )
 
 
-def serve_studio(
-    path,
-    *,
-    widget: str = "preview",
-    unit: int | str | None = None,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
-    size=DEFAULT_SIZE,
-    key: str | None = None,
-    quality: int = 80,
-    parent_pid: int | None = None,
-) -> None:
-    """Serve the Studio on ``path`` until interrupted or its canvas closes.
+def serve_studio(path, *, parent_pid: int | None = None, **kwargs) -> None:
+    """Serves the Studio on ``path`` until interrupted or its canvas closes.
 
-    With ``parent_pid`` it also stops once that process is gone, so a
-    gateway that dies leaves no Studio holding the GPU.
+    ``kwargs`` go to :class:`StudioServer`. With ``parent_pid`` it also stops
+    once that process is gone, so a gateway that dies leaves no Studio
+    holding the GPU.
     """
     select_http_backend()
     # before any worker spawns, as run_gui does
     apply_persisted_compute_gpu()
-    server = StudioServer(
-        path,
-        widget=widget,
-        unit=unit,
-        host=host,
-        port=port,
-        size=size,
-        key=key,
-        quality=quality,
-    )
+    server = StudioServer(path, **kwargs)
     if parent_pid is not None:
         threading.Thread(
             target=_stop_with, args=(parent_pid, server), daemon=True
@@ -151,11 +130,7 @@ def _size(text: str) -> tuple[int, int]:
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("path", type=Path, help="a file or folder mbo PATH opens")
-    ap.add_argument(
-        "--host",
-        default=DEFAULT_HOST,
-        help=f"interface to listen on (default {DEFAULT_HOST})",
-    )
+    ap.add_argument("--host", default=DEFAULT_HOST, help="interface to listen on")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--widget", choices=WIDGETS, default="preview")
     ap.add_argument("--unit", default=None, help="the .mesc unit to open")
@@ -164,13 +139,13 @@ def main(argv: list[str] | None = None) -> None:
         type=_size,
         default=DEFAULT_SIZE,
         metavar="WxH",
-        help="canvas size until a browser reports its window (default 1600x1000)",
+        help="canvas size until a browser reports its window",
     )
     ap.add_argument(
-        "--quality",
-        type=int,
-        default=80,
-        help="jpeg quality while the view changes (default 80; 50 halves the bytes)",
+        "--quality", type=int, default=80, help="jpeg quality without H.264"
+    )
+    ap.add_argument(
+        "--bitrate", type=float, default=8.0, help="H.264 Mbit/s while it changes"
     )
     ap.add_argument(
         "--parent-pid",
@@ -189,6 +164,7 @@ def main(argv: list[str] | None = None) -> None:
         size=args.size,
         key=os.environ.get(SESSION_KEY_ENV) or None,
         quality=args.quality,
+        bitrate=args.bitrate,
         parent_pid=args.parent_pid,
     )
 

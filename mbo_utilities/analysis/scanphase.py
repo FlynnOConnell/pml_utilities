@@ -20,46 +20,38 @@ from mbo_utilities.analysis.phasecorr import _phase_corr_2d
 
 logger = log.get("analysis.scanphase")
 
-
-# MBO dark theme colors (consistent with benchmarks.py and docs/_static/custom.css)
+# the docs' dark theme (docs/_static/custom.css)
 MBO_DARK_THEME = {
     "background": "#121212",
     "surface": "#1e1e1e",
     "text": "#e0e0e0",
     "text_muted": "#9e9e9e",
     "border": "#333333",
-    "primary": "#82aaff",  # blue
-    "secondary": "#c792ea",  # purple
-    "success": "#c3e88d",  # green
-    "warning": "#ffcb6b",  # yellow
-    "error": "#f07178",  # red
-    "accent": "#89ddff",  # cyan
+    "primary": "#82aaff",
+    "secondary": "#c792ea",
+    "success": "#c3e88d",
+    "warning": "#ffcb6b",
+    "error": "#f07178",
+    "accent": "#89ddff",
     "orange": "#f78c6c",
 }
 
 
 @dataclass
 class ScanPhaseResults:
-    """Results from scan-phase analysis."""
+    """Scan-phase offsets per averaging window length (``window_*``), per FOV patch (``grid_*``, valid where ``grid_valid``) and flat over the valid patches (``offsets_*``)."""
 
-    # window length sweep (offset vs frames averaged)
     window_sizes: np.ndarray = field(default_factory=lambda: np.array([]))
     window_offsets_fft: np.ndarray = field(default_factory=lambda: np.array([]))
     window_stds_fft: np.ndarray = field(default_factory=lambda: np.array([]))
     window_offsets_int: np.ndarray = field(default_factory=lambda: np.array([]))
     window_stds_int: np.ndarray = field(default_factory=lambda: np.array([]))
-
-    # spatial grid offsets across the FOV
     patch_size: int = 0
     grid_offsets_fft: np.ndarray = field(default_factory=lambda: np.array([]))
     grid_offsets_int: np.ndarray = field(default_factory=lambda: np.array([]))
     grid_valid: np.ndarray = field(default_factory=lambda: np.array([]))
-
-    # flat per-patch offsets (for summary stats)
     offsets_fft: np.ndarray = field(default_factory=lambda: np.array([]))
     offsets_int: np.ndarray = field(default_factory=lambda: np.array([]))
-
-    # metadata
     num_timepoints: int = 0
     num_planes: int = 1
     num_rois: int = 1
@@ -199,8 +191,7 @@ class ScanPhaseAnalyzer:
             return shape[0], 1, shape[1], shape[2]
         if ndim == 4:
             return shape[0], shape[1], shape[2], shape[3]
-        # 5D canonical TCZYX (LazyArray or raw)
-        return shape[0], shape[2], shape[3], shape[4]
+        return shape[0], shape[2], shape[3], shape[4]  # TCZYX
 
     def _frame(self, t):
         """Return a single 2D frame for timepoint `t` at the active channel/plane."""
@@ -291,16 +282,9 @@ class ScanPhaseAnalyzer:
                 patch = mean_img[y0:y1, x0:x1]
                 if patch.mean() < thr:
                     continue
-                try:
-                    grid_fft[row, col] = _phase_corr_2d(
-                        patch, 0, max_offset, use_fft=True
-                    )
-                    grid_int[row, col] = _phase_corr_2d(
-                        patch, 0, max_offset, use_fft=False
-                    )
-                    valid[row, col] = True
-                except Exception:
-                    pass
+                grid_fft[row, col] = _phase_corr_2d(patch, 0, max_offset, use_fft=True)
+                grid_int[row, col] = _phase_corr_2d(patch, 0, max_offset, use_fft=False)
+                valid[row, col] = True
 
         self.results.patch_size = patch_size
         self.results.grid_offsets_fft = grid_fft
@@ -317,20 +301,11 @@ class ScanPhaseAnalyzer:
     def run(self, border=4, max_offset=10, patch_size=32):
         """Run both diagnostics."""
         start = time.perf_counter()
-        steps = [
-            (
-                "window lengths",
-                lambda: self.analyze_windows(border=border, max_offset=max_offset),
-            ),
-            (
-                "spatial distribution",
-                lambda: self.analyze_spatial(
-                    patch_size=patch_size, max_offset=max_offset
-                ),
-            ),
-        ]
-        for _name, func in tqdm(steps, desc="scan-phase analysis"):
-            func()
+        with tqdm(total=2, desc="scan-phase analysis") as bar:
+            self.analyze_windows(border=border, max_offset=max_offset)
+            bar.update()
+            self.analyze_spatial(patch_size=patch_size, max_offset=max_offset)
+            bar.update()
         self.results.analysis_time = time.perf_counter() - start
         logger.info(f"complete in {self.results.analysis_time:.1f}s")
         return self.results
@@ -345,9 +320,15 @@ class ScanPhaseAnalyzer:
             output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        saved = []
+        figures = []
+        if len(self.results.window_sizes) > 0:
+            figures.append((self._fig_windows, "window_lengths"))
+        if self.results.grid_valid.any():
+            figures.append((self._fig_spatial, "spatial_distribution"))
 
-        def _save_fig(fig, name):
+        saved = []
+        for make_figure, name in figures:
+            fig = make_figure()
             if output_dir:
                 path = output_dir / f"{name}.{fmt}"
                 fig.savefig(
@@ -361,12 +342,6 @@ class ScanPhaseAnalyzer:
             if show:
                 plt.show()
             plt.close(fig)
-
-        if len(self.results.window_sizes) > 0:
-            _save_fig(self._fig_windows(), "window_lengths")
-        if self.results.grid_valid.any():
-            _save_fig(self._fig_spatial(), "spatial_distribution")
-
         return saved
 
     def _fig_windows(self):

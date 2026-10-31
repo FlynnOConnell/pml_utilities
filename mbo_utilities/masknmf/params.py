@@ -36,16 +36,15 @@ ASAP7_RESULTS_FILE = "results.glutamate.hdf5"
 
 @dataclass
 class MasknmfRegistrationSettings:
-    do_registration: int = 1  # 0=skip, 1=run, 2=force
+    do_registration: int = 1
     strategy: str = "rigid"  # "rigid" | "pwrigid"
     max_shifts: tuple[int, int] = (15, 15)
     # pwrigid only
     minimum_patch_sizes: tuple[int, int] = (50, 50)
     overlaps: tuple[int, int] = (5, 5)
     max_deviation_rigid: tuple[int, int] = (2, 2)
-    # estimate shifts on a quick denoised copy and apply them to the raw movie;
-    # the copy is blocked like the main compression (the ASAP7 ribbon's 4x4
-    # blocks with 4x pooling took 27 h on one 2P plane, 61102 blocks at ~1.6 s)
+    # shifts estimated on a quick denoised copy, applied to the raw movie
+    # the copy is blocked like the main compression: ASAP7's 4x4 blocks with 4x pooling took 27 h on one 2P plane
     denoised_reference: bool = False
     reference_block_sizes: tuple[int, int] = (20, 20)
     reference_max_components: int = 20
@@ -76,7 +75,7 @@ class MasknmfRegistrationSettings:
 
 @dataclass
 class MasknmfCompressionSettings:
-    do_compression: int = 1  # 0=skip (requires cached hdf5), 1=run, 2=force
+    do_compression: int = 1
     denoise: bool = True  # CompressDenoiseStrategy vs CompressStrategy
     block_sizes: tuple[int, int] = (20, 20)
     max_components: int = 20
@@ -105,7 +104,7 @@ class MasknmfCompressionSettings:
 
 @dataclass
 class MasknmfDemixingSettings:
-    do_demixing: int = 1  # 0=skip, 1=run, 2=force
+    do_demixing: int = 1
     # spatial highpass applied to the PMD movie for initialization
     filter_sigma: float = 4.0
     # superpixel init
@@ -162,8 +161,7 @@ class MasknmfDemixingSettings:
 
 @dataclass
 class MasknmfRuntimeSettings:
-    # GPU by default: superpixel init needs CUDA, and "auto" quietly fell
-    # back to a cpu run that is orders of magnitude slower
+    # superpixel init needs CUDA, and "auto" fell back to a cpu run orders of magnitude slower
     device: str = "cuda"  # auto | cuda | cpu
     frame_batch_size: int = 300
     exclude_border_radius: int = 0
@@ -183,8 +181,7 @@ class MasknmfSettings:
     runtime: MasknmfRuntimeSettings = field(default_factory=MasknmfRuntimeSettings)
 
     def to_dict(self) -> dict:
-        d = asdict(self)
-        return _tuples_to_lists(d)
+        return _tuples_to_lists(asdict(self))
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "MasknmfSettings":
@@ -360,9 +357,9 @@ def stage_action(tri: int, cached: bool) -> str:
     """Resolve a stage tri-state against its cached output.
 
     Returns "skip" (bypass the stage), "reuse" (load its cached output), or
-    "compute". What "skip" means is stage-specific (registration: feed raw
-    frames downstream; compression: cached PMD required; demixing: stop
-    after compression).
+    "compute". "skip" is stage-specific: registration feeds raw frames
+    downstream, compression needs a cached PMD, demixing stops after
+    compression.
     """
     if tri == STAGE_FORCE:
         return "compute"

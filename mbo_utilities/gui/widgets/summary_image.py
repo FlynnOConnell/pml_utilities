@@ -1,14 +1,10 @@
-"""
-SummaryImageViewer - browse 2D summary images stored in ops.npy.
+"""The Summary Images panel browses the 2D images an array's metadata carries, such as suite2p's ops.npy images.
 
-Activates whenever a loaded array's metadata contains image-like 2D
-ndarrays (typical case: BinArray that auto-loaded a sibling ops.npy).
-Shows a selector in the side panel and a floating imgui popup window
-with pan, zoom, colormap, contrast control, pixel-value overlay,
-suite2p ROI overlay (when stat.npy is present), and PNG export.
-
-Renders through fastplotlib's wgpu imgui backend (immvision can't be
-used here - it requires OpenGL).
+It shows whenever a loaded array's metadata holds 2D numeric arrays, as a
+``BinArray``'s does once it has read the ops.npy beside it. A side-panel
+selector opens a popup that pans, zooms, colormaps and contrasts the image,
+draws pixel values and the suite2p ROIs from stat.npy, and saves a PNG.
+Textures go through fastplotlib's wgpu imgui backend; immvision needs OpenGL.
 """
 
 from __future__ import annotations
@@ -21,7 +17,11 @@ import wgpu
 from cmap import Colormap
 from imgui_bundle import hello_imgui, imgui
 from imgui_bundle import portable_file_dialogs as pfd
+from skimage.measure import find_contours
 
+from mbo_utilities.gui._colormaps import DEFAULT_COLORMAP as _DEFAULT_COLORMAP
+from mbo_utilities.gui._colormaps import DEFAULT_COLORMAPS as _DEFAULT_COLORMAPS
+from mbo_utilities.gui._colormaps import listed_name as _listed_name
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.widgets._base import Widget
 
@@ -68,14 +68,6 @@ _PRIORITY_KEYS = (
     "refImg0",
     "sdmov",
 )
-
-from mbo_utilities.gui._colormaps import (
-    DEFAULT_COLORMAP as _DEFAULT_COLORMAP,
-)
-from mbo_utilities.gui._colormaps import (
-    DEFAULT_COLORMAPS as _DEFAULT_COLORMAPS,
-)
-from mbo_utilities.gui._colormaps import listed_name as _listed_name
 
 _CONTRAST_MODES = ("Full", "Auto", "Manual")
 _CONTRAST_AUTO = 1
@@ -192,32 +184,23 @@ class _GpuImage:
 
     def destroy(self) -> None:
         if self.ref is not None:
-            try:
-                self.backend.unregister_texture(self.ref)
-            except Exception:
-                pass
+            self.backend.unregister_texture(self.ref)
             self.ref = None
         self._view = None
         if self._texture is not None:
-            try:
-                self._texture.destroy()
-            except Exception:
-                pass
+            self._texture.destroy()
             self._texture = None
 
 
 def _array_data_path(arr) -> Path | None:
-    """Best-effort lookup of the directory the array came from."""
+    """Returns the directory the array was read from, or None."""
     for attr in ("filenames", "filename"):
         v = getattr(arr, attr, None)
         if v is None:
             continue
         if isinstance(v, (list, tuple)) and v:
             v = v[0]
-        try:
-            p = Path(str(v))
-        except (TypeError, ValueError):
-            continue
+        p = Path(str(v))
         return p.parent if p.is_file() else p
     return None
 
@@ -249,11 +232,6 @@ def _load_rois(stat_dir: Path) -> tuple[list[np.ndarray], np.ndarray | None] | N
         except Exception:
             iscell = None
 
-    try:
-        from skimage.measure import find_contours
-    except ImportError:
-        return None
-
     polygons: list[np.ndarray] = []
     for roi in stat:
         try:
@@ -273,9 +251,9 @@ def _load_rois(stat_dir: Path) -> tuple[list[np.ndarray], np.ndarray | None] | N
         if not contours:
             polygons.append(np.zeros((0, 2), dtype=np.float32))
             continue
-        # take the longest contour (outer boundary of largest component)
+        # the longest contour is the outer boundary of the largest component
         c = max(contours, key=len).astype(np.float32)
-        # contour is (row, col) -> convert to (x, y) and shift back to image coords
+        # (row, col) in the padded mask -> (x, y) in the image
         poly = np.empty_like(c)
         poly[:, 0] = c[:, 1] + x0 - 1
         poly[:, 1] = c[:, 0] + y0 - 1
@@ -313,6 +291,7 @@ class SummaryImageViewer(Widget):
             Path, tuple[list[np.ndarray], np.ndarray | None] | None
         ] = {}
         self._save_dialog: Any = None
+        self._pending_save_key: str | None = None
         self._last_save_msg: str = ""
         self._images_z: int | None = None
 
@@ -340,17 +319,17 @@ class SummaryImageViewer(Widget):
         )
 
     def _active_metadata(self) -> dict:
-        """The array's metadata, its images swapped for the ones the plane
-        on screen's results unit carries (a suite2p volume's ops are plane
-        1's; each plane's meanImg, max_proj, Vcorr and refImg are its own).
+        """Returns the array's metadata with its images swapped for the ones the plane on screen's results unit carries.
+
+        A suite2p volume's ops are plane 1's; each plane's meanImg, max_proj,
+        Vcorr and refImg are its own.
         """
         arr = self._active_array()
         if arr is None:
             return {}
         md = dict(getattr(arr, "metadata", None) or {})
         results = getattr(arr, "results", None)
-        on_screen = getattr(self.parent, "slice", None)
-        z = int(on_screen.z) if on_screen is not None else 0
+        z = int(self.parent.slice.z)
         if z != self._images_z:
             self._images_z = z
             self._hist_cache.clear()
@@ -379,13 +358,7 @@ class SummaryImageViewer(Widget):
         """
         if self._cmap_synced_with_fpl:
             return
-        iw = getattr(self.parent, "image_widget", None)
-        if iw is None:
-            return
-        try:
-            graphics = list(iw.graphics)
-        except Exception:
-            return
+        graphics = self.parent.image_widget.graphics
         if not graphics:
             return
         try:
@@ -489,7 +462,7 @@ class SummaryImageViewer(Widget):
             self._popup_open = True
             self._reset_view()
 
-        # poll any pending save dialog regardless of popup state
+        # the save dialog can outlive the popup
         self._poll_save_dialog()
 
         if self._popup_open:
@@ -527,7 +500,6 @@ class SummaryImageViewer(Widget):
             self._open_save_dialog(keys[self._selected], md[keys[self._selected]])
         set_tooltip("Save the colormapped image as a PNG (native resolution).")
 
-        # row 2: overlays
         _, self._show_pixel_values = imgui.checkbox(
             "Pixel values", self._show_pixel_values
         )
@@ -568,9 +540,6 @@ class SummaryImageViewer(Widget):
             self._manual_hi[key] = hi
 
         bins = self._get_histogram(key, arr)
-        # tight bordered frame: 24-px histogram strip on the left, two
-        # min/max sliders on the right side of the same row. Total height
-        # ~30 px including child padding so it doesn't crowd the image.
         if imgui.begin_child(
             "##levels",
             imgui.ImVec2(0, 32),
@@ -607,7 +576,6 @@ class SummaryImageViewer(Widget):
     ) -> None:
         if self._zoom < _PIXEL_VALUES_MIN_ZOOM:
             return
-        # visible image-pixel rect
         x0_img = max(0, int(np.floor(-self._pan_x / self._zoom)))
         y0_img = max(0, int(np.floor(-self._pan_y / self._zoom)))
         x1_img = min(
@@ -622,7 +590,7 @@ class SummaryImageViewer(Widget):
         if n > _PIXEL_VALUES_MAX_CELLS:
             return
 
-        # luminance of colormapped pixels to pick text color
+        # rec. 601 luma of the colormapped pixel picks black or white text
         rgba = gpu.rgba
         luma = (
             0.299 * rgba[..., 0].astype(np.float32)
@@ -638,7 +606,7 @@ class SummaryImageViewer(Widget):
             for x in range(x0_img, x1_img):
                 sx = canvas_pos.x + self._pan_x + x * z + z * 0.5
                 txt = _format_value(float(arr[y, x]), arr.dtype)
-                # rough centering
+                # rough centering, ~6 px per glyph
                 tw = len(txt) * 6.0
                 tx = sx - tw * 0.5
                 ty = sy - 6.5
@@ -672,7 +640,7 @@ class SummaryImageViewer(Widget):
                 ox = -float(xrange[0])
                 oy = -float(yrange[0])
             else:
-                return  # can't safely place ROIs
+                return  # a crop without its origin has nowhere to put them
 
         z = self._zoom
         clip_x1 = canvas_pos.x + canvas_size.x
@@ -683,9 +651,7 @@ class SummaryImageViewer(Widget):
         for i, poly in enumerate(polygons):
             if poly.shape[0] < 3:
                 continue
-            cell = (
-                True if iscell is None else bool(iscell[i]) if i < len(iscell) else True
-            )
+            cell = iscell is None or i >= len(iscell) or bool(iscell[i])
             if self._iscell_only and not cell:
                 continue
             color = cyan if cell else red
@@ -728,25 +694,14 @@ class SummaryImageViewer(Widget):
         self._pending_save_key = key
 
     def _poll_save_dialog(self) -> None:
-        if self._save_dialog is None:
+        if self._save_dialog is None or not self._save_dialog.ready(0):
             return
-        try:
-            ready = self._save_dialog.ready(0)
-        except TypeError:
-            ready = self._save_dialog.ready()
-        if not ready:
-            return
-        try:
-            path = self._save_dialog.result()
-        except Exception:
-            path = ""
+        path = self._save_dialog.result()
         self._save_dialog = None
         if not path:
             return
         try:
-            key = getattr(self, "_pending_save_key", None)
-            if key is None:
-                return
+            key = self._pending_save_key
             md = self._active_metadata()
             arr = md.get(key)
             if arr is None:
@@ -766,7 +721,6 @@ class SummaryImageViewer(Widget):
 
     def _draw_popup(self, keys: list[str], md: dict) -> None:
         key = keys[self._selected]
-        arr = md[key]
 
         center_popup_on_open(default_em=(52.0, 56.0), min_em=(38.0, 30.0))
         opened, self._popup_open = imgui.begin(
@@ -861,11 +815,7 @@ class SummaryImageViewer(Widget):
             px = int(mx / max(self._zoom, 1e-6))
             py = int(my / max(self._zoom, 1e-6))
             if 0 <= px < w and 0 <= py < h:
-                try:
-                    val = float(arr[py, px])
-                    readout = f"px ({py}, {px}) = {val:.4g}"
-                except Exception:
-                    readout = ""
+                readout = f"px ({py}, {px}) = {float(arr[py, px]):.4g}"
 
         imgui.end_child()
 

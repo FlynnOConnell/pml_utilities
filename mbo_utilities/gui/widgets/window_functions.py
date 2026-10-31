@@ -1,9 +1,4 @@
-"""
-window functions widget.
-
-controls for projection type and window size (temporal operations).
-always shows for any data with temporal dimension.
-"""
+"""The Window Functions and Spatial Functions panels: the temporal projection and its window, and the spatial preview filters."""
 
 from typing import Any
 
@@ -16,20 +11,16 @@ from mbo_utilities.gui.widgets.preview_data import _base_5d
 
 
 class WindowFunctionsWidget(Widget):
-    """ui widget for window functions (projection, window size)."""
+    """Projection type and window size over time, shown for data with more than one timepoint."""
 
     name = "Window Functions"
-    priority = 10  # show first
+    priority = 10
     toggle_key = "preview"
 
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
         """Supported when data has a time dimension with more than 1 frame."""
-        arr = (
-            parent.image_widget.data[0]
-            if getattr(parent, "image_widget", None)
-            else None
-        )
+        arr = parent.image_widget.data[0]
         if arr is None:
             return False
         dims = getattr(arr, "dims", None)
@@ -39,7 +30,6 @@ class WindowFunctionsWidget(Widget):
             if "t" in dims_lower:
                 return shape[dims_lower.index("t")] > 1
             return False
-        # fallback: any shape with >1 in the outer dim and rank >= 3
         return bool(shape) and len(shape) >= 3 and shape[0] > 1
 
     def draw(self) -> None:
@@ -51,7 +41,6 @@ class WindowFunctionsWidget(Widget):
         imgui.spacing()
         imgui.spacing()
 
-        # projection type combo (temporal operations only)
         options = ["mean", "max", "std"]
 
         current_display_idx = (
@@ -72,7 +61,6 @@ class WindowFunctionsWidget(Widget):
         if proj_changed and options[selected_display_idx] != parent.proj:
             parent.proj = options[selected_display_idx]
 
-        # window size
         imgui.set_next_item_width(hello_imgui.em_size(6))
         winsize_changed, new_winsize = imgui.input_int(
             "Window Size", parent.window_size, step=1, step_fast=2
@@ -88,15 +76,14 @@ class WindowFunctionsWidget(Widget):
 
     @staticmethod
     def _draw_apply(parent: Any) -> None:
-        """The checkbox that turns the window size into a pipeline step.
+        """Draws the checkbox that turns the window size into a pipeline step.
 
         Ticking it bins the dataset itself by the current window size and
-        resets the size to 1, so the control above then applies a window
-        *over the averaged frames*. Everything downstream — traces, extract,
-        demix, save — reads the averaged array, so what you see is what gets
-        processed.
+        resets the size to 1, so the control above then applies a window over
+        the averaged frames. Traces, extraction, demixing and saving all read
+        the averaged array, so what is on screen is what gets processed.
         """
-        averaged = getattr(parent, "frame_average", 1)
+        averaged = parent.frame_average
         locked = averaged > 1
         changed, want = imgui.checkbox("Apply to dataset", locked)
         set_tooltip(
@@ -106,10 +93,7 @@ class WindowFunctionsWidget(Widget):
             "The window size resets to 1, so it then applies on top."
         )
         if changed:
-            if want:
-                parent.frame_average = parent.window_size
-            else:
-                parent.frame_average = 1
+            parent.frame_average = parent.window_size if want else 1
         if not locked:
             return
         imgui.same_line(0, hello_imgui.em_size(0.5))
@@ -117,8 +101,8 @@ class WindowFunctionsWidget(Widget):
             imgui.ImVec4(0.6, 0.8, 0.6, 1.0), f"{averaged} frames averaged"
         )
         set_tooltip("Untick to get the raw frames back.")
-        source = getattr(parent, "_frame_average_source", None)
-        nt = int(parent.shape[0]) if getattr(parent, "shape", None) else 0
+        source = parent._frame_average_source
+        nt = int(parent.shape[0])
         was = int(source.shape[0]) if source is not None else nt * averaged
         imgui.text(f"Frames: {was} -> {nt}")
         arrays = parent._get_data_arrays()
@@ -131,25 +115,20 @@ class WindowFunctionsWidget(Widget):
 
 
 class SpatialFunctionsWidget(Widget):
-    """ui widget for spatial functions (gaussian blur, mean subtraction)."""
+    """Gaussian blur, mean subtraction and deflection inversion of the preview image."""
 
     name = "Spatial Functions"
-    priority = 11  # show after window functions
+    priority = 11
     toggle_key = "preview"
 
     @classmethod
     def is_supported(cls, parent: Any) -> bool:
         """Supported when data has rank > 2 (something to stack across).
 
-        A pure 2D image has no temporal or z axis — mean subtraction is
-        ill-defined and gaussian blur is trivially available on the
-        already-displayed frame without this control.
+        A 2D image has no temporal or z axis, so mean subtraction means
+        nothing for it.
         """
-        arr = (
-            parent.image_widget.data[0]
-            if getattr(parent, "image_widget", None)
-            else None
-        )
+        arr = parent.image_widget.data[0]
         if arr is None:
             return False
         shape = getattr(arr, "shape", None)
@@ -166,7 +145,6 @@ class SpatialFunctionsWidget(Widget):
         imgui.spacing()
         imgui.spacing()
 
-        # gaussian sigma
         imgui.set_next_item_width(hello_imgui.em_size(6))
         gaussian_changed, new_sigma = imgui.input_float(
             "Gaussian Sigma",

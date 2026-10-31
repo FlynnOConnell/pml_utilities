@@ -136,17 +136,6 @@ _UNIT_ATTRS = (
     "member_kind",
     "image_shape",
 )
-_ROOT_ATTRS = (
-    RESULTS_ATTR,
-    "pipeline",
-    "created",
-    "tags",
-    "units",
-    "source",
-    "settings",
-    "metadata",
-    "provenance",
-)
 _CHUNK = (256, 8192)
 
 
@@ -319,8 +308,8 @@ class Results:
         the position its plane has in that order. ``F`` is ``raw``, ``Fneu``
         ``neuropil``, ``spks`` ``spikes``, ``norm_traces`` ``dff`` or
         ``zscore`` (:func:`norm_traces_kind`); ``stat`` gives each ROI's pixels
-        and ``lam`` weights;
-        ``meanImg``, ``max_proj``, ``Vcorr`` and ``refImg`` are the images.
+        and ``lam`` weights; ``meanImg``, ``max_proj``, ``Vcorr`` and ``refImg``
+        are the images.
         ``index`` is the plane number: a ``zplaneNN`` tag is 1-based, vanilla
         suite2p's ``planeN`` 0-based.
         """
@@ -493,7 +482,6 @@ class Results:
             for s, v in (traces_pkl or {}).items()
         }
         if not rois and provenance.get("scan_ids"):
-            # a run without denoising writes no pickles; its pipeline.json has the table
             rois = {
                 "scanID_spatial": provenance["scan_ids"],
                 "scanID_1st_env": provenance.get("first_env") or [],
@@ -836,9 +824,7 @@ def results_name(
 
 
 def results_stamp(path) -> datetime | None:
-    """When a results file was written, from the timestamp in its name, or
-    None when the name carries none.
-    """
+    """The time a results file was written, read from the timestamp in its name; None when the name carries none."""
     for part in Path(path).name.split("."):
         try:
             return datetime.strptime(part, RESULTS_STAMP)
@@ -915,8 +901,7 @@ def results_summary(path) -> dict | None:
 
 
 def pipeline_files(path) -> Path:
-    """Where a run's own files (``pipeline.json``, ``timings.json``, its native
-    h5 and npy, ``traces/``) sit.
+    """The folder holding a run's own files: ``pipeline.json``, ``timings.json``, its native h5 and npy, ``traces/``.
 
     Inside a results file they are one folder named after the pipeline that
     wrote it, so one path is the whole output; ``path`` may be that file or a
@@ -954,9 +939,9 @@ def results_source(path) -> str:
 
 
 def results_dir_of(path) -> Path | None:
-    """What a run left, from anything naming it: a results file itself, the
-    vnoiser pipeline's ``PF`` folder of pickles, or a folder holding either
-    (its own results file, or a ``PF`` beside it). None for anything else.
+    """The run output ``path`` names: a results file itself, the vnoiser
+    pipeline's ``PF`` folder of pickles, or a folder holding either (its own
+    results file, or a ``PF`` beside it); None for anything else.
 
     Suite2p and masknmf plane dirs are not claimed here: they open as a
     ``Suite2pArray``, whose ``results`` is :meth:`Results.from_suite2p` of them.
@@ -980,7 +965,7 @@ def results_dir_of(path) -> Path | None:
 
 
 def vnoiser_run_for_mesc(mesc_path) -> Path | None:
-    """What the vnoiser pipeline last left for a line scan: the newest results
+    """The vnoiser pipeline's latest output for a line scan: the newest results
     file beside it that was made from it, else a ``PF`` folder of pickles
     beside it or one folder up (the ``<expt>/<expt>/<expt>.mesc`` layout keeps
     ``<expt>/PF``); None when there is none. Another recording's run in the
@@ -1039,8 +1024,8 @@ register_pipeline(
 
 
 def recording_id(unit: ResultUnit, roi: str) -> str:
-    """The curation's id of one ROI trace, ``scan=<id>/domain=<name>``: what its
-    labels are keyed by under ``<run>/.curation``.
+    """The curation's id of one ROI trace, ``scan=<id>/domain=<name>``, which
+    keys its labels under ``<run>/.curation``.
 
     The words are the archive's and stay whatever the results file calls the
     unit, so a trace curated before the run was a results file still matches.
@@ -1243,7 +1228,6 @@ class ResultsArray(ReductionMixin, LazyArray):
         )
         if unit is not None and unit.fs is not None:
             md.setdefault("fs", unit.fs)
-        # the run's per-step wall, cpu and memory record, as the pipeline wrote it
         for key in ("timing", "processing_history"):
             if key in self.results.provenance:
                 md[key] = self.results.provenance[key]

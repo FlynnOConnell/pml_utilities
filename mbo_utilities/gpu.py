@@ -32,13 +32,9 @@ import sys
 from typing import Any
 
 _SMI_TIMEOUT = 5
-
-
-def _no_window_flags() -> int:
-    """CREATE_NO_WINDOW on Windows so subprocess calls don't flash a console."""
-    if sys.platform == "win32":
-        return getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    return 0
+# keeps subprocess calls from flashing a console on Windows
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+_OFF_TOKENS = ("0", "off", "false", "no", "cpu", "none")
 
 
 def _run(cmd: list[str], timeout: int = _SMI_TIMEOUT) -> str | None:
@@ -50,9 +46,9 @@ def _run(cmd: list[str], timeout: int = _SMI_TIMEOUT) -> str | None:
             capture_output=True,
             text=True,
             timeout=timeout,
-            creationflags=_no_window_flags(),
+            creationflags=_NO_WINDOW,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    except (subprocess.TimeoutExpired, OSError):
         return None
     if result.returncode != 0:
         return None
@@ -77,6 +73,22 @@ def driver_cuda() -> str | None:
     return None
 
 
+def _smi_number(s: str) -> float | None:
+    """A numeric nvidia-smi field, or None for ``[N/A]`` and other non-numbers."""
+    try:
+        return float(s.strip())
+    except ValueError:
+        return None
+
+
+def _smi_text(s: str) -> str | None:
+    """A text nvidia-smi field, or None for ``[N/A]`` (the driver model off Windows) and ``Not Supported``."""
+    s = s.strip().strip("[]").strip()
+    if not s or s.upper() in ("N/A", "NA", "NOT SUPPORTED"):
+        return None
+    return s
+
+
 def gpu_devices() -> list[dict[str, Any]]:
     """Per-device memory and utilization.
 
@@ -97,21 +109,6 @@ def gpu_devices() -> list[dict[str, Any]]:
     )
     if not out:
         return []
-
-    def _num(s: str) -> float | None:
-        s = s.strip()
-        try:
-            return float(s)
-        except ValueError:
-            return None
-
-    def _dm(s: str) -> str | None:
-        # nvidia-smi prints "WDDM"/"TCC" on Windows, "[N/A]"/"N/A" elsewhere.
-        s = s.strip().strip("[]").strip()
-        if not s or s.upper() in ("N/A", "NA", "NOT SUPPORTED"):
-            return None
-        return s
-
     devices = []
     for line in out.splitlines():
         line = line.strip()
@@ -129,27 +126,17 @@ def gpu_devices() -> list[dict[str, Any]]:
             {
                 "index": index,
                 "name": name,
-                "total_mb": _num(total),
-                "used_mb": _num(used),
-                "free_mb": _num(free),
-                "util_pct": _num(util),
-                "temp_c": _num(temp),
-                "driver_model": _dm(parts[7]) if len(parts) > 7 else None,
-                "driver_model_pending": _dm(parts[8]) if len(parts) > 8 else None,
-                "compute_cap": _dm(parts[9]) if len(parts) > 9 else None,
+                "total_mb": _smi_number(total),
+                "used_mb": _smi_number(used),
+                "free_mb": _smi_number(free),
+                "util_pct": _smi_number(util),
+                "temp_c": _smi_number(temp),
+                "driver_model": _smi_text(parts[7]) if len(parts) > 7 else None,
+                "driver_model_pending": _smi_text(parts[8]) if len(parts) > 8 else None,
+                "compute_cap": _smi_text(parts[9]) if len(parts) > 9 else None,
             }
         )
     return devices
-
-
-def _pid_name(pid: int) -> str:
-    """Best-effort process name for a pid."""
-    try:
-        import psutil
-
-        return psutil.Process(pid).name()
-    except Exception:
-        return "?"
 
 
 def _gpu_processes_windows() -> list[dict[str, Any]]:
@@ -159,8 +146,8 @@ def _gpu_processes_windows() -> list[dict[str, Any]]:
     driver (WDDM); the '\\GPU Process Memory(*)\\Dedicated Usage' counter
     is what Task Manager reads. Instance names encode the pid, e.g.
     'pid_23584_luid_0x..._phys_0'. A process can have several instances;
-    we sum them per pid. Process names come from Get-Process in the same
-    call (so this works without psutil installed).
+    they are summed per pid. Process names come from Get-Process in the same
+    call, ``?`` when it has none.
     """
     ps = (
         "$n=@{}; Get-Process | ForEach-Object { $n[$_.Id]=$_.ProcessName }; "
@@ -194,7 +181,7 @@ def _gpu_processes_windows() -> list[dict[str, Any]]:
     procs = [
         {
             "pid": pid,
-            "name": names.get(pid) or _pid_name(pid),
+            "name": names[pid],
             "used_mb": b / (1024 * 1024),
             "device": None,
         }
@@ -228,15 +215,11 @@ def _gpu_processes_nvsmi() -> list[dict[str, Any]]:
             pid = int(pid_s)
         except ValueError:
             continue
-        try:
-            used_mb = float(mem_s)
-        except ValueError:
-            used_mb = None  # '[N/A]' under unsupported drivers
         procs.append(
             {
                 "pid": pid,
                 "name": name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
-                "used_mb": used_mb,
+                "used_mb": _smi_number(mem_s),
                 "device": None,
             }
         )
@@ -256,20 +239,8 @@ def gpu_processes() -> list[dict[str, Any]]:
 
 
 def _adapter_summary(adapter: Any) -> str:
-    """Short label for a wgpu adapter, e.g. 'NVIDIA RTX A4000 [DiscreteGPU] via Vulkan'."""
-    summary = getattr(adapter, "summary", None)
-    if isinstance(summary, str) and summary:
-        return summary
-    info = getattr(adapter, "info", {}) or {}
-    name = info.get("device", info.get("description", "?"))
-    type_ = info.get("adapter_type", info.get("device_type", ""))
-    backend = info.get("backend_type", "")
-    label = name
-    if type_:
-        label += f" [{type_}]"
-    if backend:
-        label += f" via {backend}"
-    return label
+    """Short label for a wgpu adapter, e.g. 'NVIDIA RTX A4000 (DiscreteGPU) via Vulkan'."""
+    return adapter.summary
 
 
 def render_gpu(live_adapter: Any | None = None) -> dict[str, Any] | None:
@@ -282,46 +253,37 @@ def render_gpu(live_adapter: Any | None = None) -> dict[str, Any] | None:
     render frame (e.g. the CLI).
     """
     if live_adapter is not None:
-        info = getattr(live_adapter, "info", {}) or {}
-        return {
-            "summary": _adapter_summary(live_adapter),
-            "name": info.get("device", info.get("description", "?")),
-            "type": info.get("adapter_type", info.get("device_type", "?")),
-            "source": "live",
-            "index": None,
-        }
-    try:
-        import fastplotlib as fpl
-
-        adapters = fpl.enumerate_adapters()
-    except Exception:
-        return None
-    if not adapters:
-        return None
-    try:
-        from mbo_utilities.preferences import get_gpu_index
-
-        idx = get_gpu_index()
-    except Exception:
-        idx = -1
-
-    source = "preference"
-    if not (0 <= idx < len(adapters)):
-        idx, source = 0, "auto"
+        adapter, source, idx = live_adapter, "live", None
+    else:
         try:
-            import wgpu
+            import fastplotlib as fpl
 
-            default_info = wgpu.gpu.request_adapter_sync().info
-            infos = [a.info for a in adapters]
-            idx = infos.index(default_info)
+            adapters = fpl.enumerate_adapters()
         except Exception:
-            pass
-    a = adapters[idx]
-    info = getattr(a, "info", {}) or {}
+            return None
+        if not adapters:
+            return None
+        try:
+            from mbo_utilities.preferences import get_gpu_index
+
+            idx = get_gpu_index()
+        except Exception:
+            idx = -1
+        source = "preference"
+        if not (0 <= idx < len(adapters)):
+            idx, source = 0, "auto"
+            try:
+                import wgpu
+
+                default_info = wgpu.gpu.request_adapter_sync().info
+                idx = [a.info for a in adapters].index(default_info)
+            except Exception:
+                pass
+        adapter = adapters[idx]
     return {
-        "summary": _adapter_summary(a),
-        "name": info.get("device", info.get("description", "?")),
-        "type": info.get("adapter_type", info.get("device_type", "?")),
+        "summary": adapter.summary,
+        "name": adapter.info["device"],
+        "type": adapter.info["adapter_type"],
         "source": source,
         "index": idx,
     }
@@ -358,17 +320,15 @@ def compute_gpu() -> dict[str, Any]:
             break
 
     torch_index = 0
-    try:
-        import sys as _sys
-
-        if "torch" in _sys.modules:
+    if "torch" in sys.modules:
+        try:
             import torch
 
             if torch.cuda.is_available():
                 torch_index = torch.cuda.current_device()
                 name = torch.cuda.get_device_name(torch_index)
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     if name is None:
         return {
@@ -393,16 +353,7 @@ def gpu_compute_disabled() -> bool:
     if cvd is not None and cvd.strip() in ("", "-1"):
         return True
     raw = os.environ.get("MBO_GPU")
-    if raw is not None and raw.strip().lower() in (
-        "0",
-        "off",
-        "false",
-        "no",
-        "cpu",
-        "none",
-    ):
-        return True
-    return False
+    return raw is not None and raw.strip().lower() in _OFF_TOKENS
 
 
 def apply_gpu_policy(value: str | int | bool | None = None) -> str | None:
@@ -423,12 +374,10 @@ def apply_gpu_policy(value: str | int | bool | None = None) -> str | None:
     token = str(value).strip().lower()
     if token in ("", "auto", "1", "on", "true", "yes", "gpu"):
         return None
-    if token in ("0", "off", "false", "no", "cpu", "none"):
+    if token in _OFF_TOKENS:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
         return ""
-    # device index or comma list -> pin. Order by PCI bus so the index
-    # matches nvidia-smi (CUDA defaults to FASTEST_FIRST otherwise); a
-    # user-set CUDA_DEVICE_ORDER still wins.
+    # PCI bus order so the index matches nvidia-smi (CUDA defaults to FASTEST_FIRST)
     if re.fullmatch(r"\d+(,\d+)*", token):
         os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
         os.environ["CUDA_VISIBLE_DEVICES"] = token
@@ -468,8 +417,6 @@ def format_gpu_report(show_processes: bool = False, top: int = 12) -> str:
     Per-process VRAM is included only when ``show_processes`` is True.
     """
     lines: list[str] = []
-
-    # roles: which GPU renders, which GPU computes
     rg = render_gpu()
     if rg is not None:
         tag = {"live": "", "preference": " (selected)", "auto": " (wgpu default)"}.get(

@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import os
+import socket
+import subprocess
 from pathlib import Path
 
 import click
 
 
 def _refuse_local_on_login_node() -> None:
-    """Guard an inline ``--local`` run from a SLURM login node — running heavy
-    compute on a shared login node is prohibited on most clusters and will OOM.
+    """Refuse an inline ``--local`` run on a SLURM login node, where heavy compute is prohibited and OOMs.
 
-    Matches on the HOSTNAME only (a username is never a node-type signal), allows
-    it when inside a SLURM allocation (``SLURM_JOB_ID`` set — you are on a compute
-    node via salloc/srun), and honors ``MBO_ALLOW_LOGIN_LOCAL=1`` as an override.
+    Matches on the hostname only (a username is never a node-type signal), allows
+    it inside a SLURM allocation (``SLURM_JOB_ID`` set by salloc/srun), and honors
+    ``MBO_ALLOW_LOGIN_LOCAL=1`` as an override.
     """
-    import os
-    import socket
-
     if os.environ.get("SLURM_JOB_ID") or os.environ.get("MBO_ALLOW_LOGIN_LOCAL"):
         return
     host = os.environ.get("SLURMD_NODENAME") or os.environ.get("HOSTNAME") or ""
@@ -94,7 +94,6 @@ def hpc_init(data_path, config_path, output_root, overwrite):
     """
     from mbo_utilities.hpc.config import render_template
 
-    # Config lands in the given path; CWD only when no path is passed.
     if config_path:
         cfg_file = Path(config_path).expanduser()
     elif data_path:
@@ -106,8 +105,7 @@ def hpc_init(data_path, config_path, output_root, overwrite):
         click.secho(f"Exists: {cfg_file}  (--overwrite to replace)", fg="yellow")
         return
 
-    # Absolute paths so the config works from any directory. Results default next
-    # to the config.
+    # absolute paths so the config works from any directory
     inp = str(Path(data_path).expanduser().resolve()) if data_path else ""
     out = output_root or str(cfg_file.resolve().parent / "results")
 
@@ -220,7 +218,7 @@ def hpc_run(
         if stage_input is not None:
             cfg.pipeline.stage_input = stage_input
         cfg.validate()
-    except ValueError as e:  # bad TOML or failed validation
+    except ValueError as e:  # a TOMLDecodeError is a ValueError too
         raise click.ClickException(str(e))
 
     if force_local:
@@ -249,14 +247,10 @@ def hpc_status(target):
       mbo hpc status /data/results/2025_07_27_mk355   # timings.json summary
       mbo hpc status                                  # squeue -u $USER
     """
-    import json
-    import os
-    import subprocess
-
     from mbo_utilities.hpc import slurm
 
     if not target:
-        # no target -> the last run you launched (registry), else your queue.
+        # no target: the last run launched, else (no registry) the queue
         from mbo_utilities.hpc.history import last_run_target
 
         target = last_run_target()
