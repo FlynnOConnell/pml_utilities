@@ -97,7 +97,7 @@ from mbo_utilities.hpc import HpcConfig, submit
 
 cfg = HpcConfig.from_toml("hpc.toml")
 cfg.pipeline.planes_per_gpu = 3
-submit(cfg, mode="array")            # or "single" / "local"; dry_run=True to preview
+submit(cfg, mode="array")  # or "single" / "local"; dry_run=True to preview
 ```
 
 ## Reload results

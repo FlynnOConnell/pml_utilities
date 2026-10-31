@@ -1,6 +1,6 @@
 # Installing on macOS
 
-Quick setup for the Miller Brain Studio viewer on a Mac. Run everything in **Terminal**.
+Quick setup for The Studio viewer on a Mac. Run everything in **Terminal**.
 
 Requires [uv](https://docs.astral.sh/uv/). If `uv` isn't installed:
 ```
@@ -16,7 +16,7 @@ Skip if your prompt doesn't show `(base)`. Re-run in each new Terminal window.
 ## 2. Remove any previous install (skip if first time)
 ```
 rm -rf ~/projects/mbo_utilities ~/mbo
-rm -rf ~/Applications/"Miller Brain Studio.app" ~/Desktop/"Miller Brain Studio.app"
+rm -rf ~/Applications/"The Studio.app" ~/Desktop/"The Studio.app"
 ```
 
 ## 3. Install from GitHub (master)
@@ -34,12 +34,12 @@ uv run mbo
 Then use **Open File(s)** or **Select Folder** to load your data.
 
 ## 5. (Optional) Make a Desktop app
-Paste this whole block to create a double-clickable **Miller Brain Studio** icon:
+Paste this whole block to create a double-clickable **The Studio** icon:
 ```
-APP="$HOME/Applications/Miller Brain Studio.app"
+APP="$HOME/Applications/The Studio.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$HOME/.mbo"
 
-cat > "$APP/Contents/MacOS/Miller Brain Studio" << 'EOF'
+cat > "$APP/Contents/MacOS/The Studio" << 'EOF'
 #!/bin/bash
 export PATH="$HOME/.local/bin:$PATH"
 MBO="$HOME/projects/mbo_utilities/bin/mbo"
@@ -51,16 +51,16 @@ else
   exec "$MBO"
 fi
 EOF
-chmod +x "$APP/Contents/MacOS/Miller Brain Studio"
+chmod +x "$APP/Contents/MacOS/The Studio"
 
 cat > "$APP/Contents/Info.plist" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleExecutable</key><string>Miller Brain Studio</string>
+    <key>CFBundleExecutable</key><string>The Studio</string>
     <key>CFBundleIdentifier</key><string>com.millerbrainobservatory.mbo-utilities</string>
-    <key>CFBundleName</key><string>Miller Brain Studio</string>
+    <key>CFBundleName</key><string>The Studio</string>
     <key>CFBundleVersion</key><string>1.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>LSUIElement</key><false/>
@@ -70,7 +70,7 @@ EOF
 
 curl -LsSf "https://raw.githubusercontent.com/MillerBrainObservatory/mbo_utilities/master/mbo_utilities/assets/app_settings/icon.png" -o "$APP/Contents/Resources/icon.png" 2>/dev/null || true
 
-ln -sf "$APP" "$HOME/Desktop/Miller Brain Studio.app"
+ln -sf "$APP" "$HOME/Desktop/The Studio.app"
 echo "Created: $APP  (+ Desktop alias)"
 ```
 First double-click may be blocked by macOS — allow it once via **System Settings → Privacy & Security → Open Anyway**.

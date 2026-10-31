@@ -1,12 +1,12 @@
 (gui_guide)=
 
-# Miller Brain Studio
+# The Studio
 
 Interactive data preview and processing tools for calcium imaging data.
 
 ```{figure} /_images/gui/readme/02_step_data_view.png
 :width: 100%
-:alt: Miller Brain Studio
+:alt: The Studio
 
 The time-series viewer: image canvas with axes and histogram, plus the side panel (Preview / Signal Quality / Run tabs) for window functions, spatial filtering, scan-phase correction, z-stats, and pipelines.
 ```
@@ -436,7 +436,7 @@ The sliders are the array's axes whatever they are called: a MESc AOD unit's
 or channel, and the trace table and legends name the axis the same way (`ROI 3`,
 not `z3`). An AOD unit's ROIs, a line scan's lines or a chessboard or ribbon scan's
 patches, land on the Traces tab as their mean traces (computed in the background
-when no `F.npy` or PF traces exist; **Options** can turn that off) with their index
+when no vnoiser run holds them; **Options** can turn that off) with their index
 and channel. Every row read on an AOD unit knows its line, whether a quick trace of
 a drawn ROI, a line-scan trace or a pipeline's denoised row: hovering the row lists
 the line's ends, length and sample spacing, from the scan's own geometry.

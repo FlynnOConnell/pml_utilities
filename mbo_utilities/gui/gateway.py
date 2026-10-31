@@ -1,4 +1,4 @@
-"""Serve Miller Brain Studio to browsers: one process per session, behind one port.
+"""Serve The Studio to browsers: one process per session, behind one port.
 
 ``mbo serve`` runs this. Each session is a ``studio_server`` process on a
 localhost port of its own that answers only to its key. The gateway starts
@@ -466,7 +466,7 @@ class Gateway:
         elif rest in ("", "index.html"):
             if session.state == "ready":
                 body = page_html(
-                    f"{session.name} - Miller Brain Studio",
+                    f"{session.name} - The Studio",
                     f"Connecting to {session.name} ...",
                     home="/",
                 )
@@ -625,8 +625,8 @@ def _status_page(heading: str, message: str, log_text: str, refresh: bool) -> st
 
 
 _NO_TOKEN = (
-    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Miller Brain Studio</title>"
-    f"<style>{_STYLE}</style></head><body><main><h1>Miller Brain Studio</h1>"
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>The Studio</title>"
+    f"<style>{_STYLE}</style></head><body><main><h1>The Studio</h1>"
     "<p>Open the link <code>mbo serve</code> printed; it carries the token this page needs.</p>"
     "</main></body></html>"
 )
@@ -637,7 +637,7 @@ _LAUNCHER = Template(
 <head>
 <meta charset='utf-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
-<title>Miller Brain Studio on $host</title>
+<title>The Studio on $host</title>
 <style>
 """
     + _STYLE.replace("$", "$$")
@@ -676,7 +676,7 @@ _LAUNCHER = Template(
 </head>
 <body>
 <main>
-    <h1>Miller Brain Studio</h1>
+    <h1>The Studio</h1>
     <div class='sub'>on <b>$host</b> &middot; v$version &middot; <span id='limit'></span></div>
     <section>
         <h2>Sessions</h2>

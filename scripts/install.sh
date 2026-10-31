@@ -875,7 +875,7 @@ add_mbo_shortcut() {
 
 create_macos_app_bundle() {
     local mbo_path="$1"
-    local app_name="${2:-Miller Brain Studio}"
+    local app_name="${2:-The Studio}"
 
     info "Creating macOS app bundle..."
 
@@ -1001,7 +1001,7 @@ main() {
         install_dev_environment
         if [[ -x "$MBO_ENV_PATH/bin/mbo" ]]; then
             if read_yes_no "Add a desktop shortcut?" "n"; then
-                add_mbo_shortcut "$MBO_ENV_PATH/bin/mbo" "Miller Brain Studio"
+                add_mbo_shortcut "$MBO_ENV_PATH/bin/mbo" "The Studio"
             fi
         fi
     fi

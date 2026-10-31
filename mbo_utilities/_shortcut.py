@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-APP_NAME = "Miller Brain Studio"
+APP_NAME = "The Studio"
 DESCRIPTION = "MBO Image Viewer"
 
 
@@ -157,7 +157,7 @@ def _create_linux_shortcut(name: str) -> Path:
 
     desktop = _linux_desktop_dir()
     desktop.mkdir(parents=True, exist_ok=True)
-    entry = desktop / "miller-brain-studio.desktop"
+    entry = desktop / "the-studio.desktop"
     entry.write_text(
         "[Desktop Entry]\n"
         "Type=Application\n"

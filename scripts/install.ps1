@@ -990,7 +990,7 @@ function Main {
         if ($envPath) {
             if (Read-YesNo "Add a desktop shortcut?" $false) {
                 $localMbo = Join-Path $envPath "Scripts\mbo.exe"
-                Add-MboShortcut -MboExe $localMbo -Name "Miller Brain Studio"
+                Add-MboShortcut -MboExe $localMbo -Name "The Studio"
             }
         }
     }

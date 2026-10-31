@@ -264,7 +264,7 @@ With a `DATA_PATH` argument, notebooks are written to a `scripts/` directory bes
 Create a desktop icon that opens the GUI.
 
 ```bash
-mbo shortcut                  # "Miller Brain Studio"
+mbo shortcut                  # "The Studio"
 mbo shortcut --name "MBO"     # custom name
 ```
 
@@ -316,126 +316,6 @@ Features:
 
 Installation OK
 ```
-
-## Linescan
-
-Per-ROI traces from the AOD line-scan units of a Femtonics `.mesc` file. Each
-line drawn on the reference Z-stack is its own ROI; its kymograph is averaged
-over the line (cropped to the line's true, unpadded extent) into one trace per
-timepoint. Ribbon, chessboard, Z-stack and other units in the file are skipped.
-
-```bash
-mbo linescan scan.mesc                                  # every linescan unit
-mbo linescan scan.mesc -o results/linescan              # keep the raw folder untouched
-mbo linescan scan.mesc --unit MUnit_3 --channel 1       # one unit, second channel
-mbo linescan scan.mesc --dfof-window 2 --no-dfof        # baseline window in seconds
-```
-
-Outputs one directory per unit, `rois_linescan/<MUnit_n>/` beside the file (or
-`<output>/<MUnit_n>/`):
-
-| file | contents |
-|------|----------|
-| `F.npy` | K x T mean over each line, in the file's converted counts (zero = no photons; MESc's raw uint16 sit ~1000 counts above that, which left in makes every dF/F several times too small) |
-| `F_chan<c>.npy` | the same for every other channel (the red structural channel next to the green functional one) |
-| `dfof.npy` | rolling max-min baseline dF/F, window in seconds so kHz line rates get the same seconds as a raster movie; stim frames bridged |
-| `kymographs.npy`, `kymographs_chan<c>.npy` | K x bins x W position-along-line x time, 10 ms bins (NaN beyond a narrower line's width) |
-| `stim_frames.npy` | frames acquired while a photostimulation pattern was active (from the `PatternSeq_AO1` curve, the rule lab4 uses); the scanner reads low on these, so derived traces bridge them |
-| `stat.npy` | per ROI: `roi_index`, `height`, `width`, `npix`, plus `f0`, `peak_dfof`, `time_to_peak_s`, `response_auc`, `noise_dfof`, `snr` (stimulus-aligned when there is a stimulus, whole-run otherwise) |
-| `ops.npy` | `roi_workflow` holds fs, channels, stim onsets/durations/pulse count, the paired reference Z-stack and the channel conversion used |
-| `Fneu.npy`, `spks.npy`, `iscell.npy`, `rois.json` | suite2p-shaped placeholders so `mbo info` and lsp tools still open the directory |
-
-A ROI whose baseline is at or below zero is reported as unreliable rather than
-silently written.
-
-The numbered figures read in order, like the suite2p and masknmf sets:
-
-| figure | what to look for |
-|--------|------------------|
-| `01a_background_snapshot_lines.png` | every line on the raster snapshot it was drawn on (the unit's `BackgroundImagePath`, taken seconds before the scan), composite plus each channel; lines more than 1 um off that plane are dashed |
-| `01b_reference_zstack_lines.png` | the lines on the paired Z-stack, one panel per slice that carries lines; the dot is the line start. The stack is the finest one whose field holds the lines and that puts at least 10 pixels along a line (a whole-cell stack never qualifies while a dendrite stack exists). A line scanned outside the stack's depth range is dashed with a `!`, drawn on the nearest slice, and its offset is in the title |
-| `01c_line_zooms.png` | an 8 um crop around every line, each channel, local contrast, from the snapshot or the stack slice at the line's depth: the line should cross a bright spine or shaft. This is the panel to check first when an overlay looks wrong |
-
-The micron-to-pixel convention (translation = the array's corner, rows grow
-with +y, no mirror) was verified on real data: 36 of 40 in-plane lines are
-brighter than random same-shaped lines nearby, the mirrored mapping is at
-chance. `--flip-y` remains for a rig that saves the other way round.
-| `02_line_profiles.png` | time-averaged counts along each line, both channels, shared y-axis: a bump is a spine, a flat line at background missed |
-| `03a_kymographs_green.png`, `03b_kymographs_red.png` | position x time per ROI, stimulus marked |
-| `04a_traces_raw.png`, `04b_traces_dfof.png` | stacked per-ROI traces over the run |
-| `05_stim_response.png` | stimulus-aligned dF/F (F0 = 1 s before onset): ROI x time heatmap, every ROI, mean +/- s.e.m. |
-| `06_roi_response_metrics.png` | per-ROI F0 (both channels), peak dF/F, latency, noise, SNR, response integral |
-| `07_motion_correction.png` | the AOD's real-time motion correction in X/Y/Z over the run |
-
-`--no-figures` skips them.
-
-`mbo scan.mesc` opens the image viewer on the file's first line-scan unit
-with no unit prompt. The viewer has no curation panel of its own: with
-vnoiser installed, the vnoiser pipeline's **Curate** button (and File >
-Curate) opens the curation window below in its own process, on the
-experiment's `PF` folder when one sits beside the file, else on the file
-itself with every line of its line-scan units as a raw recording that the
-wavelet denoiser runs on when clicked. The vnoiser pipeline is on the
-Process tab. `mbo <expt>`
-or `mbo <expt>/PF` opens the folder the same way: `imread` returns a
-`ResultsArray` for any run's output, like a suite2p output folder, whose
-image is the recording it came from (named in `pipeline.json`, or laid out
-beside it as `<expt>/<expt>/<expt>.mesc`) or, without that file, a raster of
-the denoised traces. The curation dashboard on its own, with no image, is
-`mbo curate PATH` (`python -m mbo_utilities.gui.curation_viewer PATH` from
-a script): it takes a `PF` folder (or the experiment folder holding it, or
-a line scan with one beside it), lists every scan / domain trace in it and
-shows the trace and its candidates over the template, focused candidate
-and PCA, one recording at a time with arrows to flip, and the recordings
-table beside it. Labels are keyed `scan=<id>/domain=<name>` in
-`PF/.curation/<mode>_template_curation.json`.
-
-The window's `guide` button (`h`), and the `vnoiser guide` button at the top of
-the vnoiser pipeline, open the vnoiser guide: one page of diagrams and tables on
-what each stage does to a trace, the vnoiser window and its domain table, the
-curation window's panels and four rules, and the files a run leaves.
-`python -m mbo_utilities.gui.imgui.vnoiser_help` opens it on its own.
-
-To curate from another machine, serve the dashboard instead of opening a
-window: `mbo curate PATH --serve` (or `python -m mbo_utilities.gui.curation_server
-PATH`) renders it where the data and the GPU are and streams it to any browser
-that opens the printed URL (default `http://localhost:60649/`); pointer and key
-events go back the same way, so nothing is installed on the laptop. Every
-connected browser sees the same frames and the longest-connected one drives.
-There is no login: leave `--host` on localhost and tunnel
-(`ssh -L 60649:localhost:60649 server`), or front it with an authenticating
-proxy; `--host 0.0.0.0` opens it to the network as is.
-
-To check that an ROI's spikes are activity and not motion, run
-`mbo spike-average <run>` on any run with results: a MaskNMF run folder that
-demixed, a results file or the folder holding one, a PF folder, a suite2p
-plane dir. `--unit` and `--roi` pick the ROI by the results' names (the first
-of each to start), `--channel` the movie's channel. On top, the movie the
-ROI was measured on (a MaskNMF run's registered and compressed movies)
-averaged over `--window` frames before and after each spike (10 and 10),
-each about its own mean unless `subtract mean` is off, on one slider over
-the lag. Above them, on the same lag, the ROI's trace, each movie's mean and
-every motion correction the movie went through (masknmf's shifts, the AOD's
-RTMC), each about the window's mean, its standard error as two faint lines.
-Over those, the ROI's whole trace with its spikes marked. The spikes come
-from the run's detected events, the events a curation file beside the run
-accepts (`curated fast`), or the trace's peaks over a threshold that drags
-(`--spikes`, `--threshold`, `--distance`); the ROI, the trace (`--trace`)
-and the spikes are picked in the window. The Studio opens the same window
-from the Traces tab, the MaskNMF and vnoiser tabs and the launcher.
-`SpikeSource.open(run, unit, roi).average(spikes, kind)` (in
-`mbo_utilities.analysis.spike_average`) returns the same averages without a
-window.
-
-To scrub the lines on the stack instead, run `mbo linescan scan.mesc --view`
-(or `mbo linescan <expt> --view`): three panels on top (the
-line-scan itself, the snapshot the lines were drawn on, the paired Z-stack)
-and the curation dashboard, scoped to the scan on screen, on the strip
-above them. The Z-stack picker shows every
-stack's fit (fraction of lines in its field and depth range, pixel size)
-and defaults to the paired one; a stack holding none of the lines is
-refused. `--dry-run` prints the choice and placement without a window,
-`--screenshot out.png` renders the window offscreen.
 
 ## vnoiser
 

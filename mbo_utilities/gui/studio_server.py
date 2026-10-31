@@ -1,4 +1,4 @@
-"""Serve Miller Brain Studio on one dataset to browsers over HTTP.
+"""Serve The Studio on one dataset to browsers over HTTP.
 
 The viewer ``mbo PATH`` opens, on rendercanvas's ``http`` canvas instead of a
 desktop window, so a browser on another machine drives it. One process holds
@@ -92,7 +92,7 @@ class StudioServer(CanvasServer):
         name = Path(str(path[0] if isinstance(path, (list, tuple)) else path)).name
         super().__init__(
             vis,
-            title=f"{name} - Miller Brain Studio v{__version__}",
+            title=f"{name} - The Studio v{__version__}",
             waiting=f"Opening {name} ...",
             host=host,
             port=port,
