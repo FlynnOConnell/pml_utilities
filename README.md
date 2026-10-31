@@ -22,7 +22,7 @@ Image processing utilities for the [Miller Brain Observatory](https://github.com
 - **Modern Image Reader/Writer**: Fast, lazy I/O for ScanImage/generic TIFFs, Suite2p `.bin`, Zarr, HDF5, and Numpy (in memeory or saved to `.npy`)
 - **Run processing pipelines** for calcium imaging - motion correction, cell extraction, and signal analysis
 - Operates on **3D timeseries** natively and is extendable to ND-arrays
-- **Visualize data interactively** with the **Miller Brain Studio**, a GPU-accelerated GUI for exploring large datasets with [fastplotlib](https://fastplotlib.org/user_guide/guide.html#what-is-fastplotlib)
+- **Visualize data interactively** with **The Studio**, a GPU-accelerated GUI for exploring large datasets with [fastplotlib](https://fastplotlib.org/user_guide/guide.html#what-is-fastplotlib)
 
 <p align="center">
   <img src="docs/_images/gui/readme/01_step_file_dialog.png" height="280" alt="File Selection" />
@@ -123,7 +123,7 @@ The [ScanPhase Guide](https://millerbrainobservatory.github.io/mbo_utilities/usa
 
 → [CLI Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/cli.html)
 
-### Miller Brain Studio
+### The Studio
 
 Launch an interactive GPU-accelerated viewer for exploring large imaging datasets. Supports all MBO file formats with real-time visualization.
 
@@ -160,15 +160,15 @@ mbo.imwrite(arr, "registered.zarr", ext=".zarr", register_z=True)
 
 # apply them on read (reversible, source never modified)
 data = mbo.imread("registered.zarr")
-aligned = mbo.with_axial_shifts(data)        # reads metadata["plane_shifts"]
-aligned.enabled = False                       # back to the raw frames
+aligned = mbo.with_axial_shifts(data)  # reads metadata["plane_shifts"]
+aligned.enabled = False  # back to the raw frames
 
 # or supply your own shifts (one (dy, dx) row per z-plane)
-shifts = [[0, 0], [2, -1], [3, -2]]           # len must equal the Z size
+shifts = [[0, 0], [2, -1], [3, -2]]  # len must equal the Z size
 aligned = mbo.with_axial_shifts(data, plane_shifts=shifts)
 ```
 
-In Miller Brain Studio, datasets that carry valid `plane_shifts` are aligned
+In The Studio, datasets that carry valid `plane_shifts` are aligned
 automatically on load. Saving the aligned view bakes the shifts into the output
 pixels.
 

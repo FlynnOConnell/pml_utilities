@@ -168,7 +168,6 @@ class SummaryImageViewer:
         self._needs_fit = True
         self._show_pixel_values = False
         self._show_rois = show_rois
-        self._highlight = None
         self._gpu: dict = {}
         self._manual_lo: dict = {}
         self._manual_hi: dict = {}
@@ -212,20 +211,6 @@ class SummaryImageViewer:
             self._selected = keys.index(selected)
         elif self._selected >= len(keys):
             self._selected = 0
-
-    def set_movies(self, movies: dict):
-        self._movies = dict(movies)
-        self._movie_frame = None
-        self._movie_key = None
-        self._movie_range.clear()
-
-    def set_highlight(self, rect: tuple | None):
-        """Outline (y0, x0, height, width) in image coords, or None."""
-        self._highlight = rect
-
-    def set_cmap(self, name: str):
-        if name in CMAPS:
-            self._cmap_idx = CMAPS.index(name)
 
     def _backend(self):
         if self._explicit_backend is not None:
@@ -503,11 +488,6 @@ class SummaryImageViewer:
             canvas_pos, imgui.ImVec2(canvas_pos.x + cw, canvas_pos.y + ch), True
         )
         draw_list.add_image(gpu.ref, img_min, img_max)
-        if self._highlight is not None:
-            y0, x0, hh, ww = self._highlight
-            p0 = imgui.ImVec2(img_min.x + x0 * self._zoom, img_min.y + y0 * self._zoom)
-            p1 = imgui.ImVec2(p0.x + ww * self._zoom, p0.y + hh * self._zoom)
-            draw_list.add_rect(p0, p1, theme.u32(theme.HIGHLIGHT), 0.0, 2.0)
         if self._show_rois and self.roi_provider is not None:
             self._draw_rois(draw_list, img_min, key)
         if self._show_pixel_values:

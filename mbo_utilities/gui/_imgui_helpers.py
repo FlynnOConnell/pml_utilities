@@ -206,15 +206,13 @@ def tooltip_marks_right():
 
 def begin_popup_size():
     """Calculate popup size based on window dimensions."""
-    width_em = hello_imgui.em_size(1.0)  # 1em in pixels
+    width_em = hello_imgui.em_size(1.0)
     win_w = imgui.get_window_width()
     win_h = imgui.get_window_height()
 
-    # 75% of window size in ems
     w = win_w * 0.75 / width_em
     h = win_h * 0.75 / width_em
 
-    # Clamp in em units (roughly 300-800 px if 1em ≈ 15px)
     w = min(max(w, 20), 60)
     h = min(max(h, 20), 60)
 
@@ -282,10 +280,10 @@ class PopupAutoSize:
                 imgui.Cond_.appearing,
                 pivot=ImVec2(0.5, 0.5),
             )
+            # default "top": horizontally centered in the work area, top edge
+            # ``top_offset`` px below the viewport's usable top (work_pos.y
+            # already excludes any host menu bar imgui draws).
             return
-        # default "top": horizontally centered in the work area, top edge
-        # ``top_offset`` px below the viewport's usable top (work_pos.y
-        # already excludes any host menu bar imgui draws).
         work_pos = viewport.work_pos
         work_size = viewport.work_size
         imgui.set_next_window_pos(
@@ -320,11 +318,9 @@ def style_imgui_opaque():
 
     style = imgui.get_style()
 
-    # global alpha — full opacity for everything except disabled widgets
     style.alpha = 1.0
     style.disabled_alpha = 0.6
 
-    # window/popup/child backgrounds — fully opaque
     style.set_color_(imgui.Col_.window_bg.value, ImVec4(0.07, 0.08, 0.10, 1.00))
     style.set_color_(imgui.Col_.child_bg.value, ImVec4(0.07, 0.08, 0.10, 1.00))
     style.set_color_(imgui.Col_.popup_bg.value, ImVec4(0.07, 0.08, 0.10, 1.00))
@@ -336,14 +332,12 @@ def style_imgui_opaque():
     style.set_color_(imgui.Col_.frame_bg_hovered.value, ImVec4(0.18, 0.20, 0.24, 1.00))
     style.set_color_(imgui.Col_.frame_bg_active.value, ImVec4(0.22, 0.25, 0.30, 1.00))
 
-    # title bars
     style.set_color_(imgui.Col_.title_bg.value, ImVec4(0.05, 0.06, 0.08, 1.00))
     style.set_color_(imgui.Col_.title_bg_active.value, ImVec4(0.10, 0.12, 0.16, 1.00))
     style.set_color_(
         imgui.Col_.title_bg_collapsed.value, ImVec4(0.05, 0.06, 0.08, 1.00)
     )
 
-    # borders — solid
     style.set_color_(imgui.Col_.border.value, ImVec4(0.30, 0.32, 0.36, 1.00))
     style.set_color_(imgui.Col_.border_shadow.value, ImVec4(0.00, 0.00, 0.00, 0.00))
 
@@ -352,57 +346,55 @@ def style_imgui_opaque():
     style.set_color_(imgui.Col_.nav_windowing_dim_bg.value, ImVec4(0.0, 0.0, 0.0, 0.85))
 
 
+def _set_implot_color(style, attr_name: str, color) -> None:
+    col = getattr(
+        implot.Col_, attr_name, None
+    )  # error_bar left Col_ in imgui-bundle 1.92.8xx
+    if col is not None:
+        style.set_color_(col.value, color)
+
+
+def _set_implot_size(style, attr_name: str, value) -> None:
+    if hasattr(
+        style, attr_name
+    ):  # per-item attrs left the Style struct in imgui-bundle 1.92.8xx
+        setattr(style, attr_name, value)
+
+
 def style_seaborn_dark():
-    """
-    Apply seaborn dark theme to ImPlot.
-    """
+    """Apply seaborn dark theme to ImPlot."""
     style = implot.get_style()
 
-    def _set(attr_name, color):
-        col = getattr(implot.Col_, attr_name, None)
-        if col is not None:
-            style.set_color_(col.value, color)
-
-    # auto colors for lines and markers
     for attr in ("line", "fill", "marker_outline", "marker_fill"):
-        _set(attr, implot.AUTO_COL)
+        _set_implot_color(style, attr, implot.AUTO_COL)
 
-    # backgrounds and axes
-    _set("frame_bg", ImVec4(0.15, 0.17, 0.2, 1.00))
-    _set("plot_bg", ImVec4(0.13, 0.15, 0.18, 1.00))
-    _set("plot_border", ImVec4(0.00, 0.00, 0.00, 0.00))
-    _set("axis_grid", ImVec4(0.35, 0.40, 0.45, 0.5))
-    _set("axis_text", ImVec4(0.9, 0.9, 0.9, 1.0))
-    _set("axis_bg_hovered", ImVec4(0.25, 0.27, 0.3, 1.00))
-    _set("axis_bg_active", ImVec4(0.25, 0.27, 0.3, 0.75))
+    _set_implot_color(style, "frame_bg", ImVec4(0.15, 0.17, 0.2, 1.00))
+    _set_implot_color(style, "plot_bg", ImVec4(0.13, 0.15, 0.18, 1.00))
+    _set_implot_color(style, "plot_border", ImVec4(0.00, 0.00, 0.00, 0.00))
+    _set_implot_color(style, "axis_grid", ImVec4(0.35, 0.40, 0.45, 0.5))
+    _set_implot_color(style, "axis_text", ImVec4(0.9, 0.9, 0.9, 1.0))
+    _set_implot_color(style, "axis_bg_hovered", ImVec4(0.25, 0.27, 0.3, 1.00))
+    _set_implot_color(style, "axis_bg_active", ImVec4(0.25, 0.27, 0.3, 0.75))
 
-    # legends and labels
-    _set("legend_bg", ImVec4(0.13, 0.15, 0.18, 1.00))
-    _set("legend_border", ImVec4(0.4, 0.4, 0.4, 1.00))
-    _set("legend_text", ImVec4(0.9, 0.9, 0.9, 1.00))
-    _set("title_text", ImVec4(1.0, 1.0, 1.0, 1.00))
-    _set("inlay_text", ImVec4(0.9, 0.9, 0.9, 1.00))
+    _set_implot_color(style, "legend_bg", ImVec4(0.13, 0.15, 0.18, 1.00))
+    _set_implot_color(style, "legend_border", ImVec4(0.4, 0.4, 0.4, 1.00))
+    _set_implot_color(style, "legend_text", ImVec4(0.9, 0.9, 0.9, 1.00))
+    _set_implot_color(style, "title_text", ImVec4(1.0, 1.0, 1.0, 1.00))
+    _set_implot_color(style, "inlay_text", ImVec4(0.9, 0.9, 0.9, 1.00))
 
-    # Misc (error_bar dropped from Col_ in imgui-bundle 1.92.8xx)
-    _set("error_bar", ImVec4(0.9, 0.9, 0.9, 1.00))
-    _set("selection", ImVec4(1.00, 0.65, 0.00, 1.00))
-    _set("crosshairs", ImVec4(0.8, 0.8, 0.8, 0.5))
+    _set_implot_color(style, "error_bar", ImVec4(0.9, 0.9, 0.9, 1.00))
+    _set_implot_color(style, "selection", ImVec4(1.00, 0.65, 0.00, 1.00))
+    _set_implot_color(style, "crosshairs", ImVec4(0.8, 0.8, 0.8, 0.5))
 
-    # Sizes; per-item attrs (line/marker/fill/error_bar/digital) left the
-    # Style struct in imgui-bundle 1.92.8xx, so set only what exists
-    def _set_size(attr_name, value):
-        if hasattr(style, attr_name):
-            setattr(style, attr_name, value)
-
-    _set_size("line_weight", 1.5)
-    _set_size("marker", implot.Marker_.none.value)
-    _set_size("marker_size", 4)
-    _set_size("marker_weight", 1)
-    _set_size("fill_alpha", 1.0)
-    _set_size("error_bar_size", 5)
-    _set_size("error_bar_weight", 1.5)
-    _set_size("digital_bit_height", 8)
-    _set_size("digital_bit_gap", 4)
+    _set_implot_size(style, "line_weight", 1.5)
+    _set_implot_size(style, "marker", implot.Marker_.none.value)
+    _set_implot_size(style, "marker_size", 4)
+    _set_implot_size(style, "marker_weight", 1)
+    _set_implot_size(style, "fill_alpha", 1.0)
+    _set_implot_size(style, "error_bar_size", 5)
+    _set_implot_size(style, "error_bar_weight", 1.5)
+    _set_implot_size(style, "digital_bit_height", 8)
+    _set_implot_size(style, "digital_bit_gap", 4)
     style.plot_border_size = 0
     style.minor_alpha = 0.3
     style.major_tick_len = ImVec2(0, 0)
@@ -552,8 +544,9 @@ def fit_width(title: str | None = None, min_width: float = 0.0):
                 "widen the panel to show it"
             )
         yield False
+        # 0 = wrap at the window's right edge
         return
-    imgui.push_text_wrap_pos(0.0)  # 0 = wrap at the window's right edge
+    imgui.push_text_wrap_pos(0.0)
     try:
         yield True
     finally:
@@ -652,7 +645,6 @@ def draw_checkbox_grid(
         imgui.end_table()
 
 
-# Track popup states globally by popup_id
 _popup_states: dict[str, bool] = {}
 
 
@@ -770,13 +762,8 @@ def fmt_value(x) -> str:
             return repr(x)
         return f"[len={len(x)}]"
     if hasattr(x, "shape") and hasattr(x, "dtype"):
+        # NOTE: only tiny arrays of plain scalar dtypes are inlined: an object array (suite2p Vmap, one 2D float array per pyramid level) would take the size<=8 path and dump pages of numbers
         try:
-            # only inline tiny arrays of plain scalar dtypes. object arrays
-            # (suite2p Vmap is shape=(5,), dtype=object, each element a
-            # different 2D float array per pyramid level) would otherwise
-            # take the size<=8 fast path and dump every inner array via
-            # repr(tolist()) — pages of numbers in the metadata viewer
-            # instead of a one-line summary.
             scalar_kinds = "biufcSU"  # bool / int / uint / float / complex / str
             if x.size <= 8 and getattr(x.dtype, "kind", "") in scalar_kinds:
                 return repr(x.tolist())

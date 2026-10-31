@@ -21,9 +21,11 @@ break collection.
 
 from __future__ import annotations
 
+import functools
 import os
 import threading
 import time
+import traceback
 from pathlib import Path
 
 os.environ.setdefault("RENDERCANVAS_FORCE_OFFSCREEN", "1")
@@ -141,38 +143,34 @@ def disc(y, x, r=3):
 
 
 def make_result(
-    widget, footprints, z=0, name="find01", kind="discover", with_traces=False
+    widget, footprints, z=0, name="find01", kind="masknmf", with_traces=False
 ):
-    """A synthetic ``RunResult`` shaped like a loaded discovery dir."""
-    from mbo_utilities.roi_workflow import RunResult
+    """``(unit, path, pipeline)`` for ``_add_derived``: a synthetic pixel
+    unit shaped like a loaded run, its path ``name``.
+    """
+    from mbo_utilities.results import ResultUnit
 
-    rows = []
-    for ypix, xpix in footprints:
-        rows.append(
-            {
-                "ypix": np.asarray(ypix, np.int32),
-                "xpix": np.asarray(xpix, np.int32),
-                "lam": np.ones(len(ypix), np.float32),
-                "med": (float(np.mean(ypix)), float(np.mean(xpix))),
-                "npix": int(len(ypix)),
-            }
-        )
-    F = None
+    members = [
+        np.asarray(ypix, np.int64) * widget.nx + np.asarray(xpix, np.int64)
+        for ypix, xpix in footprints
+    ]
+    traces = {}
     if with_traces:
-        F = np.arange(len(rows) * 6, dtype=np.float32).reshape(len(rows), 6)
-    return RunResult(
-        path=Path(name),
-        kind=kind,
-        z=z,
-        shape=(widget.ny, widget.nx),
-        stat=np.array(rows, dtype=object),
-        F=F,
-        Fneu=np.zeros_like(F) if F is not None else None,
-        norm=None,
-        iscell=None,
-        uids=None,
-        store_indices=None,
+        F = np.arange(len(members) * 6, dtype=np.float32).reshape(len(members), 6)
+        traces = {"raw": F, "neuropil": np.zeros_like(F)}
+    unit = ResultUnit(
+        name="zplane01",
+        kind="plane",
+        index=1,
+        roi_names=[f"roi{k}" for k in range(len(members))],
+        traces=traces,
+        member_kind="pixel",
+        members=members,
+        weights=[np.ones(m.size, np.float32) for m in members],
+        image_shape=(widget.ny, widget.nx),
+        attrs={"z": z},
     )
+    return unit, Path(name), kind
 
 
 class TestMasks:
@@ -199,13 +197,15 @@ class TestMasks:
         assert widget.counts == []
         assert "not added" in widget.status
 
-    def test_overlap_keeps_only_free_pixels(self, widget):
+    def test_overlapping_rois_both_keep_their_pixels(self, widget):
         widget.add_roi(square(10, 10, 9))
         widget.add_roi(square(15, 10, 9))
-        # second ROI loses the 5 columns already owned by the first
-        assert widget.counts == [100, 50]
-        assert widget.labels[15, 17] == 1
+        assert widget.counts == [100, 100]
+        # the label image shows the smaller (here the later) roi on top
+        assert widget.labels[15, 12] == 1
+        assert widget.labels[15, 17] == 2
         assert widget.labels[15, 22] == 2
+        assert widget.store.mask(0)[15, 17] and widget.store.mask(1)[15, 17]
 
     def test_stroke_clipped_to_image(self, widget):
         widget.add_roi(square(-20, -20, 40))
@@ -281,15 +281,17 @@ class TestMasks:
         assert tuple(rgb[15, 19]) == widget.store.roi_rgb(0)
         assert tuple(rgb[15, 20]) == widget.store.roi_rgb(1)
 
-    def test_save_writes_labels_zarr(self, widget, tmp_path):
-        from mbo_utilities.annotation import LabelsZarr
+    def test_save_writes_the_rois_zarr(self, widget, tmp_path):
+        from mbo_utilities.annotation import RoiFile
 
         widget.fpath = tmp_path / "movie.tif"
         widget.add_roi(square(10, 10, 9))
         widget.save()
-        restored = LabelsZarr.load(tmp_path / "manual_labels.zarr")
-        assert np.array_equal(restored.labels, widget.store.labels)
-        assert restored.counts == [100]
+        got = RoiFile.load(tmp_path / "movie.rois.zarr")
+        assert np.array_equal(got.store.label_image(0), widget.labels)
+        assert got.store.counts == [100]
+        assert got.store.rois[0].polygon.shape == (4, 2)
+        assert got.source["path"] == str(tmp_path / "movie.tif")
 
 
 class TestSelection:
@@ -361,7 +363,7 @@ class TestSelection:
     def test_clicking_a_drawn_roi_clears_the_source_filter(self, widget):
         widget.add_roi(square(10, 10, 20))
         widget.select_roi(-1)
-        widget._add_derived(make_result(widget, [disc(45, 45)]))
+        widget._add_derived(*make_result(widget, [disc(45, 45)]))
         widget.order.source = 1  # the derived set only
         widget.order.rebuild()
         assert 0 not in widget.order.order
@@ -372,7 +374,7 @@ class TestSelection:
 
     def test_clicking_a_derived_component_reveals_its_row(self, widget):
         widget.add_roi(square(10, 10, 20))
-        widget._add_derived(make_result(widget, [disc(45, 45)]))
+        widget._add_derived(*make_result(widget, [disc(45, 45)]))
         widget.order.source = 0  # drawn only
         widget.order.rebuild()
         click(widget, 45, 45)
@@ -474,30 +476,6 @@ class TestDrawMode:
         assert widget.region_selector is None
 
 
-class TestRegionMode:
-    def test_the_region_box_is_where_find_looks(self, widget):
-        polygon(widget, [(10.0, 20.0), (40.0, 20.0), (40.0, 50.0)])
-        assert widget.counts == []
-        assert widget.region == (20, 50, 10, 40)
-
-    def test_clear_region(self, widget):
-        polygon(widget, square(10, 10, 20))
-        widget.clear_region()
-        assert widget.region is None
-        assert widget.region_selector is None
-
-    def test_region_mode_is_the_same_polygon(self, widget):
-        widget.set_region_mode(True)
-        assert widget.drawing
-        widget.set_region_mode(False)
-        assert widget.region_selector is None
-
-    def test_discover_without_a_region_is_refused(self, widget):
-        widget.discover_region("masknmf")
-        assert "region" in widget.status
-        assert not widget.manager.busy
-
-
 class TestClassLabels:
     def test_assign_class_recolors_and_counts(self, widget):
         from mbo_utilities.annotation import class_color
@@ -556,7 +534,7 @@ class TestClassLabels:
         assert widget.selected == 1
 
     def test_follow_mode_advances_through_derived_rows(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40), disc(20, 20)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40), disc(20, 20)]))
         widget.store.add_label_name("soma")
         widget.follow = True
         widget.select_derived(0, 0)
@@ -716,7 +694,7 @@ class TestContours:
         assert not drawn_showing(widget)
 
     def test_algo_rows_draw_in_the_same_overlay(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40), disc(52, 52)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40), disc(52, 52)]))
         widget.set_contours(True)
         assert drawn_showing(widget)
         points = np.concatenate(paths(widget.outline))
@@ -727,7 +705,7 @@ class TestContours:
     def test_a_marked_row_draws_red(self, widget):
         from masknmf.visualization.rois import MARKED_COLOR
 
-        widget._add_derived(make_result(widget, [disc(40, 40)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40)]))
         widget.select_roi(-1)
         widget.mark([(0, 0)], True)
         expected = tuple(int(round(c * 255)) for c in MARKED_COLOR)
@@ -760,35 +738,25 @@ class TestImguiWindows:
         widget.store.add_label_name("soma")
         label(widget, 0, 0)
         widget.select_roi(1)
-        widget._add_derived(make_result(widget, [disc(40, 40)], with_traces=True))
+        widget._add_derived(*make_result(widget, [disc(40, 40)], with_traces=True))
         polygon(widget, square(30, 30, 20))
         widget.keybinds_open = True
 
-        seen = []
-        real_child = imgui.begin_child
-        real_text = imgui.text_colored
-
-        def spy(name, *args, **kwargs):
-            if isinstance(name, str):
-                seen.append(name)
-            return real_child(name, *args, **kwargs)
-
-        def spy_text(color, text, *args, **kwargs):
-            seen.append(text)
-            return real_text(color, text, *args, **kwargs)
-
+        children = _StrSpy(imgui.begin_child)
+        texts = _SecondArgSpy(imgui.text_colored)
         set_widget_enabled("manual_roi", True, persist=False)
-        imgui.begin_child = spy
-        imgui.text_colored = spy_text
+        imgui.begin_child = children
+        imgui.text_colored = texts
         try:
             errors = draw_frames(widget, 4)
         finally:
-            imgui.begin_child = real_child
-            imgui.text_colored = real_text
+            imgui.begin_child = children.real
+            imgui.text_colored = texts.real
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
+        seen = set(children.seen) | set(texts.seen)
         # masknmf's Curation tab sections, then this tool's
-        assert {"OVERLAY", "SELECTION", "LABELS", "RUN"} <= set(seen)
+        assert {"OVERLAY", "SELECTION", "LABELS", "RUN"} <= seen
         assert "##roi_curation_tab" in seen
 
     def test_the_roi_keys_are_taken_from_the_viewer(self, widget):
@@ -848,8 +816,7 @@ class TestPersistence:
             w.save()
         finally:
             iw.close()
-        assert (tmp_path / "manual_labels.zarr").exists()
-        assert (tmp_path / "roi_runs.json").exists()
+        assert [p.name for p in tmp_path.iterdir()] == ["movie.rois.zarr"]
 
     def test_a_chosen_folder_holds_the_rois(self, tmp_path, options):
         from mbo_utilities.gui._ndviewer import MboNDViewer
@@ -872,9 +839,9 @@ class TestPersistence:
             assert w.folder == roi_folder(fpath, root)
             assert w.folder.parent == root
             assert w.folder.name.startswith("movie.tif_")
-            assert (w.folder / "manual_labels.zarr").exists()
+            assert (w.folder / "movie.rois.zarr").exists()
             assert list(data_dir.iterdir()) == []
-            assert w._run_out_dir("roi01").parent == w.folder
+            assert w._run_out_path("roi01").parent == w.folder
         finally:
             iw.close()
 
@@ -886,7 +853,7 @@ class TestPersistence:
             iw.close()
 
     def test_rois_saved_beside_the_data_restore_under_a_folder(self, tmp_path, options):
-        from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
+        from mbo_utilities.annotation import RoiFile, RoiLabelStore
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
 
@@ -895,7 +862,7 @@ class TestPersistence:
         mask = np.zeros((64, 64), bool)
         mask[10:20, 10:20] = True
         store.add_roi(0, mask)
-        LabelsZarr(tmp_path / "manual_labels.zarr").save(store)
+        RoiFile(tmp_path / "movie.rois.zarr").save(store)
         options["roi_folder"] = str(tmp_path / "mine")
 
         iw = MboNDViewer(data=np.zeros((4, 64, 64), np.float32))
@@ -921,10 +888,12 @@ class TestPersistence:
             w.store.add_label_name("soma")
             w.assign_class(0)
             w.store.set_note(0, "check me")
+            w.quick_trace(0)
+            pump(w)
             w._autosave()
         finally:
             iw.close()
-        assert (tmp_path / "manual_labels.zarr").exists()
+        assert (tmp_path / "movie.rois.zarr").exists()
 
         iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
         iw.show()
@@ -935,6 +904,9 @@ class TestPersistence:
             assert w2.store.rois[0].class_index == 0
             assert w2.store.rois[0].note == "check me"
             assert "restored" in w2.status
+            # the quick trace came back with the rois
+            (trace,) = w2.traces.for_roi(w2.store.rois[0].uid)
+            assert trace.source == "quick" and trace.F.shape == (4,)
         finally:
             iw.close()
 
@@ -953,14 +925,7 @@ class TestPersistence:
         try:
             w = ManualRoiWidget(iw, fpath=fpath, auto_trace=False)
             w.add_roi(square(10, 10, 9))
-
-            class Boom:
-                path = w._writer.path
-
-                def save_dirty(self, *a, **k):
-                    raise OSError("read only")
-
-            w._writer = Boom()
+            w._write_rois = _read_only
             w.add_roi(square(35, 35, 9))
             assert w.n_rois == 2 and "autosave failed" in w._save_error
             parked = w.store
@@ -971,15 +936,16 @@ class TestPersistence:
         finally:
             iw.close()
 
-    def test_shape_mismatch_starts_fresh(self, tmp_path):
-        from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
+    def test_shape_mismatch_starts_fresh_and_leaves_the_file(self, tmp_path, options):
+        from mbo_utilities.annotation import RoiFile, RoiLabelStore
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
 
+        options["roi_autosave"] = True
         fpath = tmp_path / "movie.tif"
         other = RoiLabelStore(2, 16, 16)
         other.add_roi(0, np.ones((16, 16), bool))
-        LabelsZarr(tmp_path / "manual_labels.zarr").save(other)
+        RoiFile(tmp_path / "movie.rois.zarr").save(other)
 
         data = np.zeros((4, 64, 64), np.float32)
         iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
@@ -988,8 +954,61 @@ class TestPersistence:
             w = ManualRoiWidget(iw, fpath=fpath, auto_trace=False)
             assert w.counts == []
             assert "starting fresh" in w.status
+            assert w._save_target().name == "movie_1x64x64.rois.zarr"
+            w.add_roi(square(10, 10, 9))
         finally:
             iw.close()
+        # the other shape's file is untouched; this shape has its own
+        assert RoiFile.load(tmp_path / "movie.rois.zarr").store.shape == (2, 16, 16)
+        got = RoiFile.load(tmp_path / "movie_1x64x64.rois.zarr").store
+        assert got.shape == (1, 64, 64) and got.counts == [100]
+        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
+        iw.show()
+        try:
+            assert ManualRoiWidget(iw, fpath=fpath, auto_trace=False).counts == [100]
+        finally:
+            iw.close()
+
+
+class TestExchange:
+    """The on-disk row's Fiji and CSV exchange runs through ``exchange``."""
+
+    def test_rois_round_trip_through_a_roiset(self, widget, tmp_path):
+        import roifile
+
+        widget.add_roi(square(10, 10, 9))
+        widget.add_roi(square(30, 30, 7))
+        widget.exchange("export_roiset", tmp_path / "RoiSet.zip")
+        assert len(roifile.roiread(tmp_path / "RoiSet.zip")) == 2
+        assert "exported 2 ROIs" in widget.status
+        before = [r.uid for r in widget.store.rois]
+        widget.exchange("import_roiset", tmp_path / "RoiSet.zip")
+        assert widget.n_rois == 4 and widget.selected == 3
+        assert widget.store.rois[2].source == "imagej"
+        assert widget.store.mask(2).sum() == widget.store.mask(0).sum()
+        widget.undo()
+        assert [r.uid for r in widget.store.rois] == before
+
+    def test_traces_export_as_a_csv(self, widget, tmp_path):
+        import csv
+
+        widget.add_roi(square(10, 10, 9))
+        widget.quick_trace(0)
+        pump(widget)
+        widget.exchange("export_traces", tmp_path / "traces.csv")
+        with (tmp_path / "traces.csv").open() as f:
+            got = list(csv.reader(f))
+        assert got[0][0] == "frame" and len(got[0]) == 2
+        assert len(got) == 1 + widget.iw.data[0].shape[0]
+
+    def test_a_failed_export_lands_in_the_status(self, widget, tmp_path):
+        widget.add_roi(square(10, 10, 9))
+        widget.exchange("export_roiset", tmp_path / "missing" / "RoiSet.zip")
+        assert "export roiset failed" in widget._run_error
+
+
+def _read_only():
+    raise OSError("read only")
 
 
 @pytest.fixture
@@ -1017,9 +1036,9 @@ class TestZPlanes:
         assert zwidget.z == 1
         zwidget.add_roi(square(10, 10, 9))
         assert zwidget.store.rois[0].plane == 1
-        assert zwidget.store.labels[1, 15, 15] == 1
-        assert zwidget.store.labels[0].max() == 0
-        assert zwidget.store.labels[2].max() == 0
+        assert zwidget.store.label_image(1)[15, 15] == 1
+        assert zwidget.store.label_image(0).max() == 0
+        assert zwidget.store.label_image(2).max() == 0
 
     def test_z_change_refreshes_the_overlay(self, zwidget):
         zwidget.add_roi(square(10, 10, 9))
@@ -1059,13 +1078,13 @@ class TestZPlanes:
         assert zwidget.region_selector is None
 
     def test_derived_overlay_follows_z(self, zwidget):
-        zwidget._add_derived(make_result(zwidget, [disc(40, 40)], z=2))
+        zwidget._add_derived(*make_result(zwidget, [disc(40, 40)], z=2))
         assert not drawn_showing(zwidget)  # the set lives on z 2
         zwidget.iw.indices["z"] = 2
         assert drawn_showing(zwidget)
 
     def test_selecting_a_derived_row_jumps_z(self, zwidget):
-        zwidget._add_derived(make_result(zwidget, [disc(40, 40)], z=2))
+        zwidget._add_derived(*make_result(zwidget, [disc(40, 40)], z=2))
         zwidget.select_derived(0, 0)
         assert zwidget.z == 2
         assert zwidget.selected_derived == (0, 0)
@@ -1093,17 +1112,27 @@ class TestTraces:
         uid = widget.store.rois[0].uid
         widget.quick_trace(0)
         pump(widget)
-        from mbo_utilities.roi_workflow import feather_mask
-
         (trace,) = widget.traces.for_roi(uid)
         data = np.asarray(widget.iw.data[0])
         mask = widget.labels == 1
-        w = feather_mask(mask)[mask]
-        expected = data[:, mask] @ (w / w.sum())
-        np.testing.assert_allclose(trace.F, expected, rtol=1e-5)
+        np.testing.assert_allclose(trace.F, data[:, mask].mean(axis=1), rtol=1e-5)
+        assert trace.Fneu is not None and trace.Fneu.shape == trace.F.shape
         assert trace.key == ("roi", uid, 0, 0, "mean") and trace.source == "quick"
         assert widget.trace_uid == uid
         assert widget.has_traces()
+
+    def test_a_quick_trace_and_a_mean_run_agree(self, widget, tmp_path):
+        from mbo_utilities.roi_workflow import extract_rois
+
+        widget.add_roi(square(10, 10, 9))
+        widget.add_roi(square(16, 10, 9))  # a neighbour the ring must avoid
+        uid = widget.store.rois[0].uid
+        widget.quick_trace(0)
+        pump(widget)
+        (quick,) = widget.traces.for_roi(uid)
+        unit = extract_rois(widget.iw.data[0], widget.store, [0], z=0, engine="mean")
+        np.testing.assert_allclose(quick.F, unit.traces["raw"][0], rtol=1e-6)
+        np.testing.assert_allclose(quick.Fneu, unit.traces["neuropil"][0], rtol=1e-6)
 
     def test_two_rois_trace_at_once(self, widget):
         widget.add_roi(square(4, 4, 9))
@@ -1123,12 +1152,9 @@ class TestTraces:
         zwidget.iw.indices["z"] = 0
         zwidget.quick_trace(0)
         pump(zwidget)
-        from mbo_utilities.roi_workflow import feather_mask
-
         data = np.asarray(zwidget.iw.data[0])
-        mask = zwidget.store.labels[2] == 1
-        w = feather_mask(mask)[mask]
-        expected = data[:, 2][:, mask] @ (w / w.sum())
+        mask = zwidget.store.mask(0)
+        expected = data[:, 2][:, mask].mean(axis=1)
         uid = zwidget.store.rois[0].uid
         (trace,) = zwidget.traces.for_roi(uid)
         np.testing.assert_allclose(trace.F, expected, rtol=1e-5)
@@ -1157,10 +1183,10 @@ class TestTraces:
         assert "frames" in new[0].status_message
 
     def test_a_failure_is_reported_not_swallowed(self, widget, monkeypatch):
-        import mbo_utilities.gui.manual_roi as mr
+        import mbo_utilities.gui.roi.jobs as jobs
         from mbo_utilities.gui.widgets.process_manager import get_process_manager
 
-        monkeypatch.setattr(mr, "roi_trace", lambda *a, **k: 1 / 0)
+        monkeypatch.setattr(jobs, "measure_mean", lambda *a, **k: 1 / 0)
         pm = get_process_manager()
         before = {j.job_id for j in pm.get_jobs()}
         widget.add_roi(square(10, 10, 9))
@@ -1204,7 +1230,8 @@ class TestRuns:
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
 
         options["roi_autosave"] = True
-        from mbo_utilities.gui.roi_runs import load_run_registry, registry_path
+        from mbo_utilities.annotation import RoiFile
+        from mbo_utilities.results import Results, newest_results
 
         data = np.random.default_rng(1).random((6, 64, 64)).astype(np.float32)
         iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
@@ -1218,15 +1245,21 @@ class TestRuns:
             pump(w)
             assert w._run_error is None
             assert w.status.startswith("done"), w.status
-            out = tmp_path / "rois_roi02"
-            F = np.load(out / "F.npy")
-            assert F.shape == (1, 6)
-            np.testing.assert_allclose(
-                F[0], data[:, w.labels == 2].mean(axis=1), rtol=1e-5
+            out = newest_results(tmp_path, "manual")
+            assert out.name.startswith("movie.roi02.") and out.name.endswith(
+                ".manual.zarr"
             )
-            assert np.load(out / "roi_indices.npy").tolist() == [1]
+            results = Results.read(out)
+            assert results.pipeline == "manual" and results.source["tag"] == "roi02"
+            (unit,) = results.units.values()
+            F = unit.traces["raw"]
+            assert unit.name == "zplane01" and F.shape == (1, 6)
+            np.testing.assert_allclose(
+                F[0], data[:, w.store.mask(1)].mean(axis=1), rtol=1e-5
+            )
+            assert unit.attrs["store_indices"] == [1] and unit.attrs["uids"] == [uid1]
             (trace,) = w.traces.for_roi(uid1)
-            assert trace.source == "rois_roi02" and trace.engine == "mean"
+            assert trace.source == w._set_name(out) and trace.engine == "mean"
             np.testing.assert_allclose(trace.F, F[0])
             assert trace.Fneu is not None
             assert w.trace_uid == uid1
@@ -1234,13 +1267,14 @@ class TestRuns:
             # the same measurement again replaces the rows instead of doubling them
             w.run_in_view()
             pump(w)
-            assert np.load(tmp_path / "rois_manual" / "F.npy").shape == (2, 6)
+            (second,) = tmp_path.glob("movie.manual.*.manual.zarr")
+            assert Results.read(second).units["zplane01"].traces["raw"].shape == (2, 6)
             assert {t.uid for t in w.traces} == {w.store.rois[0].uid, uid1}
-            assert {t.source for t in w.traces} == {"rois_manual"}
+            assert {t.source for t in w.traces} == {w._set_name(second)}
             assert len(w.traces) == 2
-            # both runs are remembered in the sidecar for the next session
-            paths = {e["path"] for e in load_run_registry(registry_path(w.fpath))}
-            assert {str(out), str(tmp_path / "rois_manual")} <= paths
+            # both runs are remembered with the rois for the next session
+            paths = {e["path"] for e in RoiFile.load(w._save_target()).runs}
+            assert {str(out), str(second)} <= paths
         finally:
             iw.close()
 
@@ -1269,7 +1303,7 @@ class TestRuns:
             assert w2.counts == [100]
             # the run's traces come back keyed by the same persistent uid
             assert [t.uid for t in w2.traces] == [uid]
-            assert w2.traces.rows[0].source == "rois_roi01"
+            assert w2.traces.rows[0].source.startswith("movie.roi01.")
             assert w2.has_traces()
         finally:
             iw.close()
@@ -1297,12 +1331,8 @@ class TestRuns:
         from mbo_utilities.gui.roi_runs import RoiRun
 
         widget.fpath = tmp_path / "movie.tif"
-
-        def boom(job):
-            raise ValueError("boom")
-
         widget.manager.submit(
-            RoiRun(kind="extract", tag="x", description="extract rois_x"), boom
+            RoiRun(kind="extract", tag="x", description="extract rois_x"), _raise_boom
         )
         pump(widget)
         assert "failed" in widget._run_error
@@ -1315,7 +1345,7 @@ class TestDerived:
 
     def _set(self, widget, with_traces=False):
         s = widget._add_derived(
-            make_result(widget, [disc(40, 40), disc(52, 52)], with_traces=with_traces)
+            *make_result(widget, [disc(40, 40), disc(52, 52)], with_traces=with_traces)
         )
         assert s is not None
         return s
@@ -1430,19 +1460,19 @@ class TestDerived:
         assert widget.promoted_index(0, 0) is None
         assert widget._format_cell("source", widget._row_index[(0, 0)]) == "find01"
 
-    def test_promote_with_no_free_pixels_is_refused(self, widget):
+    def test_promote_over_a_drawn_roi_keeps_both(self, widget):
         widget.add_roi(square(34, 34, 14))  # covers disc(40, 40) completely
         self._set(widget)
-        assert widget.promote_derived(0, 0) is None
-        assert "overlaps" in widget.status
-        assert widget.counts == [225]
+        assert widget.promote_derived(0, 0) == 1
+        assert widget.counts == [225, 36]
+        assert widget.store.mask(0)[40, 40] and widget.store.mask(1)[40, 40]
 
     def test_promote_set_reports_the_split(self, widget):
-        widget.add_roi(square(34, 34, 14))  # blocks row 0
         self._set(widget)
+        assert widget.promote_derived(0, 0) == 0
         widget.promote_set(0)
         assert "promoted 1 / skipped 1" in widget.status
-        assert widget.counts == [225, 36]
+        assert widget.counts == [36, 36]
 
     def test_discard_advances_the_selection(self, widget):
         self._set(widget)
@@ -1502,6 +1532,7 @@ class TestDerived:
             dtype=object,
         )
         np.save(tmp_path / "stat.npy", stat)
+        np.save(tmp_path / "F.npy", np.zeros((1, 4), np.float32))
         np.save(
             tmp_path / "ops.npy",
             {"Ly": 64, "Lx": 64, "plane": 5, "pipeline": "masknmf"},
@@ -1513,26 +1544,28 @@ class TestDerived:
         try:
             w = ManualRoiWidget(iw, fpath=fpath, auto_trace=False)
             assert len(w.derived) == 1
-            assert w.derived[0].result.kind == "masknmf"
-            assert w.derived[0].result.z == 0
+            assert w.derived[0].kind == "masknmf"
+            assert w.derived[0].z == 0
             assert (0, 0) in w._row_index
         finally:
             iw.close()
 
-    def test_accept_reject_round_trips_iscell(self, widget, tmp_path):
-        res = make_result(widget, [disc(40, 40), disc(20, 20)])
+    def test_accept_reject_is_kept_with_the_rois(self, widget, tmp_path):
+        unit, _path, kind = make_result(widget, [disc(40, 40), disc(20, 20)])
         d = tmp_path / "run"
         d.mkdir()
-        res.path = d
-        s = widget._add_derived(res)
+        np.save(d / "iscell.npy", np.ones((2, 2), np.float32))
+        s = widget._add_derived(unit, d, kind)
         assert s.accepted.all()
         widget.set_accepted(0, 1)
         assert not s.accepted[1]
-        iscell = np.load(d / "iscell.npy")
-        assert iscell[1, 0] == 0.0 and iscell[0, 0] == 1.0
-        assert widget._format_cell("ok", widget._row_index[(0, 1)]) == "no"
-        widget.set_accepted(0, 1)
+        # the run is never written to
         assert np.load(d / "iscell.npy")[1, 0] == 1.0
+        assert widget._format_cell("ok", widget._row_index[(0, 1)]) == "no"
+        (entry,) = widget._run_entries()
+        assert entry["path"] == str(d) and entry["iscell"] == {1: False}
+        widget.set_accepted(0, 1)
+        assert widget._run_entries()[0]["iscell"] == {}
 
     def test_rejected_rows_load_and_stay_curatable(self, widget, tmp_path):
         # iscell is read unfiltered so rejected cells can be re-accepted
@@ -1552,23 +1585,23 @@ class TestDerived:
             dtype=object,
         )
         np.save(d / "stat.npy", stat)
+        np.save(d / "F.npy", np.zeros((2, 6), np.float32))
         np.save(d / "iscell.npy", np.array([[1, 0.5], [0, 0.5]], np.float32))
         np.save(d / "ops.npy", {"Ly": 64, "Lx": 64, "plane": 1}, allow_pickle=True)
         assert widget.load_run(d)
         s = widget.derived[0]
-        assert len(s.result.stat) == 2
+        assert len(s) == 2
         assert s.accepted.tolist() == [True, False]
 
     def test_derived_labels_persist_through_the_registry(self, widget):
-        res = make_result(widget, [disc(40, 40), disc(20, 20)])
-        widget._add_derived(res)
+        widget._add_derived(*make_result(widget, [disc(40, 40), disc(20, 20)]))
         widget.select_derived(0, 1)
         widget.assign_class(0)
         assert widget.derived[0].classes == {1: 0}
         row = widget._row_index[(0, 1)]
         assert widget.classes.labels[row] == 0
         # a reload of the same dir keeps the label
-        widget._add_derived(make_result(widget, [disc(40, 40), disc(20, 20)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40), disc(20, 20)]))
         assert widget.derived[0].classes == {1: 0}
         # promoting carries it into the drawn store
         index = widget.promote_derived(0, 1)
@@ -1576,7 +1609,7 @@ class TestDerived:
         assert widget.store.rois[index].class_index == 0
 
     def test_out_of_range_plane_is_refused(self, widget):
-        assert widget._add_derived(make_result(widget, [disc(40, 40)], z=4)) is None
+        assert widget._add_derived(*make_result(widget, [disc(40, 40)], z=4)) is None
         assert widget.derived == []
         assert "plane 5" in widget._run_error
 
@@ -1611,23 +1644,17 @@ class TestTracesTab:
         widget.add_roi(square(10, 10, 9))
         widget.quick_trace(0)
         pump(widget)
-        plotted = []
-        real = implot.plot_line
-
-        def spy(name, *a, **k):
-            plotted.append(name)
-            return real(name, *a, **k)
-
-        implot.plot_line = spy
+        lines = _Spy(implot.plot_line)
+        implot.plot_line = lines
         try:
             errors = draw_frames(widget, 3)
         finally:
-            implot.plot_line = real
+            implot.plot_line = lines.real
         assert not errors, errors[0]
-        assert plotted, "the Traces tab never plotted a line"
+        assert lines.seen, "the Traces tab never plotted a line"
 
     def test_a_derived_selection_renders_its_trace(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40)], with_traces=True))
+        widget._add_derived(*make_result(widget, [disc(40, 40)], with_traces=True))
         widget.select_derived(0, 0)
         errors = draw_frames(widget, 3)
         assert not errors, errors[0]
@@ -1650,7 +1677,7 @@ class TestTracesTab:
 
     def test_derived_traces_fill_the_table(self, widget):
         widget._add_derived(
-            make_result(widget, [disc(40, 40), disc(20, 20)], with_traces=True)
+            *make_result(widget, [disc(40, 40), disc(20, 20)], with_traces=True)
         )
         rows = widget._trace_rows()
         assert ("member", "find01", 0) in rows and ("member", "find01", 1) in rows
@@ -1670,38 +1697,23 @@ class TestTracesTab:
         pump(widget)
         widget.trace_sel = set(widget._trace_rows())
         widget.trace_picked = True
-        plotted = []
-        real = implot.plot_line
-
-        def spy(name, *a, **k):
-            plotted.append(name)
-            return real(name, *a, **k)
-
-        implot.plot_line = spy
+        lines = _Spy(implot.plot_line)
+        implot.plot_line = lines
         try:
             errors = draw_frames(widget, 2)
         finally:
-            implot.plot_line = real
+            implot.plot_line = lines.real
         assert not errors, errors[0]
-        assert len(set(plotted)) == 2, plotted
+        assert len(set(lines.seen)) == 2, lines.seen
 
     def test_trace_table_renders(self, widget):
-        import traceback
-
         widget.add_roi(square(10, 10, 9))
         widget.quick_trace(0)
         pump(widget)
-        errors = []
-
-        def body(*_args):
-            try:
-                widget.draw_trace_table()
-            except Exception:
-                errors.append(traceback.format_exc())
-
+        body = _Guard(widget.draw_trace_table)
         widget.strip._update_calls[:] = [body]
         widget.iw.figure.canvas.draw()
-        assert not errors, errors[0]
+        assert not body.errors, body.errors[0]
 
     def test_arrows_step_the_roi_table_and_the_traces_follow(self, widget):
         """Masknmf's up / down walk the ROIs table; the plot shows the row landed on."""
@@ -1823,17 +1835,19 @@ class TestTracesTab:
             tmp_path / "run.2026-10-07-00-00-00.suite2p.zarr"
         )
         assert widget.load_results(path)
-        by_path = {s.result.path: i for i, s in enumerate(widget.derived)}
+        by_path = {s.path: i for i, s in enumerate(widget.derived)}
         assert set(by_path) == {plane_dir, path / "zplane02"}
         widget.set_accepted(by_path[plane_dir], 1, False)
         widget.set_accepted(by_path[path / "zplane02"], 1, False)
-        np.testing.assert_array_equal(
-            np.load(plane_dir / "iscell.npy")[:, 0], [1.0, 0.0]
-        )
-        assert not (path / "zplane02" / "iscell.npy").exists()
+        # curation stays with the rois: the run's own files are untouched
+        assert not (plane_dir / "iscell.npy").exists()
         np.testing.assert_allclose(
-            Results.read(path).units["zplane02"].iscell, [[1, 0.9], [0, 0.4]]
+            Results.read(path).units["zplane02"].iscell, [[1, 0.9], [1, 0.4]]
         )
+        assert {e["path"]: e["iscell"] for e in widget._run_entries()} == {
+            str(plane_dir): {1: False},
+            str(path / "zplane02"): {1: False},
+        }
         # an algo row opens its run: the plane dir it was read from, or the file and unit
         widget.select_derived(by_path[plane_dir], 1)
         assert widget._spike_target([]) == (plane_dir, None, "1", None)
@@ -1937,7 +1951,7 @@ class TestTracesTab:
 
     def test_deleting_a_derived_trace_row_marks_the_component(self, widget):
         widget._add_derived(
-            make_result(widget, [disc(40, 40), disc(20, 20)], with_traces=True)
+            *make_result(widget, [disc(40, 40), disc(20, 20)], with_traces=True)
         )
         widget.delete_trace_row(("member", "find01", 1))
         assert 1 in widget.derived[0].discarded
@@ -2013,7 +2027,7 @@ class TestSorting:
         assert list(labels) == sorted(labels)
 
     def test_sorting_by_source_groups_the_sets(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40)]))
         order = self._order(widget)
         order.sort_by = "source"
         order.rebuild()
@@ -2021,7 +2035,7 @@ class TestSorting:
         assert list(codes) == sorted(codes)
 
     def test_descending_reverses(self, widget):
-        widget._add_derived(make_result(widget, [disc(40, 40)]))
+        widget._add_derived(*make_result(widget, [disc(40, 40)]))
         order = self._order(widget)
         order.sort_by = "source"
         order.ascending = False
@@ -2045,50 +2059,115 @@ def in_window(name, draw, size=(600, 760)):
         imgui.end()
 
 
-def draw_frames(widget, n=4, tabs=True):
+class _Spy:
+    """Stands in for an imgui call: records the label (the first argument, positional or keyword) of every call and passes it on to ``real``."""
+
+    def __init__(self, real):
+        self.real = real
+        self.seen = []
+
+    def record(self, label, args, kwargs):
+        self.seen.append(label)
+
+    def __call__(self, *args, **kwargs):
+        self.record(args[0] if args else next(iter(kwargs.values())), args, kwargs)
+        return self.real(*args, **kwargs)
+
+
+class _StrSpy(_Spy):
+    def record(self, label, args, kwargs):
+        if isinstance(label, str):
+            self.seen.append(label)
+
+
+class _SecondArgSpy(_Spy):
+    def record(self, label, args, kwargs):
+        self.seen.append(args[1] if len(args) > 1 else kwargs["text"])
+
+
+class _RowSpy(_Spy):
+    def record(self, label, args, kwargs):
+        if "##row" in label:
+            self.seen.append(label)
+
+
+class _SmallButtonSpy(_Spy):
+    """Records each label with the cursor x and the width left at the call."""
+
+    def record(self, label, args, kwargs):
+        from imgui_bundle import imgui
+
+        self.seen.append(
+            (label, imgui.get_cursor_pos_x(), imgui.get_content_region_avail().x)
+        )
+
+
+class _Guard:
+    """Runs ``fns`` in order as the strip's update call; a raise, which rendercanvas swallows, lands in ``errors`` as a traceback."""
+
+    def __init__(self, *fns, reraise=False):
+        self.fns = fns
+        self.reraise = reraise
+        self.errors = []
+        self.calls = 0
+
+    def __call__(self, *_args):
+        self.calls += 1
+        try:
+            for fn in self.fns:
+                fn()
+        except Exception:
+            self.errors.append(traceback.format_exc())
+            if self.reraise:
+                raise
+
+
+class _KwargsSink:
+    """A run function that keeps the kwargs it was called with and returns None."""
+
+    def __init__(self):
+        self.seen = {}
+
+    def __call__(self, *args, **kwargs):
+        self.seen.update(kwargs)
+        return None
+
+
+class _BareHost:
+    manual_roi = None
+    image_widget = None
+
+
+def _raise_boom(job):
+    raise ValueError("boom")
+
+
+def draw_frames(widget, n=4, tabs=True, foreign=False):
     """Render n frames with the top strip guarded; returns its tracebacks.
 
-    A raise inside an imgui update call is swallowed by rendercanvas, so
-    collect it off the guard rather than letting the draw look clean.
+    ``foreign`` draws a window of some other tool where the ROIs tab would be.
     """
-    import traceback
+    from imgui_bundle import imgui
 
-    errors = []
-
-    strip = widget.strip
-
-    def guarded(*_args):
-        try:
-            strip.update()
-            if tabs:
-                in_window("##rois_tab", widget.draw_rois)
-        except Exception:
-            errors.append(traceback.format_exc())
-
-    strip._update_calls[:] = [guarded]
-    for _ in range(n):
-        widget.iw.figure.canvas.draw()
-    return errors
-
-
-def draw_tab_frames(widget, n=2):
-    """Same as draw_frames for the ROIs tab body, which the strip window is
-    happy to host: it only needs to sit inside some imgui window.
-    """
-    import traceback
-
-    errors = []
-
-    def guarded(*_args):
-        try:
-            widget.draw_tab()
-        except Exception:
-            errors.append(traceback.format_exc())
-
+    fns = [widget.strip.update]
+    if tabs:
+        fns.append(functools.partial(in_window, "##rois_tab", widget.draw_rois))
+    if foreign:
+        fns.append(functools.partial(in_window, "##another_tool", imgui.separator))
+    guarded = _Guard(*fns)
     widget.strip._update_calls[:] = [guarded]
     for _ in range(n):
         widget.iw.figure.canvas.draw()
-    return errors
+    return guarded.errors
+
+
+def draw_tab_frames(widget, n=2):
+    """``draw_frames`` for the ROIs tab body, which the strip window hosts: it only needs to sit inside some imgui window."""
+    guarded = _Guard(widget.draw_tab)
+    widget.strip._update_calls[:] = [guarded]
+    for _ in range(n):
+        widget.iw.figure.canvas.draw()
+    return guarded.errors
 
 
 def send(widget, kind, x, y, button=1, modifiers=()):
@@ -2198,7 +2277,7 @@ class TestRoiTab:
 
     def test_tab_draws_with_drawn_and_derived_rows(self, widget):
         widget.add_roi(square(10, 10, 20))
-        widget._add_derived(make_result(widget, [disc(45, 45)]))
+        widget._add_derived(*make_result(widget, [disc(45, 45)]))
         widget.order.set_range_column("ok")
         assert draw_tab_frames(widget) == []
 
@@ -2306,7 +2385,7 @@ class TestWidgetAttach:
             gui = self._preview(iw)
             gui.sync_manual_roi(True)
             w = gui.manual_roi
-            w._add_derived(make_result(w, [disc(40, 40)], with_traces=True))
+            w._add_derived(*make_result(w, [disc(40, 40)], with_traces=True))
             w.promote_derived(0, 0)
             uid = w.store.rois[0].uid
 
@@ -2354,13 +2433,13 @@ class TestWidgetAttach:
             iw.close()
 
     def test_saved_annotations_turn_the_widget_on(self, tmp_path):
-        from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
+        from mbo_utilities.annotation import RoiFile, RoiLabelStore
         from mbo_utilities.arrays.numpy import NumpyArray
         from mbo_utilities.gui.run_gui import _create_image_widget
 
         store = RoiLabelStore(1, 32, 32)
         store.add_roi(0, np.pad(np.ones((8, 8), bool), 12))
-        LabelsZarr(tmp_path / "manual_labels.zarr").save(store)
+        RoiFile(tmp_path / "movie.rois.zarr").save(store)
 
         data = np.random.default_rng(0).random((4, 1, 1, 32, 32)).astype(np.float32)
         arr = NumpyArray(data, dims="TCZYX")
@@ -2389,39 +2468,24 @@ class TestWidgetAttach:
         # focus_tab selects the ROI tab on the first frame, so its body
         # (draw_rois) actually runs; a draw error inside the imgui update is
         # swallowed by rendercanvas, so capture it here
-        seen, errors = [], []
-        real = imgui.begin_tab_item
-
-        def spy(label, *args, **kwargs):
-            seen.append(label)
-            return real(label, *args, **kwargs)
-
-        original_draw_tab = roi.draw_rois
-        ran = []
-
-        def guarded():
-            ran.append(True)
-            try:
-                original_draw_tab()
-            except Exception as exc:  # noqa: BLE001 - reported below
-                errors.append(exc)
-                raise
-
-        ts.imgui.begin_tab_item = spy
+        tabs = _Spy(imgui.begin_tab_item)
+        guarded = _Guard(roi.draw_rois, reraise=True)
+        ts.imgui.begin_tab_item = tabs
         roi.draw_rois = guarded
         try:
             panel_errors = draw_frames(roi, 4, tabs=False)
         finally:
-            ts.imgui.begin_tab_item = real
+            ts.imgui.begin_tab_item = tabs.real
             iw.close()
 
+        seen = tabs.seen
         assert not panel_errors, f"ROI panel raised: {panel_errors[0]}"
         assert "ROIs" in seen, f"ROIs tab missing from tab bar: {seen}"
         assert "Traces" in seen, f"Traces tab missing from tab bar: {seen}"
         assert "Runs" not in seen, "the Runs tab was removed"
         assert "Image" in seen and "Process" in seen, "the other tabs must survive"
-        assert ran, "ROI tab body never drew"
-        assert not errors, f"ROI tab raised: {errors}"
+        assert guarded.calls, "ROI tab body never drew"
+        assert not guarded.errors, f"ROI tab raised: {guarded.errors}"
         assert roi.focus_tab is False, "focus must be one-shot"
 
 
@@ -2484,8 +2548,8 @@ class TestPlaneMapping:
         cwidget.iw.indices["z"] = 2
         cwidget.add_roi(square(10, 10, 9))
         assert cwidget.store.rois[0].plane == 5
-        assert cwidget.store.labels[5, 15, 15] == 1
-        assert cwidget.store.labels[2].max() == 0  # same z, other channel
+        assert cwidget.store.label_image(5)[15, 15] == 1
+        assert cwidget.store.label_image(2).max() == 0  # same z, other channel
 
     def test_channel_flip_swaps_the_overlay(self, cwidget):
         cwidget.add_roi(square(10, 10, 9))  # plane 0 = (c0, z0)
@@ -2511,31 +2575,6 @@ class TestPlaneMapping:
         assert movie is not None
         assert movie.z == 2 and movie.c == 1
         assert movie.shape == (4, 64, 64)
-
-    def test_legacy_zarr_grows_into_channel_planes(self, tmp_path):
-        from mbo_utilities.annotation import LabelsZarr, RoiLabelStore
-        from mbo_utilities.gui._ndviewer import MboNDViewer
-        from mbo_utilities.gui.manual_roi import ManualRoiWidget, labels_path
-
-        fpath = tmp_path / "movie.tif"
-        old = RoiLabelStore(3, 64, 64)
-        mask = np.zeros((64, 64), bool)
-        mask[10:20, 10:20] = True
-        old.add_roi(1, mask)
-        LabelsZarr(labels_path(fpath)).save(old, source_path=fpath)
-
-        data = np.random.default_rng(0).random((4, 2, 3, 64, 64)).astype(np.float32)
-        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
-        iw.show()
-        try:
-            w = ManualRoiWidget(iw, fpath=fpath, auto_trace=False)
-            assert w.store.nz == 6
-            assert len(w.store.rois) == 1
-            # the old z1 plane is plane 1 here: (c0, z1)
-            assert w.store.rois[0].plane == 1
-            assert w.store.labels[1, 15, 15] == 1
-        finally:
-            iw.close()
 
 
 class TestGroupBuffer:
@@ -2589,7 +2628,7 @@ class TestGroupBuffer:
     def test_group_color_reaches_derived_rows(self, widget):
         from mbo_utilities.gui.roi_runs import component_color
 
-        widget._add_derived(make_result(widget, [disc(30, 30)]))
+        widget._add_derived(*make_result(widget, [disc(30, 30)]))
         widget.buffer_toggle(0, 0)
         widget.set_group_color((0.0, 1.0, 0.0))
         assert component_color(widget.derived[0], 0) == (0.0, 1.0, 0.0)
@@ -2614,20 +2653,11 @@ class TestTracePlotView:
 
     def _draw(self, widget, frames=1):
         """Draw the Traces panel ``frames`` times; raises what it raised."""
-        import traceback
-
-        errors = []
-
-        def body(*_args):
-            try:
-                widget.draw_traces()
-            except Exception:
-                errors.append(traceback.format_exc())
-
+        body = _Guard(widget.draw_traces)
         widget.strip._update_calls[:] = [body]
         for _ in range(frames):
             widget.iw.figure.canvas.draw()
-        assert not errors, errors[0]
+        assert not body.errors, body.errors[0]
 
     def _two_traces(self, widget):
         for i in range(2):
@@ -2667,6 +2697,19 @@ class TestTracePlotView:
         # the masks take the same colors
         expected = tuple(int(round(c * 255)) for c in GROUP_COLORS[1])
         assert tuple(widget.overlay.data.value[6, 20, :3]) == expected
+
+    def test_the_x_zoom_survives_a_relabel(self, widget):
+        rows = self._two_traces(widget)
+        widget.select_trace(rows[0])
+        self._draw(widget, 2)
+        plot = widget.trace_plot
+        assert plot.panels == ("dF/F (%)",)
+        plot._x_span = (1.0, 3.0)
+        widget.kind = "raw"  # another y label: the panel is renamed
+        self._draw(widget, 2)
+        assert widget.trace_plot is plot and plot.panels == ("F (a.u.)",)
+        assert plot._lines[plot.panels[-1]]
+        assert plot._x_span == (1.0, 3.0)
 
     def test_show_traces_off_only_highlights(self, widget):
         rows = self._two_traces(widget)
@@ -2713,8 +2756,15 @@ class TestTracePlotView:
         (AGENTS.md §7.6, Trace display).
         """
         rows = [widget.traces.get(k) for k in self._two_traces(widget)]
-        # quick traces are mean-engine rows without a ring: no neuropil kinds
-        assert widget.kind_options(rows) == ("dff", "zscore", "raw")
+        # quick traces are mean-engine rows with a neuropil ring, the same
+        # measurement as a mean run, so the neuropil kinds are on offer
+        assert widget.kind_options(rows) == (
+            "dff",
+            "zscore",
+            "raw",
+            "neuropil",
+            "raw - neuropil",
+        )
         assert widget.plot_y_label(rows) == "dF/F (%)"
         s2p = RoiTrace(
             uid=0,
@@ -2889,19 +2939,9 @@ class TestPipelineParams:
 
     def test_settings_come_from_the_host_or_are_none(self, widget):
         assert widget.masknmf_settings() is None  # no host in this fixture
-        assert widget.suite2p_detection_settings() is None
 
         widget.host = _StubHost(masknmf=_StubSettings({"demixing": {"do_demixing": 2}}))
         assert widget.masknmf_settings() == {"demixing": {"do_demixing": 2}}
-
-        widget.host = _StubHost(
-            s2p=_StubSettings({"detection": {"threshold_scaling": 2.0}})
-        )
-        assert widget.suite2p_detection_settings() == {"threshold_scaling": 2.0}
-
-    def test_empty_detection_section_reads_as_none(self, widget):
-        widget.host = _StubHost(s2p=_StubSettings({"detection": {}}))
-        assert widget.suite2p_detection_settings() is None
 
     def test_params_button_jumps_to_the_run_tab(self, widget):
         widget.host = _StubHost()
@@ -2932,20 +2972,15 @@ class TestPipelineParams:
         assert "demix:force" in detail
 
     def test_demix_run_carries_the_settings(self, widget, monkeypatch, tmp_path):
-        seen = {}
-
-        def fake_demix(src, store, indices, **kwargs):
-            seen.update(kwargs)
-            return None
-
-        monkeypatch.setattr("mbo_utilities.gui.manual_roi.demix_rois", fake_demix)
+        demix = _KwargsSink()
+        monkeypatch.setattr("mbo_utilities.gui.roi.jobs.demix_rois", demix)
         widget.fpath = tmp_path / "movie.tif"
         widget.host = _StubHost(masknmf=_StubSettings({"runtime": {"device": "cpu"}}))
         widget.engine = "masknmf"
         widget.add_roi(square(10, 10, 9))
         widget.run_rois([0], "params")
         pump(widget)
-        assert seen.get("settings") == {"runtime": {"device": "cpu"}}
+        assert demix.seen.get("settings") == {"runtime": {"device": "cpu"}}
 
     def test_the_selection_row_carries_masknmfs_buttons(self, widget):
         """Masknmf's SELECTION row: center, draw, add ROI, delete, then this
@@ -2954,21 +2989,16 @@ class TestPipelineParams:
         from imgui_bundle import imgui
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        seen = []
-        real_button = imgui.button
-
-        def button_spy(label, *args, **kwargs):
-            seen.append(label)
-            return real_button(label, *args, **kwargs)
-
+        buttons = _Spy(imgui.button)
         set_widget_enabled("manual_roi", True, persist=False)
-        imgui.button = button_spy
+        imgui.button = buttons
         try:
             errors = draw_frames(widget, 3)
         finally:
-            imgui.button = real_button
+            imgui.button = buttons.real
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
+        seen = buttons.seen
         ids = [label.split("##")[-1] for label in seen[: len(seen) // 3]]
         row = [
             "roi_center",
@@ -3018,8 +3048,6 @@ class TestRunCoordinates:
     """
 
     def test_a_mask_drawn_on_one_channel_traces_the_other(self, cwidget):
-        from mbo_utilities.roi_workflow import feather_mask
-
         cwidget.iw.indices["c"] = 0
         cwidget.iw.indices["z"] = 2
         cwidget.add_roi(square(10, 10, 9))
@@ -3028,18 +3056,17 @@ class TestRunCoordinates:
         cwidget.trace_rois([0], c=1)
         pump(cwidget)
         data = np.asarray(cwidget.iw.data[0])
-        mask = cwidget.store.labels[2] == 1
-        w = feather_mask(mask)[mask]
+        mask = cwidget.store.mask(0)
         rows = {t.key: t for t in cwidget.traces.for_roi(uid)}
         assert set(rows) == {("roi", uid, 2, 0, "mean"), ("roi", uid, 2, 1, "mean")}
         np.testing.assert_allclose(
             rows[("roi", uid, 2, 1, "mean")].F,
-            data[:, 1, 2][:, mask] @ (w / w.sum()),
+            data[:, 1, 2][:, mask].mean(axis=1),
             rtol=1e-5,
         )
         np.testing.assert_allclose(
             rows[("roi", uid, 2, 0, "mean")].F,
-            data[:, 0, 2][:, mask] @ (w / w.sum()),
+            data[:, 0, 2][:, mask].mean(axis=1),
             rtol=1e-5,
         )
         assert cwidget._trace_cells(("roi", uid, 2, 1, "mean"))[1:4] == (
@@ -3076,14 +3103,9 @@ class TestRunCoordinates:
         pump(widget)
         (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
         assert trace.frames == (1, 4, 1) and trace.n_frames == 3
-        from mbo_utilities.roi_workflow import feather_mask
-
         data = np.asarray(widget.iw.data[0])
         mask = widget.labels == 1
-        w = feather_mask(mask)[mask]
-        np.testing.assert_allclose(
-            trace.F, data[1:4][:, mask] @ (w / w.sum()), rtol=1e-5
-        )
+        np.testing.assert_allclose(trace.F, data[1:4][:, mask].mean(axis=1), rtol=1e-5)
         assert "t2-4" in widget._trace_label(trace)
         # a strided selection: one sample per two frames, the axis says so
         widget.run_tp = [0, 2, 4]
@@ -3093,7 +3115,7 @@ class TestRunCoordinates:
         (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
         assert trace.frames == (0, 5, 2) and trace.n_frames == 3
         np.testing.assert_allclose(
-            trace.F, data[[0, 2, 4]][:, mask] @ (w / w.sum()), rtol=1e-5
+            trace.F, data[[0, 2, 4]][:, mask].mean(axis=1), rtol=1e-5
         )
         assert widget.trace_axis(trace).per_second == pytest.approx(0.5)
         assert "t1-5-2" in widget._trace_label(trace)
@@ -3123,15 +3145,17 @@ class TestRunCoordinates:
             w.run_roi(0)
             pump(w)
             assert w._run_error is None, w._run_error
-            out = tmp_path / "rois_roi01"
-            F = np.load(out / "F.npy")
+            from mbo_utilities.results import Results, newest_results
+
+            out = newest_results(tmp_path, "manual")
+            (unit,) = Results.read(out).units.values()
+            F = unit.traces["raw"]
             assert F.shape == (1, 4)
             np.testing.assert_allclose(
-                F[0], data[:4, 1, 0][:, w.store.labels[0] == 1].mean(axis=1), rtol=1e-5
+                F[0], data[:4, 1, 0][:, w.store.mask(0)].mean(axis=1), rtol=1e-5
             )
-            ops = np.load(out / "ops.npy", allow_pickle=True).item()
-            wf = ops["roi_workflow"]
-            assert (wf["z"], wf["c"], wf["frames"], wf["tp_indices"]) == (
+            attrs = unit.attrs
+            assert (attrs["z"], attrs["c"], attrs["frames"], attrs["tp_indices"]) == (
                 0,
                 1,
                 [0, 4, 1],
@@ -3139,12 +3163,13 @@ class TestRunCoordinates:
             )
             (trace,) = w.traces.for_roi(uid)
             assert trace.key == ("roi", uid, 0, 1, "mean") and trace.frames == (0, 4, 1)
-            # both channels: one child dir per read, named by the filename tags
+            # both channels: one unit per read, named by the filename tags
             w.run_where = "drawn"
             w.run_tp = None
             w.run_rois([0], "both", c=None)
             pump(w)
-            assert (tmp_path / "rois_both" / "F.npy").exists()
+            (both,) = tmp_path.glob("movie.both.*.manual.zarr")
+            assert Results.read(both).units["zplane01"].attrs["c"] == 0
             assert {t.key for t in w.traces.for_roi(uid)} == {
                 ("roi", uid, 0, 0, "mean"),
                 ("roi", uid, 0, 1, "mean"),
@@ -3153,10 +3178,6 @@ class TestRunCoordinates:
             w.run_where, w.run_c = "fixed", 0
             w.trace_rois([0], c=1)
             pump(w)
-            assert (
-                w._set_name(tmp_path / "rois_x" / "ch02_zplane01")
-                == "rois_x/ch02_zplane01"
-            )
         finally:
             iw.close()
 
@@ -3167,12 +3188,13 @@ class TestHelpAndKeysAreAppWide:
     """
 
     def test_the_roi_guide_is_markdown_for_the_help_viewer(self):
-        from mbo_utilities.gui.manual_roi import _HELP_STEPS, help_markdown
+        from mbo_utilities.gui.manual_roi import help_markdown
+        from mbo_utilities.gui.roi._shared import _HELP_STEPS
 
         doc = help_markdown()
         assert doc.startswith("## ROI Labeling")
         assert "### Workflow" in doc and "### Output files" in doc
-        assert "manual_labels.zarr" in doc
+        assert ".rois.zarr" in doc
         for step in _HELP_STEPS:
             assert step in doc
         # the keys are the Keybinds popup's job, not the guide's
@@ -3181,10 +3203,7 @@ class TestHelpAndKeysAreAppWide:
     def test_the_help_viewer_lists_the_roi_tab_only_with_the_widget(self):
         from mbo_utilities.gui import _help_viewer
 
-        class _Parent:
-            manual_roi = None
-
-        parent = _Parent()
+        parent = _BareHost()
         assert [name for name, _ in _help_viewer.docs_for(parent)] == [
             name for name, _ in _help_viewer.DOCS
         ]
@@ -3197,10 +3216,7 @@ class TestHelpAndKeysAreAppWide:
         from mbo_utilities.gui.manual_roi import KEYBINDS
         from mbo_utilities.gui.widgets.menu_bar import _roi_keybinds
 
-        class _Parent:
-            manual_roi = None
-
-        parent = _Parent()
+        parent = _BareHost()
         assert _roi_keybinds(parent) == []
         parent.manual_roi = object()
         rows = _roi_keybinds(parent)
@@ -3231,6 +3247,7 @@ class TestAdoptingRunsStartedElsewhere:
         )
         path.mkdir(parents=True, exist_ok=True)
         np.save(path / "stat.npy", stat)
+        np.save(path / "F.npy", np.zeros((len(accepted), 6), np.float32))
         np.save(
             path / "iscell.npy",
             np.array([[1.0 if a else 0.0, 0.5] for a in accepted], np.float32),
@@ -3259,7 +3276,7 @@ class TestAdoptingRunsStartedElsewhere:
         try:
             widget._adopt_checked = 0.0
             widget._adopt_finished_runs()
-            assert [s.result.path for s in widget.derived] == [d]
+            assert [s.path for s in widget.derived] == [d]
             # accepted / rejected come from the run's own iscell, curatable
             # in the table like any other loaded run
             assert widget.derived[0].accepted.tolist() == [True, False]
@@ -3302,34 +3319,18 @@ class TestAdoptingRunsStartedElsewhere:
         """One masknmf table row per trace, the id cell in its trace's color."""
         from imgui_bundle import imgui
 
-        widget._add_derived(make_result(widget, [disc(40, 40)], with_traces=True))
-        labels = []
-        real = imgui.selectable
-
-        def spy(label, *args, **kwargs):
-            if "##row" in label:
-                labels.append(label)
-            return real(label, *args, **kwargs)
-
-        import traceback
-
-        errors = []
-
-        def body(*_args):
-            try:
-                widget.draw_trace_table()
-            except Exception:
-                errors.append(traceback.format_exc())
-
+        widget._add_derived(*make_result(widget, [disc(40, 40)], with_traces=True))
+        rows = _RowSpy(imgui.selectable)
+        body = _Guard(widget.draw_trace_table)
         widget.strip._update_calls[:] = [body]
-        imgui.selectable = spy
+        imgui.selectable = rows
         try:
             for _ in range(2):
                 widget.iw.figure.canvas.draw()
         finally:
-            imgui.selectable = real
-        assert not errors, errors[0]
-        assert labels, "no trace rows drawn"
+            imgui.selectable = rows.real
+        assert not body.errors, body.errors[0]
+        assert rows.seen, "no trace rows drawn"
         assert widget._trace_keys == [("member", "find01", 0)]
 
 
@@ -3340,7 +3341,7 @@ class TestFollowModeAdvances:
 
     def test_labeling_an_algo_row_skips_ones_already_labeled(self, widget):
         widget._add_derived(
-            make_result(widget, [disc(10, 10), disc(30, 30), disc(50, 50)])
+            *make_result(widget, [disc(10, 10), disc(30, 30), disc(50, 50)])
         )
         widget.store.add_label_name("soma")
         widget.store.add_label_name("dendrite")
@@ -3359,7 +3360,7 @@ class TestFollowModeAdvances:
         assert widget.order.current == rows[2]
 
     def test_it_wraps_to_the_first_row_still_needing_a_label(self, widget):
-        widget._add_derived(make_result(widget, [disc(10, 10), disc(30, 30)]))
+        widget._add_derived(*make_result(widget, [disc(10, 10), disc(30, 30)]))
         widget.store.add_label_name("soma")
         widget._resync()
         widget.follow = True
@@ -3373,7 +3374,7 @@ class TestFollowModeAdvances:
         labeled and the cursor is already on the next one; stepping past it
         skipped every other ROI.
         """
-        from mbo_utilities.gui.manual_roi import _PlaneOrder
+        from mbo_utilities.gui.roi._shared import _PlaneOrder
 
         labels = np.array([-1, -1, -1], np.int64)
         order = _PlaneOrder({"source": np.zeros(3, np.int64)}, labels, 3)
@@ -3400,28 +3401,16 @@ class TestLabelButtons:
         from imgui_bundle import imgui
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        seen, small = [], []
-        real_button, real_small = imgui.button, imgui.small_button
-
-        def button_spy(label, *args, **kwargs):
-            seen.append(label)
-            return real_button(label, *args, **kwargs)
-
-        def small_spy(label, *args, **kwargs):
-            small.append(
-                (label, imgui.get_cursor_pos_x(), imgui.get_content_region_avail().x)
-            )
-            return real_small(label, *args, **kwargs)
-
+        buttons, small = _Spy(imgui.button), _SmallButtonSpy(imgui.small_button)
         set_widget_enabled("manual_roi", True, persist=False)
-        imgui.button, imgui.small_button = button_spy, small_spy
+        imgui.button, imgui.small_button = buttons, small
         try:
             errors = draw_frames(widget, 3)
         finally:
-            imgui.button, imgui.small_button = real_button, real_small
+            imgui.button, imgui.small_button = buttons.real, small.real
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
-        return seen, small
+        return buttons.seen, small.seen
 
     def test_class_buttons_paint_their_own_columns(self, widget):
         widget.store.add_label_name("spine")
@@ -3451,207 +3440,6 @@ class TestLabelButtons:
         seen, small = self._draw(widget)
         assert not [s for s in seen if s.startswith("##lab")], seen
         assert not [row for row in small if "unlabel" in row[0]], small
-
-
-class _RoiTabParent:
-    """The PreviewDataWidget bits the ROIs pipeline reads: the ROI widget,
-    the viewer, and the toggle hook it uses to switch the widget on.
-    """
-
-    def __init__(self, roi=None, iw=None):
-        self.manual_roi = roi
-        self.image_widget = (
-            iw if iw is not None else (roi.iw if roi is not None else None)
-        )
-        self.fpath = None
-        self.synced = []
-
-    def sync_manual_roi(self, enabled):
-        self.synced.append(enabled)
-
-
-def draw_pipeline_frames(widget, pipeline, n=2):
-    """Draw the ROIs pipeline body inside the strip window, guarded."""
-    import traceback
-
-    errors = []
-
-    def guarded(*_args):
-        try:
-            pipeline.draw()
-        except Exception:
-            errors.append(traceback.format_exc())
-
-    widget.strip._update_calls[:] = [guarded]
-    for _ in range(n):
-        widget.iw.figure.canvas.draw()
-    return errors
-
-
-class TestRoiPipelineTab:
-    """The Process tab's ROIs pipeline: which ROIs, read where, which
-    engine; it edits the ROI widget's run settings and shows its table.
-    """
-
-    def test_applies_to_movies(self):
-        from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
-
-        assert RoiPipelineWidget.name == "ROIs" and RoiPipelineWidget.is_available
-        assert RoiPipelineWidget.applies_to(np.zeros((6, 8, 8)))
-        assert RoiPipelineWidget.applies_to(np.zeros((6, 2, 3, 8, 8)))
-        assert not RoiPipelineWidget.applies_to(np.zeros((1, 8, 8)))
-        assert not RoiPipelineWidget.applies_to(np.zeros((8, 8)))
-        assert not RoiPipelineWidget.applies_to(None)
-        assert RoiPipelineWidget.axes_consumed == {
-            "T": "range",
-            "Z": "select-one",
-            "C": "select-one",
-        }
-        assert RoiPipelineWidget.info.name == "rois"
-
-    def test_targets_follow_the_choice(self, widget):
-        from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
-
-        tab = RoiPipelineWidget(_RoiTabParent(widget))
-        for i in range(3):
-            widget.add_roi(square(2 + 14 * i, 2, 9))
-        widget.select_roi(-1)
-        assert tab.target == "selected" and tab.target_indices() == []
-        widget.select_roi(1)
-        assert tab.target_indices() == [1]
-        widget.buffer_add(-1, 2)
-        assert tab.target_indices() == [1, 2]
-        widget.buffer_clear()
-        tab.target = "listed"
-        widget.store.add_label_name("soma")
-        label(widget, 0, 0)
-        widget.order.filter_label = 0
-        widget.order.rebuild()
-        assert tab.target_indices() == [0]
-        tab.target = "plane"
-        assert tab.target_indices() == [0, 1, 2]
-        tab.target = "all"
-        assert tab.target_indices() == [0, 1, 2]
-
-    def test_plane_target_is_the_slice_on_screen(self, cwidget):
-        from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
-
-        tab = RoiPipelineWidget(_RoiTabParent(cwidget))
-        cwidget.add_roi(square(10, 10, 9))  # c0 z0
-        cwidget.iw.indices["c"] = 1
-        cwidget.add_roi(square(30, 30, 9))  # c1 z0
-        tab.target = "plane"
-        assert tab.target_indices() == [1]
-        cwidget.iw.indices["c"] = 0
-        assert tab.target_indices() == [0]
-        tab.target = "all"
-        assert tab.target_indices() == [0, 1]
-
-    def test_off_draws_a_switch_and_turns_the_widget_on(self, widget):
-        from imgui_bundle import imgui
-        from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
-
-        parent = _RoiTabParent(None, iw=widget.iw)
-        tab = RoiPipelineWidget(parent)
-        seen = []
-        real = imgui.button
-
-        def spy(label, *args, **kwargs):
-            seen.append(label)
-            return real(label, *args, **kwargs)
-
-        imgui.button = spy
-        try:
-            errors = draw_pipeline_frames(widget, tab)
-        finally:
-            imgui.button = real
-        assert not errors, errors[0]
-        assert any(b.startswith("Turn on Manual ROI Labeling") for b in seen), seen
-        tab._turn_on()
-        assert parent.synced == [True]
-
-    def test_draws_the_run_controls_and_the_table(self, widget):
-        from imgui_bundle import imgui
-        from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
-
-        tab = RoiPipelineWidget(_RoiTabParent(widget))
-        widget.add_roi(square(10, 10, 9))
-        widget.quick_trace(0)
-        pump(widget)
-        widget.select_roi(0)
-        buttons, radios, tables = [], [], []
-        real_button, real_radio, real_table = (
-            imgui.button,
-            imgui.radio_button,
-            imgui.begin_table,
-        )
-
-        def button_spy(label, *args, **kwargs):
-            buttons.append(label)
-            return real_button(label, *args, **kwargs)
-
-        def radio_spy(label, *args, **kwargs):
-            radios.append(label)
-            return real_radio(label, *args, **kwargs)
-
-        def table_spy(name, *args, **kwargs):
-            tables.append(name)
-            return real_table(name, *args, **kwargs)
-
-        imgui.button, imgui.radio_button, imgui.begin_table = (
-            button_spy,
-            radio_spy,
-            table_spy,
-        )
-        try:
-            errors = draw_pipeline_frames(widget, tab)
-        finally:
-            imgui.button, imgui.radio_button, imgui.begin_table = (
-                real_button,
-                real_radio,
-                real_table,
-            )
-        assert not errors, errors[0]
-        assert "Run mean##rois_run" in buttons and "Trace##rois_trace" in buttons, (
-            buttons
-        )
-        assert "Draw region##rois_region" in buttons
-        assert {b for b in buttons if b.endswith("##rois_find")} == {
-            "suite2p##rois_find",
-            "masknmf##rois_find",
-        }
-        assert not [b for b in buttons if b.endswith("##rois_plane")], (
-            "the full-image target replaced the whole-slice row"
-        )
-        assert [r for r in radios if "rois_target_" in r][:5] == [
-            "selected##rois_target_selected",
-            "listed##rois_target_listed",
-            "this slice##rois_target_plane",
-            "all##rois_target_all",
-            "full image##rois_target_full",
-        ]
-        assert [r for r in radios if "rois_where_" in r][:3] == [
-            "as drawn##rois_where_drawn",
-            "slice on screen##rois_where_screen",
-            "fixed##rois_where_fixed",
-        ]
-        assert "##rois_pipeline_traces" in tables, "the selected ROI's rows are listed"
-
-    def test_engine_and_frames_land_on_the_widget(self, widget):
-        from mbo_utilities.arrays.features._slicing import parse_timepoint_selection
-        from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
-
-        tab = RoiPipelineWidget(_RoiTabParent(widget))
-        widget.add_roi(square(10, 10, 9))
-        # what the frames box does on a change
-        tab._frames_text = "2:4"
-        widget.run_tp = [
-            int(t) for t in parse_timepoint_selection(tab._frames_text, 6).final_indices
-        ]
-        assert widget.run_tp == [1, 2, 3]
-        widget.engine = "suite2p"
-        assert widget.pipeline_for() == "suite2p"
-        assert "frames 2-4" in widget._where_label()
 
 
 class TestPlayheadWiring:
@@ -3795,118 +3583,16 @@ class TestColorBy:
         from imgui_bundle import imgui
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        seen = []
-        real = imgui.combo
-
-        def spy(label, *args, **kwargs):
-            seen.append(label)
-            return real(label, *args, **kwargs)
-
+        combos = _Spy(imgui.combo)
         set_widget_enabled("manual_roi", True, persist=False)
-        imgui.combo = spy
+        imgui.combo = combos
         try:
             errors = draw_frames(widget, 2)
         finally:
-            imgui.combo = real
+            imgui.combo = combos.real
             set_widget_enabled("manual_roi", False, persist=False)
         assert not errors, errors[0]
-        assert "##color_by" in seen and "##color_cmap" in seen
-
-
-class TestFullImage:
-    """The whole frame as one mask, at the run coordinates."""
-
-    def test_full_image_mean_is_a_table_row(self, cwidget):
-        from mbo_utilities.annotation import FULL_IMAGE
-
-        cwidget.iw.indices["c"] = 1
-        cwidget.iw.indices["z"] = 2
-        cwidget.trace_full()
-        pump(cwidget)
-        (row,) = [t for t in cwidget.traces if t.source == FULL_IMAGE]
-        assert row.key == ("member", FULL_IMAGE, "ch02_zplane03") and (
-            row.z,
-            row.c,
-        ) == (2, 1)
-        data = np.asarray(cwidget.iw.data[0])
-        np.testing.assert_allclose(row.F, data[:, 1, 2].mean(axis=(1, 2)), rtol=1e-5)
-        assert row.label == "full image z3 c2"
-        assert cwidget._trace_cells(row.key)[:4] == (
-            "full image z3 c2",
-            "3",
-            "1",
-            "mean",
-        )
-        assert cwidget.model.column("z") == {}  # the full image is not a drawn ROI
-        # the same slice again replaces the row; a window is stamped
-        cwidget.run_tp = [1, 2]
-        cwidget.trace_full()
-        pump(cwidget)
-        rows = [t for t in cwidget.traces if t.source == FULL_IMAGE]
-        assert len(rows) == 1 and rows[0].frames == (1, 3, 1) and rows[0].n_frames == 2
-        # and a fixed channel reads that channel
-        cwidget.run_tp = None
-        cwidget.run_where, cwidget.run_c = "fixed", 0
-        cwidget.trace_full()
-        pump(cwidget)
-        assert {t.key for t in cwidget.traces if t.source == FULL_IMAGE} == {
-            ("member", FULL_IMAGE, "ch02_zplane03"),
-            ("member", FULL_IMAGE, "ch01_zplane03"),
-        }
-        assert cwidget._plot_lines() is not None, (
-            "the plot falls back to a full-image row"
-        )
-
-    def test_full_plane_workers_read_the_run_coordinates(self, cwidget, tmp_path):
-        cwidget.fpath = tmp_path / "movie.tif"
-        spawned = []
-        cwidget.manager.spawn = lambda run, task_type, args: (
-            spawned.append((run, task_type, args)) or run
-        )
-        cwidget.iw.indices["c"] = 1
-        cwidget.iw.indices["z"] = 1
-        cwidget.run_full_plane("suite2p")
-        run, task_type, args = spawned[-1]
-        assert task_type == "suite2p" and args["planes"] == [2] and args["channel"] == 2
-        assert "tp_indices" not in args and run.tag == "ch02_zplane02"
-        cwidget.run_where, cwidget.run_z, cwidget.run_c = "fixed", 0, 0
-        cwidget.run_tp = [0, 1]
-        cwidget.run_full_plane("masknmf")
-        run, task_type, args = spawned[-1]
-        assert task_type == "masknmf" and args["planes"] == [1] and args["channel"] == 1
-        assert args["tp_indices"] == [0, 1] and args["selected_planes_0based"] == [0]
-        assert run.tag == "ch01_zplane01"
-
-    def test_single_channel_data_sends_no_channel(self, zwidget, tmp_path):
-        zwidget.fpath = tmp_path / "movie.tif"
-        spawned = []
-        zwidget.manager.spawn = lambda run, task_type, args: spawned.append(args) or run
-        zwidget.iw.indices["z"] = 2
-        zwidget.run_full_plane("suite2p")
-        assert spawned[-1]["planes"] == [3] and "channel" not in spawned[-1]
-
-    def test_the_tab_runs_the_full_image(self, cwidget, monkeypatch):
-        from mbo_utilities.gui.widgets.pipelines.rois import RoiPipelineWidget
-
-        tab = RoiPipelineWidget(_RoiTabParent(cwidget))
-        tab.target = "full"
-        assert tab.target_indices() == []
-        called = []
-        monkeypatch.setattr(
-            cwidget, "trace_full", lambda **kw: called.append(("trace", kw))
-        )
-        monkeypatch.setattr(
-            cwidget, "run_full_plane", lambda kind, **kw: called.append((kind, kw))
-        )
-        # what the Run button does per engine
-        cwidget.engine = "mean"
-        if cwidget.engine == "mean":
-            cwidget.trace_full()
-        cwidget.engine = "masknmf"
-        cwidget.run_full_plane(cwidget.engine)
-        assert called == [("trace", {}), ("masknmf", {})]
-        errors = draw_pipeline_frames(cwidget, tab)
-        assert not errors, errors[0]
+        assert "##color_by" in combos.seen and "##color_cmap" in combos.seen
 
 
 class TestSliderRoles:
@@ -3949,12 +3635,9 @@ class TestSliderRoles:
             pump(w)
             (trace,) = w.traces.for_roi(w.store.rois[0].uid)
             expected = np.asarray(data)[:, 1, 2]
-            mask = w.store.labels[w.store.rois[0].plane] == 1
-            from mbo_utilities.roi_workflow import feather_mask
-
-            wts = feather_mask(mask)[mask]
+            mask = w.store.mask(0)
             np.testing.assert_allclose(
-                trace.F, expected[:, mask] @ (wts / wts.sum()), rtol=1e-5
+                trace.F, expected[:, mask].mean(axis=1), rtol=1e-5
             )
             assert w._trace_label(trace) == "mean"
             other = RoiTrace(
@@ -4062,12 +3745,12 @@ class TestArrayResults:
             roi = gui.manual_roi
             # a run's output turns the ROI widget on by itself
             assert roi is not None and roi.slice is gui.slice
-            assert [s.result.z for s in roi.derived] == [0, 1]
-            assert [s.result.path.name for s in roi.derived] == [
+            assert [s.z for s in roi.derived] == [0, 1]
+            assert [s.path.name for s in roi.derived] == [
                 "zplane01_tp00001-00006",
                 "zplane02_tp00001-00006",
             ]
-            assert [s.result.kind for s in roi.derived] == ["suite2p", "suite2p"]
+            assert [s.kind for s in roi.derived] == ["suite2p", "suite2p"]
             # the ROI table opens on the plane on screen, with the classifier's probability
             assert roi.order.plane == 0 and "prob" in roi.columns
             assert roi._format_cell("prob", roi._row_index[(0, 0)]) == "0.9"
@@ -4102,10 +3785,133 @@ class TestArrayResults:
         iw.show()
         try:
             w = ManualRoiWidget(iw, fpath=arr.source_path, auto_trace=False)
-            assert len(w.derived) == 1 and w.derived[0].result.z == 0
-            assert w.derived[0].result.path == tmp_path / "zplane02_tp00001-00006"
+            assert len(w.derived) == 1 and w.derived[0].z == 0
+            assert w.derived[0].path == tmp_path / "zplane02_tp00001-00006"
             assert drawn_showing(w) and len(w._trace_rows()) == 1
             # the widget on a bare viewer feeds a slice of its own
             assert w._own_slice and w.slice.z == 0
         finally:
             iw.close()
+
+
+def press(widget, key, *, ctrl=False, shift=False, mouse=None, foreign=False):
+    """Press ``key`` for one frame the way a user would: the pointer parked at
+    ``mouse`` (figure pixels) for two frames first, the modifiers held, the
+    strip and the ROIs tab (or a ``foreign`` window instead) drawing.
+    """
+    from imgui_bundle import imgui
+
+    # the figure makes its imgui context current on its first draw; an io
+    # taken before that belongs to another context and swallows the events
+    errors = draw_frames(widget, 1, tabs=not foreign, foreign=foreign)
+    io = imgui.get_io()
+    if mouse is not None:
+        io.add_mouse_pos_event(float(mouse[0]), float(mouse[1]))
+    errors += draw_frames(widget, 2, tabs=not foreign, foreign=foreign)
+    if ctrl:
+        io.add_key_event(imgui.Key.mod_ctrl, True)
+    if shift:
+        io.add_key_event(imgui.Key.mod_shift, True)
+    io.add_key_event(key, True)
+    errors += draw_frames(widget, 1, tabs=not foreign, foreign=foreign)
+    io.add_key_event(key, False)
+    if ctrl:
+        io.add_key_event(imgui.Key.mod_ctrl, False)
+    if shift:
+        io.add_key_event(imgui.Key.mod_shift, False)
+    errors += draw_frames(widget, 1, tabs=not foreign, foreign=foreign)
+    assert not errors, errors[0]
+
+
+class TestKeys:
+    """Key presses injected through imgui's io: the chords that used to fire
+    two actions, the one active thing, and keys asleep over other windows.
+    """
+
+    def test_shift_m_leaves_the_masks_alone(self, widget):
+        from imgui_bundle import imgui
+
+        widget.add_roi(square(10, 10, 9))
+        shown = widget.show_masks
+        press(widget, imgui.Key.m, shift=True)
+        assert widget.show_masks == shown
+        press(widget, imgui.Key.m)
+        assert widget.show_masks != shown
+
+    def test_shift_t_runs_and_plain_t_follows(self, widget):
+        from imgui_bundle import imgui
+        from mbo_utilities.gui.manual_roi import ROI_KEYS
+
+        # masknmf leaves shift open on t; here shift+t is the run key alone
+        assert ROI_KEYS["trace_follow"].shift is False and ROI_KEYS["run"].shift is True
+        assert all(
+            bind.shift is None
+            for name, bind in ROI_KEYS.items()
+            if name in ("up", "down", "left", "right")
+        )
+        widget.add_roi(square(10, 10, 9))
+        widget.select_roi(0)
+        press(widget, imgui.Key.t, shift=True)
+        assert widget.status == "no data path to write beside"
+
+    def test_ctrl_digit_does_not_label(self, widget):
+        from imgui_bundle import imgui
+
+        widget.store.add_label_name("soma")
+        widget.add_roi(square(10, 10, 9))
+        widget.select_roi(0)
+        press(widget, imgui.Key._1, ctrl=True)
+        assert widget.store.rois[0].class_index == -1
+        press(widget, imgui.Key._1)
+        assert widget.store.rois[0].class_index == 0
+
+    def test_d_deletes_the_active_drawn_roi_only(self, widget):
+        from imgui_bundle import imgui
+
+        widget.add_roi(square(10, 10, 9))
+        widget.add_roi(square(30, 30, 9))
+        widget.buffer_add(-1, 0)
+        widget.buffer_add(-1, 1)
+        press(widget, imgui.Key.d)
+        assert widget.n_rois == 1
+
+    def test_a_pixel_average_is_the_active_thing(self, widget):
+        widget.add_roi(square(10, 10, 9))
+        widget.select_roi(0)
+        widget.set_pixel_traces(True)
+        widget.add_pixel(40, 40)
+        assert widget.selected == -1 and widget.active_pixel == (0, 40, 40)
+        assert (-1, 0) in widget.buffer
+        widget.delete_selected()
+        assert widget.active_pixel is None and not widget.pixels
+        assert widget.n_rois == 1
+        widget.select_roi(0)
+        assert widget.active_pixel is None
+
+    def test_undo_brings_the_deleted_roi_back_as_the_selection(self, widget):
+        widget.add_roi(square(10, 10, 9))
+        widget.add_roi(square(30, 30, 9))
+        widget.add_roi(square(50, 50, 9))
+        uid = widget.store.rois[0].uid
+        widget.select_roi(0)
+        widget.delete_selected()
+        assert [r.uid for r in widget.store.rois] == [uid + 1, uid + 2]
+        widget.undo()
+        assert widget.store.rois[widget.selected].uid == uid
+
+    def test_a_lone_pixel_average_takes_a_group_color(self, widget):
+        from masknmf.visualization.imgui.theme import GROUP_COLORS
+
+        widget.set_pixel_traces(True)
+        widget.add_pixel(40, 40)
+        assert widget._group_colors() == {(0, 40, 40): GROUP_COLORS[0]}
+
+    def test_keys_sleep_while_the_pointer_is_over_another_window(self, widget):
+        from imgui_bundle import imgui
+
+        widget.add_roi(square(10, 10, 9))
+        widget.select_roi(0)
+        press(widget, imgui.Key.d, mouse=(300, 300), foreign=True)
+        assert widget.n_rois == 1
+        press(widget, imgui.Key.d, mouse=(300, 300))
+        assert widget.n_rois == 0

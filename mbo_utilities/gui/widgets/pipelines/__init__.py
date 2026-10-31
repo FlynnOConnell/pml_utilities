@@ -18,7 +18,6 @@ from imgui_bundle import imgui
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
 from mbo_utilities.lazy_array import base_array
 
-# registry of available pipeline classes
 _PIPELINE_CLASSES: list[type[PipelineWidget]] = []
 _REGISTRATION_LOCK = threading.Lock()
 _REGISTRATION_STARTED = False
@@ -26,8 +25,6 @@ _REGISTRATION_COMPLETE = False
 
 # delay before the bg thread starts heavy imports. lets the main thread
 # finish painting the first frame and initializing fastplotlib/qt
-# without GIL contention from a multi-second suite2p import. tune via
-# start_preload(delay_s=...) if needed.
 _PRELOAD_DELAY_S = 1.0
 
 
@@ -40,75 +37,31 @@ def _register_pipelines_sync() -> None:
             _REGISTRATION_COMPLETE = True
             return
 
-        # preload settings module first (it's imported by Suite2pPipelineWidget.__init__).
-        # _s2p_schema is now lazy, so this import is cheap — it does NOT
-        # transitively pull in suite2p. the actual suite2p load happens
-        # in the warm_up step below.
-        try:
-            from mbo_utilities.gui.widgets.pipelines import settings as _  # noqa: F401
-        except Exception:
-            pass
+        from mbo_utilities.gui.widgets.pipelines import settings as _  # noqa: F401
+        from mbo_utilities.gui.widgets.pipelines.isoview import IsoviewPipelineWidget
+        from mbo_utilities.gui.widgets.pipelines.masknmf import MaskNMFPipelineWidget
+        from mbo_utilities.gui.widgets.pipelines.suite2p import Suite2pPipelineWidget
+        from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
+        from mbo_utilities.pipeline_registry import load_entry_point_pipelines
 
-        # import pipeline widgets - they register themselves based on availability
-        try:
-            from mbo_utilities.gui.widgets.pipelines.suite2p import (
+        _PIPELINE_CLASSES.extend(
+            (
                 Suite2pPipelineWidget,
-            )
-
-            _PIPELINE_CLASSES.append(Suite2pPipelineWidget)
-        except Exception:
-            pass
-
-        try:
-            from mbo_utilities.gui.widgets.pipelines.isoview import (
                 IsoviewPipelineWidget,
-            )
-
-            _PIPELINE_CLASSES.append(IsoviewPipelineWidget)
-        except Exception:
-            pass
-
-        try:
-            from mbo_utilities.gui.widgets.pipelines.masknmf import (
                 MaskNMFPipelineWidget,
-            )
-
-            _PIPELINE_CLASSES.append(MaskNMFPipelineWidget)
-        except Exception:
-            pass
-
-        try:
-            from mbo_utilities.gui.widgets.pipelines.vnoiser import (
                 VnoiserPipelineWidget,
             )
-
-            _PIPELINE_CLASSES.append(VnoiserPipelineWidget)
-        except Exception:
-            pass
-
-        # third-party pipelines from the "mbo_utilities.pipelines"
-        # entry-point group. Loaded last so a plugin never shadows a
-        # built-in in the selector order.
-        try:
-            from mbo_utilities.pipeline_registry import load_entry_point_pipelines
-
-            for cls in load_entry_point_pipelines():
-                if issubclass(cls, PipelineWidget) and cls not in _PIPELINE_CLASSES:
-                    _PIPELINE_CLASSES.append(cls)
-        except Exception:
-            pass
+        )
+        # plugins load last so one never shadows a built-in in the selector order
+        for cls in load_entry_point_pipelines():
+            if issubclass(cls, PipelineWidget) and cls not in _PIPELINE_CLASSES:
+                _PIPELINE_CLASSES.append(cls)
 
         _REGISTRATION_COMPLETE = True
 
-    # suite2p.parameters.SETTINGS is loaded out-of-process by
-    # `_s2p_schema`'s module-level daemon (cached to
-    # `~/.mbo/cache/s2p_settings_<version>.json`). Importing the widget
-    # classes above triggers that daemon transitively; the subprocess
-    # never enters this interpreter's address space.
-
 
 def _delayed_preload(delay_s: float) -> None:
-    """Sleep, then run the heavy preload. Runs in a daemon thread."""
+    """Sleep, then import the widgets; importing suite2p's starts _s2p_schema's out-of-process settings daemon."""
     if delay_s > 0:
         time.sleep(delay_s)
     _register_pipelines_sync()
@@ -133,21 +86,14 @@ def start_preload(delay_s: float | None = None) -> None:
     thread.start()
 
 
-def is_ready() -> bool:
-    """Check if pipeline registration is complete."""
-    return _REGISTRATION_COMPLETE
-
-
 def _register_pipelines() -> None:
     """Register available pipeline widgets (blocking if not preloaded)."""
     if not _REGISTRATION_STARTED:
         start_preload()
 
-    # if already complete, return immediately
     if _REGISTRATION_COMPLETE:
         return
 
-    # wait for background thread to complete (blocking)
     _register_pipelines_sync()
 
 
@@ -155,12 +101,6 @@ def get_available_pipelines() -> list[type[PipelineWidget]]:
     """Get list of all registered pipeline classes."""
     _register_pipelines()
     return _PIPELINE_CLASSES.copy()
-
-
-def get_pipeline_names() -> list[str]:
-    """Get names of all registered pipelines."""
-    _register_pipelines()
-    return [p.name for p in _PIPELINE_CLASSES]
 
 
 def any_pipeline_available() -> bool:
@@ -186,46 +126,34 @@ def _active_array(parent: Any) -> Any:
 
     Used to filter pipelines via :meth:`PipelineWidget.applies_to`.
     """
-    iw = getattr(parent, "image_widget", None)
+    iw = parent.image_widget
     if iw is None or not iw.data:
         return None
     return iw.data[0]
 
 
 def shown_name(parent: Any) -> str:
-    """What the array on screen is called on a button: its recording
-    (``MUnit_3`` of a .mesc), else its file's name, else "".
-    """
+    """The array on screen's name on a button: its recording (``MUnit_3`` of a .mesc), else its file's name, else ""."""
     arr = _active_array(parent)
     key = getattr(base_array(arr), "unit_key", None) if arr is not None else None
     if key:
         return str(key).rsplit("/", 1)[-1]
-    fpath = getattr(parent, "fpath", None)
+    fpath = parent.fpath
     if isinstance(fpath, (list, tuple)):
         fpath = fpath[0] if fpath else None
     return Path(str(fpath)).name if fpath else ""
 
 
 def _is_pipeline_available(cls: type) -> bool:
-    """Resolve ``is_available`` whether it's a class attr or a property.
-
-    Suite2p declares ``is_available`` as a ``@property`` (instance-bound),
-    so reading it off the class returns the descriptor (truthy) and not
-    the value. We instantiate temporarily if needed — Suite2p widgets
-    are heavy to construct so we cache the result on the class.
-    """
+    """``is_available`` of a class, cached on it; a property is read off an uninitialised instance (Suite2p's checks lsp lazily)."""
     cached = getattr(cls, "_is_available_cached", None)
     if cached is not None:
         return cached
     val = cls.__dict__.get("is_available")
     if isinstance(val, property):
-        try:
-            result = bool(val.fget(cls.__new__(cls)))
-        except Exception:
-            # property reads parent state — give up and assume available
-            result = True
+        result = bool(val.fget(cls.__new__(cls)))
     else:
-        result = bool(getattr(cls, "is_available", True))
+        result = bool(cls.is_available)
     cls._is_available_cached = result  # type: ignore[attr-defined]
     return result
 
@@ -235,14 +163,9 @@ def _applies_by_class(parent: Any) -> dict[type[PipelineWidget], bool]:
     evaluated once per array: it can open the source file.
     """
     arr = _active_array(parent)
-    cache = getattr(parent, "_pipeline_applies_cache", None)
+    cache = parent._pipeline_applies_cache
     if cache is None or cache[0] is not arr:
-        applies_by_cls = {}
-        for cls in _PIPELINE_CLASSES:
-            try:
-                applies_by_cls[cls] = bool(cls.applies_to(arr))
-            except Exception:
-                applies_by_cls[cls] = False
+        applies_by_cls = {cls: bool(cls.applies_to(arr)) for cls in _PIPELINE_CLASSES}
         cache = (arr, applies_by_cls)
         parent._pipeline_applies_cache = cache
     return cache[1]
@@ -267,8 +190,6 @@ def quick_pipelines(parent: Any) -> list[type[PipelineWidget]]:
 
 def pipeline_instance(parent: Any, cls: type[PipelineWidget]) -> PipelineWidget:
     """The one widget of ``cls`` for this host, built on first use."""
-    if not hasattr(parent, "_pipeline_instances"):
-        parent._pipeline_instances = {}
     if cls.name not in parent._pipeline_instances:
         parent._pipeline_instances[cls.name] = cls(parent)
     return parent._pipeline_instances[cls.name]
@@ -301,15 +222,6 @@ def draw_run_tab(parent: Any) -> None:
     installed) AND ``applies_to(active_array)`` (data type matches).
     """
     _register_pipelines()
-
-    # Persist selection by pipeline NAME, not list index — the list of
-    # applicable pipelines changes between datasets, and an int index
-    # silently shifts to a different pipeline when the list shrinks.
-    if not hasattr(parent, "_selected_pipeline_name"):
-        parent._selected_pipeline_name = None
-    if not hasattr(parent, "_pipeline_instances"):
-        parent._pipeline_instances = {}
-
     applies_by_cls = _applies_by_class(parent)
 
     if not _PIPELINE_CLASSES:
@@ -324,7 +236,6 @@ def draw_run_tab(parent: Any) -> None:
         )
         return
 
-    # partition: applicable to current data (and installed) vs. not.
     applicable: list[type[PipelineWidget]] = []
     not_applicable: list[type[PipelineWidget]] = []
     not_installed: list[type[PipelineWidget]] = []
@@ -405,61 +316,9 @@ def draw_run_tab(parent: Any) -> None:
 
 
 def cleanup_pipelines(parent: Any) -> None:
-    """Clean up all pipeline instances when gui is closing.
-
-    calls cleanup() on each pipeline to release resources like
-    open windows, background threads, etc.
-    """
-    if not hasattr(parent, "_pipeline_instances"):
-        return
-
+    """Release every built pipeline widget's windows and threads when the gui closes."""
     for pipeline in parent._pipeline_instances.values():
         with contextlib.suppress(Exception):
             pipeline.cleanup()
 
     parent._pipeline_instances.clear()
-
-
-# lazy imports for settings - use __getattr__ for module-level lazy loading
-_settings_cache = {}
-
-
-def __getattr__(name: str):
-    """Lazy load settings module exports on first access."""
-    lazy_names = (
-        "Suite2pSettings",
-        "Suite2pDB",
-        "MboSuite2pExtras",
-        "draw_suite2p_settings_panel",
-        "draw_section_suite2p",
-    )
-    if name in lazy_names:
-        if name not in _settings_cache:
-            from mbo_utilities.gui.widgets.pipelines import settings
-
-            for attr in lazy_names:
-                _settings_cache[attr] = getattr(settings, attr)
-        return _settings_cache[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-__all__ = [
-    "PipelineWidget",
-    "Suite2pSettings",
-    "Suite2pDB",
-    "MboSuite2pExtras",
-    "any_pipeline_available",
-    "cleanup_pipelines",
-    "draw_run_tab",
-    "draw_section_suite2p",
-    "draw_suite2p_settings_panel",
-    "get_available_pipelines",
-    "get_pipeline_names",
-    "get_trace_extractors",
-    "is_ready",
-    "open_pipeline",
-    "pipeline_instance",
-    "quick_pipelines",
-    "shown_name",
-    "start_preload",
-]

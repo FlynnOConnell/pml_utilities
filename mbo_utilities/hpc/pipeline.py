@@ -17,6 +17,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import numpy as np
+
 from .config import HpcConfig
 
 # Per-plane timing columns (see _read_plane_timings).
@@ -27,24 +29,8 @@ def cpu_quota() -> int:
     """CPUs this process may use — respects SLURM cgroup, unlike os.cpu_count()."""
     try:
         return len(os.sched_getaffinity(0))
-    except AttributeError:
+    except AttributeError:  # NOTE: sched_getaffinity is linux only
         return os.cpu_count() or 1
-
-
-def num_planes(arr) -> int:
-    try:
-        from lbm_suite2p_python.utils import _get_num_planes
-
-        return int(_get_num_planes(arr))
-    except Exception:
-        pass
-    n = getattr(arr, "nz", None)
-    if n:
-        return int(n)
-    shp = getattr(arr, "shape", None)
-    if shp is not None and len(shp) >= 3:
-        return int(shp[-3])
-    return 1
 
 
 def resolve_workers(
@@ -83,10 +69,10 @@ def _run(
     keep_reg = kw.pop("keep_reg", True)
     keep_raw = kw.pop("keep_raw", False)
     writer_kwargs = kw.pop("writer_kwargs", {"fix_phase": True, "use_fft": True})
-    kw.pop("planes", None)  # runner passes planes explicitly below
-    kw.pop("num_zplanes", None)  # consumed by the runner when building planes
     # [] / None selection -> all timepoints (lbm pipeline expects the kwarg
     # absent or None).
+    kw.pop("planes", None)
+    kw.pop("num_zplanes", None)
     for _sel in ("timepoints", "frames", "frame_indices"):
         if not kw.get(_sel):
             kw.pop(_sel, None)
@@ -115,9 +101,9 @@ def _run(
 def _aggregate(input_dir, output_dir, ops, passthrough=None, stream=False):
     from mbo_utilities import imread
 
-    arr = imread(input_dir)
     # replot=False: per-plane figures already exist from the shard runs; the
     # aggregate only needs the volumetric merge + volume plots.
+    arr = imread(input_dir)
     _run(
         arr,
         output_dir,
@@ -133,21 +119,21 @@ def _aggregate(input_dir, output_dir, ops, passthrough=None, stream=False):
     )
 
 
+def _timing_field(d, k):
+    return float(d.get(k, 0) or 0)
+
+
 def _read_plane_timings(output_dir):
     """Per-plane timing (s): IO + suite2p stage split + plotting."""
-    try:
-        import numpy as np
-    except Exception:
-        return []
-
-    def _g(d, k):
-        return float(d.get(k, 0) or 0)
-
     rows = []
     for p in sorted(Path(output_dir).glob("**/ops.npy")):
         try:
             ops = np.load(p, allow_pickle=True).item()
-        except Exception:
+        except (
+            OSError,
+            ValueError,
+            EOFError,
+        ):  # NOTE: a plane still writing its ops.npy
             continue
         if not isinstance(ops, dict):
             continue
@@ -169,12 +155,12 @@ def _read_plane_timings(output_dir):
         row = {
             "plane": p.parent.name,
             "io": io,
-            "reg": _g(pt, "registration"),
-            "regmetrics": _g(pt, "registration_metrics"),
-            "detect": _g(pt, "detection"),
-            "extract": _g(pt, "extraction")
-            + _g(pt, "classification")
-            + _g(pt, "deconvolution"),
+            "reg": _timing_field(pt, "registration"),
+            "regmetrics": _timing_field(pt, "registration_metrics"),
+            "detect": _timing_field(pt, "detection"),
+            "extract": _timing_field(pt, "extraction")
+            + _timing_field(pt, "classification")
+            + _timing_field(pt, "deconvolution"),
             "plots": plots,
         }
         row["total"] = (
@@ -202,10 +188,7 @@ def write_timing_report(output_dir, wall=None, n_workers=None):
             }
             for c in _COLS
         }
-    try:
-        (Path(output_dir) / "timings.json").write_text(json.dumps(report, indent=2))
-    except Exception:
-        pass
+    (Path(output_dir) / "timings.json").write_text(json.dumps(report, indent=2))
 
     if not rows:
         print(f"timing: no ops.npy timing under {output_dir}", flush=True)
@@ -242,22 +225,17 @@ def _pin_local_gpu(index) -> None:
     CUDA_VISIBLE_DEVICES. Must run before torch/cupy import. No-op when
     index < 0 (auto) or under SLURM, where gres owns device assignment.
     """
-    try:
-        idx = int(index)
-    except (TypeError, ValueError):
-        return
+    idx = int(index)
     if idx < 0 or os.environ.get("SLURM_JOB_ID"):
         return
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(idx)
-    print(f"pinned GPU {idx} (CUDA_DEVICE_ORDER=PCI_BUS_ID)", flush=True)
     # Fail loudly if CUDA can't use the pinned device, instead of silently
     # running the whole job on CPU. A device that nvidia-smi shows (e.g. a
     # TCC card the GeForce driver won't expose) can still be unusable here.
-    try:
-        import torch
-    except Exception:
-        return
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(idx)
+    print(f"pinned GPU {idx} (CUDA_DEVICE_ORDER=PCI_BUS_ID)", flush=True)
+    import torch
+
     if not torch.cuda.is_available():
         raise RuntimeError(
             f"gpu={idx}: CUDA can't use that device (torch.cuda.is_available() is "
@@ -314,20 +292,17 @@ def assert_output_writable(path) -> None:
 
 
 def _bin_gb_per_plane(arr) -> float:
-    """int16 data.bin size for one plane, or 0 if shape is unreadable."""
-    try:
-        nt, ly, lx = int(arr.shape[0]), int(arr.shape[-2]), int(arr.shape[-1])
-    except Exception:
-        return 0.0
-    return nt * ly * lx * 2 / 1e9
+    """int16 data.bin size for one plane, in GB."""
+    return int(arr.shape[0]) * int(arr.shape[-2]) * int(arr.shape[-1]) * 2 / 1e9
 
 
 def _log_output_estimate(arr, n_planes: int, output_dir) -> None:
     """Print the expected registered-binary footprint vs. free space."""
     per = _bin_gb_per_plane(arr)
+    # int16 data.bin per plane
     if not per:
         return
-    est_gb = per * n_planes  # int16 data.bin per plane
+    est_gb = per * n_planes
     free_gb = disk_free_gb(output_dir)
     print(
         f"output estimate: ~{est_gb:.0f} GB for {n_planes} plane(s); "
@@ -356,10 +331,11 @@ def assert_stage_fits(arr, work_dir, n_planes: int, keep_raw: bool = False) -> N
     free_gb = disk_free_gb(work_dir)
     print(
         f"node-local staging: ~{est_gb:.0f} GB for {n_planes} plane(s); "
+        # 10% headroom for fs overhead
         f"{free_gb:.0f} GB free on {work_dir}",
         flush=True,
     )
-    if est_gb and 0 <= free_gb < est_gb * 1.1:  # 10% headroom for fs overhead
+    if est_gb and 0 <= free_gb < est_gb * 1.1:
         raise RuntimeError(
             f"node-local /tmp ({work_dir}) has {free_gb:.0f} GB free but staging "
             f"this shard needs ~{est_gb:.0f} GB. Lower [pipeline] planes_per_gpu, "
@@ -389,11 +365,12 @@ def assert_input_stage_fits(src, work_base) -> None:
     """Fail fast if node-local /tmp can't hold a copy of the raw input."""
     need = _input_size_gb(src)
     free = disk_free_gb(work_base)
+    # 10% headroom for fs overhead
     print(
         f"input staging: ~{need:.0f} GB raw -> {work_base} ({free:.0f} GB free)",
         flush=True,
     )
-    if need and 0 <= free < need * 1.1:  # 10% headroom for fs overhead
+    if need and 0 <= free < need * 1.1:
         raise RuntimeError(
             f"node-local /tmp ({work_base}) has {free:.0f} GB free but staging the "
             f"raw input needs ~{need:.0f} GB. Set [pipeline] stage_input = false to "
@@ -442,12 +419,12 @@ def write_failure_report(output_dir, role, task_id, exc) -> str | None:
         f"tmp={os.environ.get('TMPDIR') or tempfile.gettempdir()} "
         f"(free {disk_free_gb(os.environ.get('TMPDIR') or tempfile.gettempdir()):.1f} GB)",
         "",
+        # always keep a rotated copy in the central history (best-effort).
         "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
     ]
     text = "\n".join(lines)
     name = f"FAILURE_{role}_{task_id}_{os.getpid()}.log"
 
-    # always keep a rotated copy in the central history (best-effort).
     try:
         from mbo_utilities.hpc.history import MAX_LOGS, logs_dir, prune_dir
 
@@ -486,15 +463,15 @@ def run_job(
     """
     if isinstance(cfg, dict):
         cfg = HpcConfig.from_dict(cfg)
-    _pin_local_gpu(getattr(cfg.pipeline, "gpu", -1))
+    _pin_local_gpu(cfg.pipeline.gpu)
     output_dir = Path(output_dir)
+    # Fail fast: confirm the destination is writable before the long
+    # compute, so a bad output costs seconds instead of hours.
     output_dir.mkdir(parents=True, exist_ok=True)
     ops = cfg.ops()
-    stream = bool(getattr(cfg.pipeline, "stream", False))
+    stream = cfg.pipeline.stream
 
     try:
-        # Fail fast: confirm the destination is writable before the long
-        # compute, so a bad output costs seconds instead of hours.
         assert_output_writable(output_dir)
 
         if role == "aggregate":
@@ -509,21 +486,19 @@ def run_job(
             write_timing_report(output_dir, {"aggregate": time.perf_counter() - t0})
             return str(output_dir)
 
-        # Prefetch the cellpose model serially here so the N plane workers don't
-        # race to download it (concurrent writes corrupt the file). Best-effort.
+        # NOTE: the N plane workers downloading the cellpose model to one path corrupt it; fetch it once here
         if ops.get("algorithm") == "cellpose":
             try:
                 from mbo_utilities._cellpose_model import ensure_cellpose_model
 
                 ensure_cellpose_model()
-            except Exception as e:
+            except Exception as e:  # each worker then fetches it itself
                 print(f"cellpose prefetch skipped: {e}", flush=True)
 
         from mbo_utilities import imread
 
-        # Node-local NVMe staging is a cluster optimization; off-cluster it would
-        # only copy results through /tmp, so it applies only when running under SLURM.
         jid = os.environ.get("SLURM_JOB_ID")
+        # off-cluster node-local staging would only copy results through /tmp
         node_local = cfg.pipeline.node_local and bool(jid)
         work_dir = output_dir
         if node_local:
@@ -534,11 +509,8 @@ def run_job(
             )
             work_dir.mkdir(parents=True, exist_ok=True)
 
-        # Input staging (benchmark knob): copy the raw to node-local /tmp and
-        # stream from there instead of re-reading shared storage on every
-        # registration/detection/extraction pass. Only meaningful with stream
-        # (binary mode reads the input once); works locally and under SLURM.
-        stage_input = bool(getattr(cfg.pipeline, "stage_input", False))
+        # stage_input copies the raw to node-local disk so stream mode re-reads it from there on every pass
+        stage_input = cfg.pipeline.stage_input
         if stage_input and not stream:
             print(
                 "note: stage_input has no effect without stream=true (binary mode "
@@ -565,18 +537,16 @@ def run_job(
             t0 = time.perf_counter()
             arr = imread(input_path)
             t_imread = time.perf_counter() - t0
-            print(f"shape={arr.shape} dims={getattr(arr, 'dims', None)}", flush=True)
+            print(f"shape={arr.shape} dims={arr.dims}", flush=True)
             sel = cfg.pipeline_kwargs().get("planes")
             nzp = cfg.pipeline_kwargs().get("num_zplanes")
-            total_planes = num_planes(arr)
+            total_planes = int(arr.nz)
             if sel:
-                plane_indices = list(sel)  # 1-based explicit selection
+                plane_indices = list(sel)
             elif nzp:
-                plane_indices = list(
-                    range(1, min(int(nzp), total_planes) + 1)
-                )  # first N
+                plane_indices = list(range(1, min(int(nzp), total_planes) + 1))
             else:
-                plane_indices = list(range(1, total_planes + 1))  # all
+                plane_indices = list(range(1, total_planes + 1))
             pack = cfg.pipeline.planes_per_gpu
             thr = cfg.pipeline.threads_per_worker
             keep_raw = cfg.pipeline_kwargs().get("keep_raw", False)
@@ -613,7 +583,7 @@ def run_job(
                     passthrough=cfg.pipeline_kwargs(),
                     stream=stream,
                 )
-            else:  # single
+            else:
                 workers, threads = resolve_workers(len(plane_indices), pack, thr)
                 _apply_thread_env(threads)
                 _log_output_estimate(arr, len(plane_indices), output_dir)
@@ -643,10 +613,7 @@ def run_job(
                     n_workers=workers,
                 )
         finally:
-            # drop the node-local raw copy regardless of outcome (it's a
-            # transient benchmark stage, never a result). release the array's
-            # file handles first so the delete also succeeds on Windows (Linux
-            # unlinks open files fine).
+            # NOTE: the staged raw is never a result; closing the array first lets windows delete it
             if staged_input is not None:
                 try:
                     if arr is not None and hasattr(arr, "close"):
@@ -655,7 +622,9 @@ def run_job(
                     pass
                 shutil.rmtree(Path(staged_input).parent, ignore_errors=True)
             if node_local and Path(work_dir) != output_dir:
-                pending = sys.exc_info()[1]  # compute error already unwinding, if any
+                pending = sys.exc_info()[
+                    1
+                ]  # the compute error already unwinding, if any
                 try:
                     t0 = time.perf_counter()
                     shutil.copytree(work_dir, output_dir, dirs_exist_ok=True)
@@ -664,7 +633,7 @@ def run_job(
                         f"timing: transfer={time.perf_counter() - t0:.1f}s -> {output_dir}",
                         flush=True,
                     )
-                except Exception as copy_err:
+                except Exception as copy_err:  # NOTE: a copy-back failure must not mask the compute error
                     detail = copy_err
                     if isinstance(copy_err, shutil.Error) and copy_err.args:
                         detail = "; ".join(str(x) for x in copy_err.args[0][:15])
@@ -673,7 +642,6 @@ def run_job(
                         f"copied to {output_dir} (check destination disk quota / free "
                         f"space): {detail}"
                     )
-                    # Never let a copy-back failure mask the real compute error.
                     if pending is not None:
                         print(f"WARNING: {msg}", flush=True)
                     else:

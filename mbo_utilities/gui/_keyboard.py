@@ -7,6 +7,8 @@ This module contains keyboard shortcut handling for the PreviewDataWidget.
 from __future__ import annotations
 
 import contextlib
+import time
+from functools import partial
 from typing import Any
 
 from imgui_bundle import imgui
@@ -19,12 +21,10 @@ def handle_keyboard_shortcuts(parent: Any):
     """Handle global keyboard shortcuts."""
     io = imgui.get_io()
 
-    # skip if any widget has focus (typing in text field)
     # single-key shortcuts MUST be blocked when typing
     if io.want_text_input:
         return
 
-    # o: open file (no modifiers); typed path with the native dialog as browse
     if (
         not io.key_ctrl
         and not io.key_shift
@@ -35,13 +35,11 @@ def handle_keyboard_shortcuts(parent: Any):
             parent.logger.info("Shortcut: 'o' (Open File)")
             start_open_prompt(parent, "file")
 
-    # O (Shift + O): open folder (no ctrl)
     if not io.key_ctrl and io.key_shift and imgui.is_key_pressed(imgui.Key.o, False):
         if parent._folder_dialog is None and parent._file_dialog is None:
             parent.logger.info("Shortcut: 'Shift+O' (Open Folder)")
             start_open_prompt(parent, "folder")
 
-    # s: open save as popup (no modifiers)
     if (
         not io.key_ctrl
         and not io.key_shift
@@ -50,7 +48,6 @@ def handle_keyboard_shortcuts(parent: Any):
         parent.logger.info("Shortcut: 's' (Save As)")
         parent._saveas_popup_open = True
 
-    # m: toggle metadata viewer (no modifiers)
     if (
         not io.key_ctrl
         and not io.key_shift
@@ -60,12 +57,10 @@ def handle_keyboard_shortcuts(parent: Any):
         parent.logger.info("Shortcut: 'm' (Metadata Viewer)")
         parent.show_metadata_viewer = not parent.show_metadata_viewer
 
-    # Shift+M: open the standalone "Set Metadata" popup (no ctrl)
     if not io.key_ctrl and io.key_shift and imgui.is_key_pressed(imgui.Key.m, False):
         parent.logger.info("Shortcut: 'Shift+M' (Set Metadata)")
         parent._show_metadata_popup = True
 
-    # enter or p: toggle side panel collapse (no modifiers)
     if (
         not io.key_ctrl
         and not io.key_shift
@@ -76,7 +71,6 @@ def handle_keyboard_shortcuts(parent: Any):
     ):
         toggle_side_panel(parent)
 
-    # Shift+P: the pipeline for the recording on screen, set to it, in the Process tab
     if not io.key_ctrl and io.key_shift and imgui.is_key_pressed(imgui.Key.p, False):
         quick = quick_pipelines(parent)
         if quick:
@@ -86,8 +80,6 @@ def handle_keyboard_shortcuts(parent: Any):
     # space is handled via the renderer-level handler installed by
     # rebind_space_to_playback; fpl's ImguiFigure registers its own
     # space=collapse handler which our imgui-layer shortcut can't intercept.
-
-    # v: reset vmin/vmax (no modifiers)
     if (
         not io.key_ctrl
         and not io.key_shift
@@ -98,44 +90,39 @@ def handle_keyboard_shortcuts(parent: Any):
             with contextlib.suppress(Exception):
                 parent.image_widget.reset_vmin_vmax_frame()
 
-    # c: toggle fix-phase (scan-phase correction) when data supports it
     if (
         not io.key_ctrl
         and not io.key_shift
         and not _claimed("c")
         and imgui.is_key_pressed(imgui.Key.c, False)
     ):
-        if hasattr(parent, "fix_phase"):
-            parent.fix_phase = not parent.fix_phase
-            state = "ON" if parent.fix_phase else "OFF"
-            parent.logger.info(f"Shortcut: 'c' (Fix Phase: {state})")
+        parent.fix_phase = not parent.fix_phase
+        parent.logger.info(
+            f"Shortcut: 'c' (Fix Phase: {'ON' if parent.fix_phase else 'OFF'})"
+        )
 
-    # Shift+C: toggle sub-pixel (FFT) scan-phase correction
     if not io.key_ctrl and io.key_shift and imgui.is_key_pressed(imgui.Key.c, False):
-        if hasattr(parent, "use_fft") and getattr(parent, "fix_phase", False):
+        if parent.fix_phase:
             parent.use_fft = not parent.use_fft
             state = "ON" if parent.use_fft else "OFF"
             parent.logger.info(f"Shortcut: 'Shift+C' (Sub-Pixel: {state})")
 
-    # Shift+V: toggle auto-contrast on z-change
     if not io.key_ctrl and io.key_shift and imgui.is_key_pressed(imgui.Key.v, False):
         parent.auto_contrast_on_z = not parent.auto_contrast_on_z
         state = "ON" if parent.auto_contrast_on_z else "OFF"
         parent.logger.info(f"Shortcut: 'Shift+V' (Auto-contrast on Z: {state})")
 
-    # k: toggle keybinds popup open/close (no modifiers)
     if (
         not io.key_ctrl
         and not io.key_shift
         and not _claimed("k")
         and imgui.is_key_pressed(imgui.Key.k, False)
     ):
-        parent._show_keybinds_popup = not getattr(parent, "_show_keybinds_popup", False)
+        parent._show_keybinds_popup = not parent._show_keybinds_popup
         parent.logger.info(
             f"Shortcut: 'k' (Keybinds {'OPEN' if parent._show_keybinds_popup else 'CLOSE'})"
         )
 
-    # h: show help popup (no modifiers)
     if (
         not io.key_ctrl
         and not io.key_shift
@@ -145,11 +132,10 @@ def handle_keyboard_shortcuts(parent: Any):
         parent.logger.info("Shortcut: 'h' (Help)")
         parent._show_help_popup = True
 
-    # arrow keys for slider dimensions (only when data is loaded)
     try:
         handle_arrow_keys(parent)
-    except Exception:
-        pass  # ignore errors during data transitions
+    except Exception:  # NOTE: the indices are stale for a frame while the data swaps
+        pass
 
 
 def _get_sliders_ui(parent: Any):
@@ -191,8 +177,8 @@ def toggle_playback(parent: Any, dim_index: int = 0) -> None:
 
 
 def toggle_side_panel(parent: Any) -> None:
-    """Toggle collapse state of the side panel."""
     # fastplotlib's collapsed flag doesn't resize; shrink to the separator like a double-click
+    """Toggle collapse state of the side panel."""
     if parent.collapsed:
         parent.size = parent._old_size
         parent.collapsed = False
@@ -201,6 +187,16 @@ def toggle_side_panel(parent: Any) -> None:
         parent.size = int(parent._separator_thickness)
         parent.collapsed = True
     parent.logger.info("Shortcut: collapse toggled")
+
+
+def _on_space(parent: Any, event) -> None:
+    if getattr(event, "key", None) != " ":
+        return
+    now = time.monotonic()
+    if now - parent._last_space_time < 0.15:  # OS key-repeat and duplicate dispatch
+        return
+    parent._last_space_time = now
+    toggle_playback(parent)
 
 
 def rebind_space_to_playback(parent: Any) -> None:
@@ -222,19 +218,8 @@ def rebind_space_to_playback(parent: Any) -> None:
     # debounce to suppress OS key-repeat and any duplicate dispatch
     parent._last_space_time = 0.0
 
-    def _on_space(event):
-        if getattr(event, "key", None) != " ":
-            return
-        import time
-
-        now = time.monotonic()
-        if now - parent._last_space_time < 0.15:
-            return
-        parent._last_space_time = now
-        toggle_playback(parent)
-
     with contextlib.suppress(Exception):
-        renderer.add_event_handler(_on_space, "key_down")
+        renderer.add_event_handler(partial(_on_space, parent), "key_down")
         parent._space_rebound = True
 
 
@@ -271,17 +256,14 @@ def handle_arrow_keys(parent: Any):
     if n_sliders == 0:
         return
 
-    # get shape from actual data
     shape = parent.image_widget.data[0].shape
     if not isinstance(shape, tuple) or len(shape) < 3:
         return
 
     current_indices = list(parent.image_widget.indices)
 
-    # jump step: 10 when shift held, 1 otherwise
     step = 10 if io.key_shift else 1
 
-    # left/right: T dimension (index 0)
     t_max = shape[0] - 1
     current_t = current_indices[0]
 

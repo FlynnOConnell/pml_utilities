@@ -136,19 +136,6 @@ class RoiOrder:
         self.pos = int(after[0] if len(after) else hits[0])
         return True
 
-    def step_group(self, direction: int) -> bool:
-        """First item in view of the next/previous label class."""
-        if self.current is None:
-            return False
-        labels = self.labels[self.order]
-        values = np.unique(labels)
-        if len(values) < 2:
-            return False
-        i = int(np.flatnonzero(values == int(self.labels[self.current]))[0])
-        target = values[(i + direction) % len(values)]
-        self.pos = int(np.flatnonzero(labels == target)[0])
-        return True
-
 
 def draw_roi_table(
     order: RoiOrder,

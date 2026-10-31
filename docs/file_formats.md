@@ -197,6 +197,10 @@ print(arr.shape)  # (1, 1, 1, Y, X)
 arr = mbo.imread("/path/to/tyx_stack.tif")
 print(arr.shape)  # (T, 1, 1, Y, X)
 
+# a plain or ImageJ stack is time unless dims says what the pages are
+arr = mbo.imread("/path/to/zstack.tif", dims="ZYX")
+print(arr.shape)  # (1, 1, Z, Y, X); dims="CYX" puts the pages on C
+
 # ImageJ hyperstack (auto-detected)
 arr = mbo.imread("/path/to/imagej_hyperstack.tif")
 print(arr.shape)          # (T, 1, Z, Y, X)

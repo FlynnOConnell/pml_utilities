@@ -535,6 +535,7 @@ def _host(path, unit="MSession_0/MUnit_4", **extra):
     iw = SimpleNamespace(
         data=[shown], dim_names=("Timepoint",), indices={"Timepoint": 0}
     )
+    extra = {"invert_deflection": False, "manual_roi": None, **extra}
     return SimpleNamespace(fpath=path, image_widget=iw, **extra)
 
 

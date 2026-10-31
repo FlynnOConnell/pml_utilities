@@ -53,6 +53,15 @@ class TestBaseContract:
         assert arr.metadata["dims"] == ("T", "C", "Z", "Y", "X")
         assert arr.dims == ("T", "C", "Z", "Y", "X")
 
+    def test_a_rate_or_z_step_nobody_stored_is_none(self):
+        arr = _Minimal((4, 1, 3, 8, 8))
+        assert arr.fs is None
+        assert arr.finterval is None
+        assert arr.dz is None
+        assert (arr.dx, arr.dy) == (1.0, 1.0)
+        stored = _Minimal((4, 1, 3, 8, 8), metadata={"fs": 10.0, "dz": 5.0})
+        assert (stored.fs, stored.finterval, stored.dz) == (10.0, 0.1, 5.0)
+
     def test_metadata_rank_mismatched_dims_does_not_raise(self):
         # a 4-element dims stored on a 5D array (e.g. round-tripped from a
         # single-channel write) must store cleanly, not raise.

@@ -77,9 +77,6 @@ def _resolve_backend(use_gpu: bool | None):
     return np, _np_fft2, _np_ifft2, False
 
 
-# mask + reference builders
-
-
 def _meshgrid_mean_centered_2d(nx, ny, xp):
     x = xp.arange(0, nx)
     y = xp.arange(0, ny)
@@ -136,9 +133,6 @@ def _phasecorr_ref(ref_img, smooth_sigma, xp, fft2):
     return cf.astype("complex64")
 
 
-# phase-corr primitives
-
-
 def _clip_and_mask(mov, mult_mask, add_mask):
     mov *= mult_mask
     mov += add_mask
@@ -170,9 +164,6 @@ def _get_max_cc_coord(phase_corr, max_reg_xy, xp):
     ymax = (argmaxs // ncc) - max_reg_xy
     xmax = (argmaxs % ncc) - max_reg_xy
     return ymax, xmax, cmax
-
-
-# public api
 
 
 def align_planes(
@@ -331,7 +322,6 @@ def _stream_plane_mean(
         idx = frame_idx[start : start + chunk_frames]
         batch = np.asarray(arr[idx])
         if use_5d and batch.ndim == 5:
-            # collapse C axis (take first color channel if multiple)
             batch = batch[:, 0]
         if f > 1:
             batch = _block_mean_yx(batch, f)
@@ -681,14 +671,14 @@ class AxialShiftView:
         z_axis = (0 if _is_int_index(t_key) else 1) + (0 if _is_int_index(c_key) else 1)
         z_indices = _idx_list(z_key, self._Z)
         raw_zf = np.moveaxis(raw, z_axis, 0)
-        out_zf = np.moveaxis(out, z_axis, 0)  # view into out
+        out_zf = np.moveaxis(out, z_axis, 0)
         for i, z in enumerate(z_indices):
             dy, dx = int(self._shifts[z, 0]), int(self._shifts[z, 1])
             out_zf[i, ..., pt + dy : pt + dy + Y, pl + dx : pl + dx + X] = raw_zf[i]
         return out
 
+    # explicit (do not let __getattr__ leak the source's rank/shape).
     def __array__(self, dtype=None, copy=None):
-        # explicit (do not let __getattr__ leak the source's rank/shape).
         data = np.asarray(self[0])
         if dtype is not None:
             data = data.astype(dtype)
@@ -697,8 +687,8 @@ class AxialShiftView:
     def astype(self, dtype, *args, **kwargs):
         return np.asarray(self).astype(dtype, *args, **kwargs)
 
+    # underscore names are never forwarded, so __init__ stays recursion-safe
     def __getattr__(self, name):
-        # underscore names are never forwarded, so __init__ stays recursion-safe
         if name.startswith("_"):
             raise AttributeError(name)
         return getattr(object.__getattribute__(self, "_source"), name)
@@ -762,15 +752,15 @@ def with_axial_shifts(
         or if `arr` is not a TCZYX 5D array.
     """
     if plane_shifts is None:
-        md = getattr(arr, "metadata", None)
         # plane count from the validated TCZYX 'Z' axis, so the metadata
         # shift count is checked against the same Z the view will index.
+        md = getattr(arr, "metadata", None)
         nz = _validated_tczyx_shape(arr)[2]
         if not validate_axial_shifts(md, nz):
-            raw = md.get("plane_shifts") if md else None
             # shifts present and well-formed, but the count doesn't match the
             # array's planes — almost always a file written before the writer
             # subset plane_shifts to the exported planes (stale .zarr / kernel).
+            raw = md.get("plane_shifts") if md else None
             if raw is not None and validate_axial_shifts(md, None):
                 n = len(np.asarray(raw))
                 raise ValueError(

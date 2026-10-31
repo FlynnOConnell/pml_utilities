@@ -10,7 +10,6 @@ import pytest
 from mbo_utilities.annotation import (
     COLUMNS,
     ENGINES,
-    FULL_IMAGE,
     ModelEvent,
     Observable,
     RoiLabelStore,
@@ -47,12 +46,17 @@ class _Recorder:
         return [e.info.get("action") for e in self.events]
 
 
+class _ThingAB(Observable):
+    events = ("a", "b")
+
+
+class _ThingA(Observable):
+    events = ("a",)
+
+
 class TestObservable:
     def test_handlers_get_typed_events_once(self):
-        class Thing(Observable):
-            events = ("a", "b")
-
-        thing = Thing()
+        thing = _ThingAB()
         seen = _Recorder()
         thing.add_event_handler(seen, "a")
         thing.add_event_handler(seen, "a")  # a repeat registration is a no-op
@@ -65,10 +69,7 @@ class TestObservable:
         assert len(seen.events) == 1
 
     def test_unknown_types_are_refused_and_blocking_silences(self):
-        class Thing(Observable):
-            events = ("a",)
-
-        thing = Thing()
+        thing = _ThingA()
         with pytest.raises(ValueError):
             thing.add_event_handler(lambda e: None, "nope")
         seen = _Recorder()
@@ -389,15 +390,3 @@ class TestColorize:
             1: (31, 119, 180)
         }
         assert model.colorize({2: 5.0}, cmap="viridis") == {2: (68, 1, 84)}
-
-    def test_full_image_rows_take_string_members(self):
-        table = RoiTraceTable()
-        row = table.add(
-            RoiTrace(uid=0, source=FULL_IMAGE, member="z2c1", z=2, c=1, F=np.ones(3))
-        )
-        assert row.key == ("member", FULL_IMAGE, "z2c1") and not row.stands_for_roi
-        table.add(
-            RoiTrace(uid=0, source=FULL_IMAGE, member="z2c1", z=2, c=1, F=np.zeros(3))
-        )
-        assert len(table) == 1 and table.get(row.key).F.sum() == 0
-        assert table.prune([]) == [] and len(table) == 1

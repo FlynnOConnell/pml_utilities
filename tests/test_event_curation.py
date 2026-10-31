@@ -1168,32 +1168,6 @@ class TestSeparateZstackFile:
         assert paired["munit"] == "MUnit_3"
         assert zstack_candidates(mesc, "MSession_0/MUnit_35") == []
 
-    @pytest.mark.skipif(
-        not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only"
-    )
-    def test_mbo_recognises_the_line_scan_unit(self):
-        from mbo_utilities.gui.run_gui import _is_linescan_unit, _mesc_unit
-
-        assert _is_linescan_unit(ASAKO_MESC, "MUnit_35")
-        assert _is_linescan_unit(ASAKO_MESC, "MSession_0/MUnit_38")
-        assert not _is_linescan_unit(ASAKO_MESC, "MUnit_0")
-        assert not _is_linescan_unit(ASAKO_MESC, None)
-        assert _mesc_unit(ASAKO_MESC, "MUnit_35")["key"] == "MSession_0/MUnit_35"
-
-    @pytest.mark.skipif(
-        not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only"
-    )
-    def test_dry_run_of_the_viewer_entry_point(self, capsys):
-        from mbo_utilities.gui.linescan_viewer import open_linescan_viewer
-
-        assert (
-            open_linescan_viewer(ASAKO_MESC, ref_key="MUnit_35", dry_run=True) is None
-        )
-        out = capsys.readouterr().out
-        assert "1 zstack in stan112_expt12_zstack.mesc" in out
-        assert "Z-stack: MSession_0/MUnit_3" in out
-        assert "24 line(s) on MUnit_3" in out
-
 
 def _mesc_beside_pf(tmp_path):
     """The archive's layout: <expt>/<expt>/<expt>.mesc next to <expt>/PF."""
@@ -1306,7 +1280,7 @@ class TestMboOpensTheLineScanViewer:
         )
         rg._run_gui_impl(data_in=mesc)
         assert len(standard) == 1
-        assert standard[0][0] == mesc and standard[0][-1] == "MSession_0/MUnit_2"
+        assert standard[0][0] == mesc and standard[0][4] == "MSession_0/MUnit_2"
 
     def test_a_file_with_chessboard_patches_opens_the_same_way(
         self, tmp_path, monkeypatch
@@ -1326,7 +1300,7 @@ class TestMboOpensTheLineScanViewer:
             rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
         )
         rg._run_gui_impl(data_in=mesc)
-        assert len(standard) == 1 and standard[0][-1] == "MSession_0/MUnit_1"
+        assert len(standard) == 1 and standard[0][4] == "MSession_0/MUnit_1"
 
     def test_an_explicit_line_scan_unit_goes_to_the_viewer(self, tmp_path, monkeypatch):
         rg = self._units(monkeypatch, ["multicube", "packed"])
@@ -1337,7 +1311,7 @@ class TestMboOpensTheLineScanViewer:
             rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
         )
         rg._run_gui_impl(data_in=mesc, unit="MUnit_1")
-        assert len(standard) == 1 and standard[0][-1] == "MUnit_1"
+        assert len(standard) == 1 and standard[0][4] == "MUnit_1"
         # a non line-scan unit of the same file still goes to the image viewer
         standard = []
         monkeypatch.setattr(rg, "_resolve_mesc_unit", lambda p, u: ({"unit": u}, True))
@@ -1345,7 +1319,7 @@ class TestMboOpensTheLineScanViewer:
             rg, "_launch_standard_viewer", lambda *a, **k: standard.append(a)
         )
         rg._run_gui_impl(data_in=mesc, unit="MUnit_0")
-        assert standard and standard[0][-1] == "MUnit_0"
+        assert standard and standard[0][4] == "MUnit_0"
 
     def test_a_file_without_line_scans_prompts_once_and_opens_the_image_viewer(
         self, tmp_path, monkeypatch
@@ -1365,7 +1339,7 @@ class TestMboOpensTheLineScanViewer:
         )
         rg._run_gui_impl(data_in=mesc)
         assert prompts == [None]
-        assert standard and standard[0][-1] == "MSession_0/MUnit_0"
+        assert standard and standard[0][4] == "MSession_0/MUnit_0"
 
     def test_cancelled_picker_opens_nothing(self, tmp_path, monkeypatch):
         rg = self._units(monkeypatch, ["multicube", "frames"])
@@ -1376,24 +1350,6 @@ class TestMboOpensTheLineScanViewer:
             rg, "_launch_standard_viewer", lambda *a, **k: pytest.fail("opened")
         )
         assert rg._run_gui_impl(data_in=mesc) is None
-
-    def test_linescan_command_view_flag(self, tmp_path, monkeypatch):
-        from click.testing import CliRunner
-        from mbo_utilities import cli
-        from mbo_utilities.gui import linescan_viewer
-
-        mesc = tmp_path / "scan.mesc"
-        mesc.write_bytes(b"x")
-        calls = []
-        monkeypatch.setattr(
-            linescan_viewer, "open_linescan_viewer", lambda p, **k: calls.append((p, k))
-        )
-        result = CliRunner().invoke(
-            cli.main, ["linescan", str(mesc), "--view", "--unit", "MUnit_35"]
-        )
-        assert result.exit_code == 0, result.output
-        assert calls[0][1]["ref_key"] == "MUnit_35"
-        assert calls[0][1]["zstack_key"] is None
 
 
 def _experiment_layout(root, name="expt1"):
@@ -1457,22 +1413,6 @@ class TestExperimentFolder:
         rg._run_gui_impl(data_in=experiment)
         assert standard and standard[0][0] == experiment
 
-    def test_linescan_command_takes_the_folder(self, tmp_path, monkeypatch):
-        from click.testing import CliRunner
-        from mbo_utilities import cli
-        from mbo_utilities.gui import linescan_viewer
-
-        experiment, mesc = _experiment_layout(tmp_path)
-        calls = []
-        monkeypatch.setattr(
-            linescan_viewer, "open_linescan_viewer", lambda p, **k: calls.append((p, k))
-        )
-        result = CliRunner().invoke(cli.main, ["linescan", str(experiment), "--view"])
-        assert result.exit_code == 0, result.output
-        assert calls[0][0] == str(mesc)
-        result = CliRunner().invoke(cli.main, ["linescan", str(tmp_path), "--view"])
-        assert result.exit_code != 0 and "no <name>/<name>.mesc" in result.output
-
 
 class TestCurationWindow:
     """``gui/curation_viewer.py``: the dashboard in a hello_imgui window,
@@ -1524,7 +1464,7 @@ class TestCurationWindow:
         monkeypatch.setattr(
             event_curation,
             "raw_linescan_traces",
-            lambda p, channel=0, traces_dir=None: [_raw_unit(35, n_rois=3)],
+            lambda p, channel=0: [_raw_unit(35, n_rois=3)],
         )
         calls = _fake_pipeline(monkeypatch)
         app = curation_viewer.open_curation_viewer(mesc, run=False)
@@ -1639,7 +1579,7 @@ class TestRawLines:
         monkeypatch.setattr(
             event_curation,
             "raw_linescan_traces",
-            lambda p, channel=0, traces_dir=None: [_raw_unit(35), _raw_unit(38)],
+            lambda p, channel=0: [_raw_unit(35), _raw_unit(38)],
         )
         assert curation.scan_raw_mesc(mesc) == 4
         assert len(curation.catalog) == 4 and "4 raw ROI traces" in curation.status

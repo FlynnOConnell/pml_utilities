@@ -174,31 +174,6 @@ def get_cached_install_type() -> str | None:
     return None
 
 
-def get_cached_pypi_version(max_age_hours: int = 1) -> str | None:
-    """Get cached pypi version if checked recently."""
-    cache = load_cache()
-    if not cache:
-        return None
-    pypi = cache.get("pypi_check", {})
-    try:
-        checked = datetime.fromisoformat(pypi.get("checked_at", ""))
-        if datetime.now() - checked < timedelta(hours=max_age_hours):
-            return pypi.get("latest_version")
-    except Exception:
-        pass
-    return None
-
-
-def update_pypi_cache(latest_version: str) -> None:
-    """Update pypi version check in cache."""
-    cache = load_cache() or {}
-    cache["pypi_check"] = {
-        "latest_version": latest_version,
-        "checked_at": datetime.now().isoformat(),
-    }
-    save_cache(cache)
-
-
 def build_full_cache() -> dict:
     """Build complete cache data from scratch."""
     from mbo_utilities import __version__

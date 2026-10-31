@@ -1,4 +1,4 @@
-"""``DataVis``: the Miller Brain Studio viewer as an object.
+"""``DataVis``: The Studio viewer as an object.
 
 The same viewer ``mbo path/to/data`` opens, built the way masknmf's
 ``*Vis`` classes are: construct with the data, ``show()`` to put it on
@@ -35,6 +35,9 @@ class DataVis:
         Which measurement unit of a ``.mesc`` to open. In a terminal the
         picker asks when this is omitted; in a notebook it is required when
         the file holds more than one.
+    dims : str, optional
+        A plain TIFF's page axis, as ``imread(..., dims=...)`` takes it:
+        ``"ZYX"`` for a z-stack, ``"CYX"`` for channels, ``"TYX"`` for time.
     size : tuple of int, optional
         Canvas size in pixels. Defaults to the screen's work area for a
         desktop window and to (1400, 900) in a notebook, where the edge
@@ -65,6 +68,7 @@ class DataVis:
         roi: int | tuple[int, ...] | None = None,
         widget: bool | str = "preview",
         unit: int | str | None = None,
+        dims: str | None = None,
         size: tuple[int, int] | None = None,
         **figure_kwargs,
     ):
@@ -75,7 +79,7 @@ class DataVis:
         )
 
         self._source = data
-        self._data_array = _load_for_viewer(data, roi=roi, unit=unit)
+        self._data_array = _load_for_viewer(data, roi=roi, unit=unit, dims=dims)
         kwargs = _figure_kwargs_for_here(size=size)
         kwargs.update(figure_kwargs)
         self._iw = _create_image_widget(
@@ -89,14 +93,10 @@ class DataVis:
         self._closed = False
 
     def show(self, **kwargs):
-        """Show the figure. Returns the canvas, which a notebook cell displays
-        when it is the last expression.
-        """
+        """Show the figure and return the canvas: a widget a notebook cell displays, None for an offscreen or desktop canvas."""
         from mbo_utilities.gui.run_gui import _after_show
 
         if not self._shown:
-            # offscreen and desktop canvases return None here; only the
-            # notebook canvas is a widget worth handing back
             self._output = self._iw.show(**kwargs)
             self._shown = True
             _after_show(self._iw)
@@ -109,12 +109,7 @@ class DataVis:
         self._closed = True
         gui = self.widget
         if gui is not None:
-            cleanup = getattr(gui, "cleanup", None)
-            if cleanup is not None:
-                try:
-                    cleanup()
-                except Exception:  # noqa: BLE001 - a dead thread must not block close
-                    pass
+            gui.cleanup()
         self._iw.close()
 
     @property
@@ -147,11 +142,11 @@ class DataVis:
     @property
     def widget(self):
         """The ``PreviewDataWidget`` on the figure, or None with ``widget="none"``."""
-        try:
-            from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
-        except ImportError:
-            return None
-        windows = getattr(self.figure, "imgui_windows", None) or {}
+        from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
+
+        windows = (
+            getattr(self.figure, "imgui_windows", None) or {}
+        )  # a plain Figure has none
         for w in windows.values():
             if isinstance(w, PreviewDataWidget):
                 return w

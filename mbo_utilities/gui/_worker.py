@@ -21,12 +21,11 @@ from pathlib import Path
 
 from mbo_utilities.gui.tasks import TASKS
 
-# max minutes with no progress change before worker self-terminates
-MAX_STALL_MINUTES = 120
+MAX_STALL_MINUTES = (
+    120  # no progress change and no log write for this long kills the worker
+)
 
-# Windows Job Object handle, kept alive for the worker's lifetime so the
-# job is not closed (and its members killed) prematurely. See _contain_in_job.
-_JOB_HANDLE = None
+_JOB_HANDLE = None  # NOTE: the Windows Job Object handle lives for the whole worker: closing it kills every contained child
 
 
 def setup_logging(log_file: str | None = None) -> logging.Logger:
@@ -43,7 +42,6 @@ def setup_logging(log_file: str | None = None) -> logging.Logger:
         "%(asctime)s | %(name)-22s | %(levelname)-7s | %(message)s",
         datefmt="%H:%M:%S",
     )
-    # apply the unified format to the package handler too
     for h in logger.handlers + logging.getLogger("mbo").handlers:
         h.setFormatter(fmt)
 
@@ -53,8 +51,7 @@ def setup_logging(log_file: str | None = None) -> logging.Logger:
 
             log_path = Path(log_file)
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            # cap a single task's log so a chatty run can't balloon to 100s of MB
-            fh = RotatingFileHandler(
+            fh = RotatingFileHandler(  # caps a chatty run's log
                 log_path, mode="a", maxBytes=5_000_000, backupCount=2, encoding="utf-8"
             )
             fh.setFormatter(fmt)
@@ -74,7 +71,6 @@ def _update_status(
 ):
     """Ensure process status is reported to sidecar file."""
     try:
-        # Match location used by TaskMonitor and ProcessManager
         from mbo_utilities.preferences import get_mbo_dirs
 
         log_dir = get_mbo_dirs()["logs"]
@@ -86,13 +82,11 @@ def _update_status(
         current_data = {}
         if sidecar.exists():
             try:
-                with open(sidecar) as f:
+                with sidecar.open() as f:
                     current_data = json.load(f)
             except Exception:
                 pass
 
-        # If already set to final state by task, respect it
-        # (unless we are reporting error which overrides success-in-progress)
         if status == "completed" and current_data.get("status") == "completed":
             return
 
@@ -110,9 +104,8 @@ def _update_status(
         if status == "completed":
             data["progress"] = 1.0
 
-        # Write atomically to avoid race conditions with readers
         tmp_file = sidecar.with_suffix(".tmp")
-        with open(tmp_file, "w") as f:
+        with tmp_file.open("w") as f:
             json.dump(data, f)
         _atomic_replace(tmp_file, sidecar)
 
@@ -135,7 +128,6 @@ def _atomic_replace(src: Path, dst: Path, attempts: int = 10, delay: float = 0.0
         except PermissionError as e:
             last_err = e
             time.sleep(delay)
-    # final attempt raises so caller can log/surface the real failure
     if last_err is not None:
         raise last_err
 
@@ -144,59 +136,68 @@ def _start_watchdog(
     uuid: str | None, logger: logging.Logger, log_file: str | None = None
 ):
     """Daemon thread that kills this process if progress stalls."""
+    threading.Thread(
+        target=_watchdog, args=(uuid, logger, log_file), daemon=True
+    ).start()
 
-    def _watchdog():
-        from mbo_utilities.preferences import get_mbo_dirs
 
-        log_dir = get_mbo_dirs()["logs"]
-        last_progress = 0.0
-        last_log_mtime = 0.0
-        last_change = time.time()
-        stall_seconds = MAX_STALL_MINUTES * 60
+def _watchdog(uuid, logger, log_file) -> None:
+    from mbo_utilities.preferences import get_mbo_dirs
 
-        while True:
-            time.sleep(60)
-            try:
-                if uuid:
-                    sidecar = log_dir / f"progress_{uuid}.json"
-                else:
-                    sidecar = log_dir / f"progress_{os.getpid()}.json"
+    log_dir = get_mbo_dirs()["logs"]
+    last_progress = 0.0
+    last_log_mtime = 0.0
+    last_change = time.time()
+    stall_seconds = MAX_STALL_MINUTES * 60
 
-                if sidecar.exists():
-                    with open(sidecar) as f:
-                        data = json.load(f)
-                    progress = data.get("progress", 0.0)
-                    status = data.get("status", "running")
+    while True:
+        time.sleep(60)
+        try:
+            if uuid:
+                sidecar = log_dir / f"progress_{uuid}.json"
+            else:
+                sidecar = log_dir / f"progress_{os.getpid()}.json"
 
-                    # done, no need to watch
-                    if status in ("completed", "error"):
-                        return
+            if sidecar.exists():
+                with sidecar.open() as f:
+                    data = json.load(f)
+                progress = data.get("progress", 0.0)
+                status = data.get("status", "running")
 
-                    if progress != last_progress:
-                        last_progress = progress
-                        last_change = time.time()
-            except Exception:
-                pass
+                if status in ("completed", "error"):
+                    return
 
-            # a blocking task logs without moving progress, so only a process that is
-            # both progress-frozen and log-silent counts as hung
-            try:
-                if log_file:
-                    m = os.path.getmtime(log_file)
-                    if m > last_log_mtime:
-                        last_log_mtime = m
-                        last_change = time.time()
-            except OSError:
-                pass
+                if progress != last_progress:
+                    last_progress = progress
+                    last_change = time.time()
+        except Exception:  # a half-written sidecar is read again next minute
+            pass
 
-            if time.time() - last_change > stall_seconds:
-                msg = f"watchdog: no progress for {MAX_STALL_MINUTES} min, terminating"
-                logger.error(msg)
-                _update_status(os.getpid(), "error", message=msg, uuid=uuid)
-                os._exit(1)
+        # NOTE: a blocking task logs without moving progress, so only a worker that is both progress-frozen and log-silent counts as hung
+        try:
+            if log_file:
+                m = Path(log_file).stat().st_mtime
+                if m > last_log_mtime:
+                    last_log_mtime = m
+                    last_change = time.time()
+        except OSError:
+            pass
 
-    t = threading.Thread(target=_watchdog, daemon=True)
-    t.start()
+        if time.time() - last_change > stall_seconds:
+            msg = f"watchdog: no progress for {MAX_STALL_MINUTES} min, terminating"
+            logger.error(msg)
+            _update_status(os.getpid(), "error", message=msg, uuid=uuid)
+            os._exit(1)
+
+
+def _env_float(name: str) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 
 def _resolve_mem_settings() -> tuple[float, float, float]:
@@ -209,19 +210,9 @@ def _resolve_mem_settings() -> tuple[float, float, float]:
       MBO_MEM_LOG_EVERY     seconds between log lines (0 = every tick)
       MBO_MEM_WARN_PCT      warn at/above this system-memory percent (0 = off)
     """
-
-    def _env(name: str) -> float | None:
-        raw = os.environ.get(name)
-        if raw is None:
-            return None
-        try:
-            return float(raw)
-        except ValueError:
-            return None
-
-    tick = _env("MBO_MEM_LOG_INTERVAL")
-    log_s = _env("MBO_MEM_LOG_EVERY")
-    warn = _env("MBO_MEM_WARN_PCT")
+    tick = _env_float("MBO_MEM_LOG_INTERVAL")
+    log_s = _env_float("MBO_MEM_LOG_EVERY")
+    warn = _env_float("MBO_MEM_WARN_PCT")
 
     if tick is None or log_s is None or warn is None:
         try:
@@ -363,7 +354,7 @@ def _contain_in_job():
 
 
 class _CRCollapseWriter(io.TextIOBase):
-    """Collapse carriage-return progress redraws to one log line per bar.
+    r"""Collapse carriage-return progress redraws to one log line per bar.
 
     tqdm (masknmf, imwrite) and pytorch-lightning ignore TQDM_DISABLE and
     emit every refresh; with stdio redirected to the log file each ``\\r``
@@ -382,8 +373,6 @@ class _CRCollapseWriter(io.TextIOBase):
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
             if "\r" in line:
-                # keep the final redraw whether the writer leads or
-                # trails with \r
                 segs = [s for s in line.split("\r") if s.strip()]
                 line = segs[-1] if segs else ""
             if line.strip():
@@ -391,8 +380,9 @@ class _CRCollapseWriter(io.TextIOBase):
         if out:
             self._stream.write("\n".join(out) + "\n")
             self._stream.flush()
-        # cap a bar that redraws forever without ever emitting a newline
-        if len(self._buf) > 65536 and "\r" in self._buf:
+        if (
+            len(self._buf) > 65536 and "\r" in self._buf
+        ):  # a bar that redraws forever without a newline
             self._buf = self._buf.rsplit("\r", 1)[-1]
         return len(text)
 
@@ -412,24 +402,19 @@ class _CRCollapseWriter(io.TextIOBase):
 
 def main():
     """Main entry point for worker subprocess."""
-    # force line buffering so print() output appears in logs immediately,
-    # AND force utf-8 stdio so unicode prints from lsp (e.g. `→` U+2192
-    # in run_plane_bin) don't crash on Windows where the default file
-    # encoding for redirected stdio is cp1252.
+    # NOTE: line buffering so prints reach the log as they happen; utf-8 because redirected stdio on Windows is cp1252, which the lsp arrows (U+2192) crash
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
 
-    # disable tqdm dynamic display for file output (no terminal = no \r updates)
-    os.environ["TQDM_DISABLE"] = "1"
+    os.environ["TQDM_DISABLE"] = (
+        "1"  # no terminal, so no \r redraws; libraries that ignore it are squashed by _CRCollapseWriter
+    )
 
-    # not every library honors TQDM_DISABLE (masknmf's tqdm bars,
-    # lightning's progress bar): squash their redraws at the stream level
     if sys.stdout is not None:
         sys.stdout = _CRCollapseWriter(sys.stdout)
     if sys.stderr is not None:
         sys.stderr = _CRCollapseWriter(sys.stderr)
 
-    # early print so we can see the process started even if logging fails
     print(f"Worker starting (pid={os.getpid()})", file=sys.stderr, flush=True)
 
     if len(sys.argv) < 3:
@@ -442,15 +427,14 @@ def main():
     task_type = sys.argv[1]
     args_source = sys.argv[2]
 
-    # args can arrive as a file path (new: avoids windows command-line
-    # length limit) or as inline JSON (legacy / small payloads). detect
-    # by checking if the string points to an existing file.
     args_file = None
     try:
-        candidate = Path(args_source)
+        candidate = Path(
+            args_source
+        )  # a file (the usual: Windows' command-line limit) or inline JSON
         if candidate.is_file() and candidate.suffix == ".json":
             args_file = candidate
-            with open(args_file, encoding="utf-8") as f:
+            with args_file.open(encoding="utf-8") as f:
                 args = json.load(f)
         else:
             args = json.loads(args_source)
@@ -458,38 +442,32 @@ def main():
         print(f"Failed to load args: {e}", file=sys.stderr)
         sys.exit(1)
     finally:
-        # clean up the args file immediately after loading so it
-        # doesn't linger. the file is unique per task (UUID-named)
-        # and no other process reads it.
-        if args_file is not None:
+        if args_file is not None:  # uuid-named and read by nobody else
             try:
                 args_file.unlink(missing_ok=True)
             except OSError:
                 pass
 
-    # setup logging
     log_file = args.get("_log_file")
     uuid = args.get("_uuid")
     logger = setup_logging(log_file)
 
     logger.info(f"Worker started: task={task_type}, pid={os.getpid()}")
 
-    # contain task-spawned children (pools, Manager, plane workers) so they
-    # are reaped when this worker exits for any reason, including os._exit.
     global _JOB_HANDLE
-    _JOB_HANDLE = _contain_in_job()
+    _JOB_HANDLE = (
+        _contain_in_job()
+    )  # task-spawned pools and plane workers die with this process, os._exit included
     if sys.platform == "win32":
         logger.debug(f"job containment: {'on' if _JOB_HANDLE else 'unavailable'}")
 
-    # watchdog kills this process if it stalls for too long
     _start_watchdog(uuid, logger, log_file)
 
-    # sample system + process-tree memory to a csv sidecar
     _start_mem_monitor(uuid, logger)
 
-    # plugin pipelines contribute their worker via entry points; the
-    # built-in TASKS table alone would not know about them.
-    if task_type not in TASKS:
+    if (
+        task_type not in TASKS
+    ):  # a plugin pipeline's task arrives through its entry point
         try:
             from mbo_utilities.gui.tasks import load_plugin_tasks
 
@@ -507,7 +485,6 @@ def main():
 
     task_func = TASKS[task_type]
 
-    # run the task
     try:
         task_func(args, logger)
         logger.info("Task completed successfully")
