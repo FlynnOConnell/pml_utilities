@@ -55,10 +55,8 @@ import numpy as np
 from imgui_bundle import hello_imgui, imgui, imgui_ctx, immapp
 
 from mbo_utilities.gui import _setup
-from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._edge_window import EdgeWindow
 from mbo_utilities.gui._theme import em
-from mbo_utilities.install import VNOISER_HINT
 
 __all__ = [
     "CurationApp",
@@ -164,8 +162,6 @@ class _Dashboard:
         logger: logging.Logger | None = None,
         figure=None,
     ):
-        if not HAS_VNOISER:
-            raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
         from mbo_utilities.gui.event_curation import EventCurationWidget
 
         self.logger = logger or logging.getLogger("curation_viewer")
@@ -191,7 +187,7 @@ class _Dashboard:
 
     def open(self, path) -> None:
         """Point the dashboard at ``path``."""
-        from mbo_utilities.vnoiser import vnoiser_run_for_mesc
+        from mbo_utilities.results import vnoiser_run_for_mesc
 
         path = Path(path).expanduser()
         self.source = path
