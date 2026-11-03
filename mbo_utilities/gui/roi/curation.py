@@ -51,6 +51,8 @@ from mbo_utilities.roi_workflow import (
     roi_folder,
 )
 
+OPACITY_WHEEL_STEP = 0.05
+
 
 class CurationMixin:
     """The ROIs tab: labels, on-disk and exchange rows, the Curation and ROIs sub-tabs."""
@@ -437,6 +439,12 @@ class CurationMixin:
             changed, value = imgui.slider_float(
                 f"##{opacity}", getattr(self, opacity), 0.05, 1.0, "%.2f"
             )
+            if imgui.is_item_hovered():
+                imgui.set_item_key_owner(imgui.Key.mouse_wheel_y)
+                wheel = imgui.get_io().mouse_wheel
+                if wheel != 0.0:
+                    changed = True
+                    value = float(np.clip(value + OPACITY_WHEEL_STEP * wheel, 0.05, 1.0))
             if changed:
                 setattr(self, opacity, value)
                 self.refresh_overlay()
@@ -657,9 +665,8 @@ class CurationMixin:
             self.engine = ENGINES[index]
         g.cell(1)
         imgui.set_next_item_width(g.w)
-        where = self.run_where if self.run_where in RUN_WHERE else RUN_WHERE[0]
         changed, index = imgui.combo(
-            "##roi_where", RUN_WHERE.index(where), ["as drawn", "on screen"]
+            "##roi_where", RUN_WHERE.index(self.run_where), ["as drawn", "on screen"]
         )
         if changed:
             self.run_where = RUN_WHERE[index]

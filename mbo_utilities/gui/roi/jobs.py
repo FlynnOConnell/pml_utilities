@@ -85,8 +85,6 @@ class JobsMixin:
         """``(z, c, frames)`` a run reads: the explicit ones, else ``run_where``'s (None reads where each ROI was drawn) and ``run_tp``."""
         if self.run_where == "screen":
             base_z, base_c = self.model.z, self.model.c
-        elif self.run_where == "fixed":
-            base_z, base_c = self.run_z, self.run_c
         else:
             base_z = base_c = None
         return (
@@ -99,13 +97,6 @@ class JobsMixin:
         """The place a run reads its pixels from, worded as the tooltips say it."""
         if self.run_where == "screen":
             where = f"slice on screen ({self._plane_label(self.z)})"
-        elif self.run_where == "fixed":
-            parts = []
-            if self.run_z is not None:
-                parts.append(self._axis_tag("z", self.run_z))
-            if self.run_c is not None:
-                parts.append(self._axis_tag("c", self.run_c))
-            where = " ".join(parts) if parts else "as drawn"
         else:
             where = "as drawn"
         if self.run_tp is not None:

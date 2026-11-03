@@ -354,8 +354,6 @@ class ManualRoiWidget(
 
         self.engine = ENGINES[0]
         self.run_where = "drawn"
-        self.run_z: int | None = None
-        self.run_c: int | None = None
         self.run_tp: list[int] | None = (
             None  # 0-based frames from parse_timepoint_selection; None every frame
         )
