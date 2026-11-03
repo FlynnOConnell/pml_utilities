@@ -223,6 +223,41 @@ class TestSession:
         slow, fast = session.tables()
         assert fast["label"][0] == "yes" and len(fast["label"]) == session.n
         assert len(slow["start_s"]) == session.events.n_slow
+        assert np.array_equal(slow["slow_id"], np.arange(session.events.n_slow))
+
+    def test_export_writes_the_run_tables_beside_the_labels(self, run_path):
+        import csv
+
+        from mbo_utilities.annotation.slow_fast import TABLE_FILES, export_run_tables
+        from mbo_utilities.results import ResultsArray
+
+        session = _session(run_path)
+        session.select(0)
+        session.set_label("yes")
+        paths = export_run_tables(ResultsArray(run_path, source=False))
+        assert paths == [run_path / ".curation" / name for name in TABLE_FILES.values()]
+        recordings, slow, fast = (list(csv.DictReader(p.open())) for p in paths)
+        assert [r["recording_id"] for r in recordings] == [RID]
+        assert recordings[0]["excluded"] == "False" and int(recordings[0]["yes"]) == 1
+        assert len(slow) == session.events.n_slow and len(fast) == session.n
+        assert fast[0]["label"] == "yes" and {r["label"] for r in fast[1:]} == {
+            "unlabeled"
+        }
+        assert np.allclose([float(r["time_s"]) for r in fast], session.times_s)
+
+    def test_an_excluded_trace_exports_without_events(self, run_path, tmp_path):
+        import csv
+
+        from mbo_utilities.annotation.slow_fast import export_tables
+
+        session = _session(run_path)
+        session.set_excluded(True)
+        recordings, slow, fast = (
+            list(csv.DictReader(p.open()))
+            for p in export_tables([session], tmp_path / "out")
+        )
+        assert recordings[0]["excluded"] == "True" and recordings[0]["n_fast"] == "0"
+        assert slow == [] and fast == []
 
     def test_kept_times_leave_out_the_no_calls(self, run_path):
         from mbo_utilities.annotation.slow_fast import kept_times
@@ -319,6 +354,13 @@ class TestWidget:
         session.set_view_filter("no")
         _frames(curation)
         assert session.settings.slow_sd == 4.0
+
+    def test_export_tables_writes_off_the_draw_thread(self, curation, run_path):
+        _open_slow_fast(curation, run_path)
+        curation._export_slow_fast_tables(curation.session)
+        assert (run_path / ".curation" / "slow_fast_fast.csv").exists()
+        assert curation.status.startswith("wrote ") and not curation._exporting
+        _frames(curation)
 
     def test_an_excluded_trace_draws(self, curation, run_path):
         _open_slow_fast(curation, run_path)

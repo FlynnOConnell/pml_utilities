@@ -670,6 +670,12 @@ line-scan ROI is already turned over by the window and only gets its dF/F.
 sample index so a settings change keeps every label on a peak found again, and
 `excluded` for a whole trace; it writes `.curation/slow_fast_curation.json` (per
 recording id: settings, labels, excluded) and needs neither vnoiser nor a GUI.
+`export_run_tables(arr)` detects every ROI of a run with its saved settings and
+writes `export_tables`' three CSVs beside it (`TABLE_FILES`: one row per trace with
+its counts, noise and settings; the slow table with `slow_id`; the fast table with
+the curation `label`; an excluded trace keeps its row and no events, as the
+original's `excluded=True`); the Files section's **export tables** runs it off the
+draw thread, or exports the opened traces when there is no run.
 `gui/slow_fast_panels.SlowFastPanelsMixin` draws it in the window's own frame: A the
 fast and slow traces with slow events as bands and the edge / peak SD lines, A1-A3
 slow sigma, edge SD and peak SD, B the slow event, C the peak (raw, 1 ms, 2 ms), D

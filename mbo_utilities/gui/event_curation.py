@@ -295,6 +295,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
         self._vnoiser_mode = "fast"
         self.slow_cutoff_hz = 40.0
         self.slow_fast_settings = SlowFastSettings()
+        self._exporting = False  # slow / fast tables being written
         self.compare = False
         self.catalog: list[Recording] = []
         self.sessions: dict[tuple[str, str], CurationSession | SlowFastSession] = {}

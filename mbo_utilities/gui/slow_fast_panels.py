@@ -5,7 +5,8 @@
 method is ``slow_fast``: the trace with its slow events and fast peaks (A),
 the detection card (A1 to A3), the focused slow event, the focused peak and
 every peak's prominence against its width (B to D), and the Decision tab's
-event, detection and files sections. The rules are
+event, detection and files sections, where **export tables** writes the
+detection's CSVs beside the labels. The rules are
 :mod:`mbo_utilities.analysis.slow_fast`'s, the labels
 :class:`~mbo_utilities.annotation.slow_fast.SlowFastSession`'s; a mixin has
 no state of its own, every attribute is the widget's.
@@ -13,12 +14,14 @@ no state of its own, every attribute is the widget's.
 
 from __future__ import annotations
 
+import threading
 from functools import partial
 
 import numpy as np
 from imgui_bundle import imgui
 
 from mbo_utilities.analysis.slow_fast import SlowFastSettings
+from mbo_utilities.annotation.slow_fast import MODE, export_run_tables, export_tables
 from mbo_utilities.gui import _theme as theme
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui._theme import card, em, section
@@ -377,3 +380,39 @@ class SlowFastPanelsMixin:
         )
         imgui.text_wrapped(f"curation file: {session.label_path}")  # the path is long
         imgui.pop_style_color()
+        imgui.begin_disabled(self._exporting)
+        if imgui.small_button("export tables##sf_export"):
+            self._exporting = True
+            threading.Thread(
+                target=self._export_slow_fast_tables,
+                args=(session,),
+                name="slow-fast-export",
+                daemon=True,
+            ).start()
+        imgui.end_disabled()
+        set_tooltip(
+            "the slow and fast tables of every trace in the run (each with its saved settings, labels and "
+            "exclusion), or of the traces opened here when there is no run, as three CSVs beside the "
+            "curation file",
+            show_mark=False,
+        )
+
+    def _export_slow_fast_tables(self, session) -> None:
+        """Runs on its own thread so a whole run's detection never holds a frame."""
+        folder = session.label_path.parent
+        try:
+            if self._run is not None:
+                paths = export_run_tables(self._run, folder, self.slow_fast_settings)
+            else:
+                opened = [
+                    s
+                    for (mode, _rid), s in list(self.sessions.items())
+                    if mode == MODE and s.loaded
+                ]
+                paths = export_tables(opened, folder)
+        except Exception as error:
+            self.logger.exception("slow / fast export failed")
+            self.status = f"export failed: {type(error).__name__}: {error}"
+        else:
+            self.status = f"wrote {', '.join(p.name for p in paths)} to {folder}"
+        self._exporting = False

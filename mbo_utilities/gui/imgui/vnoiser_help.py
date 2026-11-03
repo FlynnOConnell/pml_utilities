@@ -419,7 +419,7 @@ FILES = (
     (
         ".curation/",
         "<mode>_template_curation.json: your labels and sliders, keyed scan=<n>/domain=<name>; "
-        "slow_fast_curation.json the same for slow + fast",
+        "slow_fast_curation.json the same for slow + fast; export tables adds slow_fast_*.csv",
     ),
     (
         "pkl",

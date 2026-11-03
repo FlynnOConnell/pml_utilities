@@ -662,5 +662,8 @@ nothing is called for you. The card's three sliders (slow sigma, edge SD, peak S
 and the two lines on the trace detect again on release, and every label stays on a
 peak that is found again. **Detection** in the Decision tab holds the rest of the
 settings and **exclude trace**. Labels go to `.curation/slow_fast_curation.json`
-in the run. **compare** (`c`) draws the other method's events over the trace, so
+in the run. **export tables** (Files) writes every trace's slow and fast tables
+beside it as CSV: `slow_fast_recordings.csv` (one row per trace: excluded, counts,
+noise, settings), `slow_fast_slow.csv` and `slow_fast_fast.csv` (one row per
+event, the fast one with your label). **compare** (`c`) draws the other method's events over the trace, so
 you can see where the two disagree. This method runs without vnoiser installed.
