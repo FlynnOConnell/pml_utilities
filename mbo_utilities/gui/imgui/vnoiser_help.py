@@ -1,8 +1,9 @@
 """The vnoiser guide (h): the vnoiser pipeline from a scan's lines to curated events.
 
 The steps, what each stage does to a trace, the vnoiser window and its domain
-table, the curation window and its four rules, and the files, as diagrams and
-tables, with the curation window's keybinds behind a button.
+table, the curation window, its four rules and its second method (slow +
+fast), and the files, as diagrams and tables, with the curation window's
+keybinds behind a button.
 ``python -m mbo_utilities.gui.imgui.vnoiser_help`` opens it in a window of its own.
 """
 
@@ -18,6 +19,7 @@ import numpy as np
 from imgui_bundle import hello_imgui, imgui, immapp
 from imgui_bundle import icons_fontawesome_6 as fa
 
+from mbo_utilities.analysis.slow_fast import SlowFastSettings
 from mbo_utilities.gui._theme import close_button, popup
 from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.preferences import get_mbo_dirs
@@ -82,6 +84,8 @@ KEYBINDS = (
         "move the threshold (red) / auto-pass (teal) line on the trace, or the PC1 (purple) line on the PCA",
     ),
     ("scroll", "zoom (shift: x only, alt: y only); drag pans; double-click fits"),
+    ("m", "switch method: vnoiser / slow + fast, on the same trace"),
+    ("c", "compare: the other method's events as faint lines over the trace"),
     ("h", "the vnoiser guide"),
     ("k", "this list"),
 )
@@ -355,6 +359,46 @@ MODES = (
         "manual",
         "no seed template and no rules: only your Yes events build the template",
     ),
+    (
+        "slow + fast",
+        "the other method (m): the fast peaks inside slow events of the raw dF/F, no template and no "
+        "rules; the next table",
+    ),
+)
+_SF = SlowFastSettings()
+SLOW_FAST = (
+    ("slow + fast", "decides"),
+    (
+        "A1 slow ms",
+        f"the slow trace: a {_SF.slow_sigma_ms:g} ms Gaussian of the dF/F after subtracting a "
+        f"{_SF.base_window_s:g} s moving median of its {_SF.base_sigma_ms:g} ms Gaussian; about a 10 Hz "
+        "low-pass",
+    ),
+    (
+        "A2 edge SD",
+        f"a slow event starts and ends where the slow trace crosses {_SF.edge_sd:g} robust SD (the teal "
+        f"line); stretches closer than {_SF.merge_ms:g} ms merge",
+    ),
+    (
+        "A3 peak SD",
+        f"a slow event is kept when it reaches {_SF.slow_sd:g} robust SD (the red line), unless it touches "
+        f"the first or last {_SF.skip_s:g} s",
+    ),
+    (
+        "candidates",
+        f"the peaks of a {_SF.fast_sigma_ms:g} ms Gaussian inside slow events with prominence at least "
+        f"{_SF.k_prom:g} x the noise (the amber line on D); yes or no each, by you only",
+    ),
+    (
+        "B to D",
+        f"B the slow event the focused peak sits in; C the peak raw, at {_SF.fine_sigma_ms:g} ms and at "
+        f"{_SF.fast_sigma_ms:g} ms; D every peak's half width against its prominence",
+    ),
+    (
+        "saved",
+        "settings, labels by peak sample and exclude trace, per trace: a label stays on every peak "
+        "found again after a change",
+    ),
 )
 FILES = (
     ("in the run", "holds"),
@@ -374,7 +418,8 @@ FILES = (
     ),
     (
         ".curation/",
-        "<mode>_template_curation.json: your labels and sliders, keyed scan=<n>/domain=<name>",
+        "<mode>_template_curation.json: your labels and sliders, keyed scan=<n>/domain=<name>; "
+        "slow_fast_curation.json the same for slow + fast",
     ),
     (
         "pkl",
@@ -1025,6 +1070,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     table("rules", RULES)
     imgui.dummy(imgui.ImVec2(0, 0.3 * em))
     table("modes", MODES)
+    imgui.dummy(imgui.ImVec2(0, 0.3 * em))
+    table("slow_fast", SLOW_FAST)
 
     heading(fa.ICON_FA_FLOPPY_DISK, "Files")
     p = imgui.get_cursor_screen_pos()

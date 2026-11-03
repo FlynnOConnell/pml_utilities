@@ -37,7 +37,7 @@ pml_utilities/
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
 │   ├── analysis/             # scan-phase, linescan, phasecorr math
-│   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr
+│   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation
 │   ├── cli.py                # `mbo` (click)
 │   └── assets/docs/          # in-app help pages
 ├── pollen/                   # pollen calibration (console script `pollen`)
@@ -655,13 +655,39 @@ table moves the slider to its first line; with no run loaded, **Run vnoiser** op
 into the Traces tab when its worker finishes (`VnoiserPipelineWidget.poll` →
 `_load_traces`, which turns Manual ROI Labeling on).
 
+**Slow / fast curation.** The curation window's second method (`m`, the radio
+buttons beside the recording's name): the fast peaks inside slow events of the raw
+dF/F, a port of the CA1 voltage project's `detect_slow_fast_events.detect_trace`
+(`analysis/slow_fast.detect_slow_fast`, numpy and scipy; its traces match the
+original bit for bit, and a peak on a slow event's last sample is kept where the
+original's float round-trip of the event's bounds drops it). The input is
+`annotation/slow_fast.events_positive_dff`: the run's `dff` negated unless its
+`provenance["polarity"]` is `invert_f` or `none` (no polarity, an archive folder, is
+negated, as the original's `-dfof_raw`); without `dff`, `dfof_zscore(raw)`; a raw
+line-scan ROI is already turned over by the window and only gets its dF/F.
+`SlowFastSession` has the widget's session surface (`n`, `times_s`, `visible`,
+`label`, `set_labels`, ...) with yes / no by hand only, labels keyed by the peak's
+sample index so a settings change keeps every label on a peak found again, and
+`excluded` for a whole trace; it writes `.curation/slow_fast_curation.json` (per
+recording id: settings, labels, excluded) and needs neither vnoiser nor a GUI.
+`gui/slow_fast_panels.SlowFastPanelsMixin` draws it in the window's own frame: A the
+fast and slow traces with slow events as bands and the edge / peak SD lines, A1-A3
+slow sigma, edge SD and peak SD, B the slow event, C the peak (raw, 1 ms, 2 ms), D
+half width against prominence with the `k_prom` line; Detection (Decision tab) holds
+the rest of `SlowFastSettings` and **exclude trace**. Sessions are keyed `(mode,
+rid)` with mode `slow_fast` beside vnoiser's three; a load error is per mode
+(`Recording.errors`). **compare** (`c`) draws the other method's events on the trace
+(`kept_times`: every candidate not called no). `mbo_utilities.vnoiser` re-exports
+lazily (`MODES` is plain), so the window and `mbo curate` run without vnoiser,
+opening on slow / fast.
+
 **Help page.** `gui/imgui/vnoiser_help.draw_vnoiser_help(is_open, keys_open)`,
 opened by the vnoiser window's `vnoiser guide` button, the curation window's `guide`
 (`h`), or `python -m mbo_utilities.gui.imgui.vnoiser_help` (`--frames N
 --screenshot out.png`). It holds the curation window's `KEYBINDS`, imports neither
 vnoiser nor `gui._setup`, and draws an opaque window whatever the host's style.
-Every number it quotes is a `VnoiserSettings` default and every colour the curation
-window's; `tests/test_vnoiser_help.py` says which guide line to change with them.
+Every number it quotes is a `VnoiserSettings` or `SlowFastSettings` default and every
+colour the curation window's; `tests/test_vnoiser_help.py` says which guide line to change with them.
 
 ### 7.4 Output contract
 

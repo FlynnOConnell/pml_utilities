@@ -652,3 +652,15 @@ each one when you click it. Those traces are turned over first (the **inverted**
 switch beside the recording's name), so a dimming indicator's spikes are the
 peaks curation looks for. The same options are on the command line; see
 `mbo vnoiser --help` and [the CLI guide](cli.md#vnoiser).
+
+The curation window has a second method, **slow + fast** (`m`, or the switch
+beside the recording's name). It works on the raw dF/F, not the denoised trace:
+a slow event is a stretch of the 12.7 ms-smoothed trace above 1.5 robust SD that
+reaches 3 SD, and the candidates are the peaks of the 2 ms-smoothed trace inside
+slow events with prominence at least 5 x the noise. You label each peak yes or no;
+nothing is called for you. The card's three sliders (slow sigma, edge SD, peak SD)
+and the two lines on the trace detect again on release, and every label stays on a
+peak that is found again. **Detection** in the Decision tab holds the rest of the
+settings and **exclude trace**. Labels go to `.curation/slow_fast_curation.json`
+in the run. **compare** (`c`) draws the other method's events over the trace, so
+you can see where the two disagree. This method runs without vnoiser installed.
