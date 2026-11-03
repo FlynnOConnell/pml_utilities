@@ -210,21 +210,28 @@ def imread(
     return arr
 
 
-def _open_first_recording(files, where, kwargs):
-    """Of ``files``, in the order given, the ones a format-specific class
-    (``PRIORITY`` above 50) claims are whole recordings each (a Bruker h5, a
-    MESc): the first opens through its class and the rest are logged by name;
-    None when no file is one. A suffix reader would guess such a file's axes,
-    and several never concatenate: they are separate sessions the user picks
-    by file.
+def _recordings(files) -> list:
+    """``(file, cls)`` for each of ``files``, in the order given, that a
+    format-specific class (``PRIORITY`` above 50) claims.
     """
-    recordings = [
+    return [
         (f, cls)
         for f in files
         if f.is_file()
         for cls in [_dispatch(f)]
         if cls is not None and cls.PRIORITY > 50
     ]
+
+
+def _open_first_recording(files, where, kwargs):
+    """Of ``files``, in the order given, the ones a format-specific class
+    claims (``_recordings``) are whole recordings each (a Bruker h5, a MESc):
+    the first opens through its class and the rest are logged by name; None
+    when no file is one. A suffix reader would guess such a file's axes, and
+    several never concatenate: they are separate sessions the user picks by
+    file.
+    """
+    recordings = _recordings(files)
     if not recordings:
         return None
     first, cls = recordings[0]

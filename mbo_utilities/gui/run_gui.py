@@ -881,6 +881,7 @@ def _run_gui_impl(
             fpl.loop.run()
             return None
         # a .mesc holding AOD ROI units opens on the first one
+        data_in = _folder_mesc(data_in) or data_in
         if _is_mesc(data_in):
             if unit is None:
                 unit = _first_linescan_unit(data_in)
@@ -926,6 +927,27 @@ def _is_mesc(path) -> bool:
     if not isinstance(path, (str, Path)):
         return False
     return Path(path).is_file() and Path(path).suffix.lower() == ".mesc"
+
+
+def _folder_mesc(path) -> Path | None:
+    """The ``.mesc`` a folder opens as, or None.
+
+    ``imread`` opens a folder no class claims as its first recording by name
+    (``reader._open_first_recording``); when that is a ``.mesc`` the viewer
+    opens the file itself, so its unit is picked the same way.
+    """
+    if not isinstance(path, (str, Path)) or not Path(path).is_dir():
+        return None
+    from mbo_utilities.lazy_array import _dispatch
+    from mbo_utilities.reader import _recordings
+
+    path = Path(path)
+    if _dispatch(path) is not None:
+        return None
+    recordings = _recordings(sorted(path.iterdir()))
+    if not recordings or not _is_mesc(recordings[0][0]):
+        return None
+    return recordings[0][0]
 
 
 def _first_linescan_unit(path) -> str | None:
