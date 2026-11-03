@@ -650,8 +650,8 @@ carries `RoiTrace.frames`); `load_results` (Load into Traces,
 unit on screen. Domains never stand in for the recording: the ROI slider plots the
 line's own mean (`StandardTraces`) and the domain holding it is the Traces panel's
 **vnoiser** panel (`ManualRoiWidget._vnoiser_rows`); picking a domain in the trace
-table moves the slider to its first line; with no run loaded, **Run vnoiser** opens
-`open_pipeline(host, "vnoiser", seed=True)`. A run the vnoiser tab started loads
+table moves the slider to its first line. The Traces tab starts no run; a run the
+vnoiser tab started loads
 into the Traces tab when its worker finishes (`VnoiserPipelineWidget.poll` →
 `_load_traces`, which turns Manual ROI Labeling on).
 

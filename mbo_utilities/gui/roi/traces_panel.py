@@ -467,8 +467,8 @@ class TracesPanelMixin:
             unit = self.unit or "this recording"
             if vrun is None:
                 tooltip(
-                    f"No vnoiser run of {unit} is loaded. Run vnoiser opens its tab on this scan; when the run "
-                    "finishes, its domains show here in a panel of their own, under the recording's trace."
+                    f"No vnoiser run of {unit} is loaded. When one is, its domains show here in a panel of their "
+                    "own, under the recording's trace."
                 )
             elif vholding:
                 tooltip(
@@ -498,18 +498,6 @@ class TracesPanelMixin:
                 )
                 if changed:
                     self._vnoiser_kind = vkinds[sel]
-            if self._shows_trace_unit():
-                imgui.same_line(0, em(0.4))
-                if imgui.small_button(
-                    "Run vnoiser##traces" if vrun is None else "vnoiser tab##traces"
-                ):
-                    from mbo_utilities.gui.widgets.pipelines import open_pipeline
-
-                    open_pipeline(self.host, "vnoiser", seed=True)
-                tooltip(
-                    f"The vnoiser tab (Process) on {unit}, the ROI on screen ticked to run: pick its domains, "
-                    "pixels, polarity and dF/F there"
-                )
         if callable(getattr(self.host, "reference_view", None)):
             imgui.same_line(0, em(0.8))
             if imgui.small_button("Reference image##traces"):
