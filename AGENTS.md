@@ -927,9 +927,8 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   panel's pixel count), its background set by `_TRACE_MODES`.
 - **Run coordinates.** `RoiModel.targets(indices, z=, c=)` says where each ROI is
   read: the mask always from the plane it was drawn on, the pixels from `z` / `c`
-  when given, else from where it was drawn. The widget's `run_where` is `drawn`,
-  `screen` (the slice on screen when the run starts) or `fixed` (`run_z`, `run_c`);
-  `run_tp` cuts T (`PlaneMovie.select`). A run is one results zarr (§7.5), pipeline
+  when given, else from where it was drawn. The widget's `run_where` is `drawn` or
+  `screen` (the slice on screen when the run starts); `run_tp` cuts T (`PlaneMovie.select`). A run is one results zarr (§7.5), pipeline
   `manual`, `<stem>.<tag>.<stamp>.manual.zarr` in the ROI folder
   (`roi_workflow.run_path`; the stamp advances a second while the name is taken):
   `run_rois` groups targets by `(plane, z, c)`, `extract_rois` or `demix_rois` makes
