@@ -28,6 +28,7 @@ pml_utilities/
 │   ├── results.py            # the results zarr every pipeline molds into + ResultsArray (§7.5)
 │   ├── masknmf/  vnoiser/    # pipeline packages: params / runner / outputs / qc
 │   ├── roi_workflow.py       # drawn ROIs -> extract (mean | suite2p) | demix (masknmf)
+│   ├── dashboard.py          # a .mesc unit's line and drawn-ROI traces (cached), processed, as stacked figures with scale bars; gui/dashboard_app.py is its hello_imgui window (`mbo dashboard`)
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # The Studio (imgui + fastplotlib)
 │   │   ├── gateway.py        # `mbo serve`: launcher + one studio_server process per browser session
@@ -36,7 +37,7 @@ pml_utilities/
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
-│   ├── analysis/             # scan-phase, linescan, phasecorr math
+│   ├── analysis/             # scan-phase, linescan, phasecorr math; filters.py: zero-phase trace filters sized in Hz and ms
 │   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr
 │   ├── cli.py                # `mbo` (click)
 │   └── assets/docs/          # in-app help pages

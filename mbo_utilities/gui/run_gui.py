@@ -801,6 +801,10 @@ def _run_gui_impl(
         from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_demixing
         from mbo_utilities.masknmf.reg_denoise import is_reg_denoise
 
+        if mode == "Dashboard (.mesc ROI traces)":
+            from mbo_utilities.gui.dashboard_app import open_dashboard
+
+            return open_dashboard(data_in, unit=unit if isinstance(unit, str) else None)
         if mode == "Spike-triggered average (run with results)":
             from mbo_utilities.gui.spike_average_viewer import (
                 open_spike_average_viewer,
