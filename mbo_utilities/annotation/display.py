@@ -17,7 +17,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.ndimage import gaussian_filter1d
 
 from mbo_utilities.analysis.dff import (
     NOISE_ESTIMATES,
@@ -26,6 +25,7 @@ from mbo_utilities.analysis.dff import (
     dfof_percentile,
     robust_sd,
 )
+from mbo_utilities.analysis.filters import gaussian
 
 __all__ = [
     "DEFAULT_TRACE_PROFILE",
@@ -270,7 +270,7 @@ def computed_zscore(
     """
     d = np.asarray(dff, np.float64)[None, :]
     if settings.slow_s > 0 and fs:
-        residual = d - gaussian_filter1d(d, sigma=settings.slow_s * float(fs), axis=1)
+        residual = d - gaussian(d, settings.slow_s * float(fs), axis=1)
     else:
         residual = d - d.mean()
     scale = (
