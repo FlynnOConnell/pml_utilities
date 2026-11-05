@@ -288,6 +288,7 @@ PANELS = (
             "MC puts the scan's motion correction over the trace, on the same time axis, and "
             "their coherence by frequency under it: a line above the grey band follows the motion there",
             "scroll zooms (shift: time only, alt: height only), drag pans, double-click fits",
+            "the title line has d' and the share of the trace the motion explains: hover either for what it measures",
         ),
     ),
     (
