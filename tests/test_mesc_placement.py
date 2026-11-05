@@ -20,7 +20,7 @@ from mbo_utilities.analysis.mesc_placement import (
     zstack_files,
 )
 from mbo_utilities.arrays.mesc import MescArray
-from mbo_utilities.arrays.mesc_geometry import image_overlays
+from mbo_utilities.arrays.mesc_geometry import image_overlays, zstack_depth_info
 from scipy import ndimage
 
 UM_PER_PX = 0.5
@@ -249,6 +249,15 @@ def test_lines_land_on_the_slice_the_tissue_is_on(scan_path):
         scan_path, "MSession_0/MUnit_1", "MSession_0/MUnit_0", shift_um=placement.shift_um
     )
     assert [r["slice"] for r in records] == [PICTURE_AT[2]] * N_LINES
+
+
+def test_a_top_to_bottom_stack_is_not_guessed_at(tmp_path):
+    path = tmp_path / "stack.mesc"
+    with h5py.File(path, "w") as f:
+        write_stack(f.create_group("MSession_0"), tissue(), STACK_CORNER)
+        f["MSession_0/MUnit_0"].attrs["ScanningDirection"] = 1
+    with pytest.raises(ValueError, match="topToBottom"):
+        zstack_depth_info(path, "MSession_0/MUnit_0")
 
 
 def test_a_picture_of_other_tissue_is_refused(tmp_path):
