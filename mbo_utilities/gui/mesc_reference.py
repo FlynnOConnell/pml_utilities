@@ -175,7 +175,7 @@ def stack_images(
     for path in paths:
         for u in list_mesc_units(path):
             placement = (
-                place_scan(mesc, path, u["key"], c) if u["kind"] == "zstack" else None
+                place_scan(mesc, path, u["key"]) if u["kind"] == "zstack" else None
             )
             if placement is None:
                 continue
@@ -239,6 +239,7 @@ def write_positions(path, mesc, images, domains: dict[int, str]) -> None:
                     "match": round(p.score, 3),
                     "confirmed": p.confirmed,
                     "with_rtmc": p.with_rtmc,
+                    "channel": p.channel + 1,
                 }
             )
     with open(path, "w", newline="") as f:
@@ -262,8 +263,9 @@ def placement_summary(placement: StackPlacement) -> str:
     verdict = "confirms" if placement.confirmed else "does not confirm"
     rtmc = "with" if placement.with_rtmc else "without"
     return (
-        f"{text}\nThe recording {verdict} it, {rtmc} the scan's mean RTMC: time "
-        f"means against the stack r {placement.profile_r:.2f}, p {placement.profile_p:.3f}."
+        f"{text}\nThe recording {verdict} it on channel {placement.channel + 1}, "
+        f"{rtmc} the scan's mean RTMC: time means against the stack "
+        f"r {placement.profile_r:.2f}, p {placement.profile_p:.3f}."
     )
 
 

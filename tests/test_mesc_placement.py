@@ -251,6 +251,35 @@ def test_lines_land_on_the_slice_the_tissue_is_on(scan_path):
     assert [r["slice"] for r in records] == [PICTURE_AT[2]] * N_LINES
 
 
+@pytest.mark.parametrize("tissue_on", [0, 1])
+def test_the_channel_the_recording_fits_wins(tmp_path, tissue_on):
+    """Scan, picture and stack hold the tissue on one channel and noise on the
+    other: that channel answers wherever the viewer is.
+    """
+    path = tmp_path / "scan.mesc"
+    volume = tissue()
+    with h5py.File(path, "w") as f:
+        write_stack(f.create_group("MSession_0"), volume, STACK_CORNER)
+    write_scan(path, volume)
+    rng = np.random.default_rng(1)
+    with h5py.File(path, "r+") as f:
+        for key in ("MSession_0/MUnit_0", "MSession_0/MUnit_1", "MSession_1/MUnit_0"):
+            unit = f[key]
+            data = unit["Channel_0"][:]
+            noise = rng.integers(0, 60000, data.shape, dtype=np.uint16)
+            del unit["Channel_0"]
+            unit["Channel_0"] = data if tissue_on == 0 else noise
+            unit["Channel_1"] = noise if tissue_on == 0 else data
+            unit.attrs["VecChannelsSize"] = 2
+    arr = open_scan(path, (0.0, 0.0, 0.0))
+    try:
+        placement = place_scan(arr, path, "MSession_0/MUnit_0")
+    finally:
+        arr.close()
+    assert placement.channel == tissue_on and placement.confirmed
+    np.testing.assert_allclose(placement.shift_um, -np.array(STAGE_ERROR), atol=1.0)
+
+
 def test_a_top_to_bottom_stack_is_not_guessed_at(tmp_path):
     path = tmp_path / "stack.mesc"
     with h5py.File(path, "w") as f:

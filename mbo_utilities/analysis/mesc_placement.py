@@ -66,7 +66,8 @@ class StackPlacement:
     stack the scan started. ``profile_r`` is the ROIs' time means against the
     stack under them and ``profile_p`` how often random offsets did as well;
     both None when the scan is not placed or has no ROI to check.
-    ``with_rtmc`` says the recording put the mean RTMC into ``shift_um``.
+    ``with_rtmc`` says the recording put the mean RTMC into ``shift_um``,
+    ``channel`` is the 0-based channel it was measured on.
     """
 
     stack_path: str
@@ -77,6 +78,7 @@ class StackPlacement:
     profile_r: float | None = None
     profile_p: float | None = None
     with_rtmc: bool = False
+    channel: int = 0
 
     @property
     def placed(self) -> bool:
@@ -188,10 +190,9 @@ def _profile_score(volume, points, means, viewport, depth, offset_um) -> float:
 
 
 def _check_profiles(mesc, c, volume, viewport, depth, stored, moved):
-    """``(with_rtmc, r, p)``: whether a scan's time means fit the stack better
-    at ``moved`` than at ``stored``, how well, and how often ``N_NULL`` random
-    xy offsets of the two did as well; ``(False, None, None)`` with no ROI to
-    compare.
+    """``(with_rtmc, r, null)``: whether a scan's time means fit the stack better
+    at ``moved`` than at ``stored``, how well, and the same score at ``N_NULL``
+    random xy offsets of the two; ``(False, None, None)`` with no ROI to compare.
     """
     outlines = roi_outlines_um(mesc.filenames[0], mesc.unit_key)
     geometry = roi_geometry(mesc)
@@ -230,14 +231,13 @@ def _check_profiles(mesc, c, volume, viewport, depth, stored, moved):
             for o in offsets
         ]
     )
-    null = null[np.isfinite(null)]
-    with_rtmc = bool(at_moved > at_stored or np.isnan(at_stored))
-    return with_rtmc, observed, float((1 + np.sum(null >= observed)) / (1 + len(null)))
+    return bool(at_moved > at_stored or np.isnan(at_stored)), float(observed), null
 
 
-def place_scan(mesc, stack_path, stack_key: str, c: int = 0) -> StackPlacement | None:
-    """Measure where ``mesc``'s scan sits in one Z-stack; None when the scan
-    links no picture or either unit has no position.
+def place_scan(mesc, stack_path, stack_key: str) -> StackPlacement | None:
+    """Measure where ``mesc``'s scan sits in one Z-stack, on the channel its time
+    means fit best: the answer must not follow the viewer's channel slider. None
+    when the scan links no picture or either unit has no position.
     """
     path = mesc.filenames[0]
     picture_key = next(
@@ -248,50 +248,68 @@ def place_scan(mesc, stack_path, stack_key: str, c: int = 0) -> StackPlacement |
     depth = zstack_depth_info(stack_path, stack_key)
     if picture_vp is None or stack_vp is None or depth is None:
         return None
-    with h5py.File(path, "r") as f:
-        picture = _channel(f[picture_key], c)[:].mean(axis=0, keepdims=True)
-        scan_time = float(f[mesc.unit_key].attrs["MeasurementDatePosix"])
-    with h5py.File(stack_path, "r") as f:
-        volume = _channel(f[stack_key], c)[:].astype(np.float32)
-        gap_s = scan_time - float(f[stack_key].attrs["MeasurementDatePosix"])
-    um_per_px = max(
-        stack_vp["width"] / GRID_PX,
-        stack_vp["width"] / volume.shape[-1],
-        picture_vp["width"] / picture.shape[-1],
-    )
-    stack_grid = _on_grid(volume, stack_vp, um_per_px)
-    picture_grid = _on_grid(picture, picture_vp, um_per_px)[0]
-    score, fractional, col, row = _match(picture_grid, stack_grid)
-
     cos, sin = np.cos(stack_vp["angle"]), np.sin(stack_vp["angle"])
-    dx = col * stack_vp["width"] / stack_grid.shape[2]
-    dy = row * stack_vp["height"] / stack_grid.shape[1]
-    found = (
-        stack_vp["transl"][0] + cos * dx - sin * dy,
-        stack_vp["transl"][1] + sin * dx + cos * dy,
-        depth["transl_z"] + depth["min_z"] + fractional * z_step_um(depth),
-    )
-    stored = np.array(found) - np.array(picture_vp["transl"])
+    matches = []
+    for c in range(mesc.nc):
+        with h5py.File(path, "r") as f:
+            picture = _channel(f[picture_key], c)[:].mean(axis=0, keepdims=True)
+            scan_time = float(f[mesc.unit_key].attrs["MeasurementDatePosix"])
+        with h5py.File(stack_path, "r") as f:
+            volume = _channel(f[stack_key], c)[:].astype(np.float32)
+            gap_s = scan_time - float(f[stack_key].attrs["MeasurementDatePosix"])
+        um_per_px = max(
+            stack_vp["width"] / GRID_PX,
+            stack_vp["width"] / volume.shape[-1],
+            picture_vp["width"] / picture.shape[-1],
+        )
+        stack_grid = _on_grid(volume, stack_vp, um_per_px)
+        picture_grid = _on_grid(picture, picture_vp, um_per_px)[0]
+        score, fractional, col, row = _match(picture_grid, stack_grid)
+        dx = col * stack_vp["width"] / stack_grid.shape[2]
+        dy = row * stack_vp["height"] / stack_grid.shape[1]
+        found = (
+            stack_vp["transl"][0] + cos * dx - sin * dy,
+            stack_vp["transl"][1] + sin * dx + cos * dy,
+            depth["transl_z"] + depth["min_z"] + fractional * z_step_um(depth),
+        )
+        stored = np.array(found) - np.array(picture_vp["transl"])
+        matches.append((score, c, stored, volume))
+    matches.sort(key=lambda m: m[0], reverse=True)
     placement = {
         "stack_path": str(stack_path),
         "stack_key": stack_key,
-        "score": score,
         "gap_s": gap_s,
     }
-    if score < NCC_PASS:
-        return StackPlacement(**placement, shift_um=tuple(stored.tolist()))
+    placed = [m for m in matches if m[0] >= NCC_PASS]
+    if not placed:
+        score, c, stored, _ = matches[0]
+        return StackPlacement(
+            **placement, shift_um=tuple(stored.tolist()), score=score, channel=c
+        )
     rtmc = mesc.rtmc
-    moved = stored + [
+    drift = [
         float(np.mean(rtmc[f"{a} total"]["um"])) if f"{a} total" in rtmc else 0.0
         for a in "XYZ"
     ]
-    with_rtmc, r, p = _check_profiles(
-        mesc, c, volume, stack_vp, depth, stored, moved
-    )
+    checks = [
+        _check_profiles(mesc, c, volume, stack_vp, depth, stored, stored + drift)
+        for _, c, stored, volume in placed
+    ]
+    best = int(np.argmax([-np.inf if r is None else r for _, r, _ in checks]))
+    score, c, stored, _ = placed[best]
+    with_rtmc, r, _ = checks[best]
+    p = None
+    if r is not None:
+        # NOTE: the offsets repeat per channel, so this is the null of picking a channel too
+        null = np.fmax.reduce([n for _, _, n in checks if n is not None])
+        null = null[np.isfinite(null)]
+        p = float((1 + np.sum(null >= r)) / (1 + len(null)))
     return StackPlacement(
         **placement,
-        shift_um=tuple((moved if with_rtmc else stored).tolist()),
+        shift_um=tuple((stored + drift if with_rtmc else stored).tolist()),
+        score=score,
         profile_r=r,
         profile_p=p,
         with_rtmc=with_rtmc,
+        channel=c,
     )

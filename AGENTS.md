@@ -1039,7 +1039,8 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
 - **Placement.** `analysis/mesc_placement.place_scan` measures one scan on one stack:
   stored position + the shift that lands its picture on the stack (none under
   `NCC_PASS`), + the mean RTMC only when the ROIs' time means fit the stack better with
-  it (`with_rtmc`). `confirmed` is that fit beating random offsets.
+  it (`with_rtmc`), on the channel they fit best, never the one on screen. `confirmed`
+  is that fit beating random offsets.
 - **Reference image.** `gui/mesc_reference.py` shows where an AOD unit's lines or
   patches sit: `picture_image` is the picture the ROIs were drawn on
   (`background_unit`), `stack_images` every Z-stack `place_scan` placed them on, each
