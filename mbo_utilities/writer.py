@@ -135,7 +135,7 @@ def imwrite(
         Compute per-plane rigid shifts via phase correlation and store
         them in ``metadata["plane_shifts"]``. The shifts are not applied
         to the output pixels; apply them non-destructively at read time
-        with ``mbo.with_axial_shifts(arr)`` (Miller Brain Studio does this
+        with ``mbo.with_axial_shifts(arr)`` (The Studio does this
         automatically when valid ``plane_shifts`` are present).
         Optional tunables via kwargs: ``max_frames`` (subsample count,
         default 200), ``chunk_frames`` (streaming batch, default 10),

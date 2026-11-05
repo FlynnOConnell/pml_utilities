@@ -34,8 +34,8 @@ Lazy 5D reader. Built on top of `Shape5DMixin`.
 ### Construction
 
 ```python
-IsoviewArray(path)                  # auto-detect
-IsoviewArray(path, kind="fused")    # force a specific reader
+IsoviewArray(path)  # auto-detect
+IsoviewArray(path, kind="fused")  # force a specific reader
 ```
 
 Construction steps (in order):
@@ -195,22 +195,22 @@ just want to convert one isoview tree into a single OME-Zarr group.
 
 ```python
 isoview_to_ome_zarr(
-    src,                       # path to any isoview tree (auto-detected)
-    out,                       # output directory
-    kind=None,                 # optional override: "corrected" | "fused" | "raw" | "clusterpt"
-    timepoints=None,           # 1-based selection (forwarded as frames=)
+    src,  # path to any isoview tree (auto-detected)
+    out,  # output directory
+    kind=None,  # optional override: "corrected" | "fused" | "raw" | "clusterpt"
+    timepoints=None,  # 1-based selection (forwarded as frames=)
     channels=None,
     planes=None,
     overwrite=False,
     target_chunk_mb=64,
-    sharded=True,              # zarr v3 sharding
-    compressor="zstd",         # "none" | "gzip" | "zstd" | "blosc-lz4" | "blosc-zstd"
+    sharded=True,  # zarr v3 sharding
+    compressor="zstd",  # "none" | "gzip" | "zstd" | "blosc-lz4" | "blosc-zstd"
     compression_level=3,
     shuffle=None,
-    pyramid=False,             # OME-NGFF multiscale pyramid (Y/X downsample)
+    pyramid=False,  # OME-NGFF multiscale pyramid (Y/X downsample)
     pyramid_max_layers=4,
     pyramid_method="mean",
-    output_suffix=None,        # defaults to the stack_type
+    output_suffix=None,  # defaults to the stack_type
     progress_callback=None,
     show_progress=True,
     debug=False,

@@ -1,12 +1,12 @@
 (gui_guide)=
 
-# Miller Brain Studio
+# The Studio
 
 Interactive data preview and processing tools for calcium imaging data.
 
 ```{figure} /_images/gui/readme/02_step_data_view.png
 :width: 100%
-:alt: Miller Brain Studio
+:alt: The Studio
 
 The time-series viewer: image canvas with axes and histogram, plus the side panel (Preview / Signal Quality / Run tabs) for window functions, spatial filtering, scan-phase correction, z-stats, and pipelines.
 ```
@@ -234,15 +234,19 @@ Readout for the temporal binning set with **Apply to dataset** above: frames per
 
 Also hosts piezo z-stack averaging. When `frames_per_slice > 1`, toggle averaging based on ScanImage's `logAverageFactor`. This changes the effective shape of the data.
 
+### Page Axis
+
+Single-file TIFFs whose pages all sit on one axis. A plain stack carries no axis labels, ImageJ writes `slices` for any stack and tifffile's ImageJ default writes `channels`, so the reader's guess is about the file, not the experiment: a plain or ImageJ stack opens as time, tifffile's default as channels. **pages are** reopens the file with its pages on the axis you name (time, z-planes or channels), the same `dims` `mbo view --dims ZYX` and `imread(path, dims="ZYX")` take and the one a worker gets when it re-opens the file. The ROI tool is rebuilt around the new reading.
+
 ### MESc
 
-Femtonics MESc files only. A `.mesc` holds one measurement unit per scan the operator ran, and `mbo scan.mesc` opens the first AOD scan (line scan, chessboard or ribbon), or the first unit when there is none. The **MESc** tab, the first tab for a `.mesc`, is how the rest are opened: it lists every unit as a table, with session and unit (MESc numbers each session's units from scratch, so `MSession_0/MUnit_3` and `MSession_1/MUnit_3` are different recordings), modality, shape, rate, duration, start time and comment. **ROIs** is the lines or patches a scan recorded (`15 lines`, `7 patches`). One row per recording: the picture MEScan took just before a scan (its `BackgroundImagePath`, role `background`) and the small reference region RTMC re-scanned every cycle (`MotionCorrectionImagePath`, role `motionCorrection`) are folded into the scan's row as its **picture** and **RTMC** cells (**companion units as rows** unfolds them). **picture** is one button naming the picture MEScan took just before the scan; click it to see the scan's lines or patches drawn on it. **RTMC** is `yes` or `no`: whether real-time motion correction was on for the recording; hover it for whether the scan was moved (the Traces tab's MC plot then draws the shifts). There is no Z-stack column: which stack was taken around a scan, and which slice its lines sit on, is in the reference image, next to the lines themselves. Hover a column header for what it means, a unit name for what that recording is, and click **?** for the MESc help page. Click a row, or an entry in a cell's popup, to display it. The Manual ROI widget follows the unit: the ROIs, runs and traces on screen are always the shown unit's, parked when you switch away and back when you return, and autosaved per unit (`manual_labels_MSession_0_MUnit_3.zarr`, `roi_runs_MSession_0_MUnit_3.json`, `rois_MSession_0_MUnit_3_<tag>/`).
+Femtonics MESc files only. A `.mesc` holds one measurement unit per scan the operator ran, and `mbo scan.mesc` opens the first AOD scan (line scan, chessboard or ribbon), or the first unit when there is none. The **MESc** tab, the first tab for a `.mesc`, is how the rest are opened: it lists every unit as a table, with session and unit (MESc numbers each session's units from scratch, so `MSession_0/MUnit_3` and `MSession_1/MUnit_3` are different recordings), modality, shape, rate, duration, start time and comment. **ROIs** is the lines or patches a scan recorded (`15 lines`, `7 patches`). One row per recording: the picture MEScan took just before a scan (its `BackgroundImagePath`, role `background`) and the small reference region RTMC re-scanned every cycle (`MotionCorrectionImagePath`, role `motionCorrection`) are folded into the scan's row as its **picture** and **RTMC** cells (**companion units as rows** unfolds them). **picture** is one button naming the picture MEScan took just before the scan; click it to see the scan's lines or patches drawn on it. **RTMC** is `yes` or `no`: whether real-time motion correction was on for the recording; hover it for whether the scan was moved (the Traces tab's MC plot then draws the shifts). There is no Z-stack column: which stack was taken around a scan, and which slice its lines sit on, is in the reference image, next to the lines themselves. Hover a column header for what it means, a unit name for what that recording is, and click **?** for the MESc help page. Click a row, or an entry in a cell's popup, to display it. The Manual ROI widget follows the unit: the ROIs, runs and traces on screen are always the shown unit's, parked when you switch away and back when you return, and saved per unit (`<stem>_MSession_0_MUnit_3.rois.zarr`, `<stem>_MSession_0_MUnit_3.<tag>.<stamp>.manual.zarr`).
 
-**Reference image** (the **picture** button on the MESc tab, and a button on the Traces panel) opens a popup showing where the shown scan's lines or patches were drawn: the picture MEScan took just before the scan, and every Z-stack holding them, projected over the slices they were scanned on rather than over the whole stack. Each carries the lines or patches drawn in MESc's colours, the one the ROI slider is on thicker. The picture carries every line whatever its depth, since that is where the operator drew them; a Z-stack carries only the lines actually scanned inside it, and the caption says how many of the scan's lines those are. Click a line to move the ROI slider to it. The popup's **display** button shows the image's own unit in the viewer, a Z-stack at the slice its lines sit on, so the Z-plane slider lands on the right tissue instead of slice 1. Pan, zoom, colormap, contrast and pixel values work as in **Open full FOV**; the popup follows a unit switch while it is open. The pairing is by the file's own metadata (`CoordinateMapJSON` outlines, `ReferenceViewportJSON` placement, `BackgroundImagePath`), so a unit MESc recorded no ROIs for has no reference image. A scan whose ROI list was edited after acquisition falls back to the viewer's own colours.
+**Reference image** (the **picture** button on the MESc tab, and a button on the Traces panel) opens a popup showing where the shown scan's lines or patches were drawn: the picture MEScan took just before the scan, and every Z-stack they could be placed on, projected over the slices they sit on rather than over the whole stack. Each carries the lines or patches drawn in MESc's colours, the one the ROI slider is on thicker. The picture carries every line whatever its depth, since that is where the operator drew them; a Z-stack is placed by matching that picture to it, and the caption gives the slice, the match and whether the recording confirms it. **add Z-stack file** takes a stack in another file; **save positions** writes each ROI's slice and microns to a CSV; **ROI's slice** swaps a stack's projection for the slice under the slider's line. Click a line to move the ROI slider to it. Pan, zoom, colormap, contrast and pixel values work as in **Open full FOV**; the popup follows a unit switch while it is open. The pairing is by the file's own metadata (`CoordinateMapJSON` outlines, `ReferenceViewportJSON` placement, `BackgroundImagePath`), so a unit MESc recorded no ROIs for has no reference image. A scan whose ROI list was edited after acquisition falls back to the viewer's own colours.
 
 **From a scan to its traces.** Pick the scan in the MESc tab. The Traces tab plots the line or patch the ROI slider is on (a single-patch scan's whole frame): its mean in photon counts, computed in the background. The kind combo shows it as **dff**, **zscore** or **raw**; **Trace** beside it sets the mean subtraction and the inversion (each as the viewer's, or on or off here) and the dF/F baseline: suite2p's rolling max-min, a rolling percentile, a Gaussian low-pass, a bleaching fit, a fixed window (MESc's F0) or one percentile for the whole trace, with the z-score's noise and slow drift. **flip** turns whatever is shown over, and **MC** puts the RTMC shifts above it on the same time axis.
 
-**Traces of a vnoiser run.** **Run vnoiser** on the Traces tab opens the vnoiser tab on the scan. When vnoiser has run on it (a `*.vnoiser.zarr` made from this file beside it, or a `PF` folder), the run's domains load by themselves, one row each in the trace table, and the domain holding the line on screen plots in a **vnoiser** panel of its own under the scan's trace, never in its place. Its combo shows the run's **denoised**, **dff**, **zscore** or **raw** trace as the run wrote it; the **vnoiser** switch hides the panel. A line no domain holds leaves the panel empty. A finished run started from the Studio loads the same way.
+**Traces of a vnoiser run.** When vnoiser has run on it (a `*.vnoiser.zarr` made from this file beside it, or a `PF` folder), the run's domains load by themselves, one row each in the trace table, and the domain holding the line on screen plots in a **vnoiser** panel of its own under the scan's trace, never in its place. Its combo shows the run's **denoised**, **dff**, **zscore** or **raw** trace as the run wrote it; the **vnoiser** switch hides the panel. A line no domain holds leaves the panel empty. A finished run started from the Studio loads the same way.
 
 (gui-metadata)=
 ## Metadata Viewer
@@ -396,40 +400,43 @@ table) group several, and their traces share the plot, each in the color its mas
 and table row take. With **pixel traces** (`p`) a click on an empty pixel adds the
 movie's 5x5 average there. **Delete** (`d`) removes a drawn ROI and marks an algo
 one for deletion: it stays listed at the top of the table and red on the image
-until you unmark it. `ctrl+z` undoes. Masks autosave beside the data as
-`manual_labels.zarr`; a `.mesc` gets one per unit
-(`manual_labels_MSession_0_MUnit_3.zarr`), and the ROIs and traces on screen are
-always the shown unit's.
+until you unmark it. `ctrl+z` undoes. ROIs may overlap. With autosave on, the
+ROIs, the quick traces and the list of loaded runs are saved beside the data as
+`<stem>.rois.zarr` (its `labels/drawn` is an OME-NGFF 0.5 label image napari
+opens); a `.mesc` gets one per unit (`<stem>_MSession_0_MUnit_3.rois.zarr`), and
+the ROIs and traces on screen are always the shown unit's. The **exchange** row
+under it talks to Fiji: **export RoiSet** writes every drawn ROI as a polygon
+into a `RoiSet.zip` the ROI Manager opens (on its z-plane and channel),
+**import RoiSet** adds the ROIs of one (or a single `.roi`) on the plane each
+names, as one undo step, and **export traces** writes the Traces tab's rows as
+one CSV (a time or frame column, then one column per trace).
 
-Running ROIs is the **Process tab > ROIs** pipeline:
+Running ROIs is the Curation tab's **RUN** section (`shift+t` runs the selection):
 
-- **Which ROIs**: the selected one (or the ctrl / shift click group), the rows the
-  ROIs tab lists (its filters apply), every ROI drawn on the slice on screen, all of
-  them, or the **full image**: the whole frame as one mask. With `mean` that is the
-  frame's mean trace; with `suite2p` or `masknmf` it is a full detection of that
-  z-plane and channel.
+- **Which ROIs**: the selected one (or the ctrl / shift click group), or every ROI
+  the ROIs tab lists.
 - **Read from**: **as drawn** reads each mask on the z-plane and channel it was drawn
   on; **slice on screen** reads it wherever the sliders are when you press Run, so
   a cell drawn on the structural channel is traced on the functional one by
-  scrolling there and running again; **fixed** picks a z-plane and channel. A
-  **frames** window (`start:stop`, 1-based) cuts T.
+  scrolling there and running again. A **frames** window (`start:stop`, 1-based)
+  cuts T.
 - **Engine**: `mean` (raw mask mean plus a neuropil ring, no pipeline), `suite2p`
   (suite2p's extractor), `masknmf` (seeded demixing). `suite2p` and `masknmf` use
   the settings of their own tab, including the skip / run / force toggles; **Open**
-  jumps there. The **tag** names the output folder `rois_<tag>/` beside the data.
-- **Run** writes suite2p-shaped outputs (`F.npy`, `Fneu.npy`, `stat.npy`,
-  `rois.json`, `ops.npy` with `roi_workflow` recording `z`, `c`, `frames` and
-  `engine`); **Trace** computes an in-memory mean without writing.
-- **Find cells in a region**: draw a region (`a`) and let suite2p or masknmf look
-  for cells inside its bounding box. Results arrive as algo rows: promote (`y`) or
-  mark for deletion (`n`) each component.
+  jumps there. The **tag** names the run file.
+- **Run** writes one results zarr, `<stem>.<tag>.<stamp>.manual.zarr`, beside
+  the data (one unit per slice read, each recording `z`, `c`, `frames`,
+  `engine` and the ROIs' uids), and the run's rows land on the Traces tab;
+  **Trace** computes an in-memory mean without writing. Accepting, rejecting
+  and marking a loaded run's ROIs never touches the run: that curation is
+  kept with the ROIs.
 
 The sliders are the array's axes whatever they are called: a MESc AOD unit's
 **ROI** slider or an IsoView **View** slider keys masks and runs like any z-plane
 or channel, and the trace table and legends name the axis the same way (`ROI 3`,
 not `z3`). An AOD unit's ROIs, a line scan's lines or a chessboard or ribbon scan's
 patches, land on the Traces tab as their mean traces (computed in the background
-when no `F.npy` or PF traces exist; **Options** can turn that off) with their index
+when no vnoiser run holds them; **Options** can turn that off) with their index
 and channel. Every row read on an AOD unit knows its line, whether a quick trace of
 a drawn ROI, a line-scan trace or a pipeline's denoised row: hovering the row lists
 the line's ends, length and sample spacing, from the scan's own geometry.
@@ -635,7 +642,8 @@ Quick start, one MESc unit:
 - Tick **traces only** to stop after the z-score. Otherwise **Denoiser and peaks**
   holds the wavelet and peak settings.
 - **Run vnoiser**. The results file `<file>.<time>.vnoiser.zarr` lands beside the
-  `.mesc`. **Load into Traces** puts each domain's F, dF/F, z and denoised trace
+  `.mesc` and loads into the Traces tab by itself when the worker finishes,
+  whatever tab is showing. **Load into Traces** puts each domain's F, dF/F, z and denoised trace
   in the Traces tab's vnoiser panel, under the scan's own trace, and **Curate**
   opens the curation window.
 
@@ -644,3 +652,18 @@ each one when you click it. Those traces are turned over first (the **inverted**
 switch beside the recording's name), so a dimming indicator's spikes are the
 peaks curation looks for. The same options are on the command line; see
 `mbo vnoiser --help` and [the CLI guide](cli.md#vnoiser).
+
+The curation window has a second method, **slow + fast** (`m`, or the switch
+beside the recording's name). It works on the raw dF/F, not the denoised trace:
+a slow event is a stretch of the 12.7 ms-smoothed trace above 1.5 robust SD that
+reaches 3 SD, and the candidates are the peaks of the 2 ms-smoothed trace inside
+slow events with prominence at least 5 x the noise. You label each peak yes or no;
+nothing is called for you. The card's three sliders (slow sigma, edge SD, peak SD)
+and the two lines on the trace detect again on release, and every label stays on a
+peak that is found again. **Detection** in the Decision tab holds the rest of the
+settings and **exclude trace**. Labels go to `.curation/slow_fast_curation.json`
+in the run. **export tables** (Files) writes every trace's slow and fast tables
+beside it as CSV: `slow_fast_recordings.csv` (one row per trace: excluded, counts,
+noise, settings), `slow_fast_slow.csv` and `slow_fast_fast.csv` (one row per
+event, the fast one with your label). **compare** (`c`) draws the other method's events over the trace, so
+you can see where the two disagree. This method runs without vnoiser installed.

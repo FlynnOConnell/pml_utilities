@@ -61,9 +61,7 @@ def get_mbo_dirs() -> dict:
     templates = base.joinpath("templates")
 
     assets = imgui.joinpath("assets")
-    # imgui .ini layout files
     app_settings = assets.joinpath("app_settings")
-    # user preferences json (preferences.json, last_savedir.json)
     user_settings = base.joinpath("settings")
 
     # parents=True so a relocated base (MBO_DIR/MBO_USER) whose parent dirs
@@ -165,10 +163,8 @@ def add_recent_file(path: str | Path, file_type: str = "auto") -> None:
     prefs = _load_preferences()
     recent = prefs.get("recent_files", [])
 
-    # Remove any existing entry for this path
     recent = [r for r in recent if r.get("path") != str(path)]
 
-    # Add new entry at the beginning
     entry = {
         "path": str(path),
         "timestamp": datetime.now().isoformat(),
@@ -176,7 +172,6 @@ def add_recent_file(path: str | Path, file_type: str = "auto") -> None:
     }
     recent.insert(0, entry)
 
-    # Trim to max size
     recent = recent[:MAX_RECENT_FILES]
 
     prefs["recent_files"] = recent
@@ -185,24 +180,17 @@ def add_recent_file(path: str | Path, file_type: str = "auto") -> None:
 
 # keys for different dialog contexts - each dialog type has its own cached path
 _DIR_KEYS = {
-    # General file/folder opening
-    "open_file": "last_open_file_dir",  # File > Open File
-    "open_folder": "last_open_folder_dir",  # File > Open Folder
-    # Save dialogs
-    "save_as": "last_save_as_dir",  # Save As dialog
-    # Suite2p pipeline
-    "suite2p_output": "last_suite2p_output_dir",  # Run tab > Browse for output
-    "suite2p_chan2": "last_suite2p_chan2_dir",  # Registration > Channel 2 file
-    "suite2p_stat": "last_suite2p_stat_dir",  # Load stat.npy for diagnostics
-    "suite2p_ops": "last_suite2p_ops_dir",  # Load ops.npy for results viewer
-    "suite2p_diagnostics": "last_suite2p_diagnostics_dir",  # Load plane folder for diagnostics
-    # Grid search
-    "grid_search": "last_grid_search_dir",  # Grid search results folder
-    # MaskNMF pipeline
-    "masknmf_outdir": "last_masknmf_outdir_dir",  # Run tab > Browse for output
-    # vnoiser pipeline
-    "vnoiser_outdir": "last_vnoiser_outdir_dir",  # Run tab > Browse for output
-    # vnoiser event curation data path
+    "open_file": "last_open_file_dir",
+    "open_folder": "last_open_folder_dir",
+    "save_as": "last_save_as_dir",
+    "suite2p_output": "last_suite2p_output_dir",
+    "suite2p_chan2": "last_suite2p_chan2_dir",
+    "suite2p_stat": "last_suite2p_stat_dir",
+    "suite2p_ops": "last_suite2p_ops_dir",
+    "suite2p_diagnostics": "last_suite2p_diagnostics_dir",
+    "grid_search": "last_grid_search_dir",
+    "masknmf_outdir": "last_masknmf_outdir_dir",
+    "vnoiser_outdir": "last_vnoiser_outdir_dir",
     "vnoiser": "last_vnoiser_dir",
 }
 
@@ -276,13 +264,11 @@ def get_last_open_dir() -> Path | None:
     This is a legacy function. Prefer using get_last_dir('open_file') or
     get_last_dir('open_folder') for context-specific directories.
     """
-    # Try the new context-specific keys first
     for context in ("open_file", "open_folder"):
         result = get_last_dir(context)
         if result:
             return result
 
-    # Fall back to legacy key
     prefs = _load_preferences()
     path_str = prefs.get("last_open_dir")
     if path_str:
@@ -312,7 +298,6 @@ def set_last_open_dir(path: str | Path) -> None:
     if path.is_dir():
         prefs = _load_preferences()
         prefs["last_open_dir"] = str(path)
-        # Also update new context-specific key
         prefs[_DIR_KEYS["open_file"]] = str(path)
         _save_preferences(prefs)
 
@@ -331,19 +316,16 @@ def get_last_save_dir() -> Path | None:
     This is a legacy function. Prefer using get_last_dir('save_as') for
     the Save As dialog specifically.
     """
-    # Try the new context-specific key first
     result = get_last_dir("save_as")
     if result:
         return result
 
-    # Fall back to legacy key
     prefs = _load_preferences()
     path_str = prefs.get("last_save_dir")
     if path_str:
         path = Path(path_str)
         if path.exists():
             return path
-    # Fall back to legacy location
     legacy_path = _get_settings_dir() / "last_savedir.json"
     if legacy_path.exists():
         try:
@@ -376,10 +358,8 @@ def set_last_save_dir(path: str | Path) -> None:
     if path.is_dir():
         prefs = _load_preferences()
         prefs["last_save_dir"] = str(path)
-        # Also update new context-specific key
         prefs[_DIR_KEYS["save_as"]] = str(path)
         _save_preferences(prefs)
-        # Also update legacy location for backwards compatibility
         legacy_path = _get_settings_dir() / "last_savedir.json"
         with contextlib.suppress(OSError):
             legacy_path.write_text(json.dumps({"last_savedir": str(path)}))
@@ -400,12 +380,10 @@ def get_default_open_dir() -> Path:
     Path
         A valid directory path.
     """
-    # Try last open dir
     last_open = get_last_open_dir()
     if last_open:
         return last_open
 
-    # Try most recent file's directory
     recent = get_recent_files()
     for entry in recent:
         path = Path(entry.get("path", ""))
@@ -414,12 +392,10 @@ def get_default_open_dir() -> Path:
             if parent.is_dir():
                 return parent
 
-    # Try last save dir
     last_save = get_last_save_dir()
     if last_save:
         return last_save
 
-    # Fall back to home
     return Path.home()
 
 
@@ -529,15 +505,15 @@ def set_compute_gpu(value: str) -> None:
 
 
 def get_linescan_auto_traces() -> bool:
-    """Whether the line-scan viewer computes per-ROI traces on a background
-    thread when no saved traces (``F.npy`` or PF) exist. Off on an imaging
-    rig: the viewer only loads saved traces and offers a button to compute.
+    """Whether the Traces tab computes an AOD unit's per-ROI means on a background
+    thread when no vnoiser run holds them. Off on an imaging rig: the tab only
+    loads saved traces and offers a button to compute.
     """
     return bool(_get_options().get("linescan_auto_traces", True))
 
 
 def set_linescan_auto_traces(value: bool) -> None:
-    """Persist whether the line-scan viewer computes missing traces itself."""
+    """Persist whether the Traces tab computes missing per-ROI means itself."""
     _set_option("linescan_auto_traces", bool(value))
 
 

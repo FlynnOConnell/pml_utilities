@@ -1,12 +1,4 @@
-"""
-base types and data structures for metadata handling.
-
-this module contains the core types used across the metadata system:
-- MetadataParameter: standardized parameter definition
-- VoxelSize: named tuple for voxel dimensions
-- METADATA_PARAMS: central registry of known parameters
-- alias lookup utilities
-"""
+"""The metadata registry: ``METADATA_PARAMS`` (one ``MetadataParameter`` per canonical key), ``VoxelSize``, the export denylist and provenance-path repair."""
 
 from __future__ import annotations
 
@@ -16,7 +8,7 @@ from typing import Any, NamedTuple
 
 
 def _logger():
-    # lazy: mbo_utilities.log pulls in package init; base.py is imported early
+    # mbo_utilities.log runs the package init, which imports this module
     from mbo_utilities import log
 
     return log.get("metadata")
@@ -24,36 +16,7 @@ def _logger():
 
 @dataclass
 class MetadataParameter:
-    """
-    Standardized metadata parameter.
-
-    Provides a central registry for parameter names, their aliases across
-    different formats (ScanImage, Suite2p, OME, TIFF tags), and type information.
-
-    Attributes
-    ----------
-    canonical : str
-        The standard key name (e.g., "dx", "fs", "num_zplanes").
-    aliases : tuple[str, ...]
-        All known aliases for this parameter.
-    dtype : type
-        Expected Python type (float, int, str).
-    unit : str, optional
-        Physical unit if applicable (e.g., "micrometer", "Hz").
-    default : Any
-        Default value if parameter is not found in metadata.
-    description : str
-        Human-readable description of the parameter.
-    label : str, optional
-        Display label for GUI (e.g., "Frame Rate" for "fs").
-    transforms : dict, optional
-        Transform aliases: keys that hold a *converted* form of this value
-        (e.g. ImageJ ``finterval`` = 1/``fs``). Each value is a
-        ``(to_canonical, from_canonical)`` pair of callables — `get_param`
-        applies ``to_canonical`` on read, writers apply ``from_canonical``
-        to emit the alias. Distinct from `aliases`, which hold the value
-        verbatim.
-    """
+    """One physical quantity: its canonical key, the spellings that hold the same value verbatim (``aliases``) and the keys that hold a converted form (``transforms``: ``{key: (to_canonical, from_canonical)}``, e.g. ImageJ ``finterval`` = 1/``fs``)."""
 
     canonical: str
     aliases: tuple[str, ...] = field(default_factory=tuple)
@@ -66,32 +29,7 @@ class MetadataParameter:
 
 
 class VoxelSize(NamedTuple):
-    """
-    Voxel size in micrometers (dx, dy, dz).
-
-    This class represents the physical size of a voxel in 3D space.
-    All values are in micrometers.
-
-    Attributes
-    ----------
-    dx : float
-        Pixel size in X dimension (µm / px).
-    dy : float
-        Pixel size in Y dimension (µm / px).
-    dz : float | None, optional
-        Pixel/voxel size in Z dimension (µm / px).
-        For LBM configurations, this must be supplied by the user.
-
-    Examples
-    --------
-    >>> vs = VoxelSize(0.5, 0.5, 5.0)
-    >>> vs.dx
-    0.5
-    >>> vs.dz
-    5.0
-    >>> tuple(vs)
-    (0.5, 0.5, 5.0)
-    """
+    """(dx, dy, dz) in µm; ``dz`` is None for an LBM stack until the user supplies it."""
 
     dx: float
     dy: float
@@ -99,28 +37,14 @@ class VoxelSize(NamedTuple):
 
     @property
     def pixel_resolution(self) -> tuple[float, float]:
-        """Return (dx, dy) tuple for backward compatibility."""
         return (self.dx, self.dy)
 
     @property
     def voxel_size(self) -> tuple[float, float, float | None]:
-        """Return (dx, dy, dz) tuple."""
         return (self.dx, self.dy, self.dz)
 
     def to_dict(self, include_aliases: bool = True) -> dict:
-        """
-        Convert to dictionary with optional aliases.
-
-        Parameters
-        ----------
-        include_aliases : bool
-            If True, includes all standard aliases (OME, ImageJ, legacy).
-
-        Returns
-        -------
-        dict
-            Dictionary with resolution values and aliases.
-        """
+        """The canonical keys plus ``pixel_resolution`` and ``voxel_size``; with ``include_aliases`` the OME ``PhysicalSize*`` keys and ``z_step`` too."""
         result = {
             "dx": self.dx,
             "dy": self.dy,
@@ -130,32 +54,25 @@ class VoxelSize(NamedTuple):
         }
 
         if include_aliases:
-            # OME format
             result["PhysicalSizeX"] = self.dx
             result["PhysicalSizeY"] = self.dy
             result["PhysicalSizeZ"] = self.dz
             result["PhysicalSizeXUnit"] = "micrometer"
             result["PhysicalSizeYUnit"] = "micrometer"
             result["PhysicalSizeZUnit"] = "micrometer"
-
-            # additional aliases
-            result["z_step"] = self.dz  # backward compat
-
+            result["z_step"] = self.dz
         return result
 
 
 def _reciprocal(value: Any) -> float:
-    """Convert between a rate and its interval (fs <-> finterval, px/µm <-> µm/px)."""
+    """``1 / value``: a rate to its interval, pixels per µm to µm per pixel, and back."""
     v = float(value)
     if v == 0:
         raise ZeroDivisionError("cannot invert a zero-valued metadata field")
     return 1.0 / v
 
 
-# metadata params registry
-# dimensions: TZYX (4D), TYX (3D), or YX (2D)
 METADATA_PARAMS: dict[str, MetadataParameter] = {
-    # spatial resolution (micrometers per pixel)
     "dx": MetadataParameter(
         canonical="dx",
         aliases=(
@@ -164,16 +81,14 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
             "pixelResolutionX",
             "pixel_size_x",
             "pixel_resolution_um",
-            # scalar µm/px stamped by the MINI2P h5 converter; applies to x and y
-            "pixel_size_um",
+            "pixel_size_um",  # the MINI2P converter's one scalar for x and y
         ),
         dtype=float,
         unit="µm",
         default=1.0,
         description="Pixel size in X dimension (µm/pixel)",
         label="Pixel Size X",
-        # TIFF/ImageJ XResolution is pixels-per-µm, the inverse of dx
-        transforms={"XResolution": (_reciprocal, _reciprocal)},
+        transforms={"XResolution": (_reciprocal, _reciprocal)},  # ImageJ: pixels per µm
     ),
     "dy": MetadataParameter(
         canonical="dy",
@@ -182,10 +97,7 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
             "PhysicalSizeY",
             "pixelResolutionY",
             "pixel_size_y",
-            # same scalar as dx's "pixel_size_um": square pixels assumed.
-            # ALIAS_MAP keeps the last registration (dy), but get_param walks
-            # each parameter's own alias tuple, so dx resolves it too.
-            "pixel_size_um",
+            "pixel_size_um",  # ALIAS_MAP keeps dy; get_param walks dx's own tuple so dx resolves it too
         ),
         dtype=float,
         unit="µm",
@@ -213,7 +125,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         description="Voxel size in Z dimension (µm/z-step). Must be user-supplied for LBM.",
         label="Z Step",
     ),
-    # temporal
     "fs": MetadataParameter(
         canonical="fs",
         aliases=(
@@ -224,7 +135,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
             "frameRate",
             "scanFrameRate",
             "fps",
-            # MINI2P h5 converter group attr (Hz)
             "frame_rate_hz",
         ),
         dtype=float,
@@ -232,10 +142,8 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         default=None,
         description="Frame rate / sampling frequency (Hz)",
         label="Frame Rate",
-        # ImageJ/Fiji store the per-frame interval (seconds); fs = 1/finterval
         transforms={"finterval": (_reciprocal, _reciprocal)},
     ),
-    # volumes per second (for volumetric imaging like IsoView)
     "vps": MetadataParameter(
         canonical="vps",
         aliases=("volumes_per_second",),
@@ -245,7 +153,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         description="Volumetric acquisition rate (volumes per second)",
         label="Volume Rate",
     ),
-    # ImageJ frame interval (seconds between frames, inverse of fs)
     "finterval": MetadataParameter(
         canonical="finterval",
         aliases=(
@@ -253,8 +160,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
             "FrameInterval",
             "dt",
             "time_interval",
-            # AOD mesc2h5 converter dataset attr (seconds per frame);
-            # fs is derived as 1/frame_period by the fs<->finterval transform
             "frame_period",
             "TimeIncrement",
         ),
@@ -265,7 +170,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         label="Frame Interval",
         transforms={"fs": (_reciprocal, _reciprocal)},
     ),
-    # image dimensions (pixels)
     "Lx": MetadataParameter(
         canonical="Lx",
         aliases=(
@@ -306,12 +210,10 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         default=None,
         description="Image height in pixels",
     ),
-    # frame/plane/channel counts
-    # note: in suite2p ops.npy, "nframes" means timepoints (post-registration), not per-slice frames
     "frames_per_file": MetadataParameter(
         canonical="frames_per_file",
         aliases=(
-            "frames_per_folder",  # suite2p ops.npy
+            "frames_per_folder",
             "nframes_per_file",
             "frames_per_tiff",
         ),
@@ -339,8 +241,8 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
     "num_timepoints": MetadataParameter(
         canonical="num_timepoints",
         aliases=(
-            "nframes",  # suite2p ops.npy compatibility
-            "num_frames",  # legacy alias
+            "nframes",
+            "num_frames",
             "n_frames",
             "frames",
             "T",
@@ -388,7 +290,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         default=1,
         description="Number of channels (typically 1 for calcium imaging)",
     ),
-    # data type
     "dtype": MetadataParameter(
         canonical="dtype",
         aliases=("data_type", "pixel_type", "datatype"),
@@ -396,7 +297,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         default="int16",
         description="Data type of pixel values",
     ),
-    # total number of elements
     "size": MetadataParameter(
         canonical="size",
         aliases=("num_elements", "total_elements"),
@@ -404,7 +304,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         default=None,
         description="Total number of elements in the array (product of dimensions)",
     ),
-    # array shape tuple
     "shape": MetadataParameter(
         canonical="shape",
         aliases=("array_shape", "data_shape"),
@@ -412,7 +311,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         default=None,
         description="Array shape as tuple (T, Z, Y, X) or (T, Y, X) or (Y, X)",
     ),
-    # stack detection (ScanImage-derived)
     "stack_type": MetadataParameter(
         canonical="stack_type",
         aliases=("stackType",),
@@ -441,7 +339,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
         default=1,
         description="Number of color channels (1 or 2)",
     ),
-    # ROI/FOV parameters
     "num_mrois": MetadataParameter(
         canonical="num_mrois",
         aliases=("num_rois", "scanimage_multirois", "numROIs", "nrois", "n_rois"),
@@ -477,7 +374,6 @@ METADATA_PARAMS: dict[str, MetadataParameter] = {
 
 
 def _build_alias_map() -> dict[str, str]:
-    """Build reverse lookup: alias (lowercase) -> canonical name."""
     alias_map = {}
     for param in METADATA_PARAMS.values():
         alias_map[param.canonical.lower()] = param.canonical
@@ -490,29 +386,13 @@ ALIAS_MAP: dict[str, str] = _build_alias_map()
 
 
 def get_canonical_name(name: str) -> str | None:
-    """
-    Get the canonical parameter name for an alias.
-
-    Parameters
-    ----------
-    name : str
-        Parameter name or alias.
-
-    Returns
-    -------
-    str or None
-        Canonical name, or None if not a registered parameter.
-    """
+    """The canonical key for any registered spelling, None for an unregistered one."""
     return ALIAS_MAP.get(name.lower())
 
 
-# core imaging metadata keys - always shown in metadata viewers/editors
-# these are the essential parameters for calcium imaging data
-IMAGING_METADATA_KEYS: tuple[str, ...] = (
+IMAGING_METADATA_KEYS: tuple[str, ...] = (  # the metadata viewer always shows these
     "fs",
-    # shown with fs so its aliases (dt, frame_interval, ...) are absorbed
-    # into the imaging section instead of contradicting it under "Other"
-    "finterval",
+    "finterval",  # with fs, so dt and frame_interval do not contradict it under "Other"
     "dx",
     "dy",
     "dz",
@@ -526,13 +406,7 @@ IMAGING_METADATA_KEYS: tuple[str, ...] = (
 )
 
 
-# fields stripped from tiff/h5/zarr metadata before stamping. these
-# belong only in suite2p layouts (ops.npy alongside data.bin) — embedding
-# them in non-suite2p outputs bloats files (regPC alone can be 500+ MB
-# after JSON expansion) and clutters readers like Fiji that load the
-# entire metadata blob into memory.
-
-_SUITE2P_REGISTRATION_INTERNALS = (
+_SUITE2P_REGISTRATION_INTERNALS = (  # regPC alone is 500+ MB as JSON
     "regPC",
     "tPC",
     "regDX",
@@ -569,10 +443,7 @@ _PER_FRAME_VECTORS = (
     "plane_times",
 )
 
-# plane_shifts / plane_shifts_params are intentionally NOT denylisted:
-# register_z writes them so viewers can align planes at render time
-# (see arrays/_registration.py), so they must survive export.
-_MBO_ADDITIONS = (
+_MBO_ADDITIONS = (  # plane_shifts stays: viewers align planes from it at read time
     "processing_history",
     "_metadata_provenance",
     "roi_mode",
@@ -666,12 +537,9 @@ EXPORT_DENYLIST: frozenset[str] = frozenset(
     + _SUITE2P_PIPELINE_SETTINGS
 )
 
-
-# backstop for ops keys the denylist doesn't know by name: anything with
-# more elements than this is image/vector payload, not metadata. keys that
-# legitimately carry long arrays must be allowlisted.
-_MAX_EXPORT_ELEMENTS = 8192
-
+_MAX_EXPORT_ELEMENTS = (
+    8192  # above this a value is image or vector payload unless allow-listed
+)
 _SIZE_GUARD_ALLOW = frozenset(
     {
         "plane_shifts",
@@ -686,15 +554,12 @@ _SIZE_GUARD_ALLOW = frozenset(
 
 
 def _element_count(value) -> int:
-    """Total leaf elements in a scalar / ndarray / (nested) list or tuple.
-
-    Iterative so pathologically deep nesting can't hit the recursion limit.
-    """
+    """Leaf elements in a scalar, ndarray or nested list or tuple."""
     total = 0
     stack = [value]
     while stack:
         v = stack.pop()
-        size = getattr(v, "size", None)  # ndarray and numpy scalars
+        size = getattr(v, "size", None)  # ndarrays and numpy scalars
         if isinstance(size, int):
             total += size
         elif isinstance(v, (list, tuple)):
@@ -705,16 +570,7 @@ def _element_count(value) -> int:
 
 
 def strip_for_export(md: dict) -> dict:
-    """Drop fields that should not be embedded in tiff/h5/zarr metadata.
-
-    suite2p ops fields (registration internals, summary images, per-frame
-    vectors, pipeline settings) and mbo-internal additions are kept only
-    in suite2p layouts (ops.npy alongside data.bin). everything else —
-    OME, ImageJ aliases, voxel size, frame rate, user description, etc. —
-    passes through untouched, except values whose element count exceeds
-    ``_MAX_EXPORT_ELEMENTS`` (embedded image planes and per-frame vectors
-    under names the denylist doesn't know inflate root attrs to MBs).
-    """
+    """``md`` without the ``EXPORT_DENYLIST`` keys (suite2p-only fields, mbo internals) and without any value over ``_MAX_EXPORT_ELEMENTS`` that is not allow-listed."""
     out = {}
     for k, v in md.items():
         if k in EXPORT_DENYLIST:
@@ -732,30 +588,22 @@ def strip_for_export(md: dict) -> dict:
     return out
 
 
-# ops fields that must reach suite2p as arrays: it and its plotting code
-# index them with .shape / .size, never as sequences
-# sdmov / refImg0 are not on the export denylist (they never reach a tiff
-# or zarr attr) but suite2p indexes them the same way
-_OPS_ARRAY_KEYS: frozenset[str] = frozenset(
-    _SUITE2P_SUMMARY_IMAGES
-    + _PER_FRAME_VECTORS
-    + _SUITE2P_REGISTRATION_INTERNALS
-    + ("sdmov", "refImg0")
+_OPS_ARRAY_KEYS: frozenset[str] = (
+    frozenset(  # suite2p indexes these with .shape, so they must be ndarrays
+        _SUITE2P_SUMMARY_IMAGES
+        + _PER_FRAME_VECTORS
+        + _SUITE2P_REGISTRATION_INTERNALS
+        + ("sdmov", "refImg0")
+    )
 )
 
 
 def normalize_ops_arrays(ops: dict) -> dict:
-    """Bring an ops dict's image and per-frame fields back to ndarrays.
+    """``ops`` with its image and per-frame fields back as ndarrays after a trip through JSON.
 
-    Metadata that has been through JSON — a zarr attr, a tiff description,
-    an h5 attribute — comes back as (nested) lists. suite2p and
-    lbm_suite2p_python index those fields with ``.shape``, so a list-valued
-    ``meanImgE`` surfaces downstream as "'list' object has no attribute
-    'shape'" and every figure that touches it fails.
-
-    Empty ones are dropped rather than saved as empty arrays: the consumers
-    test for the key's absence, and lbm_suite2p_python recomputes
-    ``meanImgE`` from ``meanImg`` when it is missing.
+    An empty one is dropped, not saved as an empty array: the consumers test
+    for the key's absence and lbm_suite2p_python recomputes ``meanImgE``
+    from ``meanImg`` when it is missing.
     """
     import numpy as np
 
@@ -767,16 +615,9 @@ def normalize_ops_arrays(ops: dict) -> dict:
         if isinstance(v, (list, tuple)):
             if not len(v):
                 continue
-            try:
-                v = np.asarray(v)
-            except Exception:
-                _logger().warning("ops field %r is not array-shaped; kept as is", k)
-                out[k] = v
-                continue
-            # a list of Python floats reads back as float64; suite2p writes
-            # these fields as float32 and callers index them by dtype
+            v = np.asarray(v)
             if v.dtype == np.float64:
-                v = v.astype(np.float32)
+                v = v.astype(np.float32)  # suite2p writes these as float32
         if isinstance(v, np.ndarray) and v.size == 0:
             continue
         out[k] = v
@@ -784,23 +625,13 @@ def normalize_ops_arrays(ops: dict) -> dict:
 
 
 def repair_ops_file(path) -> bool:
-    """Normalize one ``ops.npy`` in place; True when it had to be rewritten.
-
-    Run dirs written before the ops fields were normalized hold their
-    images as JSON lists, and nothing rewrites ops.npy on a detection-only
-    re-run - it is copied as is - so the plots keep failing until the file
-    itself is repaired.
-    """
+    """Rewrite one ``ops.npy`` whose array fields are JSON lists (an older export; a detection-only re-run copies it as is); True when rewritten."""
     import numpy as np
 
     path = Path(path)
     if not path.exists():
         return False
-    try:
-        ops = np.load(path, allow_pickle=True).item()
-    except Exception as error:  # noqa: BLE001 - a bad ops.npy is not fatal here
-        _logger().warning("could not read %s to repair it: %s", path, error)
-        return False
+    ops = np.load(path, allow_pickle=True).item()
     if not isinstance(ops, dict):
         return False
     bad = [
@@ -810,29 +641,18 @@ def repair_ops_file(path) -> bool:
     ]
     if not bad:
         return False
-    try:
-        np.save(path, normalize_ops_arrays(ops))
-    except Exception as error:  # noqa: BLE001 - read-only / locked file
-        _logger().warning("could not rewrite %s: %s", path, error)
-        return False
+    np.save(path, normalize_ops_arrays(ops))
     _logger().info("repaired %s: %s were lists, not arrays", path, ", ".join(bad))
     return True
 
 
 def repair_ops_tree(path) -> int:
-    """Repair every ``ops.npy`` in a run dir and its plane children.
-
-    Returns the number of files rewritten. Accepts a dir, an ops.npy, or a
-    file inside a plane dir, so callers can hand it whatever the user
-    pointed the run at.
-    """
+    """``repair_ops_file`` on a run dir, its plane children and the suite2p/planeNN level below; the count rewritten. A file inside the tree names its dir."""
     path = Path(path)
     if path.is_file():
         path = path.parent
     if not path.is_dir():
         return 0
-    # the dir itself, its plane children, and one more level for the
-    # suite2p/planeNN layout
     targets = [path / "ops.npy"]
     for pattern in ("*/ops.npy", "*/*/ops.npy"):
         targets += sorted(path.glob(pattern))
@@ -845,10 +665,9 @@ def repair_ops_tree(path) -> int:
     return fixed
 
 
-# keys whose values are filesystem paths recorded by a pipeline run —
-# provenance that goes stale the moment the output directory is copied to
-# another machine or share (db.npy data_path, ops raw_file, ...).
-PROVENANCE_PATH_KEYS: tuple[str, ...] = (
+PROVENANCE_PATH_KEYS: tuple[
+    str, ...
+] = (  # paths a run recorded; stale once its folder is copied elsewhere
     "data_path",
     "save_path",
     "save_path0",
@@ -863,17 +682,12 @@ PROVENANCE_PATH_KEYS: tuple[str, ...] = (
 
 
 def _path_basename(p) -> str:
-    """Basename of a path string regardless of which OS recorded it."""
+    """The last path component, whichever OS wrote the separators."""
     return str(p).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
 
 
 def _rebase_dirs(anchor: Path) -> list[Path]:
-    """Small fixed candidate set: the opened dir, three ancestors, their raw/.
-
-    Three ancestors because run layouts nest as <share>/<user>/<group>/<run>/
-    <plane> with raw/ beside <group> (e.g. eunji/raw vs eunji/demo/s2p_*/
-    zplane01_*), so a plane-dir anchor needs to climb three levels.
-    """
+    """``anchor``, its three ancestors and each one's ``raw/``: a plane dir sits at <share>/<user>/<group>/<run>/<plane> with ``raw/`` beside <group>."""
     dirs: list[Path] = []
     for d in (
         anchor,
@@ -892,26 +706,15 @@ def _rebase_one(dead, dirs: list[Path]) -> Path | None:
     if not name:
         return None
     for d in dirs:
-        try:
-            cand = d / name
-            if cand.exists():
-                return cand
-        except OSError:
-            continue
+        if (d / name).exists():
+            return d / name
     return None
 
 
 def rebase_provenance_paths(md: dict, anchor: Path | str, logger=None) -> dict:
-    """Repair or drop stale recorded paths against the actually-opened tree.
+    """A copy of ``md`` whose ``PROVENANCE_PATH_KEYS`` name files on this machine: a dead path is rebased by basename onto ``_rebase_dirs(anchor)``, or dropped.
 
-    For each :data:`PROVENANCE_PATH_KEYS` entry in ``md``: paths that exist
-    are kept; dead paths are rebased by basename against ``anchor``, its
-    three ancestors, and their ``raw/`` subdirectories (the layout lab
-    shares use);
-    unresolvable entries are dropped so run outputs never re-embed another
-    machine's paths. Empty/None values pass through untouched. Never raises.
-
-    Returns a new dict; ``md`` is not modified.
+    None, empty and non-path values pass through untouched.
     """
     lg = logger or _logger()
     anchor = Path(anchor)
@@ -921,7 +724,6 @@ def rebase_provenance_paths(md: dict, anchor: Path | str, logger=None) -> dict:
         if key not in out:
             continue
         val = out[key]
-        # type-check before any equality: ndarray values make `==` elementwise
         if val is None:
             continue
         if isinstance(val, (str, Path)):
@@ -930,17 +732,13 @@ def rebase_provenance_paths(md: dict, anchor: Path | str, logger=None) -> dict:
             entries, was_scalar = [val], True
         elif isinstance(val, (list, tuple)):
             if not val or not all(isinstance(v, (str, Path)) for v in val):
-                continue  # empty, or unexpected element types: leave untouched
+                continue
             entries, was_scalar = list(val), False
         else:
-            continue  # unexpected shape (ndarray, dict, ...): leave untouched
+            continue
         kept: list[str] = []
         for entry in entries:
-            try:
-                alive = Path(entry).exists()
-            except OSError:
-                alive = False
-            if alive:
+            if Path(entry).exists():
                 kept.append(str(entry))
                 continue
             found = _rebase_one(entry, dirs)

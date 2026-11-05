@@ -89,8 +89,7 @@ class PollenCalibrationViewer(BaseViewer):
 
     name = "Pollen Calibration Viewer"
 
-    # Default beam order for 30-channel system
-    DEFAULT_ORDER_30 = [
+    DEFAULT_ORDER_30 = [  # the 30-beamlet cavity's beam order
         0,
         4,
         5,
@@ -132,14 +131,11 @@ class PollenCalibrationViewer(BaseViewer):
     ):
         super().__init__(image_widget, fpath, parent=parent, **kwargs)
 
-        # Pollen-specific state
         self._z_step_um = 1.0
         self._pixel_size_um = 1.0
-
         self._cavity_info = None
         self._beam_order = None
 
-        # Auto calibration state
         self._status = "Initializing..."
         self._progress = 0.0
         self._processing = False
@@ -147,51 +143,43 @@ class PollenCalibrationViewer(BaseViewer):
         self._error = None
         self._initialized = False
 
-        # Separate results for auto and manual
         self._results_auto = None
         self._results_manual = None
-
-        # Results viewing state
         self._saved_images: list[Path] = []
         self._show_figures_popup = False
         self._figures_popup_mode = "auto"
-        self._current_figure_idx = 0
-        self._calibration_data_auto = None  # cached H5 data for auto mode
-        self._calibration_data_manual = None  # cached H5 data for manual mode
+        self._calibration_data_auto = None
+        self._calibration_data_manual = None
 
-        # Manual calibration state
         self._manual_mode = False
-        self._manual_channel_idx = 0  # Current beamlet index in order
-        self._manual_positions = []  # User-clicked positions [(x, y), ...]
-        self._manual_z_indices = []  # Best z for each position
+        self._manual_channel_idx = 0  # index into the beam order
+        self._manual_positions = []  # clicked (x, y) per beamlet
+        self._manual_z_indices = []  # best z per clicked position
         self._click_handler = None
-        self._vol = None  # Cached volume for manual mode
-        self._num_channels = None  # Number of channels (set during manual mode)
-        self._max_projections = None  # Max projections for viewing
-        self._original_metadata = (
-            None  # Store metadata before replacing with numpy array
+        self._subplot = None
+        self._vol = None  # the volume in memory while manual mode runs
+        self._max_projections = (
+            None  # (C, Y, X) shown in place of the volume during manual mode
         )
+        self._original_metadata = None
+        self._original_data_array = None
 
-        # External file loading state
-        self._external_h5_dialog = None  # pfd file dialog for loading external H5
-        self._loaded_external = None  # External calibration data dict
-        self._existing_h5_files = []  # H5 files found in current directory
-        self._original_data_array = None  # Store original array for restoration
+        self._loaded_external = None
+        self._existing_h5_files = []
 
-        # Drag detection state for click handler
-        self._pointer_down_pos = None  # (x, y) on pointer_down
-        self._drag_threshold = 5.0  # pixels moved to consider it a drag
+        self._pointer_down_pos = (
+            None  # (x, y) at pointer_down; a move past _drag_threshold is a pan
+        )
+        self._drag_threshold = 5.0
 
     @property
     def data(self):
-        """Access the loaded data arrays."""
         if self.parent is not None:
             return self.parent.image_widget.data if self.parent.image_widget else None
         return self.image_widget.data if self.image_widget else None
 
     @property
     def logger(self):
-        """Access the GUI logger."""
         if self.parent is not None:
             return self.parent.logger
         import logging
@@ -199,18 +187,11 @@ class PollenCalibrationViewer(BaseViewer):
         return logging.getLogger("mbo_utilities")
 
     def _init_from_data(self):
-        """Initialize calibration parameters from loaded data."""
-        try:
-            data = self.data
-            if data is None:
-                return
-            arr = data[0]
-            if arr is None:
-                return
-        except (TypeError, IndexError):
+        """Z step, pixel size, cavity info and beam order from the loaded array's metadata."""
+        arr = self._get_array()
+        if arr is None:
             return
-
-        metadata = getattr(arr, "metadata", {})
+        metadata = arr.metadata
 
         z_step = get_z_step_size(metadata)
         if z_step is not None:
@@ -218,24 +199,16 @@ class PollenCalibrationViewer(BaseViewer):
         else:
             self._z_step_um = get_param(metadata, "dz", default=1.0)
 
-        # get pixel size from metadata (already calculated in microns)
         pixel_res = get_param(metadata, "pixel_resolution", default=None)
         if pixel_res is not None:
-            # pixel_resolution is (dx, dy) tuple in microns
-            self._pixel_size_um = (
-                float(pixel_res[0])
-                if hasattr(pixel_res, "__getitem__")
-                else float(pixel_res)
-            )
+            self._pixel_size_um = float(np.ravel(pixel_res)[0])
         else:
-            # fallback: use fov_um if available, otherwise warn and use default
             fov_um = get_param(metadata, "fov_um", default=None)
             if fov_um is not None and arr.ndim >= 2:
                 nx = arr.shape[-1]
-                fov_x = fov_um[0] if hasattr(fov_um, "__getitem__") else fov_um
-                self._pixel_size_um = float(fov_x) / nx
+                self._pixel_size_um = float(np.ravel(fov_um)[0]) / nx
             elif arr.ndim >= 2:
-                # last resort: use default 600um FOV with zoom
+                # a 600 um field at zoom 1 is the last resort
                 zoom = get_param(metadata, "zoom_factor", default=1.0)
                 nx = arr.shape[-1]
                 self._pixel_size_um = 600.0 / zoom / nx
@@ -254,17 +227,10 @@ class PollenCalibrationViewer(BaseViewer):
         self._initialized = True
 
     def _get_array(self):
-        """Safely get the first data array."""
-        try:
-            data = self.data
-            if data is None:
-                return None
-            return data[0]
-        except (TypeError, IndexError):
-            return None
+        data = self.data
+        return data[0] if data else None
 
     def _get_fpath(self):
-        """Get the file path."""
         parent_fpath = self.parent.fpath if self.parent is not None else self.fpath
         if isinstance(parent_fpath, (list, tuple)):
             parent_fpath = parent_fpath[0] if parent_fpath else None
@@ -272,28 +238,24 @@ class PollenCalibrationViewer(BaseViewer):
 
     @property
     def num_beamlets(self) -> int:
-        """Get number of beamlets (channels) - shape[1] for ZCYX data."""
+        """The beamlet count: the array's ``num_beamlets``, else C of a (Z, C, Y, X) volume."""
         arr = self._get_array()
         if arr is None:
             return 0
-        # For ZCYX data: shape is (Z, C, Y, X), so channels is shape[1]
         if hasattr(arr, "num_beamlets"):
             return arr.num_beamlets
         if hasattr(arr, "num_channels"):
             return arr.num_channels
-        # Fallback: for 4D ZCYX, channels is dim 1
         if arr.ndim == 4:
             return arr.shape[1]
         return 1
 
     def draw(self) -> None:
-        """Draw the pollen calibration UI."""
         self._draw_calibration_ui()
         if self._show_figures_popup:
             self._draw_figures_popup()
 
     def _draw_calibration_ui(self) -> None:
-        """Draw the main calibration UI."""
         if not self._initialized:
             self._init_from_data()
             if self._initialized and not self._processing and not self._done:
@@ -303,19 +265,14 @@ class PollenCalibrationViewer(BaseViewer):
         imgui.push_style_var(imgui.StyleVar_.frame_padding, imgui.ImVec2(4, 3))
 
         imgui.dummy(imgui.ImVec2(0, 5))
-
-        # Info section
         self._draw_info_section()
-
         imgui.spacing()
         imgui.separator()
         imgui.spacing()
 
-        # Manual or auto mode
         if self._manual_mode:
             self._draw_manual_mode()
         else:
-            # Load previous section
             self._draw_load_previous_section()
 
             imgui.spacing()
@@ -332,17 +289,13 @@ class PollenCalibrationViewer(BaseViewer):
         imgui.pop_style_var()
 
     def _draw_info_section(self):
-        """Draw info panel with meaningful calibration metrics."""
         imgui.text_colored(imgui.ImVec4(0.8, 0.8, 0.2, 1.0), "Pollen Calibration")
         imgui.spacing()
 
         arr = self._get_array()
         if arr is not None:
-            # Shape info (compact)
             imgui.text(f"Shape: {arr.shape}")
             set_tooltip("(Z-piezo, Channels, Y, X)", show_mark=False)
-
-            # Core parameters with tooltips
             imgui.text(f"Z-step: {self._z_step_um:.2f} um")
             set_tooltip(
                 "Piezo z-step size between each slice (from stackZStepSize)",
@@ -357,8 +310,6 @@ class PollenCalibrationViewer(BaseViewer):
             imgui.text_disabled("No data loaded")
 
     def _draw_auto_status(self):
-        """Draw automatic calibration status and results."""
-        # Show processing status
         if self._processing:
             imgui.text_colored(imgui.ImVec4(0.6, 0.6, 0.8, 1.0), "Processing...")
             imgui.text(self._status)
@@ -370,39 +321,26 @@ class PollenCalibrationViewer(BaseViewer):
             )
             imgui.spacing()
 
-        # Check if we have any results
         has_auto = self._results_auto is not None
         has_manual = self._results_manual is not None
-
         if has_auto or has_manual:
             imgui.text_colored(imgui.ImVec4(0.7, 0.7, 0.9, 1.0), "Results")
             imgui.spacing()
-
-            # Buttons - mode selection is in the popup
             if imgui.button("Open Folder"):
-                # Open folder for whichever result exists (prefer manual)
-                mode = "manual" if has_manual else "auto"
-                self._open_output_folder(mode)
+                self._open_output_folder("manual" if has_manual else "auto")
             imgui.same_line()
             if imgui.button("View Figures"):
-                # Default to auto if available, otherwise manual
-                mode = "auto" if has_auto else "manual"
-                self._open_all_graphs(mode)
+                self._open_all_graphs("auto" if has_auto else "manual")
 
         elif not self._processing and not self._error:
             imgui.text_disabled("Waiting...")
 
     def _draw_load_previous_section(self):
-        """Draw UI for loading previous calibration results."""
-        # Scan for existing H5 files if not already done
+        """Load the newest ``*_pollen.h5`` beside the data once, and name it."""
         if not self._existing_h5_files:
             self._scan_existing_h5_files()
-
-        # Auto-load first existing result if available and not already loaded
         if self._existing_h5_files and not self._loaded_external:
             self._load_h5_file(str(self._existing_h5_files[0]))
-
-        # Show loaded results status
         if self._loaded_external:
             mode = self._loaded_external.get("calibration_mode", "previous")
             imgui.text_colored(imgui.ImVec4(0.6, 0.8, 0.6, 1.0), f"Loaded: {mode}")
@@ -412,25 +350,18 @@ class PollenCalibrationViewer(BaseViewer):
                 imgui.text_disabled(name[:30] + "..." if len(name) > 30 else name)
 
     def _scan_existing_h5_files(self):
-        """Scan current file's directory for existing pollen H5 files."""
+        """The ``*_pollen.h5`` files beside the data, newest first."""
         self._existing_h5_files = []
         fpath = self._get_fpath()
-        if fpath is None:
+        if fpath is None or not fpath.parent.exists():
             return
-
-        parent_dir = fpath.parent
-        if not parent_dir.exists():
-            return
-
-        # Find pollen calibration H5 files
-        for h5_file in parent_dir.glob("*_pollen.h5"):
-            self._existing_h5_files.append(h5_file)
-
-        # Sort by modification time (newest first)
-        self._existing_h5_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        self._existing_h5_files = sorted(
+            fpath.parent.glob("*_pollen.h5"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
 
     def _load_h5_file(self, path: str):
-        """Load calibration data from an H5 file."""
         from pollen._pollen_analysis import extract_calibration_summary
 
         summary = extract_calibration_summary(path)
@@ -442,14 +373,11 @@ class PollenCalibrationViewer(BaseViewer):
             self.logger.error(f"Failed to load calibration from: {path}")
 
     def _draw_manual_button(self):
-        """Draw manual calibration button."""
-        # Centered header with help
         avail_w = imgui.get_content_region_avail().x
         text = "Interactive Calibration"
         text_w = imgui.calc_text_size(text).x
         imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + (avail_w - text_w - 20) / 2)
         imgui.text_colored(imgui.ImVec4(0.8, 0.6, 0.2, 1.0), text)
-        # set_tooltip adds its own (?) mark
         set_tooltip(
             "Manual pollen calibration mode.\n\n"
             "Click on the same pollen bead in each beamlet.\n"
@@ -462,18 +390,15 @@ class PollenCalibrationViewer(BaseViewer):
 
         imgui.spacing()
 
-        # Centered button
         btn_w = 180
         imgui.set_cursor_pos_x(imgui.get_cursor_pos_x() + (avail_w - btn_w) / 2)
         if imgui.button("Start", imgui.ImVec2(btn_w, 0)):
             self._start_manual_mode()
 
     def _draw_manual_mode(self):
-        """Draw manual calibration UI."""
         imgui.text_colored(imgui.ImVec4(0.2, 0.8, 0.4, 1.0), "Manual Calibration")
         imgui.spacing()
 
-        # Use actual channel count from max projections
         nc = (
             self._max_projections.shape[0]
             if self._max_projections is not None
@@ -487,8 +412,6 @@ class PollenCalibrationViewer(BaseViewer):
 
         imgui.text(f"Beamlet {current + 1}/{nc} (ch {channel})")
         imgui.text(f"Marked: {num_marked}")
-
-        # Progress bar
         progress = num_marked / nc if nc > 0 else 0
         imgui.progress_bar(progress, imgui.ImVec2(-1, 0), f"{num_marked}/{nc}")
         imgui.spacing()
@@ -496,7 +419,6 @@ class PollenCalibrationViewer(BaseViewer):
         imgui.text_colored(imgui.ImVec4(0.8, 0.8, 0.2, 1.0), "Click on pollen bead")
         imgui.spacing()
 
-        # Navigation buttons - compact, no fixed width
         imgui.button("Prev") and self._manual_prev()
         imgui.same_line()
         imgui.button("Skip") and self._manual_skip()
@@ -507,7 +429,6 @@ class PollenCalibrationViewer(BaseViewer):
         imgui.separator()
         imgui.spacing()
 
-        # Finish button - always available if we have some positions
         if num_marked > 0:
             if num_marked >= nc:
                 imgui.text_colored(imgui.ImVec4(0.3, 1.0, 0.3, 1.0), "All done!")
@@ -517,7 +438,7 @@ class PollenCalibrationViewer(BaseViewer):
         imgui.button("Cancel") and self._cancel_manual_mode()
 
     def _start_manual_mode(self):
-        """Start interactive manual calibration."""
+        """Load the volume, show its per-channel max projections in the viewer and arm the click handler."""
         arr = self._get_array()
         if arr is None:
             self.logger.error("No data for manual calibration")
@@ -527,103 +448,56 @@ class PollenCalibrationViewer(BaseViewer):
         self._manual_channel_idx = 0
         self._manual_positions = []
         self._manual_z_indices = []
-
-        # Store original data array and metadata before we replace viewer data
         self._original_data_array = arr
-        self._original_metadata = getattr(arr, "metadata", {})
+        self._original_metadata = arr.metadata
 
-        # Load volume into memory for click analysis
         self.logger.info("Loading volume for manual calibration...")
-        self._vol = np.asarray(arr[:]).astype(np.float32)
+        self._vol = np.asarray(arr[:]).astype(np.float32)  # (Z piezo, C beamlets, Y, X)
         self._vol -= self._vol.mean()
-
-        # For ZCYX data: shape is (Z, C, Y, X)
-        # Z = piezo positions (typically many, e.g. 224)
-        # C = beamlet channels (typically fewer, e.g. 14)
-        self.logger.info(f"Volume shape: {self._vol.shape} (Z, C, Y, X)")
         nz, nc, _ny, _nx = self._vol.shape
-        self.logger.info(f"Z-planes: {nz}, Channels: {nc}")
-
-        # Store channel count for UI
-        self._num_channels = nc
-
-        # Compute max projections over Z for each channel -> (C, Y, X)
-        # This creates a 3D array we can navigate by channel
-        self._max_projections = self._vol.max(axis=0)
-        self.logger.info(f"Max projections shape: {self._max_projections.shape}")
-
-        # Replace viewer data with max projections
-        # Note: This replaces with numpy array - metadata viewer handles this gracefully
+        self.logger.info(f"Volume shape: {self._vol.shape} (Z, C, Y, X)")
+        self._max_projections = self._vol.max(axis=0)  # (C, Y, X)
         self.image_widget.data[0] = self._max_projections
-
-        # Reset to first channel
         if self.image_widget.n_sliders > 0:
             self.image_widget.indices = [0]
-
-        # Show first beamlet
         self._show_beamlet(0)
-
-        # Add click handler to the figure
         self._setup_click_handler()
-
         self.logger.info("Manual calibration started. Click on pollen beads.")
 
     def _setup_click_handler(self):
-        """Set up click event handler on the image with drag detection."""
-        if self.image_widget is None:
+        if self.image_widget is None or self._click_handler is not None:
             return
+        self._subplot = self.image_widget.figure[0, 0]
+        self._subplot.renderer.add_event_handler(self._on_pointer_down, "pointer_down")
+        self._subplot.renderer.add_event_handler(self._on_click, "click")
+        self._click_handler = self._on_click
 
-        # Get the subplot and add click handler
-        try:
-            subplot = self.image_widget.figure[0, 0]
+    def _on_pointer_down(self, ev):
+        if self._manual_mode:
+            self._pointer_down_pos = (ev.x, ev.y)
 
-            def on_pointer_down(ev):
-                """Track pointer down position for drag detection."""
-                if not self._manual_mode:
-                    return
-                self._pointer_down_pos = (ev.x, ev.y)
-
-            def on_click(ev):
-                if not self._manual_mode:
-                    return
-
-                # Check if this was a drag (mouse moved significantly)
-                if self._pointer_down_pos is not None:
-                    dx = abs(ev.x - self._pointer_down_pos[0])
-                    dy = abs(ev.y - self._pointer_down_pos[1])
-                    if dx > self._drag_threshold or dy > self._drag_threshold:
-                        # This was a drag, not a click - skip marking
-                        self._pointer_down_pos = None
-                        return
-
-                self._pointer_down_pos = None
-
-                # Map screen coords to world coords
-                try:
-                    world_pos = subplot.map_screen_to_world((ev.x, ev.y))
-                    if world_pos is not None:
-                        x, y = world_pos[0], world_pos[1]
-                        self._handle_click(x, y)
-                except Exception as e:
-                    self.logger.exception(f"Click mapping error: {e}")
-
-            subplot.renderer.add_event_handler(on_pointer_down, "pointer_down")
-            subplot.renderer.add_event_handler(on_click, "click")
-            self._click_handler = on_click
-            self.logger.info("Click handler registered with drag detection")
-
-        except Exception as e:
-            self.logger.exception(f"Failed to set up click handler: {e}")
+    def _on_click(self, ev):
+        """Mark the bead under a click; a pointer that moved past the drag threshold was a pan."""
+        if not self._manual_mode:
+            return
+        down = self._pointer_down_pos
+        self._pointer_down_pos = None
+        if down is not None and (
+            abs(ev.x - down[0]) > self._drag_threshold
+            or abs(ev.y - down[1]) > self._drag_threshold
+        ):
+            return
+        world_pos = self._subplot.map_screen_to_world((ev.x, ev.y))
+        if world_pos is not None:
+            self._handle_click(world_pos[0], world_pos[1])
 
     def _handle_click(self, x, y):
-        """Handle a click event during manual calibration."""
+        """Record the clicked bead position and its brightest z for the current beamlet, then advance."""
         if not self._manual_mode or self._vol is None:
             return
 
         _nz, nc, ny, nx = self._vol.shape
         current = self._manual_channel_idx
-
-        # Don't process clicks if we're already past the last beamlet
         if current >= nc:
             self.logger.info("All beamlets already marked. Click 'Finish'.")
             return
@@ -632,13 +506,10 @@ class PollenCalibrationViewer(BaseViewer):
             self._beam_order[current] if current < len(self._beam_order) else current
         )
 
-        # Clamp to image bounds
         x = max(0, min(nx - 1, x))
         y = max(0, min(ny - 1, y))
-
         self.logger.info(f"Beamlet {current + 1}: clicked at ({x:.1f}, {y:.1f})")
 
-        # Find best z at this position
         ix, iy = round(x), round(y)
         patch_size = 10
         y0 = max(0, iy - patch_size)
@@ -650,7 +521,6 @@ class PollenCalibrationViewer(BaseViewer):
         smoothed = uniform_filter1d(patch.max(axis=(1, 2)), size=3, mode="nearest")
         best_z = int(np.argmax(smoothed))
 
-        # Store position
         if current < len(self._manual_positions):
             self._manual_positions[current] = (x, y)
             self._manual_z_indices[current] = best_z
@@ -658,51 +528,38 @@ class PollenCalibrationViewer(BaseViewer):
             self._manual_positions.append((x, y))
             self._manual_z_indices.append(best_z)
 
-        # Auto-advance to next beamlet (but don't go past nc-1)
         if current < nc - 1:
             self._manual_channel_idx = current + 1
             self._show_beamlet(self._manual_channel_idx)
         else:
-            # We just marked the last one - auto-finish
             self.logger.info("All beamlets marked! Starting calibration...")
             self._finish_manual_calibration()
 
     def _show_beamlet(self, idx):
-        """Show a single beamlet's max projection in the viewer."""
+        """Put beamlet ``idx`` (in beam order) of the max projections on the viewer's one slider."""
         if self._max_projections is None or self.image_widget is None:
             return
-
         nc = self._max_projections.shape[0]
         channel = self._beam_order[idx] if idx < len(self._beam_order) else idx
-
         if channel >= nc:
             self.logger.error(f"Channel {channel} out of range ({nc} channels)")
             return
-
-        # Navigate to this channel using ImageWidget indices
-        # _max_projections is (C, Y, X) with 1 slider for C
-        try:
-            if self.image_widget.n_sliders > 0:
-                self.image_widget.indices = [channel]
-
-        except Exception as e:
-            self.logger.exception(f"Failed to update display: {e}")
+        if self.image_widget.n_sliders > 0:
+            self.image_widget.indices = [channel]
 
     def _manual_prev(self):
-        """Go to previous beamlet."""
         if self._manual_channel_idx > 0:
             self._manual_channel_idx -= 1
             self._show_beamlet(self._manual_channel_idx)
 
     def _manual_next(self):
-        """Go to next beamlet."""
         nc = self.num_beamlets
         if self._manual_channel_idx < nc - 1:
             self._manual_channel_idx += 1
             self._show_beamlet(self._manual_channel_idx)
 
     def _manual_skip(self):
-        """Skip current beamlet (use center as position)."""
+        """Mark the current beamlet at the frame's centre and move on."""
         if self._vol is None:
             return
 
@@ -711,11 +568,7 @@ class PollenCalibrationViewer(BaseViewer):
         channel = (
             self._beam_order[current] if current < len(self._beam_order) else current
         )
-
-        # Use center
         x, y = nx / 2, ny / 2
-
-        # Find best z at center
         patch_size = 10
         iy, ix = int(ny / 2), int(nx / 2)
         y0 = max(0, iy - patch_size)
@@ -738,28 +591,20 @@ class PollenCalibrationViewer(BaseViewer):
         self._manual_next()
 
     def _cancel_manual_mode(self):
-        """Cancel manual calibration."""
         self._manual_mode = False
         self._manual_positions = []
         self._manual_z_indices = []
         self._vol = None
-        self._num_channels = None
         self._max_projections = None
-
-        # Restore original data view before clearing references
         self._restore_original_view()
-
-        # Clear stored references after restore
         self._original_metadata = None
         self._original_data_array = None
         self.logger.info("Manual calibration cancelled")
 
     def _restore_original_view(self):
-        """Restore the original full data view."""
+        """Put the lazy array back in place of the max projections, sliders at 0."""
         if self.image_widget is None:
             return
-
-        # Use stored original array if available
         arr = (
             self._original_data_array
             if self._original_data_array is not None
@@ -767,22 +612,14 @@ class PollenCalibrationViewer(BaseViewer):
         )
         if arr is None:
             return
-
-        try:
-            # Reload original lazy array
-            self.image_widget.data[0] = arr
-
-            # Reset indices to start
-            if self.image_widget.n_sliders > 0:
-                self.image_widget.indices = [0] * self.image_widget.n_sliders
-
-            self.image_widget.figure[0, 0].auto_scale()
-            self.logger.info("Restored original data view")
-        except Exception as e:
-            self.logger.exception(f"Failed to restore view: {e}")
+        self.image_widget.data[0] = arr
+        if self.image_widget.n_sliders > 0:
+            self.image_widget.indices = [0] * self.image_widget.n_sliders
+        self.image_widget.figure[0, 0].auto_scale()
+        self.logger.info("Restored original data view")
 
     def _finish_manual_calibration(self):
-        """Complete manual calibration and run analysis."""
+        """Run the calibration on the marked positions in a background thread."""
         self._manual_mode = False
 
         positions = self._manual_positions
@@ -796,15 +633,8 @@ class PollenCalibrationViewer(BaseViewer):
         self.logger.info(
             f"Running calibration with {len(positions)} marked positions..."
         )
-
-        # Restore view before running background calibration
         self._restore_original_view()
-
-        # Clear max projections (no longer needed)
         self._max_projections = None
-        self._num_channels = None
-
-        # Run calibration in background
         self._processing = True
         self._status = "Running calibration..."
 
@@ -815,7 +645,6 @@ class PollenCalibrationViewer(BaseViewer):
         ).start()
 
     def _run_calibration_with_positions(self, positions, z_indices):
-        """Run calibration using manually marked positions."""
         try:
             arr = self._get_array()
             if arr is None:
@@ -846,7 +675,7 @@ class PollenCalibrationViewer(BaseViewer):
             )
 
             self._progress = 0.2
-            # Use stored metadata (arr may be numpy array now)
+            # the viewer may still hold the max-projection ndarray, which has no metadata
             metadata = (
                 self._original_metadata
                 if self._original_metadata
@@ -915,14 +744,10 @@ class PollenCalibrationViewer(BaseViewer):
             self._original_metadata = None
             self._original_data_array = None
 
-    # === Auto calibration methods ===
-
     def _start_auto_calibration(self):
-        """Start automatic background calibration."""
-        # Check if previous results exist
+        """Load a previous ``*_pollen.h5`` beside the data, else calibrate in a background thread."""
         self._scan_existing_h5_files()
         if self._existing_h5_files:
-            # Load previous results instead of running calibration
             self._load_h5_file(str(self._existing_h5_files[0]))
             self._done = True
             self._status = "Loaded previous results"
@@ -941,7 +766,6 @@ class PollenCalibrationViewer(BaseViewer):
         threading.Thread(target=self._auto_calibration_worker, daemon=True).start()
 
     def _auto_calibration_worker(self):
-        """Background worker for automatic calibration."""
         try:
             arr = self._get_array()
             if arr is None:
@@ -1034,29 +858,18 @@ class PollenCalibrationViewer(BaseViewer):
             self._processing = False
 
     def _detect_beads(self, vol):
-        """Detect bead positions by tracking a reference bead across channels.
-
-        Uses the same approach as manual mode: find a bead in the first channel,
-        then track that same bead in other channels using cross-correlation.
-
-        Returns positions and z_indices in beam order (matching manual calibration).
-        """
+        """Bead positions and best z per beamlet, in beam order: the brightest bead of the first beamlet, tracked into the others by normalized cross-correlation of its template."""
         from scipy.signal import correlate2d
 
         _nz, nc, ny, nx = vol.shape
         positions = []
         z_indices = []
         patch_size = 10
-        template_size = 25  # larger template for better matching
-
-        # get max projections for all channels (same as manual mode shows)
+        template_size = 25
         max_projs = vol.max(axis=0)  # (nc, ny, nx)
 
-        # find reference bead in first channel (beam order)
         first_channel = self._beam_order[0] if len(self._beam_order) > 0 else 0
         ref_img = max_projs[first_channel]
-
-        # find brightest region in reference channel
         threshold = np.percentile(ref_img, 90)
         mask = ref_img > threshold
         if mask.sum() > 0:
@@ -1068,43 +881,31 @@ class PollenCalibrationViewer(BaseViewer):
             peak_idx = np.argmax(ref_img)
             ref_cy, ref_cx = np.unravel_index(peak_idx, ref_img.shape)
 
-        # extract reference template
         ix, iy = round(ref_cx), round(ref_cy)
         t_y0 = max(0, iy - template_size)
         t_y1 = min(ny, iy + template_size + 1)
         t_x0 = max(0, ix - template_size)
         t_x1 = min(nx, ix + template_size + 1)
         template = ref_img[t_y0:t_y1, t_x0:t_x1].copy()
-
-        # normalize template for correlation
         template = template - template.mean()
         template_std = template.std()
         if template_std > 0:
             template = template / template_std
 
-        # track bead in each channel using cross-correlation
         for idx in range(nc):
             channel = self._beam_order[idx] if idx < len(self._beam_order) else idx
             img = max_projs[channel]
 
             if idx == 0:
-                # first channel uses reference position directly
                 cx, cy = ref_cx, ref_cy
             else:
-                # cross-correlate template with this channel's image
                 img_norm = img - img.mean()
                 img_std = img.std()
                 if img_std > 0:
                     img_norm = img_norm / img_std
-
-                # use normalized cross-correlation
                 corr = correlate2d(img_norm, template, mode="same")
-
-                # find peak in correlation map
                 peak_idx = np.argmax(corr)
                 cy, cx = np.unravel_index(peak_idx, corr.shape)
-
-                # refine with centroid around peak
                 p_y0 = max(0, cy - 5)
                 p_y1 = min(ny, cy + 6)
                 p_x0 = max(0, cx - 5)
@@ -1112,7 +913,6 @@ class PollenCalibrationViewer(BaseViewer):
                 peak_region = corr[p_y0:p_y1, p_x0:p_x1]
 
                 if peak_region.max() > 0:
-                    # weighted centroid refinement
                     peak_region = peak_region - peak_region.min()
                     if peak_region.sum() > 0:
                         yy, xx = np.mgrid[
@@ -1123,7 +923,6 @@ class PollenCalibrationViewer(BaseViewer):
 
             positions.append((float(cx), float(cy)))
 
-            # find best Z for this position
             ix, iy = round(cx), round(cy)
             y0 = max(0, iy - patch_size)
             y1 = min(ny, iy + patch_size + 1)
@@ -1138,7 +937,7 @@ class PollenCalibrationViewer(BaseViewer):
         return positions, z_indices
 
     def _extract_traces(self, vol, positions, z_indices):
-        """Extract intensity traces and patches."""
+        """Per beamlet, the smoothed patch maximum along z (``Iz``) and the patch at its best z (``III``, padded to one size)."""
         _nz, _nc, ny, nx = vol.shape
         Iz = []
         III = []
@@ -1182,7 +981,7 @@ class PollenCalibrationViewer(BaseViewer):
         return Iz, III
 
     def _scan_saved_images(self, mode: str = "auto"):
-        """Scan output directory for saved images of a specific mode."""
+        """The ``pollen_<mode>_*`` figures in the run's output folder, by name."""
         self._saved_images = []
         results = self._results_auto if mode == "auto" else self._results_manual
         if not results:
@@ -1196,18 +995,15 @@ class PollenCalibrationViewer(BaseViewer):
         if not out_path.exists():
             return
 
-        # Find images matching the mode prefix (pollen_auto_* or pollen_manual_*)
         prefix = f"pollen_{mode}_"
         for ext in ("*.png", "*.jpg", "*.jpeg", "*.svg"):
             for img in out_path.glob(ext):
                 if img.name.startswith(prefix):
                     self._saved_images.append(img)
-
-        # Sort by name
         self._saved_images.sort(key=lambda p: p.name)
 
     def _open_image(self, path: Path):
-        """Open an image in the system default viewer."""
+        """Open an image in the system's default viewer."""
         import subprocess
         import sys
 
@@ -1224,7 +1020,6 @@ class PollenCalibrationViewer(BaseViewer):
             self.logger.exception(f"Failed to open image: {e}")
 
     def _open_output_folder(self, mode: str = "auto"):
-        """Open the output folder in file explorer."""
         results = self._results_auto if mode == "auto" else self._results_manual
         if not results:
             return
@@ -1234,7 +1029,7 @@ class PollenCalibrationViewer(BaseViewer):
             self._open_output_folder_path(out_dir)
 
     def _open_output_folder_path(self, folder_path: str):
-        """Open a folder path in file explorer."""
+        """Open a folder in the system's file browser."""
         import subprocess
         import sys
 
@@ -1254,24 +1049,20 @@ class PollenCalibrationViewer(BaseViewer):
             self.logger.exception(f"Failed to open folder: {e}")
 
     def _open_all_graphs(self, mode: str = "auto"):
-        """Show figures popup with implot graphs."""
         self._figures_popup_mode = mode
         self._show_figures_popup = True
 
     def _load_calibration_data(self, mode: str):
-        """Load calibration data from H5 file for plotting."""
+        """The calibration summary of ``mode``'s h5 (the run's, else the loaded file's), read once."""
         from pollen._pollen_analysis import extract_calibration_summary
 
-        # Check cache first
         if mode == "auto" and self._calibration_data_auto is not None:
             return self._calibration_data_auto
         if mode == "manual" and self._calibration_data_manual is not None:
             return self._calibration_data_manual
 
-        # Find H5 file
         results = self._results_auto if mode == "auto" else self._results_manual
         if not results:
-            # Try loaded external
             if self._loaded_external and self._loaded_external.get("h5_path"):
                 h5_path = self._loaded_external["h5_path"]
             else:
@@ -1313,7 +1104,6 @@ class PollenCalibrationViewer(BaseViewer):
             return
 
         if expanded:
-            # Load data for both modes
             data_auto = self._load_calibration_data("auto")
             data_manual = self._load_calibration_data("manual")
 
@@ -1329,11 +1119,9 @@ class PollenCalibrationViewer(BaseViewer):
                 imgui.end()
                 return
 
-            # Colors for auto/manual - match pollen_analysis.py
-            color_auto = imgui.ImVec4(0.0, 0.75, 1.0, 1.0)  # cyan
-            color_manual = imgui.ImVec4(0.4, 1.0, 0.4, 1.0)  # green
+            color_auto = imgui.ImVec4(0.0, 0.75, 1.0, 1.0)  # pollen_analysis.py's cyan
+            color_manual = imgui.ImVec4(0.4, 1.0, 0.4, 1.0)  # and its green
 
-            # Legend
             imgui.text("Legend:")
             imgui.same_line()
             imgui.text_colored(color_auto, "Auto")
@@ -1341,14 +1129,12 @@ class PollenCalibrationViewer(BaseViewer):
             imgui.text_colored(color_manual, "Manual")
             imgui.spacing()
 
-            # XY Positions plot - normalized (subtract mean to center)
             plot_h = 220
             if implot.begin_plot("XY Positions (normalized)", imgui.ImVec2(-1, plot_h)):
                 implot.setup_axes("dX (um)", "dY (um)")
                 implot.setup_axis_limits(implot.ImAxis_.x1, -50, 50, implot.Cond_.once)
                 implot.setup_axis_limits(implot.ImAxis_.y1, -50, 50, implot.Cond_.once)
 
-                # Plot auto data - normalized
                 if has_auto:
                     xs_auto = np.asarray(data_auto["xs_um"], dtype=np.float64)
                     ys_auto = np.asarray(data_auto["ys_um"], dtype=np.float64)
@@ -1365,7 +1151,6 @@ class PollenCalibrationViewer(BaseViewer):
                         ),
                     )
 
-                # Plot manual data - normalized
                 if has_manual:
                     xs_manual = np.asarray(data_manual["xs_um"], dtype=np.float64)
                     ys_manual = np.asarray(data_manual["ys_um"], dtype=np.float64)
@@ -1386,11 +1171,8 @@ class PollenCalibrationViewer(BaseViewer):
 
             imgui.spacing()
 
-            # X/Y offsets bar chart - normalized (relative to first beam)
             if implot.begin_plot("XY Offsets (relative)", imgui.ImVec2(-1, plot_h)):
                 implot.setup_axes("Beam #", "Offset (um)")
-
-                # Determine beam count
                 n_beams = 0
                 if has_auto and "diffx" in data_auto:
                     n_beams = max(n_beams, len(data_auto["diffx"]))
@@ -1401,7 +1183,6 @@ class PollenCalibrationViewer(BaseViewer):
                     beam_nums = np.arange(1, n_beams + 1, dtype=np.float64)
                     bar_width = 0.35
 
-                    # Auto X offsets - normalize to first beam
                     if has_auto and "diffx" in data_auto:
                         diffx_auto = np.asarray(data_auto["diffx"], dtype=np.float64)
                         diffx_auto = diffx_auto - diffx_auto[0]
@@ -1413,7 +1194,6 @@ class PollenCalibrationViewer(BaseViewer):
                             implot.Spec(fill_color=color_auto),
                         )
 
-                    # Manual X offsets - normalize to first beam
                     if has_manual and "diffx" in data_manual:
                         diffx_manual = np.asarray(
                             data_manual["diffx"], dtype=np.float64
@@ -1433,7 +1213,6 @@ class PollenCalibrationViewer(BaseViewer):
             imgui.separator()
             imgui.spacing()
 
-            # Summary stats
             imgui.text_colored(imgui.ImVec4(0.7, 0.7, 0.9, 1.0), "Summary:")
             if has_auto:
                 rms_dx = data_auto.get("rms_dx")
@@ -1454,15 +1233,12 @@ class PollenCalibrationViewer(BaseViewer):
 
             imgui.spacing()
 
-            # Open output folder button
             if imgui.button("Open Output Folder"):
-                # Open the folder containing saved figures
                 if self._results_auto:
                     self._open_output_folder("auto")
                 elif self._results_manual:
                     self._open_output_folder("manual")
                 elif self._loaded_external and self._loaded_external.get("h5_path"):
-                    # Open folder containing loaded h5 file
                     h5_path = Path(self._loaded_external["h5_path"])
                     if h5_path.parent.exists():
                         self._open_output_folder_path(str(h5_path.parent))
@@ -1488,7 +1264,6 @@ class PollenCalibrationViewer(BaseViewer):
     def cleanup(self) -> None:
         """Clean up resources when viewer closes."""
         self._vol = None
-        self._num_channels = None
         self._max_projections = None
         self._original_metadata = None
         self._original_data_array = None

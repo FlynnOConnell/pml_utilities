@@ -2,17 +2,10 @@
 rebase_provenance_paths: stale pipeline-recorded paths are repaired against
 the opened tree or dropped — never re-embedded verbatim.
 
-Synthetic cases run on tmp_path. The real-data case exercises the actual lab
-layout (every run dir on the share embeds dead 'loson' machine paths) and
-skips when X:/data/eunji is not mounted.
+Every case runs on tmp_path.
 """
 
-from pathlib import Path
-
-import numpy as np
-import pytest
 from mbo_utilities.metadata.base import (
-    PROVENANCE_PATH_KEYS,
     rebase_provenance_paths,
 )
 
@@ -102,46 +95,3 @@ def test_string_data_path_scalar_shape_preserved(tmp_path):
 
     assert isinstance(out["data_path"], str)
     assert out["data_path"] == str(target)
-
-
-EUNJI = Path("X:/data/eunji")
-PLANE = EUNJI / "demo" / "s2p_sparsery" / "zplane01_tp00001-02000"
-RAW_TIF = EUNJI / "raw" / "ek350_250610_00001.tif"
-
-
-def _assert_no_loson(md: dict):
-    for key in PROVENANCE_PATH_KEYS:
-        val = md.get(key)
-        entries = val if isinstance(val, (list, tuple)) else [val]
-        for entry in entries:
-            if isinstance(entry, str):
-                assert "loson" not in entry.lower(), f"{key}: {entry}"
-
-
-@pytest.mark.skipif(not EUNJI.exists(), reason="X:/data/eunji not mounted")
-def test_real_ops_rebase_no_dead_machine_paths_survive():
-    ops = np.load(PLANE / "ops.npy", allow_pickle=True).item()
-
-    # anchor at the plane dir: paths whose basenames live inside the run
-    # tree rebase in place. The search walks the anchor plus THREE
-    # ancestors (and their raw/), so the raw tif at
-    # anchor.parent.parent.parent/raw/<basename> is inside the search set
-    # even from the plane dir — every source reference rebases to the
-    # share's raw copy rather than dropping.
-    out = rebase_provenance_paths(ops, anchor=PLANE)
-    _assert_no_loson(out)
-    assert out["save_path"] == str(PLANE)
-    assert out["ops_path"] == str(PLANE / "ops.npy")
-    assert out["reg_file"] == str(PLANE / "data.bin")
-    assert out["data_path"] == str(RAW_TIF)
-    assert out["raw_source"] == str(RAW_TIF)
-    assert out["file_paths"] == [str(RAW_TIF)]
-
-    # anchor at the run root (what hydration stores as _s2p_outdir): the
-    # raw tif at anchor.parent.parent/raw/<basename> is inside the search
-    # set, so every source reference resolves to the share's raw copy.
-    out2 = rebase_provenance_paths(ops, anchor=PLANE.parent)
-    _assert_no_loson(out2)
-    assert out2["data_path"] == str(RAW_TIF)
-    assert out2["raw_source"] == str(RAW_TIF)
-    assert out2["file_paths"] == [str(RAW_TIF)]

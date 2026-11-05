@@ -120,7 +120,7 @@ class RunTabWidget(Widget):
 
     def wants_focus(self) -> bool:
         """One-shot programmatic focus, used by scripts/capture_docs.py."""
-        if getattr(self.parent, "_force_run_tab", False):
+        if self.parent._force_run_tab:
             self.parent._force_run_tab = False
             return True
         return False

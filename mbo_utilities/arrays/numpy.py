@@ -143,7 +143,6 @@ class NumpyArray(ReductionMixin, Shape5DMixin):
         dim_order: str | Sequence[str] | None = None,
         dims: str | Sequence[str] | None = None,
     ):
-        self._tempfile = None
         self._npz_file = None
         self._is_in_memory = False
         self._metadata = {}

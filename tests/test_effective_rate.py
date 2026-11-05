@@ -9,16 +9,20 @@ delegates fs/finterval lookups to it.
 import logging
 
 import pytest
+from mbo_utilities import log
 from mbo_utilities.metadata import params
 from mbo_utilities.metadata.params import get_param, resolve_effective_rate
 
 
 @pytest.fixture(autouse=True)
-def _fresh_stale_warning_cache():
-    """Each test sees the stale-alias warning dedupe cache empty."""
+def _fresh_stale_warning_cache(caplog):
+    """Each test sees the dedupe cache empty and the params logger's records in caplog (the mbo tree does not propagate)."""
+    logger = log.get("metadata.params")
+    logger.addHandler(caplog.handler)
     params._STALE_WARNED.clear()
     yield
     params._STALE_WARNED.clear()
+    logger.removeHandler(caplog.handler)
 
 
 # alias state of a real x4-decimated store: the writer updated only
@@ -80,7 +84,7 @@ class TestResolveEffectiveRate:
         """The real decimated dict resolves from canonical fs, warning once
         about the stale aliases.
         """
-        with caplog.at_level(logging.WARNING, logger="mbo_utilities"):
+        with caplog.at_level(logging.WARNING, logger="mbo.metadata.params"):
             fs, finterval, source = resolve_effective_rate(dict(DECIMATED))
 
         assert fs == pytest.approx(4.915, rel=1e-3)
@@ -143,14 +147,14 @@ class TestResolveEffectiveRate:
 
     def test_case_colliding_agreement_no_warning(self, caplog):
         """Two case-variants of one alias that agree produce no warning."""
-        with caplog.at_level(logging.WARNING, logger="mbo_utilities"):
+        with caplog.at_level(logging.WARNING, logger="mbo.metadata.params"):
             fs, _, _ = resolve_effective_rate({"framerate": 20.0, "frameRate": 20.0})
         assert fs == pytest.approx(20.0)
         assert _rate_warnings(caplog) == []
 
     def test_case_colliding_divergence_warns(self, caplog):
         """Diverging case-variants produce one warning naming both."""
-        with caplog.at_level(logging.WARNING, logger="mbo_utilities"):
+        with caplog.at_level(logging.WARNING, logger="mbo.metadata.params"):
             fs, _, _ = resolve_effective_rate({"framerate": 20.0, "frameRate": 25.0})
         assert fs == pytest.approx(20.0)
         warnings = _rate_warnings(caplog)
@@ -161,7 +165,7 @@ class TestResolveEffectiveRate:
         """The registered spelling wins a same-rank tie regardless of
         dict insertion order.
         """
-        with caplog.at_level(logging.WARNING, logger="mbo_utilities"):
+        with caplog.at_level(logging.WARNING, logger="mbo.metadata.params"):
             fs, finterval, source = resolve_effective_rate({"FS": 10.0, "fs": 20.0})
         assert fs == pytest.approx(20.0)
         assert finterval == pytest.approx(0.05)
@@ -175,7 +179,7 @@ class TestResolveEffectiveRate:
         (hot render loops call get_param(md, 'fs') per frame).
         """
         md = dict(DECIMATED)
-        with caplog.at_level(logging.WARNING, logger="mbo_utilities"):
+        with caplog.at_level(logging.WARNING, logger="mbo.metadata.params"):
             first = resolve_effective_rate(md)
             second = resolve_effective_rate(md)
 

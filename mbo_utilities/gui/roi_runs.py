@@ -6,17 +6,19 @@ and full-plane suite2p / masknmf spawns (detached subprocesses polled
 through their progress files). GPU-heavy runs serialize on one lock so two
 demixes never fight over the device.
 
-``DerivedSet`` wraps a loaded :class:`~mbo_utilities.roi_workflow.RunResult`
-for display - per-set color, visibility, discarded rows and a pick map.
+``DerivedSet`` wraps one pixel unit of a results file
+(:class:`~mbo_utilities.results.ResultUnit`: a suite2p plane, a masknmf run,
+a manual run's slice) for display - its footprints in the frame, per-set
+color, visibility, discarded rows, accept / reject state and a pick map.
 Traces live in the session model's :class:`~mbo_utilities.annotation.RoiTraceTable`,
-keyed by store uid so deleting an ROI never remaps anyone else's rows.
+keyed by store uid so deleting an ROI never remaps anyone else's rows;
+:func:`unit_trace` turns one unit row into such a row.
 Everything here is figure-free and imports without masknmf, so it is
 unit-testable with a stub process manager.
 """
 
 from __future__ import annotations
 
-import json
 import queue
 import threading
 from dataclasses import dataclass, field
@@ -26,8 +28,9 @@ import numpy as np
 
 from mbo_utilities import log
 from mbo_utilities.annotation import ROI_COLORS, RoiTrace, class_color
+from mbo_utilities.arrays.features._dim_tags import filename_tags
 from mbo_utilities.gui.widgets.process_manager import LocalJob, get_process_manager
-from mbo_utilities.roi_workflow import OUT_PREFIX, RunResult, roi_folder
+from mbo_utilities.results import ResultUnit
 
 __all__ = [
     "DerivedSet",
@@ -46,22 +49,16 @@ __all__ = [
     "footprint_center",
     "footprint_edges",
     "footprint_radius",
-    "full_plane_args",
-    "load_run_registry",
     "outline_data",
     "outline_paths",
-    "registry_path",
-    "result_traces",
     "ring",
-    "save_run_registry",
-    "scan_run_dirs",
     "set_color",
+    "unit_trace",
 ]
 
-REGISTRY_NAME = "roi_runs.json"
-SELECTED_ALPHA = 0.9  # matches the manual overlay's selection opacity
+SELECTED_ALPHA = 0.9  # the manual overlay's selection opacity
 
-# per-set overlay hues, bright against gnuplot2 and the class colors
+# bright against gnuplot2 and the class colors
 SET_COLORS: tuple[tuple[float, float, float], ...] = (
     (1.00, 0.85, 0.10),
     (0.10, 0.90, 0.90),
@@ -81,7 +78,7 @@ def set_color(index: int) -> tuple[float, float, float]:
 class RoiRun:
     """One background run: an in-process job (``job``) or a spawn (``pid``)."""
 
-    kind: str  # "extract" | "demix" | "discover" | "suite2p" | "masknmf"
+    kind: str  # "extract" | "demix" | "suite2p" | "masknmf"
     tag: str
     description: str
     job: LocalJob | None = None
@@ -104,6 +101,26 @@ def _raised_at(error: BaseException) -> str:
         return ""
     last = frames[-1]
     return f" ({Path(last.filename).name}:{last.lineno})"
+
+
+def _run_in_thread(manager: RoiRunManager, run: RoiRun, fn, heavy: bool) -> None:
+    """``fn(job)`` on the manager's gpu lock when ``heavy``; the payload or the error goes on the results queue."""
+    job = run.job
+    try:
+        if heavy:
+            job.set_progress(0.0, "waiting for gpu")
+            with manager._heavy:
+                payload = fn(job)
+        else:
+            payload = fn(job)
+    except Exception as error:  # noqa: BLE001 - reported on the job
+        manager.logger.exception(f"{run.description} failed")
+        message = f"{type(error).__name__}: {error}{_raised_at(error)}"
+        job.fail(message)
+        manager._results.put((run, None, message))
+        return
+    job.done()
+    manager._results.put((run, payload, None))
 
 
 class RoiRunManager:
@@ -136,26 +153,12 @@ class RoiRunManager:
         """
         pm = self._pm or get_process_manager()
         run.job = pm.start_job(run.kind, run.description)
-
-        def work():
-            job = run.job
-            try:
-                if heavy:
-                    job.set_progress(0.0, "waiting for gpu")
-                    with self._heavy:
-                        payload = fn(job)
-                else:
-                    payload = fn(job)
-            except Exception as error:  # noqa: BLE001 - reported on the job
-                self.logger.exception(f"{run.description} failed")
-                message = f"{type(error).__name__}: {error}{_raised_at(error)}"
-                job.fail(message)
-                self._results.put((run, None, message))
-                return
-            job.done()
-            self._results.put((run, payload, None))
-
-        thread = threading.Thread(target=work, name=f"roi-run-{run.tag}", daemon=True)
+        thread = threading.Thread(
+            target=_run_in_thread,
+            args=(self, run, fn, heavy),
+            name=f"roi-run-{run.tag}",
+            daemon=True,
+        )
         thread.start()
         self.runs.append(run)
         return run
@@ -199,17 +202,14 @@ class RoiRunManager:
             for run in spawned:
                 info = by_pid.get(run.pid)
                 if info is None:
-                    # a completed entry is pruned from the console after a
-                    # few minutes; outputs on disk mean the run succeeded
+                    # the console prunes a completed entry after a few minutes; outputs on disk mean success
                     if run.out_root is None or not finished_dirs(
                         run.out_root, run.planes
                     ):
                         run.error = "process stopped"
-                elif info.status == "completed":
-                    pass
                 elif info.status == "error":
                     run.error = info.status_message or "process failed"
-                else:
+                elif info.status != "completed":
                     continue
                 run.finished = True
                 done.append((run, None))
@@ -229,54 +229,195 @@ class RoiRunManager:
         return bool(self.active)
 
 
-def build_pick_map(stat: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+def build_pick_map(footprints, shape: tuple[int, int]) -> np.ndarray:
     """``(Y, X)`` int32 row index per pixel, -1 background.
 
-    Rows are painted in ascending peak-lam order, so the strongest
-    component wins contested pixels - picking matches what the overlay
-    shows on top.
+    ``footprints`` are ``(ypix, xpix, lam)`` per row. Rows are painted in
+    ascending peak-lam order, so the strongest component wins contested
+    pixels - picking matches what the overlay shows on top.
     """
     pick = np.full(shape, -1, np.int32)
-    peaks = [float(np.max(s["lam"])) if len(s["lam"]) else 0.0 for s in stat]
+    peaks = [float(np.max(lam)) if len(lam) else 0.0 for _y, _x, lam in footprints]
     for k in np.argsort(peaks, kind="stable"):
-        s = stat[k]
-        pick[s["ypix"], s["xpix"]] = k
+        ypix, xpix, _lam = footprints[k]
+        pick[ypix, xpix] = k
     return pick
 
 
 @dataclass(eq=False)
 class DerivedSet:
-    """One loaded run's components, as shown: overlay color, visibility,
+    """One loaded unit's components, as shown: overlay color, visibility,
     discarded rows, accepted flags, per-row class labels and the pick map.
     Promoted rows are never stored here - the widget recomputes them from
     the store's ``source`` strings.
 
-    ``accepted`` starts from the run's ``iscell`` and is the mutable
-    curation state; the widget mirrors changes back into ``iscell.npy``.
-    ``classes`` maps a row to a class index in the shared label set;
-    ``colors`` maps a row to an explicit group color (float rgb in 0-1)
-    that wins over the class / hue color.
+    ``path`` is the set's identity: the plane dir the unit was read from,
+    or ``<file>.zarr/<unit>``. ``z`` is the plane of the array shown the
+    footprints sit on. ``accepted`` starts from the unit's ``iscell`` and
+    is the mutable curation state (kept in the rois zarr, never written
+    into the run); ``classes`` maps a row to a class index in the shared
+    label set; ``colors`` maps a row to an explicit group color (float rgb
+    in 0-1) that wins over the class / hue color.
     """
 
-    result: RunResult
+    unit: ResultUnit
+    path: Path
     name: str
     color: tuple[float, float, float]
+    z: int = 0
+    kind: str = "suite2p"
+    algo: str = ""
     visible: bool = True
     discarded: set[int] = field(default_factory=set)
     classes: dict[int, int] = field(default_factory=dict)
     colors: dict[int, tuple[float, float, float]] = field(default_factory=dict)
     accepted: np.ndarray | None = None
+    footprints: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = field(
+        default_factory=list
+    )
     pick_map: np.ndarray | None = None
 
     def __post_init__(self):
+        unit = self.unit
+        if unit.member_kind != "pixel" or unit.image_shape is None:
+            raise ValueError(
+                f"{unit.name}: only pixel units with an image shape load as ROIs"
+            )
+        self.path = Path(self.path)
+        ly, lx = self.shape
+        if not self.footprints:
+            weights = (
+                unit.weights if unit.weights is not None else [None] * len(unit.members)
+            )
+            for members, lam in zip(unit.members, weights, strict=True):
+                ypix, xpix = np.divmod(np.asarray(members, np.int64).ravel(), lx)
+                self.footprints.append(
+                    (
+                        ypix.astype(np.int32),
+                        xpix.astype(np.int32),
+                        np.ones(ypix.size, np.float32)
+                        if lam is None
+                        else np.asarray(lam, np.float32),
+                    )
+                )
         if self.pick_map is None:
-            self.pick_map = build_pick_map(self.result.stat, self.result.shape)
+            self.pick_map = build_pick_map(self.footprints, (ly, lx))
         if self.accepted is None:
-            iscell = self.result.iscell
-            if iscell is not None and len(iscell) == len(self.result.stat):
+            iscell = unit.iscell
+            if iscell is not None and len(iscell) == len(self.footprints):
                 self.accepted = np.asarray(iscell)[:, 0] > 0
             else:
-                self.accepted = np.ones(len(self.result.stat), bool)
+                self.accepted = np.ones(len(self.footprints), bool)
+
+    def __len__(self) -> int:
+        return len(self.footprints)
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (int(self.unit.image_shape[0]), int(self.unit.image_shape[1]))
+
+    @property
+    def engine(self) -> str:
+        """The engine a manual run used, else the pipeline's name."""
+        return str(self.unit.attrs.get("engine") or self.kind)
+
+    @property
+    def read_z(self) -> int | None:
+        z = self.unit.attrs.get("z") if "engine" in self.unit.attrs else None
+        return None if z is None else int(z)
+
+    @property
+    def read_c(self) -> int | None:
+        c = self.unit.attrs.get("c") if "engine" in self.unit.attrs else None
+        return None if c is None else int(c)
+
+    @property
+    def frames(self) -> tuple[int, int, int] | None:
+        frames = self.unit.attrs.get("frames")
+        return None if not frames else tuple(int(v) for v in frames)
+
+    @property
+    def tp_indices(self) -> list[int] | None:
+        found = self.unit.attrs.get("tp_indices")
+        return None if not found else [int(t) for t in found]
+
+    @property
+    def uids(self) -> list[int] | None:
+        """The store uids a manual run's rows stand for, when every row has one."""
+        uids = self.unit.attrs.get("uids")
+        if not uids or len(uids) != len(self.footprints):
+            return None
+        return [int(u) for u in uids]
+
+    @property
+    def has_prob(self) -> bool:
+        """Whether the unit carries a classifier probability (suite2p's ``iscell[:, 1]``)."""
+        iscell = self.unit.iscell
+        return iscell is not None and np.ndim(iscell) == 2 and iscell.shape[1] > 1
+
+    def prob(self, k: int) -> float:
+        return float(self.unit.iscell[k, 1]) if self.has_prob else np.nan
+
+    def trace(self, k: int, *, z: int, c: int) -> RoiTrace | None:
+        """Row ``k`` as a member row of the trace table, read at ``z`` / ``c``
+        unless the run recorded where it read; None without a raw trace.
+        """
+        return unit_trace(
+            self.unit,
+            k,
+            uid=0,
+            member=k,
+            source=self.name,
+            path=self.path,
+            z=z if self.read_z is None else self.read_z,
+            c=c if self.read_c is None else self.read_c,
+            engine=self.engine,
+        )
+
+
+def unit_trace(
+    unit: ResultUnit,
+    k: int,
+    *,
+    uid: int,
+    member,
+    source: str,
+    path,
+    z: int,
+    c: int,
+    engine: str,
+) -> RoiTrace | None:
+    """Row ``k`` of a unit's traces as one :class:`RoiTrace`: ``raw`` is
+    ``F``, ``neuropil`` ``Fneu``, ``dff`` ``norm`` and every other kind
+    rides in ``kinds``; None when the unit has no ``raw`` trace.
+    """
+    raw = unit.traces.get("raw")
+    if raw is None or not 0 <= k < len(raw):
+        return None
+    fneu = unit.traces.get("neuropil")
+    norm = unit.traces.get("dff")
+    frames = unit.attrs.get("frames")
+    tp = unit.attrs.get("tp_indices")
+    return RoiTrace(
+        uid=int(uid),
+        member=member,
+        source=source,
+        z=int(z),
+        c=int(c),
+        engine=str(engine),
+        F=np.asarray(raw[k], np.float32),
+        Fneu=None if fneu is None else np.asarray(fneu[k], np.float32),
+        norm=None if norm is None else np.asarray(norm[k], np.float32),
+        kinds={
+            kind: np.asarray(v[k], np.float32)
+            for kind, v in unit.traces.items()
+            if kind not in ("raw", "neuropil", "dff")
+        },
+        frames=None if not frames else tuple(int(v) for v in frames),
+        fs=unit.fs,
+        path=None if path is None else Path(path),
+        extra={} if not tp or frames else {"tp_indices": [int(t) for t in tp]},
+    )
 
 
 def _rim(mask: np.ndarray) -> np.ndarray:
@@ -321,9 +462,7 @@ def ring(cx: float, cy: float, r: float, segments: int = RING_SEGMENTS) -> np.nd
     return np.column_stack([cx + r * np.cos(t), cy + r * np.sin(t)])
 
 
-# The corners bounding each edge, as (dx, dy) off the top-left corner of
-# pixel (row, col) - which in world coordinates is (col, row). One row per
-# side, in the order the sides are stacked below.
+# each side's end corners as (dx, dy) off pixel (row, col)'s top-left, which is world (col, row)
 _EDGE_FROM = np.array([(0, 0), (0, 1), (0, 0), (1, 0)], np.float32)
 _EDGE_TO = np.array([(1, 0), (1, 1), (0, 1), (1, 1)], np.float32)
 
@@ -447,7 +586,7 @@ def derived_comps(
     selected: tuple[DerivedSet, int] | None = None,
     grouped: frozenset | set = frozenset(),
 ) -> tuple[list, tuple | None, list]:
-    """What one plane's derived sets draw: ``(comps, selected, halo)``.
+    """``(comps, selected, halo)``: one plane's derived sets as both renderers draw them.
 
     ``comps`` are the ``(ypix, xpix, lam, rgb, fill)`` tuples both renderers
     take, one per visible, undiscarded row - rejected rows dimmed, group
@@ -462,22 +601,20 @@ def derived_comps(
     for s in sets_on_z:
         if not s.visible:
             continue
-        for k, row in enumerate(s.result.stat):
+        for k, (ypix, xpix, lam) in enumerate(s.footprints):
             if k in s.discarded:
                 continue
             fill = alpha if s.accepted[k] else alpha * 0.35
             if (id(s), k) in grouped:
                 fill = SELECTED_ALPHA
-                halo.append((row["ypix"], row["xpix"]))
-            comps.append(
-                (row["ypix"], row["xpix"], row["lam"], component_color(s, k), fill)
-            )
+                halo.append((ypix, xpix))
+            comps.append((ypix, xpix, lam, component_color(s, k), fill))
     if selected is not None:
         s, k = selected
         if s in sets_on_z and s.visible and k not in s.discarded:
-            row = s.result.stat[k]
-            sel = (row["ypix"], row["xpix"], component_color(s, k))
-            halo.append((row["ypix"], row["xpix"]))
+            ypix, xpix, _lam = s.footprints[k]
+            sel = (ypix, xpix, component_color(s, k))
+            halo.append((ypix, xpix))
     return comps, sel, halo
 
 
@@ -518,48 +655,6 @@ def derived_outline(
     """
     comps, _sel, halo = derived_comps(sets_on_z, 1.0, selected, grouped)
     return outline_data(comps, mode, halo, scale, segments)
-
-
-def result_traces(res: RunResult, uids=None) -> list[RoiTrace]:
-    """One :class:`RoiTrace` per row of a run result that carries traces,
-    keyed by the store uid ``uids`` gives for that row (``res.uids`` when
-    None); rows without a uid are skipped. ``z`` / ``c`` are the read
-    coordinates the run recorded, else its store plane.
-    """
-    if res.F is None:
-        return []
-    uids = res.uids if uids is None else uids
-    if uids is None:
-        return []
-    out = []
-    for row, uid in enumerate(uids):
-        uid = int(uid)
-        if uid <= 0 or row >= len(res.F):
-            continue
-        out.append(
-            RoiTrace(
-                uid=uid,
-                z=res.z if res.read_z is None else int(res.read_z),
-                c=0 if res.read_c is None else int(res.read_c),
-                engine=res.engine
-                or ("masknmf" if res.kind in ("demix", "masknmf") else "mean"),
-                source=res.path.name,
-                F=np.asarray(res.F[row], np.float32),
-                Fneu=None
-                if res.Fneu is None
-                else np.asarray(res.Fneu[row], np.float32),
-                norm=None
-                if res.norm is None
-                else np.asarray(res.norm[row], np.float32),
-                kinds={k: np.asarray(v[row], np.float32) for k, v in res.kinds.items()},
-                frames=res.frames,
-                path=res.path,
-                extra={}
-                if res.tp_indices is None or res.frames is not None
-                else {"tp_indices": list(res.tp_indices)},
-            )
-        )
-    return out
 
 
 def component_color(s: DerivedSet, k: int) -> tuple[float, float, float]:
@@ -609,14 +704,6 @@ def feathered_rgba(shape: tuple[int, int], comps, selected=None) -> np.ndarray:
     return rgba
 
 
-def _kind_of(ops: dict) -> str:
-    wf = ops.get("roi_workflow") or {}
-    return str(
-        wf.get("process")
-        or ("masknmf" if ops.get("pipeline") == "masknmf" else "suite2p")
-    )
-
-
 def run_dir_complete(d) -> bool:
     """True when ``d`` holds a loadable run: ``stat.npy`` + ``ops.npy``, a
     results file (``mbo_utilities.results``), a masknmf run folder holding
@@ -642,261 +729,28 @@ def run_dir_complete(d) -> bool:
 def finished_dirs(out_root, planes=None) -> list[Path]:
     """Completed output dirs under ``out_root`` for 1-based ``planes`` (any
     plane when None): the root itself when it holds outputs, else its
-    children naming the plane - suite2p's ``zplaneNN*`` (pipelines may
-    suffix a frame range) and masknmf's ``<stamp>_masknmf_zplaneNN*`` run
-    folders.
+    direct children whose name carries that plane's ``zplaneNN`` tag
+    (suite2p's ``zplane01_tp00001-00400``, masknmf's
+    ``<stamp>_masknmf_zplane01``), read through ``filename_tags`` so a
+    plane never matches another's by prefix.
     """
     root = Path(out_root)
     if run_dir_complete(root):
         return [root]
-    pats = [f"*zplane{int(p):02d}*" for p in planes] if planes else ["*zplane*"]
+    wanted = None if planes is None else {int(p) for p in planes}
     out: list[Path] = []
-    for pat in pats:
-        out += [d for d in sorted(root.glob(pat)) if d.is_dir() and run_dir_complete(d)]
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        if not d.is_dir():
+            continue
+        z = [t.start for t in filename_tags(d.name) if t.definition.label == "zplane"]
+        if not z or (wanted is not None and int(z[0]) not in wanted):
+            continue
+        if run_dir_complete(d):
+            out.append(d)
     return out
-
-
-def scan_run_dirs(fpath, root=None) -> list[dict]:
-    """Loadable run dirs beside ``fpath`` and in its ROI folder under
-    ``root`` (``roi_folder``), newest first.
-
-    Covers ``rois_<tag>/`` dirs (and their per-plane ``zNN/`` children) and
-    sibling ``zplane*`` trees and masknmf ``*_zplane*`` run folders from full-plane pipelines (including their own
-    ``rois_*`` subsets), vanilla suite2p ``plane*`` / ``suite2p/plane*`` dirs,
-    and the opened dir itself when it holds results. Rows are ``{"path", "kind", "n_rois", "mtime"}``; a
-    dir without ``stat.npy`` + ``ops.npy`` (still being written, say) is
-    not listed.
-    """
-    bases = [roi_folder(fpath)]
-    if root is not None:
-        bases.append(roi_folder(fpath, root))
-    bases = [b for b in bases if b.is_dir()]
-    dirs: list[Path] = []
-
-    def add(d: Path):
-        if (d / "stat.npy").exists() and (d / "ops.npy").exists():
-            dirs.append(d)
-
-    if bases:
-        add(bases[0])  # the opened data may itself sit in a result dir
-    for d in sorted(d for b in bases for d in b.glob(f"{OUT_PREFIX}*")):
-        if not d.is_dir():
-            continue
-        add(d)
-        for child in sorted(d.glob("z[0-9]*")):
-            if child.is_dir():
-                add(child)
-    for d in sorted(d for b in bases for d in b.glob("*zplane*")):
-        if not d.is_dir():
-            continue
-        add(d)
-        for sub in sorted(d.glob(f"{OUT_PREFIX}*")):
-            if sub.is_dir():
-                add(sub)
-    for pattern in ("plane[0-9]*", "suite2p/plane[0-9]*"):
-        for d in sorted(d for b in bases for d in b.glob(pattern)):
-            if d.is_dir():
-                add(d)
-
-    rows = []
-    for d in dirs:
-        try:
-            ops = np.load(d / "ops.npy", allow_pickle=True).item()
-        except Exception:
-            continue
-        n = ops.get("n_rois")
-        if n is None:
-            try:
-                n = len(np.load(d / "stat.npy", allow_pickle=True))
-            except Exception:
-                n = 0
-        rows.append(
-            {
-                "path": d,
-                "kind": _kind_of(ops),
-                "n_rois": int(n),
-                "mtime": (d / "ops.npy").stat().st_mtime,
-            }
-        )
-    # results files (mbo_utilities.results) beside the data, in a run dir, or in a PF folder
-    from mbo_utilities.results import results_summary
-
-    for pattern in ("*.zarr", f"{OUT_PREFIX}*/*.zarr", "*zplane*/*.zarr", "PF/*.zarr"):
-        for z in sorted(z for b in bases for z in b.glob(pattern)):
-            summary = results_summary(z)
-            if summary is None:
-                continue
-            rows.append(
-                {
-                    "path": z,
-                    "kind": summary["pipeline"],
-                    "n_rois": int(summary["n_rois"]),
-                    "mtime": (z / "zarr.json").stat().st_mtime,
-                }
-            )
-    rows.sort(key=lambda r: r["mtime"], reverse=True)
-    return rows
-
-
-def full_plane_args(
-    kind: str,
-    fpath,
-    plane_1based: int,
-    iw,
-    host=None,
-    channel: int | None = None,
-    tp_indices=None,
-    root=None,
-) -> dict:
-    """``task_suite2p`` / ``task_masknmf`` worker args for one plane.
-
-    Parameters
-    ----------
-    kind : {"suite2p", "masknmf"}
-        Which pipeline to run.
-    fpath : path-like
-        The data to run on; outputs go to its ``roi_folder`` under ``root``
-        (beside it when None).
-    plane_1based : int
-        The z-plane to run, 1-based.
-    iw : MboNDViewer
-        The viewer, for its reader settings.
-    host : PreviewDataWidget, optional
-        The widget holding the Run tab's live settings. Given one, the run
-        uses exactly the parameters configured there - including the
-        Registration / Detection skip / run / force toggles - instead of the
-        pipeline's defaults.
-    channel : int, optional
-        1-based channel to read; None reads the source as is.
-    tp_indices : list of int, optional
-        0-based frames to read; None reads every frame.
-
-    Returns
-    -------
-    dict
-        Worker args for the task named by ``kind``.
-    """
-    if fpath is None:
-        raise ValueError("no data path to run a full plane on")
-    if kind not in ("suite2p", "masknmf"):
-        raise ValueError(f"unknown pipeline {kind!r}")
-    from mbo_utilities.reader import widget_reader_kwargs
-
-    args = {
-        "input_path": str(fpath),
-        "output_dir": str(roi_folder(fpath, root)),
-        "planes": [int(plane_1based)],
-        "reader_kwargs": widget_reader_kwargs(iw),
-    }
-    if channel is not None:
-        args["channel"] = int(channel)
-    if tp_indices is not None:
-        args["tp_indices"] = [int(t) for t in tp_indices]
-        args["selected_planes_0based"] = [int(plane_1based) - 1]
-    if kind == "masknmf":
-        args["settings"] = masknmf_settings(host) or _default_masknmf_settings()
-        return args
-    s2p = getattr(host, "s2p", None)
-    # This button exists to find ROIs on this plane, so say so outright.
-    # lsp merges the source plane dir's ops.npy under the caller's ops, and
-    # a dir written by a registration pass carries roidetect=0 - which wins
-    # over anything the caller leaves unspelled and silently turns the run
-    # into "regenerate figures only".
-    detect = 1 if s2p is None else int(bool(getattr(s2p, "do_detection", 1)))
-    args["ops"] = {"roidetect": detect}
-    # roidetect alone is not enough: lsp skips detection when the plane dir already
-    # holds a stat.npy, which staging copies in. force_reg stays the tri-state.
-    args["s2p_settings"] = {
-        "force_reg": s2p is not None and int(getattr(s2p, "do_registration", 1)) == 2,
-        "force_detect": bool(detect),
-    }
-    if s2p is None:
-        return args
-    args["settings"] = s2p.to_dict()
-    db = getattr(host, "s2p_db", None)
-    if db is not None:
-        args["db"] = db.to_dict()
-    return args
-
-
-def _default_masknmf_settings() -> dict:
-    from mbo_utilities.masknmf.params import MasknmfSettings
-
-    return MasknmfSettings().to_dict()
 
 
 def masknmf_settings(host) -> dict | None:
-    """The masknmf settings the Run tab is holding, or None when it has not
-    built that pipeline yet.
-    """
-    instances = getattr(host, "_pipeline_instances", None) or {}
-    settings = getattr(instances.get("MaskNMF"), "settings", None)
-    if settings is None:
-        return None
-    try:
-        return settings.to_dict()
-    except Exception:
-        return None
-
-
-def registry_path(fpath, tag: str = "", root=None) -> Path:
-    """``roi_runs.json`` beside ``manual_labels.zarr``; ``roi_runs_<tag>.json``
-    for one recording of a file holding several (``labels_path``).
-    """
-    name = f"{REGISTRY_NAME[:-5]}_{tag}.json" if tag else REGISTRY_NAME
-    return roi_folder(fpath, root) / name
-
-
-def load_run_registry(path) -> list[dict]:
-    """The run list's entries; unreadable or absent files are ``[]``.
-
-    Entries are kept whether or not their dir still exists - a spawned run
-    may still be writing when the GUI comes back.
-    """
-    path = Path(path)
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return []
-    out = []
-    for row in data.get("runs", []) if isinstance(data, dict) else []:
-        if isinstance(row, dict) and row.get("path"):
-            out.append(
-                {
-                    "path": str(row["path"]),
-                    "kind": str(row.get("kind", "")),
-                    "discarded": [int(i) for i in row.get("discarded", [])],
-                    "classes": {
-                        int(k): int(v) for k, v in (row.get("classes") or {}).items()
-                    },
-                    "colors": {
-                        int(k): tuple(float(x) for x in v)
-                        for k, v in (row.get("colors") or {}).items()
-                    },
-                }
-            )
-    return out
-
-
-def save_run_registry(path, entries: list[dict]) -> None:
-    """Write the run list: ``{"runs": [{"path", "kind", "discarded", "classes",
-    "colors"}]}``.
-    """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    runs = [
-        {
-            "path": str(e["path"]),
-            "kind": str(e.get("kind", "")),
-            "discarded": sorted(int(i) for i in e.get("discarded", [])),
-            "classes": {str(k): int(v) for k, v in (e.get("classes") or {}).items()},
-            "colors": {
-                str(k): [float(x) for x in v]
-                for k, v in (e.get("colors") or {}).items()
-            },
-        }
-        for e in entries
-    ]
-    path.write_text(json.dumps({"runs": runs}, indent=1))
+    """The masknmf settings the Run tab is holding, or None when it has not built that pipeline yet."""
+    widget = None if host is None else host._pipeline_instances.get("MaskNMF")
+    return None if widget is None else widget.settings.to_dict()

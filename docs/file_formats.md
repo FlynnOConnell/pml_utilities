@@ -197,6 +197,10 @@ print(arr.shape)  # (1, 1, 1, Y, X)
 arr = mbo.imread("/path/to/tyx_stack.tif")
 print(arr.shape)  # (T, 1, 1, Y, X)
 
+# a plain or ImageJ stack is time unless dims says what the pages are
+arr = mbo.imread("/path/to/zstack.tif", dims="ZYX")
+print(arr.shape)  # (1, 1, Z, Y, X); dims="CYX" puts the pages on C
+
 # ImageJ hyperstack (auto-detected)
 arr = mbo.imread("/path/to/imagej_hyperstack.tif")
 print(arr.shape)          # (T, 1, Z, Y, X)
@@ -466,7 +470,6 @@ sliders, labelled with the axis names the array reports.
 | `mesc_sync_frame_raw` | the same sync event as a raw scanner-frame index (`TStepInMs` units) |
 | `mesc_light_paths` / `mesc_dichroic` | interleaved light paths per scanner frame, and whether switching is on |
 | `mesc_raw_frame_rate` | scanner frame rate, `1000 / TStepInMs`, before the light-path split |
-| `mesc_flip_y` | whether Y was flipped on read |
 | `mesc_rtmc` | labels of the real-time motion-correction curves the unit carries (`X total`, `X intercycle`, `Z total layer 3`); `arr.rtmc` holds them in µm, `arr.motion_correction` the applied totals as the `MotionCorrection` every reader shares (the viewer's Traces tab draws it under the trace behind `MC`) |
 | `mesc_background_unit` / `mesc_rtmc_unit` | keys of the snapshot the ROIs were drawn on (`BackgroundImagePath`) and of the real-time motion-correction stream MEScan watched (`MotionCorrectionImagePath`); `None` when the scan links none. `mbo.imread(path, unit=md["mesc_rtmc_unit"])` opens the stream |
 

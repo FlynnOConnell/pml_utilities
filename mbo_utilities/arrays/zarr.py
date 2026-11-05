@@ -20,7 +20,7 @@ from mbo_utilities.arrays._base import (
     _normalize_key,
 )
 from mbo_utilities.arrays.suite2p import _add_suite2p_labels
-from mbo_utilities.file_io import HAS_ZARR, logger
+from mbo_utilities.file_io import HAS_ZARR
 from mbo_utilities.lazy_array import register_array_class
 from mbo_utilities.metadata import _build_ome_metadata, get_param, get_voxel_size
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
@@ -30,7 +30,6 @@ if TYPE_CHECKING:
 
 logger = log.get("arrays.zarr")
 
-# register zarr pipeline info
 _ZARR_INFO = PipelineInfo(
     name="zarr",
     description="Zarr v3 stores (including OME-Zarr)",
@@ -67,6 +66,24 @@ def _ome_time_scale_attr(md: dict) -> float | None:
         return float(entry["datasets"][0]["coordinateTransformations"][0]["scale"][idx])
     except (TypeError, KeyError, IndexError, ValueError, StopIteration):
         return None
+
+
+def _read_index(idx):
+    if isinstance(idx, range):
+        if len(idx) == 0:
+            return slice(0, 0)
+        return slice(idx.start, idx.stop, idx.step)
+    if isinstance(idx, list) and len(idx) > 0:
+        if all(idx[i] + 1 == idx[i + 1] for i in range(len(idx) - 1)):
+            return slice(idx[0], idx[-1] + 1)
+        return np.array(idx)
+    return idx
+
+
+def _keep_slice(k):
+    if isinstance(k, (int, np.integer)):
+        return slice(int(k), int(k) + 1)
+    return _read_index(k)
 
 
 class ZarrArray(ReductionMixin, Shape5DMixin):
@@ -119,10 +136,11 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         p = Path(file)
         if p.suffix != ".zarr" and not (p.is_dir() and (p / "zarr.json").exists()):
             return False
-        # a pipeline's results file is a zarr group without an image
         from mbo_utilities.results import results_pipeline
 
-        return results_pipeline(p) is None
+        return (
+            results_pipeline(p) is None
+        )  # a results file is a zarr group without an image
 
     def __init__(
         self,
@@ -131,13 +149,7 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         rois: list[int] | int | None = None,
         dims: str | tuple | None = None,
     ):
-        try:
-            import zarr
-        except ImportError:
-            logger.exception(
-                "zarr is not installed. Install with `uv pip install zarr>=3.1.3`."
-            )
-            raise
+        import zarr
 
         if isinstance(filenames, (str, Path)):
             filenames = [filenames]
@@ -148,21 +160,15 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
             if not p.exists():
                 raise FileNotFoundError(f"No zarr store at {p}")
 
-        # Open zarr stores - handle both standard arrays and OME-Zarr groups
         opened = [zarr.open(p, mode="r") for p in self.filenames]
 
-        # If we opened a Group (OME-Zarr structure), get the "0" array
         self.zs = []
         self._groups = []
         for i, z in enumerate(opened):
             if isinstance(z, zarr.Group):
                 if "0" not in z:
-                    # get store path for error message (zarr v3 uses .root)
-                    store_path = getattr(
-                        z.store, "root", getattr(z.store, "path", self.filenames[i])
-                    )
                     raise ValueError(
-                        f"OME-Zarr group missing '0' array in {store_path}"
+                        f"OME-Zarr group missing '0' array in {self.filenames[i]}"
                     )
                 self.zs.append(z["0"])
                 self._groups.append(z)
@@ -183,7 +189,6 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
                 f'Open one explicitly, e.g. imread(r"{self.filenames[0]}").'
             )
 
-        # For OME-Zarr, metadata is on the group; for standard zarr, on the array
         self._metadata = []
         for i, z in enumerate(self.zs):
             if self._groups[i] is not None:
@@ -201,13 +206,12 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         else:
             md = self._metadata[0].copy() if self._metadata[0] else {}
 
-        # ensure critical keys are present
         md["dtype"] = self.dtype
         if "num_timepoints" not in md and self.zs:
             tp = int(self.zs[0].shape[0])
             md["num_timepoints"] = tp
-            md["nframes"] = tp  # suite2p alias
-            md["num_frames"] = tp  # legacy alias
+            md["nframes"] = tp
+            md["num_frames"] = tp
 
         time_scale = _ome_time_scale_attr(md)
         if time_scale is not None:
@@ -248,7 +252,6 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         if not self._metadata:
             self._metadata = [{}]
         self._metadata[0]["zstats"] = value
-        # also store under 'stats' for forward compat
         self._metadata[0]["stats"] = value
 
     @property
@@ -266,7 +269,6 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         if "stats" in md:
             return md["stats"]
         if "zstats" in md:
-            # convert legacy format
             zs = md["zstats"]
             return {**zs, "slice_label": "z"}
         return None
@@ -282,7 +284,6 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         if not self._metadata:
             self._metadata = [{}]
         self._metadata[0]["stats"] = value
-        # also store under legacy key for backward compat
         self._metadata[0]["zstats"] = value
 
     @metadata.setter
@@ -334,23 +335,17 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         self._target_dtype = np.dtype(dtype)
         return self
 
-    # _compute_frame_vminmax / vmin / vmax inherited from ReductionMixin
-
     @property
     def size(self):
         return np.prod(self.shape)
 
     def __array__(self, dtype=None, copy=None):
-        # return single frame for fast histogram/preview (prevents accidental full load)
         data = self[0]
         if dtype is not None:
             data = data.astype(dtype)
         return data
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
-        # 5D source zarr: TCZYX is the natural layout, return as-is. This
-        # supports the multi-channel OME-Zarrs produced by isoview_to_ome_zarr
-        # and any other (T, C, Z, Y, X) NGFF stores.
         first_shape = self.zs[0].shape
         if len(first_shape) == 5:
             return first_shape
@@ -365,34 +360,12 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         key = key + (slice(None),) * (5 - len(key))
         t_key, c_key, z_key, y_key, x_key = key
 
-        def normalize(idx):
-            if isinstance(idx, range):
-                if len(idx) == 0:
-                    return slice(0, 0)
-                return slice(idx.start, idx.stop, idx.step)
-            if isinstance(idx, list) and len(idx) > 0:
-                if all(idx[i] + 1 == idx[i + 1] for i in range(len(idx) - 1)):
-                    return slice(idx[0], idx[-1] + 1)
-                return np.array(idx)
-            return idx
-
-        # convert int keys to slice-of-one for the underlying zarr read so the
-        # result preserves rank. integer-indexed axes get squeezed in a single
-        # pass at the end. this avoids the subtle axis-tracking bug where an
-        # int t_key removes T during the read, then the C-insert + 5D-indexed
-        # squeeze loop end up squeezing the wrong axis (e.g. Z=7) and crash
-        # with `cannot select an axis to squeeze out which has size != 1`.
-        def to_keep_slice(k):
-            if isinstance(k, (int, np.integer)):
-                k_int = int(k)
-                return slice(k_int, k_int + 1)
-            return normalize(k)
-
-        t_read = to_keep_slice(t_key)
-        c_read = to_keep_slice(c_key)
-        z_read = to_keep_slice(z_key)
-        y_read = normalize(y_key)
-        x_read = normalize(x_key)
+        # NOTE: integer T/C/Z keys are read as slices of one and squeezed at the end, so the C insert below never lands on the wrong axis
+        t_read = _keep_slice(t_key)
+        c_read = _keep_slice(c_key)
+        z_read = _keep_slice(z_key)
+        y_read = _read_index(y_key)
+        x_read = _read_index(x_key)
 
         first_ndim = len(self.zs[0].shape)
         is_single_5d = len(self.zs) == 1 and first_ndim == 5
@@ -400,32 +373,24 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         is_single_2d = len(self.zs) == 1 and first_ndim == 2
 
         if is_single_5d:
-            # native 5D TCZYX read — no synthesis required
             out = self.zs[0][t_read, c_read, z_read, y_read, x_read]
         elif is_single_4d:
-            # internal zarr stores are TZYX — read without C, insert C below
             out = self.zs[0][t_read, z_read, y_read, x_read]
         elif is_single_2d:
-            # bare YX zarr: treat as single timepoint, single z-plane
             if isinstance(t_key, (int, np.integer)) and int(t_key) != 0:
                 raise IndexError("T dimension has size 1, only index 0 is valid")
             if isinstance(z_key, (int, np.integer)) and int(z_key) != 0:
                 raise IndexError("Z dimension has size 1, only index 0 is valid")
             data = self.zs[0][y_read, x_read]
-            # data is (Y, X); reshape to (T=1, Z=1, Y, X)
             out = data[np.newaxis, np.newaxis, ...]
         elif len(self.zs) == 1:
-            # 3D zarr with implicit Z=1
             if isinstance(z_key, (int, np.integer)) and int(z_key) != 0:
                 raise IndexError("Z dimension has size 1, only index 0 is valid")
             data = self.zs[0][t_read, y_read, x_read]
-            # data is (T, Y, X); insert Z at position 1 to match TZYX layout
             out = np.expand_dims(data, axis=1)
         elif isinstance(z_key, (int, np.integer)):
-            # one zarr file per plane: pick the right plane store
             z_int = int(z_key)
             data = self.zs[z_int][t_read, y_read, x_read]
-            # data is (T, Y, X); reinsert Z at position 1 as singleton
             out = np.expand_dims(data, axis=1)
         else:
             if isinstance(z_key, slice):
@@ -437,15 +402,11 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
             arrs = [self.zs[i][t_read, y_read, x_read] for i in z_indices]
             out = np.stack(arrs, axis=1)
 
-        # 4D-source paths produce a TZYX block; add the C axis so every path
-        # exits with a 5D TCZYX result matching the `shape` / `ndim` contract.
         if not is_single_5d:
-            out = np.expand_dims(out, axis=1)
+            out = np.expand_dims(
+                out, axis=1
+            )  # 4D sources give TZYX; the stores never carry C
 
-        # squeeze every axis the user passed as an integer, in 5D order
-        # (T=0, C=1, Z=2). every such axis is guaranteed size-1 here because
-        # we read with slice-of-one above (T, C, Z) or — for non-5D sources —
-        # because C is always 1.
         squeeze_axes = []
         if isinstance(t_key, (int, np.integer)):
             squeeze_axes.append(0)
@@ -624,12 +585,10 @@ def merge_zarr_zplanes(
     if not zarr_paths:
         raise ValueError("zarr_paths cannot be empty")
 
-    # Validate all input Zarrs exist
     for zp in zarr_paths:
         if not zp.exists():
             raise FileNotFoundError(f"Zarr store not found: {zp}")
 
-    # Validate suite2p_dirs if provided
     if suite2p_dirs is not None:
         suite2p_dirs = [Path(p) for p in suite2p_dirs]
         if len(suite2p_dirs) != len(zarr_paths):
@@ -641,18 +600,15 @@ def merge_zarr_zplanes(
             if not s2p_dir.exists():
                 raise FileNotFoundError(f"Suite2p directory not found: {s2p_dir}")
 
-    # Read first Zarr to get dimensions
     logger.info(f"Reading first Zarr to determine dimensions: {zarr_paths[0]}")
     z0 = zarr.open(str(zarr_paths[0]), mode="r")
     logger.debug(f"Zarr type: {type(z0)}")
 
-    if hasattr(z0, "shape"):
-        # Direct array
+    if isinstance(z0, zarr.Array):
         T, Y, X = z0.shape
         dtype = z0.dtype
         logger.debug(f"Detected direct array with shape {(T, Y, X)}, dtype {dtype}")
     else:
-        # Group - look for "0" array (OME-Zarr)
         logger.debug(f"Detected group with keys: {list(z0.keys())}")
         if "0" in z0:
             arr = z0["0"]
@@ -675,10 +631,6 @@ def merge_zarr_zplanes(
         shutil.rmtree(output_path)
 
     root = zarr.open_group(str(output_path), mode="w", zarr_format=3)
-    # Chunk by (frame, z-plane); pack all T at one z into a single shard
-    # so a fixed-(c, z) T-scrub touches one file per z. File count = Z
-    # instead of T*Z. Benchmark (D:/demo/zarr_chunking_benchmark): same
-    # ~5.5 ms/frame as unsharded, ~50x fewer files at typical sizes.
     from zarr.codecs import Crc32cCodec, ShardingCodec
 
     inner_codecs = [BytesCodec(), GzipCodec(level=compression_level)]
@@ -693,7 +645,12 @@ def merge_zarr_zplanes(
         store=root.store,
         path="0",
         shape=(T, Z, Y, X),
-        chunks=(T, 1, Y, X),  # outer = shard shape: all T at one z
+        chunks=(
+            T,
+            1,
+            Y,
+            X,
+        ),  # NOTE: one shard per z holding all T: same ~5.5 ms/frame as unsharded, ~50x fewer files
         dtype=dtype,
         codecs=image_codecs,
         overwrite=True,
@@ -704,8 +661,7 @@ def merge_zarr_zplanes(
         logger.debug(f"Reading z-plane {zi + 1}/{Z} from {zpath}")
         z_arr = zarr.open(str(zpath), mode="r")
 
-        # Handle both direct arrays and OME-Zarr groups
-        if hasattr(z_arr, "shape"):
+        if isinstance(z_arr, zarr.Array):
             plane_data = z_arr[:]
             logger.debug(f"  Read direct array with shape {plane_data.shape}")
         elif "0" in z_arr:
@@ -714,7 +670,7 @@ def merge_zarr_zplanes(
         else:
             raise ValueError(
                 f"Cannot read data from {zpath}. "
-                f"Got group with keys: {list(z_arr.keys()) if hasattr(z_arr, 'keys') else 'N/A'}"
+                f"Got group with keys: {list(z_arr.keys())}"
             )
 
         if plane_data.shape != (T, Y, X):
@@ -727,7 +683,6 @@ def merge_zarr_zplanes(
         image[:, zi, :, :] = plane_data
         logger.info(f"Copied z-plane {zi + 1}/{Z} from {zpath.name}")
 
-    # Add Suite2p labels if provided
     if suite2p_dirs is not None:
         logger.info("Adding Suite2p segmentation masks as labels...")
         _add_suite2p_labels(root, suite2p_dirs, T, Z, Y, X, dtype, compression_level)
@@ -742,14 +697,16 @@ def merge_zarr_zplanes(
     for key, value in ome_attrs.items():
         root.attrs[key] = value
 
-    # add napari-specific scale metadata using centralized voxel size extraction
     vs = get_voxel_size(metadata)
     frame_rate = get_param(metadata, "fs", default=1.0)
     time_scale = 1.0 / float(frame_rate) if frame_rate else 1.0
 
-    # napari reads scale from array attributes for volumetric viewing
-    # Scale order: (T, Z, Y, X) in physical units
-    image.attrs["scale"] = [time_scale, vs.dz, vs.dy, vs.dx]
+    image.attrs["scale"] = [
+        time_scale,
+        vs.dz,
+        vs.dy,
+        vs.dx,
+    ]  # napari reads (t, z, y, x) from the array attrs
 
     logger.info(f"Successfully created merged OME-Zarr at {output_path}")
     logger.info(f"Napari scale (t,z,y,x): {image.attrs['scale']}")

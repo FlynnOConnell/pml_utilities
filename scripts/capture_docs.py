@@ -1,4 +1,4 @@
-"""Capture documentation screenshots of the real Miller Brain Studio GUI.
+"""Capture documentation screenshots of The Studio GUI.
 
 Every panel is captured from the actual running GUI, never a reconstruction.
 
@@ -15,6 +15,7 @@ Usage:
 DATA_PATH defaults to E:/demo/mk355/raw. Data-driven captures are skipped if it
 is missing; the file dialog still captures.
 """
+
 import sys
 import time
 from pathlib import Path
@@ -37,15 +38,24 @@ def style_image(img: Image.Image, output_path: Path):
         img = img.convert("RGBA")
 
     shadow_margin = SHADOW_BLUR * 2
-    final_img = Image.new("RGBA", (img.width + PADDING * 2, img.height + PADDING * 2), (0, 0, 0, 0))
-    shadow = Image.new("RGBA", (img.width + shadow_margin, img.height + shadow_margin), (0, 0, 0, 0))
-    shadow_draw = Image.new("RGBA", (img.width, img.height), (0, 0, 0, int(255 * SHADOW_OPACITY)))
+    final_img = Image.new(
+        "RGBA", (img.width + PADDING * 2, img.height + PADDING * 2), (0, 0, 0, 0)
+    )
+    shadow = Image.new(
+        "RGBA", (img.width + shadow_margin, img.height + shadow_margin), (0, 0, 0, 0)
+    )
+    shadow_draw = Image.new(
+        "RGBA", (img.width, img.height), (0, 0, 0, int(255 * SHADOW_OPACITY))
+    )
     shadow.paste(shadow_draw, (shadow_margin // 2, shadow_margin // 2))
     shadow = shadow.filter(ImageFilter.GaussianBlur(SHADOW_BLUR))
 
     final_img.paste(
         shadow,
-        (PADDING + SHADOW_OFFSET[0] - shadow_margin // 2, PADDING + SHADOW_OFFSET[1] - shadow_margin // 2),
+        (
+            PADDING + SHADOW_OFFSET[0] - shadow_margin // 2,
+            PADDING + SHADOW_OFFSET[1] - shadow_margin // 2,
+        ),
         shadow,
     )
     final_img.paste(img, (PADDING, PADDING))
@@ -68,10 +78,11 @@ def _resolve_data_path(argv) -> Path | None:
 # An offscreen canvas composites scene + imgui overlay + popups into a frame we
 # read back directly, so these need no display and are byte-for-byte the GUI.
 
+
 def _build_viewer(data_in: Path, size: tuple[int, int]):
-    from mbo_utilities.reader import imread
     from mbo_utilities.arrays import normalize_roi
     from mbo_utilities.gui.run_gui import _create_image_widget
+    from mbo_utilities.reader import imread
 
     arr = imread(data_in, roi=normalize_roi(None))
     iw = _create_image_widget(
@@ -117,11 +128,16 @@ def capture_metadata_editor(data_in: Path):
     _shut(iw)
 
 
-def _capture_save_options(data_in: Path, name: str, ext_idx: int | None = None,
-                          size: tuple[int, int] = (1000, 760)):
+def _capture_save_options(
+    data_in: Path,
+    name: str,
+    ext_idx: int | None = None,
+    size: tuple[int, int] = (1000, 760),
+):
     """Open Save As -> Options and snapshot it. ext_idx selects the output
     format (0 .tiff, 1 .zarr, 2 .bin, 3 .h5, 4 .mp4), which changes the
-    format-specific options shown."""
+    format-specific options shown.
+    """
     iw, gui = _build_viewer(data_in, size)
     _draw(iw, 5)
     if ext_idx is not None:
@@ -138,11 +154,15 @@ def capture_save_options(data_in: Path):
 
 
 def capture_save_options_zarr(data_in: Path):
-    _capture_save_options(data_in, "08_save_options_zarr.png", ext_idx=1, size=(1000, 820))
+    _capture_save_options(
+        data_in, "08_save_options_zarr.png", ext_idx=1, size=(1000, 820)
+    )
 
 
 def capture_save_options_mp4(data_in: Path):
-    _capture_save_options(data_in, "09_save_options_mp4.png", ext_idx=4, size=(1000, 880))
+    _capture_save_options(
+        data_in, "09_save_options_mp4.png", ext_idx=4, size=(1000, 880)
+    )
 
 
 def capture_suite2p_settings(data_in: Path):
@@ -167,7 +187,9 @@ def capture_keybinds(data_in: Path):
 
 
 def capture_process_console(data_in: Path):
-    _capture_popup(data_in, "_show_process_console", "11_process_console.png", (1000, 650))
+    _capture_popup(
+        data_in, "_show_process_console", "11_process_console.png", (1000, 650)
+    )
 
 
 def capture_options(data_in: Path):
@@ -176,7 +198,8 @@ def capture_options(data_in: Path):
 
 def _set_s2p_demo_params(gui):
     """Set a few Suite2p params to non-default values so the 'modified from
-    default' orange tint is visible in the captured settings panel."""
+    default' orange tint is visible in the captured settings panel.
+    """
     s = getattr(gui, "s2p", None)
     if s is not None:
         s.tau = 0.7
@@ -228,9 +251,10 @@ def capture_save_as_dialog(data_in: Path):
 # These run a real hello_imgui app and screenshot its framebuffer; they need a
 # desktop session.
 
+
 def capture_file_dialog():
-    from mbo_utilities.gui.run_gui import run_gui
     from imgui_bundle import hello_imgui
+    from mbo_utilities.gui.run_gui import run_gui
 
     start = time.time()
 
@@ -241,7 +265,7 @@ def capture_file_dialog():
             hello_imgui.get_runner_params().app_shall_exit = True
 
     params = hello_imgui.RunnerParams()
-    params.app_window_params.window_title = "Miller Brain Studio - Data Selection"
+    params.app_window_params.window_title = "The Studio - Data Selection"
     params.app_window_params.window_geometry.size = (340, 620)
     params.app_window_params.window_geometry.size_auto = False
     params.app_window_params.resizable = False
@@ -258,10 +282,10 @@ def capture_file_dialog():
 
 
 def capture_metadata_viewer(data_in: Path):
-    from mbo_utilities.reader import imread
+    from imgui_bundle import hello_imgui, immapp
     from mbo_utilities.gui._metadata import draw_metadata_inspector
     from mbo_utilities.gui._setup import get_default_ini_path
-    from imgui_bundle import hello_imgui, immapp
+    from mbo_utilities.reader import imread
 
     arr = imread(data_in)
     metadata = arr.metadata
@@ -278,7 +302,7 @@ def capture_metadata_viewer(data_in: Path):
             hello_imgui.get_runner_params().app_shall_exit = True
 
     params = hello_imgui.RunnerParams()
-    params.app_window_params.window_title = "Miller Brain Studio - Metadata"
+    params.app_window_params.window_title = "The Studio - Metadata"
     params.app_window_params.window_geometry.size = (500, 700)
     params.app_window_params.window_geometry.size_auto = False
     params.app_window_params.resizable = False

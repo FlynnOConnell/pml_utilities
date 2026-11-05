@@ -101,11 +101,9 @@ _IMPORTANT_FIELDS = {
     "thres_amp_sd",
 }
 DOMAINS_FILE = "domains.json"
-# ROIs drawn as one toggle each up to this many; more take a typed list
-MAX_ROI_TOGGLES = 48
+MAX_ROI_TOGGLES = 48  # one toggle per ROI up to this many; more take a typed list
 PREVIEW_SECONDS = (5.0, 15.0, 30.0, 60.0, 0.0)
-# what the Scans table calls a MESc modality
-KIND_LABELS = {
+KIND_LABELS = {  # the Scans table's word for a MESc modality
     "linescan": "lines",
     "multiline": "lines",
     "chessboard": "chessboard",
@@ -260,10 +258,11 @@ def one_per_roi(n_rois: int, names=None) -> list[DomainRow]:
 
 
 class TracePreview:
-    """One domain's trace on one scan, computed on a worker thread so the tab
-    never waits for a read: ``result`` is :func:`preview_domain`'s dict for
-    the last request finished, ``error`` why it failed. A request while one
-    runs replaces any queued one, so dragging a slider costs one run at most.
+    """One domain's trace on one scan, computed on a worker thread so the tab never waits for a read.
+
+    ``result`` is :func:`preview_domain`'s dict for the last request finished
+    and ``error`` its failure message. A request while one runs replaces any
+    queued one, so dragging a slider costs one run at most.
     """
 
     def __init__(self):
@@ -315,23 +314,24 @@ class VnoiserPipelineWidget(PipelineWidget):
     name = "vnoiser"
     is_available = HAS_VNOISER
     install_command = VNOISER_HINT
-    # frames are a window; the domains say which ROIs (the unit's Z) are read
-    # and the Trace block which channel, so neither is a slice row
-    axes_consumed = {"T": "range", "Z": "none", "C": "none"}
+    axes_consumed = {
+        "T": "range",
+        "Z": "none",
+        "C": "none",
+    }  # the domains pick the ROIs (Z), the Trace block the channel
     seeds_from_view = True
 
     @classmethod
     def applies_to(cls, arr: Any) -> bool:
-        """True for any unit of a .mesc that holds a recording traces come
-        from (the unit on screen need not be one) and for a vnoiser run
-        whose source recording is reachable.
-        """
+        """True for any unit of a .mesc holding a recording traces come from (not necessarily the unit on screen), and for a vnoiser run whose source recording is reachable."""
         from mbo_utilities.arrays.mesc import ROI_LAYOUTS
 
         arr = base_array(arr)
+        if arr is None:
+            return False
         if isinstance(arr, ResultsArray):
             return arr.pipeline == "vnoiser" and arr.source_recording is not None
-        if (getattr(arr, "metadata", None) or {}).get("mesc_layout") in ROI_LAYOUTS:
+        if (arr.metadata or {}).get("mesc_layout") in ROI_LAYOUTS:
             return True
         filenames = getattr(arr, "filenames", None) or []
         if not filenames or Path(str(filenames[0])).suffix.lower() != ".mesc":
@@ -352,8 +352,11 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._outdir_dialog = None
         self._last_status = ""
         self._status_color = _DIM_COLOR
-        # the spike-average windows this tab started, until they exit
-        self._windows: list = []
+        self._windows: list = []  # spike-average windows this tab started, until they exit
+        self._spawned: set[int] = (
+            set()
+        )  # workers this tab started, until each run is loaded
+        self._polled = 0.0
         self._show_settings_popup = False
         self._settings_sizer: PopupAutoSize | None = None
         self._show_slice_popup = False
@@ -368,19 +371,28 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._domain_error = ""
         self._domains_path = ""
         self._channel_index = 0
+        self._vnoiser_tp_selection = ""
+        self._vnoiser_tp_parsed = None
+        self._vnoiser_tp_error = ""
         self._preview = TracePreview()
         self._preview_open = True
         self._preview_seconds = 15.0
         self._preview_roi = 0
-        # the preview result last drawn, so a new one refits the time axis
-        self._drawn: dict | None = None
-        # F, dF/F and z; the bottom row also holds the shared time axis
-        self._preview_ratios = implot.SubplotsRowColRatios(row_ratios=[1.0, 1.0, 1.35])
+        self._drawn: dict | None = (
+            None  # the result last drawn; a new one refits the time axis
+        )
+        self._preview_ratios = implot.SubplotsRowColRatios(
+            row_ratios=[
+                1.0,
+                1.0,
+                1.35,
+            ]  # F, dF/F, z; the bottom row holds the shared time axis
+        )
         self._help_open = False
         self._help_keys = False
 
     def _array(self):
-        iw = getattr(self.parent, "image_widget", None)
+        iw = self.parent.image_widget
         if iw is None or not iw.data:
             return None
         return base_array(iw.data[0])
@@ -403,7 +415,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         arr = self._array()
         if isinstance(arr, ResultsArray):
             return arr.source_recording
-        fpath = getattr(self.parent, "fpath", None)
+        fpath = self.parent.fpath
         if isinstance(fpath, (list, tuple)):
             fpath = fpath[0] if fpath else None
         if not fpath or Path(str(fpath)).suffix.lower() != ".mesc":
@@ -420,7 +432,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         from mbo_utilities.vnoiser.params import VnoiserSettings
         from mbo_utilities.vnoiser.pipeline import read_domains, scan_units
 
-        fpath = getattr(self.parent, "fpath", None)
+        fpath = self.parent.fpath
         shown = getattr(self._array(), "unit_key", None)
         if fpath == self._last_fpath:
             # another unit of the same file on screen: the selection follows it
@@ -496,9 +508,9 @@ class VnoiserPipelineWidget(PipelineWidget):
                     spec["first_env"],
                 )
                 self._domains_path = str(mesc.parent / DOMAINS_FILE)
-            except Exception as e:
+            except (OSError, ValueError, KeyError) as e:
                 self._domain_error = f"{DOMAINS_FILE}: {e}"
-        if run is None and getattr(self.parent, "invert_deflection", False):
+        if run is None and self.parent.invert_deflection:
             # the viewer shows the movie inverted: the run inverts the same way, once
             self.settings.polarity = "invert_f"
         # after the previous run's settings land: the folder follows the output format
@@ -519,10 +531,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._fit_domains(0)
 
     def _fit_domains(self, was: int) -> None:
-        """One domain per ROI of the ticked scans, unless the table was loaded
-        or edited and names only ROIs they have. ``was`` is the ROI count the
-        table was last fitted to.
-        """
+        """One domain per ROI of the ticked scans, unless the table was loaded or edited and names only ROIs they have; ``was`` is the ROI count it was last fitted to."""
         _, n_rois, _ = self._dims()
         default = [(f"roi{i}", [i]) for i in range(was)]
         fits = [(r.name, r.rois) for r in self._domains] != default and bool(
@@ -543,10 +552,9 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._channel_index = min(self._channel_index, max(num_channels - 1, 0))
 
     def seed_from_view(self) -> None:
-        """Tick only the recording on screen, run only the domains holding
-        the ROI its slider is on (one of its own when none does), read the
-        channel on screen, over every frame. A unit without traces on screen
-        (a picture) leaves the scans as seeded.
+        """Tick only the recording on screen, run only the domains holding the ROI its slider is on (one of its own when none does), read the channel on screen, over every frame.
+
+        A unit without traces on screen (a picture) leaves the scans as seeded.
         """
         self._ensure_state()
         shown = getattr(self._array(), "unit_key", None)
@@ -557,7 +565,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._scans = {u["key"]: u["key"] == shown for u in self._units}
         self._seed_slicing()
         self._fit_domains(was)
-        iw = getattr(self.parent, "image_widget", None)
+        iw = self.parent.image_widget
         names = tuple(getattr(iw, "dim_names", None) or ())
         # the sliders are the array's T, C, Z axes by position; Z is the ROI index here
         roles = {role: name for name, role in slider_roles(names).items()}
@@ -627,12 +635,8 @@ class VnoiserPipelineWidget(PipelineWidget):
 
     def _frame_window(self) -> tuple[int, int] | None:
         """``(start, stop)`` of the frame selection; None means every frame; raises on a stride."""
-        parsed = getattr(self, "_vnoiser_tp_parsed", None)
-        idx = (
-            list(getattr(parsed, "final_indices", []) or [])
-            if parsed is not None
-            else []
-        )
+        parsed = self._vnoiser_tp_parsed
+        idx = list(parsed.final_indices) if parsed is not None else []
         max_frames = self._dims()[0]
         if not idx or len(idx) == max_frames:
             return None
@@ -706,9 +710,7 @@ class VnoiserPipelineWidget(PipelineWidget):
             imgui.set_tooltip(path_str)
         filenames = getattr(arr, "filenames", None) or ([str(mesc)] if mesc else [])
         if filenames:
-            imgui.text(
-                f"Size on disk: {_format_size(_dataset_size_bytes(self, filenames))}"
-            )
+            imgui.text(f"Size on disk: {_format_size(_dataset_size_bytes(filenames))}")
         imgui.text(f"On screen: {getattr(arr, 'unit_key', '?')}")
         set_tooltip(
             "The measurement unit on screen; the Scans block below picks which units become scans."
@@ -732,9 +734,7 @@ class VnoiserPipelineWidget(PipelineWidget):
                 imgui.text_disabled(f"Comment: {comment}")
 
     def _default_outdir(self) -> str:
-        """Where this format's output belongs: the folder beside the file for
-        a zarr run, which the runner names its file in, else the PF folder.
-        """
+        """The folder a run of this format writes into: the file's own for a zarr run (the runner names the file), else the PF folder."""
         from mbo_utilities.vnoiser.pipeline import default_pf_dir
 
         mesc = self._mesc_path()
@@ -905,13 +905,10 @@ class VnoiserPipelineWidget(PipelineWidget):
         return comment_names(ticked[0].get("comment"), int(ticked[0]["nrois"]))
 
     def drawn_domains(self) -> list[DomainRow]:
-        """The ROI tool's ROIs on the recording on screen, one mask domain
-        each, named by their note or ``drawn<uid>``; [] without the tool or
-        another recording on screen.
-        """
+        """The ROI tool's ROIs on the recording on screen as one mask domain each, named by note or ``drawn<uid>``; [] without the tool or with another recording on screen."""
         from mbo_utilities.analysis.roi_traces import roi_geometry
 
-        widget = getattr(self.parent, "manual_roi", None)
+        widget = self.parent.manual_roi
         arr = self._array()
         if widget is None or arr is None:
             return []
@@ -926,9 +923,7 @@ class VnoiserPipelineWidget(PipelineWidget):
                 continue
             name = (record.note or "").strip() or f"drawn{record.uid}"
             try:
-                d = Domain.from_frame_mask(
-                    name, z, store.labels[record.plane] == i + 1, geometry
-                )
+                d = Domain.from_frame_mask(name, z, store.mask(i), geometry)
             except ValueError:
                 continue
             rows.append(DomainRow(d.name, d.rois, d.pixels, d.fraction, d.mask))
@@ -1255,7 +1250,7 @@ class VnoiserPipelineWidget(PipelineWidget):
                 imgui.set_tooltip(POLARITY_HELP)
             if changed:
                 self.settings.polarity = values[index]
-            if getattr(self.parent, "invert_deflection", False):
+            if self.parent.invert_deflection:
                 imgui.same_line()
                 imgui.text_disabled(fa.ICON_FA_CIRCLE_INFO)
                 if imgui.is_item_hovered():
@@ -1611,9 +1606,7 @@ class VnoiserPipelineWidget(PipelineWidget):
             )
 
     def _draw_preview_traces(self, result: dict) -> None:
-        """F (with the pixel mean, background and F0 when there are), dF/F and
-        z stacked on one time axis, refitted when a new result lands.
-        """
+        """F (with pixel mean, background and F0 when present), dF/F and z stacked on one time axis, refitted when a new result lands."""
         t = result["t"]
         fresh = result is not self._drawn
         self._drawn = result
@@ -1694,7 +1687,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
         pushed = self._mod_push(obj, field)
         if field in _IMPORTANT_FIELDS:
-            draw_boxed_label(label, font=getattr(self.parent, "_bold_font", None))
+            draw_boxed_label(label, font=self.parent._bold_font)
         else:
             imgui.text(label)
         if pushed:
@@ -2258,8 +2251,7 @@ class VnoiserPipelineWidget(PipelineWidget):
                     self._set_status(state, error=True)
         if mesc is None:
             return
-        # the curation window on the folder once it is written (pickles or
-        # zarr), else on the file itself (every line raw, denoised when clicked)
+        # curation opens the run once written, else the file itself with every line raw
         written = pf_done or results is not None
         if imgui.button(
             "Curate##vnoiser_curate", imgui.ImVec2(hello_imgui.em_size(11), 0)
@@ -2277,18 +2269,16 @@ class VnoiserPipelineWidget(PipelineWidget):
         first_env = [k.rsplit("_", 1)[-1] for k in scans if self._first_env.get(k)]
         args = {
             "input_path": str(mesc),
-            "reader_kwargs": widget_reader_kwargs(
-                getattr(self.parent, "image_widget", None)
-            ),
+            "reader_kwargs": widget_reader_kwargs(self.parent.image_widget),
             "output_dir": self._outdir,
             "units": scans,
             "first_env": first_env,
             "domains": domains,
             "channel": self._channel(),
             "frames": None if window is None else [window[0], window[1]],
-            "invert_deflection": bool(getattr(self.parent, "invert_deflection", False)),
+            "invert_deflection": bool(self.parent.invert_deflection),
             "settings": self.settings.to_dict(),
-            "custom_metadata": dict(getattr(self.parent, "_custom_metadata", {}) or {}),
+            "custom_metadata": dict(self.parent._custom_metadata),
         }
         description = f"vnoiser: {len(scans)} scan(s), {len(domains)} domain(s)"
         pid = get_process_manager().spawn(
@@ -2298,19 +2288,43 @@ class VnoiserPipelineWidget(PipelineWidget):
             output_path=self._outdir,
         )
         if pid:
+            self._spawned.add(int(pid))
             self._set_status(f"Started (PID {pid}); progress in the process console.")
         else:
             self._set_status("Failed to start the worker.", error=True)
+
+    def poll(self) -> None:
+        """Once a second, whatever tab is showing: a finished worker this tab started lands in the Traces tab (:meth:`_load_traces`), a failed one in the status row."""
+        if not self._spawned or time.monotonic() - self._polled < 1.0:
+            return
+        self._polled = time.monotonic()
+        from mbo_utilities.gui.widgets.process_manager import get_process_manager
+
+        for info in get_process_manager().get_running():
+            if info.pid not in self._spawned or info.status == "running":
+                continue
+            self._spawned.discard(info.pid)
+            if info.status != "completed":
+                self._set_status(
+                    f"vnoiser failed: {info.status_message or info.status}", error=True
+                )
+                continue
+            out = (info.args or {}).get("output_dir") or self._outdir
+            results = newest_results(out, "vnoiser", source=self._mesc_path())
+            if results is None:
+                self._set_status(
+                    f"vnoiser finished but left no results file in {out}", error=True
+                )
+                continue
+            self._load_traces(results)
 
     def _load_traces(self, results: Path) -> None:
         """Switch Manual ROI Labeling on and load a results file into its Traces tab."""
         from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
 
-        sync = getattr(self.parent, "sync_manual_roi", None)
-        if sync is not None:
-            set_widget_enabled("manual_roi", True)
-            sync(True)
-        widget = getattr(self.parent, "manual_roi", None)
+        set_widget_enabled("manual_roi", True)
+        self.parent.sync_manual_roi(True)
+        widget = self.parent.manual_roi
         if widget is None:
             self._set_status(
                 "Manual ROI Labeling is unavailable for this view.", error=True
@@ -2324,20 +2338,17 @@ class VnoiserPipelineWidget(PipelineWidget):
             )
 
     def _spike_average(self, results: Path) -> None:
-        """Open the spike-triggered average on the scan and ROI on screen:
-        the results unit that processed the shown recording unit, and the ROI
-        whose lines hold the line on the ROI slider.
-        """
+        """Open the spike-triggered average on the results unit that processed the recording on screen, at the ROI whose lines hold the line on the ROI slider."""
         from mbo_utilities.gui.launch import LaunchedWindow
         from mbo_utilities.gui.spike_average_viewer import launch_spike_average
         from mbo_utilities.results import Results, unit_for_source
 
         found = Results.read(results)
-        iw = getattr(self.parent, "image_widget", None)
+        iw = self.parent.image_widget
         shown = base_array(iw.data[0]) if iw is not None else None
         unit = unit_for_source(found, str(getattr(shown, "unit_key", "") or ""))
         roi = None
-        view = getattr(self.parent, "slice", None)
+        view = self.parent.slice
         if unit is not None and view is not None:
             k = found.units[unit].member_roi(view.z)
             roi = None if k is None else found.units[unit].roi_names[k]

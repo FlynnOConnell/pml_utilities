@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import math
 import os
 import subprocess
 import sys
@@ -29,16 +30,11 @@ import threading
 from pathlib import Path
 from typing import Any
 
-# suite2p's schema is read out-of-process into a version-keyed disk cache:
-# importing suite2p in the GUI interpreter freezes the imgui loop for seconds
 _SETTINGS: dict | None = None
 _DB: dict | None = None
 _LOAD_LOCK = threading.Lock()
 _LOAD_EVENT = threading.Event()
 _LOAD_THREAD: threading.Thread | None = None
-# bounded wait when callers hit _ensure_loaded before the daemon finishes.
-# longer than typical subprocess cold-start (~3 s) but short enough that a
-# truly broken environment surfaces as "no schema" instead of hanging UI.
 _LOAD_TIMEOUT_S = 10.0
 
 
@@ -54,7 +50,7 @@ def _cache_dir() -> Path:
 def _suite2p_version() -> str:
     try:
         return importlib.metadata.version("suite2p")
-    except Exception:
+    except importlib.metadata.PackageNotFoundError:
         return "unknown"
 
 
@@ -75,9 +71,6 @@ def _load_cache_file(path: Path) -> tuple[dict, dict] | None:
     return None
 
 
-# Source for the subprocess. Encodes type objects as their __name__
-# (consumers only need a display string via _format_type) and falls
-# back to repr() for any other non-JSON-serializable value.
 _EXTRACTOR_SRC = r"""
 import json, sys
 def encode(o):
@@ -134,7 +127,7 @@ def _build_cache_via_subprocess() -> tuple[dict, dict] | None:
         tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
         with tmp.open("w") as f:
             json.dump({"SETTINGS": settings, "DB": db}, f)
-        os.replace(tmp, cache_path)
+        tmp.replace(cache_path)
     except OSError:
         pass
     return settings, db
@@ -170,9 +163,6 @@ def _start_loader() -> None:
     t.start()
 
 
-# Kick off loader on module import. Daemon thread + subprocess means the
-# main interpreter never imports suite2p; the GUI paints normally while
-# the child process spins up.
 _start_loader()
 
 
@@ -219,53 +209,32 @@ def _to_py(v: Any) -> Any:
 
     No-op for already-Python values; cheap to call defensively.
     """
-    # numpy scalar wrapped as a 0-d array
     if hasattr(v, "shape") and v.shape == () and hasattr(v, "item"):
-        try:
-            return v.item()
-        except Exception:
-            return v
-    # multi-element numpy array → tuple of Python scalars
+        return v.item()
     if type(v).__name__ == "ndarray":
-        try:
-            return tuple(x.item() if hasattr(x, "item") else x for x in v.tolist())
-        except Exception:
-            return v
-    # numpy scalar that isn't a 0-d array (e.g. np.float64) — has .item()
+        return tuple(v.tolist())
     if hasattr(v, "item") and v.__class__.__module__ == "numpy":
-        try:
-            return v.item()
-        except Exception:
-            return v
+        return v.item()
     return v
 
 
-# (mbo_field) -> (upstream path, optional list/tuple index)
-# - upstream path is a tuple of keys into SETTINGS (or DB) ending at a
-#   parameter spec dict (the one with "default", "type", etc.)
-# - index is set when the upstream spec is a list/tuple value (diameter,
-#   block_size) and the mbo field stores a single component.
 _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
-    # top-level
     "torch_device": (("torch_device",), None),
     "tau": (("tau",), None),
     "fs": (("fs",), None),
     "diameter_y": (("diameter",), 0),
     "diameter_x": (("diameter",), 1),
-    # run
     "do_registration": (("run", "do_registration"), None),
     "do_regmetrics": (("run", "do_regmetrics"), None),
     "do_detection": (("run", "do_detection"), None),
     "do_deconvolution": (("run", "do_deconvolution"), None),
     "multiplane_parallel": (("run", "multiplane_parallel"), None),
-    # io
     "combined": (("io", "combined"), None),
     "save_mat": (("io", "save_mat"), None),
     "save_NWB": (("io", "save_NWB"), None),
     "save_ops_orig": (("io", "save_ops_orig"), None),
     "delete_bin": (("io", "delete_bin"), None),
     "move_bin": (("io", "move_bin"), None),
-    # registration (renames: reg_batch_size, block_size_y/x, align_by_chan)
     "align_by_chan": (("registration", "align_by_chan2"), None),
     "nimg_init": (("registration", "nimg_init"), None),
     "maxregshift": (("registration", "maxregshift"), None),
@@ -286,7 +255,6 @@ _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
     "two_step_registration": (("registration", "two_step_registration"), None),
     "reg_tif": (("registration", "reg_tif"), None),
     "reg_tif_chan2": (("registration", "reg_tif_chan2"), None),
-    # detection (renames: det_block_size_y/x)
     "algorithm": (("detection", "algorithm"), None),
     "denoise": (("detection", "denoise"), None),
     "det_block_size_y": (("detection", "block_size"), 0),
@@ -301,7 +269,6 @@ _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
     "soma_crop": (("detection", "soma_crop"), None),
     "chan2_threshold": (("detection", "chan2_threshold"), None),
     "cellpose_chan2": (("detection", "cellpose_chan2"), None),
-    # detection.sparsery_settings
     "highpass_neuropil": (
         ("detection", "sparsery_settings", "highpass_neuropil"),
         None,
@@ -312,11 +279,9 @@ _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
         ("detection", "sparsery_settings", "active_percentile"),
         None,
     ),
-    # detection.sourcery_settings
     "connected": (("detection", "sourcery_settings", "connected"), None),
     "max_iterations": (("detection", "sourcery_settings", "max_iterations"), None),
     "smooth_masks": (("detection", "sourcery_settings", "smooth_masks"), None),
-    # detection.cellpose_settings
     "cellpose_model": (("detection", "cellpose_settings", "cellpose_model"), None),
     "cellpose_img": (("detection", "cellpose_settings", "img"), None),
     "highpass_spatial": (("detection", "cellpose_settings", "highpass_spatial"), None),
@@ -325,11 +290,9 @@ _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
         ("detection", "cellpose_settings", "cellprob_threshold"),
         None,
     ),
-    # classification
     "classifier_path": (("classification", "classifier_path"), None),
     "use_builtin_classifier": (("classification", "use_builtin_classifier"), None),
     "preclassify": (("classification", "preclassify"), None),
-    # extraction (rename: extract_batch_size)
     "snr_threshold": (("extraction", "snr_threshold"), None),
     "extract_batch_size": (("extraction", "batch_size"), None),
     "neuropil_extract": (("extraction", "neuropil_extract"), None),
@@ -339,7 +302,6 @@ _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
     "lam_percentile": (("extraction", "lam_percentile"), None),
     "allow_overlap": (("extraction", "allow_overlap"), None),
     "circular_neuropil": (("extraction", "circular_neuropil"), None),
-    # dcnv_preprocess
     "baseline": (("dcnv_preprocess", "baseline"), None),
     "win_baseline": (("dcnv_preprocess", "win_baseline"), None),
     "sig_baseline": (("dcnv_preprocess", "sig_baseline"), None),
@@ -347,19 +309,13 @@ _MBO_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
 }
 
 
-# mbo-only fields: no upstream schema, so no default to compare against
 _MBO_DB_TO_S2P: dict[str, tuple[tuple[str, ...], int | None]] = {
     "keep_movie_raw": (("keep_movie_raw",), None),
 }
 
 
 MBO_ONLY_FIELDS: set[str] = {
-    # cellpose_niter resolves to cellpose_settings.params.niter at to_dict
-    # time, so it has no direct schema entry. Always rendered with the
-    # mbo-only color tint to flag it as not-suite2p-canonical.
     "cellpose_niter",
-    # legacy ops keys (anatomical_only, sparse_mode, spatial_hp_detect) are
-    # remapped on load by _FLAT_TO_MBO
 }
 
 
@@ -439,13 +395,10 @@ def get_default(mbo_field: str) -> Any:
     if spec is None:
         return None
     default = spec.get("default")
-    # list/tuple unpacking (diameter, block_size)
     if idx is not None and isinstance(default, (list, tuple)):
         if idx < len(default):
             return default[idx]
         return None
-    # align_by_chan: upstream stores `align_by_chan2` as bool;
-    # mbo stores `align_by_chan` as int 1/2.
     if mbo_field == "align_by_chan":
         return 2 if default else 1
     return default
@@ -465,52 +418,25 @@ def is_default(mbo_field: str, value: Any) -> bool:
     precision (~7 decimal digits) to keep the modified-color signal honest.
     """
     if mbo_field in MBO_ONLY_FIELDS:
-        return False  # no default to compare against
+        return False
     found, default = _mbo_default(mbo_field)
     if not found:
-        # field has no mbo dataclass default — compare against the upstream
-        # schema, which loads in a background daemon (subprocess on cold
-        # cache, disk read on warm). While it's pending, report "matches
-        # default" so the Run tab isn't a sea of orange for the few seconds
-        # it takes on cold launch. Subsequent draws color-code accurately.
         if _SETTINGS is None:
             return True
         default = get_default(mbo_field)
-    # normalize at the boundary — numpy types leak through ops.npy
-    # round-trips and break `value in (...)` / `value == default` with
-    # `truth value of an array with more than one element is ambiguous`.
     value = _to_py(value)
     default = _to_py(default)
-    # treat any equality / membership exception as "not default" so a
-    # surprising type combination doesn't crash the gui — the user
-    # sees the field as modified, which is the safer bias (visually
-    # flags it for review).
-    try:
-        if default is None and value in (None, "", [], ()):
-            return True
-    except Exception:
-        pass
-    try:
-        if value == default:
-            return True
-    except Exception:
-        pass
-    # numeric comparison with float32 tolerance, but never compare bool to
-    # number (Python's `True == 1` would otherwise sneak past).
+    if default is None and value in (None, "", [], ()):
+        return True
+    if value == default:
+        return True
     if (
         isinstance(value, (int, float))
         and isinstance(default, (int, float))
         and not isinstance(value, bool)
         and not isinstance(default, bool)
     ):
-        import math
-
-        try:
-            return math.isclose(
-                float(value), float(default), rel_tol=1e-6, abs_tol=1e-9
-            )
-        except Exception:
-            return False
+        return math.isclose(float(value), float(default), rel_tol=1e-6, abs_tol=1e-9)
     return False
 
 
@@ -519,55 +445,34 @@ def all_mapped_fields() -> list[str]:
     return sorted(set(_MBO_TO_S2P.keys()) | set(_MBO_DB_TO_S2P.keys()))
 
 
-# two on-disk formats coexist: a flat pre-v1 ops.npy and suite2p v1's nested
-# settings.npy. `from_ops(d)` detects which and resolves both to mbo fields.
-
-
-# Flat-key → mbo-field map. Includes legacy spellings (left-side aliases).
-# When the value is a 2-tuple of strings the source value is a list/tuple
-# that gets unpacked into both fields. When it's a (str, callable) tuple
-# the callable transforms the value before assignment.
 _FLAT_TO_MBO: dict[str, Any] = {
-    # top-level
     "torch_device": "torch_device",
     "tau": "tau",
     "fs": "fs",
-    "diameter": ("diameter_y", "diameter_x"),  # int → both, [y,x] → unpack
-    # run
+    "diameter": ("diameter_y", "diameter_x"),
     "do_registration": "do_registration",
     "do_regmetrics": "do_regmetrics",
     "do_detection": "do_detection",
-    "roidetect": ("do_detection", lambda v: 1 if v else 0),  # legacy bool
+    "roidetect": ("do_detection", lambda v: 1 if v else 0),
     "do_deconvolution": "do_deconvolution",
-    "spikedetect": "do_deconvolution",  # legacy bool
+    "spikedetect": "do_deconvolution",
     "multiplane_parallel": "multiplane_parallel",
-    # io
     "combined": "combined",
     "save_mat": "save_mat",
     "save_NWB": "save_NWB",
     "save_ops_orig": "save_ops_orig",
     "delete_bin": "delete_bin",
     "move_bin": "move_bin",
-    # registration
     "align_by_chan": "align_by_chan",
     "align_by_chan2": ("align_by_chan", lambda v: 2 if v else 1),
     "nimg_init": "nimg_init",
     "maxregshift": "maxregshift",
     "do_bidiphase": "do_bidiphase",
     "bidiphase": "bidiphase",
-    # registration batch size — flat ops "batch_size" is the legacy name.
-    # extraction batch size now has its own distinct flat key
-    # ("extract_batch_size") per lsp's _SECTION_FLAT_RENAMES — historically
-    # they conflated to the same flat slot, so older ops files (pre-fix)
-    # only set "batch_size" and we silently routed to reg.
     "batch_size": "reg_batch_size",
     "extract_batch_size": "extract_batch_size",
     "nonrigid": "nonrigid",
     "maxregshiftNR": "maxregshiftNR",
-    # registration block_size keeps the legacy flat "block_size" name.
-    # detection block_size now lives at "det_block_size" per lsp's
-    # _SECTION_FLAT_RENAMES (was silently dropped from flat ops before
-    # the fix because both sections wrote to the same slot).
     "block_size": ("block_size_y", "block_size_x"),
     "det_block_size": ("det_block_size_y", "det_block_size_x"),
     "smooth_sigma_time": "smooth_sigma_time",
@@ -580,71 +485,53 @@ _FLAT_TO_MBO: dict[str, Any] = {
     "two_step_registration": "two_step_registration",
     "reg_tif": "reg_tif",
     "reg_tif_chan2": "reg_tif_chan2",
-    # db (also lives at top-level of ops/db.npy — Suite2pDB field, not Settings)
     "keep_movie_raw": "keep_movie_raw",
-    # detection
     "algorithm": "algorithm",
     "denoise": "denoise",
     "nbins": "nbins",
-    "nbinned": "nbins",  # legacy
+    "nbinned": "nbins",
     "bin_size": "bin_size",
     "highpass_time": "highpass_time",
-    "high_pass": "highpass_time",  # legacy
+    "high_pass": "highpass_time",
     "threshold_scaling": "threshold_scaling",
     "npix_norm_min": "npix_norm_min",
     "npix_norm_max": "npix_norm_max",
     "max_overlap": "max_overlap",
     "soma_crop": "soma_crop",
     "chan2_threshold": "chan2_threshold",
-    "chan2_thres": "chan2_threshold",  # legacy
+    "chan2_thres": "chan2_threshold",
     "cellpose_chan2": "cellpose_chan2",
-    # legacy upstream key: spatial_hp_detect was renamed to highpass_neuropil
-    # in the suite2p restructure. Map old flat ops to the new field.
     "spatial_hp_detect": "highpass_neuropil",
-    # NOTE: legacy `anatomical_only` (int 0-4) and `sparse_mode` (bool) are
-    # NOT in this dict — the joint decision (`algorithm` + `cellpose_img`)
-    # lives in `from_flat` itself so the priority rule "anatomical_only > 0
-    # forces cellpose, regardless of sparse_mode" is preserved.
-    # detection.sparsery_settings
+    # anatomical_only and sparse_mode resolve jointly in from_flat
     "highpass_neuropil": "highpass_neuropil",
     "max_ROIs": "max_ROIs",
     "spatial_scale": "spatial_scale",
     "active_percentile": "active_percentile",
-    # detection.sourcery_settings
     "connected": "connected",
     "max_iterations": "max_iterations",
     "smooth_masks": "smooth_masks",
-    # detection.cellpose_settings
     "cellpose_model": "cellpose_model",
-    "pretrained_model": "cellpose_model",  # legacy
+    "pretrained_model": "cellpose_model",
     "highpass_spatial": "highpass_spatial",
-    "spatial_hp_cp": "highpass_spatial",  # legacy
+    "spatial_hp_cp": "highpass_spatial",
     "flow_threshold": "flow_threshold",
     "cellprob_threshold": "cellprob_threshold",
-    # classification
     "classifier_path": "classifier_path",
     "use_builtin_classifier": "use_builtin_classifier",
     "preclassify": "preclassify",
-    # extraction
     "snr_threshold": "snr_threshold",
     "neuropil_extract": "neuropil_extract",
     "neuropil_coefficient": "neuropil_coefficient",
-    "neucoeff": "neuropil_coefficient",  # legacy
+    "neucoeff": "neuropil_coefficient",
     "inner_neuropil_radius": "inner_neuropil_radius",
     "min_neuropil_pixels": "min_neuropil_pixels",
     "lam_percentile": "lam_percentile",
     "allow_overlap": "allow_overlap",
     "circular_neuropil": "circular_neuropil",
-    # dcnv_preprocess
     "baseline": "baseline",
     "win_baseline": "win_baseline",
     "sig_baseline": "sig_baseline",
     "prctile_baseline": "prctile_baseline",
-    # mbo-only post-processing knobs (MboSuite2pExtras). lsp persists
-    # these as top-level ops keys after the post-processing block runs,
-    # outside the suite2p settings schema (so settings.npy stays a
-    # record of the suite2p stages only). Listed here so flat-ops
-    # loaders pick them up; the hydrator routes them to s2p_extras.
     "norm_method": "norm_method",
     "dff_window_size": "dff_window_size",
     "dff_percentile": "dff_percentile",
@@ -652,10 +539,6 @@ _FLAT_TO_MBO: dict[str, Any] = {
     "correct_neuropil": "correct_neuropil",
     "accept_all_cells": "accept_all_cells",
     "save_json": "save_json",
-    # cell_filters / rastermap_kwargs are persisted by lsp as nested
-    # structures (list[dict] / nested dict) rather than scalars; the
-    # decompose-back-to-GUI-state step is handled separately so they're
-    # intentionally not in this scalar map.
 }
 
 
@@ -668,11 +551,6 @@ _STRUCTURED_TOP_KEYS = {
     "extraction",
     "dcnv_preprocess",
 }
-
-
-def _is_structured(d: dict) -> bool:
-    """Heuristic: structured settings have at least one nested-group key at top."""
-    return any(k in d and isinstance(d[k], dict) for k in _STRUCTURED_TOP_KEYS)
 
 
 def from_structured(settings: dict) -> dict[str, Any]:
@@ -693,14 +571,8 @@ def from_structured(settings: dict) -> dict[str, Any]:
             cur = cur[k]
         if not ok:
             continue
-        # normalize numpy types at the boundary so downstream code only
-        # ever sees Python scalars / tuples (`is_default`, type-coercion
-        # in the gui hydrator, etc. all break on numpy multi-element
-        # arrays — `truth value ambiguous`).
         cur = _to_py(cur)
         if idx is not None:
-            # accept any sequence here (numpy arrays now arrive as
-            # tuples after _to_py, but also handle list/tuple defensively).
             if isinstance(cur, (list, tuple)) and idx < len(cur):
                 out[mbo_field] = _to_py(cur[idx])
             continue
@@ -709,8 +581,6 @@ def from_structured(settings: dict) -> dict[str, Any]:
             continue
         out[mbo_field] = cur
 
-    # cellpose_settings.params is a dict with optional `niter`; mbo stores
-    # it as a top-level int (0 = "let cellpose decide").
     cp = (
         settings.get("detection", {}).get("cellpose_settings", {})
         if isinstance(settings.get("detection"), dict)
@@ -734,19 +604,10 @@ def from_flat(ops: dict) -> dict[str, Any]:
     for flat_key, target in _FLAT_TO_MBO.items():
         if flat_key not in ops:
             continue
-        # normalize numpy at the boundary — diameter, block_size,
-        # det_block_size land here as np.ndarray when ops.npy was
-        # produced via numpy. _to_py turns 0-d arrays into scalars and
-        # multi-element arrays into tuples so the unpack and downstream
-        # comparisons work correctly.
         v = _to_py(ops[flat_key])
-        # (mbo_field, callable) transform
         if isinstance(target, tuple) and len(target) == 2 and callable(target[1]):
             out[target[0]] = target[1](v)
             continue
-        # (y_field, x_field) list unpack — covers diameter, block_size,
-        # det_block_size. v is now guaranteed to be a Python tuple/list
-        # if it was a numpy array, so the isinstance check works.
         if isinstance(target, tuple):
             yf, xf = target
             if isinstance(v, (list, tuple)):
@@ -760,14 +621,8 @@ def from_flat(ops: dict) -> dict[str, Any]:
                 out[yf] = v
                 out[xf] = v
             continue
-        # plain string target
         out[target] = v
 
-    # Legacy algorithm derivation: anatomical_only > 0 forces cellpose
-    # (regardless of sparse_mode); otherwise sparse_mode picks
-    # sparsery/sourcery. Mirrors the historical mbo `_derived_algorithm`
-    # logic so old ops files map onto the new (`algorithm` + `cellpose_img`)
-    # interface without ambiguity.
     if "anatomical_only" in ops or "sparse_mode" in ops:
         ana = ops.get("anatomical_only", 0) or 0
         try:
@@ -779,17 +634,12 @@ def from_flat(ops: dict) -> dict[str, Any]:
             out["cellpose_img"] = {
                 1: "max_proj / meanImg",
                 2: "meanImg",
-                3: "max_proj",  # upstream removed enhanced_mean_img
+                3: "max_proj",
                 4: "max_proj",
             }.get(ana_i, "max_proj / meanImg")
         elif "sparse_mode" in ops:
             out["algorithm"] = "sparsery" if ops["sparse_mode"] else "sourcery"
 
-    # lsp post-processing: cell_filters list-of-dicts → GUI's per-criterion
-    # (enabled, value) pairs. lsp run_lsp persists this list to ops.npy
-    # with one entry per active filter; mirrors build_cell_filters() in
-    # mbo_utilities (settings.py) so a saved run round-trips back into
-    # the same checkbox state.
     cell_filters = ops.get("cell_filters")
     if isinstance(cell_filters, (list, tuple)):
         for entry in cell_filters:
@@ -817,9 +667,6 @@ def from_flat(ops: dict) -> dict[str, Any]:
                 if "min_F0_rel" in entry and entry["min_F0_rel"] is not None:
                     out["baseline_min_F0_rel"] = float(_to_py(entry["min_F0_rel"]))
 
-    # lsp post-processing: rastermap_kwargs dict → GUI's planar/volumetric
-    # toggles + per-mode overrides. Presence of "planar" / "volumetric"
-    # sub-dicts is the per-mode enable signal (mirrors lsp's unified api).
     rm_kw = ops.get("rastermap_kwargs")
     if isinstance(rm_kw, dict):
         any_mode = False
@@ -844,29 +691,6 @@ def from_flat(ops: dict) -> dict[str, Any]:
             if "n_PCs" in volumetric and volumetric["n_PCs"] is not None:
                 out["rastermap_volumetric_n_pcs"] = int(_to_py(volumetric["n_PCs"]))
         if any_mode:
-            # Skip=0, Run=1, Force=2. We don't know force-vs-run from a
-            # saved run, so default to Run when either mode is enabled.
             out["rastermap_mode"] = 1
 
     return out
-
-
-def from_ops(d: dict) -> dict[str, Any]:
-    """Auto-detect format and return {mbo_field: value} from an ops/settings dict."""
-    return from_structured(d) if _is_structured(d) else from_flat(d)
-
-
-def from_npy_file(path) -> dict[str, Any]:
-    """Load a flat ops.npy or structured settings.npy and decode into mbo fields.
-
-    Accepts a pickled-dict .npy (the standard suite2p output shape).
-    """
-    import numpy as np
-
-    arr = np.load(str(path), allow_pickle=True)
-    d = arr.item() if hasattr(arr, "item") and arr.ndim == 0 else arr
-    if not isinstance(d, dict):
-        raise ValueError(
-            f"expected dict-like content in {path}, got {type(d).__name__}"
-        )
-    return from_ops(d)

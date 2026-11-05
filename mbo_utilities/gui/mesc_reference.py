@@ -1,47 +1,62 @@
-"""The picture a MESc AOD scan's lines or patches were drawn on, with them drawn.
+"""A MESc AOD scan's lines or patches on its picture and on the Z-stacks around it.
 
 An AOD scan (a line scan, chessboard or ribbon) has no picture of its own:
 the viewer shows its lines by their samples, or its patches packed side by
-side. The reference image puts each line or patch back where the operator
-drew it, in one popup with a combo over the images:
+side. The reference image puts each line or patch back in the tissue, in one
+popup with a combo over the images:
 
 - the picture MEScan took just before the scan (the unit's
-  ``BackgroundImagePath``), the max over its frames when it has several;
-- every Z-stack whose field and depth range hold the scan's lines or
-  patches, projected over the slices they were scanned on, not over the
-  whole stack: a 98-slice stack's full max is a wall of tissue with the
-  ROI's own plane lost in it.
+  ``BackgroundImagePath``), the max over its frames when it has several, with
+  every ROI where the operator drew it;
+- every Z-stack the scan could be placed on (``analysis.mesc_placement``), in
+  this file or a stack file beside it, projected over the slices the ROIs sit
+  on, not over the whole stack: a 98-slice stack's full max is a wall of
+  tissue with the ROI's own plane lost in it.
+
+A stack's position in the file is not the scan's frame, so its ROIs are drawn
+at the measured shift, and a stack the picture does not match carries none.
+The caption gives the slice under the ROI on the slider, its domain when a run
+named one, and the match; measuring takes seconds, so the stacks arrive after
+the picture.
 
 Every ROI is drawn in the colour MESc used, the one the viewer's ROI slider
-is on thicker; a click on a line or patch moves the slider to it. Nothing
-here says how deep a line sits: the picture is a reference for where it was
-drawn, no more.
-
-Each image says which unit it is and, for a Z-stack, which slice its ROIs sit
-on, so the popup's one button can open that unit in the viewer at that slice.
-That is the only place the Z-stack is offered: the table says nothing about
-it, because a stack is worth seeing only next to the lines drawn on it.
+is on thicker; a click on a line or patch moves the slider to it.
 
 The popup is ``gui.imgui.summary.SummaryImageViewer``, masknmf's full-FOV
 popup and the one behind the ROI widget's Open full FOV: pan, zoom,
-colormap, contrast, pixel values. :func:`reference_images` is GUI-free and
-pinned on synthetic files; :class:`ReferenceView` is the popup, opened from
-the MESc tab and redrawn every frame from the top strip's hook.
+colormap, contrast, pixel values. :func:`picture_image` and
+:func:`stack_images` are GUI-free and pinned on synthetic files;
+:class:`ReferenceView` is the popup, opened from the MESc tab and redrawn
+every frame from the top strip's hook.
 """
 
 from __future__ import annotations
 
+import csv
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 from imgui_bundle import imgui
+from imgui_bundle import portable_file_dialogs as pfd
 
+from mbo_utilities import log
+from mbo_utilities.analysis.mesc_placement import (
+    StackPlacement,
+    place_scan,
+    zstack_files,
+)
 from mbo_utilities.annotation.store import CLASS_COLORS
 from mbo_utilities.arrays.features._dim_labels import find_slider_name, slider_roles
-from mbo_utilities.arrays.mesc_geometry import image_overlays, zstack_contents
+from mbo_utilities.arrays.mesc import list_mesc_units
+from mbo_utilities.arrays.mesc_geometry import image_overlays
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.imgui.summary import SummaryImageViewer
+from mbo_utilities.results import unit_for_source
+
+logger = log.get("gui.mesc_reference")
 
 __all__ = [
     "MAX_ELEMENTS",
@@ -52,8 +67,11 @@ __all__ = [
     "ReferenceImage",
     "ReferenceView",
     "current_roi",
+    "picture_image",
+    "roi_domains",
     "roi_slider",
-    "reference_images",
+    "stack_images",
+    "write_positions",
 ]
 
 ON_THICKNESS = 2.0
@@ -86,97 +104,198 @@ def current_roi(iw) -> int:
 @dataclass
 class ReferenceImage:
     """One image of the popup: what the combo calls it, its pixels, the shown
-    unit's overlay records on it (``mesc_geometry.image_overlays``), the unit
-    it is of, and the slice to open that unit at (None for a picture).
+    unit's overlay records on it (``mesc_geometry.image_overlays``), and for a
+    Z-stack the placement that put them there, the opened stack and its channel.
     """
 
     key: str
     image: np.ndarray
     records: list[dict] = field(default_factory=list)
-    unit: str = ""
-    slice: int | None = None
+    placement: StackPlacement | None = None
+    stack: object = None
+    c: int = 0
 
 
-def reference_images(
-    mesc, open_unit: Callable[[str], object], c: int
-) -> list[ReferenceImage]:
-    """Every image the popup shows for ``mesc``, in combo order: the picture
-    its ROIs were drawn on, then every Z-stack holding them, each a max
-    projection in channel ``c`` carrying the unit's ROIs. A picture projects
-    over its frames, a Z-stack over the slices the ROIs were scanned on.
-    Empty for a unit with no ROIs, or none placed on an image of the file.
-    ``open_unit`` opens a sibling unit by key; the caller keeps the cache.
+def _projection(ref, c: int, lo: int, hi: int) -> np.ndarray:
+    """Max of ``ref`` in channel ``c`` over slices ``lo`` to ``hi``, from evenly
+    spaced frames, a few slices at a time, within ``MAX_ELEMENTS`` samples.
     """
+    nt, nc, _nz, ny, nx = ref.shape
+    cc = min(int(c), nc - 1)
+    step = max(1, -(-nt * ny * nx // MAX_ELEMENTS))
+    chunk = max(1, min(hi - lo + 1, MAX_ELEMENTS // max(-(-nt // step) * ny * nx, 1)))
+    peak = np.full((ny, nx), -np.inf, np.float32)
+    for k0 in range(lo, hi + 1, chunk):
+        block = np.asarray(ref[::step, cc, k0 : min(k0 + chunk, hi + 1)], np.float32)
+        np.maximum(peak, block.reshape(-1, ny, nx).max(axis=0), out=peak)
+    return peak
+
+
+def _scan_info(mesc) -> dict | None:
+    """The list entry of a scan whose outlines pair with its ROIs: pairing a
+    different count by order would be a guess.
+    """
+    info = next((u for u in mesc.units if u["key"] == mesc.unit_key), None)
+    return info if info is not None and info["n_outlines"] == info["nrois"] else None
+
+
+def picture_image(mesc, open_unit: Callable, c: int) -> ReferenceImage | None:
+    """The picture ``mesc``'s ROIs were drawn on, carrying every one of them;
+    None for a unit with no ROIs or no picture. ``open_unit(path, key)`` opens
+    a unit; the caller keeps the cache.
+    """
+    info = _scan_info(mesc)
+    key = None if info is None else info["background_unit"]
+    if key is None:
+        return None
     path = mesc.filenames[0]
-    key = mesc.unit_key
-    info = next((u for u in mesc.units if u["key"] == key), None)
-    refs = (
-        [info["background_unit"]]
-        if info is not None and info.get("background_unit")
-        else []
+    records = image_overlays(path, mesc.unit_key, key)
+    if not records:
+        return None
+    name = key.rsplit("/", 1)[-1]
+    return ReferenceImage(
+        f"{name} picture", _projection(open_unit(path, key), c, 0, 0), records
     )
-    refs += [
-        stack
-        for stack, held in zstack_contents(path, mesc.units).items()
-        if key in held and stack not in refs
-    ]
-    out = []
-    for ref_key in refs:
-        records = [
-            r for r in image_overlays(path, ref_key, mesc.units) if r["unit"] == key
-        ]
-        if not records:
+
+
+def stack_images(
+    mesc, open_unit: Callable, c: int, stack_files=()
+) -> tuple[list[ReferenceImage], list[StackPlacement]]:
+    """Every Z-stack ``mesc``'s scan was placed on, in the file, beside it or in
+    ``stack_files``, each projected over the slices its ROIs sit on; then the
+    placements refused, whose stacks carry no ROIs.
+    """
+    if _scan_info(mesc) is None:
+        return [], []
+    source = str(mesc.filenames[0])
+    paths = dict.fromkeys(
+        [source, *(str(p) for p in zstack_files(source)), *map(str, stack_files)]
+    )
+    images, refused = [], []
+    for path in paths:
+        for u in list_mesc_units(path):
+            placement = (
+                place_scan(mesc, path, u["key"]) if u["kind"] == "zstack" else None
+            )
+            if placement is None:
+                continue
+            if not placement.placed:
+                refused.append(placement)
+                continue
+            records = image_overlays(
+                source, mesc.unit_key, u["key"], path, placement.shift_um
+            )
+            if not records:
+                continue
+            slices = sorted(r["slice"] for r in records)
+            lo, hi = slices[0], slices[-1]
+            name = u["munit"] if path == source else f"{Path(path).stem} {u['munit']}"
+            label = f"slice {lo + 1}" if lo == hi else f"slices {lo + 1}-{hi + 1}"
+            stack = open_unit(path, u["key"])
+            image = _projection(stack, c, lo, hi)
+            images.append(
+                ReferenceImage(f"{name} {label}", image, records, placement, stack, c)
+            )
+    return images, refused
+
+
+def roi_domains(mesc) -> dict[int, str]:
+    """``{roi: domain}`` from the newest run's line membership; empty without one."""
+    results = mesc.results
+    name = None if results is None else unit_for_source(results, mesc.unit_key)
+    if name is None or results.units[name].member_kind != "line":
+        return {}
+    unit = results.units[name]
+    return {
+        int(line): domain
+        for domain, lines in zip(unit.roi_names, unit.members)
+        for line in lines
+    }
+
+
+def write_positions(path, mesc, images, domains: dict[int, str]) -> None:
+    """One CSV row per ROI on each placed stack: its ends in that stack's microns,
+    and its ROI and slice counted from 1 as the caption counts them.
+    """
+    rows = []
+    for im in images:
+        if im.placement is None:
             continue
-        ref = open_unit(ref_key)
-        nt, nc, nz, ny, nx = ref.shape
-        cc = min(int(c), nc - 1)
-        name = ref_key.rsplit("/", 1)[-1]
-        if nz > 1:
-            # one entry per ROI, so the middle slice is where most of them are
-            ks = sorted(r["slice"] for r in records)
-            lo, hi, at = ks[0], ks[-1], ks[len(ks) // 2]
-            label = (
-                f"{name} slice {lo + 1}"
-                if lo == hi
-                else f"{name} slices {lo + 1}-{hi + 1}"
+        p = im.placement
+        for r in im.records:
+            pos = mesc.line_positions[r["roi"]]
+            start = (np.array(pos["start_um"]) + p.shift_um).round(2).tolist()
+            end = (np.array(pos["end_um"]) + p.shift_um).round(2).tolist()
+            rows.append(
+                {
+                    "unit": mesc.unit_key,
+                    "roi": r["roi"] + 1,
+                    "domain": domains.get(r["roi"], ""),
+                    "stack_file": p.stack_path,
+                    "stack_unit": p.stack_key,
+                    "slice": r["slice"] + 1,
+                    **dict(zip(("x0_um", "y0_um", "z0_um"), start)),
+                    **dict(zip(("x1_um", "y1_um", "z1_um"), end)),
+                    "match": round(p.score, 3),
+                    "confirmed": p.confirmed,
+                    "with_rtmc": p.with_rtmc,
+                    "channel": p.channel + 1,
+                }
             )
-        else:
-            lo, hi, label, at = 0, 0, f"{name} picture", None
-        # evenly spaced frames, a few slices at a time, within MAX_ELEMENTS samples
-        step = max(1, -(-nt * ny * nx // MAX_ELEMENTS))
-        chunk = max(
-            1, min(hi - lo + 1, MAX_ELEMENTS // max(-(-nt // step) * ny * nx, 1))
-        )
-        peak = np.full((ny, nx), -np.inf, np.float32)
-        for k0 in range(lo, hi + 1, chunk):
-            block = np.asarray(
-                ref[::step, cc, k0 : min(k0 + chunk, hi + 1)], np.float32
-            )
-            np.maximum(peak, block.reshape(-1, ny, nx).max(axis=0), out=peak)
-        out.append(ReferenceImage(label, peak, records, ref_key, at))
-    return out
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def placement_summary(placement: StackPlacement) -> str:
+    """One image's placement in words, for the caption's tooltip."""
+    dx, dy, dz = placement.shift_um
+    minutes = abs(placement.gap_s) / 60
+    when = "before" if placement.gap_s > 0 else "after"
+    text = (
+        f"ROIs moved {dx:+.1f}, {dy:+.1f}, {dz:+.1f} um from where the file stores "
+        f"them. The picture matches this stack at {placement.score:.2f}. "
+        f"The stack was taken {minutes:.0f} min {when} the scan."
+    )
+    if placement.profile_r is None:
+        return f"{text}\nThe recording cannot check this placement."
+    verdict = "confirms" if placement.confirmed else "does not confirm"
+    rtmc = "with" if placement.with_rtmc else "without"
+    return (
+        f"{text}\nThe recording {verdict} it on channel {placement.channel + 1}, "
+        f"{rtmc} the scan's mean RTMC: time means against the stack "
+        f"r {placement.profile_r:.2f}, p {placement.profile_p:.3f}."
+    )
 
 
 class ReferenceView:
     """The reference-image popup of one viewer, rebuilt for the unit it shows.
 
-    ``open`` builds the images once per unit and channel on screen and keeps
-    them until another is asked for; ``draw`` goes in a per-frame hook. The
-    ROI the viewer's ROI slider is on is read as the overlay draws, so the
-    highlight follows the slider with no work of its own. ``on_show(unit,
-    slice)`` is called by the toolbar's one button: the host displays that
-    unit, a Z-stack at that slice.
+    ``open`` shows the picture at once and measures the Z-stacks on a thread,
+    once per unit and channel on screen; ``draw`` goes in a per-frame hook and
+    takes them in when they land. The ROI the viewer's ROI slider is on is read
+    as the overlay draws, so the highlight follows the slider with no work of
+    its own.
     """
 
-    def __init__(
-        self, parent, on_show: Callable[[str, int | None], None] | None = None
-    ):
+    def __init__(self, parent):
         self.parent = parent
-        self.on_show = on_show
         self.images: dict[str, ReferenceImage] = {}
         self.unit = ""
         self.n_rois = 0
+        self.domains: dict[int, str] = {}
+        self.refused: list[StackPlacement] = []
+        self.stack_files: list[str] = []
+        self.placing = False
+        self.one_slice = False
+        self.error: str | None = None
         self._built: tuple | None = None
+        self._placed: tuple | None = None
+        self._source: tuple | None = None
+        self._shown_slice: tuple | None = None
+        self._dialog = None
+        self._save_dialog = None
         self.viewer = SummaryImageViewer(
             parent.image_widget.figure,
             title="Reference image",
@@ -191,33 +310,94 @@ class ReferenceView:
     def is_open(self) -> bool:
         return self.viewer.is_open
 
-    def open(self, mesc, open_unit: Callable[[str], object]) -> bool:
+    def open(self, mesc, open_unit: Callable) -> bool:
         """Show the popup for ``mesc``, on the picture its ROIs were drawn on;
-        False when no image of the file carries them.
+        False when it has none.
         """
         iw = self.parent.image_widget
         cdim = find_slider_name(iw.dim_names, "c")
         c = int(iw.indices[cdim]) if cdim is not None else 0
-        built = (str(mesc.filenames[0]), mesc.unit_key, c)
+        built = (str(mesc.filenames[0]), mesc.unit_key, c, tuple(self.stack_files))
+        self._source = (mesc, open_unit)
         if built != self._built:
-            images = reference_images(mesc, open_unit, c)
-            self.images = {im.key: im for im in images}
+            picture = picture_image(mesc, open_unit, c)
+            self.images = {} if picture is None else {picture.key: picture}
             self.unit = mesc.unit_key.rsplit("/", 1)[-1]
             self.n_rois = next(
                 (u["n_outlines"] for u in mesc.units if u["key"] == mesc.unit_key), 0
             )
+            self.domains = roi_domains(mesc)
+            self.refused, self.error, self._placed = [], None, None
             self._built = built
             self.viewer.set_images(
                 {k: im.image for k, im in self.images.items()},
-                selected=images[0].key if images else None,
+                selected=None if picture is None else picture.key,
             )
+            self.placing = picture is not None
+            if self.placing:
+                threading.Thread(
+                    target=self._place,
+                    args=(built, mesc, open_unit, c),
+                    name="mesc-placement",
+                    daemon=True,
+                ).start()
         if not self.images:
             return False
         self.viewer.open()
         return True
 
+    def _place(self, built: tuple, mesc, open_unit: Callable, c: int) -> None:
+        """Measure the stacks off the draw thread; a stale unit's answer is dropped."""
+        try:
+            found = (*stack_images(mesc, open_unit, c, built[3]), None)
+        except Exception as e:
+            logger.exception(f"placing {mesc.unit_key} failed")
+            found = ([], [], str(e))
+        if built == self._built:
+            self._placed = found
+
     def draw(self) -> None:
+        if self._dialog is not None and self._dialog.ready():
+            picked = self._dialog.result()
+            self._dialog = None
+            if picked:
+                self.stack_files.append(picked[0])
+                self.open(*self._source)
+        if self._save_dialog is not None and self._save_dialog.ready():
+            picked = self._save_dialog.result()
+            self._save_dialog = None
+            if picked:
+                write_positions(
+                    picked, self._source[0], self.images.values(), self.domains
+                )
+        if self._placed is not None:
+            images, self.refused, self.error = self._placed
+            self._placed = None
+            self.placing = False
+            self.images.update({im.key: im for im in images})
+            self.viewer.set_images({k: im.image for k, im in self.images.items()})
+            self._shown_slice = None
+        self._show_slice()
         self.viewer.draw()
+
+    def _show_slice(self) -> None:
+        """Hold the slice under the slider's ROI on screen while ``one_slice``
+        is on, in place of the stack's projection.
+        """
+        key = self.viewer.current_key
+        im = self.images.get(key)
+        k = None
+        if self.one_slice and self.is_open and im is not None and im.placement is not None:
+            roi = current_roi(self.parent.image_widget)
+            k = next((r["slice"] for r in im.records if r["roi"] == roi), None)
+        shown = None if k is None else (key, k)
+        if shown == self._shown_slice:
+            return
+        self._shown_slice = shown
+        images = {name: i.image for name, i in self.images.items()}
+        if shown is not None:
+            images[key] = _projection(im.stack, im.c, k, k)
+        self.viewer.set_images(images)
 
     def close(self) -> None:
         self.viewer.close()
@@ -282,39 +462,76 @@ class ReferenceView:
             iw.indices[zdim] = int(best["roi"])
         return int(best["roi"])
 
-    def _toolbar(self, viewer) -> None:
-        """The popup's one button, which displays the image's own unit in the
-        viewer (a Z-stack at the slice its ROIs sit on), and its caption: how
-        many of the unit's ROIs are on this image and which one is thick. A
-        Z-stack holds only the ROIs scanned inside it, so the count says of
-        how many when some are missing.
+    def caption(self, im: ReferenceImage) -> str:
+        """What the toolbar says about image ``im``: how many of the unit's
+        ROIs are on it and, on a Z-stack, the slice under the slider's ROI.
         """
-        im = self.images.get(viewer.current_key)
-        if im is None:
-            return
-        name = im.unit.rsplit("/", 1)[-1]
-        if self.on_show is not None:
-            imgui.same_line(0, 12)
-            at = "" if im.slice is None else f" at slice {im.slice + 1}"
-            if imgui.button(f"display {name}{at}"):
-                self.on_show(im.unit, im.slice)
-            set_tooltip(
-                f"Show {name} in the viewer{at}, in place of {self.unit}."
-                + ("" if im.slice is None else " The Z-plane slider opens there."),
-                show_mark=False,
-            )
         roi = current_roi(self.parent.image_widget)
         n = len(im.records)
         what = "patches" if im.records[0]["kind"] == "patch" else "lines"
         drawn = f"{n} {what}" if n == self.n_rois else f"{n} of {self.n_rois} {what}"
-        imgui.same_line(0, 12)
-        imgui.text_disabled(f"{self.unit}: {drawn} drawn here, ROI {roi + 1} thick")
+        name = f"ROI {roi + 1}"
+        if roi in self.domains:
+            name += f" ({self.domains[roi]})"
+        if im.placement is None:
+            return f"{self.unit}: {drawn} drawn here, {name} thick"
+        record = next((r for r in im.records if r["roi"] == roi), None)
+        where = "not in this stack" if record is None else f"slice {record['slice'] + 1}"
+        check = "confirmed" if im.placement.confirmed else "unconfirmed"
+        return f"{self.unit}: {name} {where}, {drawn}, match {im.placement.score:.2f}, {check}"
+
+    def status(self) -> str:
+        """The stacks' state: still measuring, failed, or what became of them."""
+        if self.placing:
+            return "measuring Z-stacks..."
+        if self.error is not None:
+            return f"placement failed: {self.error}"
+        placed = sum(im.placement is not None for im in self.images.values())
+        states = [f"Z-stacks placed: {placed}, in the image list"] if placed else []
+        states += [
+            f"{p.stack_key.rsplit('/', 1)[-1]} not placed ({p.score:.2f})"
+            for p in self.refused
+        ]
+        return "  ".join(states) or "no Z-stack found"
+
+    def _toolbar(self, viewer) -> None:
+        """A row under the viewer's own for the button that takes a stack file
+        the search missed and the image's caption, then the stacks' state, on
+        a row of its own so the image does not jump when it clears.
+        """
+        if imgui.button("add Z-stack file") and self._dialog is None:
+            start = str(Path(self._built[0]).parent)
+            self._dialog = pfd.open_file("Z-stack file", start, ["MESc", "*.mesc"])
         set_tooltip(
-            "Click a line or patch to move the ROI slider to it."
-            + (
-                ""
-                if n == self.n_rois
-                else "\nThe rest were scanned above or below this Z-stack."
-            ),
+            "Measure this scan against the stacks of another .mesc file.",
             show_mark=False,
         )
+        imgui.same_line()
+        imgui.begin_disabled(all(im.placement is None for im in self.images.values()))
+        if imgui.button("save positions") and self._save_dialog is None:
+            source = Path(self._built[0])
+            self._save_dialog = pfd.save_file(
+                "ROI positions",
+                str(source.with_name(f"{source.stem}_{self.unit}_positions.csv")),
+                ["CSV", "*.csv"],
+            )
+        imgui.end_disabled()
+        set_tooltip(
+            "Every ROI's slice and microns on each placed Z-stack, as one CSV.",
+            show_mark=False,
+        )
+        im = self.images.get(viewer.current_key)
+        if im is not None and im.placement is not None:
+            imgui.same_line()
+            _, self.one_slice = imgui.checkbox("ROI's slice", self.one_slice)
+            set_tooltip(
+                "Show the slice under the ROI slider's line, not the projection.",
+                show_mark=False,
+            )
+        if im is not None:
+            imgui.text_disabled(self.caption(im))
+            tip = "Click a line or patch to move the ROI slider to it."
+            if im.placement is not None:
+                tip = f"{placement_summary(im.placement)}\n{tip}"
+            set_tooltip(tip, show_mark=False)
+        imgui.text_disabled(self.status())

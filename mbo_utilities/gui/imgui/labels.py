@@ -115,7 +115,10 @@ class LabelSet:
         return done, len(self._labels)
 
     def hotkey_pressed(self) -> int | None:
-        """Label index for a pressed 1-9 key, -1 for 0, or None."""
+        """Label index for a pressed 1-9 key, -1 for 0, or None; never with a modifier down."""
+        io = imgui.get_io()
+        if io.key_ctrl or io.key_shift or io.key_alt:
+            return None
         if imgui.is_key_pressed(imgui.Key._0, False):
             return UNLABELED
         for i, key in enumerate(LABEL_KEYS[: len(self._names)]):
