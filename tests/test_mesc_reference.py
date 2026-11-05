@@ -364,3 +364,41 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         view.cleanup()
         iw.close()
         arr.close()
+
+
+def test_a_replaced_image_keeps_its_texture_until_the_frame_is_drawn(mesc_path):
+    """``set_images`` runs inside a frame whose draw list may already hold the
+    old texture: freeing it there is a ``KeyError`` in the imgui backend.
+    """
+    pytest.importorskip("fastplotlib.widgets.nd_widget")
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui._ndviewer import MboNDViewer
+    from mbo_utilities.gui._top_strip import TopStrip
+    from mbo_utilities.gui.imgui.summary import SummaryImageViewer
+    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+
+    arr = MescArray(mesc_path, unit=1)
+    iw = MboNDViewer(
+        data=display_wrap(arr),
+        slider_dim_names=arr.slider_dim_labels,
+        figure_kwargs={"size": (640, 480)},
+    )
+    iw.show()
+    strip = TopStrip(iw.figure)
+    viewer = SummaryImageViewer(iw.figure, title="test", window_id="test_retired")
+    image = np.zeros((8, 8), np.float32)
+    try:
+        viewer.set_images({"a": image}, selected="a")
+        viewer.open()
+        strip._update_calls[:] = [viewer.draw]
+        iw.figure.canvas.draw()
+        backend = iw.figure.imgui_renderer.backend
+        drawn = set(backend._texture_views)
+        viewer.set_images({"b": image}, selected="b")
+        assert drawn <= set(backend._texture_views)
+        iw.figure.canvas.draw()
+        assert not drawn <= set(backend._texture_views)
+    finally:
+        viewer.cleanup()
+        iw.close()
+        arr.close()

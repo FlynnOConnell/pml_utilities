@@ -169,6 +169,7 @@ class SummaryImageViewer:
         self._show_pixel_values = False
         self._show_rois = show_rois
         self._gpu: dict = {}
+        self._retired: list = []
         self._manual_lo: dict = {}
         self._manual_hi: dict = {}
         self._hist_cache: dict = {}
@@ -202,8 +203,8 @@ class SummaryImageViewer:
     def set_images(self, images: dict, selected: str | None = None):
         for key, gpu in list(self._gpu.items()):
             if images.get(key) is not gpu.arr:
-                gpu.destroy()
-                del self._gpu[key]
+                # the frame being built may already draw it; the next draw frees it
+                self._retired.append(self._gpu.pop(key))
                 self._hist_cache.pop(key, None)
         self._images = dict(images)
         keys = list(self._images) + list(self._movies)
@@ -388,6 +389,8 @@ class SummaryImageViewer:
                 )
 
     def draw(self):
+        while self._retired:
+            self._retired.pop().destroy()
         if not self._popup_open or not (self._images or self._movies):
             return
         keys = list(self._images) + list(self._movies)
@@ -508,7 +511,8 @@ class SummaryImageViewer:
         imgui.end()
 
     def cleanup(self):
-        for gpu in self._gpu.values():
+        for gpu in (*self._gpu.values(), *self._retired):
             gpu.destroy()
         self._gpu.clear()
+        self._retired.clear()
         self._hist_cache.clear()
