@@ -15,6 +15,7 @@ dependencies = [
 	"numpy>=2.2.5",
 	"scipy",
 	"tifffile>=2025.3.30",
+	"roifile>=2025.5.10",
 	"imagecodecs>=2026.6.6",
 	"scikit-image",
 	"zarr>=3.1.3",

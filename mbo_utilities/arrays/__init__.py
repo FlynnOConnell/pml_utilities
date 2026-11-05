@@ -1,6 +1,4 @@
-"""
-Array types for mbo_utilities.
-"""
+"""Array types for mbo_utilities."""
 
 from __future__ import annotations
 
@@ -23,6 +21,21 @@ from mbo_utilities.arrays._base import (
 )
 
 
+def _load_lazy(f, chunk_t: int):
+    import dask.array as da
+    import numpy as np
+    from tifffile import tifffile
+
+    if f.suffix == ".npy":
+        arr = np.load(f, mmap_mode="r")
+    elif f.suffix in (".tif", ".tiff"):
+        arr = tifffile.memmap(f, mode="r")
+    else:
+        raise ValueError(f"Unsupported file type: {f}")
+    chunks = (min(chunk_t, arr.shape[0]), *arr.shape[1:])
+    return da.from_array(arr, chunks=chunks)
+
+
 def files_to_dask(files: list[str | Path], astype=None, chunk_t=250):
     """Lazily build a Dask array or list of arrays depending on filename tags.
 
@@ -43,16 +56,6 @@ def files_to_dask(files: list[str | Path], astype=None, chunk_t=250):
     )
     has_roi = any(re.search(r"roi[_-]?\d+", f.stem, re.IGNORECASE) for f in files)
 
-    def load_lazy(f):
-        if f.suffix == ".npy":
-            arr = np.load(f, mmap_mode="r")
-        elif f.suffix in (".tif", ".tiff"):
-            arr = tifffile.memmap(f, mode="r")
-        else:
-            raise ValueError(f"Unsupported file type: {f}")
-        chunks = (min(chunk_t, arr.shape[0]), *arr.shape[1:])
-        return da.from_array(arr, chunks=chunks)
-
     if has_roi:
         roi_groups = defaultdict(list)
         for f in files:
@@ -60,7 +63,9 @@ def files_to_dask(files: list[str | Path], astype=None, chunk_t=250):
             roi_groups[int(m.group(1)) if m else 0].append(f)
         roi_arrays = []
         for _idx, group in sorted(roi_groups.items()):
-            darr = da.concatenate([load_lazy(f) for f in sorted(group)], axis=0)
+            darr = da.concatenate(
+                [_load_lazy(f, chunk_t) for f in sorted(group)], axis=0
+            )
             roi_arrays.append(darr.astype(astype) if astype else darr)
         return roi_arrays
 
@@ -70,13 +75,13 @@ def files_to_dask(files: list[str | Path], astype=None, chunk_t=250):
             m = re.search(r"(plane|z|chan)[_-]?(\d+)", f.stem, re.IGNORECASE)
             plane_groups[int(m.group(2)) if m else 0].append(f)
         plane_stacks = [
-            da.concatenate([load_lazy(f) for f in sorted(group)], axis=0)
+            da.concatenate([_load_lazy(f, chunk_t) for f in sorted(group)], axis=0)
             for _z, group in sorted(plane_groups.items())
         ]
         full = da.stack(plane_stacks, axis=1)
         return full.astype(astype) if astype else full
 
-    full = da.concatenate([load_lazy(f) for f in sorted(files)], axis=0)
+    full = da.concatenate([_load_lazy(f, chunk_t) for f in sorted(files)], axis=0)
     return full.astype(astype) if astype else full
 
 
@@ -164,9 +169,7 @@ if TYPE_CHECKING:
     )
     from mbo_utilities.arrays.zarr import ZarrArray as ZarrArray
 
-# lazy loading map: name -> (module, attr)
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
-    # array classes
     "Suite2pArray": (".suite2p", "Suite2pArray"),
     "H5Array": (".h5", "H5Array"),
     "BrukerArray": (".bruker", "BrukerArray"),
@@ -194,27 +197,20 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "detect_isoview_kind": (".isoview", "detect_isoview_kind"),
     "isoview_to_ome_zarr": (".isoview", "isoview_to_ome_zarr"),
     "_extract_tiff_plane_number": (".tiff", "_extract_tiff_plane_number"),
-    # registration
     "AxialShiftView": ("._registration", "AxialShiftView"),
     "compute_axial_shifts": ("._registration", "compute_axial_shifts"),
     "validate_axial_shifts": ("._registration", "validate_axial_shifts"),
     "with_axial_shifts": ("._registration", "with_axial_shifts"),
-    # phase correction (read-time wrapper)
     "PhaseCorrectedView": ("._phasecorr_view", "PhaseCorrectedView"),
     "with_phasecorr": ("._phasecorr_view", "with_phasecorr"),
-    # temporal frame averaging (read-time wrapper)
     "FrameAveragedView": ("._average_view", "FrameAveragedView"),
     "average_frames": ("._average_view", "average_frames"),
-    # deflection inversion (read-time wrapper)
     "InvertedDeflectionView": ("._inverted_view", "InvertedDeflectionView"),
     "invert_deflection": ("._inverted_view", "invert_deflection"),
-    # features subpackage
     "features": (".features", None),
-    # ROI mixin
     "RoiFeatureMixin": (".features._roi", "RoiFeatureMixin"),
 }
 
-# cache loaded modules
 _loaded: dict[str, object] = {}
 
 
@@ -272,11 +268,9 @@ __all__ = [
     "MP4Array",
     "NumpyArray",
     "PiezoArray",
-    # ROI mixin
     "RoiFeatureMixin",
     "ScanImageArray",
     "SinglePlaneArray",
-    # Array classes
     "Suite2pArray",
     "TiffArray",
     "ZarrArray",
@@ -284,7 +278,6 @@ __all__ = [
     "_imwrite_base",
     "_normalize_planes",
     "_sanitize_suffix",
-    # Features subpackage
     "features",
     "isoview_to_ome_zarr",
     "list_demixing_results",
@@ -293,22 +286,16 @@ __all__ = [
     "iter_rois",
     "normalize_roi",
     "open_scanimage",
-    # Pipeline registration
     "register_all_pipelines",
-    # Helpers
     "supports_roi",
-    # Registration
     "AxialShiftView",
     "compute_axial_shifts",
     "validate_axial_shifts",
     "with_axial_shifts",
-    # Phase correction
     "PhaseCorrectedView",
     "with_phasecorr",
-    # Frame averaging
     "FrameAveragedView",
     "average_frames",
-    # Deflection inversion
     "InvertedDeflectionView",
     "invert_deflection",
 ]

@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-# common dimension label characters and their meanings
 DIM_DESCRIPTIONS = {
     "T": "time",
     "Z": "z-plane/depth",
@@ -25,26 +24,21 @@ DIM_DESCRIPTIONS = {
     "B": "batch",
 }
 
-# default dimension mappings by ndim (ngff 0.5 compliant: T -> C -> Z -> Y -> X)
 DEFAULT_DIMS = {
     2: ("Y", "X"),
     3: ("T", "Y", "X"),
     4: ("T", "Z", "Y", "X"),
-    5: ("T", "C", "Z", "Y", "X"),  # ngff: time -> channel -> space
+    5: ("T", "C", "Z", "Y", "X"),
 }
 
-# alternative common dimension orderings
 KNOWN_ORDERINGS = {
-    # 3D alternatives
     "ZYX": ("Z", "Y", "X"),
     "TYX": ("T", "Y", "X"),
     "CYX": ("C", "Y", "X"),
-    # 4D alternatives
     "TZYX": ("T", "Z", "Y", "X"),
     "ZTYX": ("Z", "T", "Y", "X"),
     "TCYX": ("T", "C", "Y", "X"),
     "CZYX": ("C", "Z", "Y", "X"),
-    # 5D alternatives (ngff compliant: T -> C -> Z -> Y -> X)
     "TCZYX": ("T", "C", "Z", "Y", "X"),
     "TZCYX": ("T", "Z", "C", "Y", "X"),
     "STZYX": ("S", "T", "Z", "Y", "X"),
@@ -87,11 +81,9 @@ def parse_dims(
         return DEFAULT_DIMS[ndim]
 
     if isinstance(dims, str):
-        # check known orderings first
         if dims.upper() in KNOWN_ORDERINGS:
             result = KNOWN_ORDERINGS[dims.upper()]
         else:
-            # parse character by character
             result = tuple(c.upper() for c in dims if c.isalpha())
     else:
         result = tuple(str(d).upper() for d in dims)
@@ -134,18 +126,16 @@ def get_slider_dims(arr_or_dims) -> tuple[str, ...] | None:
         dimensions that need sliders (excludes Y, X), lowercase for fastplotlib.
         returns None if dims cannot be determined.
     """
-    # if it's already a tuple of strings, use it directly
     if isinstance(arr_or_dims, tuple) and all(isinstance(d, str) for d in arr_or_dims):
         dims = arr_or_dims
     else:
-        # assume it's an array, try to get dims
-        # use normalize=False to preserve descriptive names for slider labels
-        dims = get_dims(arr_or_dims, normalize=False)
+        dims = get_dims(
+            arr_or_dims, normalize=False
+        )  # descriptive names stay for the slider labels
 
     if dims is None:
         return None
 
-    # filter out spatial dims and singleton dims, convert to lowercase for fastplotlib
     # skip size-1 dims since fastplotlib doesn't handle singleton sliders well
     shape = getattr(arr_or_dims, "shape", None)
     slider_dims = []
@@ -165,9 +155,9 @@ def get_slider_dims(arr_or_dims) -> tuple[str, ...] | None:
 # label styles resolve to the same slider.
 _SLIDER_NAME_ALIASES: dict[str, tuple[str, ...]] = {
     "t": ("t", "tile", "timepoint", "timepoints", "tp"),
-    "c": ("c", "cam", "view", "channel", "channels", "cm"),
     # "z-plane"/"cube-slice" are what MescArray.slider_dim_labels emits for
     # depth/cube datasets ("Z-plane"/"Cube-slice"; matching is lowercased)
+    "c": ("c", "cam", "view", "channel", "channels", "cm"),
     "z": (
         "z",
         "zplane",
@@ -248,9 +238,6 @@ def get_dim_index(dims: tuple[str, ...], label: str) -> int | None:
         return None
 
 
-# convenience functions for use outside feature system
-
-
 def infer_dims(ndim: int) -> tuple[str, ...]:
     """
     Infer dimension labels from array dimensionality.
@@ -307,7 +294,6 @@ def get_dims(arr, *, normalize: bool = True) -> tuple[str, ...]:
             dims = tuple(dims)
         return normalize_dims(dims) if normalize else dims
 
-    # fallback to inference (already canonical)
     return infer_dims(arr.ndim)
 
 

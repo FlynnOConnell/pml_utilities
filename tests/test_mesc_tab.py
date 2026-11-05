@@ -69,6 +69,7 @@ class FakeImageWidget:
 class FakeParent:
     def __init__(self, data, dim_names=(), z=0):
         self.image_widget = FakeImageWidget(data, dim_names, z)
+        self._pipeline_applies_cache = None
 
 
 def draw_frames(widget, n=2):
@@ -428,49 +429,6 @@ def test_the_table_says_nothing_about_z_stacks(stack_mesc_path):
     assert not any("##stack" in b or "##pic" in b for b in BUTTONS)
 
 
-def test_the_reference_popups_button_opens_a_stack_at_its_slice(stack_mesc_path):
-    """The one place the Z-stack is offered: the popup's display button hands
-    the tab a unit and a slice, and the tab applies it on the next frame, so
-    the viewer lands on the tissue the lines were scanned in, not on slice 1.
-    """
-    pytest.importorskip("fastplotlib.widgets.nd_widget")
-    from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
-    from mbo_utilities.gui.mesc_reference import roi_slider
-    from mbo_utilities.gui.run_gui import _create_image_widget
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
-    from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
-
-    stack, scan = list_mesc_units(stack_mesc_path)
-    arr = MescArray(stack_mesc_path, unit=1)
-    iw = _create_image_widget(
-        arr, widget="preview", figure_kwargs_override={"size": (640, 480)}
-    )
-    try:
-        gui = next(
-            w
-            for w in iw.figure.imgui_windows.values()
-            if isinstance(w, PreviewDataWidget)
-        )
-        tab = MescTabWidget(gui)
-        # nothing happens inside the popup's own draw; the frame after applies it
-        tab._show_reference_unit(stack["key"], 3)
-        assert tab._pending is not None
-        tab._frame()
-        assert tab._pending is None
-        zdim = roi_slider(gui.image_widget.dim_names)
-        assert zdim is not None and int(gui.image_widget.indices[zdim]) == 3
-        # a picture carries no slice, so the viewer opens it where it opens
-        tab._switch(scan)
-        tab._show_reference_unit(stack["key"], None)
-        tab._frame()
-        assert (
-            int(gui.image_widget.indices[roi_slider(gui.image_widget.dim_names)]) == 0
-        )
-    finally:
-        iw.close()
-        arr.close()
-
-
 def pump(widget, seconds: float = 60.0):
     """Poll the ROI widget's background work until it finishes."""
     deadline = time.time() + seconds
@@ -484,20 +442,19 @@ def pump(widget, seconds: float = 60.0):
 
 
 def test_sidecars_are_named_after_the_unit(tmp_path):
-    from mbo_utilities.gui.roi_runs import registry_path
-    from mbo_utilities.roi_workflow import labels_path
+    from mbo_utilities.roi_workflow import labels_path, run_path
 
     mesc = tmp_path / "scan.mesc"
-    assert labels_path(mesc).name == "manual_labels.zarr"
+    assert labels_path(mesc).name == "scan.rois.zarr"
     assert (
         labels_path(mesc, "MSession_0_MUnit_3").name
-        == "manual_labels_MSession_0_MUnit_3.zarr"
+        == "scan_MSession_0_MUnit_3.rois.zarr"
     )
     assert labels_path(mesc, "MSession_0_MUnit_3").parent == tmp_path
-    assert (
-        registry_path(mesc, "MSession_0_MUnit_3").name
-        == "roi_runs_MSession_0_MUnit_3.json"
-    )
+    run = run_path(mesc, "MSession_0_MUnit_3_manual")
+    assert run.parent == tmp_path
+    assert run.name.startswith("scan.MSession_0_MUnit_3_manual.")
+    assert run.name.endswith(".manual.zarr")
 
 
 def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
@@ -532,8 +489,10 @@ def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
         first = gui.manual_roi
         assert first is not None and first.unit == "MUnit_0"
         assert first.tag == "MSession_0_MUnit_0"
-        assert first._save_target().name == "manual_labels_MSession_0_MUnit_0.zarr"
-        assert first.run_prefix == "rois_MSession_0_MUnit_0_"
+        assert first._save_target().name == "two_units_MSession_0_MUnit_0.rois.zarr"
+        assert first._run_out_path("manual").name.startswith(
+            "two_units.MSession_0_MUnit_0_manual."
+        )
         first.auto_trace = False
         first.add_roi([(2.0, 2.0), (9.0, 2.0), (9.0, 9.0), (2.0, 9.0)])
         first.quick_trace(0)
@@ -545,7 +504,7 @@ def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
         second = gui.manual_roi
         assert second is not None and second is not first and second.unit == "MUnit_1"
         assert second.n_rois == 0 and not second.has_traces()
-        assert second._save_target().name == "manual_labels_MSession_0_MUnit_1.zarr"
+        assert second._save_target().name == "two_units_MSession_0_MUnit_1.rois.zarr"
         second.add_roi([(3.0, 3.0), (8.0, 3.0), (8.0, 8.0), (3.0, 8.0)])
         second.add_roi([(12.0, 3.0), (18.0, 3.0), (18.0, 9.0), (12.0, 9.0)])
         assert second.n_rois == 2
@@ -556,9 +515,9 @@ def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
         assert back.store is first.store
         tab._switch(arr.units[1])
         assert gui.manual_roi.unit == "MUnit_1" and gui.manual_roi.n_rois == 2
-        assert (mesc_path.parent / "manual_labels_MSession_0_MUnit_0.zarr").exists()
-        assert (mesc_path.parent / "manual_labels_MSession_0_MUnit_1.zarr").exists()
-        assert not (mesc_path.parent / "manual_labels.zarr").exists()
+        assert (mesc_path.parent / "two_units_MSession_0_MUnit_0.rois.zarr").exists()
+        assert (mesc_path.parent / "two_units_MSession_0_MUnit_1.rois.zarr").exists()
+        assert not (mesc_path.parent / "two_units.rois.zarr").exists()
     finally:
         iw.close()
         set_widget_enabled("manual_roi", was, persist=False)

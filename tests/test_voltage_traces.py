@@ -103,8 +103,7 @@ def patch(tmp_path):
     path = tmp_path / "cell_session1.mesc"
     green, red = _single_patch_mesc(path)
     arr = MescArray(path, unit="MUnit_4")
-    # the reader flips chessboard pages in Y; the cell square is symmetric about the middle
-    return path, arr, green[:, ::-1], red[:, ::-1]
+    return path, arr, green, red
 
 
 def _uint(page):
@@ -117,7 +116,7 @@ def test_a_single_patch_is_one_roi_of_the_whole_frame(patch):
 
     path, arr, green, _ = patch
     assert arr.metadata["mesc_layout"] == "frames"
-    assert roi_geometry(arr) == {0: (0, 20, 20)}
+    assert roi_geometry(arr) == {0: (20, 20)}
     units = {u["key"]: u for u in list_mesc_units(path)}
     assert is_trace_unit(units["MSession_0/MUnit_4"])
     assert not is_trace_unit(units["MSession_0/MUnit_5"])
@@ -129,40 +128,22 @@ def test_a_single_patch_is_one_roi_of_the_whole_frame(patch):
     np.testing.assert_allclose(found.roi_mean[0], found.F[0])
 
 
-def test_ragged_boxes_on_a_flipped_layout_sit_at_the_bottom():
-    """A shorter box of a Y-flipped ribbon is padded below and flipped, so its pixels are the last
-    rows of the frame; ``roi_geometry`` reads that from the extents.
-    """
-
-    class Unit:
-        shape = (10, 1, 2, 8, 6)
-        metadata = {
-            "mesc_z_axis_meaning": "roi_index",
-            "mesc_roi_extents": [
-                {"index": 0, "y_start": 0, "y_end": 8, "height": 8, "width": 6},
-                {"index": 1, "y_start": 3, "y_end": 8, "height": 5, "width": 4},
-            ],
-        }
-
-    assert roi_geometry(Unit()) == {0: (0, 8, 6), 1: (3, 5, 4)}
-
-
 def test_line_means_read_a_short_box_where_it_sits():
-    """The Traces tab's line and patch means (``linescan_roi_read``) take a
-    short box from its ``y_start``, not from the top of the padded frame.
+    """The Traces tab's line and patch means (``linescan_roi_read``) leave a
+    short box's padding out.
     """
     from mbo_utilities.arrays.numpy import NumpyArray
     from mbo_utilities.roi_workflow import linescan_roi_means
 
     data = np.zeros((5, 1, 2, 8, 6), np.float32)
     data[:, 0, 0] = 1.0
-    data[:, 0, 1, 3:8, 0:4] = 7.0
+    data[:, 0, 1, 0:5, 0:4] = 7.0
     arr = NumpyArray(
         data,
         metadata={
             "mesc_roi_extents": [
-                {"index": 0, "y_start": 0, "y_end": 8, "height": 8, "width": 6},
-                {"index": 1, "y_start": 3, "y_end": 8, "height": 5, "width": 4},
+                {"index": 0, "height": 8, "width": 6},
+                {"index": 1, "height": 5, "width": 4},
             ]
         },
         dims="TCZYX",
@@ -171,11 +152,11 @@ def test_line_means_read_a_short_box_where_it_sits():
 
 
 def test_a_mask_drawn_on_the_frame_becomes_a_domain_of_its_roi():
-    """A mask drawn in the viewer's (padded, flipped) frame is cut to the ROI's own pixels."""
-    geometry = {0: (0, 8, 6), 1: (3, 5, 4)}
+    """A mask drawn in the viewer's padded frame is cut to the ROI's own pixels."""
+    geometry = {0: (8, 6), 1: (5, 4)}
     mask = np.zeros((8, 6), bool)
-    mask[3:5, 0:2] = True
-    mask[0, 5] = True  # padding above and beside box 1
+    mask[0:2, 0:2] = True
+    mask[7, 5] = True  # padding below and beside box 1
     d = Domain.from_frame_mask("spine", 1, mask, geometry)
     assert d.rois == [1] and d.pixels == "mask" and d.mask == {1: [0, 1, 4, 5]}
     assert Domain.from_json("spine", d.to_json()) == d
@@ -535,6 +516,7 @@ def _host(path, unit="MSession_0/MUnit_4", **extra):
     iw = SimpleNamespace(
         data=[shown], dim_names=("Timepoint",), indices={"Timepoint": 0}
     )
+    extra = {"invert_deflection": False, "manual_roi": None, **extra}
     return SimpleNamespace(fpath=path, image_widget=iw, **extra)
 
 

@@ -27,7 +27,6 @@ def _load_stats(plane_dir: Path) -> dict:
             stats["n_cells"] = int(np.sum(iscell > 0.5))
         stats["n_not_cells"] = len(iscell) - stats["n_cells"]
 
-        # calculate SNR if F.npy exists
         f_path = plane_dir / "F.npy"
         if f_path.exists():
             F = load_npy(f_path)
@@ -51,19 +50,15 @@ class GridSearchViewer:
         self.loaded = False
         self._file_dialog = None
 
-        # two suite2p windows for side-by-side comparison
         self._suite2p_left = None
         self._suite2p_right = None
         self._left_idx = 0
         self._right_idx = 1
 
-        # stats cache
         self._stats_cache = {}
 
-        # completeness cache (files required for suite2p GUI)
         self._complete_cache = {}
 
-        # error message state (for showing in UI)
         self._error_message = None
 
     def load_results(self, path: Path):
@@ -77,17 +72,12 @@ class GridSearchViewer:
         if not path.exists():
             raise FileNotFoundError(f"Path does not exist: {path}")
 
-        # Check if this is a single param combo folder (has suite2p results inside)
-        # or the parent grid_search folder
         plane_dir = self._find_plane_dir(path)
         if plane_dir is not None:
-            # User selected a single parameter combination folder
-            # Use its parent as the results path to find sibling combinations
             self.results_path = path.parent
             self.param_combos = sorted(
                 [d for d in self.results_path.iterdir() if d.is_dir()]
             )
-            # Find the index of the selected folder
             try:
                 selected_idx = next(
                     i for i, c in enumerate(self.param_combos) if c.name == path.name
@@ -101,7 +91,6 @@ class GridSearchViewer:
                 else 0
             )
         else:
-            # User selected the parent folder containing param combinations
             self.results_path = path
             self.param_combos = sorted([d for d in path.iterdir() if d.is_dir()])
             self._left_idx = 0
@@ -136,7 +125,6 @@ class GridSearchViewer:
         """
         import os
 
-        # All files required by suite2p GUI's load_files function
         required_files = ["stat.npy", "ops.npy", "F.npy", "Fneu.npy", "spks.npy"]
         # Use os.path.exists for consistent behavior with UNC paths
         missing = [
@@ -200,10 +188,8 @@ class GridSearchViewer:
         if not stat_path.exists():
             return f"No stat.npy found in {plane_dir}"
 
-        # Check for required files BEFORE importing suite2p GUI
         import os
 
-        # Use os.path for all checks - more reliable with various path types
         plane_dir_str = str(plane_dir)
         ops_check_path = os.path.join(plane_dir_str, "ops.npy")
 
@@ -215,7 +201,6 @@ class GridSearchViewer:
             from PyQt6.QtWidgets import QApplication
             from suite2p.gui.gui2p import MainWindow as Suite2pMainWindow
 
-            # close existing window for this position
             if position == "left" and self._suite2p_left is not None:
                 with contextlib.suppress(RuntimeError, AttributeError):
                     self._suite2p_left.close()
@@ -230,12 +215,10 @@ class GridSearchViewer:
             window = Suite2pMainWindow(statfile=normalized_stat_path)
             window.setWindowTitle(f"Suite2p - {combo_dir.name}")
 
-            # position windows side-by-side with proper margins for window decorations
             screen = QApplication.primaryScreen()
             if screen:
                 geom = screen.availableGeometry()
                 half_w = geom.width() // 2
-                # Leave margin for title bar and taskbar
                 margin_top = 30
                 margin_bottom = 10
                 win_height = geom.height() - margin_top - margin_bottom
@@ -257,9 +240,8 @@ class GridSearchViewer:
 
             window.setMinimumSize(400, 300)
             window.show()
-            # Ensure window has normal state (not maximized/fullscreen)
             window.showNormal()
-            return None  # Success
+            return None
 
         except ImportError as e:
             return f"Could not open suite2p GUI: {e}"
@@ -268,7 +250,6 @@ class GridSearchViewer:
 
     def draw(self):
         """Draw the grid search viewer UI."""
-        # check for pending file dialog
         if self._file_dialog is not None and self._file_dialog.ready():
             result = self._file_dialog.result()
             if result:
@@ -307,7 +288,6 @@ class GridSearchViewer:
         n_combos = len(self.param_combos)
         imgui.text(f"Results: {self.results_path.name} ({n_combos} combinations)")
 
-        # Show error message if any
         if self._error_message:
             imgui.spacing()
             imgui.text_colored(imgui.ImVec4(1.0, 0.4, 0.4, 1.0), self._error_message)
@@ -318,15 +298,12 @@ class GridSearchViewer:
         imgui.separator()
         imgui.spacing()
 
-        # two-column layout
         avail = imgui.get_content_region_avail()
         col_width = (avail.x - 20) / 2
 
-        # Check completeness for both selected combos
         left_complete, left_missing = self._is_combo_complete(self._left_idx)
         right_complete, right_missing = self._is_combo_complete(self._right_idx)
 
-        # left column
         imgui.begin_group()
         imgui.text("Left Window")
         imgui.set_next_item_width(col_width - 100)
@@ -348,7 +325,6 @@ class GridSearchViewer:
             if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
                 imgui.set_tooltip(f"Missing: {', '.join(left_missing)}")
 
-        # show stats for left
         stats_l = self._get_stats(self._left_idx)
         if not left_complete:
             imgui.text_colored(
@@ -367,7 +343,6 @@ class GridSearchViewer:
         imgui.dummy(imgui.ImVec2(20, 0))
         imgui.same_line()
 
-        # right column
         imgui.begin_group()
         imgui.text("Right Window")
         imgui.set_next_item_width(col_width - 100)
@@ -389,7 +364,6 @@ class GridSearchViewer:
             if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
                 imgui.set_tooltip(f"Missing: {', '.join(right_missing)}")
 
-        # show stats for right
         stats_r = self._get_stats(self._right_idx)
         if not right_complete:
             imgui.text_colored(
@@ -408,14 +382,12 @@ class GridSearchViewer:
         imgui.separator()
         imgui.spacing()
 
-        # open both button - disable if either is incomplete
         both_complete = left_complete and right_complete
         if not both_complete:
             imgui.begin_disabled()
         if imgui.button("Open Both Side-by-Side"):
             err_left = self._open_suite2p(self._left_idx, "left")
             err_right = self._open_suite2p(self._right_idx, "right")
-            # Show first error encountered
             if err_left:
                 self._error_message = err_left
             elif err_right:
@@ -432,7 +404,6 @@ class GridSearchViewer:
                 "Open both selected combinations in suite2p GUIs side-by-side"
             )
 
-        # quick stats comparison table
         imgui.spacing()
         imgui.separator()
         imgui.text("Quick Stats Comparison:")
@@ -453,7 +424,6 @@ class GridSearchViewer:
                 imgui.table_next_row()
 
                 imgui.table_next_column()
-                # highlight selected rows
                 if i in (self._left_idx, self._right_idx):
                     imgui.text_colored(imgui.ImVec4(0.3, 0.8, 0.3, 1.0), combo.name)
                 else:

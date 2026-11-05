@@ -129,7 +129,7 @@ async def _token_and_refusals(gateway, movie):
     cookie = [(b"cookie", b"mbo_gateway_8899=t0ken")]
 
     status, body = await get(gateway, "/", cookie)
-    assert status == 200 and b"Miller Brain Studio" in body
+    assert status == 200 and b"The Studio" in body
     status, body = await get(gateway, "/api/sessions", cookie)
     assert json.loads(body) == {
         "sessions": [],

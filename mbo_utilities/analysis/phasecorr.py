@@ -2,9 +2,6 @@ import numpy as np
 
 from mbo_utilities import log
 
-TWO_DIM_PHASECORR_METHODS = {"frame", None}
-THREE_DIM_PHASECORR_METHODS = ["mean", "max", "std", "mean-sub"]
-
 MBO_WINDOW_METHODS = {
     "mean": lambda X: np.mean(X, axis=0),
     "max": lambda X: np.max(X, axis=0),
@@ -12,9 +9,6 @@ MBO_WINDOW_METHODS = {
     "mean-sub": lambda X: X[0] - np.mean(X, axis=0),
 }
 
-ALL_PHASECORR_METHODS = set(TWO_DIM_PHASECORR_METHODS) | set(
-    THREE_DIM_PHASECORR_METHODS
-)
 
 logger = log.get("phasecorr")
 

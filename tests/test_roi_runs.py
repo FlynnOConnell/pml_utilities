@@ -8,7 +8,7 @@ here imports masknmf or opens a figure.
 
 from __future__ import annotations
 
-import json
+import logging
 import threading
 import time
 from pathlib import Path
@@ -16,9 +16,9 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from mbo_utilities import roi_workflow as rw
 from mbo_utilities.gui import roi_runs as rr
 from mbo_utilities.gui.widgets.process_manager import LocalJob
+from mbo_utilities.results import ResultUnit
 
 
 class _StubPM:
@@ -103,20 +103,24 @@ def _row(ypix, xpix, lam):
     }
 
 
-def _result(rows, shape=(6, 6), z=0, kind="discover"):
-    return rw.RunResult(
-        path=Path("run"),
-        kind=kind,
-        z=z,
-        shape=shape,
-        stat=np.array(rows, dtype=object),
-        F=None,
-        Fneu=None,
-        norm=None,
-        iscell=None,
-        uids=None,
-        store_indices=None,
+def _result(rows, shape=(6, 6), **attrs):
+    """A pixel ``ResultUnit`` from suite2p-shaped stat rows."""
+    ly, lx = shape
+    return ResultUnit(
+        name="zplane01",
+        kind="plane",
+        index=1,
+        roi_names=[f"roi{k}" for k in range(len(rows))],
+        member_kind="pixel",
+        members=[r["ypix"].astype(np.int64) * lx + r["xpix"] for r in rows],
+        weights=[r["lam"] for r in rows],
+        image_shape=(ly, lx),
+        attrs=dict(attrs),
     )
+
+
+def _set(unit, name, color, **kw):
+    return rr.DerivedSet(unit, Path("run") / name, name, color, **kw)
 
 
 def test_submit_success_and_single_poll(pm):
@@ -133,14 +137,35 @@ def test_submit_success_and_single_poll(pm):
     assert not mgr.busy and mgr.poll(pm) == []
 
 
+def _boom(job):
+    raise ValueError("boom")
+
+
+class _HydrateParent:
+    """What ``_try_hydrate_s2p_from_binary`` needs of the preview widget."""
+
+    logger = logging.getLogger("test.hydrate")
+
+    def __init__(self, s2p, s2p_db):
+        self.s2p, self.s2p_db, self.s2p_extras = s2p, s2p_db, None
+
+
+class _GatedJob:
+    """A job that logs its start, waits on ``gate``, then logs its end."""
+
+    def __init__(self, gate, order):
+        self.gate, self.order = gate, order
+
+    def __call__(self, job):
+        self.order.append("a")
+        assert self.gate.wait(5)
+        self.order.append("a-done")
+
+
 def test_submit_failure_lands_on_run_and_job(pm):
     mgr = rr.RoiRunManager(pm)
     run = rr.RoiRun(kind="demix", tag="b", description="demix rois_b")
-
-    def boom(job):
-        raise ValueError("boom")
-
-    mgr.submit(run, boom)
+    mgr.submit(run, _boom)
     ((got, payload),) = _drain(mgr, pm)
     assert got is run and payload is None
     # the message names the frame that raised, so a failure deep in a
@@ -153,14 +178,10 @@ def test_heavy_runs_serialize_on_the_gpu_lock(pm):
     mgr = rr.RoiRunManager(pm)
     gate = threading.Event()
     order = []
-
-    def slow(job):
-        order.append("a")
-        assert gate.wait(5)
-        order.append("a-done")
-
     ra = mgr.submit(
-        rr.RoiRun(kind="demix", tag="a", description="demix a"), slow, heavy=True
+        rr.RoiRun(kind="demix", tag="a", description="demix a"),
+        _GatedJob(gate, order),
+        heavy=True,
     )
     assert _until(lambda: order == ["a"])
     rb = mgr.submit(
@@ -235,17 +256,6 @@ def test_finished_dirs_prefix_matches_suffixed_plane_dirs(tmp_path):
     assert rr.finished_dirs(a) == [a]
 
 
-def test_scan_lists_the_opened_dir_and_vanilla_suite2p(tmp_path):
-    np.save(tmp_path / "stat.npy", np.empty(0, object))
-    np.save(tmp_path / "ops.npy", {"Ly": 4, "Lx": 4}, allow_pickle=True)
-    _fake_run_dir(tmp_path, "suite2p/plane0")
-    _fake_run_dir(tmp_path, "plane2")
-    paths = {str(r["path"]) for r in rr.scan_run_dirs(tmp_path / "data.bin")}
-    assert str(tmp_path) in paths
-    assert str(tmp_path / "suite2p" / "plane0") in paths
-    assert str(tmp_path / "plane2") in paths
-
-
 def test_spawn_disappearance_with_outputs_is_success(pm, tmp_path):
     # the console prunes completed entries after a few minutes; outputs on
     # disk mean the run finished, not that it crashed
@@ -282,16 +292,17 @@ def test_pick_map_strongest_lam_wins():
             _row([1, 2], [1, 2], [2.0, 2.0]),
         ]
     )
-    pick = rr.build_pick_map(res.stat, res.shape)
+    s = _set(res, "a", rr.set_color(0))
+    pick = rr.build_pick_map(s.footprints, s.shape)
     assert pick[0, 0] == 0 and pick[2, 2] == 1
     assert pick[1, 1] == 0  # contested pixel goes to the stronger component
     assert pick[3, 3] == -1
-    s = rr.DerivedSet(res, "a", rr.set_color(0))
     np.testing.assert_array_equal(s.pick_map, pick)
+    assert len(s) == 2 and s.z == 0 and s.engine == "suite2p" and not s.has_prob
 
 
 def test_derived_rgba_lam_weights():
-    s = rr.DerivedSet(_result([_row([1, 2], [1, 2], [1.0, 2.0])]), "a", (1.0, 0.0, 0.0))
+    s = _set(_result([_row([1, 2], [1, 2], [1.0, 2.0])]), "a", (1.0, 0.0, 0.0))
     img = rr.derived_rgba((6, 6), [s], 0.5)
     assert img.shape == (6, 6, 4) and img.dtype == np.uint8
     c = np.rint(np.asarray(rr.component_color(s, 0)) * 255).astype(int).tolist()
@@ -301,8 +312,8 @@ def test_derived_rgba_lam_weights():
 
 
 def test_derived_rgba_overlap_winner_takes_color():
-    a = rr.DerivedSet(_result([_row([1, 2], [1, 2], [0.5, 1.0])]), "a", (1.0, 0.0, 0.0))
-    b = rr.DerivedSet(_result([_row([1], [1], [1.0])]), "b", (0.0, 0.0, 1.0))
+    a = _set(_result([_row([1, 2], [1, 2], [0.5, 1.0])]), "a", (1.0, 0.0, 0.0))
+    b = _set(_result([_row([1], [1], [1.0])]), "b", (0.0, 0.0, 1.0))
     img = rr.derived_rgba((6, 6), [a, b], 0.6)
     ca = np.rint(np.asarray(rr.component_color(a, 0)) * 255).astype(int).tolist()
     cb = np.rint(np.asarray(rr.component_color(b, 0)) * 255).astype(int).tolist()
@@ -312,9 +323,7 @@ def test_derived_rgba_overlap_winner_takes_color():
 
 def test_derived_rgba_selection_fill_and_rim():
     yy, xx = np.mgrid[1:4, 1:4]
-    s = rr.DerivedSet(
-        _result([_row(yy.ravel(), xx.ravel(), np.ones(9))]), "a", (1.0, 0.0, 0.0)
-    )
+    s = _set(_result([_row(yy.ravel(), xx.ravel(), np.ones(9))]), "a", (1.0, 0.0, 0.0))
     img = rr.derived_rgba((6, 6), [s], 0.3, selected=(s, 0))
     fill = round(rr.SELECTED_ALPHA * 255)
     c = np.rint(np.asarray(rr.component_color(s, 0)) * 255).astype(int).tolist()
@@ -324,7 +333,7 @@ def test_derived_rgba_selection_fill_and_rim():
 
 
 def test_derived_rgba_skips_discarded_and_invisible():
-    s = rr.DerivedSet(
+    s = _set(
         _result(
             [
                 _row([1], [1], [1.0]),
@@ -424,7 +433,7 @@ def test_outline_data_of_nothing_is_empty():
 
 
 def test_derived_outline_follows_the_same_rows_as_derived_rgba():
-    s = rr.DerivedSet(
+    s = _set(
         _result(
             [
                 _row([1], [1], [1.0]),
@@ -447,7 +456,7 @@ def test_derived_outline_follows_the_same_rows_as_derived_rgba():
 
 
 def test_derived_outline_haloes_the_selection():
-    s = rr.DerivedSet(_result([_row([3], [3], [1.0])]), "a", (1.0, 0.0, 0.0))
+    s = _set(_result([_row([3], [3], [1.0])]), "a", (1.0, 0.0, 0.0))
     pos, colors = rr.derived_outline([s], "circle", selected=(s, 0))
     assert len(_pieces(pos)) == 2
     assert np.allclose(colors[-1], (1.0, 1.0, 1.0, 1.0))
@@ -456,51 +465,46 @@ def test_derived_outline_haloes_the_selection():
 def test_component_color_is_class_color_when_labeled():
     from mbo_utilities.annotation import class_color
 
-    s = rr.DerivedSet(_result([_row([1], [1], [1.0])]), "a", (1.0, 0.0, 0.0))
+    s = _set(_result([_row([1], [1], [1.0])]), "a", (1.0, 0.0, 0.0))
     hue = rr.component_color(s, 0)
     s.classes[0] = 1
     assert rr.component_color(s, 0) == class_color(1) != hue
 
 
-def test_result_traces_carry_the_read_coordinates(tmp_path):
-    stat = np.array([_row([0], [0], [1.0])] * 2, object)
-    res = rw.RunResult(
-        path=tmp_path / "rois_manual",
-        kind="extract",
-        z=3,
-        shape=(8, 9),
-        stat=stat,
-        F=np.arange(8, dtype=np.float32).reshape(2, 4),
-        Fneu=np.zeros((2, 4), np.float32),
-        norm=None,
-        iscell=None,
-        uids=np.array([5, 0]),
-        store_indices=None,
-        engine="suite2p",
-        read_z=1,
-        read_c=2,
+def test_unit_trace_carries_the_read_coordinates(tmp_path):
+    unit = _result(
+        [_row([0], [0], [1.0])] * 2, shape=(8, 9), engine="suite2p", z=1, c=2
     )
-    (trace,) = rr.result_traces(res)
+    unit.fs = 5.0
+    unit.traces = {
+        "raw": np.arange(8, dtype=np.float32).reshape(2, 4),
+        "neuropil": np.zeros((2, 4), np.float32),
+        "spikes": np.ones((2, 4), np.float32),
+    }
+    unit.attrs["frames"] = (10, 14, 1)
+    path = tmp_path / "movie.a.2026-10-28-10-00-00.manual.zarr"
+    trace = rr.unit_trace(
+        unit, 0, uid=5, member=None, source="a", path=path, z=1, c=2, engine="suite2p"
+    )
     assert trace.key == ("roi", 5, 1, 2, "suite2p")
-    assert trace.source == "rois_manual" and trace.path == res.path
+    assert trace.source == "a" and trace.path == path
+    assert trace.frames == (10, 14, 1) and trace.fs == 5.0
     np.testing.assert_array_equal(trace.F, [0, 1, 2, 3])
-    # no read coordinates recorded: the store plane stands in for z
-    plain = rw.RunResult(
-        path=tmp_path / "find01",
-        kind="demix",
-        z=3,
-        shape=(8, 9),
-        stat=stat,
-        F=res.F,
-        Fneu=None,
-        norm=None,
-        iscell=None,
-        uids=None,
-        store_indices=None,
+    np.testing.assert_array_equal(trace.Fneu, 0)
+    assert trace.norm is None and trace.kinds["spikes"].tolist() == [1] * 4
+    assert (
+        rr.unit_trace(
+            unit, 2, uid=0, member=None, source="a", path=path, z=0, c=0, engine="mean"
+        )
+        is None
     )
-    assert rr.result_traces(plain) == []
-    (t0, t1) = rr.result_traces(plain, uids=[7, 8])
-    assert (t0.z, t0.c, t0.engine) == (3, 0, "masknmf") and t1.uid == 8
+    s = _set(unit, "a", rr.set_color(0))
+    assert (s.read_z, s.read_c, s.frames, s.engine) == (1, 2, (10, 14, 1), "suite2p")
+    member = s.trace(1, z=0, c=0)
+    assert member.key == ("member", "a", 1) and member.z == 1 and member.c == 2
+    plain = _set(_result([_row([0], [0], [1.0])]), "b", rr.set_color(1), z=3)
+    assert (plain.read_z, plain.read_c, plain.frames) == (None, None, None)
+    assert plain.trace(0, z=3, c=0) is None
 
 
 def _run_dir(path, kind=None, n_stat=1, n_rois=None, pipeline=None):
@@ -518,119 +522,6 @@ def _run_dir(path, kind=None, n_stat=1, n_rois=None, pipeline=None):
     return path
 
 
-def test_scan_run_dirs(tmp_path):
-    _run_dir(tmp_path / "rois_a", kind="extract", n_rois=2, n_stat=2)
-    _run_dir(tmp_path / "rois_m" / "z01", kind="demix", pipeline="masknmf")
-    _run_dir(tmp_path / "rois_m" / "z02", kind="demix", pipeline="masknmf")
-    _run_dir(tmp_path / "rois_partial", kind="extract", n_stat=None)  # still writing
-    _run_dir(tmp_path / "zplane01", n_stat=3)  # full suite2p plane
-    _run_dir(tmp_path / "zplane01" / "rois_d", kind="discover")
-    _run_dir(tmp_path / "zplane02", n_stat=None)  # registered only, no detection
-
-    rows = rr.scan_run_dirs(tmp_path)
-    by_path = {r["path"]: r for r in rows}
-    assert set(by_path) == {
-        tmp_path / "rois_a",
-        tmp_path / "rois_m" / "z01",
-        tmp_path / "rois_m" / "z02",
-        tmp_path / "zplane01",
-        tmp_path / "zplane01" / "rois_d",
-    }
-    assert by_path[tmp_path / "rois_a"]["kind"] == "extract"
-    assert by_path[tmp_path / "rois_a"]["n_rois"] == 2
-    assert by_path[tmp_path / "rois_m" / "z01"]["kind"] == "demix"
-    assert by_path[tmp_path / "rois_m" / "z01"]["n_rois"] == 1  # from stat.npy
-    assert by_path[tmp_path / "zplane01"]["kind"] == "suite2p"
-    assert by_path[tmp_path / "zplane01"]["n_rois"] == 3
-    assert all(r["mtime"] > 0 for r in rows)
-    assert [r["mtime"] for r in rows] == sorted(
-        (r["mtime"] for r in rows), reverse=True
-    )
-    # a data file scans the dir beside it; nothing on disk is fine
-    assert {r["path"] for r in rr.scan_run_dirs(tmp_path / "raw.tif")} == set(by_path)
-    assert rr.scan_run_dirs(tmp_path / "missing" / "raw.tif") == []
-
-
-def test_full_plane_args_minimal_payloads(tmp_path):
-    from mbo_utilities.masknmf.params import MasknmfSettings
-
-    fpath = tmp_path / "raw.tif"
-    s2p = rr.full_plane_args("suite2p", fpath, 3, None)
-    assert set(s2p) == {
-        "input_path",
-        "output_dir",
-        "planes",
-        "reader_kwargs",
-        "ops",
-        "s2p_settings",
-    }
-    assert s2p["input_path"] == str(fpath) and s2p["output_dir"] == str(tmp_path)
-    assert s2p["planes"] == [3] and s2p["reader_kwargs"] == {}
-    # detection is the point of a plane run, and it must be spelled twice:
-    # the source dir's ops.npy can carry roidetect=0 from a registration
-    # pass, and a stat.npy staged in from an earlier run of any pipeline
-    # otherwise reads as "detection already complete"
-    assert s2p["ops"] == {"roidetect": 1}
-    assert s2p["s2p_settings"] == {"force_reg": False, "force_detect": True}
-
-    mnmf = rr.full_plane_args("masknmf", fpath, 1, None)
-    assert set(mnmf) == {
-        "input_path",
-        "output_dir",
-        "planes",
-        "reader_kwargs",
-        "settings",
-    }
-    assert mnmf["settings"] == MasknmfSettings().to_dict()
-
-    with pytest.raises(ValueError, match="pipeline"):
-        rr.full_plane_args("bogus", fpath, 1, None)
-    with pytest.raises(ValueError, match="data path"):
-        rr.full_plane_args("suite2p", None, 1, None)
-
-
-def test_run_registry_round_trip(tmp_path):
-    target = rr.registry_path(tmp_path / "raw.tif")
-    assert target == tmp_path / rr.REGISTRY_NAME
-    assert rr.load_run_registry(target) == []
-
-    entries = [
-        {
-            "path": tmp_path / "rois_a",
-            "kind": "extract",
-            "discarded": {3, 1},
-            "classes": {2: 0},
-            "colors": {4: (1.0, 0.5, 0.0)},
-        },
-        {"path": tmp_path / "gone" / "rois_b", "kind": "demix"},  # dir never existed
-    ]
-    rr.save_run_registry(target, entries)
-    got = rr.load_run_registry(target)
-    assert got == [
-        {
-            "path": str(tmp_path / "rois_a"),
-            "kind": "extract",
-            "discarded": [1, 3],
-            "classes": {2: 0},
-            "colors": {4: (1.0, 0.5, 0.0)},
-        },
-        {
-            "path": str(tmp_path / "gone" / "rois_b"),
-            "kind": "demix",
-            "discarded": [],
-            "classes": {},
-            "colors": {},
-        },
-    ]
-    assert json.loads(target.read_text())["runs"][0]["discarded"] == [1, 3]
-
-    target.write_text("not json {")
-    assert rr.load_run_registry(target) == []
-    nested = tmp_path / "new" / "deep" / rr.REGISTRY_NAME
-    rr.save_run_registry(nested, [])
-    assert rr.load_run_registry(nested) == []
-
-
 class _Settings:
     """Stand-in for a settings dataclass: just carries a to_dict()."""
 
@@ -646,59 +537,13 @@ class _Host:
     """Stand-in for the PreviewDataWidget that owns the Process tab's settings."""
 
     def __init__(self, s2p=None, s2p_db=None, masknmf=None):
+        self._pipeline_instances = {}
         if s2p is not None:
             self.s2p = s2p
         if s2p_db is not None:
             self.s2p_db = s2p_db
         if masknmf is not None:
             self._pipeline_instances = {"MaskNMF": _Settings({}, settings=masknmf)}
-
-
-def test_full_plane_args_uses_the_run_tabs_suite2p_settings(tmp_path):
-    fpath = tmp_path / "raw.tif"
-    # tri-state 2 = force, which reaches lsp as its own kwarg
-    s2p = _Settings({"run": {"do_registration": 2}}, do_registration=2, do_detection=0)
-    host = _Host(s2p=s2p, s2p_db=_Settings({"data_path": ["x"]}))
-
-    args = rr.full_plane_args("suite2p", fpath, 3, None, host=host)
-    assert args["settings"] == {"run": {"do_registration": 2}}
-    assert args["db"] == {"data_path": ["x"]}
-    assert args["s2p_settings"] == {"force_reg": True, "force_detect": False}
-
-
-def test_full_plane_args_without_a_host_keeps_the_old_payload(tmp_path):
-    from mbo_utilities.masknmf.params import MasknmfSettings
-
-    fpath = tmp_path / "raw.tif"
-    s2p = rr.full_plane_args("suite2p", fpath, 3, None)
-    assert set(s2p) == {
-        "input_path",
-        "output_dir",
-        "planes",
-        "reader_kwargs",
-        "ops",
-        "s2p_settings",
-    }
-    assert s2p["ops"] == {"roidetect": 1}
-    mnmf = rr.full_plane_args("masknmf", fpath, 1, None)
-    assert mnmf["settings"] == MasknmfSettings().to_dict()
-
-
-def test_full_plane_args_honors_an_explicit_detection_skip(tmp_path):
-    """The Process tab's Skip still wins - the fix is about the toggle the
-    user never set, not about overriding one they did.
-    """
-    host = _Host(s2p=_Settings({}, do_detection=0, do_registration=1))
-    args = rr.full_plane_args("suite2p", tmp_path / "raw.tif", 1, None, host=host)
-    assert args["ops"] == {"roidetect": 0}
-    assert args["s2p_settings"]["force_detect"] is False
-
-
-def test_full_plane_args_uses_the_run_tabs_masknmf_settings(tmp_path):
-    fpath = tmp_path / "raw.tif"
-    tuned = _Settings({"demixing": {"do_demixing": 2}})
-    args = rr.full_plane_args("masknmf", fpath, 1, None, host=_Host(masknmf=tuned))
-    assert args["settings"] == {"demixing": {"do_demixing": 2}}
 
 
 def test_masknmf_settings_is_none_until_the_run_tab_builds_it():
@@ -719,8 +564,6 @@ class TestSuite2pHydrate:
 
     @staticmethod
     def _parent():
-        import logging
-
         try:
             from mbo_utilities.gui.widgets.pipelines.settings import (
                 Suite2pDB,
@@ -728,16 +571,7 @@ class TestSuite2pHydrate:
             )
         except Exception as error:  # suite2p / cellpose not importable here
             pytest.skip(f"suite2p settings unavailable: {error}")
-
-        class _Parent:
-            logger = logging.getLogger("test.hydrate")
-
-            def __init__(self):
-                self.s2p = Suite2pSettings()
-                self.s2p_db = Suite2pDB()
-                self.s2p_extras = None
-
-        return _Parent()
+        return _HydrateParent(Suite2pSettings(), Suite2pDB())
 
     def test_a_registered_dir_does_not_switch_detection_off(self, tmp_path):
         from mbo_utilities.gui._dialogs import _try_hydrate_s2p_from_binary
@@ -760,36 +594,3 @@ class TestSuite2pHydrate:
         assert _try_hydrate_s2p_from_binary(parent, plane)
         assert parent.s2p.do_detection == before, "the Skip/Run gate must not move"
         assert parent.s2p.tau == pytest.approx(0.7), "parameters still hydrate"
-
-
-def test_registration_does_not_leave_roidetect_behind(tmp_path):
-    """roidetect=0 is how register() asks for registration only; left in
-    ops.npy it is inherited by every later stage and by the GUI.
-    """
-    import logging
-
-    from mbo_utilities.roi_workflow import _drop_run_gates
-
-    ops_path = tmp_path / "ops.npy"
-    np.save(ops_path, {"roidetect": 0, "do_registration": 1, "Ly": 4, "Lx": 4})
-    _drop_run_gates(ops_path, logging.getLogger("test.gates"))
-
-    ops = np.load(ops_path, allow_pickle=True).item()
-    assert "roidetect" not in ops
-    assert ops["do_registration"] == 1 and ops["Ly"] == 4
-    # missing file / missing key are both no-ops
-    _drop_run_gates(ops_path, logging.getLogger("test.gates"))
-    _drop_run_gates(tmp_path / "nope.npy", logging.getLogger("test.gates"))
-
-
-def test_full_plane_args_carry_a_channel_and_a_frame_window(tmp_path):
-    fpath = tmp_path / "raw.tif"
-    args = rr.full_plane_args(
-        "suite2p", fpath, 2, None, channel=2, tp_indices=range(0, 5)
-    )
-    assert args["channel"] == 2
-    assert args["tp_indices"] == [0, 1, 2, 3, 4] and args["selected_planes_0based"] == [
-        1
-    ]
-    args = rr.full_plane_args("masknmf", fpath, 1, None, channel=1)
-    assert args["channel"] == 1 and "tp_indices" not in args

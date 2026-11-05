@@ -39,9 +39,8 @@ Usage:
 The image viewer (``mbo scan.mesc``, ``mbo <expt>/PF``) has no curation of
 its own: its Curate button (the vnoiser pipeline, or the MESc tab once a run is beside the file) runs
 :func:`launch_curation_window`, this window in a second process, since one
-imgui loop cannot host a second hello_imgui runner. The line-scan + Z-stack
-viewer that draws the lines on the stack is ``mbo linescan scan.mesc --view``
-(``gui/linescan_viewer.py``).
+imgui loop cannot host a second hello_imgui runner. The MESc tab's reference
+image (``gui/mesc_reference.py``) draws the lines on the stack.
 """
 
 from __future__ import annotations
@@ -56,10 +55,8 @@ import numpy as np
 from imgui_bundle import hello_imgui, imgui, imgui_ctx, immapp
 
 from mbo_utilities.gui import _setup
-from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._edge_window import EdgeWindow
 from mbo_utilities.gui._theme import em
-from mbo_utilities.install import VNOISER_HINT
 
 __all__ = [
     "CurationApp",
@@ -165,8 +162,6 @@ class _Dashboard:
         logger: logging.Logger | None = None,
         figure=None,
     ):
-        if not HAS_VNOISER:
-            raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
         from mbo_utilities.gui.event_curation import EventCurationWidget
 
         self.logger = logger or logging.getLogger("curation_viewer")
@@ -192,7 +187,7 @@ class _Dashboard:
 
     def open(self, path) -> None:
         """Point the dashboard at ``path``."""
-        from mbo_utilities.vnoiser import vnoiser_run_for_mesc
+        from mbo_utilities.results import vnoiser_run_for_mesc
 
         path = Path(path).expanduser()
         self.source = path

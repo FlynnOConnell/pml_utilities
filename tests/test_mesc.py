@@ -337,14 +337,13 @@ def test_zstack_axis0_is_depth(mesc_path, raw):
     assert np.array_equal(arr[0, 1, 3:6], src[3:6])
 
 
-def test_chessboard_rois_tile_along_x_and_flip_y(mesc_path, raw):
+def test_chessboard_rois_tile_along_x(mesc_path, raw):
     arr = MescArray(mesc_path, unit=1)
     src = raw["MSession_0/MUnit_1/Channel_0"][:]
     assert arr.shape == (6, 2, 4, 32, 24)
     assert arr.num_rois == 4
-    assert arr.metadata["mesc_flip_y"] is True
     for r in range(4):
-        expected = src[:, :, r * 24 : (r + 1) * 24][:, ::-1, :]
+        expected = src[:, :, r * 24 : (r + 1) * 24]
         assert np.array_equal(arr[:, 0, r], expected), f"roi {r}"
 
 
@@ -355,16 +354,15 @@ def test_ribbon_boxes_are_padded_to_the_largest_roi(mesc_path, raw):
 
     padded = np.zeros((5, 18, 20), dtype=src.dtype)
     padded[:, :10, :20] = src[:, 0:10, 0:20]
-    assert np.array_equal(arr[:, 0, 0], padded[:, ::-1, :])
+    assert np.array_equal(arr[:, 0, 0], padded)
 
     padded = np.zeros((5, 18, 20), dtype=src.dtype)
     padded[:, :18, :16] = src[:, 12:30, 0:16]
-    assert np.array_equal(arr[:, 0, 1], padded[:, ::-1, :])
+    assert np.array_equal(arr[:, 0, 1], padded)
 
     # the padding is recorded so a consumer can mask it out
     extents = arr.metadata["mesc_roi_extents"]
-    assert (extents[0]["height"], extents[0]["y_start"]) == (10, 8)
-    assert (extents[1]["height"], extents[1]["y_start"]) == (18, 0)
+    assert [e["height"] for e in extents] == [10, 18]
 
 
 def test_linescan_frames_unpack_from_the_y_axis(mesc_path, raw):
@@ -494,7 +492,7 @@ def test_roi_selection_collapses_z_to_one_roi(mesc_path, raw):
     src = raw["MSession_0/MUnit_1/Channel_0"][:]
     arr.roi = 3
     assert arr.shape == (6, 2, 1, 32, 24)
-    assert np.array_equal(arr[:, 0, 0], src[:, :, 48:72][:, ::-1, :])
+    assert np.array_equal(arr[:, 0, 0], src[:, :, 48:72])
 
 
 def test_roi_zero_splits_all(mesc_path):
@@ -786,6 +784,14 @@ class TestUnitPicker:
         other.touch()
         assert _resolve_mesc_unit(other, None) == ({}, True)
         assert _resolve_mesc_unit(tmp_path, None) == ({}, True)
+
+    def test_a_folder_opens_its_mesc_like_the_file(self, single_unit_mesc, tmp_path):
+        from mbo_utilities.gui.run_gui import _folder_mesc
+
+        assert _folder_mesc(single_unit_mesc.parent) == single_unit_mesc
+        assert _folder_mesc(single_unit_mesc) is None
+        (tmp_path / "scan.tif").touch()
+        assert _folder_mesc(tmp_path) is None
 
 
 class TestViewerFit:

@@ -1038,6 +1038,11 @@ register_pipeline(
 )
 
 
+def trace_label(unit: ResultUnit, roi: str) -> str:
+    """How one ROI trace of a unit reads in the curation window."""
+    return f"scan {unit.attrs.get('scan_id', unit.index)} / {roi}"
+
+
 def recording_id(unit: ResultUnit, roi: str) -> str:
     """The curation's id of one ROI trace, ``scan=<id>/domain=<name>``: what its
     labels are keyed by under ``<run>/.curation``.

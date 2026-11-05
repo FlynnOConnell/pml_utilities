@@ -105,8 +105,8 @@ class Domain:
         ``geometry`` is :func:`roi_geometry`'s. Raises when nothing of the mask
         falls on the ROI.
         """
-        y0, h, w = geometry[int(roi)]
-        local = np.asarray(mask, bool)[y0 : y0 + h, :w]
+        h, w = geometry[int(roi)]
+        local = np.asarray(mask, bool)[:h, :w]
         pixels = np.flatnonzero(local)
         if pixels.size == 0:
             raise ValueError(f"{name}: the mask has no pixel on ROI {roi}")
@@ -215,26 +215,18 @@ class ExtractedTraces:
         return self.names.index(name)
 
 
-def roi_geometry(arr) -> dict[int, tuple[int, int, int]]:
-    """``{roi: (y0, height, width)}``: where each ROI's valid pixels sit in
-    the array's frame. A MESc AOD unit's lines, patches or boxes come from
-    ``mesc_roi_extents`` (a ragged ROI is padded to the shared frame and, on
-    a Y-flipped layout, lands at the bottom); any other array's ROIs are its
-    Z planes, each the whole frame.
+def roi_geometry(arr) -> dict[int, tuple[int, int]]:
+    """``{roi: (height, width)}``: each ROI's valid pixels, from the array
+    frame's top left corner. A MESc AOD unit's lines, patches or boxes come
+    from ``mesc_roi_extents`` (a ragged ROI is padded to the shared frame);
+    any other array's ROIs are its Z planes, each the whole frame.
     """
     md = getattr(arr, "metadata", None) or {}
     extents = md.get("mesc_roi_extents") or []
     if extents and md.get("mesc_z_axis_meaning") == "roi_index":
-        return {
-            int(e["index"]): (
-                int(e.get("y_start", 0)),
-                int(e["height"]),
-                int(e["width"]),
-            )
-            for e in extents
-        }
+        return {int(e["index"]): (int(e["height"]), int(e["width"])) for e in extents}
     _, _, nz, ny, nx = (int(s) for s in arr.shape)
-    return {z: (0, ny, nx) for z in range(nz)}
+    return {z: (ny, nx) for z in range(nz)}
 
 
 def invert(F: np.ndarray) -> np.ndarray:
@@ -348,7 +340,7 @@ def extract_traces(
     fs = float(fs) if fs else None
     n_frames = t1 - t0
     rois = sorted({r for d in domains for r in d.rois})
-    shapes = {r: (geometry[r][1], geometry[r][2]) for r in rois}
+    shapes = {r: geometry[r] for r in rois}
 
     # each domain sums its pixels in every ROI it has; count is its pixel total
     num = np.zeros((len(domains), n_frames))
@@ -359,8 +351,8 @@ def extract_traces(
     roi_mean, masks, imgs = {}, {d.name: {} for d in domains}, {}
     started = time.time()
     for i, r in enumerate(rois):
-        y0, h, w = geometry[r]
-        rows = slice(y0, y0 + h)
+        h, w = geometry[r]
+        rows = slice(0, h)
         movie = as_movie(arr, z=r, c=channel)
         users = [k for k, d in enumerate(domains) if r in d.rois]
         scored = images or any(
@@ -368,7 +360,7 @@ def extract_traces(
         )
         if scored:
             imgs[r] = _score_images(
-                movie.crop(y0, y0 + h, 0, w), (t0, t1), h, w, fs, settings
+                movie.crop(0, h, 0, w), (t0, t1), h, w, fs, settings
             )
         weights = np.zeros((h * w, len(users) + 1))
         outside = np.zeros((h * w, len(users)))

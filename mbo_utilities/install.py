@@ -50,13 +50,6 @@ HAS_FASTPLOTLIB: bool = _get_cached_flag(
     "fastplotlib", lambda: _check_import("fastplotlib")
 )
 HAS_PYQT6: bool = _get_cached_flag("pyqt6", lambda: _check_import("PyQt6"))
-HAS_NAPARI: bool = _get_cached_flag("napari", lambda: _check_import("napari"))
-HAS_NAPARI_OME_ZARR: bool = _get_cached_flag(
-    "napari_ome_zarr", lambda: _check_import("napari_ome_zarr")
-)
-HAS_NAPARI_ANIMATION: bool = _get_cached_flag(
-    "napari_animation", lambda: _check_import("napari_animation")
-)
 
 
 class Status(Enum):
