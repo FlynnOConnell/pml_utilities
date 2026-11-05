@@ -7,8 +7,9 @@ shown (raw, dF/F or z-score, filtered) and :class:`MinMaxPyramid` lets a view
 of any span draw about one point per pixel column. :func:`trace_figure` draws
 rows one per cell, each in its own colour on its own scale with a labelled
 bar, over a time axis; :func:`export_figure` writes PNG, SVG, PDF, the
-window as CSV and the settings as JSON. The dashboard window
-(``gui/dashboard_app.py``) is one view of these.
+window as CSV and the settings as JSON. :func:`compute_readouts` measures
+rows over a span and :func:`morphology_figure` draws them on their tissue.
+The dashboard window (``gui/dashboard_app.py``) is one view of these.
 """
 
 from __future__ import annotations
@@ -30,6 +31,13 @@ from matplotlib.figure import Figure
 
 from mbo_utilities import log
 from mbo_utilities.analysis.filters import FilterSettings, apply_filter
+from mbo_utilities.analysis.trace_readouts import (
+    correlation_matrix,
+    detect_events,
+    noise_floor_hz,
+    power_spectrum,
+    triggered_average,
+)
 from mbo_utilities.annotation.display import DffSettings, display_trace
 from mbo_utilities.annotation.traces import RoiTrace
 
@@ -37,16 +45,23 @@ logger = log.get("dashboard")
 
 __all__ = [
     "FORMATS",
+    "FigureOutline",
     "FigureSettings",
     "FigureTrace",
     "MinMaxPyramid",
     "PALETTES",
+    "ReadoutSettings",
+    "Readouts",
     "TraceView",
     "bar_label",
+    "compute_readouts",
     "cut",
     "export_figure",
+    "export_morphology",
+    "export_readouts",
     "figure_rgba",
     "load_rows",
+    "morphology_figure",
     "nice_bar",
     "process",
     "row_times",
@@ -175,6 +190,59 @@ class TraceView:
     def __post_init__(self):
         if self.kind not in KINDS:
             raise ValueError(f"kind must be one of {tuple(KINDS)}, got {self.kind!r}")
+
+
+@dataclass
+class ReadoutSettings:
+    """What :func:`compute_readouts` measures: a spectrum in ``resolution_hz``
+    bins, and events of the trigger row ``threshold_sd`` robust SDs past its
+    median (``polarity`` -1 for troughs), ``gap_ms`` apart, averaged from
+    ``before_ms`` to ``after_ms`` around each. ``skip_s`` leaves out the start
+    of a recording when no window is active: a scan opens on a transient on
+    every row, which the correlation and the average would take for a signal.
+    """
+
+    skip_s: float = 1.0
+    resolution_hz: float = 1.0
+    threshold_sd: float = 5.0
+    gap_ms: float = 5.0
+    polarity: int = 1
+    before_ms: float = 20.0
+    after_ms: float = 20.0
+
+
+@dataclass
+class Readouts:
+    """What the plotted rows say over ``span`` seconds, one ``labels`` entry a
+    row: ``power`` and each row's ``floors`` (the Hz it reaches the noise at);
+    ``correlation`` between the rows and the motion traces after them, named
+    by ``correlation_labels``; ``mean`` and ``sem`` of every row around
+    ``event_times``, the events of row ``trigger``, at ``lags_ms``.
+    """
+
+    labels: list[str]
+    span: tuple[float, float]
+    frequency: np.ndarray
+    power: np.ndarray  ## (n_rows, n_frequencies)
+    floors: list[float]
+    correlation_labels: list[str]
+    correlation: np.ndarray  ## (n_rows + n_motion, n_rows + n_motion)
+    trigger: int
+    event_times: np.ndarray
+    lags_ms: np.ndarray
+    mean: np.ndarray  ## (n_rows, n_lags)
+    sem: np.ndarray  ## (n_rows, n_lags)
+
+
+@dataclass
+class FigureOutline:
+    """One ROI as :func:`morphology_figure` draws it: ``pixels`` ``(n, 2)``
+    ``[col, row]`` on the image, in ``color`` (a matplotlib colour).
+    """
+
+    label: str
+    pixels: np.ndarray
+    color: str
 
 
 def trace_units(path) -> list[dict]:
@@ -615,6 +683,181 @@ def figure_rgba(fig: Figure, settings: FigureSettings, dpi: float) -> np.ndarray
     return np.ascontiguousarray((rgba * 255).round().astype(np.uint8))
 
 
+def compute_readouts(
+    labels: list[str],
+    t: np.ndarray,
+    traces: np.ndarray,
+    fs: float,
+    trigger: int,
+    span: tuple[float, float],
+    settings: ReadoutSettings,
+    motion=None,
+    motion_filter: FilterSettings | None = None,
+) -> Readouts:
+    """Measure ``(n_rows, n_samples)`` ``traces`` at ``t`` seconds over ``span``.
+
+    ``motion`` (a ``MotionCorrection``) joins the correlation through
+    ``motion_filter``, the filter the rows went through, so both are in one band.
+
+    Raises
+    ------
+    ValueError
+        If ``span`` holds fewer than two samples.
+    """
+    first, last = np.searchsorted(t, span[0]), np.searchsorted(t, span[1], "right")
+    if last - first < 2:
+        raise ValueError(f"{span[0]:g} to {span[1]:g} s holds fewer than two samples")
+    times, shown = t[first:last], traces[:, first:last]
+    frequency, power = power_spectrum(shown, fs, settings.resolution_hz)
+    motion_traces = {} if not motion else motion.at(times)
+    if motion_filter is not None:
+        motion_traces = {
+            label: apply_filter(y, fs, motion_filter)
+            for label, y in motion_traces.items()
+        }
+    events = detect_events(
+        shown[trigger],
+        fs,
+        settings.threshold_sd,
+        settings.gap_ms,
+        settings.polarity,
+    )
+    before = int(round(settings.before_ms * fs / 1000))
+    after = int(round(settings.after_ms * fs / 1000))
+    mean, sem, _ = triggered_average(shown, events, before, after)
+    return Readouts(
+        labels=labels,
+        span=span,
+        frequency=frequency,
+        power=power,
+        floors=[noise_floor_hz(frequency, p) for p in power],
+        correlation_labels=[
+            *labels,
+            *(f"{motion.source} {label}" for label in motion_traces),
+        ],
+        correlation=correlation_matrix(
+            np.concatenate(
+                [shown, np.array(list(motion_traces.values())).reshape(-1, len(times))]
+            )
+        ),
+        trigger=trigger,
+        event_times=times[events],
+        lags_ms=np.arange(-before, after + 1) * 1000 / fs,
+        mean=mean,
+        sem=sem,
+    )
+
+
+def export_readouts(readouts: Readouts, stem: Path | str) -> list[Path]:
+    """Write ``<stem>_spectrum.csv``, ``_correlation.csv``, ``_triggered.csv``
+    and ``_events.csv``. Returns the paths written.
+    """
+    stem = Path(stem)
+    stem.parent.mkdir(parents=True, exist_ok=True)
+    r = readouts
+    tables = {
+        "spectrum": (["frequency_hz", *r.labels], [r.frequency, *r.power]),
+        "triggered": (
+            [
+                "lag_ms",
+                *r.labels,
+                *(f"{label} sem" for label in r.labels),
+            ],
+            [r.lags_ms, *r.mean, *r.sem],
+        ),
+        "events": (["time_s"], [r.event_times]),
+        "correlation": (r.correlation_labels, list(r.correlation)),
+    }
+    written = []
+    for name, (header, columns) in tables.items():
+        path = stem.with_name(f"{stem.name}_{name}.csv")
+        with path.open("w") as f:
+            f.write(",".join(header) + "\n")
+            np.savetxt(f, np.column_stack(columns), delimiter=",", fmt="%.6g")
+        written.append(path)
+    return written
+
+
+def morphology_figure(
+    image: np.ndarray,
+    outlines: list[FigureOutline],
+    um_per_px: float,
+    view: tuple[float, float, float, float],
+    settings: FigureSettings,
+) -> Figure:
+    """A ``(Y, X)`` image under ``outlines`` and a scale bar, cropped to
+    ``view`` ``(col0, col1, row0, row1)``. Rows grow upward, as the dashboard
+    and MESc draw them.
+    """
+    col0, col1, row0, row1 = view
+    width = settings.width_in / 2
+    fig = Figure(figsize=(width, width * (row1 - row0) / (col1 - col0)))
+    FigureCanvasAgg(fig)
+    ax = fig.add_axes((0, 0, 1, 1))
+    ax.imshow(image, cmap="gray", origin="lower", interpolation="nearest")
+    for outline in outlines:
+        col, row = outline.pixels.T
+        ax.plot(col, row, color=outline.color, lw=settings.line_pt * 2)
+        if settings.labels:
+            ax.annotate(
+                outline.label,
+                (col[-1], row[-1]),
+                xytext=(3, 3),
+                textcoords="offset points",
+                color=outline.color,
+                fontsize=settings.font_pt * 0.75,
+                fontfamily=_font(),
+                annotation_clip=True,
+            )
+    bar_um = nice_bar((col1 - col0) * um_per_px)
+    bar_px = bar_um / um_per_px
+    right = col1 - 0.04 * (col1 - col0)
+    low = row0 + 0.05 * (row1 - row0)
+    ax.plot([right - bar_px, right], [low, low], color="white", lw=2)
+    ax.annotate(
+        bar_label(bar_um, "um"),
+        (right - bar_px / 2, low),
+        xytext=(0, 3),
+        textcoords="offset points",
+        ha="center",
+        color="white",
+        fontsize=settings.font_pt * 0.75,
+        fontfamily=_font(),
+    )
+    ax.set_xlim(col0, col1)
+    ax.set_ylim(row0, row1)
+    ax.set_axis_off()
+    return fig
+
+
+def _save_figure(fig: Figure, path: Path, settings: FigureSettings) -> None:
+    """Save ``fig`` with editable text, its format from ``path``'s suffix."""
+    with matplotlib.rc_context(EDITABLE_TEXT):
+        fig.savefig(
+            path, dpi=settings.dpi, transparent=settings.transparent, **SAVE_KWARGS
+        )
+    if path.suffix == ".svg" and _font() == "Nimbus Sans":
+        ## NOTE: Nimbus Sans has Arial's metrics; named Arial, the SVG opens
+        ## with Arial in PowerPoint on a machine without Nimbus Sans
+        path.write_text(path.read_text().replace("Nimbus Sans", "Arial"))
+
+
+def export_morphology(
+    fig: Figure, settings: FigureSettings, stem, info: dict
+) -> list[Path]:
+    """Write a :func:`morphology_figure` as ``<stem>.png``, ``.svg``, ``.pdf``
+    and ``info`` as ``<stem>.json``. Returns the paths written.
+    """
+    stem = Path(stem)
+    stem.parent.mkdir(parents=True, exist_ok=True)
+    written = [stem.with_name(f"{stem.name}.{fmt}") for fmt in ("png", "svg", "pdf")]
+    for path in written:
+        _save_figure(fig, path, settings)
+    path = stem.with_name(f"{stem.name}.json")
+    path.write_text(json.dumps(info, indent=2))
+    return [*written, path]
+
+
 def export_figure(
     traces: list[FigureTrace],
     settings: FigureSettings,
@@ -638,14 +881,7 @@ def export_figure(
         if fmt == "csv":
             continue
         path = stem.with_name(f"{stem.name}.{fmt}")
-        with matplotlib.rc_context(EDITABLE_TEXT):
-            fig.savefig(
-                path, dpi=settings.dpi, transparent=settings.transparent, **SAVE_KWARGS
-            )
-        if fmt == "svg" and _font() == "Nimbus Sans":
-            ## NOTE: Nimbus Sans has Arial's metrics; named Arial, the SVG opens
-            ## with Arial in PowerPoint on a machine without Nimbus Sans
-            path.write_text(path.read_text().replace("Nimbus Sans", "Arial"))
+        _save_figure(fig, path, settings)
         written.append(path)
     if "csv" in formats:
         shown = cut(traces, settings.start_s, settings.stop_s)

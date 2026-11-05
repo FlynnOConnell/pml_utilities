@@ -5,11 +5,12 @@ Open a ``.mesc``, pick a unit with ROIs (:func:`~mbo_utilities.dashboard.trace_u
 and its line or patch means load with any ROIs drawn on it in the ROI tool
 (:func:`~mbo_utilities.dashboard.load_rows`, cached after the first read).
 The ROIs are on the left, the processing (kind, dF/F baseline, filter),
-windows and export on the right, and in the middle an overview of the whole
-recording over one plot per ROI on a shared time axis. Every trace is
-processed on a worker thread and drawn from a min/max pyramid, so the window
-never waits on a computation and draws about two points per pixel column at
-any zoom.
+read-outs, windows and export on the right, and in the middle the ROIs on their
+tissue (``gui/dashboard_morphology.py``) beside an overview of the whole
+recording over one plot per ROI on a shared time axis, or a read-out of them
+(``gui/dashboard_readouts.py``). Every trace is processed on a worker thread
+and drawn from a min/max pyramid, so the window never waits on a computation
+and draws about two points per pixel column at any zoom.
 
 ``mbo dashboard [file.mesc] [--unit MUnit_28]``, the launcher's Dashboard
 entry and the MESc tab's Dashboard button open it
@@ -46,6 +47,7 @@ from mbo_utilities.dashboard import (
     FigureSettings,
     FigureTrace,
     MinMaxPyramid,
+    ReadoutSettings,
     TraceView,
     export_figure,
     figure_rgba,
@@ -55,6 +57,12 @@ from mbo_utilities.dashboard import (
     trace_units,
 )
 from mbo_utilities.gui import _setup
+from mbo_utilities.gui.dashboard_morphology import (
+    PANEL_WIDTH,
+    MorphologyMixin,
+    write_morphology,
+)
+from mbo_utilities.gui.dashboard_readouts import PAGES, ReadoutsMixin
 from mbo_utilities.gui.imgui.lines import (
     X_AXIS_HIDDEN,
     line,
@@ -142,7 +150,7 @@ def write_exports(jobs: list[tuple]) -> str:
     return f"wrote {len(written)} files to {folder}"
 
 
-class DashboardApp:
+class DashboardApp(MorphologyMixin, ReadoutsMixin):
     """One window's state: the file, the unit and its rows, how they are
     shown, the windows and the export settings.
     """
@@ -188,6 +196,31 @@ class DashboardApp:
         self._show_preview = False
         self._dialog = None
         self.process_error = ""
+        self.page = PAGES[0]
+        self._set_page: str | None = None
+        self.readout = ReadoutSettings()
+        self.readouts = None
+        self.readout_rows = None
+        self.readout_error = ""
+        self.trigger: tuple | None = None
+        self.show_events = False
+        self._reading: Future | None = None
+        self._reading_rows: list = []
+        self._readouts_key: tuple | None = None
+        self.show_morphology = True
+        self.morph_picked_only = False
+        self.morph_pad = 0
+        self.morph_view = (0.0, 1.0, 0.0, 1.0)
+        self.stack_files: list[str] = []
+        self.motion = None
+        self._morpher = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="dashboard-morphology"
+        )
+        self._morph_on: tuple | None = None
+        self._morph_scale = 1.0
+        self._morph_textures: dict = {}
+        self._stack_dialog = None
+        self._reset_morphology()
         if path is not None:
             self.open(path)
 
@@ -204,6 +237,8 @@ class DashboardApp:
         if channel is not None:
             self.channel = int(channel)
         self.rows, self._results, self._pending = [], {}, {}
+        self.readouts, self._readouts_key, self._reading = None, None, None
+        self._reset_morphology()
         self.progress = (0, 0)
         self.status = f"loading {unit.rsplit('/', 1)[-1]}"
         self._loading = self._loader.submit(
@@ -265,6 +300,8 @@ class DashboardApp:
                 self.error = f"preview failed: {previewing.exception()}"
             else:
                 self._preview, self._preview_new = previewing.result(), True
+        self._poll_morphology()
+        self._poll_readouts()
 
     def _loaded(self, rows) -> None:
         self.rows = rows
@@ -293,6 +330,8 @@ class DashboardApp:
         if key != self._view_key:
             self._view_key = key
             self.process_error = ""
+        if self.process_error:
+            return
         for row in self._picked_rows():
             have = self._results.get(row.key)
             if (have is not None and have.view == key) or row.key in self._pending:
@@ -304,6 +343,9 @@ class DashboardApp:
     def _color(self, row, theme: str = "dark") -> str:
         palette = COLORS[theme]
         return palette[self.rows.index(row) % len(palette)]
+
+    def _row_rgb(self, row) -> tuple[float, float, float]:
+        return rgb(self._color(row))
 
     def _y_unit(self) -> str:
         return KIND_UNITS[self.view.kind]
@@ -319,6 +361,7 @@ class DashboardApp:
             self._draw_open()
         elif self.rows:
             self._schedule()
+            self._schedule_readouts()
             self._keys()
             self._draw_main()
         elif self._loading is not None:
@@ -422,6 +465,8 @@ class DashboardApp:
             self.add_window(*self.x_view)
         if imgui.is_key_pressed(imgui.Key.f, False):
             self._set_x = self.duration
+        if imgui.is_key_pressed(imgui.Key.m, False):
+            self.show_morphology = not self.show_morphology
 
     def _draw_main(self) -> None:
         avail = imgui.get_content_region_avail()
@@ -436,6 +481,7 @@ class DashboardApp:
         imgui.same_line()
         with imgui_ctx.begin_child("##side", imgui.ImVec2(RIGHT_WIDTH, 0)):
             self._draw_processing()
+            self._draw_readout_settings()
             self._draw_windows()
             self._draw_export()
 
@@ -475,10 +521,40 @@ class DashboardApp:
                 )
 
     def _draw_plots(self) -> None:
-        picked = self._picked_rows()
-        if not picked:
-            imgui.text_disabled("Tick ROIs on the left to plot them.")
+        if self.show_morphology:
+            with imgui_ctx.begin_child("##morph", imgui.ImVec2(PANEL_WIDTH, 0)):
+                self._draw_morphology()
+            imgui.same_line()
+        with imgui_ctx.begin_child("##pages", imgui.ImVec2(0, 0)):
+            self._draw_pages()
+
+    def _draw_pages(self) -> None:
+        if not imgui.begin_tab_bar("##pages_bar"):
             return
+        for page, draw, read_out in (
+            (PAGES[0], self._draw_traces, False),
+            (PAGES[1], self._draw_spectrum, True),
+            (PAGES[2], self._draw_correlation, True),
+            (PAGES[3], self._draw_triggered, True),
+        ):
+            flags = imgui.TabItemFlags_.none
+            if page == self._set_page:
+                flags = imgui.TabItemFlags_.set_selected
+            if imgui.begin_tab_item(page, None, flags)[0]:
+                self.page = page
+                if not self._picked_rows():
+                    imgui.text_disabled("Tick ROIs on the left to plot them.")
+                elif read_out:
+                    with plot_style(grid=True):
+                        self._draw_readout_page(draw)
+                else:
+                    draw()
+                imgui.end_tab_item()
+        self._set_page = None
+        imgui.end_tab_bar()
+
+    def _draw_traces(self) -> None:
+        picked = self._picked_rows()
         with plot_style(grid=True):
             self._draw_overview(picked[0])
             height = max(
@@ -589,6 +665,7 @@ class DashboardApp:
                 line("##under", y, x=x, color=UNDER_RGB, legend=False)
             x, y = result.pyramid.view(x0, x1, columns)
             line(f"{row.name}", y, x=x, color=rgb(self._color(row)), legend=False)
+            self._draw_event_marks(row, x0, x1)
             if result.view != self._view_key:
                 implot.annotation(
                     x0,
@@ -848,6 +925,17 @@ class DashboardApp:
         imgui.end_disabled()
         if not ready:
             imgui.text_disabled("waiting for the processing to finish")
+        imgui.begin_disabled(self._morph_on is None or self._exporting is not None)
+        if imgui.button("Export morphology") and self._morph_on is not None:
+            self._exporting = self._worker.submit(
+                write_morphology, *self.morphology_job()
+            )
+        imgui.end_disabled()
+        imgui.set_item_tooltip(
+            "The panel as shown with the picked ROIs and, with a placed stack, "
+            "every ROI's position as a CSV."
+        )
+        imgui.same_line()
         if imgui.small_button("Open folder"):
             self.open_folder()
 
@@ -963,6 +1051,8 @@ class DashboardApp:
             hello_imgui.ImGuiTheme_.darcula_darker
         )
         params.callbacks.show_gui = self.draw
+        ## NOTE: a texture outliving the GL context segfaults when it is collected
+        params.callbacks.before_exit = self._morph_textures.clear
         return params
 
     def run(self, frames: int | None = None, screenshot=None) -> None:
@@ -985,6 +1075,7 @@ class DashboardApp:
         finally:
             self._loader.shutdown(wait=False, cancel_futures=True)
             self._worker.shutdown(wait=False, cancel_futures=True)
+            self._morpher.shutdown(wait=False, cancel_futures=True)
 
 
 def open_dashboard(

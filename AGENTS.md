@@ -37,7 +37,7 @@ pml_utilities/
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
-│   ├── analysis/             # scan-phase, linescan, phasecorr math, MESc stack placement; filters.py: zero-phase trace filters sized in Hz and ms
+│   ├── analysis/             # scan-phase, linescan, phasecorr math, MESc stack placement; filters.py: zero-phase trace filters sized in Hz and ms; trace_readouts.py: spectrum, correlation, triggered average
 │   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation
 │   ├── cli.py                # `mbo` (click)
 │   └── assets/docs/          # in-app help pages
@@ -1058,7 +1058,8 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   The MESc tab opens the popup from the picture cell, reopens it on a unit switch and
   hands the host `reference_view` (a callable) the Traces panel offers as a button.
   Nothing draws ROIs on the viewer's own image; no projection of the unit itself is
-  offered.
+  offered. The dashboard's morphology panel (`gui/dashboard_morphology.py`) shows the
+  same images in the traces' colours, rows growing upward as in MESc.
 - **The MESc table.** One row per recording: a scan's picture (`background_unit`)
   and RTMC reference unit (`rtmc_unit`) fold into its row (`mesc_units.companions`).
   The `picture` cell is **one** button (`IMAGE_ICON`) that opens the reference image;
