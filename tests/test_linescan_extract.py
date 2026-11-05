@@ -1,4 +1,4 @@
-"""``linescan_roi_means`` applies the channel conversion and ``pair_reference_zstack`` finds the stack a line scan was drawn on."""
+"""``linescan_roi_means`` applies the channel conversion."""
 
 from __future__ import annotations
 
@@ -7,10 +7,6 @@ import json
 import h5py
 import numpy as np
 import pytest
-from mbo_utilities.analysis.linescan import (
-    background_image,
-    pair_reference_zstack,
-)
 from mbo_utilities.arrays.mesc import MescArray
 from mbo_utilities.roi_workflow import (
     linescan_roi_means,
@@ -328,44 +324,3 @@ def test_conversion_offset_applied(stim_path, tmp_path):
     assert kymo.shape == (3, 40, 8) and abs(float(np.nanmean(kymo[2])) - 100.0) < 5
     F1, _ = linescan_roi_read(arr, channel=1)
     assert np.allclose(F1, 150.0)
-
-
-def test_reference_zstack_pairing(stim_path):
-    path, _, _ = stim_path
-    ref = pair_reference_zstack(path, "MSession_0/MUnit_1")
-    assert (
-        ref["munit"] == "MUnit_0"
-        and ref["xy_fraction"] == 1.0
-        and ref["z_fraction"] == 1.0
-    )
-    assert ref["coarse"] is False and abs(ref["um_per_px"] - 20 / 64) < 1e-9
-    # the fine stack keeps winning when the lines sit below its depth range:
-    # depth coverage is flagged, not used to fall back to the coarse stack
-    with h5py.File(path, "r+") as f:
-        u = f["MSession_0/MUnit_1"]
-        cm = json.loads(u.attrs["CoordinateMapJSON"])
-        for seg in cm["maps"][0]["driftEndPoints"]:
-            seg[2] = [-108.0, -108.0]  # 8 um below the stack's bottom slice
-        u.attrs["CoordinateMapJSON"] = json.dumps(cm)
-    ref = pair_reference_zstack(path, "MSession_0/MUnit_1")
-    assert (
-        ref["munit"] == "MUnit_0"
-        and ref["z_fraction"] == 0.0
-        and ref["coarse"] is False
-    )
-    # with the fine stack gone the coarse one is used, and says so
-    units = [
-        u
-        for u in __import__(
-            "mbo_utilities.arrays.mesc", fromlist=["list_mesc_units"]
-        ).list_mesc_units(path)
-        if u["munit"] != "MUnit_0"
-    ]
-    ref = pair_reference_zstack(path, "MSession_0/MUnit_1", units)
-    assert ref["munit"] == "MUnit_2" and ref["coarse"] is True
-    bg = background_image(path, "MSession_0/MUnit_1")
-    assert (
-        bg["key"] == "MSession_1/MUnit_0" and bg["z"] == -98.0 and bg["nchannels"] == 2
-    )
-    assert bg["shape"] == (1, 32, 32) and bg["width"] == 20.0
-    assert background_image(path, "MSession_0/MUnit_0") is None

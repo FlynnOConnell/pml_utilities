@@ -1,21 +1,24 @@
 """The reference image of a MESc scan: the picture its lines were drawn on
 and the Z-stack around it, max projected, with the lines drawn.
 
-Fixture: a Z-stack (11 slices, 2 um apart, slice k filled with k) whose
-field holds a four-line scan (6 frames; lines on slices 3, 7 and 3, and a
-fourth scanned 10 um below the stack) drawn on a picture focused 4 um under
-the stack's origin.
+Fixture: a textured Z-stack (11 slices, 2 um apart) whose field holds a
+four-line scan (6 frames; lines on slices 3, 7 and 3, and a fourth scanned
+10 um below the stack) drawn on a picture of slice 3, so the picture registers
+at no shift.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
+import time
 import traceback
-from functools import partial
 
 import h5py
 import numpy as np
 import pytest
+from mbo_utilities.analysis.mesc_placement import StackPlacement
+from scipy import ndimage
 
 TRANSL = (100.0, 200.0, -50.0)
 SNAP_TRANSL = (100.0, 200.0, -54.0)
@@ -25,6 +28,16 @@ LINES = [
     [[105, 135], [220, 230], [-53.9, -53.9]],
     [[112, 118], [212, 212], [-70, -70]],
 ]
+
+
+def tissue(seed: int) -> np.ndarray:
+    """``(11, 64, 80)`` uint16 blobs a few pixels wide, different on every slice."""
+    rng = np.random.default_rng(seed)
+    blobs = ndimage.gaussian_filter(rng.normal(size=(11, 64, 80)), (1, 2, 2))
+    return ((blobs - blobs.min()) / np.ptp(blobs) * 1000).astype(np.uint16)
+
+
+STACK = tissue(seed=1)
 
 
 @pytest.fixture(scope="module")
@@ -53,10 +66,7 @@ def mesc_path(tmp_path_factory):
                 ]
             }
         )
-        stack = np.broadcast_to(
-            np.arange(11, dtype=np.uint16)[:, None, None], (11, 64, 80)
-        )
-        z.create_dataset("Channel_0", data=np.ascontiguousarray(stack))
+        z.create_dataset("Channel_0", data=STACK)
 
         ls = s.create_group("MUnit_1")
         ls.attrs.update(
@@ -103,8 +113,8 @@ def mesc_path(tmp_path_factory):
                 ]
             }
         )
-        picture = np.full((3, 64, 80), 7, np.uint16)
-        picture[2, 10, 10] = 9
+        picture = np.repeat(STACK[3][None], 3, axis=0)
+        picture[2, 10, 10] = 2000
         snap.create_dataset("Channel_0", data=picture)
     return path
 
@@ -121,27 +131,63 @@ def test_reference_images_of_a_line_scan(mesc_path):
     projected over the slices they sit on, not over the whole stack.
     """
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.mesc_reference import reference_images
+    from mbo_utilities.gui.mesc_reference import picture_image, stack_images
 
     mesc = MescArray(mesc_path, unit=1)
     try:
-        images = reference_images(mesc, partial(open_unit, mesc_path), 0)
+        picture = picture_image(mesc, open_unit, 0)
+        (stack,), refused = stack_images(mesc, open_unit, 0)
     finally:
         mesc.close()
-    assert [im.key for im in images] == ["MUnit_4 picture", "MUnit_0 slices 4-8"]
-    picture, stack = images
-    # each image says which unit it is and, for a stack, the slice to open it at
-    assert (picture.unit, picture.slice) == ("MSession_0/MUnit_4", None)
-    assert (stack.unit, stack.slice) == ("MSession_0/MUnit_0", 3)
+    assert picture.key == "MUnit_4 picture" and picture.placement is None
+    assert stack.key == "MUnit_0 slices 4-8" and refused == []
+    assert stack.placement.placed
+    np.testing.assert_allclose(stack.placement.shift_um, 0.0, atol=0.5)
     # the picture is the max over its frames
     assert picture.image.shape == (64, 80) and picture.image.dtype == np.float32
-    assert float(picture.image[0, 0]) == 7.0 and float(picture.image[10, 10]) == 9.0
+    assert float(picture.image[0, 0]) == STACK[3, 0, 0]
+    assert float(picture.image[10, 10]) == 2000.0
     assert [r["roi"] for r in picture.records] == [0, 1, 2, 3]
     assert all(r["pixels"].shape == (2, 2) for r in picture.records)
-    # slice k holds the value k: slices 3..7 project to 7, not the stack's 10
-    np.testing.assert_allclose(stack.image, 7.0)
+    np.testing.assert_allclose(stack.image, STACK[3:8].max(axis=0))
     assert [r["roi"] for r in stack.records] == [0, 1, 2]
     assert [r["slice"] for r in stack.records] == [3, 7, 3]
+
+
+def test_a_stack_file_beside_the_scan_is_measured_too(mesc_path, tmp_path):
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui.mesc_reference import stack_images
+
+    path = tmp_path / "reference.mesc"
+    shutil.copy(mesc_path, path)
+    shutil.copy(mesc_path, tmp_path / "reference_z.mesc")
+    mesc = MescArray(path, unit=1)
+    try:
+        images, _ = stack_images(mesc, open_unit, 0)
+    finally:
+        mesc.close()
+    assert [im.key for im in images] == [
+        "MUnit_0 slices 4-8",
+        "reference_z MUnit_0 slices 4-8",
+    ]
+    assert images[1].placement.stack_path == str(tmp_path / "reference_z.mesc")
+
+
+def test_a_stack_of_other_tissue_is_refused_and_carries_nothing(mesc_path, tmp_path):
+    """Its stored position is right on top of the lines, and that is no evidence."""
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui.mesc_reference import stack_images
+
+    path = tmp_path / "other.mesc"
+    shutil.copy(mesc_path, path)
+    with h5py.File(path, "a") as f:
+        f["MSession_0/MUnit_0/Channel_0"][...] = tissue(seed=2)
+    mesc = MescArray(path, unit=1)
+    try:
+        images, (refused,) = stack_images(mesc, open_unit, 0)
+    finally:
+        mesc.close()
+    assert images == [] and not refused.placed
 
 
 def test_a_sampled_projection_stays_a_max(mesc_path, monkeypatch):
@@ -150,22 +196,24 @@ def test_a_sampled_projection_stays_a_max(mesc_path, monkeypatch):
     """
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui import mesc_reference
-    from mbo_utilities.gui.mesc_reference import reference_images
+    from mbo_utilities.gui.mesc_reference import picture_image, stack_images
 
     # room for one frame of the picture at a time: frames 0 and 2 are read
     monkeypatch.setattr(mesc_reference, "MAX_ELEMENTS", 64 * 80 * 2)
     mesc = MescArray(mesc_path, unit=1)
     try:
-        picture, stack = reference_images(mesc, partial(open_unit, mesc_path), 0)
+        picture = picture_image(mesc, open_unit, 0)
+        (stack,), _ = stack_images(mesc, open_unit, 0)
     finally:
         mesc.close()
-    assert picture.image.shape == (64, 80) and float(picture.image[10, 10]) == 9.0
-    np.testing.assert_allclose(stack.image, 7.0)
+    assert picture.image.shape == (64, 80)
+    assert float(picture.image[10, 10]) == 2000.0
+    np.testing.assert_allclose(stack.image, STACK[3:8].max(axis=0))
 
 
 def test_the_reader_places_its_lines(mesc_path):
-    """``MescArray.line_positions``: each line's depth against the picture
-    it was drawn on, read once; None for a unit without ROIs.
+    """``MescArray.line_positions``: each line's stored ends, read once; None
+    for a unit without ROIs.
     """
     from mbo_utilities.arrays.mesc import MescArray
 
@@ -174,14 +222,7 @@ def test_the_reader_places_its_lines(mesc_path):
     try:
         positions = scan.line_positions
         assert [p["index"] for p in positions] == [0, 1, 2, 3]
-        np.testing.assert_allclose(
-            [p["dz_um"] for p in positions], [0.0, 8.0, 0.1, -16.0]
-        )
-        # and on the Z-stack holding them: the slice each sits on. The fourth
-        # was scanned below the stack, so no stack holds it
-        assert [p["stack"] for p in positions] == ["MSession_0/MUnit_0"] * 3 + [None]
-        assert [p["slice"] for p in positions] == [3, 7, 3, None]
-        assert [p["in_stack"] for p in positions] == [True, True, True, None]
+        assert positions[1]["start_um"] == [120.0, 204.0, -46.0]
         assert scan.line_positions is positions
         assert stack.line_positions is None
     finally:
@@ -229,7 +270,6 @@ def test_trace_rows_on_a_line_scan_know_their_line(mesc_path):
         )
         assert widget._line_position(results_row)["start_um"] == [120.0, 204.0, -46.0]
         assert widget._line_position(drawn_row)["start_um"] == [105.0, 220.0, -53.9]
-        assert widget._line_position(results_row)["slice"] == 7
         assert widget._trace_cells(results_row.key)[1:4] == ("2", "0", "vnoiser")
         assert len(widget._trace_cells(drawn_row.key)) == 5
         # a row's own record wins over the recording's
@@ -243,23 +283,33 @@ def test_trace_rows_on_a_line_scan_know_their_line(mesc_path):
 
 def test_a_stack_or_picture_has_no_reference_image(mesc_path):
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.mesc_reference import reference_images
+    from mbo_utilities.gui.mesc_reference import picture_image, stack_images
 
     stack = MescArray(mesc_path, unit=0)
     snap = MescArray(mesc_path, unit="MUnit_4")
     try:
-        assert reference_images(stack, partial(open_unit, mesc_path), 0) == []
-        assert reference_images(snap, partial(open_unit, mesc_path), 0) == []
+        for unit in (stack, snap):
+            assert picture_image(unit, open_unit, 0) is None
+            assert stack_images(unit, open_unit, 0) == ([], [])
     finally:
         stack.close()
         snap.close()
 
 
-SHOWN = []
+def test_a_placement_says_what_the_recording_found():
+    from mbo_utilities.gui.mesc_reference import placement_summary
 
-
-def record_show(unit, at):
-    SHOWN.append((unit, at))
+    placed = StackPlacement("z.mesc", "MUnit_3", (1.0, -2.0, 3.0), 0.8, 600.0)
+    assert "+1.0, -2.0, +3.0 um" in placement_summary(placed)
+    assert "10 min before" in placement_summary(placed)
+    assert "cannot check" in placement_summary(placed)
+    checked = StackPlacement(
+        "z.mesc", "MUnit_3", (0.0, 0.0, 0.0), 0.8, -60.0, 0.7, 0.01
+    )
+    assert "1 min after" in placement_summary(checked)
+    assert "recording confirms it" in placement_summary(checked)
+    failed = StackPlacement("z.mesc", "MUnit_3", (0.0, 0.0, 0.0), 0.8, 0.0, 0.1, 0.4)
+    assert "does not confirm" in placement_summary(failed)
 
 
 class ViewerHost:
@@ -297,8 +347,7 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
     iw.show()
     strip = TopStrip(iw.figure)
     host = ViewerHost(iw)
-    SHOWN.clear()
-    view = ReferenceView(host, on_show=record_show)
+    view = ReferenceView(host)
     errors = []
 
     def guarded(*_args):
@@ -309,13 +358,22 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
             errors.append(traceback.format_exc())
 
     try:
-        assert view.open(arr, partial(open_unit, mesc_path))
+        assert view.open(arr, open_unit)
         assert view.is_open and view.unit == "MUnit_1"
         assert view.viewer.current_key == "MUnit_4 picture"
+        assert list(view.images) == ["MUnit_4 picture"]
         strip._update_calls[:] = [guarded]
+        deadline = time.monotonic() + 60
+        while view.placing and time.monotonic() < deadline:
+            iw.figure.canvas.draw()
         for _ in range(3):
             iw.figure.canvas.draw()
         assert not errors, errors[0]
+        # the stack landed behind the picture without moving the popup off it
+        assert list(view.images) == ["MUnit_4 picture", "MUnit_0 slices 4-8"]
+        assert view.viewer.current_key == "MUnit_4 picture"
+        caption = view.caption(view.images["MUnit_0 slices 4-8"])
+        assert "ROI 1 slice 4" in caption and "3 of 4 lines" in caption
         lines = view.contours("MUnit_4 picture")
         # the others dimmed, the selected one last over a white halo
         assert [t for _p, _c, t in lines] == [
@@ -356,8 +414,11 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         assert view.contours("nowhere") == []
         # the same unit again is not rebuilt, and opens on the picture
         built = view._built
-        assert view.open(arr, partial(open_unit, mesc_path))
+        assert view.open(arr, open_unit)
         assert view._built is built and view.viewer.current_key == "MUnit_4 picture"
+        # an answer for a unit no longer shown is dropped
+        view._place(("old.mesc", "MUnit_9", 0, ()), arr, open_unit, 0)
+        assert view._placed is None
         view.close()
         assert not view.is_open
     finally:

@@ -36,7 +36,7 @@ pml_utilities/
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
-│   ├── analysis/             # scan-phase, linescan, phasecorr math
+│   ├── analysis/             # scan-phase, linescan, phasecorr math, MESc stack placement
 │   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation
 │   ├── cli.py                # `mbo` (click)
 │   └── assets/docs/          # in-app help pages
@@ -607,7 +607,7 @@ block's).
 **vnoiser domains.** A domain is the pixels of one or more ROIs averaged into one
 trace (`analysis/roi_traces.py`, GUI-free, no vnoiser import). An ROI is one Z
 index: on an AOD unit a line, patch or box cropped to `mesc_roi_extents` (a ragged
-box of a Y-flipped layout sits at `y_start`); elsewhere the plane's whole frame, so a
+box sits at the frame's top left); elsewhere the plane's whole frame, so a
 single-patch chessboard or a raster is a scan too (`arrays.mesc.is_trace_unit`: at
 least `MIN_TRACE_FRAMES`). `domains.json` and the task's `domains` take an ROI list
 (every pixel; the archive's `domain_ROInumber`) or `{"rois", "pixels", "fraction" |
@@ -1017,46 +1017,41 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   anything more for the ROI tool. Wherever the widget names an axis it uses the
   slider's own word (`ManualRoiWidget.axis_label`): on an AOD unit the Z axis reads
   `ROI 3`, never `z3` (`mesc_z_axis_meaning == "roi_index"`).
-- **Line positions.** Where a MESc scan line or patch sits is
+- **Line positions.** Where a MESc scan line or patch was drawn is
   `arrays/mesc_geometry.py`'s business and nothing else re-derives it: the segment the
   AOD scanned (`CoordinateMapJSON.maps[0].driftEndPoints`, or `contours` for patches;
   never the shorter hand-drawn `guideLine`, never `ROIJSON`, whose vertices are in the
-  unrolled scan's pixels) in the file's absolute micron frame, where
-  `ReferenceViewportJSON.geomTransTransl` is the `[0, 0]` corner of an image, rows
-  grow with +y, and a stack's slice `k` sits at `geomTransTransl[2] + MinZ + k·step`
-  (verified on two rigs: brightness ranking of lines on their own snapshot, and 0.86
-  cross-correlation at zero offset against the stack on the 2026-09-14 pictures).
-  `line_positions(path, unit)` gives each ROI `start_um` / `end_um`, `z_um`,
-  `length_um`, `sample_um`, `dz_um` against the snapshot the lines were drawn on;
-  `roi_placements` puts them on a stack's slices; `image_overlays` draws them. An AOD
+  unrolled scan's pixels) in microns, where
+  `ReferenceViewportJSON.geomTransTransl` is the `[0, 0]` corner of an image,
+  `geomTransRot` its rotation, rows grow with +y, and a stack's slice `k` sits at
+  `geomTransTransl[2] + MinZ + k·step`. A scan shares that frame with its picture, not
+  with a Z-stack. The reader flips no patch rows.
+  `line_positions(path, unit)` gives each ROI `start_um` / `end_um`, `length_um`,
+  `sample_um`; `image_overlays` draws them. An AOD
   unit's trace-table rows (`linescan_viewer.StandardTraces`, for every `ROI_LAYOUTS`
   layout and the `PATCH_MODALITIES`: the mean of each line or patch in photon counts,
   computed in the background unless `F.npy` or the vnoiser run's line means exist)
   are keyed `("member", "<MUnit> lines", k)` or `("member", "<MUnit> patches", k)`,
-  carry `z = k`, `c` = the channel read, and the position in `extra` (`line`, `z_um`,
-  `dz_um`, ...; `POSITION_KEYS`); the label is the ROI alone. Depth is never a
-  column, label or caption: the GUI shows where a line was drawn, not how deep it
-  sits. Hovering a row lists the line's ends, length and sample spacing
+  carry `z = k`, `c` = the channel read, and the position in `extra` (`line`,
+  `POSITION_KEYS`); the label is the ROI alone. Hovering a row lists the line's ends, length and sample spacing
   (`ManualRoiWidget._line_position` over `MescArray.line_positions`, the reader's
   cached facet; a results file's line rows get theirs stamped at load).
+- **Placement.** `analysis/mesc_placement.place_scan` measures one scan on one stack:
+  stored position + the shift that lands its picture on the stack (none under
+  `NCC_PASS`), + the mean RTMC only when the ROIs' time means fit the stack better with
+  it (`with_rtmc`). `confirmed` is that fit beating random offsets.
 - **Reference image.** `gui/mesc_reference.py` shows where an AOD unit's lines or
-  patches were drawn: `reference_images(mesc, open_unit, c)` (GUI-free) is the
-  picture the ROIs were drawn on (`background_unit`), then every Z-stack holding them
-  (`zstack_contents`), each a max projection in channel `c` (at most `MAX_ELEMENTS`
+  patches sit: `picture_image` is the picture the ROIs were drawn on
+  (`background_unit`), `stack_images` every Z-stack `place_scan` placed them on, each
+  a max projection in channel `c` (at most `MAX_ELEMENTS`
   samples) carrying the unit's `image_overlays`. A Z-stack projects **only over the
-  slices its ROIs were scanned on**, and `image_overlays` keeps an ROI only when its
-  outline falls inside the stack's field **and** depth range (`roi_placements`'
-  `in_range`); one scanned above or below is left out, never clamped onto an edge
+  slices its ROIs sit on**, and `image_overlays` keeps an ROI only when its
+  outline falls inside the stack's field **and** depth range; one outside is left out, never clamped onto an edge
   slice (2026-09-14 rig: a chessboard box 720 um under the only stack landed on slice
-  0 over unrelated cells). So `on_plane` on a stack is always True, `zstack_contents`
-  lists only stacks that really hold a scan, and `line_positions` reports
-  `stack`/`slice`/`in_stack` as None when no stack was scanned around the line.
-  `ReferenceView` is that set in a `SummaryImageViewer` popup (masknmf's full-FOV
+  0 over unrelated cells). `ReferenceView` is that set in a `SummaryImageViewer` popup (masknmf's full-FOV
   viewer; `roi_provider(key)` returns `(points, rgba, thickness)` polylines, MESc's
   colours, every ROI dimmed to `ON_ALPHA`, the slider's ROI drawn last at
-  `SELECTED_THICKNESS` over a `HALO_THICKNESS` halo). Each `ReferenceImage` carries
-  its `unit` and, for a stack, the `slice` its ROIs sit on, so the popup's one button
-  (`on_show(unit, slice)`) displays that unit at that slice; a click on a line
+  `SELECTED_THICKNESS` over a `HALO_THICKNESS` halo). A click on a line
   (`SummaryImageViewer.on_pick`, `ReferenceView.pick`) moves the ROI slider to it.
   The MESc tab opens the popup from the picture cell, reopens it on a unit switch and
   hands the host `reference_view` (a callable) the Traces panel offers as a button.
@@ -1066,12 +1061,7 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   and RTMC reference unit (`rtmc_unit`) fold into its row (`mesc_units.companions`).
   The `picture` cell is **one** button (`IMAGE_ICON`) that opens the reference image;
   no second button, no popup, no Z-stack column. The `RTMC` cell is `yes` or `no`
-  (`rtmc_on`: `list_mesc_units`' `rtmc` or `rtmc_armed`), detail on hover. The
-  popup's display button reaches the tab through `_show_reference_unit`, which parks
-  the request on `_pending` for `_frame` to apply after the popup has drawn: a unit
-  switch rebuilds the panel widgets, never inside another widget's draw.
-  `_install(arr, z)` sets the viewer's `roi_slider` after the swap, so a Z-stack
-  opens on the tissue the ROIs were scanned in. Every header carries its meaning
+  (`rtmc_on`: `list_mesc_units`' `rtmc` or `rtmc_armed`), detail on hover. Every header carries its meaning
   (`COLUMN_HELP`); `?` opens `assets/docs/mesc.md`. The header line carries one
   button per `quick_pipelines` entry (`vnoiser on MUnit_3`) that opens the pipeline
   seeded from the unit and sliders on screen (§7.2).

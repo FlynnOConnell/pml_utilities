@@ -1,25 +1,13 @@
-"""Where an AOD line-scan unit's lines were drawn: the snapshot behind them, the Z-stack that holds them, the experiment folder's scan, and the trace figure masknmf's QC reuses."""
+"""The experiment folder's line scan and the trace figure masknmf's QC reuses."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import h5py
 import numpy as np
-
-from mbo_utilities.arrays.mesc_geometry import (
-    linescan_endpoints_um,
-    roi_placements,
-    viewport_geometry,
-    zstack_depth_info,
-)
 
 __all__ = [
     "experiment_linescan_mesc",
-    "background_image",
-    "zstack_candidates",
-    "pair_reference_zstack",
 ]
 
 _FIG_BG = "black"
@@ -61,155 +49,6 @@ def experiment_linescan_mesc(path) -> Path | None:
         if found:
             return found[0]
     return None
-
-
-def _fov_fraction(lines_um, vp) -> float:
-    tx, ty, _ = vp["transl"]
-    inside = 0
-    for seg in lines_um:
-        x, y = float(seg[0].mean()), float(seg[1].mean())
-        inside += tx <= x <= tx + vp["width"] and ty <= y <= ty + vp["height"]
-    return inside / max(len(lines_um), 1)
-
-
-def background_image(mesc_path, unit_key: str) -> dict | None:
-    """The raster snapshot a line-scan unit's lines were drawn on.
-
-    MESc records it as the unit's ``BackgroundImagePath`` (an MSession_1
-    image unit acquired seconds before the scan, at the focal plane the
-    lines were placed in). Returns ``{"key", "munit", "transl", "width",
-    "height", "z", "nchannels", "shape"}`` or ``None`` when the attr is
-    missing, dangling, or the target has no viewport.
-    """
-    with h5py.File(mesc_path, "r") as f:
-        unit = f.get(unit_key)
-        if unit is None:
-            return None
-        raw = unit.attrs.get("BackgroundImagePath")
-        path = raw.decode() if isinstance(raw, bytes) else raw
-        if not path or path not in f or "Channel_0" not in f[path]:
-            return None
-        img = f[path]
-        vp_raw = img.attrs.get("ReferenceViewportJSON")
-        if not vp_raw:
-            return None
-        try:
-            vp = json.loads(vp_raw)["viewports"][0]
-        except (KeyError, IndexError, TypeError, ValueError):
-            return None
-        shape = tuple(int(v) for v in img["Channel_0"].shape)
-        nchannels = sum(1 for k in img if k.startswith("Channel_"))
-        transl = tuple(float(v) for v in vp["geomTransTransl"])
-        return {
-            "key": path.strip("/"),
-            "munit": path.rstrip("/").rsplit("/", 1)[-1],
-            "transl": transl,
-            "width": float(vp["width"]),
-            "height": float(vp["height"]),
-            "z": transl[2],
-            "nchannels": nchannels,
-            "shape": shape,
-        }
-
-
-def zstack_candidates(
-    mesc_path,
-    unit_key: str,
-    units: list[dict] | None = None,
-    *,
-    min_px_per_line: int = 10,
-    zstack_path=None,
-) -> list[dict]:
-    """Every Z-stack of the file scored against a line-scan unit's lines:
-    ``xy_fraction`` / ``z_fraction`` of lines inside its field / depth range,
-    ``um_per_px``, and ``coarse`` when it puts fewer than ``min_px_per_line``
-    pixels along the median line. All stacks, including those holding no
-    line at all, so a picker can show why one is unsuitable. ``zstack_path``
-    is the file holding the stacks when they were saved separately from the
-    line scan (``units`` then lists that file's units).
-    """
-    from mbo_utilities.arrays.mesc import list_mesc_units
-
-    lines = linescan_endpoints_um(mesc_path, unit_key)
-    if not lines:
-        return []
-    stack_path = mesc_path if zstack_path is None else zstack_path
-    lengths = [float(np.hypot(*(seg[:2, -1] - seg[:2, 0]))) for seg in lines]
-    max_um_per_px = float(np.median(lengths)) / max(min_px_per_line, 1)
-    units = units if units is not None else list_mesc_units(stack_path)
-    out = []
-    for u in units:
-        if u["modality_name"] != "zstack":
-            continue
-        vp = viewport_geometry(stack_path, u["key"])
-        depth = zstack_depth_info(stack_path, u["key"])
-        if vp is None or depth is None:
-            continue
-        nx = int(u["shape"][-1])
-        placements = roi_placements(lines, depth)
-        um_per_px = vp["width"] / max(nx, 1)
-        out.append(
-            {
-                "key": u["key"],
-                "munit": u["munit"],
-                "xy_fraction": _fov_fraction(lines, vp),
-                "z_fraction": sum(p["in_range"] for p in placements) / len(placements),
-                "um_per_px": um_per_px,
-                "coarse": um_per_px > max_um_per_px,
-            }
-        )
-    return out
-
-
-def pair_reference_zstack(
-    mesc_path,
-    unit_key: str,
-    units: list[dict] | None = None,
-    *,
-    min_px_per_line: int = 10,
-    zstack_path=None,
-) -> dict | None:
-    """Pick the Z-stack unit of the same file that the lines were drawn on.
-
-    Lines live in absolute microns, so any stack whose field contains them
-    can show them; what decides is whether it can *resolve* them. A stack
-    is a candidate only when it has at least ``min_px_per_line`` pixels
-    along the median line (a 400 um whole-cell stack at 0.8 um/px puts 4
-    pixels on a 3 um spine line and is useless as a reference). Among
-    candidates holding at least 80 % of the lines in XY the finest pixel
-    size wins; failing that, the best XY coverage. Depth coverage is
-    reported (``z_fraction``) but does not disqualify a stack: on the
-    2026-07-30 file the lines of two dendrites were placed up to 7 um below
-    their own stack's bottom slice, and switching to the coarse stack there
-    lost the dendrite entirely. Lines outside the depth range are drawn on
-    the nearest edge slice and flagged.
-
-    Only when no stack resolves the lines does a coarse one get used, with
-    ``"coarse": True`` so the figure can say so. ``None`` when no stack
-    contains any line in XY.
-
-    Returns ``{"key", "munit", "xy_fraction", "z_fraction", "um_per_px",
-    "coarse"}``.
-    """
-    cands = [
-        c
-        for c in zstack_candidates(
-            mesc_path,
-            unit_key,
-            units,
-            min_px_per_line=min_px_per_line,
-            zstack_path=zstack_path,
-        )
-        if c["xy_fraction"] > 0
-    ]
-    if not cands:
-        return None
-    fine = [c for c in cands if not c["coarse"]]
-    pool = fine or cands
-    good = [c for c in pool if c["xy_fraction"] >= 0.8]
-    if good:
-        return min(good, key=lambda c: c["um_per_px"])
-    return max(pool, key=lambda c: (c["xy_fraction"], -c["um_per_px"]))
 
 
 def _smooth(x: np.ndarray, fs: float, window_s: float = _SMOOTH_S) -> np.ndarray:

@@ -429,49 +429,6 @@ def test_the_table_says_nothing_about_z_stacks(stack_mesc_path):
     assert not any("##stack" in b or "##pic" in b for b in BUTTONS)
 
 
-def test_the_reference_popups_button_opens_a_stack_at_its_slice(stack_mesc_path):
-    """The one place the Z-stack is offered: the popup's display button hands
-    the tab a unit and a slice, and the tab applies it on the next frame, so
-    the viewer lands on the tissue the lines were scanned in, not on slice 1.
-    """
-    pytest.importorskip("fastplotlib.widgets.nd_widget")
-    from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
-    from mbo_utilities.gui.mesc_reference import roi_slider
-    from mbo_utilities.gui.run_gui import _create_image_widget
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
-    from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
-
-    stack, scan = list_mesc_units(stack_mesc_path)
-    arr = MescArray(stack_mesc_path, unit=1)
-    iw = _create_image_widget(
-        arr, widget="preview", figure_kwargs_override={"size": (640, 480)}
-    )
-    try:
-        gui = next(
-            w
-            for w in iw.figure.imgui_windows.values()
-            if isinstance(w, PreviewDataWidget)
-        )
-        tab = MescTabWidget(gui)
-        # nothing happens inside the popup's own draw; the frame after applies it
-        tab._show_reference_unit(stack["key"], 3)
-        assert tab._pending is not None
-        tab._frame()
-        assert tab._pending is None
-        zdim = roi_slider(gui.image_widget.dim_names)
-        assert zdim is not None and int(gui.image_widget.indices[zdim]) == 3
-        # a picture carries no slice, so the viewer opens it where it opens
-        tab._switch(scan)
-        tab._show_reference_unit(stack["key"], None)
-        tab._frame()
-        assert (
-            int(gui.image_widget.indices[roi_slider(gui.image_widget.dim_names)]) == 0
-        )
-    finally:
-        iw.close()
-        arr.close()
-
-
 def pump(widget, seconds: float = 60.0):
     """Poll the ROI widget's background work until it finishes."""
     deadline = time.time() + seconds

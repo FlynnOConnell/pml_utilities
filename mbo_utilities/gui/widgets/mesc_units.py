@@ -19,16 +19,13 @@ The ``picture`` cell is one button: it opens ``gui.mesc_reference``, the
 picture the scan's lines or patches were drawn on with them drawn, in a popup
 the top strip's hook redraws every frame. Everything about where a scan sits
 lives in that popup, the Z-stack around it included: the table says only
-which picture it was drawn on. The popup's own button displays the image's
-unit in the viewer, a Z-stack at the slice the ROIs sit on, which the tab
-applies after the popup has drawn (``_pending``) rather than mid-frame.
+which picture it was drawn on.
 """
 
 from __future__ import annotations
 
 import glob
 from datetime import datetime
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +35,7 @@ from imgui_bundle import imgui, imgui_ctx
 from mbo_utilities import log
 from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._imgui_helpers import set_tooltip
-from mbo_utilities.gui.mesc_reference import ReferenceView, roi_slider
+from mbo_utilities.gui.mesc_reference import ReferenceView
 from mbo_utilities.gui.widgets._base import Widget
 from mbo_utilities.gui.widgets.pipelines import (
     open_pipeline,
@@ -114,8 +111,8 @@ COLUMN_HELP = {
     ),
     "picture": (
         "The raster picture MEScan took just before the scan; the operator drew the "
-        "lines or patches on it. Click to see them drawn on it, and on the Z-stack "
-        "taken around them when there is one. MESc calls it the background image "
+        "lines or patches on it. Click to see them drawn on it, and on every Z-stack "
+        "it matches. MESc calls it the background image "
         "and saves it as its own unit, which this table folds into the scan's row."
     ),
     "RTMC": (
@@ -354,8 +351,6 @@ class MescTabWidget(Widget):
         self._reference: ReferenceView | None = None
         # the reference-image popup, drawn from the strip's hook whatever tab
         # is up; the host offers it wherever a recording's ROIs are on screen
-        self._pending: tuple[dict, int | None] | None = None
-        # a unit the popup's button asked for, applied once it has drawn
         self._curation: tuple[str, Path | None] | None = None
         # the vnoiser run beside the open file the curation window can take,
         # looked up once per file: (file, PF folder or results file, or None)
@@ -373,31 +368,18 @@ class MescTabWidget(Widget):
     def _frame(self) -> None:
         if self._reference is not None:
             self._reference.draw()
-        if self._pending is not None:
-            # switching rebuilds the panel widgets, so never inside the popup's draw
-            info, z = self._pending
-            self._pending = None
-            self._switch(info, z)
-
-    def _show_reference_unit(self, key: str, z: int | None) -> None:
-        """The popup's display button: show that picture or Z-stack next frame."""
-        info = next((u for u in self._mesc.units if u["key"] == key), None)
-        if info is not None and len(self.parent.image_widget.data) == 1:
-            self._pending = (info, z)
 
     def open_reference(self) -> None:
         """The popup with the shown unit's lines or patches drawn on the
-        picture they were drawn on and the Z-stack around them
-        (``mesc_reference``); the tab says so when neither exists.
+        picture they were drawn on and every Z-stack it matches
+        (``mesc_reference``); the tab says so when there is no picture.
         """
         mesc = self._mesc
         if self._reference is None:
-            self._reference = ReferenceView(
-                self.parent, on_show=self._show_reference_unit
-            )
+            self._reference = ReferenceView(self.parent)
         self._note = None
-        if not self._reference.open(mesc, partial(self._open_unit, mesc.filenames[0])):
-            self._note = f"no picture or Z-stack in this file carries {mesc.unit_key.rsplit('/', 1)[-1]}'s ROIs"
+        if not self._reference.open(mesc, self._open_unit):
+            self._note = f"{mesc.unit_key.rsplit('/', 1)[-1]} has no picture to show its ROIs on"
 
     @property
     def _mesc(self):
@@ -416,17 +398,16 @@ class MescTabWidget(Widget):
     def _open_unit(self, path, key: str):
         """The `MescArray` for one unit, opening it on first use."""
         cache = self._cache()
-        arr = cache.get(key)
+        arr = cache.get((str(path), key))
         if arr is None:
             from mbo_utilities.arrays.mesc import MescArray
 
             arr = MescArray(path, unit=key)
-            cache[key] = arr
+            cache[(str(path), key)] = arr
         return arr
 
-    def _install(self, arr, z: int | None = None) -> None:
-        """Show `arr` in the viewer at slice ``z``, re-deriving every
-        per-dataset display state.
+    def _install(self, arr) -> None:
+        """Show `arr` in the viewer, re-deriving every per-dataset display state.
 
         Each unit is an unrelated recording, so the Manual ROI widget is
         rebuilt for it: the outgoing unit's ROIs, runs and traces are parked
@@ -460,12 +441,6 @@ class MescTabWidget(Widget):
         unit = arr.unit_key.rsplit("/", 1)[-1]
         swap_viewer_array(parent, arr, title=f"{Path(path).stem[:16]} · {unit}")
 
-        zdim = roi_slider(parent.image_widget.dim_names) if z is not None else None
-        # a Z-stack opened from a scan's row lands on the slice its ROIs sit
-        # on; the swap reset the sliders, so this follows it
-        if zdim is not None:
-            parent.image_widget.indices[zdim] = int(z)
-
         if roi_on:
             attach_roi_widget(parent)
         try:
@@ -476,14 +451,12 @@ class MescTabWidget(Widget):
             self.open_reference()
         parent.logger.info(f"MESc unit: {arr.unit_key}  shape={arr.shape}")
 
-    def _switch(self, info: dict, z: int | None = None) -> None:
-        """Open the unit ``info`` describes and show it at slice ``z``; a
-        failure is shown in the tab.
-        """
+    def _switch(self, info: dict) -> None:
+        """Open the unit ``info`` describes and show it; a failure is shown in the tab."""
         mesc = self._mesc
         self._error = None
         try:
-            self._install(self._open_unit(mesc.filenames[0], info["key"]), z)
+            self._install(self._open_unit(mesc.filenames[0], info["key"]))
         except Exception as e:
             self._error = str(e)
             self.parent.logger.exception(
@@ -675,7 +648,7 @@ class MescTabWidget(Widget):
                     | imgui.SelectableFlags_.allow_overlap,
                 )
                 if clicked and not split and info["key"] != mesc.unit_key:
-                    picked = (info, None)
+                    picked = info
                 for i in range(1, len(cells)):
                     if not imgui.table_next_column():
                         continue
@@ -706,7 +679,7 @@ class MescTabWidget(Widget):
                         set_tooltip(
                             f"Show this scan's {what} drawn on {bg}, the picture MEScan took "
                             f"just before it ({y} x {x} px, {c} color{'s' if c != 1 else ''}), "
-                            "and on the Z-stack taken around them when there is one.",
+                            "and on every Z-stack it matches.",
                             show_mark=False,
                         )
                         continue
@@ -736,7 +709,7 @@ class MescTabWidget(Widget):
 
             if picked is not None:
                 # swapping rebuilds the panel widgets; finish the frame on the old ones
-                self._switch(*picked)
+                self._switch(picked)
             if reference is not None:
                 if reference["key"] != mesc.unit_key:
                     self._switch(reference)

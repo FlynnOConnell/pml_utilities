@@ -290,7 +290,7 @@ def test_patch_traces_attach_for_a_chessboard_unit(patch_viewer):
     first = roi.traces.get(("member", "MUnit_9 patches", 0))
     # the patch's own pixel mean per frame, placed by the scan geometry
     assert np.allclose(first.F, arr[:, 0, 0].reshape(8, -1).mean(axis=1))
-    assert first.extra["z_um"] == -50.0 and first.extra["dz_um"] == pytest.approx(-2.0)
+    assert first.extra["start_um"][2] == -50.0
     # the label is the ROI alone; where it sits is a hover, not a number in its name
     assert first.label == "ROI 0"
     # a dF/F over a configurable baseline comes from the raw mean on the panel
@@ -355,12 +355,6 @@ def test_lines_with_geometry_carry_their_position(tmp_path):
     assert rows[0]["length_um"] == pytest.approx(2.0) and rows[0][
         "sample_um"
     ] == pytest.approx(0.5)
-    assert rows[0]["z_um"] == -100.0 and rows[0]["dz_um"] == pytest.approx(-3.0)
-    assert rows[3]["dz_um"] == pytest.approx(0.0) and rows[6]["dz_um"] == pytest.approx(
-        3.0
-    )
-    # no Z-stack in this file holds the lines
-    assert rows[0]["stack"] is None and rows[0]["slice"] is None
     # no geometry at all: None, so a caller draws nothing rather than guessing
     assert line_positions(path, "MSession_1/MUnit_35") is None
     assert line_positions(path, "MSession_0/MUnit_99") is None
