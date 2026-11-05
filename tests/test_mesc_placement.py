@@ -120,7 +120,9 @@ def write_scan(path, volume, picture=None, time=600, beam_um=(0.0, 0.0)):
             - STACK_CORNER[1]
             + beam_um[1]
         ) / UM_PER_PX
-        means.append(ndimage.map_coordinates(volume[k], [row - 0.5, col - 0.5], order=1))
+        means.append(
+            ndimage.map_coordinates(volume[k], [row - 0.5, col - 0.5], order=1)
+        )
     page = np.tile(np.concatenate(means)[None, :], (N_FRAMES, 1))
     with h5py.File(path, "a") as f:
         session = f.require_group("MSession_0")
@@ -246,7 +248,10 @@ def test_lines_land_on_the_slice_the_tissue_is_on(scan_path):
     finally:
         arr.close()
     records = image_overlays(
-        scan_path, "MSession_0/MUnit_1", "MSession_0/MUnit_0", shift_um=placement.shift_um
+        scan_path,
+        "MSession_0/MUnit_1",
+        "MSession_0/MUnit_0",
+        shift_um=placement.shift_um,
     )
     assert [r["slice"] for r in records] == [PICTURE_AT[2]] * N_LINES
 
@@ -317,7 +322,9 @@ def test_a_picture_larger_than_the_stack_still_matches(tmp_path):
         viewports["viewports"][0]["width"] = stack_px * UM_PER_PX
         viewports["viewports"][0]["height"] = stack_px * UM_PER_PX
         f["MSession_0/MUnit_0"].attrs["ReferenceViewportJSON"] = json.dumps(viewports)
-    write_scan(path, volume, picture=volume[k, py : py + PICTURE_PX, px : px + PICTURE_PX])
+    write_scan(
+        path, volume, picture=volume[k, py : py + PICTURE_PX, px : px + PICTURE_PX]
+    )
     arr = open_scan(path)
     arr._rtmc = {}
     try:
@@ -366,4 +373,7 @@ def test_stack_files_are_found_beside_the_scan_or_one_folder_up(tmp_path):
     assert zstack_files(scan) == []
     (inner.parent / "expt_z.mesc").touch()
     (inner / "expt_zstack.mesc").touch()
-    assert zstack_files(scan) == [inner / "expt_zstack.mesc", inner.parent / "expt_z.mesc"]
+    assert zstack_files(scan) == [
+        inner / "expt_zstack.mesc",
+        inner.parent / "expt_z.mesc",
+    ]

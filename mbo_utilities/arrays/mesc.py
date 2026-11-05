@@ -1270,8 +1270,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             "mesc_centroids": info["centroids"],
             "mesc_rotations": info["rotations"],
             "mesc_roi_extents": [
-                {k: r[k] for k in ("index", "height", "width")}
-                for r in self._rois
+                {k: r[k] for k in ("index", "height", "width")} for r in self._rois
             ],
             "mesc_sync_frame": self._sync_frame,
             "mesc_sync_frame_raw": self._sync_frame_raw,

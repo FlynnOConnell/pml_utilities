@@ -150,7 +150,9 @@ def zstack_depth_info(mesc_path, unit_key: str) -> dict | None:
             return None
         # NOTE: every stack seen so far is bottomToTop (0); FemtoAPI negates z otherwise
         if unit.attrs.get("ScanningDirection", 0) != 0:
-            raise ValueError(f"{unit_key}: slice depths of a topToBottom stack are unverified")
+            raise ValueError(
+                f"{unit_key}: slice depths of a topToBottom stack are unverified"
+            )
         return {
             "transl_z": vp["transl"][2],
             "min_z": float(unit.attrs["MinZ"]),

@@ -379,7 +379,9 @@ class MescTabWidget(Widget):
             self._reference = ReferenceView(self.parent)
         self._note = None
         if not self._reference.open(mesc, self._open_unit):
-            self._note = f"{mesc.unit_key.rsplit('/', 1)[-1]} has no picture to show its ROIs on"
+            self._note = (
+                f"{mesc.unit_key.rsplit('/', 1)[-1]} has no picture to show its ROIs on"
+            )
 
     @property
     def _mesc(self):

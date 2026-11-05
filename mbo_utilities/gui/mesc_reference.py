@@ -401,7 +401,12 @@ class ReferenceView:
         key = self.viewer.current_key
         im = self.images.get(key)
         k = None
-        if self.one_slice and self.is_open and im is not None and im.placement is not None:
+        if (
+            self.one_slice
+            and self.is_open
+            and im is not None
+            and im.placement is not None
+        ):
             roi = current_roi(self.parent.image_widget)
             k = next((r["slice"] for r in im.records if r["roi"] == roi), None)
         shown = None if k is None else (key, k)
@@ -481,7 +486,9 @@ class ReferenceView:
         if im.placement is None:
             return f"{self.unit}: {drawn} drawn here, {name} thick"
         record = next((r for r in im.records if r["roi"] == roi), None)
-        where = "not in this stack" if record is None else f"slice {record['slice'] + 1}"
+        where = (
+            "not in this stack" if record is None else f"slice {record['slice'] + 1}"
+        )
         check = "confirmed" if im.placement.confirmed else "unconfirmed"
         return f"{self.unit}: {name} {where}, {drawn}, match {im.placement.score:.2f}, {check}"
 

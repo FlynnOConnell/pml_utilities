@@ -785,7 +785,6 @@ class TestUnitPicker:
         assert _resolve_mesc_unit(other, None) == ({}, True)
         assert _resolve_mesc_unit(tmp_path, None) == ({}, True)
 
-
     def test_a_folder_opens_its_mesc_like_the_file(self, single_unit_mesc, tmp_path):
         from mbo_utilities.gui.run_gui import _folder_mesc
 
