@@ -18,6 +18,14 @@ from mbo_utilities.analysis.filters import (
     describe,
     gaussian,
 )
+from mbo_utilities.analysis.mesc_placement import StackPlacement
+from mbo_utilities.analysis.trace_readouts import (
+    correlation_matrix,
+    detect_events,
+    noise_floor_hz,
+    power_spectrum,
+    triggered_average,
+)
 from mbo_utilities.annotation import RoiTrace
 from mbo_utilities.annotation.display import (
     DffSettings,
@@ -26,16 +34,23 @@ from mbo_utilities.annotation.display import (
 )
 from mbo_utilities.annotation.ngff import RoiFile
 from mbo_utilities.annotation.store import RoiLabelStore
+from mbo_utilities.arrays.features import MotionCorrection
 from mbo_utilities.dashboard import (
+    FigureOutline,
     FigureSettings,
     FigureTrace,
     MinMaxPyramid,
+    ReadoutSettings,
     TraceView,
     _envelope,
     bar_label,
+    compute_readouts,
     cut,
     export_figure,
+    export_morphology,
+    export_readouts,
     load_rows,
+    morphology_figure,
     nice_bar,
     process,
     row_times,
@@ -43,9 +58,29 @@ from mbo_utilities.dashboard import (
     trace_units,
 )
 from mbo_utilities.gui.dashboard_app import DashboardApp, write_exports
+from mbo_utilities.gui.dashboard_morphology import (
+    best_stack,
+    grey_rgba,
+    load_picture,
+    load_stacks,
+    slice_range,
+    um_per_px,
+    view_of,
+    write_morphology,
+)
+from mbo_utilities.gui.mesc_reference import ReferenceImage, polyline_distance
 from mbo_utilities.reader import imread
 from mbo_utilities.roi_workflow import labels_path
 
+from tests.test_mesc_placement import (
+    N_LINES,
+    UM_PER_PX,
+    open_scan,
+    tissue,
+    write_scan,
+    write_stack,
+)
+from tests.test_mesc_placement import STACK_CORNER as PLACEMENT_CORNER
 from tests.test_results_array import N_ROIS, write_mesc
 
 FS = 100.0
@@ -84,15 +119,25 @@ def mesc_with_conversion(tmp_path, munits=(35, 38), frames=40):
 
 
 def wait(app, timeout=30.0):
-    """Poll ``app`` until its loader and worker are idle."""
+    """Poll ``app`` until its threads are done."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         app._poll()
-        busy = app._listing or app._loading or app._pending or app._exporting
-        if not busy:
+        if app.rows:
+            app._schedule()
+            app._schedule_readouts()
+        if not (
+            app._listing
+            or app._loading
+            or app._pending
+            or app._exporting
+            or app._morph_picture
+            or app._morph_stacks
+            or app._reading
+        ):
             return
         time.sleep(0.01)
-    raise TimeoutError("the dashboard's threads did not finish")
+    raise TimeoutError("dashboard threads did not finish")
 
 
 @pytest.fixture
@@ -334,3 +379,254 @@ def test_app_shows_a_filter_error_instead_of_raising(tmp_path, mbo_dir):
     app._schedule()
     wait(app)
     assert "between 0 and 500" in app.process_error
+
+
+def test_power_spectrum_puts_a_sine_in_its_bin():
+    fs = 1000.0
+    t = np.arange(20000) / fs
+    frequency, power = power_spectrum(np.sin(2 * np.pi * 50 * t)[None], fs)
+    assert frequency[np.argmax(power[0])] == pytest.approx(50.0)
+    assert frequency[1] - frequency[0] == pytest.approx(1.0)
+
+
+def test_noise_floor_is_where_a_slow_signal_sinks_into_white_noise():
+    rng = np.random.default_rng(0)
+    fs = 1000.0
+    slow = apply_filter(
+        rng.normal(size=200_000), fs, FilterSettings("lowpass", high_hz=30.0, order=8)
+    )
+    y = 6 * slow + rng.normal(size=200_000)
+    frequency, power = power_spectrum(y, fs)
+    assert 25.0 < noise_floor_hz(frequency, power) < 50.0
+
+
+def test_correlation_matrix_gives_a_flat_trace_no_correlation():
+    rng = np.random.default_rng(1)
+    a = rng.normal(size=500)
+    r = correlation_matrix(np.stack([a, -a, np.full(500, 3.0)]))
+    np.testing.assert_allclose(r[:2, :2], [[1, -1], [-1, 1]], atol=1e-12)
+    np.testing.assert_array_equal(r[2], 0.0)
+
+
+def test_detect_events_finds_peaks_or_troughs_a_gap_apart():
+    rng = np.random.default_rng(2)
+    y = rng.normal(size=10_000)
+    planted = np.array([1000, 3000, 3002, 7000])
+    y[planted] += 20.0
+    found = detect_events(y, 1000.0, threshold_sd=8.0, gap_ms=10.0)
+    assert len(found) == 3 and set(found) <= set(planted)
+    np.testing.assert_array_equal(
+        detect_events(-y, 1000.0, 8.0, 10.0, polarity=-1), found
+    )
+    assert len(detect_events(np.zeros(100), 1000.0)) == 0
+    with pytest.raises(ValueError, match="polarity"):
+        detect_events(y, 1000.0, polarity=0)
+
+
+def test_triggered_average_recovers_a_waveform_and_leaves_out_the_edges():
+    y = np.zeros((2, 1000))
+    events = np.array([3, 200, 500, 800, 997])
+    for e in events[1:-1]:
+        y[0, e : e + 3] = [5.0, 3.0, 1.0]
+    mean, sem, n = triggered_average(y, events, before=10, after=10)
+    assert n == 3 and mean.shape == sem.shape == (2, 21)
+    np.testing.assert_allclose(mean[0, 10:13], [5.0, 3.0, 1.0])
+    np.testing.assert_array_equal(mean[1], 0.0)
+    assert sem[0, 10] == 0.0
+
+
+def test_triggered_average_with_no_event_left_is_empty():
+    mean, sem, n = triggered_average(np.ones((1, 50)), np.array([1]), 10, 10)
+    assert n == 0 and mean.shape == sem.shape == (1, 21)
+
+
+def rtmc_rows(n=4000, fs=1000.0):
+    """Two rows and an RTMC whose X follows the first row's slow wave."""
+    t = np.arange(n) / fs
+    wave = np.sin(2 * np.pi * 3 * t)
+    noise = np.random.default_rng(3).normal(size=n)
+    motion = MotionCorrection("RTMC", "um", {"X": (t, wave), "Y": (t[:2], np.zeros(2))})
+    return t, np.stack([wave + 0.1 * noise, noise]), fs, motion
+
+
+def test_compute_readouts_measures_rows_and_motion_in_one_band():
+    t, traces, fs, motion = rtmc_rows()
+    band = FilterSettings("lowpass", high_hz=10.0)
+    filtered = apply_filter(traces, fs, band)
+    r = compute_readouts(
+        ["a", "b"], t, filtered, fs, 0, (0.0, 4.0), ReadoutSettings(), motion, band
+    )
+    assert r.correlation_labels == ["a", "b", "RTMC X", "RTMC Y"]
+    assert r.correlation[0, 2] > 0.99
+    np.testing.assert_array_equal(r.correlation[3], 0.0)
+    assert r.power.shape[0] == 2 and len(r.floors) == 2
+    assert r.lags_ms[0] == pytest.approx(-20.0)
+    assert r.mean.shape == r.sem.shape == (2, len(r.lags_ms))
+
+
+def test_compute_readouts_keeps_to_the_span_and_refuses_an_empty_one():
+    t, traces, fs, _ = rtmc_rows()
+    traces[0, 500] = 50.0
+    traces[0, 3000] = 50.0
+    r = compute_readouts(["a", "b"], t, traces, fs, 0, (2.0, 4.0), ReadoutSettings())
+    assert r.correlation_labels == ["a", "b"]
+    np.testing.assert_allclose(r.event_times, [3.0])
+    with pytest.raises(ValueError, match="fewer than two samples"):
+        compute_readouts(["a", "b"], t, traces, fs, 0, (9.0, 10.0), ReadoutSettings())
+
+
+def test_export_readouts_writes_a_csv_each_that_reads_back(tmp_path):
+    t, traces, fs, motion = rtmc_rows()
+    r = compute_readouts(
+        ["a", "b"], t, traces, fs, 0, (0.0, 4.0), ReadoutSettings(), motion
+    )
+    written = export_readouts(r, tmp_path / "out" / "rec")
+    assert sorted(p.name for p in written) == [
+        "rec_correlation.csv",
+        "rec_events.csv",
+        "rec_spectrum.csv",
+        "rec_triggered.csv",
+    ]
+    spectrum = np.loadtxt(
+        tmp_path / "out" / "rec_spectrum.csv", delimiter=",", skiprows=1
+    )
+    assert spectrum.shape == (len(r.frequency), 3)
+    header = (tmp_path / "out" / "rec_correlation.csv").read_text().splitlines()[0]
+    assert header == "a,b,RTMC X,RTMC Y"
+
+
+def test_polyline_distance_measures_to_the_nearest_segment():
+    vertices = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]])
+    assert polyline_distance(np.array([5.0, 3.0]), vertices) == pytest.approx(3.0)
+    assert polyline_distance(np.array([13.0, 10.0]), vertices) == pytest.approx(3.0)
+    assert polyline_distance(np.array([-4.0, -3.0]), vertices) == pytest.approx(5.0)
+
+
+def test_grey_rgba_is_opaque_and_stretched():
+    rgba = grey_rgba(np.linspace(0.0, 1.0, 100 * 100).reshape(100, 100))
+    assert rgba.shape == (100, 100, 4) and rgba.dtype == np.uint8
+    assert rgba[..., 3].min() == 255
+    assert rgba[..., 0].min() == 0 and rgba[..., 0].max() == 255
+
+
+@pytest.fixture(scope="module")
+def placed_scan(tmp_path_factory):
+    """A line scan with its picture and one stack it can be placed on."""
+    path = tmp_path_factory.mktemp("morphology") / "scan.mesc"
+    volume = tissue()
+    with h5py.File(path, "w") as f:
+        write_stack(f.create_group("MSession_0"), volume, PLACEMENT_CORNER)
+    write_scan(path, volume)
+    return path
+
+
+def test_the_picture_comes_first_and_the_stack_carries_the_placement(placed_scan):
+    arr, picture, _, domains = load_picture(placed_scan, "MSession_0/MUnit_1", 0)
+    assert picture is not None and picture.placement is None
+    assert len(picture.records) == N_LINES and domains == {}
+    assert um_per_px(arr, picture) == pytest.approx(UM_PER_PX)
+    assert slice_range(picture, None, 3) is None
+
+    arr = open_scan(placed_scan)
+    images, refused = load_stacks(arr, 0, ())
+    assert len(images) == 1 and refused == []
+    stack = best_stack(images)
+    assert stack.placement.placed and len(stack.records) == N_LINES
+    assert um_per_px(arr, stack) == pytest.approx(UM_PER_PX)
+    lo, hi = slice_range(stack, None, 0)
+    assert slice_range(stack, None, 100) == (0, stack.stack.shape[2] - 1)
+    assert slice_range(stack, {0}, 0)[0] >= lo and slice_range(stack, {99}, 0) is None
+    col0, col1, row0, row1 = view_of(stack)
+    points = np.concatenate([r["pixels"] for r in stack.records])
+    assert col0 < points[:, 0].min() and points[:, 0].max() < col1
+    assert row0 < points[:, 1].min() and points[:, 1].max() < row1
+
+
+def test_best_stack_prefers_a_confirmed_placement_then_more_rois():
+    stack = {"stack_path": "s", "stack_key": "k", "shift_um": (0, 0, 0), "gap_s": 0.0}
+    weak = StackPlacement(**stack, score=0.9, profile_r=0.9, profile_p=0.5)
+    sure = StackPlacement(**stack, score=0.7, profile_r=0.5, profile_p=0.01)
+    a = ReferenceImage("a", np.zeros((2, 2)), [{}] * 9, weak)
+    b = ReferenceImage("b", np.zeros((2, 2)), [{}] * 2, sure)
+    c = ReferenceImage("c", np.zeros((2, 2)), [{}] * 3, sure)
+    assert best_stack([a, b, c]).key == "c"
+    assert best_stack([]) is None
+
+
+def test_app_opens_on_the_placed_stack_and_asks_for_the_slices_set(placed_scan):
+    app = DashboardApp()
+    app.path, app.unit, app.channel = placed_scan, "MSession_0/MUnit_1", 0
+    app._reset_morphology()
+    wait(app)
+    assert app.morph_note == "" and len(app.morph_images) == 2
+    image = app.morph_images[app.morph_key]
+    assert image.placement is not None
+    assert app._morph_scale == pytest.approx(UM_PER_PX)
+    assert app._morph_shown() == (image.key, None)
+    app.morph_pad = 1
+    lo, hi = slice_range(image, None, 1)
+    assert app._morph_shown() == (image.key, (lo, hi))
+
+
+def test_morphology_exports_the_figure_and_the_positions(placed_scan, tmp_path):
+    arr = open_scan(placed_scan)
+    images, _ = load_stacks(arr, 0, ())
+    stack = images[0]
+    outlines = [FigureOutline("ROI 0", stack.records[0]["pixels"], "#ff8c3a")]
+    settings = FigureSettings(dpi=72)
+    status = write_morphology(
+        arr,
+        {stack.key: stack},
+        stack,
+        stack.image,
+        outlines,
+        view_of(stack),
+        settings,
+        tmp_path / "rec_morphology",
+        {"image": stack.key},
+        {},
+    )
+    assert status.startswith("wrote 5 files")
+    assert (tmp_path / "rec_morphology.svg").read_text().count("ROI 0") == 1
+    table = (tmp_path / "rec_morphology_positions.csv").read_text().splitlines()
+    assert table[0].startswith("unit,roi,domain") and len(table) == N_LINES + 1
+
+
+def test_morphology_figure_crops_to_the_view_with_rows_growing_up():
+    image = np.zeros((50, 80))
+    fig = morphology_figure(image, [], 0.5, (10, 40, 5, 25), FigureSettings())
+    ax = fig.axes[0]
+    assert ax.get_xlim() == (10, 40) and ax.get_ylim() == (5, 25)
+    assert ax.images[0].origin == "lower"
+    assert fig.get_size_inches()[1] / fig.get_size_inches()[0] == pytest.approx(20 / 30)
+
+
+def test_app_says_when_a_unit_has_no_picture(tmp_path, mbo_dir):
+    app = DashboardApp(mesc_with_conversion(tmp_path), unit="MUnit_35")
+    wait(app)
+    assert app.morph_images == {} and "no ROIs on a picture" in app.morph_note
+
+
+def test_app_reads_out_the_plotted_rows_over_the_active_window(tmp_path, mbo_dir):
+    app = DashboardApp(mesc_with_conversion(tmp_path, frames=400), unit="MUnit_35")
+    wait(app)
+    app.page = "Spectrum"
+    app.readout.skip_s = 0.1
+    app._schedule()
+    wait(app)
+    assert app.readout_error == "" and app.readouts is not None
+    assert app.readouts.labels == [r.name for r in app._picked_rows()]
+    assert app.readouts.span == pytest.approx((0.1, app.duration[1]))
+
+    app.add_window(0.05, 0.2)
+    app._schedule_readouts()
+    wait(app)
+    assert app.readouts.span == pytest.approx((0.05, 0.2))
+
+    app.trigger = app._picked_rows()[1].key
+    app._schedule_readouts()
+    wait(app)
+    assert app.readouts.trigger == 1
+
+    app.choose(app.unit)
+    assert app.readouts is None and app._reading is None
