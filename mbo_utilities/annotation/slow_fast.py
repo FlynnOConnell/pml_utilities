@@ -42,6 +42,7 @@ __all__ = [
     "MODE",
     "TABLE_FILES",
     "SlowFastSession",
+    "curated_trace",
     "events_positive_dff",
     "export_run_tables",
     "export_tables",
@@ -95,14 +96,19 @@ def kept_times(session) -> np.ndarray:
     return np.asarray(session.times_s, dtype=float)[keep]
 
 
-def kept_dprime(session) -> tuple[float, int]:
-    """``(d', n)`` of a session's candidates not called no, for either method,
-    on the trace they were found on: the baseline-subtracted dF/F, or the
-    denoised trace, so vnoiser's d' runs higher by what it took out.
+def curated_trace(session) -> np.ndarray:
+    """The trace a session's candidates were found on, for either method: the
+    baseline-subtracted dF/F, or the denoised trace.
     """
-    trace = session.events.x if session.mode == MODE else session.denoised
+    return session.events.x if session.mode == MODE else session.denoised
+
+
+def kept_dprime(session) -> tuple[float, int]:
+    """``(d', n)`` of a session's candidates not called no, on their own trace,
+    so vnoiser's d' runs higher by the noise it took out.
+    """
     peaks = np.round(kept_times(session) * session.fs).astype(np.int64)
-    return event_dprime(trace, peaks, session.fs)
+    return event_dprime(curated_trace(session), peaks, session.fs)
 
 
 class SlowFastSession:

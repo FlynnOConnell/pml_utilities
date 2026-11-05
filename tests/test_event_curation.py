@@ -1695,6 +1695,32 @@ class TestMotion:
         _each_panel(curation)
         assert curation.panel.height == PANEL_HEIGHT
 
+    def test_a_recording_long_enough_gets_its_coherence_under_the_trace(
+        self, curation, data_root, monkeypatch
+    ):
+        from mbo_utilities.analysis import trace_readouts
+        from mbo_utilities.gui.event_curation import (
+            COUPLING_HEIGHT,
+            MOTION_HEIGHT,
+            PANEL_HEIGHT,
+        )
+
+        # the fixture's scan is shorter than a real read-out needs
+        monkeypatch.setattr(trace_readouts, "COUPLING_SKIP_S", 0.0)
+        monkeypatch.setattr(trace_readouts, "COUPLING_MIN_S", 0.0)
+        monkeypatch.setattr(trace_readouts, "COUPLING_WINDOW_S", 0.3)
+        pf_dir = data_root / "expt1" / "PF"
+        mesc = _mesc_with_rtmc(data_root / "src" / "expt.mesc")
+        _name_source(pf_dir, mesc)
+        _load(curation, data_root)
+        coupling = curation.coupling[(curation.session.mode, curation.current)]
+        assert sorted(coupling.axes) == ["X", "Y"] and 0.0 <= coupling.p <= 1.0
+        _each_panel(curation)
+        assert curation.panel.height == PANEL_HEIGHT + MOTION_HEIGHT + COUPLING_HEIGHT
+        curation.show_motion = False
+        _each_panel(curation)
+        assert curation.panel.height == PANEL_HEIGHT
+
     def test_a_scan_without_rtmc_shows_no_motion_plot(self, curation, data_root):
         from mbo_utilities.gui.event_curation import PANEL_HEIGHT
 

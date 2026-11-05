@@ -10,7 +10,8 @@ at a time in the notebook's grid: the
 trace with its candidates (A) beside the threshold / slider card (A1 to A4);
 the arrows flip through recordings. When the scan ran with real-time motion correction,
 its motion correction (the RTMC shifts) sits over the trace on the same
-time axis, behind the ``MC`` checkbox. The Decision and
+time axis, behind the ``MC`` checkbox, and the trace's coherence with it by
+frequency under the trace. The Decision and
 Recordings tabs (labels, navigation, the table, the mode) are the column
 beside the dashboard in the curation window (``gui/curation_viewer.py``,
 ``mbo curate``) and the card under the ROI table in the line-scan viewer.
@@ -41,9 +42,11 @@ from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities import log
 from mbo_utilities.analysis.slow_fast import SlowFastSettings
+from mbo_utilities.analysis.trace_readouts import MotionCoupling, motion_coupling
 from mbo_utilities.annotation.slow_fast import (
     LABEL_RGBA,
     SlowFastSession,
+    curated_trace,
     kept_dprime,
     kept_times,
 )
@@ -64,7 +67,7 @@ from mbo_utilities.gui.imgui.lines import (
     vec4,
     vlines,
 )
-from mbo_utilities.gui.imgui.motion import MotionPlot
+from mbo_utilities.gui.imgui.motion import MOTION_COLORS, MotionPlot
 from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
 from mbo_utilities.gui.imgui.vnoiser_help import (
@@ -95,9 +98,11 @@ __all__ = [
     "Recording",
 ]
 
-# the trace (A, with its cards); the strip asks for MOTION_HEIGHT more while the motion plot sits over the trace in MOTION_SHARE of its cell
+# the trace (A, with its cards); the strip asks for MOTION_HEIGHT more while the motion plot sits over the trace in MOTION_SHARE of its cell, and COUPLING_HEIGHT more for the coherence plot under it
 PANEL_HEIGHT = 300
 MOTION_HEIGHT = 120
+COUPLING_HEIGHT = 150
+COUPLING_TICKS_HZ = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0]
 MOTION_SHARE = 0.35
 SLIDER_COL_EM = 4.2
 SLIDER_GAP_EM = 0.4
@@ -130,6 +135,14 @@ WIDGET_MODES = (*MODES, SLOW_FAST)
 METHODS = {"vnoiser": "vnoiser", SLOW_FAST: "slow + fast"}
 COMPARE_COLOR = (0.85, 0.45, 0.95, 0.55)
 COMPARE_LABELS = {"vnoiser": "vnoiser events", SLOW_FAST: "slow + fast peaks"}
+CHANCE_COLOR = (0.62, 0.62, 0.65, 0.3)
+COUPLING_TOOLTIP = (
+    "the share of this trace's 1-50 Hz power the motion correction explains, past what "
+    "the same trace gets moved along in time; p is how many of those moves reach it. "
+    "The plot under the trace shows it by frequency: a line above the grey band follows "
+    "the motion there. It says the two move together, never which moved which: a cell "
+    "that fires with movement looks the same."
+)
 DPRIME_TOOLTIP = (
     "d': how far the peaks stand above the trace just before them, in noise SDs: the "
     "1 ms at each peak against the 1 ms ending 3 ms before it, over the n isolated "
@@ -306,6 +319,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
         self._run: ResultsArray | None = None
         self._trace_sources: dict[str, dict] = {}
         self.motion: dict[tuple[str, str], MotionPlot] = {}
+        self.coupling: dict[tuple[str, str], MotionCoupling | None] = {}
         self._scan_keys: dict[str, tuple[str, str] | None] = {}
         self._motion_ratios = implot.SubplotsRowColRatios(
             row_ratios=[MOTION_SHARE, 1.0 - MOTION_SHARE]
@@ -701,6 +715,11 @@ class EventCurationWidget(SlowFastPanelsMixin):
         self._scan_keys[rec.rid] = scan_key
         if scan_key is not None and scan_key not in self.motion:  # read once per scan
             self.motion[scan_key] = MotionPlot(rtmc_motion(unit_rtmc(*scan_key)))
+        plot = self.motion.get(scan_key)
+        if plot:
+            self.coupling[(mode, rec.rid)] = motion_coupling(
+                curated_trace(session), plot.motion.at(session.t), session.fs
+            )
         return session, message
 
     def _run_jobs(self) -> None:
@@ -906,7 +925,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
     def draw_panel(self) -> None:
         """The Curation panel: the notebook's dashboard for one recording, the
         trace row (A with the threshold / auto-pass, Decision and Navigation
-        cards), MOTION_HEIGHT taller while the motion plot shows.
+        cards), MOTION_HEIGHT taller while the motion plot shows, over the
+        coherence plot of a recording long enough to have one.
         """
         self._mark_hovered()
         self._draw_flip_row()
@@ -921,8 +941,54 @@ class EventCurationWidget(SlowFastPanelsMixin):
             self._fit_timeline = True
             if plot is not None:
                 plot.refit()
-        self.panel.height = PANEL_HEIGHT + (MOTION_HEIGHT if motion else 0)
-        self._draw_timeline_row(session, plot)
+        timeline = PANEL_HEIGHT + (MOTION_HEIGHT if motion else 0)
+        coupling = self.coupling.get((session.mode, self.current)) if motion else None
+        self.panel.height = timeline + (COUPLING_HEIGHT if coupling else 0)
+        if coupling is None:
+            self._draw_timeline_row(session, plot)
+            return
+        top = imgui.get_content_region_avail().y * timeline / self.panel.height
+        with imgui_ctx.begin_child("##curation_row_a", imgui.ImVec2(0, top)):
+            self._draw_timeline_row(session, plot)
+        self._draw_coupling(coupling)
+
+    def _draw_coupling(self, coupling: MotionCoupling) -> None:
+        """The trace's coherence with the motion by frequency, every axis in the
+        motion plot's colour, over the band moved traces reach by chance.
+        """
+        f = coupling.frequency
+        height = max(imgui.get_content_region_avail().y - 2, em(3))
+        with line_plot(
+            "##curation_coupling", "frequency (Hz)", "coherence", height=height
+        ) as ok:
+            if not ok:
+                return
+            top = 1.15 * max(coupling.coherence.max(), coupling.chance.max())
+            implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10)
+            implot.setup_axes_limits(f[0], f[-1], 0.0, top, implot.Cond_.always)
+            implot.setup_axis_ticks(implot.ImAxis_.x1, COUPLING_TICKS_HZ)
+            implot.setup_legend(implot.Location_.north_east, implot.LegendFlags_.horizontal)
+            implot.plot_shaded(
+                "chance",
+                np.ascontiguousarray(f),
+                np.zeros(f.size),
+                np.ascontiguousarray(coupling.chance),
+                implot.Spec(fill_color=vec4(CHANCE_COLOR)),
+            )
+            for label, y in coupling.axes.items():
+                line(label, y, x=f, color=MOTION_COLORS.get(label[0], TRACE_COLOR))
+            line("all axes", coupling.coherence, x=f, color=TRACE_COLOR, weight=2.0)
+
+    def _draw_coupling_share(self, session, source: str) -> None:
+        """The title line's share of the trace the motion explains."""
+        coupling = self.coupling.get((session.mode, self.current))
+        imgui.same_line(0, em(0.6))
+        if coupling is None:
+            imgui.text_disabled(f"{source}: recording too short to read")
+            return
+        p = "p < 0.001" if coupling.p < 0.001 else f"p {coupling.p:.3f}"
+        imgui.text(f"{source} explains {coupling.share:.1%} ({p})")
+        set_tooltip(COUPLING_TOOLTIP, show_mark=False)
 
     def _draw_timeline_row(
         self, session: CurationSession, plot: MotionPlot | None
@@ -966,6 +1032,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 "over the trace on the same time axis",
                 show_mark=False,
             )
+            self._draw_coupling_share(session, plot.motion.source)
         avail = imgui.get_content_region_avail()
         if session.mode == SLOW_FAST:
             n_cols = 3

@@ -285,7 +285,8 @@ PANELS = (
         "one to focus it, the arrows above flip to the next trace",
         (
             "the red line is A1, the teal line A2: drag either",
-            "MC puts the scan's motion correction over the trace, on the same time axis",
+            "MC puts the scan's motion correction over the trace, on the same time axis, and "
+            "their coherence by frequency under it: a line above the grey band follows the motion there",
             "scroll zooms (shift: time only, alt: height only), drag pans, double-click fits",
         ),
     ),
