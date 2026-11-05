@@ -1141,34 +1141,6 @@ ASAKO_MESC = next(
 )
 
 
-class TestSeparateZstackFile:
-    @pytest.mark.skipif(
-        not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only"
-    )
-    def test_stack_in_a_sibling_file_pairs_with_the_lines(self):
-        from pathlib import Path
-
-        from mbo_utilities.analysis.linescan import (
-            pair_reference_zstack,
-            zstack_candidates,
-        )
-        from mbo_utilities.arrays.mesc import list_mesc_units
-
-        mesc = Path(ASAKO_MESC)
-        zstack = mesc.parent.parent / f"{mesc.stem}_zstack.mesc"
-        units = list_mesc_units(zstack)
-        cands = zstack_candidates(
-            mesc, "MSession_0/MUnit_35", units, zstack_path=zstack
-        )
-        assert [c["munit"] for c in cands] == ["MUnit_3"]
-        assert cands[0]["xy_fraction"] == 1.0 and cands[0]["z_fraction"] == 1.0
-        paired = pair_reference_zstack(
-            mesc, "MSession_0/MUnit_35", units, zstack_path=zstack
-        )
-        assert paired["munit"] == "MUnit_3"
-        assert zstack_candidates(mesc, "MSession_0/MUnit_35") == []
-
-
 def _mesc_beside_pf(tmp_path):
     """The archive's layout: <expt>/<expt>/<expt>.mesc next to <expt>/PF."""
     pf_dir = _write_spatial_recording(tmp_path)

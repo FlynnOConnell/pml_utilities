@@ -29,8 +29,10 @@ from mbo_utilities.results import (
     CURATION_DIR,
     ResultsArray,
     recording_id,
+    trace_label,
     vnoiser_run_for_mesc,
 )
+from mbo_utilities.vnoiser import MODES
 
 __all__ = [
     "LABEL_RGBA",
@@ -44,16 +46,10 @@ __all__ = [
     "trace_label",
 ]
 
-MODES = ("fast", "slow", "manual")
 LABELS = ("yes", "no", "auto_yes", "auto_no", "unlabeled")
 VIEW_FILTERS = ("all", "yes", "no", "unlabeled")
 
 _TAGS = re.compile(r"<[^>]+>")
-
-
-def trace_label(unit, roi: str) -> str:
-    """How one ROI trace of a unit reads in the curation window."""
-    return f"scan {unit.attrs.get('scan_id', unit.index)} / {roi}"
 
 
 def hex_rgba(color: str, alpha: float = 1.0) -> tuple[float, float, float, float]:

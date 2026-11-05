@@ -142,9 +142,6 @@ def is_trace_unit(unit: dict) -> bool:
     )
 
 
-# NOTE: lab4.convert flips Y for these, undoing MEScan's save orientation; linescan and multiline are unsettled upstream, multicube was never handled
-_FLIP_Y_BY_MODALITY: dict[int, bool] = {8: True, 9: True, 10: True}
-
 CURVE_NAMES = frozenset(
     {
         "PatternSeq_AO1",
@@ -553,7 +550,6 @@ class _Layout:
         "ny",
         "nx",
         "rois",
-        "flip_y",
         "z_meaning",
         "frame_maps",
         "raw_shape",
@@ -579,11 +575,11 @@ class _Layout:
         return (
             f"kind={self.kind} raw={self.raw_shape} -> "
             f"(T={self.nt}, C={self.nc}, Z={self.nz}, Y={self.ny}, X={self.nx}) "
-            f"z={self.z_meaning} flip_y={self.flip_y}{slices}"
+            f"z={self.z_meaning}{slices}"
         )
 
 
-def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
+def _resolve_layout(unit, modality: int, curves: dict) -> _Layout:
     """Work out how to turn this unit's raw channels into canonical TCZYX."""
     nc = int(_attr(unit, "VecChannelsSize", 0) or 0)
     if nc <= 0:
@@ -598,9 +594,7 @@ def _resolve_layout(unit, modality: int, curves: dict, flip_y=None) -> _Layout:
         )
     n0, page_y, page_x = (int(v) for v in raw)
 
-    if flip_y is None:
-        flip_y = _FLIP_Y_BY_MODALITY.get(modality, False)
-    common = {"nc": nc, "flip_y": bool(flip_y), "raw_shape": raw, "frame_maps": None}
+    common = {"nc": nc, "raw_shape": raw, "frame_maps": None}
 
     if modality == 2:
         return _Layout(
@@ -1005,11 +999,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
     roi : int or sequence of int, optional
         ROI selection. ``None`` keeps every ROI on the Z axis (default), ``N``
         selects one ROI (1-based), ``0`` splits all ROIs.
-    flip_y : bool, optional
-        Flip Y on read. Defaults to the ``lab4.convert`` behaviour: on for
-        chessboard and both ribbon scans, off for everything else. Whether the
-        flip also belongs on linescan/multiline is unsettled upstream; pass it
-        explicitly to override.
     start_frame : int, optional
         Drop this many leading timepoints (crop-to-start alignment).
     sync_key : str, optional
@@ -1070,7 +1059,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         munit: str | None = None,
         unit: int | str | None = None,
         roi: int | Sequence[int] | None = None,
-        flip_y: bool | None = None,
         start_frame: int | None = None,
         sync_key: str | None = None,
         sync_edge: str | None = None,
@@ -1104,9 +1092,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             logger.info(f"{self.unit_key}: RTMC traces {sorted(self._rtmc)}")
         else:
             logger.info(f"{self.unit_key}: no RTMC motion correction detected")
-        self._layout = _resolve_layout(
-            self._unit, self.modality, self._curves, flip_y=flip_y
-        )
+        self._layout = _resolve_layout(self._unit, self.modality, self._curves)
 
         frame_period_ms = _attr(
             self._unit, "TStepInMs"
@@ -1218,16 +1204,15 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         for i, roi in enumerate(self._layout.rois):
             height = roi.get("n_lines", roi["row1"] - roi["row0"])
             width = roi.get("width", roi["col1"] - roi["col0"])
-            y0 = self._layout.ny - height if self._layout.flip_y else 0
             out.append(
                 {
                     "index": i,
-                    "y_start": y0,
-                    "y_end": y0 + height,
+                    "y_start": 0,
+                    "y_end": height,
                     "x": 0,
                     "height": height,
                     "width": width,
-                    "slice": slice(y0, y0 + height),
+                    "slice": slice(0, height),
                     "source_row0": roi["row0"],
                     "source_col0": roi["col0"],
                 }
@@ -1282,11 +1267,10 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
             "mesc_layout": layout.kind,
             "mesc_raw_shape": tuple(layout.raw_shape),
             "mesc_z_axis_meaning": layout.z_meaning,
-            "mesc_flip_y": layout.flip_y,
             "mesc_centroids": info["centroids"],
             "mesc_rotations": info["rotations"],
             "mesc_roi_extents": [
-                {k: r[k] for k in ("index", "y_start", "y_end", "height", "width")}
+                {k: r[k] for k in ("index", "height", "width")}
                 for r in self._rois
             ],
             "mesc_sync_frame": self._sync_frame,
@@ -1437,11 +1421,10 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
 
     @property
     def line_positions(self) -> list[dict] | None:
-        """Where each scanned line or patch of an AOD unit sits, from the
+        """Where each scanned line or patch of an AOD unit was drawn, from the
         file's geometry (``mesc_geometry.line_positions``): one dict per ROI
-        with ``z_um``, ``dz_um`` against the snapshot it was drawn on,
-        ``start_um`` / ``end_um``, ``length_um``, ``sample_um``; None for a
-        unit without ROIs or geometry. Read once.
+        with ``start_um`` / ``end_um``, ``length_um``, ``sample_um``; None for
+        a unit without ROIs or geometry. Read once.
         """
         if not self._line_positions_read:
             from mbo_utilities.arrays.mesc_geometry import line_positions
@@ -1544,8 +1527,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         block = np.ascontiguousarray(block)
         if block.shape[1:] != (layout.ny, layout.nx):
             block = self._pad_to_frame(block)
-        if layout.flip_y:
-            block = block[:, ::-1, :]
         if self.fix_phase and block.size:
             block = self._apply_phase(block, c, z, frames)
         return block
@@ -1630,7 +1611,7 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         """Per-pixel mean over T as ``(C, Z, Y, X)`` float32.
 
         Reads each raw channel once, whatever the ROI count: the mean commutes
-        with the ROI crop, padding and Y flip, so those run on the mean page.
+        with the ROI crop and padding, so those run on the mean page.
         The layout mean is cached; the ROI selection and scan-phase correction
         are applied to it on every call.
         """
@@ -1700,8 +1681,6 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
                 h = min(plane.shape[0], layout.ny)
                 w = min(plane.shape[1], layout.nx)
                 out[c, z, :h, :w] = plane[:h, :w]
-        if layout.flip_y:
-            out = np.ascontiguousarray(out[:, :, ::-1, :])
         if progress_callback is not None:
             progress_callback(1.0)
         return out

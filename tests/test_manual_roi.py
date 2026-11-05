@@ -3088,9 +3088,6 @@ class TestRunCoordinates:
         (trace,) = cwidget.traces.for_roi(uid)
         assert (trace.z, trace.c) == (1, 1)
         assert cwidget.model.targets([0]) == cwidget.model.targets([0], z=None)
-        cwidget.run_where = "fixed"
-        cwidget.run_z, cwidget.run_c = 2, 0
-        assert cwidget._coords() == (2, 0, None)
         cwidget.run_where = "drawn"
         assert cwidget._coords() == (None, None, None)
         assert cwidget._where_label() == "as drawn"
@@ -3139,10 +3136,8 @@ class TestRunCoordinates:
             assert w.store.plane_axes == (("c", 2),)
             w.add_roi(square(10, 10, 9))  # drawn on c0
             uid = w.store.rois[0].uid
-            w.run_where = "fixed"
-            w.run_c = 1
             w.run_tp = [0, 1, 2, 3]
-            w.run_roi(0)
+            w.run_rois([0], "roi01", c=1)
             pump(w)
             assert w._run_error is None, w._run_error
             from mbo_utilities.results import Results, newest_results
@@ -3164,7 +3159,6 @@ class TestRunCoordinates:
             (trace,) = w.traces.for_roi(uid)
             assert trace.key == ("roi", uid, 0, 1, "mean") and trace.frames == (0, 4, 1)
             # both channels: one unit per read, named by the filename tags
-            w.run_where = "drawn"
             w.run_tp = None
             w.run_rois([0], "both", c=None)
             pump(w)
@@ -3175,7 +3169,6 @@ class TestRunCoordinates:
                 ("roi", uid, 0, 1, "mean"),
             }
             w.run_rois([0, 0], "each", c=None)
-            w.run_where, w.run_c = "fixed", 0
             w.trace_rois([0], c=1)
             pump(w)
         finally:
@@ -3620,11 +3613,11 @@ class TestSliderRoles:
             )
             # R is not Z: everything the widget says about the axis uses its name
             assert w.axis_label("z") == "ROI" and w.axis_label("c") == "Channel"
-            w.run_where, w.run_z, w.run_c = "fixed", 2, None
-            assert w._where_label() == "ROI 3"
-            w.run_where = "drawn"
             iw.indices["Channel"] = 1
             iw.indices["ROI"] = 2
+            w.run_where = "screen"
+            assert "ROI 3" in w._where_label(), w._where_label()
+            w.run_where = "drawn"
             w.add_roi(square(10, 10, 9))
             assert (w.store.roi_z(0), w.store.roi_c(0)) == (2, 1)
             movie = w.movie(w.store.rois[0].plane)

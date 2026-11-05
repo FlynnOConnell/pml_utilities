@@ -62,11 +62,9 @@ ends or each patch's corners. The **picture** button draws them back on:
 | image | shows |
 |---|---|
 | the picture | every line, whatever its depth, because that is where they were drawn |
-| a Z-stack | only the lines scanned inside it, in field **and** depth range; the caption says how many of the scan's lines those are |
+| a Z-stack | the lines inside it, placed by matching the picture to the stack; the caption gives the slice, the match and whether the recording confirms it |
 
 The ROI slider's line is drawn thicker; click a line to move the slider to it.
-The popup's **display** button puts that image in the viewer, a Z-stack at the
-slice the lines sit on. That is the only place a Z-stack is offered.
 
 ## Clicks
 

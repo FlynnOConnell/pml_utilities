@@ -16,9 +16,14 @@ Recordings tabs (labels, navigation, the table, the mode) are the column
 beside the dashboard in the curation window (``gui/curation_viewer.py``,
 ``mbo curate``) and the card under the ROI table in the line-scan viewer.
 Every plot reads the focused session, so a label, a threshold or a flip
-updates all of them at once. Every rule comes from ``vnoiser.curation``
-through :class:`mbo_utilities.vnoiser.CurationSession`: one per mode and
-recording, each with its own JSON file, as the notebook's sections have.
+updates all of them at once. Two methods: vnoiser's, every rule from
+``vnoiser.curation`` through :class:`mbo_utilities.vnoiser.CurationSession`
+(one per mode and recording, each with its own JSON file, as the notebook's
+sections have), and ``slow_fast``, the fast peaks inside slow events of the
+raw dF/F (:class:`mbo_utilities.annotation.slow_fast.SlowFastSession`, drawn
+by :class:`~mbo_utilities.gui.slow_fast_panels.SlowFastPanelsMixin`), which
+runs without vnoiser. ``compare`` draws the other method's events over the
+trace.
 """
 
 from __future__ import annotations
@@ -26,18 +31,22 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from imgui_bundle import imgui, imgui_ctx, implot
 from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities import log
+from mbo_utilities.analysis.slow_fast import SlowFastSettings
+from mbo_utilities.annotation.slow_fast import LABEL_RGBA, SlowFastSession, kept_times
+from mbo_utilities.annotation.slow_fast import MODE as SLOW_FAST
 from mbo_utilities.arrays.mesc import rtmc_motion, unit_rtmc
 from mbo_utilities.gui import _theme as theme
+from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._files import PathPrompt, draw_path_prompt
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui._theme import card, em, section
@@ -61,10 +70,22 @@ from mbo_utilities.gui.imgui.vnoiser_help import (
     TOOLTIP,
     draw_vnoiser_help,
 )
+from mbo_utilities.gui.slow_fast_panels import SlowFastPanelsMixin
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
+from mbo_utilities.install import VNOISER_HINT
 from mbo_utilities.preferences import get_last_dir, set_last_dir
-from mbo_utilities.results import TRACES_PKL, ResultsArray, results_dir_of
-from mbo_utilities.vnoiser import MODES, CurationSession, vnoiser_run_for_mesc
+from mbo_utilities.results import (
+    TRACES_PKL,
+    ResultsArray,
+    recording_id,
+    results_dir_of,
+    trace_label,
+    vnoiser_run_for_mesc,
+)
+from mbo_utilities.vnoiser import MODES
+
+if TYPE_CHECKING:
+    from mbo_utilities.vnoiser.session import CurationSession
 
 __all__ = [
     "KEYBINDS",
@@ -109,7 +130,12 @@ _MODE_TITLES = {
     "fast": "fast candidates",
     "slow": "slow (<{cutoff:g} Hz) candidates",
     "manual": "manual candidates",
+    SLOW_FAST: "fast peaks in slow events",
 }
+WIDGET_MODES = (*MODES, SLOW_FAST)
+METHODS = {"vnoiser": "vnoiser", SLOW_FAST: "slow + fast"}
+COMPARE_COLOR = (0.85, 0.45, 0.95, 0.55)
+COMPARE_LABELS = {"vnoiser": "vnoiser events", SLOW_FAST: "slow + fast peaks"}
 
 
 def _mode_title(mode: str, cutoff: float) -> str:
@@ -232,12 +258,12 @@ class Recording:
     label: str
     source: str
     pre_denoised: bool
-    error: str = ""
+    errors: dict[str, str] = field(default_factory=dict)  # mode -> why it did not load
     unit: str = ""
     roi: str = ""
 
 
-class EventCurationWidget:
+class EventCurationWidget(SlowFastPanelsMixin):
     """The curation panel and its controls on a host with a figure.
 
     Parameters
@@ -265,10 +291,14 @@ class EventCurationWidget:
         self.panel = TopPanel("curation", "Curation", self.draw_panel, PANEL_HEIGHT, 12)
         self.strip.register(self.panel)
 
-        self.mode = "fast"
+        self.mode = "fast" if HAS_VNOISER else SLOW_FAST
+        self._vnoiser_mode = "fast"
         self.slow_cutoff_hz = 40.0
+        self.slow_fast_settings = SlowFastSettings()
+        self._exporting = False  # slow / fast tables being written
+        self.compare = False
         self.catalog: list[Recording] = []
-        self.sessions: dict[tuple[str, str], CurationSession] = {}
+        self.sessions: dict[tuple[str, str], CurationSession | SlowFastSession] = {}
         self.raw_inverted = True
         self._raw_scan: tuple[Path, int] | None = None
         self.current = ""
@@ -303,6 +333,9 @@ class EventCurationWidget:
         self._active: tuple | None = None
         self.timeline_points = ScatterPlot("##curation_timeline_pts", marker_size=7.0)
         self.pca = ScatterPlot("##curation_pca", marker_size=7.0)
+        self.event_points = ScatterPlot("##curation_sf_event", marker_size=7.0)
+        self.peak_scatter = ScatterPlot("##curation_sf_scatter", marker_size=7.0)
+        self._line_drags: dict[str, float] = {}
         self.autofit = True
         self.show_keybinds = False
         self.show_help = False
@@ -436,9 +469,23 @@ class EventCurationWidget:
             self.current = first.rid
             self.load_all()
 
+    @property
+    def method(self) -> str:
+        """``vnoiser`` or ``slow_fast``: which kind of session the focused one is."""
+        return SLOW_FAST if self.mode == SLOW_FAST else "vnoiser"
+
+    def set_method(self, method: str) -> None:
+        """Switch method on the same recording; vnoiser comes back in its last mode."""
+        self.set_mode(SLOW_FAST if method == SLOW_FAST else self._vnoiser_mode)
+
     def set_mode(self, mode: str) -> None:
-        if mode not in MODES or mode == self.mode:
+        if mode not in WIDGET_MODES or mode == self.mode:
             return
+        if mode in MODES and not HAS_VNOISER:
+            self.status = f"vnoiser is not installed: {VNOISER_HINT}"
+            return
+        if mode in MODES:
+            self._vnoiser_mode = mode
         self.mode = mode
         self._fit_timeline = True
         rec = self.recording(self.current)
@@ -463,8 +510,8 @@ class EventCurationWidget:
         rec = self.recording(rid)
         if rec is None:
             return
-        if rec.error:
-            self.status = f"{rec.label}: {rec.error}"
+        if rec.errors.get(self.mode):
+            self.status = f"{rec.label}: {rec.errors[self.mode]}"
             return
         self.current = rid
         self._fit_timeline = True
@@ -600,12 +647,15 @@ class EventCurationWidget:
                 n += 1
         self.data_path = str(mesc_path)
         self.prompt.path = self.data_path
-        self.status = (
-            f"{n} raw ROI traces in {mesc_path.name}; no PF folder beside it, so click a "
-            "recording to run vnoiser's denoiser on it (minutes the first time, cached after)"
-            if n
-            else f"no AOD ROI units in {mesc_path.name}"
-        )
+        if not n:
+            self.status = f"no AOD ROI units in {mesc_path.name}"
+        elif self.method == SLOW_FAST:
+            self.status = f"{n} raw ROI traces in {mesc_path.name}; click a recording to detect its events"
+        else:
+            self.status = (
+                f"{n} raw ROI traces in {mesc_path.name}; no PF folder beside it, so click a "
+                "recording to run vnoiser's denoiser on it (minutes the first time, cached after)"
+            )
         return n
 
     def set_raw_inverted(self, inverted: bool) -> None:
@@ -623,10 +673,13 @@ class EventCurationWidget:
         self._busy.add(key)
         source = self._trace_sources.get(rec.rid)
         run = self._run
-        cutoff = self.slow_cutoff_hz
-
+        option = (
+            replace(self.slow_fast_settings)
+            if mode == SLOW_FAST
+            else self.slow_cutoff_hz
+        )
         self._jobs.put(
-            (key, rec.label, partial(self._load_job, rec, mode, source, run, cutoff))
+            (key, rec.label, partial(self._load_job, rec, mode, source, run, option))
         )
         if self._worker is None or not self._worker.is_alive():
             self._worker = threading.Thread(
@@ -634,8 +687,14 @@ class EventCurationWidget:
             )
             self._worker.start()
 
-    def _load_job(self, rec: Recording, mode: str, source, run, cutoff):
-        session = CurationSession(rec.source, mode=mode, slow_cutoff_hz=cutoff)
+    def _load_job(self, rec: Recording, mode: str, source, run, option):
+        """``option`` is the slow / fast settings or vnoiser's slow cutoff."""
+        if mode == SLOW_FAST:
+            session = SlowFastSession(option)
+        else:
+            from mbo_utilities.vnoiser import CurationSession
+
+            session = CurationSession(rec.source, mode=mode, slow_cutoff_hz=option)
         if source is not None:
             if callable(
                 source["trace"]
@@ -678,7 +737,9 @@ class EventCurationWidget:
             return f"{len(self._busy)} queued" if self._busy else ""
         key, label, started = active
         elapsed = int(time.monotonic() - started)
-        verb = "denoising" if key[1] in self._trace_sources else "loading"
+        verb = "loading"
+        if key[1] in self._trace_sources:
+            verb = "detecting" if key[0] == SLOW_FAST else "denoising"
         line = f"{verb} {label} · {elapsed // 60}:{elapsed % 60:02d}"
         queued = len(self._busy) - 1
         return line + (f" · {queued} queued" if queued > 0 else "")
@@ -711,7 +772,7 @@ class EventCurationWidget:
                 self.status = message
                 rec = self.recording(key[1])
                 if rec is not None:
-                    rec.error = message.rsplit(": ", 1)[-1]
+                    rec.errors[key[0]] = message.rsplit(": ", 1)[-1]
                 if key == (self.mode, self.current) and self.loadable():
                     self.step_recording(1)
                 continue
@@ -807,6 +868,10 @@ class EventCurationWidget:
             self.step_recording(-1)
         if imgui.is_key_pressed(imgui.Key.down_arrow, False):
             self.step_recording(1)
+        if imgui.is_key_pressed(imgui.Key.m, False):
+            self.set_method("vnoiser" if self.method == SLOW_FAST else SLOW_FAST)
+        if imgui.is_key_pressed(imgui.Key.c, False):
+            self.compare = not self.compare
         session = self._ready()
         if session is None or not session.n:
             return
@@ -830,7 +895,8 @@ class EventCurationWidget:
         return [
             r
             for r in self.shown
-            if not r.error and (r.pre_denoised or r.rid in self._trace_sources)
+            if not r.errors.get(self.mode)
+            and (r.pre_denoised or r.rid in self._trace_sources)
         ]
 
     def step_recording(self, delta: int) -> None:
@@ -906,7 +972,10 @@ class EventCurationWidget:
                 show_mark=False,
             )
         avail = imgui.get_content_region_avail()
-        n_cols = 4 if session.seeded else 1
+        if session.mode == SLOW_FAST:
+            n_cols = 3
+        else:
+            n_cols = 4 if session.seeded else 1
         card_w = (
             em(SLIDER_COL_EM) * n_cols
             + em(SLIDER_GAP_EM) * (n_cols - 1)
@@ -935,7 +1004,10 @@ class EventCurationWidget:
                         )
                         self._draw_timeline(session)
         imgui.same_line(0, em(0.5))
-        self._draw_slider_card(session, card_w, avail.y)
+        if session.mode == SLOW_FAST:
+            self._draw_slow_fast_card(session, card_w, avail.y)
+        else:
+            self._draw_slider_card(session, card_w, avail.y)
 
     def _draw_flip_row(self) -> None:
         """Previous / next recording, and which one this is."""
@@ -957,6 +1029,7 @@ class EventCurationWidget:
         label = rec.label if rec is not None else "no recording"
         where = f"  ({pos + 1}/{len(rows)})" if pos >= 0 else ""
         imgui.text(f"{label}{where}")
+        self._draw_method_switch()
         if rec is not None and rec.rid in self._trace_sources and self._raw_scan:
             imgui.same_line(0, em(0.8))
             changed, inverted = imgui.checkbox(
@@ -974,6 +1047,60 @@ class EventCurationWidget:
         if (self.mode, self.current) in self._busy:
             imgui.same_line(0, em(0.6))
             imgui.text_disabled(self.loading_line() or "loading...")
+
+    def _draw_method_switch(self) -> None:
+        """The two methods (m) and the other's events over the trace (c)."""
+        imgui.same_line(0, em(1.2))
+        for i, (method, caption) in enumerate(METHODS.items()):
+            if i:
+                imgui.same_line(0, em(0.4))
+            disabled = method == "vnoiser" and not HAS_VNOISER
+            imgui.begin_disabled(disabled)
+            if imgui.radio_button(f"{caption}##method", self.method == method):
+                self.set_method(method)
+            imgui.end_disabled()
+        set_tooltip(
+            "m: vnoiser curates candidates on its denoised trace with a seed template; "
+            "slow + fast curates the fast peaks inside slow events of the raw dF/F. "
+            "Each keeps its own labels."
+            + (
+                f"\nvnoiser is not installed: {VNOISER_HINT}" if not HAS_VNOISER else ""
+            ),
+            show_mark=False,
+        )
+        imgui.same_line(0, em(0.8))
+        imgui.begin_disabled(not HAS_VNOISER)
+        _changed, self.compare = imgui.checkbox(
+            "compare##curation_compare", self.compare
+        )
+        imgui.end_disabled()
+        set_tooltip(
+            "c: the other method's events on this trace (all but the ones called no) "
+            "as faint lines over the trace",
+            show_mark=False,
+        )
+
+    def _other_mode(self) -> str:
+        return self._vnoiser_mode if self.mode == SLOW_FAST else SLOW_FAST
+
+    def _draw_compare(self) -> None:
+        """Inside panel A's open plot: the other method's events on the focused
+        recording, loading them first when it can load without a click.
+        """
+        mode = self._other_mode()
+        rec = self.recording(self.current)
+        if rec is None or rec.errors.get(mode):
+            return
+        key = (mode, rec.rid)
+        other = self.sessions.get(key)
+        if other is None:
+            if key not in self._busy and (rec.pre_denoised or mode == SLOW_FAST):
+                self._enqueue(rec, mode)
+            return
+        if key in self._busy or not other.loaded:
+            return
+        method = SLOW_FAST if mode == SLOW_FAST else "vnoiser"
+        vlines(COMPARE_LABELS[method], kept_times(other), COMPARE_COLOR, 1.0)
 
     def _cached_trace(
         self, name: str, t: np.ndarray, y: np.ndarray
@@ -997,11 +1124,21 @@ class EventCurationWidget:
         self._timeline_key = key
         self._fit_timeline = False
         height = max(imgui.get_content_region_avail().y - 2, 60.0)
-        flags = BOX_PLOT_FLAGS if self.box_mode is not None else 0
+        y_label = "dF/F" if session.mode == SLOW_FAST else "z"
         with line_plot(
-            "##curation_timeline", "time (s)", "z", height=height, fit=fit, flags=flags
+            "##curation_timeline",
+            "time (s)",
+            y_label,
+            height=height,
+            fit=fit,
+            flags=self._box_flags(),
         ) as ok:
             if not ok:
+                return
+            if self.compare and HAS_VNOISER:
+                self._draw_compare()
+            if session.mode == SLOW_FAST:
+                self._slow_fast_items(session)
                 return
             t = session.t
             t_plot, denoised_plot = self._cached_trace("denoised", t, session.denoised)
@@ -1045,32 +1182,43 @@ class EventCurationWidget:
                     session.set_auto_pass(self._auto_pass_drag)
                     self._auto_pass_drag = None
 
-            visible = session.visible
-            if not session.n:
-                return
-            xs = session.times_s[visible]
-            ys = np.interp(xs, t, marker_source)
-            focused = np.flatnonzero(visible == session.current)
-            picked = self.timeline_points.items(
-                xs,
-                ys,
-                session.colors(visible),
-                focused=int(focused[0]) if focused.size else None,
-                label="candidates",
-                tooltip=lambda i: (
-                    f"candidate {visible[i] + 1}: {xs[i]:.3f} s, {session.label(visible[i])}"
-                ),
-            )
-            if picked is not None:
-                session.select(int(visible[picked]))
-            self._box_select("timeline", xs, ys, visible, self.timeline_points)
-            vlines(
-                "##focus",
-                [session.times_s[session.current]],
-                FOCUS_COLOR,
-                1.0,
-                legend=False,
-            )
+            ys = np.interp(session.times_s, t, marker_source) if session.n else []
+            self._draw_candidate_points(session, session.times_s, ys)
+
+    def _draw_candidate_points(self, session, times_s, ys) -> None:
+        """Inside panel A's open plot: the candidates in view at ``(times_s,
+        ys)`` in their label's colour, picking and box selection, the focus.
+        """
+        visible = session.visible
+        if not session.n:
+            return
+        xs = np.asarray(times_s)[visible]
+        ys = np.asarray(ys)[visible]
+        focused = np.flatnonzero(visible == session.current)
+        picked = self.timeline_points.items(
+            xs,
+            ys,
+            session.colors(visible),
+            focused=int(focused[0]) if focused.size else None,
+            label="candidates",
+            tooltip=lambda i: (
+                f"candidate {visible[i] + 1}: {xs[i]:.3f} s, {session.label(visible[i])}"
+            ),
+        )
+        if picked is not None:
+            session.select(int(visible[picked]))
+        self._box_select("timeline", xs, ys, visible, self.timeline_points)
+        vlines(
+            "##focus",
+            [session.times_s[session.current]],
+            FOCUS_COLOR,
+            1.0,
+            legend=False,
+        )
+
+    def _box_flags(self) -> int:
+        """In box mode right-drag belongs to the box, on every plot that takes one."""
+        return BOX_PLOT_FLAGS if self.box_mode is not None else 0
 
     def set_box_mode(self, mode: str | None) -> None:
         """Enter box mode for ``mode`` ("yes" / "no"); the same mode again
@@ -1318,18 +1466,30 @@ class EventCurationWidget:
         imgui.dummy(imgui.ImVec2(width, 1))
         imgui.end_group()
 
-    def _draw_candidate_row(self, session: CurationSession) -> None:
-        """B to D: template, focused candidate, PCA."""
+    def _draw_candidate_row(self, session) -> None:
+        """B to D: template, focused candidate, PCA; or the slow event, the
+        fast peak and the peaks' scatter for slow / fast.
+        """
         if not session.n:
-            imgui.text_disabled("No candidate events found; lower the threshold.")
+            imgui.text_disabled(
+                "Trace excluded; untick exclude trace under Detection."
+                if session.mode == SLOW_FAST and session.excluded
+                else "No fast peaks inside slow events; lower the edge or peak SD."
+                if session.mode == SLOW_FAST
+                else "No candidate events found; lower the threshold."
+            )
             return
         avail = imgui.get_content_region_avail()
         gap = em(0.5)
         width = max((avail.x - 2 * gap) / 3, em(8))
         panels = (
-            ("B. Current template", self._draw_template),
-            (self._candidate_title(session), self._draw_candidate),
-            ("D. Candidate PCA (400 ms)", self._draw_pca),
+            self._slow_fast_panels(session)
+            if session.mode == SLOW_FAST
+            else (
+                ("B. Current template", self._draw_template),
+                (self._candidate_title(session), self._draw_candidate),
+                ("D. Candidate PCA (400 ms)", self._draw_pca),
+            )
         )
         for i, (title, draw) in enumerate(panels):
             if i:
@@ -1434,7 +1594,7 @@ class EventCurationWidget:
                 f"PC1 {scores[visible[k], 0]:.2f}  PC2 {scores[visible[k], 1]:.2f}"
             ),
             inside=lambda: self._pca_inside(session, scores, visible),
-            flags=BOX_PLOT_FLAGS if self.box_mode is not None else 0,
+            flags=self._box_flags(),
         )
         if picked is not None:
             session.select(int(visible[picked]))
@@ -1502,6 +1662,8 @@ class EventCurationWidget:
             return
         self._draw_decision(session)
         self._draw_event(session)
+        if session.mode == SLOW_FAST:
+            self._draw_detection(session)
         self._draw_navigation(session)
         self._draw_filter(session)
         self._draw_files(session)
@@ -1510,6 +1672,9 @@ class EventCurationWidget:
         imgui.text_wrapped(self.status)
 
     def _draw_mode_row(self) -> None:
+        if self.method == SLOW_FAST:
+            imgui.text_disabled("method: slow + fast (m switches)")
+            return
         imgui.set_next_item_width(em(6))
         changed, idx = imgui.combo("mode", MODES.index(self.mode), list(MODES))
         set_tooltip(
@@ -1587,14 +1752,16 @@ class EventCurationWidget:
                     rec.label if not rec.pre_denoised else f"{rec.label}\n{rec.source}"
                 )
             imgui.table_next_column()
-            if ready:
+            if ready and session.mode == SLOW_FAST and session.excluded:
+                imgui.text_disabled("excl")
+            elif ready:
                 imgui.text(str(session.n))
             elif key in self._busy:
                 imgui.text_disabled("...")
-            elif rec.error:
+            elif rec.errors.get(self.mode):
                 imgui.text_disabled("missing")
                 if imgui.is_item_hovered():
-                    imgui.set_tooltip(rec.error)
+                    imgui.set_tooltip(rec.errors[self.mode])
             else:
                 imgui.text_disabled("-" if rec.pre_denoised else "raw")
             imgui.table_next_column()
@@ -1653,7 +1820,7 @@ class EventCurationWidget:
                 if imgui.button(caption, wide):
                     self.set_box_mode(mode)
             set_tooltip(
-                f"box mode: right-drag a box on the trace or the PCA, adjust its edges, "
+                f"box mode: right-drag a box on the trace or panel D, adjust its edges, "
                 f"then Apply (enter) labels every candidate inside {mode}; again or esc leaves",
                 show_mark=False,
             )
@@ -1663,7 +1830,9 @@ class EventCurationWidget:
         if imgui.button("Clear all", width):
             session.clear_labels()
         set_tooltip(
-            "drop every manual label of this recording (the file keeps its "
+            "drop every label of the peaks found now (the file keeps the settings)"
+            if session.mode == SLOW_FAST
+            else "drop every manual label of this recording (the file keeps its "
             "thresholds): the A2 / A3 / A4 rules decide every candidate again. "
             "Manual labels, including boxed ones, always win over the rules.",
             show_mark=False,
@@ -1685,7 +1854,7 @@ class EventCurationWidget:
             self.exit_box_mode()
         set_tooltip("esc", show_mark=False)
         if self._box_rect is None:
-            imgui.text_disabled("right-drag a box on the trace or the PCA")
+            imgui.text_disabled("right-drag a box on the trace or panel D")
         else:
             imgui.text_colored(
                 theme.to_vec4(BOX_COLORS[self.box_mode]),
@@ -1722,6 +1891,9 @@ class EventCurationWidget:
         self._draw_event_body(session)
 
     def _draw_event_body(self, session) -> None:
+        if session.mode == SLOW_FAST:
+            self._draw_slow_fast_event(session)
+            return
         if not session.n:
             imgui.text_disabled("No candidate events found.")
             return
@@ -1763,6 +1935,9 @@ class EventCurationWidget:
         self._draw_files_body(session)
 
     def _draw_files_body(self, session) -> None:
+        if session.mode == SLOW_FAST:
+            self._draw_slow_fast_files(session)
+            return
         yes, no, unlabeled = session.counts()
         imgui.text_disabled(f"yes {yes} · no {no} · unlabeled {unlabeled}")
         imgui.text_disabled(f"template source events: {len(session.template_source)}")
@@ -1775,17 +1950,14 @@ class EventCurationWidget:
 
     @staticmethod
     def _label_color(label: str):
-        from mbo_utilities.vnoiser import LABEL_RGBA
-
         return LABEL_RGBA.get(label, LABEL_RGBA["unlabeled"])
 
 
 def _build_catalog(run: ResultsArray) -> list[Recording]:
-    """Every denoised ROI trace a run holds, units in the pipeline's order and
-    ROIs in the run's; a unit without a sampling rate is left out.
+    """Every ROI trace a run holds that a method can curate (a denoised trace
+    for vnoiser, dF/F or raw for slow / fast), units in the pipeline's order
+    and ROIs in the run's; a unit without a sampling rate is left out.
     """
-    from mbo_utilities.vnoiser import recording_id, trace_label
-
     return [
         Recording(
             recording_id(unit, roi),
@@ -1796,6 +1968,6 @@ def _build_catalog(run: ResultsArray) -> list[Recording]:
             roi=roi,
         )
         for name, unit in run.results.units.items()
-        if unit.fs and "denoised" in unit.traces
+        if unit.fs and {"denoised", "dff", "raw"} & set(unit.traces)
         for roi in unit.roi_names
     ]

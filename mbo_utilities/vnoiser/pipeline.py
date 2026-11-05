@@ -311,7 +311,7 @@ def scan_traces_from_mesc(
         _munit_number(md.get("mesc_unit", unit_key)),
         float(md["fs"]),
         {r: found.roi_mean[r] for r in rois},
-        {r: float(geometry[r][1] * geometry[r][2]) for r in rois},
+        {r: float(geometry[r][0] * geometry[r][1]) for r in rois},
         comment=str(md.get("comment", "") or ""),
     )
 
@@ -673,7 +673,7 @@ def run_vnoiser_pipeline(
                 sid,
                 float(arr.metadata["fs"]),
                 ex.roi_mean,
-                {r: float(geometry[r][1] * geometry[r][2]) for r in ex.roi_mean},
+                {r: float(geometry[r][0] * geometry[r][1]) for r in ex.roi_mean},
                 comment=str(arr.metadata.get("comment", "") or u.get("comment") or ""),
             )
             scans.append(scan)

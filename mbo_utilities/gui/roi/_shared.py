@@ -50,14 +50,8 @@ TRACE_COLUMNS = (  # (name, sortable, hidden by default), after the id column
 POSITION_KEYS = (
     "start_um",
     "end_um",
-    "z_um",
     "length_um",
     "sample_um",
-    "dz_um",
-    "stack",
-    "slice",
-    "slice_dz_um",
-    "in_stack",
 )
 
 _STAGE_NAMES = ("skip", "run", "force")  # suite2p's 0 / 1 / 2

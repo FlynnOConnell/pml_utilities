@@ -223,7 +223,6 @@ def test_chessboard_patches_run_as_scans(tmp_path):
         2: 400.0,
     }
     raw = np.clip(page, 0, 65535).astype(np.uint16).astype(np.float64)
-    # the reader flips chessboard pages in Y, which a patch mean does not see
     assert np.allclose(scan.traces[1], raw[:, :, 20:40].mean(axis=(1, 2)))
     template = write_domains_template(mesc, tmp_path / DOMAINS_FILE)
     doc = json.loads(template.read_text())

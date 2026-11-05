@@ -194,7 +194,7 @@ class TraceTableMixin:
             if pos.get("start_um") is not None:
                 (x0, y0), (x1, y1) = pos["start_um"][:2], pos["end_um"][:2]
                 imgui.text_disabled(
-                    f"line ({x0:.0f}, {y0:.0f}) -> ({x1:.0f}, {y1:.0f}) um, {pos['length_um']:.1f} um long"
+                    f"stored line ({x0:.0f}, {y0:.0f}) -> ({x1:.0f}, {y1:.0f}) um, {pos['length_um']:.1f} um long"
                     + (
                         f", {pos['sample_um']:.2f} um per sample"
                         if pos.get("sample_um")
