@@ -457,7 +457,7 @@ class ReferenceView:
         if self.error is not None:
             return f"placement failed: {self.error}"
         placed = sum(im.placement is not None for im in self.images.values())
-        states = [f"{placed} Z-stack(s) placed, in the image list"] if placed else []
+        states = [f"Z-stacks placed: {placed}, in the image list"] if placed else []
         states += [
             f"{p.stack_key.rsplit('/', 1)[-1]} not placed ({p.score:.2f})"
             for p in self.refused

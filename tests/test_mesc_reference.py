@@ -331,7 +331,7 @@ def test_the_status_says_what_became_of_the_stacks():
     assert view.status() == "no Z-stack found"
     stack = StackPlacement("z.mesc", "MSession_0/MUnit_3", (0.0, 0.0, 0.0), 0.8, 0.0)
     view.images = {"z": ReferenceImage("z", np.zeros((2, 2)), [], stack)}
-    assert view.status().startswith("1 Z-stack(s) placed")
+    assert view.status().startswith("Z-stacks placed: 1")
     view.refused = [StackPlacement("z.mesc", "MSession_0/MUnit_9", (0.0, 0.0, 0.0), 0.1, 0.0)]
     assert "MUnit_9 not placed (0.10)" in view.status()
 
