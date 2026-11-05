@@ -786,6 +786,15 @@ class TestUnitPicker:
         assert _resolve_mesc_unit(tmp_path, None) == ({}, True)
 
 
+    def test_a_folder_opens_its_mesc_like_the_file(self, single_unit_mesc, tmp_path):
+        from mbo_utilities.gui.run_gui import _folder_mesc
+
+        assert _folder_mesc(single_unit_mesc.parent) == single_unit_mesc
+        assert _folder_mesc(single_unit_mesc) is None
+        (tmp_path / "scan.tif").touch()
+        assert _folder_mesc(tmp_path) is None
+
+
 class TestViewerFit:
     """Every non-spatial axis is a slider — no ROI pinning, no subplot fan-out."""
 

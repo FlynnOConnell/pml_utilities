@@ -466,6 +466,18 @@ scan of the PF folder is listed, and a scan that went through motion
 correction (the AOD's RTMC) shows it over the candidate trace on the same time
 axis behind the `MC` checkbox. `mbo scan.mesc` opens on the first scan the folder holds.
 
+## Dashboard
+
+```bash
+mbo dashboard path/to/file.mesc                  # pick a unit with ROIs
+mbo dashboard path/to/file.mesc --unit MUnit_28  # open one unit
+mbo dashboard path/to/file.mesc --unit MUnit_28 --channel 1
+```
+
+Opens the trace dashboard (see the GUI guide's MESc section): each line's or
+patch's mean and every ROI drawn on the unit, as raw, dF/F or z-score through a
+filter, over windows you mark, exported as PNG, SVG, PDF, CSV and JSON.
+
 ## Formats
 
 ```bash

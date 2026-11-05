@@ -124,27 +124,12 @@ class TraceJob:
         print(f"  traces: ROI {i + 1}/{k} done ({seconds:.1f}s)")
 
     def _run(self) -> None:
-        from mbo_utilities.analysis.roi_traces import (
-            TraceSettings,
-            extract_traces,
-            roi_geometry,
-        )
-        from mbo_utilities.roi_workflow import linescan_roi_means
+        from mbo_utilities.roi_workflow import unit_roi_means
 
         try:
-            if self.ref_arr.metadata.get("mesc_roi_extents"):
-                self.result = linescan_roi_means(
-                    self.ref_arr, channel=self.channel, progress=self._on_roi
-                )
-            else:
-                found = extract_traces(
-                    self.ref_arr,
-                    {f"roi{k}": [k] for k in roi_geometry(self.ref_arr)},
-                    TraceSettings(convert=True),
-                    channel=self.channel,
-                    progress=self._on_roi,
-                )
-                self.result = found.F.astype(np.float32)
+            self.result = unit_roi_means(
+                self.ref_arr, channel=self.channel, progress=self._on_roi
+            )
             self.source = f"computed from channel {self.channel}"
         except BaseException as e:
             self.error = e

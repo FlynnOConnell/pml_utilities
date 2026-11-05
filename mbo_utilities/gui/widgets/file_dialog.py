@@ -222,6 +222,7 @@ class FileDialog:
             "Napari viewer",
             "Registration QC (MaskNMF run)",
             "Spike-triggered average (run with results)",
+            "Dashboard (.mesc ROI traces)",
         ]
         self.selected_mode_index = 0
 

@@ -1664,6 +1664,34 @@ def curate(path, serve, host, port, channel):
     open_curation_viewer(path, channel=channel)
 
 
+@main.command("dashboard")
+@click.argument("path", type=click.Path(exists=True), required=False)
+@click.option(
+    "--unit",
+    default=None,
+    help="The unit to open (MUnit_28 or MSession_0/MUnit_28); without it, a table of the units with ROIs.",
+)
+@click.option(
+    "--channel",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Channel the ROIs are read from.",
+)
+def dashboard(path, unit, channel):
+    r"""Trace figures of a .mesc unit's ROIs, for slides: each line's or
+    patch's mean and every ROI drawn on it, as raw, dF/F or z-score through
+    a filter, over windows you mark, exported as PNG, SVG, PDF and CSV.
+
+    \b
+      mbo dashboard D:/data/stan110/stan110_expt1.mesc
+      mbo dashboard D:/data/stan110/stan110_expt1.mesc --unit MUnit_28
+    """
+    from mbo_utilities.gui.dashboard_app import open_dashboard
+
+    open_dashboard(path, unit=unit, channel=channel)
+
+
 @main.command("serve")
 @click.argument("path", type=click.Path(exists=True), required=False)
 @click.option(

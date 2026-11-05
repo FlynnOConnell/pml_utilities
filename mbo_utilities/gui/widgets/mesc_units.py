@@ -519,6 +519,18 @@ class MescTabWidget(Widget):
                     "recording and the ROI and channel the sliders are on.",
                     show_mark=False,
                 )
+            imgui.same_line(0, 12)
+            if imgui.small_button("Dashboard##mesc_dashboard"):
+                from mbo_utilities.gui.dashboard_app import launch_dashboard
+
+                # its module brings hello_imgui; the window is its own process
+                launch_dashboard(mesc.filenames[0], owner or mesc.unit_key)
+            set_tooltip(
+                f"Open {unit_name}'s ROI traces in the dashboard, a window of its own "
+                "(what `mbo dashboard` opens): dF/F, z-score and filters over any "
+                "window, exported as figures for slides.",
+                show_mark=False,
+            )
             path = Path(mesc.filenames[0])
             if self._curation is None or self._curation[0] != str(path):
                 runs = [

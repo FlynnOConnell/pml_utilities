@@ -1354,3 +1354,28 @@ def linescan_roi_means(
         arr, channel=channel, batch_size=batch_size, progress=progress
     )
     return F
+
+
+def unit_roi_means(arr, channel: int = 0, progress=None) -> np.ndarray:
+    """``(K, T)`` float32 raw mean of each ROI of an AOD unit (a line, a
+    patch, a single-patch scan's frame) in photon counts, one per Z index:
+    :func:`linescan_roi_means` for a unit with ROI extents, else each ROI's
+    whole frame through ``analysis.roi_traces.extract_traces``.
+    ``progress(i, k, seconds)`` follows each ROI.
+    """
+    from mbo_utilities.analysis.roi_traces import (
+        TraceSettings,
+        extract_traces,
+        roi_geometry,
+    )
+
+    if arr.metadata.get("mesc_roi_extents"):
+        return linescan_roi_means(arr, channel=channel, progress=progress)
+    found = extract_traces(
+        arr,
+        {f"roi{k}": [k] for k in roi_geometry(arr)},
+        TraceSettings(convert=True),
+        channel=channel,
+        progress=progress,
+    )
+    return found.F.astype(np.float32)
