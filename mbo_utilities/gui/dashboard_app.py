@@ -293,6 +293,8 @@ class DashboardApp:
         if key != self._view_key:
             self._view_key = key
             self.process_error = ""
+        if self.process_error:
+            return
         for row in self._picked_rows():
             have = self._results.get(row.key)
             if (have is not None and have.view == key) or row.key in self._pending:
