@@ -225,6 +225,16 @@ class TestSession:
         assert len(slow["start_s"]) == session.events.n_slow
         assert np.array_equal(slow["slow_id"], np.arange(session.events.n_slow))
 
+    def test_a_peak_called_no_leaves_dprime(self, run_path):
+        from mbo_utilities.annotation.slow_fast import kept_dprime
+
+        session = _session(run_path)
+        _d, n = kept_dprime(session)
+        assert n == session.n
+        session.select(0)
+        session.set_label("no")
+        assert kept_dprime(session)[1] == n - 1
+
     def test_export_writes_the_run_tables_beside_the_labels(self, run_path):
         import csv
 
@@ -239,6 +249,7 @@ class TestSession:
         recordings, slow, fast = (list(csv.DictReader(p.open())) for p in paths)
         assert [r["recording_id"] for r in recordings] == [RID]
         assert recordings[0]["excluded"] == "False" and int(recordings[0]["yes"]) == 1
+        assert int(recordings[0]["dprime_n"]) == session.n
         assert len(slow) == session.events.n_slow and len(fast) == session.n
         assert fast[0]["label"] == "yes" and {r["label"] for r in fast[1:]} == {
             "unlabeled"

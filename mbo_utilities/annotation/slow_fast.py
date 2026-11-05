@@ -28,6 +28,7 @@ from mbo_utilities.analysis.slow_fast import (
     SlowFastSettings,
     detect_slow_fast,
 )
+from mbo_utilities.analysis.trace_readouts import event_dprime
 from mbo_utilities.results import (
     CURATION_DIR,
     ResultsArray,
@@ -44,6 +45,7 @@ __all__ = [
     "events_positive_dff",
     "export_run_tables",
     "export_tables",
+    "kept_dprime",
     "kept_times",
 ]
 
@@ -91,6 +93,16 @@ def kept_times(session) -> np.ndarray:
     """Times of a session's candidates not called no, for either method."""
     keep = [i for i in range(session.n) if session.label(i) not in ("no", "auto_no")]
     return np.asarray(session.times_s, dtype=float)[keep]
+
+
+def kept_dprime(session) -> tuple[float, int]:
+    """``(d', n)`` of a session's candidates not called no, for either method,
+    on the trace they were found on: the baseline-subtracted dF/F, or the
+    denoised trace, so vnoiser's d' runs higher by what it took out.
+    """
+    trace = session.events.x if session.mode == MODE else session.denoised
+    peaks = np.round(kept_times(session) * session.fs).astype(np.int64)
+    return event_dprime(trace, peaks, session.fs)
 
 
 class SlowFastSession:
@@ -371,7 +383,7 @@ class SlowFastSession:
 def export_tables(sessions, folder) -> list[Path]:
     """Write loaded sessions' tables as three CSVs in ``folder`` (:data:`TABLE_FILES`).
 
-    ``recordings`` has one row per trace (excluded, counts, noise, settings),
+    ``recordings`` has one row per trace (excluded, counts, noise, d', settings),
     ``slow`` and ``fast`` one row per event, keyed by ``recording_id``; the fast
     table's ``label`` is the curation's yes / no / unlabeled.
     """
@@ -382,6 +394,7 @@ def export_tables(sessions, folder) -> list[Path]:
     for session in sessions:
         slow, fast = session.tables()
         yes, no, unlabeled = session.counts()
+        dprime, dprime_n = kept_dprime(session)
         key = {
             "recording_id": session.recording_id,
             "recording": session.recording_label,
@@ -398,6 +411,8 @@ def export_tables(sessions, folder) -> list[Path]:
                 "unlabeled": unlabeled,
                 "sd": session.events.sd,
                 "noise": session.events.noise,
+                "dprime": dprime,
+                "dprime_n": dprime_n,
                 **asdict(session.settings),
             }
         )
@@ -422,6 +437,8 @@ def export_tables(sessions, folder) -> list[Path]:
             "unlabeled",
             "sd",
             "noise",
+            "dprime",
+            "dprime_n",
             *settings_names,
         ],
         "slow": [*key_columns, "slow_id", *SLOW_COLUMNS],

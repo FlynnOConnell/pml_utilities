@@ -41,7 +41,12 @@ from imgui_bundle import portable_file_dialogs as pfd
 
 from mbo_utilities import log
 from mbo_utilities.analysis.slow_fast import SlowFastSettings
-from mbo_utilities.annotation.slow_fast import LABEL_RGBA, SlowFastSession, kept_times
+from mbo_utilities.annotation.slow_fast import (
+    LABEL_RGBA,
+    SlowFastSession,
+    kept_dprime,
+    kept_times,
+)
 from mbo_utilities.annotation.slow_fast import MODE as SLOW_FAST
 from mbo_utilities.arrays.mesc import rtmc_motion, unit_rtmc
 from mbo_utilities.gui import _theme as theme
@@ -125,6 +130,13 @@ WIDGET_MODES = (*MODES, SLOW_FAST)
 METHODS = {"vnoiser": "vnoiser", SLOW_FAST: "slow + fast"}
 COMPARE_COLOR = (0.85, 0.45, 0.95, 0.55)
 COMPARE_LABELS = {"vnoiser": "vnoiser events", SLOW_FAST: "slow + fast peaks"}
+DPRIME_TOOLTIP = (
+    "d': how far the peaks stand above the trace just before them, in noise SDs: the "
+    "1 ms at each peak against the 1 ms ending 3 ms before it, over the n isolated "
+    "candidates not called no. A threshold between the two gets Phi(d' / 2) right: "
+    "1 is 69%, 2 is 84%, 3 is 93%. Candidates are picked at peaks, so noise alone "
+    "scores above 0."
+)
 
 
 def _mode_title(mode: str, cutoff: float) -> str:
@@ -934,6 +946,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 if session.mode == SLOW_FAST
                 else "lower the threshold"
             )
+        if session.mode != "slow":
+            self._draw_dprime(session)
         imgui.same_line(0, 12)
         if imgui.small_button("keybinds"):
             self.show_keybinds = not self.show_keybinds
@@ -989,6 +1003,13 @@ class EventCurationWidget(SlowFastPanelsMixin):
             self._draw_slow_fast_card(session, card_w, avail.y)
         else:
             self._draw_slider_card(session, card_w, avail.y)
+
+    def _draw_dprime(self, session) -> None:
+        """The title line's d'; slow candidates outlast its 1 ms windows."""
+        d, n = kept_dprime(session)
+        imgui.same_line(0, em(1.2))
+        imgui.text(f"d' {d:.2f} (n {n})" if n > 1 else "d' n/a")
+        set_tooltip(DPRIME_TOOLTIP, show_mark=False)
 
     def _draw_flip_row(self) -> None:
         """Previous / next recording, and which one this is."""
