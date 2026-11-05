@@ -679,9 +679,8 @@ original's `excluded=True`); the Files section's **export tables** runs it off t
 draw thread, or exports the opened traces when there is no run.
 `gui/slow_fast_panels.SlowFastPanelsMixin` draws it in the window's own frame: A the
 fast and slow traces with slow events as bands and the edge / peak SD lines, A1-A3
-slow sigma, edge SD and peak SD, B the slow event, C the peak (raw, 1 ms, 2 ms), D
-half width against prominence with the `k_prom` line; Detection (Decision tab) holds
-the rest of `SlowFastSettings` and **exclude trace**. Sessions are keyed `(mode,
+slow sigma, edge SD and peak SD; Detection (Decision tab) holds the rest of
+`SlowFastSettings` and **exclude trace**. Sessions are keyed `(mode,
 rid)` with mode `slow_fast` beside vnoiser's three; a load error is per mode
 (`Recording.errors`). **compare** (`c`) draws the other method's events on the trace
 (`kept_times`: every candidate not called no). `mbo_utilities.vnoiser` re-exports

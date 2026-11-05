@@ -347,7 +347,7 @@ class TestWidget:
         session = curation.session
         session.set_label("yes")
         curation.set_box_mode("no")
-        curation._box = ("scatter", np.arange(session.n))
+        curation._box = ("timeline", np.arange(session.n))
         assert curation.apply_box() == session.n
         assert session.counts()[1] == session.n
         curation._apply_setting(session, "slow_sd", 4.0)

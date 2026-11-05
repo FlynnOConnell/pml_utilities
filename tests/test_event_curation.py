@@ -790,11 +790,6 @@ class TestWidget:
         session.set_auto_template_threshold(0.5)
         _each_panel(curation, 3)
         assert session.auto_pass_pc1 == pytest.approx(line)
-        # the drag ends off-frame: the next frame applies the held value
-        curation._pc1_drag = lo + 0.25 * (hi - lo)
-        _each_panel(curation)
-        assert curation._pc1_drag is None
-        assert session.auto_pass_pc1 == pytest.approx(lo + 0.25 * (hi - lo))
         # manual mode shows neither the card nor the line
         curation.set_mode("manual")
         curation.wait(60)
@@ -850,7 +845,7 @@ class TestWidget:
         }
         curation.set_box_mode("yes")
         assert curation.box_mode == "yes" and curation._box_rect is None
-        curation._box = ("pca", np.array([1, 2]))
+        curation._box = ("timeline", np.array([1, 2]))
         assert curation.apply_box() == 2
         assert [session.manual_label(i) for i in range(3)] == ["no", "yes", "yes"]
         curation.exit_box_mode()

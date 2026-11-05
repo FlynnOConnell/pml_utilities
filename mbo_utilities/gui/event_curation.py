@@ -7,9 +7,8 @@ beside it), lists every scan / domain trace the vnoiser pipeline wrote and
 loads them in the background; a line scan without a folder lists its raw
 ROIs for the denoiser instead. The ``Curation`` panel shows one recording
 at a time in the notebook's grid: the
-trace with its candidates (A) beside the threshold / slider card (A1 to A4),
-then the template, focused candidate and PCA (B to D) under it; the arrows
-flip through recordings. When the scan ran with real-time motion correction,
+trace with its candidates (A) beside the threshold / slider card (A1 to A4);
+the arrows flip through recordings. When the scan ran with real-time motion correction,
 its motion correction (the RTMC shifts) sits over the trace on the same
 time axis, behind the ``MC`` checkbox. The Decision and
 Recordings tabs (labels, navigation, the table, the mode) are the column
@@ -53,9 +52,7 @@ from mbo_utilities.gui._theme import card, em, section
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
 from mbo_utilities.gui.imgui.lines import (
     decimate_minmax,
-    dotted_vline,
     drag_hline,
-    drag_vline,
     line,
     line_plot,
     subplots,
@@ -93,10 +90,8 @@ __all__ = [
     "Recording",
 ]
 
-# two rows: the trace (A, with its cards) over the candidates (B to D); the strip asks for their sum, plus MOTION_HEIGHT while the motion plot sits over the trace in MOTION_SHARE of its cell
-TIMELINE_HEIGHT = 260
-CANDIDATE_HEIGHT = 210
-PANEL_HEIGHT = TIMELINE_HEIGHT + CANDIDATE_HEIGHT
+# the trace (A, with its cards); the strip asks for MOTION_HEIGHT more while the motion plot sits over the trace in MOTION_SHARE of its cell
+PANEL_HEIGHT = 300
 MOTION_HEIGHT = 120
 MOTION_SHARE = 0.35
 SLIDER_COL_EM = 4.2
@@ -110,13 +105,7 @@ THRESHOLD_COLOR = (0.84, 0.15, 0.24, 1.0)
 AUTO_PASS_COLOR = (0.16, 0.62, 0.56, 1.0)
 PC1_COLOR = (0.62, 0.45, 0.90, 1.0)
 COSINE_COLOR = (0.95, 0.68, 0.25, 1.0)
-PC1_LINE_ID = (
-    3  # drag-tool id of the A3 line on the PCA plot; the threshold lines are 1 and 2
-)
-TEMPLATE_COLOR = (1.0, 1.0, 1.0, 1.0)
-SNIPPET_COLOR = (0.30, 0.47, 0.66, 1.0)
 FOCUS_COLOR = THRESHOLD_COLOR
-ZERO_COLOR = (0.62, 0.62, 0.65, 0.9)  # the t = 0 marker: a reference, not a call
 BOX_COLORS = {
     "yes": (0.14, 0.72, 0.65, 1.0),
     "no": (0.95, 0.22, 0.30, 1.0),
@@ -332,9 +321,6 @@ class EventCurationWidget(SlowFastPanelsMixin):
         self._worker: threading.Thread | None = None
         self._active: tuple | None = None
         self.timeline_points = ScatterPlot("##curation_timeline_pts", marker_size=7.0)
-        self.pca = ScatterPlot("##curation_pca", marker_size=7.0)
-        self.event_points = ScatterPlot("##curation_sf_event", marker_size=7.0)
-        self.peak_scatter = ScatterPlot("##curation_sf_scatter", marker_size=7.0)
         self._line_drags: dict[str, float] = {}
         self.autofit = True
         self.show_keybinds = False
@@ -345,10 +331,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
         self._fit_timeline = False
         self._timeline_key = None
         self._timeline_trace_cache: dict[str, tuple] = {}
-        self._panel_keys: dict[str, tuple] = {}
         self._threshold_drag: float | None = None
         self._auto_pass_drag: float | None = None
-        self._pc1_drag: float | None = None
         self._slider_pending: dict[str, float] = {}
 
         self._hovered = False
@@ -515,8 +499,6 @@ class EventCurationWidget(SlowFastPanelsMixin):
             return
         self.current = rid
         self._fit_timeline = True
-        self.pca.refit()
-        self._panel_keys.clear()
         key = (self.mode, rid)
         if key in self.sessions or key in self._busy:
             return
@@ -780,8 +762,6 @@ class EventCurationWidget(SlowFastPanelsMixin):
             if key == (self.mode, self.current):
                 self.status = message
                 self._fit_timeline = True
-                self.pca.refit()
-                self._panel_keys.clear()
             elif not self._busy:
                 self.status = f"{len(self.loaded())} recordings loaded"
 
@@ -912,11 +892,9 @@ class EventCurationWidget(SlowFastPanelsMixin):
         self.load(rids[(pos + int(delta)) % len(rids)])
 
     def draw_panel(self) -> None:
-        """The Curation panel: the notebook's dashboard for one recording.
-        The trace row (A with the threshold / auto-pass, Decision and
-        Navigation cards) sits over the candidate row (B to D); the rows
-        share the height the strip gives in the ratio they asked for, the
-        trace row taking MOTION_HEIGHT more while the motion plot shows.
+        """The Curation panel: the notebook's dashboard for one recording, the
+        trace row (A with the threshold / auto-pass, Decision and Navigation
+        cards), MOTION_HEIGHT taller while the motion plot shows.
         """
         self._mark_hovered()
         self._draw_flip_row()
@@ -931,14 +909,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
             self._fit_timeline = True
             if plot is not None:
                 plot.refit()
-        timeline = TIMELINE_HEIGHT + (MOTION_HEIGHT if motion else 0)
         self.panel.height = PANEL_HEIGHT + (MOTION_HEIGHT if motion else 0)
-        avail = imgui.get_content_region_avail()
-        top = max(avail.y * timeline / self.panel.height, em(6))
-        with imgui_ctx.begin_child("##curation_row_a", imgui.ImVec2(0, top)):
-            self._draw_timeline_row(session, plot)
-        with imgui_ctx.begin_child("##curation_row_b", imgui.ImVec2(0, 0)):
-            self._draw_candidate_row(session)
+        self._draw_timeline_row(session, plot)
 
     def _draw_timeline_row(
         self, session: CurationSession, plot: MotionPlot | None
@@ -953,6 +925,15 @@ class EventCurationWidget(SlowFastPanelsMixin):
         """
         kind = _mode_title(session.mode, self.slow_cutoff_hz)
         imgui.text_disabled(f"A. {kind}: {session.n} ({len(session.visible)} in view)")
+        if not session.n:
+            imgui.same_line(0, em(0.6))
+            imgui.text_disabled(
+                "trace excluded; untick exclude trace under Detection"
+                if session.mode == SLOW_FAST and session.excluded
+                else "lower the edge or peak SD"
+                if session.mode == SLOW_FAST
+                else "lower the threshold"
+            )
         imgui.same_line(0, 12)
         if imgui.small_button("keybinds"):
             self.show_keybinds = not self.show_keybinds
@@ -1315,9 +1296,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
     def _draw_slider_card(self, session, width, height) -> None:
         """A1 to A4 as one line of slider columns: the candidate threshold
         (red, also the red line on the trace); in a seeded mode also the
-        auto-pass peak (teal, the teal line), the PC1 line of the PCA
-        (purple, drawn on panel D; the arrow picks the passing side) and the
-        seed-template cosine at or above which a candidate passes (amber).
+        auto-pass peak (teal, the teal line), the PC1 auto-pass (purple; the
+        arrow picks the passing side) and the seed-template cosine at or above which a candidate passes (amber).
         """
         title = "A1 - A4" if session.seeded else "A1"
         with card("##curation_sliders", title, height, width):
@@ -1325,8 +1305,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 "Sliders apply on release. A1 threshold: candidates are local "
                 "maxima of the trace above it. A2 peak: a candidate peaking at "
                 "or above it passes whatever its shape. A3 PC1: every candidate on "
-                "the passing side of the purple line on the PCA passes (the "
-                "arrow flips the side; drag the line on the plot too). A4 "
+                "the passing side of this value along the snippets' first "
+                "principal component passes (the arrow flips the side). A4 "
                 "cosine: a candidate whose similarity to the seed template is "
                 "at or above it passes, below it is rejected; at the bottom "
                 "nothing is rejected. Manual labels always win. All saved per "
@@ -1376,8 +1356,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 "off"
                 if session.auto_pass_pc1 is None
                 else f"{session.auto_pass_pc1_count()}/{session.n}",
-                f"PC1 auto-pass: candidates at or {'above' if side == 'right' else 'below'} the "
-                "purple line on the PCA pass; the arrow flips the side",
+                f"PC1 auto-pass: candidates at or {'above' if side == 'right' else 'below'} this "
+                "value along the snippets' first principal component pass; the arrow flips the side",
                 side=side,
                 flip=lambda: session.set_auto_pass_pc1_side(
                     "left" if side == "right" else "right"
@@ -1465,172 +1445,6 @@ class EventCurationWidget(SlowFastPanelsMixin):
         _centred_text(x0, width, count)
         imgui.dummy(imgui.ImVec2(width, 1))
         imgui.end_group()
-
-    def _draw_candidate_row(self, session) -> None:
-        """B to D: template, focused candidate, PCA; or the slow event, the
-        fast peak and the peaks' scatter for slow / fast.
-        """
-        if not session.n:
-            imgui.text_disabled(
-                "Trace excluded; untick exclude trace under Detection."
-                if session.mode == SLOW_FAST and session.excluded
-                else "No fast peaks inside slow events; lower the edge or peak SD."
-                if session.mode == SLOW_FAST
-                else "No candidate events found; lower the threshold."
-            )
-            return
-        avail = imgui.get_content_region_avail()
-        gap = em(0.5)
-        width = max((avail.x - 2 * gap) / 3, em(8))
-        panels = (
-            self._slow_fast_panels(session)
-            if session.mode == SLOW_FAST
-            else (
-                ("B. Current template", self._draw_template),
-                (self._candidate_title(session), self._draw_candidate),
-                ("D. Candidate PCA (400 ms)", self._draw_pca),
-            )
-        )
-        for i, (title, draw) in enumerate(panels):
-            if i:
-                imgui.same_line(0, gap)
-            with imgui_ctx.begin_child(f"##curation_panel{i}", imgui.ImVec2(width, 0)):
-                imgui.text_colored(theme.to_vec4(theme.THEME.accent), title)
-                draw(session, max(imgui.get_content_region_avail().y - 2, em(3)))
-
-    @staticmethod
-    def _candidate_title(session) -> str:
-        scores = session.template_scores
-        if session.template is None or not len(scores):
-            return "C. Focused candidate (cosine n/a)"
-        return f"C. Focused candidate (cosine {scores[session.current]:.2f})"
-
-    def _fit_for(self, name: str, key: tuple) -> bool:
-        """True when panel ``name`` should refit because its content changed."""
-        if self._panel_keys.get(name) == key:
-            return False
-        self._panel_keys[name] = key
-        return True
-
-    def _draw_template(self, session, height: float) -> None:
-        source = session.template_source
-        fit = self._fit_for(
-            "template", (session.mode, session.recording_id, len(source))
-        )
-        with line_plot(
-            "##curation_b",
-            "aligned time (ms)",
-            "z",
-            height=height,
-            fit=fit,
-            legend=False,
-        ) as ok:
-            if not ok:
-                return
-            if session.template is None:
-                implot.plot_text("No Yes events yet", 0.0, 0.0)
-                return
-            t_ms = session.template_time_ms
-            for i in source:
-                line(
-                    f"##snippet{i}",
-                    session.short_snippet(i),
-                    x=t_ms,
-                    color=SNIPPET_COLOR,
-                    alpha=0.18,
-                )
-            line("template", session.template, x=t_ms, color=TEMPLATE_COLOR, weight=3.0)
-
-    def _draw_candidate(self, session, height: float) -> None:
-        i = session.current
-        half = session.candidate_window_ms
-        t_ms = session.long_time_ms
-        y = session.long_snippet(i)
-        if self._fit_for(
-            "candidate", (session.mode, session.recording_id, i, session.threshold)
-        ):
-            inside = (t_ms >= -half) & (t_ms <= half) & np.isfinite(y)
-            ys = y[inside] if inside.any() else y[np.isfinite(y)]
-            if session.template is not None:
-                ys = np.concatenate([ys, session.template])
-            lo, hi = (float(np.min(ys)), float(np.max(ys))) if ys.size else (-1.0, 1.0)
-            pad = 0.05 * (hi - lo or 1.0)
-            implot.set_next_axes_limits(
-                -half, half, lo - pad, hi + pad, imgui.Cond_.always
-            )
-        with line_plot(
-            "##curation_c", "time from event (ms)", "z", height=height, legend=True
-        ) as ok:
-            if not ok:
-                return
-            line("candidate", y, x=t_ms, color=SNIPPET_COLOR, weight=1.2)
-            if session.template is not None:
-                line(
-                    "template",
-                    session.template,
-                    x=session.template_time_ms,
-                    color=TEMPLATE_COLOR,
-                    weight=2.5,
-                )
-            dotted_vline(0.0, ZERO_COLOR)
-
-    def _draw_pca(self, session, height: float) -> None:
-        scores = session.pca_scores
-        explained = session.pca_explained * 100.0
-        visible = session.visible
-        focused = np.flatnonzero(visible == session.current)
-        if self._fit_for("pca", (session.mode, session.recording_id, session.n)):
-            self.pca.refit()
-        picked = self.pca.draw(
-            scores[visible, 0],
-            scores[visible, 1],
-            session.colors(visible),
-            x_label=f"PC1 ({explained[0]:.1f}%)",
-            y_label=f"PC2 ({explained[1]:.1f}%)",
-            height=height,
-            focused=int(focused[0]) if focused.size else None,
-            tooltip=lambda k: (
-                f"event {visible[k] + 1}: {session.label(visible[k])}\n"
-                f"PC1 {scores[visible[k], 0]:.2f}  PC2 {scores[visible[k], 1]:.2f}"
-            ),
-            inside=lambda: self._pca_inside(session, scores, visible),
-            flags=self._box_flags(),
-        )
-        if picked is not None:
-            session.select(int(visible[picked]))
-
-    def _pca_inside(self, session, scores, visible) -> None:
-        self._box_select(
-            "pca", scores[visible, 0], scores[visible, 1], visible, self.pca
-        )
-        self._draw_pc1_line(session)
-
-    def _draw_pc1_line(self, session) -> None:
-        """The A3 line on the PCA: drag it to set the PC1 auto-pass, applied
-        on release like the trace's lines; the label names the passing side.
-        """
-        if not session.seeded:
-            return
-        shown = (
-            self._pc1_drag
-            if self._pc1_drag is not None
-            else session.auto_pass_pc1_shown
-        )
-        value, held = drag_vline(PC1_LINE_ID, shown, PC1_COLOR)
-        if held:
-            self._pc1_drag = value
-        elif self._pc1_drag is not None:
-            session.set_auto_pass_pc1(self._pc1_drag)
-            self._pc1_drag = None
-        left = session.auto_pass_pc1_side == "left"
-        text = "< pass" if left else "pass >"
-        half_w = 0.5 * imgui.calc_text_size(text).x
-        top = implot.get_plot_limits().y.max
-        implot.push_style_color(implot.Col_.inlay_text, vec4(PC1_COLOR))
-        implot.plot_text(
-            text, value, top, imgui.ImVec2(-(half_w + 6) if left else half_w + 6, 8)
-        )
-        implot.pop_style_color()
 
     def draw_tab(self) -> None:
         """The controls column, two tabs: Decision (with the event, navigation,
