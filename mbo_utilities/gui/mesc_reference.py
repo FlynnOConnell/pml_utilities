@@ -68,6 +68,7 @@ __all__ = [
     "ReferenceView",
     "current_roi",
     "picture_image",
+    "polyline_distance",
     "roi_domains",
     "roi_slider",
     "stack_images",
@@ -129,6 +130,19 @@ def _projection(ref, c: int, lo: int, hi: int) -> np.ndarray:
         block = np.asarray(ref[::step, cc, k0 : min(k0 + chunk, hi + 1)], np.float32)
         np.maximum(peak, block.reshape(-1, ny, nx).max(axis=0), out=peak)
     return peak
+
+
+def polyline_distance(point: np.ndarray, vertices: np.ndarray) -> float:
+    """Distance from ``point`` to the polyline through ``(n, 2)`` ``vertices``."""
+    a, b = vertices[:-1], vertices[1:]
+    ab = b - a
+    t = np.clip(
+        np.einsum("ij,ij->i", point - a, ab)
+        / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12),
+        0.0,
+        1.0,
+    )
+    return float(np.min(np.linalg.norm(point - (a + t[:, None] * ab), axis=1)))
 
 
 def _scan_info(mesc) -> dict | None:
@@ -442,16 +456,7 @@ class ReferenceView:
         best, best_d = None, reach
         p = np.array([px, py], dtype=float)
         for r in im.records:
-            pts = np.asarray(r["pixels"], dtype=float)
-            a, b = pts[:-1], pts[1:]
-            ab = b - a
-            t = np.clip(
-                np.einsum("ij,ij->i", p - a, ab)
-                / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-12),
-                0.0,
-                1.0,
-            )
-            d = float(np.min(np.linalg.norm(p - (a + t[:, None] * ab), axis=1)))
+            d = polyline_distance(p, np.asarray(r["pixels"], dtype=float))
             if d < best_d:
                 best, best_d = r, d
         if best is None:
