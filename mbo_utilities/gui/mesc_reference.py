@@ -32,6 +32,7 @@ every frame from the top strip's hook.
 
 from __future__ import annotations
 
+import csv
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -70,6 +71,7 @@ __all__ = [
     "roi_domains",
     "roi_slider",
     "stack_images",
+    "write_positions",
 ]
 
 ON_THICKNESS = 2.0
@@ -206,6 +208,40 @@ def roi_domains(mesc) -> dict[int, str]:
     }
 
 
+def write_positions(path, mesc, images, domains: dict[int, str]) -> None:
+    """One CSV row per ROI on each placed stack: its ends in that stack's microns,
+    and its ROI and slice counted from 1 as the caption counts them.
+    """
+    rows = []
+    for im in images:
+        if im.placement is None:
+            continue
+        p = im.placement
+        for r in im.records:
+            pos = mesc.line_positions[r["roi"]]
+            start = (np.array(pos["start_um"]) + p.shift_um).round(2).tolist()
+            end = (np.array(pos["end_um"]) + p.shift_um).round(2).tolist()
+            rows.append(
+                {
+                    "unit": mesc.unit_key,
+                    "roi": r["roi"] + 1,
+                    "domain": domains.get(r["roi"], ""),
+                    "stack_file": p.stack_path,
+                    "stack_unit": p.stack_key,
+                    "slice": r["slice"] + 1,
+                    **dict(zip(("x0_um", "y0_um", "z0_um"), start)),
+                    **dict(zip(("x1_um", "y1_um", "z1_um"), end)),
+                    "match": round(p.score, 3),
+                    "confirmed": p.confirmed,
+                    "with_rtmc": p.with_rtmc,
+                }
+            )
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def placement_summary(placement: StackPlacement) -> str:
     """One image's placement in words, for the caption's tooltip."""
     dx, dy, dz = placement.shift_um
@@ -250,6 +286,7 @@ class ReferenceView:
         self._placed: tuple | None = None
         self._source: tuple | None = None
         self._dialog = None
+        self._save_dialog = None
         self.viewer = SummaryImageViewer(
             parent.image_widget.figure,
             title="Reference image",
@@ -317,6 +354,13 @@ class ReferenceView:
             if picked:
                 self.stack_files.append(picked[0])
                 self.open(*self._source)
+        if self._save_dialog is not None and self._save_dialog.ready():
+            picked = self._save_dialog.result()
+            self._save_dialog = None
+            if picked:
+                write_positions(
+                    picked, self._source[0], self.images.values(), self.domains
+                )
         if self._placed is not None:
             images, self.refused, self.error = self._placed
             self._placed = None
@@ -429,9 +473,22 @@ class ReferenceView:
             "Measure this scan against the stacks of another .mesc file.",
             show_mark=False,
         )
+        imgui.same_line()
+        imgui.begin_disabled(all(im.placement is None for im in self.images.values()))
+        if imgui.button("save positions") and self._save_dialog is None:
+            source = Path(self._built[0])
+            self._save_dialog = pfd.save_file(
+                "ROI positions",
+                str(source.with_name(f"{source.stem}_{self.unit}_positions.csv")),
+                ["CSV", "*.csv"],
+            )
+        imgui.end_disabled()
+        set_tooltip(
+            "Every ROI's slice and microns on each placed Z-stack, as one CSV.",
+            show_mark=False,
+        )
         im = self.images.get(viewer.current_key)
         if im is not None:
-            imgui.same_line(0, 12)
             imgui.text_disabled(self.caption(im))
             tip = "Click a line or patch to move the ROI slider to it."
             if im.placement is not None:

@@ -9,6 +9,7 @@ at no shift.
 
 from __future__ import annotations
 
+import csv
 import json
 import shutil
 import time
@@ -188,6 +189,32 @@ def test_a_stack_of_other_tissue_is_refused_and_carries_nothing(mesc_path, tmp_p
     finally:
         mesc.close()
     assert images == [] and not refused.placed
+
+
+def test_positions_save_each_roi_where_it_sits_in_the_stack(mesc_path, tmp_path):
+    """The CSV holds what the caption says, in the stack's microns: the picture
+    registers at no shift, so an ROI's ends are its stored ones.
+    """
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui.mesc_reference import stack_images, write_positions
+
+    mesc = MescArray(mesc_path, unit=1)
+    try:
+        (stack,), _ = stack_images(mesc, open_unit, 0)
+        path = tmp_path / "positions.csv"
+        write_positions(path, mesc, [stack], {0: "soma"})
+    finally:
+        mesc.close()
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert [int(r["roi"]) for r in rows] == [r["roi"] + 1 for r in stack.records]
+    assert [int(r["slice"]) for r in rows] == [r["slice"] + 1 for r in stack.records]
+    first = rows[0]
+    assert first["domain"] == "soma" and first["confirmed"] == str(stack.placement.confirmed)
+    x, y, z = LINES[0][0][0], LINES[0][1][0], LINES[0][2][0]
+    np.testing.assert_allclose(
+        [float(first[k]) for k in ("x0_um", "y0_um", "z0_um")], (x, y, z), atol=1.5
+    )
 
 
 def test_a_sampled_projection_stays_a_max(mesc_path, monkeypatch):
