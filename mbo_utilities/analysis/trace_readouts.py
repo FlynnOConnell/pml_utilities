@@ -1,5 +1,5 @@
 """What can be read off traces sampled in time: their power spectrum, how they
-correlate, and what they do around events.
+correlate, what they do around events, and how far those events stand out.
 
 Every function takes plain arrays on one clock, so the same read-out runs on a
 raw trace or on anything already filtered: a band-limited correlation is
@@ -17,6 +17,8 @@ __all__ = [
     "MAD_TO_SD",
     "correlation_matrix",
     "detect_events",
+    "dprime",
+    "event_dprime",
     "noise_floor_hz",
     "power_spectrum",
     "triggered_average",
@@ -29,6 +31,11 @@ FLOOR_SHARE = 0.25
 # 1 Hz bins over minutes scatter by a few percent, so this is well clear of them
 FLOOR_FACTOR = 1.25
 SMOOTH_BINS = 5
+# a voltage spike fills about 1 ms and peaks about 3 ms after its onset (ASAP7y's
+# rise); 50 ms is the quiet imgui_ophys's d' lesson asks of a voltage event
+DPRIME_WINDOW_MS = 1.0
+DPRIME_RISE_MS = 3.0
+DPRIME_QUIET_MS = 50.0
 
 
 def power_spectrum(
@@ -103,3 +110,37 @@ def triggered_average(
     snippets -= snippets[:, :, : max(before // 2, 1)].mean(axis=2, keepdims=True)
     sem = snippets.std(axis=1) / np.sqrt(len(kept))
     return snippets.mean(axis=1), sem, len(kept)
+
+
+def dprime(top: np.ndarray, bottom: np.ndarray) -> float:
+    """``(mean top - mean bottom) / sqrt(0.5 * (var top + var bottom))``, the
+    sensitivity index of Zhang et al. 2023 (jGCaMP8), after McNicol 2004; NaN
+    when a pool is empty or both are constant.
+    """
+    if top.size == 0 or bottom.size == 0:
+        return float("nan")
+    pooled = np.sqrt(0.5 * (top.var() + bottom.var()))
+    return float((top.mean() - bottom.mean()) / pooled) if pooled > 0 else float("nan")
+
+
+def event_dprime(trace: np.ndarray, events: np.ndarray, fs: float) -> tuple[float, int]:
+    """``(d', n)`` of ``trace`` at the peaks ``events`` (sample indices): each
+    isolated peak's mean over ``DPRIME_WINDOW_MS`` around it against the same
+    length ending ``DPRIME_RISE_MS`` before it. A window's mean is one
+    observation, so d' does not depend on the sampling rate. A peak needs
+    ``DPRIME_QUIET_MS`` to itself beforehand and a whole window afterwards;
+    one too near an end is left out.
+    """
+    events = np.sort(np.asarray(events, dtype=np.int64))
+    width = max(int(round(DPRIME_WINDOW_MS * fs / 1000)), 1)
+    rise = int(round(DPRIME_RISE_MS * fs / 1000))
+    gaps = np.diff(events)
+    alone = np.ones(events.size, dtype=bool)
+    alone[1:] &= gaps >= DPRIME_QUIET_MS * fs / 1000
+    alone[:-1] &= gaps >= width
+    peaks = events[alone]
+    peaks = peaks[(peaks >= rise + width) & (peaks + width <= trace.size)]
+    window = peaks[:, None] + np.arange(width)  ## (n_events, width)
+    top = trace[window - width // 2].mean(axis=1)
+    bottom = trace[window - rise - width].mean(axis=1)
+    return dprime(top, bottom), len(peaks)
