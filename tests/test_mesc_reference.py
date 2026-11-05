@@ -452,6 +452,20 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         assert view.pick("MUnit_4 picture", -40.0, -40.0) is None
         assert view.pick("nowhere", 0.0, 0.0) is None
         assert view.contours("nowhere") == []
+        # one slice: the slider's ROI's slice replaces the projection and follows it
+        stack_key = "MUnit_0 slices 4-8"
+        projections = {k: im.image for k, im in view.images.items()}
+        view.viewer.set_images(projections, selected=stack_key)
+        view.one_slice = True
+        for roi in (1, 0):
+            iw.indices[roi_slider(iw.dim_names)] = roi
+            iw.figure.canvas.draw()
+            k = next(r["slice"] for r in view.images[stack_key].records if r["roi"] == roi)
+            assert np.array_equal(view.viewer._images[stack_key], STACK[k])
+        view.one_slice = False
+        iw.figure.canvas.draw()
+        assert view.viewer._images[stack_key] is projections[stack_key]
+        view.viewer.set_images(projections, selected="MUnit_4 picture")
         # the same unit again is not rebuilt, and opens on the picture
         built = view._built
         assert view.open(arr, open_unit)

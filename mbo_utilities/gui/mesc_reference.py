@@ -105,13 +105,15 @@ def current_roi(iw) -> int:
 class ReferenceImage:
     """One image of the popup: what the combo calls it, its pixels, the shown
     unit's overlay records on it (``mesc_geometry.image_overlays``), and for a
-    Z-stack the placement that put them there.
+    Z-stack the placement that put them there, the opened stack and its channel.
     """
 
     key: str
     image: np.ndarray
     records: list[dict] = field(default_factory=list)
     placement: StackPlacement | None = None
+    stack: object = None
+    c: int = 0
 
 
 def _projection(ref, c: int, lo: int, hi: int) -> np.ndarray:
@@ -189,8 +191,11 @@ def stack_images(
             lo, hi = slices[0], slices[-1]
             name = u["munit"] if path == source else f"{Path(path).stem} {u['munit']}"
             label = f"slice {lo + 1}" if lo == hi else f"slices {lo + 1}-{hi + 1}"
-            image = _projection(open_unit(path, u["key"]), c, lo, hi)
-            images.append(ReferenceImage(f"{name} {label}", image, records, placement))
+            stack = open_unit(path, u["key"])
+            image = _projection(stack, c, lo, hi)
+            images.append(
+                ReferenceImage(f"{name} {label}", image, records, placement, stack, c)
+            )
     return images, refused
 
 
@@ -281,10 +286,12 @@ class ReferenceView:
         self.refused: list[StackPlacement] = []
         self.stack_files: list[str] = []
         self.placing = False
+        self.one_slice = False
         self.error: str | None = None
         self._built: tuple | None = None
         self._placed: tuple | None = None
         self._source: tuple | None = None
+        self._shown_slice: tuple | None = None
         self._dialog = None
         self._save_dialog = None
         self.viewer = SummaryImageViewer(
@@ -367,7 +374,28 @@ class ReferenceView:
             self.placing = False
             self.images.update({im.key: im for im in images})
             self.viewer.set_images({k: im.image for k, im in self.images.items()})
+            self._shown_slice = None
+        self._show_slice()
         self.viewer.draw()
+
+    def _show_slice(self) -> None:
+        """Hold the slice under the slider's ROI on screen while ``one_slice``
+        is on, in place of the stack's projection.
+        """
+        key = self.viewer.current_key
+        im = self.images.get(key)
+        k = None
+        if self.one_slice and self.is_open and im is not None and im.placement is not None:
+            roi = current_roi(self.parent.image_widget)
+            k = next((r["slice"] for r in im.records if r["roi"] == roi), None)
+        shown = None if k is None else (key, k)
+        if shown == self._shown_slice:
+            return
+        self._shown_slice = shown
+        images = {name: i.image for name, i in self.images.items()}
+        if shown is not None:
+            images[key] = _projection(im.stack, im.c, k, k)
+        self.viewer.set_images(images)
 
     def close(self) -> None:
         self.viewer.close()
@@ -491,6 +519,13 @@ class ReferenceView:
             show_mark=False,
         )
         im = self.images.get(viewer.current_key)
+        if im is not None and im.placement is not None:
+            imgui.same_line()
+            _, self.one_slice = imgui.checkbox("ROI's slice", self.one_slice)
+            set_tooltip(
+                "Show the slice under the ROI slider's line, not the projection.",
+                show_mark=False,
+            )
         if im is not None:
             imgui.text_disabled(self.caption(im))
             tip = "Click a line or patch to move the ROI slider to it."
