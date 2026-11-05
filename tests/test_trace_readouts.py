@@ -5,10 +5,16 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import scipy.signal
 
-from mbo_utilities.analysis.trace_readouts import dprime, event_dprime
+from mbo_utilities.analysis.trace_readouts import (
+    dprime,
+    event_dprime,
+    motion_coupling,
+)
 
 FS_HZ = 1000.0
+BAND_HZ = (1.0, 40.0)
 
 
 def _spikes_in_noise(fs: float, height: float, seed: int = 0) -> tuple:
@@ -22,6 +28,19 @@ def _spikes_in_noise(fs: float, height: float, seed: int = 0) -> tuple:
     peaks = np.arange(1, 799) * 500 * per_ms
     trace[peaks[:, None] + np.arange(per_ms) - per_ms // 2] += height
     return trace, peaks
+
+
+def _band_noise(n: int, seed: int) -> np.ndarray:
+    """Unit-SD noise in ``BAND_HZ``: as autocorrelated as a real shift or trace."""
+    sos = scipy.signal.butter(2, BAND_HZ, "bandpass", fs=FS_HZ, output="sos")
+    y = scipy.signal.sosfiltfilt(sos, np.random.default_rng(seed).normal(size=n))
+    return y / y.std()
+
+
+def _axes(n: int, seed: int) -> dict[str, np.ndarray]:
+    """X, Y and Z, where Y follows X a few samples late: axes share motion, out of phase."""
+    x, y, z = (_band_noise(n, seed + k) for k in range(3))
+    return {"X": x, "Y": 0.8 * np.roll(x, 6) + 0.6 * y, "Z": z}
 
 
 def test_dprime_of_two_gaussians_is_their_separation_in_sds():
@@ -59,3 +78,60 @@ def test_dprime_does_not_depend_on_the_sampling_rate():
     for fs in (1000.0, 3000.0):
         trace, peaks = _spikes_in_noise(fs, 3.0)
         assert abs(event_dprime(trace, peaks, fs)[0] - 3.0) < 0.3
+
+
+
+def test_coupling_reads_the_share_of_power_it_explains():
+    n = int(120 * FS_HZ)
+    motion = _axes(n, 0)
+    driven = 0.7 * np.roll(motion["X"], 3) - 0.5 * motion["Y"] + 0.3 * motion["Z"]
+    noise = _band_noise(n, 9) * driven.std()
+    for gain, truth in ((0.5, 0.8), (1.0, 0.5), (2.0, 0.2)):
+        coupling = motion_coupling(driven + gain * noise, motion, FS_HZ)
+        assert abs(coupling.share - truth) < 0.08
+        assert coupling.p < 0.01
+        # the joint coherence is an R^2: it cannot pass 1, and no axis passes it
+        assert coupling.coherence.max() <= 1.0
+        assert all(np.all(a <= coupling.coherence + 1e-9) for a in coupling.axes.values())
+
+
+def test_a_trace_with_its_own_rhythm_is_not_coupled():
+    n = int(120 * FS_HZ)
+    motion = _axes(n, 0)
+    coupling = motion_coupling(_band_noise(n, 20), motion, FS_HZ)
+    assert coupling.p > 0.05 and coupling.share < 0.02
+    assert np.all(coupling.chance > 0)
+
+
+def test_the_opening_step_every_scan_shares_is_left_out():
+    n = int(60 * FS_HZ)
+    step = np.where(np.arange(n) < 0.5 * FS_HZ, 40.0, 0.0)
+    motion = {k: v + step for k, v in _axes(n, 0).items()}
+    assert motion_coupling(_band_noise(n, 20) + step, motion, FS_HZ).p > 0.05
+
+
+def test_a_lagged_or_inverted_coupling_counts_the_same():
+    n = int(60 * FS_HZ)
+    motion = _axes(n, 0)
+    coupling = motion_coupling(-np.roll(motion["Z"], 25), motion, FS_HZ)
+    assert coupling.share > 0.8
+
+
+def test_a_recording_too_short_to_read_has_no_coupling():
+    n = int(11 * FS_HZ)
+    assert motion_coupling(_band_noise(n, 1), _axes(n, 0), FS_HZ) is None
+
+
+def test_the_band_starts_at_1_hz_at_a_rate_that_does_not_divide_evenly():
+    fs = 2777.7777777777774
+    n = int(30 * fs)
+    y = np.random.default_rng(3).normal(size=n)
+    coupling = motion_coupling(y, {"X": np.random.default_rng(4).normal(size=n)}, fs)
+    assert abs(coupling.frequency[0] - 1.0) < 0.01
+    assert abs(coupling.frequency[-1] - 50.0) < 0.01
+
+
+def test_an_axis_that_never_moved_is_left_out():
+    n = int(30 * FS_HZ)
+    motion = {**_axes(n, 0), "Z": np.zeros(n)}
+    assert sorted(motion_coupling(_band_noise(n, 1), motion, FS_HZ).axes) == ["X", "Y"]

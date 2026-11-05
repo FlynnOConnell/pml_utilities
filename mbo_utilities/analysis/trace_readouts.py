@@ -1,5 +1,6 @@
 """What can be read off traces sampled in time: their power spectrum, how they
-correlate, what they do around events, and how far those events stand out.
+correlate, what they do around events, how far those events stand out, and how
+much of them their motion correction explains.
 
 Every function takes plain arrays on one clock, so the same read-out runs on a
 raw trace or on anything already filtered: a band-limited correlation is
@@ -10,15 +11,19 @@ themselves do not raise it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import scipy.signal
 
 __all__ = [
     "MAD_TO_SD",
+    "MotionCoupling",
     "correlation_matrix",
     "detect_events",
     "dprime",
     "event_dprime",
+    "motion_coupling",
     "noise_floor_hz",
     "power_spectrum",
     "triggered_average",
@@ -36,6 +41,17 @@ SMOOTH_BINS = 5
 DPRIME_WINDOW_MS = 1.0
 DPRIME_RISE_MS = 3.0
 DPRIME_QUIET_MS = 50.0
+# 1 s windows beat 2 and 4 s on real scans: fewer false calls, more hits, and more
+# windows in a short recording. The first seconds hold RTMC's settling step, which
+# every scan shares, and below 10 s a real coupling is mostly missed
+COUPLING_WINDOW_S = 1.0
+COUPLING_LOW_HZ = 1.0
+COUPLING_HIGH_HZ = 50.0
+COUPLING_SKIP_S = 2.0
+COUPLING_MIN_S = 10.0
+COUPLING_RATE_HZ = 400.0
+# windows overlap this many times over, so a short recording still has many shifts
+COUPLING_HOPS = 8
 
 
 def power_spectrum(
@@ -144,3 +160,85 @@ def event_dprime(trace: np.ndarray, events: np.ndarray, fs: float) -> tuple[floa
     top = trace[window - width // 2].mean(axis=1)
     bottom = trace[window - rise - width].mean(axis=1)
     return dprime(top, bottom), len(peaks)
+
+
+@dataclass
+class MotionCoupling:
+    """How much of one trace its recording's motion correction explains.
+
+    ``share`` is the part of the trace's power from ``COUPLING_LOW_HZ`` to
+    ``COUPLING_HIGH_HZ`` the motion explains, past what the same trace gets moved
+    along in time, so it reads as a fraction of that power. ``p`` ranks the real
+    alignment among those moved traces. A coupling says the two move together,
+    never which moved which.
+    """
+
+    frequency: np.ndarray  ## (n_bins,) Hz
+    coherence: np.ndarray  ## (n_bins,) all axes together
+    axes: dict[str, np.ndarray]  ## label: (n_bins,) that axis alone
+    chance: np.ndarray  ## (n_bins,) 95th percentile of the moved traces' coherence
+    share: float
+    p: float
+
+
+def motion_coupling(
+    trace: np.ndarray, motion: dict[str, np.ndarray], fs: float
+) -> MotionCoupling | None:
+    """The coherence of ``trace`` with ``motion`` (label: shift, on the trace's
+    clock), None with under ``COUPLING_MIN_S`` to read.
+
+    Coherence compares each frequency with itself, so a slow drift in both adds
+    nothing to their spikes' band, and any fixed lag or sign is the same to it.
+    Every window's spectrum is taken once; the trace's windows moved along by whole
+    hops, wrapping round, are the null, which keeps both signals' own rhythm and
+    only breaks their alignment. A plain correlation's p-value assumes independent
+    samples and called 78% of trace and motion pairs from different scans coupled.
+    """
+    start = int(COUPLING_SKIP_S * fs)
+    if (trace.size - start) / fs < COUPLING_MIN_S:
+        return None
+    moving = {label: y for label, y in motion.items() if np.ptp(y) > 0}
+    factor = max(int(fs // COUPLING_RATE_HZ), 1)
+    rows = np.stack([trace, *moving.values()]).astype(np.float64)[:, start:]
+    rows = rows[:, : rows.shape[1] // factor * factor]
+    rows = rows.reshape(len(rows), -1, factor).mean(axis=2)
+    size = int(round(COUPLING_WINDOW_S * fs / factor))
+    hop = max(size // COUPLING_HOPS, 1)
+    windows = np.lib.stride_tricks.sliding_window_view(rows, size, axis=1)[:, ::hop]
+    spectra = np.fft.rfft(
+        scipy.signal.detrend(windows, axis=2) * np.hanning(size), axis=2
+    )  ## (n_rows, n_windows, n_frequencies)
+    frequency = np.fft.rfftfreq(size, factor / fs)
+    ## NOTE: whole-sample windows put bins a hair off whole Hz, 0.9999 at 2777.8 Hz
+    half_bin = frequency[1] / 2
+    band = (frequency > COUPLING_LOW_HZ - half_bin) & (
+        frequency < COUPLING_HIGH_HZ + half_bin
+    )
+    x, m = spectra[0][:, band], spectra[1:][:, :, band]
+    n_windows = x.shape[0]
+    ## NOTE: cross[a, s] is the trace moved s windows along against axis a; x before conj(m) is what keeps R^2 <= 1
+    cross = (
+        np.fft.ifft(np.fft.fft(x, axis=0) * np.conj(np.fft.fft(m, axis=1)), axis=1)
+        / n_windows
+    )  ## (n_axes, n_windows, n_bins)
+    power = (np.abs(x) ** 2).mean(axis=0)
+    inner = np.einsum("akf,bkf->fab", m, np.conj(m)) / n_windows
+    joint = (
+        np.einsum("asf,fab,bsf->sf", cross, np.linalg.pinv(inner), np.conj(cross)).real
+        / power
+    )  ## (n_windows, n_bins)
+    clear = -(-size // hop)  ## shifts nearer than a window share samples with the real one
+    null = joint[clear : n_windows - clear + 1]
+    shares = joint @ power / power.sum()
+    null_shares = shares[clear : n_windows - clear + 1]
+    return MotionCoupling(
+        frequency=frequency[band],
+        coherence=joint[0],
+        axes={
+            label: np.abs(cross[a, 0]) ** 2 / (power * inner[:, a, a].real)
+            for a, label in enumerate(moving)
+        },
+        chance=np.percentile(null, 95, axis=0),
+        share=max(float(shares[0] - np.median(null_shares)), 0.0),
+        p=float((1 + np.sum(null_shares >= shares[0])) / (1 + null_shares.size)),
+    )
