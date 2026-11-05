@@ -323,6 +323,19 @@ def test_a_stack_or_picture_has_no_reference_image(mesc_path):
         snap.close()
 
 
+def test_the_status_says_what_became_of_the_stacks():
+    from mbo_utilities.gui.mesc_reference import ReferenceImage, ReferenceView
+
+    view = ReferenceView.__new__(ReferenceView)
+    view.placing, view.error, view.images, view.refused = False, None, {}, []
+    assert view.status() == "no Z-stack found"
+    stack = StackPlacement("z.mesc", "MSession_0/MUnit_3", (0.0, 0.0, 0.0), 0.8, 0.0)
+    view.images = {"z": ReferenceImage("z", np.zeros((2, 2)), [], stack)}
+    assert view.status().startswith("1 Z-stack(s) placed")
+    view.refused = [StackPlacement("z.mesc", "MSession_0/MUnit_9", (0.0, 0.0, 0.0), 0.1, 0.0)]
+    assert "MUnit_9 not placed (0.10)" in view.status()
+
+
 def test_a_placement_says_what_the_recording_found():
     from mbo_utilities.gui.mesc_reference import placement_summary
 

@@ -451,15 +451,18 @@ class ReferenceView:
         return f"{self.unit}: {name} {where}, {drawn}, match {im.placement.score:.2f}, {check}"
 
     def status(self) -> str:
-        """The stacks' state: still measuring, failed, or which were refused."""
+        """The stacks' state: still measuring, failed, or what became of them."""
         if self.placing:
             return "measuring Z-stacks..."
         if self.error is not None:
             return f"placement failed: {self.error}"
-        return "  ".join(
+        placed = sum(im.placement is not None for im in self.images.values())
+        states = [f"{placed} Z-stack(s) placed, in the image list"] if placed else []
+        states += [
             f"{p.stack_key.rsplit('/', 1)[-1]} not placed ({p.score:.2f})"
             for p in self.refused
-        )
+        ]
+        return "  ".join(states) or "no Z-stack found"
 
     def _toolbar(self, viewer) -> None:
         """A row under the viewer's own for the button that takes a stack file
