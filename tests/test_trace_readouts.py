@@ -6,7 +6,6 @@ import math
 
 import numpy as np
 import scipy.signal
-
 from mbo_utilities.analysis.trace_readouts import (
     dprime,
     event_dprime,
@@ -80,7 +79,6 @@ def test_dprime_does_not_depend_on_the_sampling_rate():
         assert abs(event_dprime(trace, peaks, fs)[0] - 3.0) < 0.3
 
 
-
 def test_coupling_reads_the_share_of_power_it_explains():
     n = int(120 * FS_HZ)
     motion = _axes(n, 0)
@@ -92,7 +90,9 @@ def test_coupling_reads_the_share_of_power_it_explains():
         assert coupling.p < 0.01
         # the joint coherence is an R^2: it cannot pass 1, and no axis passes it
         assert coupling.coherence.max() <= 1.0
-        assert all(np.all(a <= coupling.coherence + 1e-9) for a in coupling.axes.values())
+        assert all(
+            np.all(a <= coupling.coherence + 1e-9) for a in coupling.axes.values()
+        )
 
 
 def test_a_trace_with_its_own_rhythm_is_not_coupled():

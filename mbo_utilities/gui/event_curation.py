@@ -967,7 +967,9 @@ class EventCurationWidget(SlowFastPanelsMixin):
             implot.setup_axis_scale(implot.ImAxis_.x1, implot.Scale_.log10)
             implot.setup_axes_limits(f[0], f[-1], 0.0, top, implot.Cond_.always)
             implot.setup_axis_ticks(implot.ImAxis_.x1, COUPLING_TICKS_HZ)
-            implot.setup_legend(implot.Location_.north_east, implot.LegendFlags_.horizontal)
+            implot.setup_legend(
+                implot.Location_.north_east, implot.LegendFlags_.horizontal
+            )
             implot.plot_shaded(
                 "chance",
                 np.ascontiguousarray(f),

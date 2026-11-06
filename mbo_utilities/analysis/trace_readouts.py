@@ -227,7 +227,7 @@ def motion_coupling(
         np.einsum("asf,fab,bsf->sf", cross, np.linalg.pinv(inner), np.conj(cross)).real
         / power
     )  ## (n_windows, n_bins)
-    clear = -(-size // hop)  ## shifts nearer than a window share samples with the real one
+    clear = -(-size // hop)  ## nearer shifts share samples with the real one
     null = joint[clear : n_windows - clear + 1]
     shares = joint @ power / power.sum()
     null_shares = shares[clear : n_windows - clear + 1]
