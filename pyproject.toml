@@ -74,6 +74,7 @@ Issues = "https://github.com/MillerBrainObservatory/mbo_utilities/issues"
 [project.optional-dependencies]
 hpc = ["submitit>=1.5.0"]
 server = ["uvicorn>=0.30", "websockets>=13", "simplejpeg>=1.8", "av>=14"]
+vnoiser = ["vnoiser @ git+https://github.com/FlynnOConnell/vnoiser@27dcb630e0b0202968fc0d69d911403c48c35f63"]
 napari = [
     "napari",
     "napari-ome-zarr",
@@ -107,7 +108,7 @@ docs = [
     "jupytext",
     "myst_nb",
 ]
-all = ["pml_utilities[hpc,napari,notebooks,server]"]
+all = ["pml_utilities[hpc,napari,notebooks,server,vnoiser]"]
 
 [tool.uv]
 default-groups = ["dev", "suite2p", "napari", "notebooks", "docs"]
