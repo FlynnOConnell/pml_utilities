@@ -42,7 +42,6 @@ THRESHOLD = imgui.ImVec4(0.84, 0.15, 0.24, 1.0)
 AUTO_PASS = imgui.ImVec4(0.16, 0.62, 0.56, 1.0)
 PC1 = imgui.ImVec4(0.62, 0.45, 0.90, 1.0)
 COSINE = imgui.ImVec4(0.95, 0.68, 0.25, 1.0)
-SNIPPET = imgui.ImVec4(0.30, 0.47, 0.66, 1.0)
 # a candidate's colour by its label, as vnoiser's curation draws them
 LABELS = {
     "yes": imgui.ImVec4(0.106, 0.600, 0.545, 1.0),
@@ -72,16 +71,16 @@ KEYBINDS = (
     ("backspace", "clear its label"),
     ("← / →", "previous / next candidate in view"),
     ("↑ / ↓", "previous / next recording"),
-    ("click", "focus a candidate on the trace or the PCA plot"),
+    ("click", "focus a candidate on the trace"),
     (
         "Box accept / reject",
-        "box mode: right-drag a box on the trace or the PCA, then drag its edges",
+        "box mode: right-drag a box on the trace, then drag its edges",
     ),
     ("enter", "apply the box"),
     ("esc", "leave box mode"),
     (
         "drag line",
-        "move the threshold (red) / auto-pass (teal) line on the trace, or the PC1 (purple) line on the PCA",
+        "move the threshold (red) / auto-pass (teal) line on the trace",
     ),
     ("scroll", "zoom (shift: x only, alt: y only); drag pans; double-click fits"),
     ("m", "switch method: vnoiser / slow + fast, on the same trace"),
@@ -286,8 +285,10 @@ PANELS = (
         "one to focus it, the arrows above flip to the next trace",
         (
             "the red line is A1, the teal line A2: drag either",
-            "MC puts the scan's motion correction over the trace, on the same time axis",
+            "MC puts the scan's motion correction over the trace, on the same time axis, and "
+            "their coherence by frequency under it: a line above the grey band follows the motion there",
             "scroll zooms (shift: time only, alt: height only), drag pans, double-click fits",
+            "the title line has d' and the share of the trace the motion explains: hover either for what it measures",
         ),
     ),
     (
@@ -295,23 +296,9 @@ PANELS = (
         "the four rules as sliders, each with how many candidates it passes; they apply on release",
     ),
     (
-        "B. template",
-        "the average shape of the events it is built from, their snippets faint behind it",
-    ),
-    (
-        "C. candidate",
-        "the focused candidate over the template; the title carries how alike they are (cosine, 1 = the "
-        "same shape)",
-    ),
-    (
-        "D. PCA",
-        "every candidate's 400 ms snippet as one dot on its two main axes of variation: alike shapes sit "
-        "together; the purple line is A3",
-    ),
-    (
         "Decision",
         "Yes (y), No (n), Clear (backspace); Box accept and Box reject label everything inside a box "
-        "right-dragged on the trace or the PCA; Clear all",
+        "right-dragged on the trace; Clear all",
     ),
     (
         "Recordings",
@@ -331,7 +318,7 @@ RULES = (
     ),
     (
         "A3 PC1",
-        "every candidate on the passing side of the purple line on the PCA passes; the arrow flips the side",
+        "every candidate on the passing side of this value along the snippets' first principal component passes; the arrow flips the side",
     ),
     (
         "A4 cos",
@@ -387,12 +374,7 @@ SLOW_FAST = (
     (
         "candidates",
         f"the peaks of a {_SF.fast_sigma_ms:g} ms Gaussian inside slow events with prominence at least "
-        f"{_SF.k_prom:g} x the noise (the amber line on D); yes or no each, by you only",
-    ),
-    (
-        "B to D",
-        f"B the slow event the focused peak sits in; C the peak raw, at {_SF.fine_sigma_ms:g} ms and at "
-        f"{_SF.fast_sigma_ms:g} ms; D every peak's half width against its prominence",
+        f"{_SF.k_prom:g} x the noise; yes or no each, by you only",
     ),
     (
         "saved",
@@ -524,28 +506,12 @@ OWNER = tuple(
 )
 
 CALLS = ("yes", "auto_yes", "yes", "auto_no", "auto_yes", "no")
-# the curation sketch: each spike is a candidate with a label, a likeness to the template, a spot on
-# the PCA and a snippet as wide as given; the lines sit at these heights of the trace
+# the curation sketch: each spike is a candidate with a label and a likeness to the template; the
+# lines sit at these heights of the trace
 COSINES = (0.97, 0.88, 0.95, 0.41, 0.98, 0.52)
-PCA = (
-    (0.78, 0.60),
-    (0.55, 0.30),
-    (0.70, 0.42),
-    (0.18, 0.70),
-    (0.84, 0.35),
-    (0.30, 0.25),
-)
-SNIPPET_WIDTHS = (0.20, 0.24, 0.21, 0.60, 0.19, 0.50)
 THRESHOLD_AT = 0.2
 AUTO_PASS_AT = 0.74
 PC1_AT = 0.42
-SNIPPETS = tuple(
-    tuple(0.1 + 0.8 * h * math.exp(-(((u - 20) / 20 / width) ** 2)) for u in range(41))
-    for (_s, h), width in zip(SPIKES, SNIPPET_WIDTHS, strict=True)
-)
-TEMPLATE_SOURCE = (0, 1, 2, 4)
-# the template: the mean snippet of the events it is built from
-TEMPLATE = tuple(np.mean([SNIPPETS[k] for k in TEMPLATE_SOURCE], axis=0).tolist())
 SLIDERS = (
     # the A1 to A4 sliders as (name, colour, where the grab sits, the count under it)
     ("thr", THRESHOLD, THRESHOLD_AT, "6 found"),
@@ -978,77 +944,7 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
                 text,
             )
     y = p.y + 1.2 * em + ah + gap
-    # the candidate row: the template, the focused candidate over it, every candidate on the PCA
-    bw, bh = (w - 2 * gap) / 3, 6.2 * em
-    top = card(dl, p.x, y, bw, 1.2 * em + bh, "B. Current template")
-    for k in TEMPLATE_SOURCE:
-        polyline(
-            dl,
-            p.x + 0.5 * em,
-            top + 0.4 * em,
-            bw - em,
-            bh - 0.8 * em,
-            SNIPPETS[k],
-            u32(SNIPPET, 0.5),
-            1.0,
-        )
-    polyline(
-        dl,
-        p.x + 0.5 * em,
-        top + 0.4 * em,
-        bw - em,
-        bh - 0.8 * em,
-        TEMPLATE,
-        u32(TEXT),
-        2.5,
-    )
-    x = p.x + bw + gap
-    top = card(
-        dl,
-        x,
-        y,
-        bw,
-        1.2 * em + bh,
-        f"C. Focused candidate (cosine {COSINES[focus]:.2f})",
-    )
-    polyline(
-        dl,
-        x + 0.5 * em,
-        top + 0.4 * em,
-        bw - em,
-        bh - 0.8 * em,
-        SNIPPETS[focus],
-        u32(SNIPPET),
-        1.5,
-    )
-    polyline(
-        dl,
-        x + 0.5 * em,
-        top + 0.4 * em,
-        bw - em,
-        bh - 0.8 * em,
-        TEMPLATE,
-        u32(TEXT),
-        2.0,
-    )
-    for dash in range(0, int(bh - 0.8 * em), 6):
-        dl.add_line(
-            imgui.ImVec2(x + bw / 2, top + 0.4 * em + dash),
-            imgui.ImVec2(x + bw / 2, top + 0.4 * em + dash + 3),
-            u32(DIM),
-            1.0,
-        )
-    x += bw + gap
-    top = card(dl, x, y, bw, 1.2 * em + bh, "D. Candidate PCA (400 ms)")
-    lx = x + PC1_AT * bw
-    dl.add_line(imgui.ImVec2(lx, top), imgui.ImVec2(lx, top + bh), u32(PC1), 1.5)
-    dl.add_text(imgui.ImVec2(lx + 0.4 * em, top + 0.2 * em), u32(PC1), "pass >")
-    for k, ((u, v), call) in enumerate(zip(PCA, CALLS, strict=True)):
-        at = imgui.ImVec2(x + u * bw, top + v * bh)
-        dl.add_circle_filled(at, 0.34 * em, u32(LABELS[call]))
-        if k == focus:
-            dl.add_circle(at, 0.58 * em, u32(TEXT), 0, 1.5)
-    imgui.dummy(imgui.ImVec2(w, y + 1.2 * em + bh - p.y))
+    imgui.dummy(imgui.ImVec2(w, y - p.y))
     p = imgui.get_cursor_screen_pos()
     # the label colours, as the dots carry them
     x = p.x

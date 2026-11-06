@@ -37,7 +37,7 @@ pml_utilities/
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
-│   ├── analysis/             # scan-phase, linescan, phasecorr math, MESc stack placement; filters.py: zero-phase trace filters sized in Hz and ms; trace_readouts.py: spectrum, correlation, triggered average
+│   ├── analysis/             # scan-phase, linescan, phasecorr math, MESc stack placement; filters.py: zero-phase trace filters sized in Hz and ms; trace_readouts.py: spectrum, correlation, triggered average, d', motion coupling
 │   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation
 │   ├── cli.py                # `mbo` (click)
 │   └── assets/docs/          # in-app help pages
@@ -673,15 +673,17 @@ sample index so a settings change keeps every label on a peak found again, and
 recording id: settings, labels, excluded) and needs neither vnoiser nor a GUI.
 `export_run_tables(arr)` detects every ROI of a run with its saved settings and
 writes `export_tables`' three CSVs beside it (`TABLE_FILES`: one row per trace with
-its counts, noise and settings; the slow table with `slow_id`; the fast table with
+its counts, noise, d' and settings; the slow table with `slow_id`; the fast table with
 the curation `label`; an excluded trace keeps its row and no events, as the
 original's `excluded=True`); the Files section's **export tables** runs it off the
 draw thread, or exports the opened traces when there is no run.
 `gui/slow_fast_panels.SlowFastPanelsMixin` draws it in the window's own frame: A the
 fast and slow traces with slow events as bands and the edge / peak SD lines, A1-A3
-slow sigma, edge SD and peak SD, B the slow event, C the peak (raw, 1 ms, 2 ms), D
-half width against prominence with the `k_prom` line; Detection (Decision tab) holds
-the rest of `SlowFastSettings` and **exclude trace**. Sessions are keyed `(mode,
+slow sigma, edge SD and peak SD; Detection (Decision tab) holds the rest of
+`SlowFastSettings` and **exclude trace**. The title line carries `kept_dprime` (the
+candidates not called no, on `curated_trace`) and, for a scan with motion correction,
+`motion_coupling`'s share and p, computed on the load worker; `MC` adds its coherence
+by frequency under the trace. Sessions are keyed `(mode,
 rid)` with mode `slow_fast` beside vnoiser's three; a load error is per mode
 (`Recording.errors`). **compare** (`c`) draws the other method's events on the trace
 (`kept_times`: every candidate not called no). `mbo_utilities.vnoiser` re-exports
