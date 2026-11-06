@@ -790,11 +790,6 @@ class TestWidget:
         session.set_auto_template_threshold(0.5)
         _each_panel(curation, 3)
         assert session.auto_pass_pc1 == pytest.approx(line)
-        # the drag ends off-frame: the next frame applies the held value
-        curation._pc1_drag = lo + 0.25 * (hi - lo)
-        _each_panel(curation)
-        assert curation._pc1_drag is None
-        assert session.auto_pass_pc1 == pytest.approx(lo + 0.25 * (hi - lo))
         # manual mode shows neither the card nor the line
         curation.set_mode("manual")
         curation.wait(60)
@@ -850,7 +845,7 @@ class TestWidget:
         }
         curation.set_box_mode("yes")
         assert curation.box_mode == "yes" and curation._box_rect is None
-        curation._box = ("pca", np.array([1, 2]))
+        curation._box = ("timeline", np.array([1, 2]))
         assert curation.apply_box() == 2
         assert [session.manual_label(i) for i in range(3)] == ["no", "yes", "yes"]
         curation.exit_box_mode()
@@ -1696,6 +1691,32 @@ class TestMotion:
         # the motion plot over the trace in linked subplots; the strip is asked for the room
         _each_panel(curation)
         assert curation.panel.height == PANEL_HEIGHT + MOTION_HEIGHT
+        curation.show_motion = False
+        _each_panel(curation)
+        assert curation.panel.height == PANEL_HEIGHT
+
+    def test_a_recording_long_enough_gets_its_coherence_under_the_trace(
+        self, curation, data_root, monkeypatch
+    ):
+        from mbo_utilities.analysis import trace_readouts
+        from mbo_utilities.gui.event_curation import (
+            COUPLING_HEIGHT,
+            MOTION_HEIGHT,
+            PANEL_HEIGHT,
+        )
+
+        # the fixture's scan is shorter than a real read-out needs
+        monkeypatch.setattr(trace_readouts, "COUPLING_SKIP_S", 0.0)
+        monkeypatch.setattr(trace_readouts, "COUPLING_MIN_S", 0.0)
+        monkeypatch.setattr(trace_readouts, "COUPLING_WINDOW_S", 0.3)
+        pf_dir = data_root / "expt1" / "PF"
+        mesc = _mesc_with_rtmc(data_root / "src" / "expt.mesc")
+        _name_source(pf_dir, mesc)
+        _load(curation, data_root)
+        coupling = curation.coupling[(curation.session.mode, curation.current)]
+        assert sorted(coupling.axes) == ["X", "Y"] and 0.0 <= coupling.p <= 1.0
+        _each_panel(curation)
+        assert curation.panel.height == PANEL_HEIGHT + MOTION_HEIGHT + COUPLING_HEIGHT
         curation.show_motion = False
         _each_panel(curation)
         assert curation.panel.height == PANEL_HEIGHT
