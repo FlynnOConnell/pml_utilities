@@ -108,12 +108,11 @@ def test_a_browser_gets_frames_and_its_input_reaches_the_dashboard(data_root):
                 break
         assert widget.show_keybinds
 
-        # shrunk under the minimum the dashboard draws nothing but the
-        # stream goes on; grown again (a browser window resize, the drag
-        # corner) it renders at the new size
+        # shrunk under the minimum the dashboard draws nothing, so the canvas
+        # has no changed frame to send; grown again (a browser window resize,
+        # the drag corner) it renders at the new size
         await browser.resize(200, 100)
-        for _ in range(3):
-            await browser.next_frame()
+        await asyncio.sleep(0.3)
         await browser.resize(1200, 700)
         await frame_of_size(browser, (1200, 700))
         assert server.vis.window.size == 700 - FIGURE_MARGIN
