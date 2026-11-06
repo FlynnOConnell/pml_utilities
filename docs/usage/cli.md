@@ -66,12 +66,16 @@ running sessions and browses the server's folders: click a folder to enter
 it, double-click a file (or type a path and press Enter) to open it. That
 page stands in for the file dialog `mbo` shows on a desktop.
 
-Each session is a GUI process of its own on the server, streamed to the
-browser as JPEG frames over a websocket while the view changes, then once
-losslessly when it stops; nothing is sent while it is still. Closing the tab
-leaves the session running; one with no browser for `--idle-timeout` minutes
-(default 10, 0 keeps it) is stopped, as is every session when `mbo serve`
-exits. `--max-sessions` (default 1) caps how many run at once.
+`/open?path=<file or folder>` opens that path, or goes to the session already
+on it, so a results page or a message can link a dataset straight into the
+GUI.
+
+Each session is a GUI process of its own on the server. While the view
+changes it streams H.264 to browsers that can decode it and JPEG to the rest;
+once the view is still it sends one lossless PNG, then nothing. Closing the
+tab leaves the session running; one with no browser for `--idle-timeout`
+minutes (default 10, 0 keeps it) is stopped, as is every session when
+`mbo serve` exits. `--max-sessions` (default 1) caps how many run at once.
 
 | Option | Default | |
 |--------|---------|---|
@@ -80,11 +84,31 @@ exits. `--max-sessions` (default 1) caps how many run at once.
 | `--max-sessions` | 1 | GUI processes allowed at once |
 | `--idle-timeout` | 10 | minutes without a browser before a session stops |
 | `--widget` | `preview` | side widget for the session `PATH` opens |
-| `--quality` | 80 | JPEG quality while the view changes; 50 for a slow link |
+| `--bitrate` | 8 | H.264 Mbit/s while the view changes |
+| `--quality` | 80 | JPEG quality while the view changes, for browsers without H.264 |
 | `--token` / `--no-token` | random | the token the link carries |
 
 Anyone with the link reads what the user who started `mbo serve` can read;
 keep it on localhost or the tailnet.
+
+### Over https, beside other pages
+
+Browsers decode H.264 with WebCodecs, which they offer only to https pages
+and `localhost`; a plain `http://<server>:8800/` page gets JPEG. `tailscale
+serve` gives the gateway an https address on the tailnet, under a path of its
+own:
+
+```bash
+mbo serve --port 8800 --no-token --max-sessions 4 --idle-timeout 30   # localhost only
+tailscale serve --bg --set-path /studio http://127.0.0.1:8800
+# https://<machine>.<tailnet>.ts.net/studio/ ; a dataset: .../studio/open?path=/data/x.h5
+```
+
+Every link the gateway writes is relative, so it works under the path
+`tailscale serve` strips. `--no-token` is safe here only because the port is
+bound to localhost on a machine with no other users and `tailscale serve`
+answers only to the tailnet. To keep it running, run that `mbo serve` line as
+a systemd user service (`Restart=on-failure`), as the results page is.
 
 What does not work in a browser yet:
 
@@ -93,11 +117,13 @@ What does not work in a browser yet:
 - The browse buttons in the GUI's own dialogs; type the path.
 - Copy and paste stay inside the GUI; nothing reaches your clipboard.
 
-Frame rate depends on the link, not the server: a frame of a 1400 x 900
-window is about 600 KB. A browser on the server itself receives the movie at
-its full playback rate; one behind a relayed tailnet connection
-(`tailscale status` shows `relay`) gets what the relay carries. There, lower
-`--quality` or shrink the window.
+Frame rate depends on the link, not the server. A JPEG frame of a 1400 x 900
+window of a noisy recording is about 500 KB; the same frame as H.264 at
+8 Mbit/s is about 37 KB. A browser on the server itself receives the movie at
+its full playback rate; one behind a relayed tailnet connection (`tailscale
+status` shows `relay`, about 22 Mbit/s here) gets about 4 frames/s of JPEG;
+8 Mbit/s of H.264 fits through it at 30 frames/s, though that has not been
+measured across the relay yet. On a slower link lower `--bitrate`.
 
 ```{image} /_images/serve/serve_playback_fps.png
 :alt: Frames per second reaching the browser while a movie plays

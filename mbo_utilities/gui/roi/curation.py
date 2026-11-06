@@ -444,7 +444,9 @@ class CurationMixin:
                 wheel = imgui.get_io().mouse_wheel
                 if wheel != 0.0:
                     changed = True
-                    value = float(np.clip(value + OPACITY_WHEEL_STEP * wheel, 0.05, 1.0))
+                    value = float(
+                        np.clip(value + OPACITY_WHEEL_STEP * wheel, 0.05, 1.0)
+                    )
             if changed:
                 setattr(self, opacity, value)
                 self.refresh_overlay()

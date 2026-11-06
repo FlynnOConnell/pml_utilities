@@ -6,37 +6,20 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
-# ruff format and fix on every pull request into main, committed to the pull
-# request's branch; main itself never gets a bot commit, so it stays equal to
-# GitLab's. A pull request from a fork is only checked.
+# GitHub is a push mirror of the GitLab project, where merge requests are
+# formatted (.gitlab-ci.yml). Anything committed here is overwritten by the
+# next mirror update, so this only checks.
 jobs:
   format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
 
       - uses: astral-sh/setup-uv@v5
 
-      - name: Format and fix
-        run: |
-          uv tool run ruff@0.14.10 format .
-          uv tool run ruff@0.14.10 check --fix --exit-zero .
-
-      - name: Commit to the pull request branch
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet || git commit -m "ruff format and fix"
-          git push
-
-      - name: Check a fork's pull request
-        if: github.event.pull_request.head.repo.full_name != github.repository
+      - name: Check formatting
         run: uv tool run ruff@0.14.10 format --check .
 
       - name: Report remaining violations

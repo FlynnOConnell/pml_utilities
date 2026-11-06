@@ -103,6 +103,57 @@ def test_a_session_streams_at_its_size_behind_its_key_and_only_when_it_changes(m
         server.close()
 
 
+async def _h264(server):
+    import av
+
+    lifespan = Lifespan(server.asgi)
+    await lifespan.start()
+    browser = Browser(server.asgi)
+    await browser.connect()
+    await browser.event(type="_codecs", h264=True)
+    await browser.resize(800, 600)
+    while True:
+        msg, buffers = await browser.next_frame()
+        if msg["mimetype"] == "video/h264":
+            break
+    # a browser's first H.264 frame is a key frame it can start decoding at
+    assert msg["key"] and msg["codec"].startswith("avc1.")
+    assert (msg["width"], msg["height"]) == (800, 600)
+    decoder = av.CodecContext.create("h264", "r")
+    decoded = [
+        f
+        for p in decoder.parse(buffers[0]) + decoder.parse(None)
+        for f in decoder.decode(p)
+    ]
+    assert (decoded[0].width, decoded[0].height) == (800, 600)
+    # a still view still ends on one lossless png
+    while msg["mimetype"] != "image/png":
+        msg, _ = await browser.next_frame(timeout=15)
+    await browser.disconnect()
+    server.close()
+    await asyncio.sleep(0.3)
+    await lifespan.stop()
+
+
+def test_a_browser_with_webcodecs_gets_h264_while_the_view_changes(movie):
+    pytest.importorskip("av")
+    from mbo_utilities.gui.studio_server import StudioServer
+
+    server = StudioServer(movie, size=(640, 480))
+    try:
+        asyncio.run(_h264(server))
+    finally:
+        server.close()
+
+
+def test_the_codec_string_comes_from_the_sps():
+    from mbo_utilities.gui.canvas_server import _avc1_codec
+
+    sps = b"\x00\x00\x00\x01\x67\x64\x00\x28\xac"
+    assert _avc1_codec(b"\x00\x00\x00\x01\x09\xf0" + sps) == "avc1.640028"
+    assert _avc1_codec(b"\x00\x00\x01\x41\x9a") is None
+
+
 def test_browse_lists_folders_first_and_hides_dot_entries(tmp_path):
     from mbo_utilities.gui.gateway import browse
 
@@ -123,9 +174,15 @@ async def _token_and_refusals(gateway, movie):
     assert status == 403
     status, _ = await get(gateway, "/?token=wrong")
     assert status == 403
+    # the token is traded for a cookie and the redirect is relative, so a
+    # proxy that mounts the gateway under a path keeps its prefix
     status, headers, _ = await request(gateway, "GET", "/s/abc/?token=t0ken")
-    assert status == 303 and headers[b"location"] == b"/s/abc/"
+    assert status == 303 and headers[b"location"] == b"."
     assert headers[b"set-cookie"].startswith(b"mbo_gateway_8899=t0ken;")
+    status, headers, _ = await request(
+        gateway, "GET", "/open?path=%2Fdata%2Fx.tif&token=t0ken"
+    )
+    assert headers[b"location"] == b"open?path=%2Fdata%2Fx.tif"
     cookie = [(b"cookie", b"mbo_gateway_8899=t0ken")]
 
     status, body = await get(gateway, "/", cookie)
@@ -150,6 +207,8 @@ async def _token_and_refusals(gateway, movie):
         assert status == code, body
     assert gateway.sessions == {}
 
+    status, _ = await get(gateway, f"/open?path={movie}", cookie)
+    assert status == 409  # max_sessions is 0
     status, _ = await get(gateway, "/s/nope/", cookie)
     assert status == 404
     refused = {"type": "websocket.close", "code": 1008}
@@ -173,9 +232,13 @@ async def _session_through_gateway(gateway, movie):
         await asyncio.sleep(0.5)
     assert session.state == "ready", session.log_tail()
 
-    status, body = await get(gateway, session.url)
+    status, body = await get(gateway, f"/{session.url}")
     assert status == 200 and b"renderview-client.js" in body
-    browser = Browser(gateway, path=session.url)
+    # a link to a path that is already open goes to its session
+    status, headers, _ = await request(gateway, "GET", f"/open?path={movie}")
+    assert status == 303 and headers[b"location"] == session.url.encode()
+    assert len(gateway.sessions) == 1
+    browser = Browser(gateway, path=f"/{session.url}")
     await browser.connect()
     assert session.clients == 1
     await browser.resize(800, 600)
@@ -224,6 +287,7 @@ def test_cli_serve_is_wired():
         "--max-sessions",
         "--idle-timeout",
         "--quality",
+        "--bitrate",
         "--no-token",
     ):
         assert flag in result.output

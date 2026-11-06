@@ -47,7 +47,6 @@ from mbo_utilities.dashboard import (
     compute_readouts,
     cut,
     export_figure,
-    export_morphology,
     export_readouts,
     load_rows,
     morphology_figure,

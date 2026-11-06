@@ -1728,8 +1728,16 @@ def dashboard(path, unit, channel):
     type=click.IntRange(1, 99),
     default=80,
     show_default=True,
-    help="JPEG quality of frames while the view changes; a still view is sent "
-    "lossless. 50 halves the bytes, for a slow or relayed link.",
+    help="JPEG quality of frames while the view changes, for browsers without "
+    "H.264 (plain http off localhost). A still view is sent lossless.",
+)
+@click.option(
+    "--bitrate",
+    type=click.FloatRange(0.5, 100),
+    default=8.0,
+    show_default=True,
+    help="H.264 Mbit/s while the view changes, for browsers with WebCodecs "
+    "(https or localhost). Lower it for a slow or relayed link.",
 )
 @click.option(
     "--token",
@@ -1743,7 +1751,16 @@ def dashboard(path, unit, channel):
     help="Serve without a token, for a localhost-only port behind a tunnel.",
 )
 def serve(
-    path, host, port, max_sessions, idle_timeout, widget, quality, token, no_token
+    path,
+    host,
+    port,
+    max_sessions,
+    idle_timeout,
+    widget,
+    quality,
+    bitrate,
+    token,
+    no_token,
 ):
     r"""Serve The Studio to browsers from this machine.
 
@@ -1789,6 +1806,7 @@ def serve(
         idle_timeout=idle_timeout * 60,
         token=token,
         quality=quality,
+        bitrate=bitrate,
     )
     click.echo(f"The Studio: {gateway.link()}")
     if path:

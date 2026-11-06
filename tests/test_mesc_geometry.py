@@ -209,8 +209,7 @@ def test_line_positions_measure_each_roi(mesc_path):
         [r["sample_um"] for r in rows], [1.0, 1.0, np.hypot(30, 10) / 10, 1.0]
     )
     assert all(
-        r["sample_um"] is None
-        for r in line_positions(mesc_path, "MSession_0/MUnit_1")
+        r["sample_um"] is None for r in line_positions(mesc_path, "MSession_0/MUnit_1")
     )
 
 

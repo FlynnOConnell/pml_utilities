@@ -79,7 +79,7 @@ def plain_2d(tmp_path, frames):
 
 @pytest.fixture
 def plain_3d(tmp_path, frames):
-    """tifffile's default for a 3D array: a shaped TIFF, no ImageJ tags."""
+    """Tifffile's default for a 3D array: a shaped TIFF, no ImageJ tags."""
     path = tmp_path / "pages.tif"
     tifffile.imwrite(path, frames)
     return path

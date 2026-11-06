@@ -210,7 +210,9 @@ def test_positions_save_each_roi_where_it_sits_in_the_stack(mesc_path, tmp_path)
     assert [int(r["roi"]) for r in rows] == [r["roi"] + 1 for r in stack.records]
     assert [int(r["slice"]) for r in rows] == [r["slice"] + 1 for r in stack.records]
     first = rows[0]
-    assert first["domain"] == "soma" and first["confirmed"] == str(stack.placement.confirmed)
+    assert first["domain"] == "soma" and first["confirmed"] == str(
+        stack.placement.confirmed
+    )
     x, y, z = LINES[0][0][0], LINES[0][1][0], LINES[0][2][0]
     np.testing.assert_allclose(
         [float(first[k]) for k in ("x0_um", "y0_um", "z0_um")], (x, y, z), atol=1.5
@@ -332,7 +334,9 @@ def test_the_status_says_what_became_of_the_stacks():
     stack = StackPlacement("z.mesc", "MSession_0/MUnit_3", (0.0, 0.0, 0.0), 0.8, 0.0)
     view.images = {"z": ReferenceImage("z", np.zeros((2, 2)), [], stack)}
     assert view.status().startswith("Z-stacks placed: 1")
-    view.refused = [StackPlacement("z.mesc", "MSession_0/MUnit_9", (0.0, 0.0, 0.0), 0.1, 0.0)]
+    view.refused = [
+        StackPlacement("z.mesc", "MSession_0/MUnit_9", (0.0, 0.0, 0.0), 0.1, 0.0)
+    ]
     assert "MUnit_9 not placed (0.10)" in view.status()
 
 
@@ -460,7 +464,9 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         for roi in (1, 0):
             iw.indices[roi_slider(iw.dim_names)] = roi
             iw.figure.canvas.draw()
-            k = next(r["slice"] for r in view.images[stack_key].records if r["roi"] == roi)
+            k = next(
+                r["slice"] for r in view.images[stack_key].records if r["roi"] == roi
+            )
             assert np.array_equal(view.viewer._images[stack_key], STACK[k])
         view.one_slice = False
         iw.figure.canvas.draw()
