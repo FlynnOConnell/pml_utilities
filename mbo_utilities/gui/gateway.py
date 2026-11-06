@@ -7,9 +7,14 @@ once no browser has been connected for ``idle_timeout`` seconds. The
 launcher at ``/`` stands in for the desktop file dialog: it browses this
 machine's folders and opens a path in a new session.
 
+A results page can link a dataset: ``/open?path=P`` opens ``P`` (or goes to
+the session already on it), ``/?path=P`` shows the launcher browsing ``P``.
+Every link the gateway writes is relative, so it also works mounted under a
+path by a proxy that strips it (``tailscale serve --set-path``).
+
 The link printed at startup carries a token, traded for a cookie on first
-use; nothing is served without one. Sessions run as the user who started the
-gateway and read whatever that user can.
+use; without ``--no-token`` nothing is served without one. Sessions run as
+the user who started the gateway and read whatever that user can.
 """
 
 from __future__ import annotations
@@ -26,11 +31,12 @@ import socket
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from http.cookies import SimpleCookie
 from pathlib import Path
 from string import Template
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 
 from rendercanvas.http import resources
 
@@ -40,7 +46,7 @@ from mbo_utilities.gui.canvas_server import (
     SESSION_KEY_HEADER,
     client_js,
     page_html,
-    require_uvicorn,
+    require,
 )
 from mbo_utilities.preferences import (
     add_recent_file,
@@ -65,22 +71,22 @@ class SessionLimitError(RuntimeError):
     """Opening another session would pass ``max_sessions``."""
 
 
+@dataclass
 class Session:
-    """One Studio process: what it opened, where it listens, how many tabs it has."""
+    """One Studio process: the path it opened, its port and key, how many tabs it has."""
 
-    def __init__(self, sid, path, widget, port, key, log_file, proc):
-        self.id = sid
-        self.path = path
-        self.widget = widget
-        self.port = port
-        self.key = key
-        self.log_file = log_file
-        self.proc = proc
-        self.started = time.time()
-        self.state = "starting"
-        self.clients = 0
-        self.idle_since = time.monotonic()
-        self.error = ""
+    id: str
+    path: Path
+    widget: str
+    port: int
+    key: str
+    log_file: Path
+    proc: subprocess.Popen
+    started: float = field(default_factory=time.time)
+    state: str = "starting"
+    clients: int = 0
+    idle_since: float = field(default_factory=time.monotonic)
+    error: str = ""
 
     @property
     def name(self) -> str:
@@ -88,7 +94,7 @@ class Session:
 
     @property
     def url(self) -> str:
-        return f"/s/{self.id}/"
+        return f"s/{self.id}/"
 
     def info(self) -> dict:
         return {
@@ -194,7 +200,10 @@ class Gateway:
     token : str or None
         What the printed link carries; None serves anyone who can connect.
     quality : int
-        JPEG quality of each session's frames while they change.
+        JPEG quality of each session's frames while they change, for
+        browsers without H.264.
+    bitrate : float
+        H.264 Mbit/s of each session's frames while they change.
     """
 
     def __init__(
@@ -206,6 +215,7 @@ class Gateway:
         idle_timeout: float = 600.0,
         token: str | None = None,
         quality: int = 80,
+        bitrate: float = 8.0,
     ):
         self.host = str(host)
         self.port = int(port)
@@ -213,15 +223,16 @@ class Gateway:
         self.idle_timeout = float(idle_timeout)
         self.token = token
         self.quality = int(quality)
+        self.bitrate = float(bitrate)
         self.sessions: dict[str, Session] = {}
         self._cookie = f"mbo_gateway_{self.port}"
         self._watcher = None
 
     def link(self, path: str = "/") -> str:
-        """The address to open, token included."""
+        """Returns the address of ``path`` on this gateway, token included."""
         host = socket.gethostname() if self.host in ("0.0.0.0", "::") else self.host
         query = f"?token={self.token}" if self.token else ""
-        return f"http://{host}:{self.port}{path}{query}"
+        return f"http://{host}:{self.port}/{path.lstrip('/')}{query}"
 
     def live(self) -> list[Session]:
         return [s for s in self.sessions.values() if s.state != "exited"]
@@ -254,6 +265,8 @@ class Gateway:
             widget,
             "--quality",
             str(self.quality),
+            "--bitrate",
+            str(self.bitrate),
             "--parent-pid",
             str(os.getpid()),
         ]
@@ -371,15 +384,18 @@ class Gateway:
         query = parse_qs(scope.get("query_string", b"").decode())
         if self.token is not None and "token" in query:
             if hmac.compare_digest(query["token"][0], self.token):
-                cookie = (
-                    f"{self._cookie}={self.token}; Path=/; HttpOnly; SameSite=Strict"
+                cookie = f"{self._cookie}={self.token}; Path=/; HttpOnly; SameSite=Lax"
+                rest = urlencode(
+                    {k: v for k, v in query.items() if k != "token"}, doseq=True
                 )
+                # relative, so it lands back under the prefix a proxy stripped
+                here = (path.rsplit("/", 1)[-1] or ".") + (f"?{rest}" if rest else "")
                 await _respond(
                     send,
                     303,
                     b"",
                     headers=[
-                        (b"location", path.encode()),
+                        (b"location", here.encode()),
                         (b"set-cookie", cookie.encode()),
                     ],
                 )
@@ -424,6 +440,8 @@ class Gateway:
                 await _json(send, 200, listing)
         elif path == "/api/recent":
             await _json(send, 200, {"recent": get_recent_files()[:12]})
+        elif path == "/open":
+            await self._open_link(query, send)
         elif path.startswith("/s/"):
             await self._session_http(path, send)
         else:
@@ -448,6 +466,28 @@ class Gateway:
         else:
             await _json(send, 200, session.info())
 
+    async def _open_link(self, query: dict, send) -> None:
+        """Redirects to the live session on ``query["path"]``, starting one if none is."""
+        path = query.get("path", [""])[0].strip()
+        widget = query.get("widget", ["preview"])[0]
+        target = Path(path).expanduser().resolve() if path else None
+        session = next(
+            (
+                s
+                for s in self.live()
+                if s.path.resolve() == target and s.widget == widget
+            ),
+            None,
+        )
+        if session is None:
+            try:
+                session = self.open(path, widget)
+            except (SessionLimitError, ValueError, OSError) as e:
+                body = _status_page(f"Could not open {path}", str(e), "", "./")
+                await _respond(send, 409, body, "text/html; charset=utf-8")
+                return
+        await _respond(send, 303, b"", headers=[(b"location", session.url.encode())])
+
     async def _session_http(self, path: str, send) -> None:
         session, rest = self._session_of(path)
         if session is None:
@@ -455,20 +495,20 @@ class Gateway:
                 send,
                 404,
                 _status_page(
-                    "No such session", "It may have been stopped.", "", refresh=False
+                    "No such session", "It may have been stopped.", "", "../../"
                 ),
                 "text/html; charset=utf-8",
             )
         elif not path.startswith(f"/s/{session.id}/"):
             await _respond(
-                send, 307, b"", headers=[(b"location", session.url.encode())]
+                send, 307, b"", headers=[(b"location", f"{session.id}/".encode())]
             )
         elif rest in ("", "index.html"):
             if session.state == "ready":
                 body = page_html(
                     f"{session.name} - The Studio",
                     f"Connecting to {session.name} ...",
-                    home="/",
+                    home="../../",
                 )
                 await _respond(send, 200, body, "text/html; charset=utf-8")
             elif session.state == "starting":
@@ -476,6 +516,7 @@ class Gateway:
                     f"Opening {session.name}",
                     f"Starting the Studio on {socket.gethostname()}; this page reloads when it is ready.",
                     session.log_tail(),
+                    "../../",
                     refresh=True,
                 )
                 await _respond(send, 200, body, "text/html; charset=utf-8")
@@ -484,7 +525,7 @@ class Gateway:
                     f"{session.name}: {session.error or 'exited'}",
                     "Open it again from the sessions page.",
                     session.log_tail(),
-                    refresh=False,
+                    "../../",
                 )
                 await _respond(send, 200, body, "text/html; charset=utf-8")
         elif rest == "renderview-client.js":
@@ -500,13 +541,7 @@ class Gateway:
         if not self._authorized(scope) or session is None or session.state != "ready":
             await send({"type": "websocket.close", "code": 1008})
             return
-        try:
-            from websockets.asyncio.client import connect
-        except ImportError as e:
-            raise ImportError(
-                'mbo serve needs websockets: uv pip install "pml_utilities[server] @ '
-                'git+https://github.com/FlynnOConnell/pml_utilities.git"'
-            ) from e
+        connect = require("websockets.asyncio.client").connect
         try:
             # frames are jpeg (a lossless png after a pause): no size cap, no deflate
             upstream = await connect(
@@ -544,7 +579,7 @@ class Gateway:
 
     def serve(self) -> None:
         """Run the gateway in this thread until interrupted; stops every session on the way out."""
-        uvicorn = require_uvicorn()
+        uvicorn = require("uvicorn")
         config = uvicorn.Config(
             self,
             host=self.host,
@@ -612,13 +647,15 @@ _STYLE = """
 """
 
 
-def _status_page(heading: str, message: str, log_text: str, refresh: bool) -> str:
+def _status_page(
+    heading: str, message: str, log_text: str, home: str, refresh: bool = False
+) -> str:
     return (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         f"<title>{html.escape(heading)}</title>"
         + ("<meta http-equiv='refresh' content='1'>" if refresh else "")
         + f"<style>{_STYLE}</style></head><body><main>"
-        f"<h1>{html.escape(heading)}</h1><p>{html.escape(message)} <a href='/'>sessions</a></p>"
+        f"<h1>{html.escape(heading)}</h1><p>{html.escape(message)} <a href='{home}'>sessions</a></p>"
         + (f"<pre>{html.escape(log_text)}</pre>" if log_text else "")
         + "</main></body></html>"
     )
@@ -705,6 +742,8 @@ _LAUNCHER = Template(
     </section>
 </main>
 <script>
+// every link here is relative: /studio must become /studio/ under a proxy's prefix
+if (!location.pathname.endsWith('/')) location.replace(location.pathname + '/' + location.search);
 const el = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 
@@ -819,7 +858,8 @@ api('api/recent').then((d) => {
 
 refresh();
 setInterval(refresh, 2000);
-browse('');
+const linked = new URLSearchParams(location.search).get('path') || '';
+browse(linked).then(() => { if (linked) el('path').value = linked; });
 </script>
 </body>
 </html>

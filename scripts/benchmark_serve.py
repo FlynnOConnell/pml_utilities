@@ -6,6 +6,7 @@ plays. It appends one record per run to a json file. ``plot`` draws the frame
 rate of every record in that file.
 
     python scripts/benchmark_serve.py run http://pml-w1:8800 --token T --label "tailnet"
+    python scripts/benchmark_serve.py run http://pml-w1:8800 --h264 --label "tailnet, h264"
     python scripts/benchmark_serve.py plot serve_benchmark.json docs/_images/serve --title ...
 
 ``run`` needs ``websockets`` (the ``server`` extra); ``plot`` needs matplotlib.
@@ -146,7 +147,9 @@ async def trial(ws, play, seconds: float, first_timeout: float) -> dict:
     }
 
 
-async def measure(url, cookie, size, seconds, trials, first_timeout) -> list[dict]:
+async def measure(
+    url, cookie, size, seconds, trials, first_timeout, h264
+) -> list[dict]:
     from websockets.asyncio.client import connect
 
     width, height = size
@@ -155,6 +158,8 @@ async def measure(url, cookie, size, seconds, trials, first_timeout) -> list[dic
     async with connect(
         url, additional_headers={"cookie": cookie}, max_size=None, compression=None
     ) as ws:
+        # canvas_client.js sends this on open, h264 True where WebCodecs decodes it
+        await send_event(ws, type="_codecs", h264=h264)
         await send_event(
             ws,
             type="resize",
@@ -205,11 +210,21 @@ def run(args) -> None:
     if waited > 1:
         print(f"waited {waited:.0f} s for another browser to leave")
     ws_url = (
-        base.replace("http://", "ws://").replace("https://", "wss://") + session["url"]
+        base.replace("http://", "ws://").replace("https://", "wss://")
+        + "/"
+        + session["url"]
     )
     size = tuple(int(v) for v in args.size.split("x"))
     trials = asyncio.run(
-        measure(ws_url, cookie, size, args.seconds, args.trials, args.first_timeout)
+        measure(
+            ws_url,
+            cookie,
+            size,
+            args.seconds,
+            args.trials,
+            args.first_timeout,
+            args.h264,
+        )
     )
     record = {
         "label": args.label,
@@ -218,6 +233,7 @@ def run(args) -> None:
         "gateway": base.split("//")[-1].split(":")[0],
         "file": session["name"],
         "size": list(size),
+        "codec": "h264" if args.h264 else "jpeg",
         "date": datetime.now().isoformat(timespec="seconds"),
         "trials": trials,
     }
@@ -364,6 +380,9 @@ def main() -> None:
     p.add_argument("--size", default="1400x900", help="browser canvas, css px")
     p.add_argument("--seconds", type=float, default=10.0, help="per trial")
     p.add_argument("--trials", type=int, default=3)
+    p.add_argument(
+        "--h264", action="store_true", help="ask for h264 as a WebCodecs browser does"
+    )
     p.add_argument(
         "--first-timeout",
         type=float,

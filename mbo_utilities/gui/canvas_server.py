@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import hmac
 import html
+import importlib
 import os
 import sys
+import time
+from importlib import resources as package_resources
 from string import Template
 
 import numpy as np
@@ -31,7 +34,7 @@ __all__ = [
     "CanvasServer",
     "client_js",
     "page_html",
-    "require_uvicorn",
+    "require",
     "select_http_backend",
 ]
 
@@ -105,15 +108,23 @@ def page_html(title: str, waiting: str, home: str | None = None) -> str:
 
 
 def client_js() -> str:
-    """The rendercanvas browser client, opening ``wss://`` on a page served over https.
-
-    The shipped client always opens ``ws://``, which a page behind an https
-    proxy (``tailscale serve``) is not allowed to.
-    """
-    return resources["renderview-client.js"][1].replace(
-        "new WebSocket('ws://'",
-        "new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://')",
+    """Returns the browser client, renderview on a canvas with H.264 decoded by WebCodecs."""
+    return (
+        package_resources.files("mbo_utilities")
+        .joinpath("assets/static/canvas_client.js")
+        .read_text(encoding="utf-8")
     )
+
+
+def require(module: str):
+    """Imports ``module`` from the ``server`` extra; the ImportError names the extra."""
+    try:
+        return importlib.import_module(module)
+    except ImportError as e:
+        raise ImportError(
+            f'serving to browsers needs {module}: uv pip install "pml_utilities[server] @ '
+            'git+https://github.com/FlynnOConnell/pml_utilities.git"'
+        ) from e
 
 
 def select_http_backend() -> None:
@@ -134,32 +145,59 @@ def select_http_backend() -> None:
 
 
 class BrowserCanvas(HttpRenderCanvas):
-    """The http canvas, sending only frames that changed.
+    """An http canvas that sends only frames that changed, as H.264 where the browser decodes it.
 
-    Two departures from ``HttpRenderCanvas``. It keeps the size it was asked
-    for until a browser reports its own; otherwise the first draw after a
-    browser connects is on a 1 x 1 canvas, where every subplot's viewport is
-    negative. And it drops a frame identical to the last one sent: an imgui
-    figure draws every frame whether anything moved or not, which streamed
-    at 60 fps of jpeg even while idle, and each draw request cancelled the
-    lossless frame meant to follow the last change, so a still view never
-    sharpened.
+    Departures from ``HttpRenderCanvas``:
 
-    Frames are rendered at no more than ``max_pixel_ratio`` physical pixels
-    per css pixel (a HiDPI browser gets a frame it upscales, a quarter of the
-    bytes), as jpeg of ``quality`` while they change.
+    - It keeps the size it was asked for until a browser reports its own;
+      otherwise the first draw after a browser connects is on a 1 x 1 canvas,
+      where every subplot's viewport is negative.
+    - It drops a frame identical to the last one sent: an imgui figure draws
+      every frame whether anything moved or not, which streamed 60 fps of jpeg
+      while idle and cancelled the lossless frame meant to follow the last change.
+    - While the view changes, browsers that can decode H.264 (WebCodecs, so
+      https or localhost) get it at ``bitrate`` Mbit/s, a tenth of the bytes of
+      jpeg on a recording; the rest get jpeg of ``quality``. A still view is
+      sent once as png either way.
+    - Frames are rendered at no more than ``max_pixel_ratio`` physical pixels
+      per css pixel, so a HiDPI browser gets a quarter of the pixels and upscales.
     """
 
     def __init__(
-        self, *args, quality: int = 80, max_pixel_ratio: float = 1.0, **kwargs
+        self,
+        *args,
+        quality: int = 80,
+        bitrate: float = 8.0,
+        max_pixel_ratio: float = 1.0,
+        **kwargs,
     ):
         self._last_array = None
         self._lossless_sent = False
+        # the base class reads _quality when it encodes jpeg
+        self._quality = int(quality)
+        self.bitrate = float(bitrate)
         self.max_pixel_ratio = float(max_pixel_ratio)
+        self._h264_clients = set()
+        self._encoder = None
+        self._codec = None
+        self._seq = 0
+        self._force_key = False
         super().__init__(*args, **kwargs)
 
     def _on_event(self, event, id):
-        ratio = event.get("ratio", 1.0) if event.get("type") == "resize" else 1.0
+        kind = event.get("type")
+        if kind == "_codecs":
+            if event.get("h264"):
+                self._h264_clients.add(id)
+            self._force_key = True
+            return
+        if kind == "_keyframe":
+            self._force_key = True
+            return
+        if kind == "_clients_change":
+            self._h264_clients &= set(event["ids"])
+            self._force_key = True
+        ratio = event.get("ratio", 1.0) if kind == "resize" else 1.0
         if ratio > self.max_pixel_ratio:
             scale = self.max_pixel_ratio / ratio
             event = {
@@ -176,6 +214,11 @@ class BrowserCanvas(HttpRenderCanvas):
             self._size_info.set_physical_size(
                 max(1, round(width)), max(1, round(height)), 1.0
             )
+
+    def _rc_close(self):
+        # an NVENC context left open while wgpu's device goes hangs the process at exit
+        self._encoder = None
+        super()._rc_close()
 
     def _rc_request_draw(self):
         # the base also cancels the pending lossless frame here; a changed
@@ -197,19 +240,94 @@ class BrowserCanvas(HttpRenderCanvas):
             # the bitmap may be a buffer the next frame reuses
             array = self._last_array = array.copy()
             self._lossless_sent = False
-        super()._encode_frame(array, is_lossless_redraw)
+        clients = self._frame_info_per_client.keys()
+        if not is_lossless_redraw and clients and clients <= self._h264_clients:
+            self._encode_h264(array)
+        else:
+            super()._encode_frame(array, is_lossless_redraw)
+
+    def _encode_h264(self, array):
+        """Sends ``array`` as one H.264 access unit and schedules the png that follows it."""
+        av = require("av")
+        height, width = array.shape[0] // 2 * 2, array.shape[1] // 2 * 2
+        if self._encoder is None or (self._encoder.width, self._encoder.height) != (
+            width,
+            height,
+        ):
+            self._encoder = _open_h264(av, width, height, self.bitrate)
+        frame = av.VideoFrame.from_ndarray(
+            np.ascontiguousarray(array[:height, :width]), format="rgba"
+        ).reformat(format="yuv420p")
+        if self._force_key:
+            frame.pict_type = av.video.frame.PictureType.I
+            self._force_key = False
+        packets = self._encoder.encode(frame)
+        data = b"".join(bytes(p) for p in packets)
+        if not data:
+            return
+        key = any(p.is_keyframe for p in packets)
+        if key:
+            self._codec = _avc1_codec(data) or self._codec
+        msg = {
+            "type": "framebufferdata",
+            "nbuffers": 1,
+            "mimetype": "video/h264",
+            "key": key,
+            "codec": self._codec,
+            "seq": self._seq,
+            "width": width,
+            "height": height,
+            "timestamp": time.time(),
+            "index": 0,
+        }
+        self._seq += 1
+        self._last_frame = msg, [data]
+        self._ref_index += 1
+        self._schedule_lossless_draw(array)
+        self._send_last_frame_to_ready_clients()
 
 
-def require_uvicorn():
-    """uvicorn, or an ImportError naming the extra that installs it."""
-    try:
-        import uvicorn
-    except ImportError as e:
-        raise ImportError(
-            'serving to browsers needs uvicorn: uv pip install "pml_utilities[server] @ '
-            'git+https://github.com/FlynnOConnell/pml_utilities.git"'
-        ) from e
-    return uvicorn
+def _open_h264(av, width: int, height: int, bitrate: float):
+    """Opens an encoder that returns each frame's packet at once: NVENC, else libx264."""
+    for name, options in (
+        (
+            "h264_nvenc",
+            {
+                "preset": "p1",
+                "tune": "ull",
+                "zerolatency": "1",
+                "delay": "0",
+                "forced-idr": "1",
+            },
+        ),
+        ("libx264", {"preset": "ultrafast", "tune": "zerolatency"}),
+    ):
+        encoder = av.CodecContext.create(name, "w")
+        encoder.width, encoder.height, encoder.pix_fmt = width, height, "yuv420p"
+        encoder.bit_rate = int(bitrate * 1e6)
+        encoder.framerate = 30
+        encoder.max_b_frames = 0
+        # keyframes only on demand: a new browser asks for one
+        encoder.gop_size = 1_000_000
+        encoder.options = options
+        try:
+            encoder.open()
+        except (av.FFmpegError, ValueError) as e:
+            logger.info("no %s (%s)", name, e)
+            continue
+        logger.info("h264 frames from %s at %g Mbit/s", name, bitrate)
+        return encoder
+    raise RuntimeError("PyAV has neither h264_nvenc nor libx264")
+
+
+def _avc1_codec(data: bytes) -> str | None:
+    """Returns the WebCodecs codec string (``avc1.PPCCLL``) from an access unit's SPS."""
+    i = data.find(b"\x00\x00\x01")
+    while i >= 0 and i + 6 < len(data):
+        if data[i + 3] & 0x1F == 7:
+            return "avc1." + data[i + 4 : i + 7].hex()
+        i = data.find(b"\x00\x00\x01", i + 3)
+    return None
 
 
 class CanvasServer:
@@ -313,7 +431,7 @@ class CanvasServer:
 
     def serve(self) -> None:
         """Run the server in this thread until it is interrupted or the canvas closes."""
-        uvicorn = require_uvicorn()
+        uvicorn = require("uvicorn")
         self._server = uvicorn.Server(self._config(uvicorn))
         logger.warning("%s at %s", self.title, self.url)
         try:
@@ -323,7 +441,7 @@ class CanvasServer:
 
     async def serve_async(self) -> None:
         """Run the server inside the current asyncio loop until it is stopped."""
-        uvicorn = require_uvicorn()
+        uvicorn = require("uvicorn")
         self._server = uvicorn.Server(self._config(uvicorn))
         logger.warning("%s at %s", self.title, self.url)
         try:
