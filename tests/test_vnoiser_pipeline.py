@@ -995,6 +995,51 @@ def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     assert [(r.name, r.rois) for r in widget._domains] == [("a", [0])]
 
 
+def test_widget_saves_and_loads_its_domains_file(tmp_path):
+    """Save writes the table and ticks beside the file, in the form ``mbo vnoiser``
+    reads, and Load brings them back; a broken file leaves the table alone.
+    """
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import (
+        DomainRow,
+        VnoiserPipelineWidget,
+    )
+
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc, extra_unit=True)
+    widget = VnoiserPipelineWidget(
+        SimpleNamespace(fpath=mesc, image_widget=None, invert_deflection=False)
+    )
+    widget._ensure_state()
+    first, second = (u["key"] for u in widget._units)
+    widget._domains = [
+        DomainRow("soma", [0, 2]),
+        DomainRow("cell", [1], "correlated", 0.2),
+    ]
+    widget._scans = {first: True, second: True}
+    widget._first_env = {first: True, second: True}
+    widget._save_domains_file()
+    spec = read_domains(tmp_path / DOMAINS_FILE)
+    assert spec["scan_ids"] == ["1", "2"] and spec["first_env"] == ["1", "2"]
+    assert spec["domains"]["soma"] == [0, 2]
+
+    widget._domains, widget._scans, widget._first_env = [], {first: True}, {}
+    widget._load_domains_file()
+    assert [(r.name, r.rois, r.pixels) for r in widget._domains] == [
+        ("soma", [0, 2], "all"),
+        ("cell", [1], "correlated"),
+    ]
+    assert widget._scans == {first: True, second: True}
+    assert widget._first_env == {first: True, second: True}
+
+    (tmp_path / DOMAINS_FILE).write_text("{")
+    widget._load_domains_file()
+    assert widget._last_status.startswith(DOMAINS_FILE)
+    assert [r.name for r in widget._domains] == ["soma", "cell"]
+
+
 def test_widget_loads_its_own_run_when_the_worker_finishes(tmp_path, monkeypatch):
     """A run the tab started lands in the Traces tab by itself once its
     worker reports completion, whatever tab is showing and whether or not

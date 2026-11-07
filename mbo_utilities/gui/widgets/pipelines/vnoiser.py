@@ -936,6 +936,47 @@ class VnoiserPipelineWidget(PipelineWidget):
         if imgui.get_item_rect_max().x + spacing + button_width(label) <= right:
             imgui.same_line()
 
+    def _load_domains_file(self) -> None:
+        """The domains, ticked scans and block ticks of ``domains.json`` beside the file."""
+        from mbo_utilities.vnoiser.pipeline import read_domains
+
+        path = self._mesc_path().parent / DOMAINS_FILE
+        try:
+            spec = read_domains(path)
+            rows = [DomainRow.from_entry(n, v) for n, v in spec["domains"].items()]
+        except (OSError, ValueError, KeyError) as e:
+            self._set_status(f"{path.name}: {e}", error=True)
+            return
+        self._domains, self._selected = rows, 0
+        for u in self._units:
+            munit = u["key"].rsplit("_", 1)[-1]
+            if spec["scan_ids"]:
+                self._scans[u["key"]] = munit in spec["scan_ids"]
+            self._first_env[u["key"]] = munit in spec["first_env"]
+        self._seed_slicing()
+        self._domains_path = str(path)
+        self._set_status(f"Loaded {path.name}")
+
+    def _save_domains_file(self) -> None:
+        """Write the table, ticked scans and block ticks to ``domains.json`` beside the file."""
+        rows = self._check_domains()
+        if not rows:
+            return
+        mesc = self._mesc_path()
+        path = mesc.parent / DOMAINS_FILE
+        scans = [u["key"] for u in self._units if self._scans.get(u["key"])]
+        doc = {
+            "mesc": mesc.name,
+            "scans": [k.rsplit("_", 1)[-1] for k in scans],
+            "first_env": [
+                k.rsplit("_", 1)[-1] for k in scans if self._first_env.get(k)
+            ],
+            "domains": {r.name.strip(): r.entry() for r in rows},
+        }
+        path.write_text(json.dumps(doc, indent=2))
+        self._domains_path = str(path)
+        self._set_status(f"Saved {path.name}")
+
     def _draw_domain_presets(self, n_rois: int) -> None:
         """Buttons that rebuild the table, wrapping to new lines when the panel is narrow."""
         right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
