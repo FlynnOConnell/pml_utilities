@@ -254,8 +254,8 @@ DOMAIN_RULES = (
     ("to start", "one domain per ROI of the scan on screen: roi0, roi1, ..."),
     (
         "presets",
-        "One per ROI, All in one, Groups of N (right-click for N), From comment (when the unit's comment "
-        "names every ROI), Drawn ROIs (each ROI drawn in the ROI tool, exactly its pixels)",
+        "One per ROI, All in one, Groups of N (the box beside it), From comment (when a unit's comment "
+        "maps every ROI), Drawn ROIs (each ROI drawn in the ROI tool, exactly its pixels)",
     ),
     (
         "another scan",

@@ -18,6 +18,7 @@ pytest.importorskip("vnoiser")
 from mbo_utilities.vnoiser.params import VnoiserSettings  # noqa: E402
 from mbo_utilities.vnoiser.pipeline import (  # noqa: E402
     DOMAINS_FILE,
+    comment_groups,
     default_pf_dir,
     read_domains,
     run_vnoiser_pipeline,
@@ -993,6 +994,68 @@ def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     assert widget._scans == {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": False}
     assert widget._first_env == {"MSession_0/MUnit_3": True}
     assert [(r.name, r.rois) for r in widget._domains] == [("a", [0])]
+
+
+def test_preview_names_the_domain_it_read(tmp_path):
+    from mbo_utilities.vnoiser.pipeline import preview_domain
+
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc)
+    found = preview_domain(mesc, "MUnit_1", {"soma": [0, 2], "api": [1]}, "soma")
+    assert found["name"] == "soma" and found["rois"] == [0, 2]
+
+
+def test_comment_groups_reads_the_rigs_maps_and_refuses_broken_ones():
+    assert comment_groups("soma,bas1,api1,each2lines", 6) == {
+        "soma": [0, 1],
+        "bas1": [2, 3],
+        "api1": [4, 5],
+    }
+    assert comment_groups("20:ROI0,13,14:soma,1-12:bg,15-17:bas1;fam", 18) == {
+        "soma": [0, 13, 14],
+        "bg": list(range(1, 13)),
+        "bas1": [15, 16, 17],
+    }
+    assert comment_groups("ROI0-2:soma,3-5:api5(otherCell)6-8:bg;fam", 9) == {
+        "soma": [0, 1, 2],
+        "api5": [3, 4, 5],
+        "bg": [6, 7, 8],
+    }
+    assert comment_groups("ROI0-2:soma,3-5:api1,151620:api4", 9) is None
+    assert comment_groups("ROI01:soma,23:bas1", 4) is None
+    assert comment_groups("ROI0-3:soma,3-5:bas1", 6) is None
+    assert comment_groups("soma,bas1,each2lines", 6) is None
+    for free in ("", None, "rew switch", "ROIsame;nov1", "fam;rew1500", "soma,bas1"):
+        assert comment_groups(free, 2) is None
+
+
+def test_from_comment_finds_the_map_on_an_earlier_scan_of_the_layout():
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
+
+    widget = VnoiserPipelineWidget(SimpleNamespace())
+    widget._units = [
+        {"key": "S/MUnit_1", "nrois": 4, "comment": "a,b,each2lines"},
+        {"key": "S/MUnit_2", "nrois": 4, "comment": "rew2400"},
+        {"key": "S/MUnit_3", "nrois": 6, "comment": ""},
+    ]
+    widget._scans = {"S/MUnit_2": True}
+    assert widget._comment_map() == ("MUnit_1", {"a": [0, 1], "b": [2, 3]})
+    widget._scans = {"S/MUnit_3": True}
+    assert widget._comment_map() is None
+
+
+def test_groups_of_n_keep_the_leftover_rois():
+    pytest.importorskip("imgui_bundle")
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import groups_of
+
+    assert [(r.name, r.rois) for r in groups_of(5, 2)] == [
+        ("domain1", [0, 1]),
+        ("domain2", [2, 3]),
+        ("domain3", [4]),
+    ]
 
 
 def test_widget_saves_and_loads_its_domains_file(tmp_path):

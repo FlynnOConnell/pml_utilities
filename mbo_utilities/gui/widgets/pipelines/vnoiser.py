@@ -251,10 +251,17 @@ class DomainRow:
         return cls(d.name, list(d.rois), d.pixels, d.fraction, d.mask, run)
 
 
-def one_per_roi(n_rois: int, names=None) -> list[DomainRow]:
-    """``roi0: [0]``, ``roi1: [1]``, ... (or ``names`` when it has one per ROI)."""
-    names = names if names and len(names) == n_rois else None
-    return [DomainRow(names[i] if names else f"roi{i}", [i]) for i in range(n_rois)]
+def one_per_roi(n_rois: int) -> list[DomainRow]:
+    """``roi0: [0]``, ``roi1: [1]``, ..."""
+    return [DomainRow(f"roi{i}", [i]) for i in range(n_rois)]
+
+
+def groups_of(n_rois: int, size: int) -> list[DomainRow]:
+    """``domain1: [0, 1, 2]``, ``domain2: [3, 4, 5]``, ...; the last takes what is left."""
+    return [
+        DomainRow(f"domain{i + 1}", list(range(lo, min(lo + size, n_rois))))
+        for i, lo in enumerate(range(0, n_rois, size))
+    ]
 
 
 class TracePreview:
@@ -896,13 +903,21 @@ class VnoiserPipelineWidget(PipelineWidget):
         if imgui.small_button("All##vnoiser_scans_all"):
             self._scans = {u["key"]: True for u in self._units}
 
-    def _comment_names(self) -> list[str] | None:
-        from mbo_utilities.vnoiser.pipeline import comment_names
+    def _comment_map(self) -> tuple[str, dict[str, list[int]]] | None:
+        """``(unit, {name: rois})`` from the nearest comment at or before the first ticked scan; the rig writes a map once per layout, so the search stops at another ROI count."""
+        from mbo_utilities.vnoiser.pipeline import comment_groups
 
-        ticked = [u for u in self._units if self._scans.get(u["key"])]
+        ticked = [i for i, u in enumerate(self._units) if self._scans.get(u["key"])]
         if not ticked:
             return None
-        return comment_names(ticked[0].get("comment"), int(ticked[0]["nrois"]))
+        n_rois = int(self._units[ticked[0]]["nrois"])
+        for u in reversed(self._units[: ticked[0] + 1]):
+            if int(u["nrois"]) != n_rois:
+                return None
+            groups = comment_groups(u.get("comment"), n_rois)
+            if groups:
+                return u["key"].rsplit("/", 1)[-1], groups
+        return None
 
     def drawn_domains(self) -> list[DomainRow]:
         """The ROI tool's ROIs on the recording on screen as one mask domain each, named by note or ``drawn<uid>``; [] without the tool or with another recording on screen."""
@@ -981,7 +996,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         """Buttons that rebuild the table, wrapping to new lines when the panel is narrow."""
         right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
         if imgui.small_button("One per ROI##vnoiser_dom_each"):
-            self._domains = one_per_roi(n_rois, self._comment_names())
+            self._domains = one_per_roi(n_rois)
             self._selected = 0
         set_tooltip("Every ROI its own domain, every pixel.", show_mark=False)
         self._inline("All in one", right)
@@ -989,31 +1004,35 @@ class VnoiserPipelineWidget(PipelineWidget):
             self._domains = [DomainRow("all", list(range(n_rois)))]
             self._selected = 0
         set_tooltip("One domain of every ROI.", show_mark=False)
-        self._inline("Groups of 00", right)
-        if imgui.small_button(f"Groups of {self._group_n}##vnoiser_dom_groups"):
-            k = max(1, int(self._group_n))
-            self._domains = [
-                DomainRow(f"domain{i + 1}", list(range(lo, min(lo + k, n_rois))))
-                for i, lo in enumerate(range(0, n_rois, k))
-            ]
+        self._inline("Groups of 0000000", right)
+        if imgui.small_button("Groups of##vnoiser_dom_groups"):
+            self._domains = groups_of(n_rois, self._group_n)
             self._selected = 0
         set_tooltip(
-            "Consecutive ROIs in groups (the archive's three lines per soma or branch). "
-            "Right-click to change the size.",
+            "Rebuild the table from consecutive ROIs, this many to a group (the archive's "
+            "three lines per soma or branch).",
             show_mark=False,
         )
-        if imgui.begin_popup_context_item("##vnoiser_dom_groups_ctx"):
-            imgui.set_next_item_width(hello_imgui.em_size(6))
-            _, self._group_n = imgui.input_int("ROIs per group", int(self._group_n))
-            self._group_n = max(1, self._group_n)
-            imgui.end_popup()
-        names = self._comment_names()
-        if names:
+        imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
+        imgui.set_next_item_width(hello_imgui.em_size(5))
+        _, self._group_n = imgui.input_int("##vnoiser_dom_group_n", self._group_n)
+        self._group_n = max(1, self._group_n)
+        mapped = self._comment_map()
+        if mapped:
+            unit, groups = mapped
             self._inline("From comment", right)
             if imgui.small_button("From comment##vnoiser_dom_comment"):
-                self._domains = one_per_roi(n_rois, names)
+                # the pipeline gives bg no trace of its own; it stays a background
+                self._domains = [
+                    DomainRow(name, rois, run=name != "bg")
+                    for name, rois in groups.items()
+                ]
                 self._selected = 0
-            set_tooltip(f"One per ROI, named {', '.join(names)}.", show_mark=False)
+            set_tooltip(
+                f"The groups in {unit}'s comment: "
+                + ", ".join(f"{name} {rois}" for name, rois in groups.items()),
+                show_mark=False,
+            )
         drawn = self.drawn_domains()
         self._inline("Drawn ROIs (00)", right)
         if not drawn:
@@ -1098,6 +1117,15 @@ class VnoiserPipelineWidget(PipelineWidget):
         )
         _, n_rois, _ = self._dims()
         self._draw_domain_presets(n_rois)
+        counts = {int(u["nrois"]) for u in self._units if self._scans.get(u["key"])}
+        if len(counts) > 1:
+            imgui.push_style_color(imgui.Col_.text, _MODIFIED_COLOR)
+            imgui.text_wrapped(
+                f"The ticked scans have {min(counts)} to {max(counts)} ROIs. This table "
+                f"applies to all of them, up to ROI {n_rois - 1}, and an ROI number may "
+                "not be the same line in each. Run each layout on its own."
+            )
+            imgui.pop_style_color()
         flags = (
             imgui.TableFlags_.row_bg
             | imgui.TableFlags_.borders_inner_h
@@ -1537,7 +1565,16 @@ class VnoiserPipelineWidget(PipelineWidget):
         # a slider being dragged waits for its release before the next read
         if not imgui.is_any_item_active():
             self._request_preview()
-        imgui.text(f"{row.name} on {unit['key'].rsplit('/', 1)[-1]}")
+        imgui.set_next_item_width(hello_imgui.em_size(9))
+        _, self._selected = imgui.combo(
+            "##vnoiser_preview_domain",
+            min(self._selected, len(self._domains) - 1),
+            [r.name for r in self._domains],
+        )
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("The domain the preview reads; its ROIs are averaged.")
+        imgui.same_line()
+        imgui.text(f"on {unit['key'].rsplit('/', 1)[-1]}")
         imgui.same_line()
         lengths = [f"{s:g} s" if s else "whole" for s in PREVIEW_SECONDS]
         current = (
@@ -1592,10 +1629,12 @@ class VnoiserPipelineWidget(PipelineWidget):
             changed, index = imgui.combo(
                 "##vnoiser_preview_roi",
                 rois.index(roi),
-                [f"ROI {r}" for r in rois],
+                [f"{result['name']}: ROI {r}" for r in rois],
             )
             if changed:
                 self._preview_roi = index
+        else:
+            imgui.text(f"{result['name']}: ROI {roi}")
         height = side * min(4.0, max(0.25, h / max(w, 1)))
         with plot_style():
             flags = (
@@ -1643,7 +1682,8 @@ class VnoiserPipelineWidget(PipelineWidget):
         imgui.end_group()
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                f"ROI {roi}'s mean image ({h} x {w}); the red pixels are the domain's."
+                f"ROI {roi}'s mean image ({h} x {w}); the red pixels are {result['name']}'s. "
+                "The traces average every ROI of the domain."
             )
 
     def _draw_preview_traces(self, result: dict) -> None:
