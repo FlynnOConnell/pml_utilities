@@ -103,13 +103,8 @@ _IMPORTANT_FIELDS = {
 DOMAINS_FILE = "domains.json"
 SCAN_LABELS = ("New env", "Reward switch")  # what an experiment starts with
 SCAN_COLUMN_HELP = {
-    "New block": "Tick the first scan after a condition changed (another environment, a "
-    "reward switch). A run's first scan always starts a block.\n\nThe pipeline does not "
-    "use it; it is written to the output (scanID_1st_env) in order. Analysis cuts scans "
-    "into blocks at this list by position, so a tick added or removed renumbers later "
-    "blocks.",
-    "Change": "What changed at this block's first scan; a scan can carry several. Labels "
-    "below sets the words for this experiment. Unticking New block clears them.",
+    "New block": "the first scan after a condition changed; a run's first scan always is one",
+    "Change": "what changed at this block's first scan; Labels below sets the words",
 }
 MAX_ROI_TOGGLES = 48  # one toggle per ROI up to this many; more take a typed list
 PREVIEW_SECONDS = (5.0, 15.0, 30.0, 60.0, 0.0)
@@ -178,7 +173,7 @@ REFERENCE_HELP = (
     "hemodynamic artifacts."
 )
 BASELINE_LABELS = {
-    "gaussian": "Gaussian (archive)",
+    "gaussian": "Gaussian",
     "percentile": "rolling percentile",
     "maxmin": "rolling max-min",
     "exponential": "bleaching fit",
@@ -955,9 +950,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         imgui.align_text_to_frame_padding()
         imgui.text("Labels")
         set_tooltip(
-            "What can change at a scan, for the Change column: this experiment's own "
-            "words. A scan can carry several. Saved with the run and in "
-            f"{DOMAINS_FILE}, and written to the exported tables.",
+            "this experiment's words for the Change column; Enter adds one",
             show_mark=False,
         )
         for i, label in enumerate(self._labels):
@@ -1123,8 +1116,7 @@ class VnoiserPipelineWidget(PipelineWidget):
             self._domains = groups_of(n_rois, self._group_n)
             self._selected = 0
         set_tooltip(
-            "Rebuild the table from consecutive ROIs, this many to a group (the archive's "
-            "three lines per soma or branch).",
+            "Consecutive ROIs, this many to a group (the box beside it).",
             show_mark=False,
         )
         imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
@@ -1554,7 +1546,7 @@ class VnoiserPipelineWidget(PipelineWidget):
             self._f_combo(
                 dfof,
                 "noise",
-                {"sd": "/ SD (archive)", "mad": "/ robust SD (MAD)"},
+                {"sd": "/ SD", "mad": "/ robust SD (MAD)"},
                 "What the z-score divides by: the SD of dF/F, or 1.4826 x the median "
                 "absolute deviation, which spikes do not inflate.",
                 hello_imgui.em_size(10),

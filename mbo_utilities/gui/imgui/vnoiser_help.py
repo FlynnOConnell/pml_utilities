@@ -197,7 +197,7 @@ WINDOW = (
             "the scan on screen is ticked to start",
             "On screen only and All set the ticks",
             "New block: the first scan after a condition changed; later analysis cuts scans into blocks "
-            "here, the pipeline does not use it",
+            "here",
             "Change: names what changed at a block's first scan (New env, Reward switch, or your own words "
             "under Labels)",
         ),
