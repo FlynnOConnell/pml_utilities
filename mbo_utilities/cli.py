@@ -2183,6 +2183,8 @@ def vnoiser(
             "domains": {f"roi{r}": [r] for r in range(n_rois)},
             "scan_ids": [],
             "first_env": [],
+            "labels": [],
+            "scan_labels": {},
         }
         click.echo(
             f"no {DOMAINS_FILE}: one domain per ROI ({n_rois}); --init writes one to edit"
@@ -2271,7 +2273,11 @@ def vnoiser(
             settings=settings,
             overwrite=overwrite,
             logger=logger,
-            provenance={"settings": settings.to_dict()},
+            provenance={
+                "settings": settings.to_dict(),
+                "labels": spec["labels"],
+                "scan_labels": spec["scan_labels"],
+            },
         )
     except (ValueError, KeyError, FileExistsError) as e:
         click.echo(f"error: {e}", err=True)

@@ -502,6 +502,7 @@ class Results:
             }
         scan_ids = [str(s) for s in rois.get("scanID_spatial", list(traces))]
         first_env = {str(s) for s in rois.get("scanID_1st_env", [])}
+        scan_labels = provenance.get("scan_labels") or {}
         roi_list = {
             str(s): [int(r) for r in v] for s, v in (rois.get("roi_list") or {}).items()
         }
@@ -529,7 +530,9 @@ class Results:
             str(k): float(v) for k, v in (provenance.get("fs_hz") or {}).items()
         }
         units = []
+        block = -1
         for scan in scan_ids:
+            block += scan in first_env
             if traces:
                 rows = [d for d in names if d in traces.get(scan, {})]
                 kinds = {
@@ -575,6 +578,8 @@ class Results:
                         "scan_id": scan,
                         "source_unit": source_units.get(scan) or f"MUnit_{scan}",
                         "first_env": scan in first_env,
+                        "block": max(block, 0),
+                        "labels": list(scan_labels.get(scan, [])),
                         "member_ids": roi_list.get(scan, []),
                     },
                 )

@@ -1097,6 +1097,8 @@ def task_vnoiser(args: dict, logger: logging.Logger) -> None:
             provenance={
                 "settings": settings.to_dict(),
                 "source_metadata": strip_for_export(metadata),
+                "labels": args.get("labels") or [],
+                "scan_labels": args.get("scan_labels") or {},
             },
             progress_callback=monitor.update,
             logger=logger,

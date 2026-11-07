@@ -196,8 +196,10 @@ WINDOW = (
         (
             "the scan on screen is ticked to start",
             "On screen only and All set the ticks",
-            "New environment: the first scan after the animal changed arena or track; a note for later "
-            "analysis, the pipeline does not use it",
+            "New block: the first scan after a condition changed; later analysis cuts scans into blocks "
+            "here, the pipeline does not use it",
+            "Change: names what changed at a block's first scan (New env, Reward switch, or your own words "
+            "under Labels)",
         ),
     ),
     (
@@ -273,7 +275,7 @@ DOMAIN_RULES = (
     ("Add, x", "a new row; remove a row"),
     (
         "Load, Save",
-        "domains.json beside the file: the domains, the ticked scans and the new-environment ticks; "
+        "domains.json beside the file: the domains, the ticked scans, the block ticks and labels; "
         "mbo vnoiser reads the same file",
     ),
 )

@@ -320,14 +320,16 @@ def scan_traces_from_mesc(
 
 
 def read_domains(path) -> dict:
-    """``{"domains", "scan_ids", "first_env"}`` from a ``domains.json`` or an
-    archive ``scanIDs_ROIs.pkl``.
+    """``{"domains", "scan_ids", "first_env", "labels", "scan_labels"}`` from a
+    ``domains.json`` or an archive ``scanIDs_ROIs.pkl``.
 
     The JSON holds ``{"domains": {"soma1": [0, 1, 2], "cell": {"rois": [3],
     "pixels": "correlated", "fraction": 0.3}, ...}, "scans": ["35", "38"],
-    "first_env": ["35"]}``: a domain is an ROI list (every pixel of those
-    ROIs) or a :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json`
-    entry; ``scans`` and ``first_env`` are optional. ``domains`` comes back
+    "first_env": ["35"], "labels": ["New env"], "scan_labels": {"38":
+    ["New env"]}}``: a domain is an ROI list (every pixel of those ROIs) or a
+    :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json` entry;
+    everything but ``domains`` is optional. ``labels`` is the experiment's
+    list and ``scan_labels`` what changed at a scan. ``domains`` comes back
     as given, checked.
     """
     path = Path(path)
@@ -337,6 +339,8 @@ def read_domains(path) -> dict:
             "domains": rois["domains"],
             "scan_ids": rois["scan_ids"],
             "first_env": rois["first_env"],
+            "labels": [],
+            "scan_labels": {},
         }
     doc = json.loads(path.read_text())
     found = domains_from_json(doc.get("domains") or {})
@@ -346,6 +350,11 @@ def read_domains(path) -> dict:
         "domains": {d.name: d.to_json() for d in found},
         "scan_ids": [str(s) for s in doc.get("scans", [])],
         "first_env": [str(s) for s in doc.get("first_env", [])],
+        "labels": [str(label) for label in doc.get("labels", [])],
+        "scan_labels": {
+            str(s): [str(label) for label in picked]
+            for s, picked in doc.get("scan_labels", {}).items()
+        },
     }
 
 
@@ -404,7 +413,8 @@ def write_domains_template(
         "note": "domains: name -> ROI indices (0-based, the order the lines or patches were drawn), "
         'or {"rois": [...], "pixels": "all|bright|active|correlated|mask", "fraction": 0.3, '
         '"mask": {"<roi>": [flat pixel indices]}}; scans: MUnit numbers in order; '
-        "first_env: the first scan of each environment",
+        "first_env: the first scan of each block, a change of condition, in order; "
+        'scan_labels: what changed there, {"<scan>": ["Reward switch"]}',
     }
     path.write_text(json.dumps(doc, indent=2))
     return path

@@ -67,7 +67,20 @@ def test_read_domains_json(tmp_path):
         "domains": {"soma1": [0, 1], "apical1": [2]},
         "scan_ids": ["35", "38"],
         "first_env": [],
+        "labels": [],
+        "scan_labels": {},
     }
+    path.write_text(
+        json.dumps(
+            {
+                "domains": {"soma1": [0]},
+                "labels": ["Odor on"],
+                "scan_labels": {35: ["Odor on"]},
+            }
+        )
+    )
+    spec = read_domains(path)
+    assert spec["labels"] == ["Odor on"] and spec["scan_labels"] == {"35": ["Odor on"]}
     path.write_text(json.dumps({"domains": {}}))
     with pytest.raises(ValueError):
         read_domains(path)
@@ -457,7 +470,11 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
         units=["MUnit_1"],
         first_env=["1"],
         settings=settings,
-        provenance={"settings": settings.to_dict()},
+        provenance={
+            "settings": settings.to_dict(),
+            "labels": ["New env"],
+            "scan_labels": {"1": ["New env"]},
+        },
     )
     zarr_path = newest_results(tmp_path, "vnoiser")
     zarr_name = zarr_path.name
@@ -493,6 +510,8 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     assert (
         scan.attrs["source_unit"] == "MSession_0/MUnit_1"
         and scan.attrs["first_env"] is True
+        and scan.attrs["block"] == 0
+        and scan.attrs["labels"] == ["New env"]
     )
     np.testing.assert_allclose(
         scan.traces["denoised"], np.load(traces / "scan1_denoised.npy"), rtol=1e-6
@@ -913,6 +932,8 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
                 "domains": {"All_domains": [0, 1, 2], "soma": [0, 1], "basal": [2]},
                 "scan_ids": ["3"],
                 "first_env": ["3"],
+                "labels": ["Odor on"],
+                "scan_labels": {"3": ["Odor on", "Reward switch"]},
                 "settings": {
                     "runtime": {"output_format": "zarr", "reference_fs": 1000.0}
                 },
@@ -932,6 +953,8 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
     ]
     assert widget._scans == {"MSession_0/MUnit_3": True}
     assert widget._first_env == {"MSession_0/MUnit_3": True}
+    assert widget._labels == ["Odor on", "Reward switch"]
+    assert widget._scan_labels == {"MSession_0/MUnit_3": ["Odor on", "Reward switch"]}
     assert widget.settings.runtime.reference_fs == 1000.0
     assert widget._outdir == str(tmp_path)
 
@@ -939,6 +962,7 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
 def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     """The Scans table ticks only the unit on screen, even over a previous
     run's scans, and moves the tick when another unit of the file is shown.
+    Block ticks stay: they mark the experiment, not what is on screen.
     """
     pytest.importorskip("imgui_bundle")
     from types import SimpleNamespace
@@ -986,14 +1010,74 @@ def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     widget = VnoiserPipelineWidget(parent)
     widget._ensure_state()
     assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}
-    assert widget._first_env == {"MSession_0/MUnit_5": True}
+    blocks = {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": False}
+    assert widget._first_env == blocks
     assert [(r.name, r.rois) for r in widget._domains] == [("a", [0])]
 
     parent.image_widget.data = [SimpleNamespace(unit_key="MSession_0/MUnit_3")]
     widget._ensure_state()
     assert widget._scans == {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": False}
-    assert widget._first_env == {"MSession_0/MUnit_3": True}
+    assert widget._first_env == blocks
     assert [(r.name, r.rois) for r in widget._domains] == [("a", [0])]
+
+
+def test_a_runs_first_scan_always_starts_a_block():
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
+
+    widget = VnoiserPipelineWidget(SimpleNamespace())
+    widget._first_env = {"S/MUnit_32": True, "S/MUnit_38": True}
+    scans = ["S/MUnit_28", "S/MUnit_30", "S/MUnit_32", "S/MUnit_38"]
+    assert widget._block_args(scans)["first_env"] == ["28", "32", "38"]
+    assert widget._block_args(scans[1:2])["first_env"] == ["30"]
+
+
+def test_a_scan_label_ticks_the_block_and_the_list_is_the_experiments(monkeypatch):
+    """A label names what changed at a block start, so picking one ticks it;
+    removing a label from the list takes it off its scans.
+    """
+    imgui = pytest.importorskip("imgui_bundle").imgui
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
+
+    widget = VnoiserPipelineWidget(SimpleNamespace())
+    key = "S/MUnit_38"
+    widget._scans = {key: True}
+    clicks = []
+    press = imgui.small_button
+    monkeypatch.setattr(
+        imgui,
+        "small_button",
+        lambda label: press(label) or label.split("##")[0] in clicks,
+    )
+    context = imgui.create_context()
+    io = imgui.get_io()
+    io.display_size = imgui.ImVec2(800, 600)
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+    try:
+        imgui.new_frame()
+        imgui.begin("tab")
+        clicks[:] = ["Reward switch"]
+        widget._draw_scan_labels(key)
+        assert widget._scan_labels == {key: ["Reward switch"]}
+        assert widget._first_env == {key: True}
+        clicks[:] = ["New env"]
+        widget._draw_scan_labels(key)
+        assert widget._scan_labels == {key: ["New env", "Reward switch"]}
+        clicks[:] = ["Reward switch x"]
+        widget._draw_label_list()
+        assert widget._labels == ["New env"]
+        assert widget._scan_labels == {key: ["New env"]}
+        clicks[:] = ["New env x"]
+        widget._draw_label_list()
+        assert widget._labels == [] and widget._scan_labels == {}
+        imgui.end()
+        imgui.end_frame()
+    finally:
+        imgui.destroy_context(context)
 
 
 def test_preview_names_the_domain_it_read(tmp_path):
@@ -1083,12 +1167,16 @@ def test_widget_saves_and_loads_its_domains_file(tmp_path):
     ]
     widget._scans = {first: True, second: True}
     widget._first_env = {first: True, second: True}
+    widget._labels = ["Odor on"]
+    widget._scan_labels = {second: ["Odor on"]}
     widget._save_domains_file()
     spec = read_domains(tmp_path / DOMAINS_FILE)
     assert spec["scan_ids"] == ["1", "2"] and spec["first_env"] == ["1", "2"]
     assert spec["domains"]["soma"] == [0, 2]
+    assert spec["labels"] == ["Odor on"] and spec["scan_labels"] == {"2": ["Odor on"]}
 
     widget._domains, widget._scans, widget._first_env = [], {first: True}, {}
+    widget._labels, widget._scan_labels = [], {}
     widget._load_domains_file()
     assert [(r.name, r.rois, r.pixels) for r in widget._domains] == [
         ("soma", [0, 2], "all"),
@@ -1096,6 +1184,8 @@ def test_widget_saves_and_loads_its_domains_file(tmp_path):
     ]
     assert widget._scans == {first: True, second: True}
     assert widget._first_env == {first: True, second: True}
+    assert widget._labels == ["Odor on"]
+    assert widget._scan_labels == {second: ["Odor on"]}
 
     (tmp_path / DOMAINS_FILE).write_text("{")
     widget._load_domains_file()

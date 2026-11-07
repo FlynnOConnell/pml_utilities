@@ -48,7 +48,7 @@ def _write_run(folder, dff, polarity="flip_z"):
         },
         member_kind="line",
         members=[np.array([0])],
-        attrs={"scan_id": 10},
+        attrs={"scan_id": 10, "block": 1, "labels": ["New env", "Reward switch"]},
     )
     path = folder / "expt1.2026-11-03-12-00-00.vnoiser.zarr"
     Results(
@@ -248,6 +248,8 @@ class TestSession:
         assert paths == [run_path / ".curation" / name for name in TABLE_FILES.values()]
         recordings, slow, fast = (list(csv.DictReader(p.open())) for p in paths)
         assert [r["recording_id"] for r in recordings] == [RID]
+        assert recordings[0]["block"] == "1"
+        assert recordings[0]["scan_labels"] == "New env;Reward switch"
         assert recordings[0]["excluded"] == "False" and int(recordings[0]["yes"]) == 1
         assert int(recordings[0]["dprime_n"]) == session.n
         assert len(slow) == session.events.n_slow and len(fast) == session.n
