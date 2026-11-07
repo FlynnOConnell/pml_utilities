@@ -530,7 +530,7 @@ class Results:
             str(k): float(v) for k, v in (provenance.get("fs_hz") or {}).items()
         }
         units = []
-        block = -1
+        block = -1 if scan_ids and scan_ids[0] in first_env else 0
         for scan in scan_ids:
             block += scan in first_env
             if traces:
@@ -578,7 +578,7 @@ class Results:
                         "scan_id": scan,
                         "source_unit": source_units.get(scan) or f"MUnit_{scan}",
                         "first_env": scan in first_env,
-                        "block": max(block, 0),
+                        "block": block,
                         "labels": list(scan_labels.get(scan, [])),
                         "member_ids": roi_list.get(scan, []),
                     },

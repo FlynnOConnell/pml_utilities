@@ -65,9 +65,10 @@ def test_read_domains_json(tmp_path):
     spec = read_domains(path)
     assert spec == {
         "domains": {"soma1": [0, 1], "apical1": [2]},
+        "run": None,
         "scan_ids": ["35", "38"],
         "first_env": [],
-        "labels": [],
+        "labels": None,
         "scan_labels": {},
     }
     path.write_text(
@@ -257,13 +258,14 @@ def test_chessboard_patches_run_as_scans(tmp_path):
         mesc,
         domains=doc["domains"],
         units=["MUnit_1"],
-        first_env=["1"],
         out=tmp_path / "PF",
         settings=pkl_settings(),
     )
     assert "denoised_trace_scans.pkl" in paths and "detected_events_peaks.pkl" in paths
     files = read_pf(tmp_path / "PF")
     assert files.scan_ids == ["1"] and set(files.domains) >= {"roi0", "roi1", "roi2"}
+    # no block ticks given: the first scan still starts a block
+    assert files.rois["scanID_1st_env"] == ["1"]
     prov = files.provenance
     assert prov["source"]["units"] == {"1": "MSession_0/MUnit_1"}
     assert prov["fs_hz"]["1"] == pytest.approx(200.0)
@@ -1032,6 +1034,9 @@ def test_a_runs_first_scan_always_starts_a_block():
     scans = ["S/MUnit_28", "S/MUnit_30", "S/MUnit_32", "S/MUnit_38"]
     assert widget._block_args(scans)["first_env"] == ["28", "32", "38"]
     assert widget._block_args(scans[1:2])["first_env"] == ["30"]
+    # a label on a scan that starts no block is not written
+    widget._scan_labels = {"S/MUnit_30": ["New env"], "S/MUnit_32": ["Reward switch"]}
+    assert widget._block_args(scans)["scan_labels"] == {"32": ["Reward switch"]}
 
 
 def test_a_scan_label_ticks_the_block_and_the_list_is_the_experiments(monkeypatch):
@@ -1095,6 +1100,12 @@ def test_comment_groups_reads_the_rigs_maps_and_refuses_broken_ones():
         "bas1": [2, 3],
         "api1": [4, 5],
     }
+    # text before the names is not part of the first one
+    for prefixed in (
+        "20:soma,bas1,api1,each2lines",
+        "fam\nsoma, bas1, api1, each2lines",
+    ):
+        assert list(comment_groups(prefixed, 6)) == ["soma", "bas1", "api1"]
     assert comment_groups("20:ROI0,13,14:soma,1-12:bg,15-17:bas1;fam", 18) == {
         "soma": [0, 13, 14],
         "bg": list(range(1, 13)),
@@ -1163,7 +1174,7 @@ def test_widget_saves_and_loads_its_domains_file(tmp_path):
     first, second = (u["key"] for u in widget._units)
     widget._domains = [
         DomainRow("soma", [0, 2]),
-        DomainRow("cell", [1], "correlated", 0.2),
+        DomainRow("cell", [1], "correlated", 0.2, run=False),
     ]
     widget._scans = {first: True, second: True}
     widget._first_env = {first: True, second: True}
@@ -1172,20 +1183,25 @@ def test_widget_saves_and_loads_its_domains_file(tmp_path):
     widget._save_domains_file()
     spec = read_domains(tmp_path / DOMAINS_FILE)
     assert spec["scan_ids"] == ["1", "2"] and spec["first_env"] == ["1", "2"]
-    assert spec["domains"]["soma"] == [0, 2]
+    assert spec["domains"]["soma"] == [0, 2] and spec["run"] == ["soma"]
     assert spec["labels"] == ["Odor on"] and spec["scan_labels"] == {"2": ["Odor on"]}
 
     widget._domains, widget._scans, widget._first_env = [], {first: True}, {}
     widget._labels, widget._scan_labels = [], {}
     widget._load_domains_file()
-    assert [(r.name, r.rois, r.pixels) for r in widget._domains] == [
-        ("soma", [0, 2], "all"),
-        ("cell", [1], "correlated"),
+    assert [(r.name, r.rois, r.pixels, r.run) for r in widget._domains] == [
+        ("soma", [0, 2], "all", True),
+        ("cell", [1], "correlated", False),
     ]
     assert widget._scans == {first: True, second: True}
     assert widget._first_env == {first: True, second: True}
     assert widget._labels == ["Odor on"]
     assert widget._scan_labels == {second: ["Odor on"]}
+    # an emptied label list stays empty
+    widget._labels, widget._scan_labels = [], {}
+    widget._save_domains_file()
+    widget._load_domains_file()
+    assert widget._labels == []
 
     (tmp_path / DOMAINS_FILE).write_text("{")
     widget._load_domains_file()

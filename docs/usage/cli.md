@@ -392,8 +392,9 @@ mbo curate X:/data/asako/stan112/stan112_expt12             # then curate it
 ```
 
 `domains.json` names the domains and their 0-based ROI indices (lines or
-patches, in drawing order), the scans in order, the first scan of each
-block and, optionally, what changed there (`"scan_labels": {"38": ["Reward
+patches, in drawing order), optionally the domains to run (`"run"`; all
+when absent), the scans in order, the first scan of each block and,
+optionally, what changed there (`"scan_labels": {"38": ["Reward
 switch"]}`). `--init` writes one domain per ROI (`roi0: [0]`, ...); merge
 the lines of a soma or branch by hand, as the archive's layout below does:
 

@@ -86,7 +86,7 @@ DOMAINS_FILE = "domains.json"
 TRACES_DIR = "traces"
 TIMINGS_FILE = "timings.json"
 _ROI_MAP = re.compile(r"((?:\d+(?:-\d+)?,)*\d+(?:-\d+)?):([A-Za-z_]\w*)")
-_EACH_LINES = re.compile(r"([^;]+),\s*each(\d+)lines?", re.IGNORECASE)
+_EACH_LINES = re.compile(r"((?:[A-Za-z_]\w*,\s*)+)each(\d+)lines?", re.IGNORECASE)
 
 
 def _munit_number(unit_key: str) -> str:
@@ -320,16 +320,17 @@ def scan_traces_from_mesc(
 
 
 def read_domains(path) -> dict:
-    """``{"domains", "scan_ids", "first_env", "labels", "scan_labels"}`` from a
-    ``domains.json`` or an archive ``scanIDs_ROIs.pkl``.
+    """``{"domains", "run", "scan_ids", "first_env", "labels", "scan_labels"}``
+    from a ``domains.json`` or an archive ``scanIDs_ROIs.pkl``.
 
     The JSON holds ``{"domains": {"soma1": [0, 1, 2], "cell": {"rois": [3],
     "pixels": "correlated", "fraction": 0.3}, ...}, "scans": ["35", "38"],
     "first_env": ["35"], "labels": ["New env"], "scan_labels": {"38":
     ["New env"]}}``: a domain is an ROI list (every pixel of those ROIs) or a
     :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json` entry;
-    everything but ``domains`` is optional. ``labels`` is the experiment's
-    list and ``scan_labels`` what changed at a scan. ``domains`` comes back
+    everything but ``domains`` is optional. ``run`` names the domains a run
+    takes (None: all), ``labels`` is the experiment's list (None when not
+    given) and ``scan_labels`` what changed at a scan. ``domains`` comes back
     as given, checked.
     """
     path = Path(path)
@@ -337,9 +338,10 @@ def read_domains(path) -> dict:
         rois = load_scan_rois(path)
         return {
             "domains": rois["domains"],
+            "run": None,
             "scan_ids": rois["scan_ids"],
             "first_env": rois["first_env"],
-            "labels": [],
+            "labels": None,
             "scan_labels": {},
         }
     doc = json.loads(path.read_text())
@@ -348,9 +350,12 @@ def read_domains(path) -> dict:
         raise ValueError(f"{path} defines no domains")
     return {
         "domains": {d.name: d.to_json() for d in found},
+        "run": None if "run" not in doc else [str(n) for n in doc["run"]],
         "scan_ids": [str(s) for s in doc.get("scans", [])],
         "first_env": [str(s) for s in doc.get("first_env", [])],
-        "labels": [str(label) for label in doc.get("labels", [])],
+        "labels": None
+        if "labels" not in doc
+        else [str(label) for label in doc["labels"]],
         "scan_labels": {
             str(s): [str(label) for label in picked]
             for s, picked in doc.get("scan_labels", {}).items()
@@ -376,7 +381,7 @@ def comment_groups(comment: str, n_rois: int) -> dict[str, list[int]] | None:
     each = _EACH_LINES.search(text)
     if each and not groups:
         k = int(each[2])
-        names = [name.strip() for name in each[1].split(",")]
+        names = [name.strip() for name in each[1].split(",")[:-1]]
         groups = {n: list(range(i * k, (i + 1) * k)) for i, n in enumerate(names)}
     named = sorted(r for rois in groups.values() for r in rois)
     return groups if named == list(range(n_rois)) else None
@@ -740,6 +745,9 @@ def run_vnoiser_pipeline(
         info.update(provenance or {})
         processed = {s.scan_id for s in scans}
         first_env = [str(s) for s in first_env if str(s) in processed]
+        # analysis cuts blocks at this list by position, so the first scan always starts one
+        if scans and scans[0].scan_id not in first_env:
+            first_env.insert(0, scans[0].scan_id)
         writer = None
         if denoise:
             writer = PfWriter(

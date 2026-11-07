@@ -139,6 +139,9 @@ def test_a_scans_block_counts_the_ticks_and_old_runs_have_no_labels(tmp_path):
     units = Results.from_pf(write_pf(tmp_path / "old" / "PF")).units
     assert [u.attrs["block"] for u in units.values()] == [0, 0]
     assert [u.attrs["labels"] for u in units.values()] == [[], []]
+    # a list that skips the first scan: the scans before its first entry are block 0
+    units = Results.from_pf(write_pf(tmp_path / "skip" / "PF", first_env=["38"])).units
+    assert [u.attrs["block"] for u in units.values()] == [0, 1]
 
 
 def test_imread_opens_a_pf_folder_as_a_trace_raster(tmp_path):

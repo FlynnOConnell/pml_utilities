@@ -478,7 +478,8 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._seed_slicing()
         arr = self._array()
         run = arr.path if isinstance(arr, ResultsArray) else vnoiser_run_for_mesc(mesc)
-        domains, scan_ids, first_env, labels, scan_labels = {}, [], [], [], {}
+        domains, scan_ids, first_env, labels, scan_labels = {}, [], [], None, {}
+        ticked = None
         if run is not None:
             prov_file = pipeline_files(run) / PROVENANCE_FILE
             try:
@@ -522,6 +523,7 @@ class VnoiserPipelineWidget(PipelineWidget):
                     spec["first_env"],
                 )
                 labels, scan_labels = spec["labels"], spec["scan_labels"]
+                ticked = spec["run"]
                 self._domains_path = str(mesc.parent / DOMAINS_FILE)
             except (OSError, ValueError, KeyError) as e:
                 self._domain_error = f"{DOMAINS_FILE}: {e}"
@@ -533,7 +535,9 @@ class VnoiserPipelineWidget(PipelineWidget):
         rows = []
         for name, value in domains.items():
             try:
-                rows.append(DomainRow.from_entry(name, value))
+                rows.append(
+                    DomainRow.from_entry(name, value, ticked is None or name in ticked)
+                )
             except ValueError as e:
                 self._domain_error = f"{name}: {e}"
         self._domains = rows
@@ -1034,7 +1038,8 @@ class VnoiserPipelineWidget(PipelineWidget):
         """Block ticks and labels by scan id, from a run or a ``domains.json``; a run without them takes the ticks alone."""
         scan_labels = scan_labels or {}
         used = [label for picked in scan_labels.values() for label in picked]
-        self._labels = list(dict.fromkeys([*(labels or SCAN_LABELS), *used]))
+        given = SCAN_LABELS if labels is None else labels
+        self._labels = list(dict.fromkeys([*given, *used]))
         self._scan_labels = {}
         for u in self._units:
             munit = u["key"].rsplit("_", 1)[-1]
@@ -1048,15 +1053,13 @@ class VnoiserPipelineWidget(PipelineWidget):
         A run's first scan always starts a block: analysis cuts blocks at this
         list, and scans before its first entry would belong to none.
         """
-        ids = {k: k.rsplit("_", 1)[-1] for k in scans}
+        starts = [k for i, k in enumerate(scans) if i == 0 or self._first_env.get(k)]
         return {
-            "first_env": [
-                ids[k] for i, k in enumerate(scans) if i == 0 or self._first_env.get(k)
-            ],
+            "first_env": [k.rsplit("_", 1)[-1] for k in starts],
             "labels": list(self._labels),
             "scan_labels": {
-                ids[k]: list(self._scan_labels[k])
-                for k in scans
+                k.rsplit("_", 1)[-1]: list(self._scan_labels[k])
+                for k in starts
                 if self._scan_labels.get(k)
             },
         }
@@ -1068,7 +1071,11 @@ class VnoiserPipelineWidget(PipelineWidget):
         path = self._mesc_path().parent / DOMAINS_FILE
         try:
             spec = read_domains(path)
-            rows = [DomainRow.from_entry(n, v) for n, v in spec["domains"].items()]
+            ticked = spec["run"]
+            rows = [
+                DomainRow.from_entry(n, v, ticked is None or n in ticked)
+                for n, v in spec["domains"].items()
+            ]
         except (OSError, ValueError, KeyError) as e:
             self._set_status(f"{path.name}: {e}", error=True)
             return
@@ -1082,7 +1089,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._set_status(f"Loaded {path.name}")
 
     def _save_domains_file(self) -> None:
-        """Write the table, ticked scans and block ticks to ``domains.json`` beside the file."""
+        """Write the table, its run ticks, ticked scans and block ticks to ``domains.json`` beside the file."""
         rows = self._check_domains()
         if not rows:
             return
@@ -1094,6 +1101,7 @@ class VnoiserPipelineWidget(PipelineWidget):
             "scans": [k.rsplit("_", 1)[-1] for k in scans],
             **self._block_args(scans),
             "domains": {r.name.strip(): r.entry() for r in rows},
+            "run": [r.name.strip() for r in rows if r.run],
         }
         path.write_text(json.dumps(doc, indent=2))
         self._domains_path = str(path)
