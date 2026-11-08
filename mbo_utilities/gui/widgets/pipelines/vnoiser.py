@@ -62,7 +62,6 @@ from mbo_utilities.gui.imgui.lines import (
 from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.gui.imgui.vnoiser_help import (
     KEYBINDS,
-    TOOLTIP,
     draw_vnoiser_help,
 )
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
@@ -678,7 +677,6 @@ class VnoiserPipelineWidget(PipelineWidget):
                 f"{fa.ICON_FA_CIRCLE_QUESTION} vnoiser guide##vnoiser_help"
             ):
                 self._help_open = not self._help_open
-            set_tooltip(TOOLTIP, show_mark=False)
             self._draw_dataset_block()
             imgui.separator()
             self._draw_output_row()

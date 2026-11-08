@@ -60,10 +60,6 @@ WIDTH_EM = 44
 WINDOW_SIZE = (760, 1000)
 
 TITLE = "vnoiser"
-TOOLTIP = (
-    "the steps, what each stage does to a trace, the vnoiser window and its domains, the curation "
-    "window and its rules, the files, the keybinds"
-)
 # the curation window's keys; its handler and its popup read this table
 KEYBINDS = (
     ("y", "label the focused candidate yes"),
@@ -1009,8 +1005,6 @@ def draw_window(state: dict) -> None:
     imgui.same_line(0, 12)
     if imgui.small_button(f"{fa.ICON_FA_CIRCLE_QUESTION} vnoiser guide"):
         state["open"] = True
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(TOOLTIP)
     state["open"], state["keys"] = draw_vnoiser_help(state["open"], state["keys"])
     state["keys"] = draw_keybinds_popup(KEYBINDS, state["keys"], "Curation keybinds")
 
