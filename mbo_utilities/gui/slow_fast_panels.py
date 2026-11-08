@@ -79,7 +79,7 @@ ADVANCED = (
         "k_prom",
         "prominence",
         "%.1f",
-        "a fast peak's prominence, in noise units",
+        "fast peaks need this prominence, in noise units",
     ),
     ("fast_sigma_ms", "fast ms", "%.1f", "fast trace Gaussian sigma, ms"),
     (
@@ -154,13 +154,7 @@ class SlowFastPanelsMixin:
     def _draw_slow_fast_card(self, session, width, height) -> None:
         """A1 to A3: slow sigma, edge SD and peak SD as slider columns."""
         with card("##curation_sliders", "A1 - A3", height, width):
-            set_tooltip(
-                "Sliders apply on release and detect again. A1 slow ms: the slow "
-                "trace's smoothing. A2 edge SD: where a slow event starts and ends. "
-                "A3 peak SD: how high it must reach. Fast peaks are counted only "
-                "inside slow events. Labels stay on every peak found again. Saved "
-                "per recording; Detection in the Decision tab has the rest.",
-            )
+            set_tooltip("sliders detect again on release; the rest is under Detection")
             counts = (
                 f"{session.events.n_slow} slow",
                 f"{session.events.n_slow} slow",
@@ -225,7 +219,7 @@ class SlowFastPanelsMixin:
         imgui.same_line(0, em(1.0))
         if imgui.small_button("defaults##sf_defaults"):
             session.set_settings(**SlowFastSettings().to_dict())
-        set_tooltip("the published run's settings for this trace", show_mark=False)
+        set_tooltip("reset this trace to the published run's settings", show_mark=False)
         imgui.same_line(0, em(0.6))
         if imgui.small_button("use for new##sf_new"):
             self.slow_fast_settings = SlowFastSettings(**session.settings.to_dict())
@@ -265,9 +259,7 @@ class SlowFastPanelsMixin:
             ).start()
         imgui.end_disabled()
         set_tooltip(
-            "the slow and fast tables of every trace in the run (each with its saved settings, labels and "
-            "exclusion), or of the traces opened here when there is no run, as three CSVs beside the "
-            "curation file",
+            "three CSVs beside the curation file: the whole run, else the traces opened here",
             show_mark=False,
         )
 

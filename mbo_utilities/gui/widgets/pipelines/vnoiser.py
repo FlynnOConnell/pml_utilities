@@ -62,7 +62,6 @@ from mbo_utilities.gui.imgui.lines import (
 from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.gui.imgui.vnoiser_help import (
     KEYBINDS,
-    TOOLTIP,
     draw_vnoiser_help,
 )
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
@@ -101,6 +100,11 @@ _IMPORTANT_FIELDS = {
     "thres_amp_sd",
 }
 DOMAINS_FILE = "domains.json"
+SCAN_LABELS = ("New env", "Reward switch")  # what an experiment starts with
+SCAN_COLUMN_HELP = {
+    "New block": "the first scan after a condition changed; a run's first scan always is one",
+    "Change": "what changed at this block's first scan; Labels below sets the words",
+}
 MAX_ROI_TOGGLES = 48  # one toggle per ROI up to this many; more take a typed list
 PREVIEW_SECONDS = (5.0, 15.0, 30.0, 60.0, 0.0)
 KIND_LABELS = {  # the Scans table's word for a MESc modality
@@ -168,7 +172,7 @@ REFERENCE_HELP = (
     "hemodynamic artifacts."
 )
 BASELINE_LABELS = {
-    "gaussian": "Gaussian (archive)",
+    "gaussian": "Gaussian",
     "percentile": "rolling percentile",
     "maxmin": "rolling max-min",
     "exponential": "bleaching fit",
@@ -251,10 +255,17 @@ class DomainRow:
         return cls(d.name, list(d.rois), d.pixels, d.fraction, d.mask, run)
 
 
-def one_per_roi(n_rois: int, names=None) -> list[DomainRow]:
-    """``roi0: [0]``, ``roi1: [1]``, ... (or ``names`` when it has one per ROI)."""
-    names = names if names and len(names) == n_rois else None
-    return [DomainRow(names[i] if names else f"roi{i}", [i]) for i in range(n_rois)]
+def one_per_roi(n_rois: int) -> list[DomainRow]:
+    """``roi0: [0]``, ``roi1: [1]``, ..."""
+    return [DomainRow(f"roi{i}", [i]) for i in range(n_rois)]
+
+
+def groups_of(n_rois: int, size: int) -> list[DomainRow]:
+    """``domain1: [0, 1, 2]``, ``domain2: [3, 4, 5]``, ...; the last takes what is left."""
+    return [
+        DomainRow(f"domain{i + 1}", list(range(lo, min(lo + size, n_rois))))
+        for i, lo in enumerate(range(0, n_rois, size))
+    ]
 
 
 class TracePreview:
@@ -365,6 +376,9 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._units: list[dict] = []
         self._scans: dict[str, bool] = {}
         self._first_env: dict[str, bool] = {}
+        self._labels: list[str] = list(SCAN_LABELS)
+        self._scan_labels: dict[str, list[str]] = {}
+        self._new_label = ""
         self._domains: list[DomainRow] = []
         self._selected = 0
         self._group_n = 3
@@ -440,13 +454,13 @@ class VnoiserPipelineWidget(PipelineWidget):
                 was = self._dims()[1]
                 self._last_unit = shown
                 self._scans = {u["key"]: u["key"] == shown for u in self._units}
-                self._first_env = {shown: True}
                 self._seed_slicing()
                 self._fit_domains(was)
             return
         self._last_fpath = fpath
         self._last_unit = shown
         self._units, self._scans, self._first_env, self._domains = [], {}, {}, []
+        self._labels, self._scan_labels = list(SCAN_LABELS), {}
         self._domain_error, self._domains_path = "", ""
         mesc = self._mesc_path()
         if mesc is None:
@@ -460,12 +474,11 @@ class VnoiserPipelineWidget(PipelineWidget):
         on_screen = any(u["key"] == shown for u in self._units)
         for u in self._units:
             self._scans[u["key"]] = u["key"] == shown or not on_screen
-        if self._units:
-            self._first_env[shown if on_screen else self._units[0]["key"]] = True
         self._seed_slicing()
         arr = self._array()
         run = arr.path if isinstance(arr, ResultsArray) else vnoiser_run_for_mesc(mesc)
-        domains, scan_ids, first_env = {}, [], []
+        domains, scan_ids, first_env, labels, scan_labels = {}, [], [], None, {}
+        ticked = None
         if run is not None:
             prov_file = pipeline_files(run) / PROVENANCE_FILE
             try:
@@ -483,6 +496,7 @@ class VnoiserPipelineWidget(PipelineWidget):
                     first_env = [str(s) for s in files.rois.get("scanID_1st_env", [])]
                 # the table the run was given; its own is cut down to the ROIs it read
                 domains = (prov.get("source") or {}).get("domains") or domains
+                labels, scan_labels = prov.get("labels"), prov.get("scan_labels")
                 self.settings = VnoiserSettings.from_provenance(prov)
                 domains = {
                     k: v for k, v in domains.items() if k not in EXCLUDED_DOMAINS
@@ -507,6 +521,8 @@ class VnoiserPipelineWidget(PipelineWidget):
                     spec["scan_ids"],
                     spec["first_env"],
                 )
+                labels, scan_labels = spec["labels"], spec["scan_labels"]
+                ticked = spec["run"]
                 self._domains_path = str(mesc.parent / DOMAINS_FILE)
             except (OSError, ValueError, KeyError) as e:
                 self._domain_error = f"{DOMAINS_FILE}: {e}"
@@ -518,16 +534,17 @@ class VnoiserPipelineWidget(PipelineWidget):
         rows = []
         for name, value in domains.items():
             try:
-                rows.append(DomainRow.from_entry(name, value))
+                rows.append(
+                    DomainRow.from_entry(name, value, ticked is None or name in ticked)
+                )
             except ValueError as e:
                 self._domain_error = f"{name}: {e}"
         self._domains = rows
+        self._set_blocks(first_env, labels, scan_labels)
         # a previous run's scans only when no unit of the file is on screen
         if scan_ids and not on_screen:
             for u in self._units:
-                munit = u["key"].rsplit("_", 1)[-1]
-                self._scans[u["key"]] = munit in scan_ids
-                self._first_env[u["key"]] = munit in first_env
+                self._scans[u["key"]] = u["key"].rsplit("_", 1)[-1] in scan_ids
         self._fit_domains(0)
 
     def _fit_domains(self, was: int) -> None:
@@ -660,7 +677,6 @@ class VnoiserPipelineWidget(PipelineWidget):
                 f"{fa.ICON_FA_CIRCLE_QUESTION} vnoiser guide##vnoiser_help"
             ):
                 self._help_open = not self._help_open
-            set_tooltip(TOOLTIP, show_mark=False)
             self._draw_dataset_block()
             imgui.separator()
             self._draw_output_row()
@@ -840,7 +856,7 @@ class VnoiserPipelineWidget(PipelineWidget):
             | imgui.TableFlags_.borders_inner_h
             | imgui.TableFlags_.sizing_fixed_fit
         )
-        if imgui.begin_table("##vnoiser_scans", 5, flags):
+        if imgui.begin_table("##vnoiser_scans", 6, flags):
             fixed = imgui.TableColumnFlags_.width_fixed
             imgui.table_setup_column("Unit", imgui.TableColumnFlags_.width_stretch)
             imgui.table_setup_column(
@@ -848,15 +864,18 @@ class VnoiserPipelineWidget(PipelineWidget):
             )
             imgui.table_setup_column("ROIs", fixed)
             imgui.table_setup_column("Length", fixed)
-            imgui.table_setup_column("New env.", fixed)
-            imgui.table_headers_row()
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(
-                    "New env.: tick when this scan is the first one recorded after the "
-                    "animal was moved to a different environment (another arena or track). "
-                    "The pipeline does not use it; it is written to the output "
-                    "(scanID_1st_env) so later analysis can group scans by environment."
-                )
+            imgui.table_setup_column("New block", fixed)
+            imgui.table_setup_column("Change", imgui.TableColumnFlags_.width_stretch)
+            imgui.table_next_row(imgui.TableRowFlags_.headers)
+            for column in range(6):
+                imgui.table_set_column_index(column)
+                name = imgui.table_get_column_name(column)
+                imgui.table_header(name)
+                if name in SCAN_COLUMN_HELP:
+                    set_tooltip(SCAN_COLUMN_HELP[name], show_mark=False)
+            first_run = next(
+                (u["key"] for u in self._units if self._scans.get(u["key"])), None
+            )
             for u in self._units:
                 key = u["key"]
                 munit = key.rsplit("/", 1)[-1]
@@ -882,27 +901,104 @@ class VnoiserPipelineWidget(PipelineWidget):
                 seconds = u.get("duration_s")
                 imgui.text(f"{seconds:.0f} s" if seconds else "-")
                 imgui.table_set_column_index(4)
-                if not self._scans[key]:
+                fixed_tick = key == first_run or not self._scans[key]
+                if fixed_tick:
                     imgui.begin_disabled()
-                _, self._first_env[key] = imgui.checkbox(
-                    f"##vnoiser_env_{key}", self._first_env.get(key, False)
+                changed, ticked = imgui.checkbox(
+                    f"##vnoiser_env_{key}",
+                    key == first_run or self._first_env.get(key, False),
                 )
-                if not self._scans[key]:
+                if changed:
+                    self._first_env[key] = ticked
+                    if not ticked:
+                        self._scan_labels.pop(key, None)
+                if fixed_tick:
                     imgui.end_disabled()
+                imgui.table_set_column_index(5)
+                if self._scans[key] and (key == first_run or self._first_env.get(key)):
+                    self._draw_scan_labels(key)
             imgui.end_table()
         if imgui.small_button("On screen only##vnoiser_scans_shown"):
             self._scans = {u["key"]: u["key"] == shown for u in self._units}
         imgui.same_line()
         if imgui.small_button("All##vnoiser_scans_all"):
             self._scans = {u["key"]: True for u in self._units}
+        self._draw_label_list()
 
-    def _comment_names(self) -> list[str] | None:
-        from mbo_utilities.vnoiser.pipeline import comment_names
+    def _draw_scan_labels(self, key: str) -> None:
+        """One toggle per label; a picked label keeps New block ticked if this stops being the run's first scan."""
+        right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
+        spacing = imgui.get_style().item_spacing.x * 0.5
+        picked = self._scan_labels.get(key, [])
+        for i, label in enumerate(self._labels):
+            if (
+                i
+                and imgui.get_item_rect_max().x + spacing + button_width(label) <= right
+            ):
+                imgui.same_line(0, spacing)
+            with selected_button_style(label in picked):
+                if imgui.small_button(f"{label}##vnoiser_label_{key}_{i}"):
+                    self._scan_labels[key] = [
+                        name
+                        for name in self._labels
+                        if (name in picked) != (name == label)
+                    ]
+                    self._first_env[key] = True
 
-        ticked = [u for u in self._units if self._scans.get(u["key"])]
+    def _draw_label_list(self) -> None:
+        """The experiment's labels: x removes one from the list and its scans, Enter adds one."""
+        right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
+        spacing = imgui.get_style().item_spacing.x * 0.5
+        imgui.align_text_to_frame_padding()
+        imgui.text("Labels")
+        set_tooltip(
+            "this experiment's words for the Change column; Enter adds one",
+            show_mark=False,
+        )
+        for i, label in enumerate(self._labels):
+            text = f"{label} x"
+            if imgui.get_item_rect_max().x + spacing + button_width(text) <= right:
+                imgui.same_line(0, spacing)
+            if imgui.small_button(f"{text}##vnoiser_label_rm_{i}"):
+                self._labels.remove(label)
+                self._scan_labels = {
+                    k: kept
+                    for k, picked in self._scan_labels.items()
+                    if (kept := [name for name in picked if name != label])
+                }
+                break
+            set_tooltip(f"Remove {label} from the list and its scans.", show_mark=False)
+        field = hello_imgui.em_size(9)
+        if imgui.get_item_rect_max().x + spacing + field <= right:
+            imgui.same_line(0, spacing)
+        imgui.set_next_item_width(field)
+        entered, self._new_label = imgui.input_text_with_hint(
+            "##vnoiser_new_label",
+            "add a label",
+            self._new_label,
+            imgui.InputTextFlags_.enter_returns_true,
+        )
+        label = self._new_label.strip()
+        if entered and label:
+            if label not in self._labels:
+                self._labels.append(label)
+            self._new_label = ""
+
+    def _comment_map(self) -> tuple[str, dict[str, list[int]]] | None:
+        """``(unit, {name: rois})`` from the nearest comment at or before the first ticked scan; the rig writes a map once per layout, so the search stops at another ROI count."""
+        from mbo_utilities.vnoiser.pipeline import comment_groups
+
+        ticked = [i for i, u in enumerate(self._units) if self._scans.get(u["key"])]
         if not ticked:
             return None
-        return comment_names(ticked[0].get("comment"), int(ticked[0]["nrois"]))
+        n_rois = int(self._units[ticked[0]]["nrois"])
+        for u in reversed(self._units[: ticked[0] + 1]):
+            if int(u["nrois"]) != n_rois:
+                return None
+            groups = comment_groups(u.get("comment"), n_rois)
+            if groups:
+                return u["key"].rsplit("/", 1)[-1], groups
+        return None
 
     def drawn_domains(self) -> list[DomainRow]:
         """The ROI tool's ROIs on the recording on screen as one mask domain each, named by note or ``drawn<uid>``; [] without the tool or with another recording on screen."""
@@ -936,11 +1032,84 @@ class VnoiserPipelineWidget(PipelineWidget):
         if imgui.get_item_rect_max().x + spacing + button_width(label) <= right:
             imgui.same_line()
 
+    def _set_blocks(self, first_env, labels, scan_labels) -> None:
+        """Block ticks and labels by scan id, from a run or a ``domains.json``; a run without them takes the ticks alone."""
+        scan_labels = scan_labels or {}
+        used = [label for picked in scan_labels.values() for label in picked]
+        given = SCAN_LABELS if labels is None else labels
+        self._labels = list(dict.fromkeys([*given, *used]))
+        self._scan_labels = {}
+        for u in self._units:
+            munit = u["key"].rsplit("_", 1)[-1]
+            self._first_env[u["key"]] = munit in first_env
+            if scan_labels.get(munit):
+                self._scan_labels[u["key"]] = list(scan_labels[munit])
+
+    def _block_args(self, scans: list[str]) -> dict:
+        """``first_env``, ``labels`` and ``scan_labels`` of ``scans``, as a run and ``domains.json`` take them.
+
+        A run's first scan always starts a block: analysis cuts blocks at this
+        list, and scans before its first entry would belong to none.
+        """
+        starts = [k for i, k in enumerate(scans) if i == 0 or self._first_env.get(k)]
+        return {
+            "first_env": [k.rsplit("_", 1)[-1] for k in starts],
+            "labels": list(self._labels),
+            "scan_labels": {
+                k.rsplit("_", 1)[-1]: list(self._scan_labels[k])
+                for k in starts
+                if self._scan_labels.get(k)
+            },
+        }
+
+    def _load_domains_file(self) -> None:
+        """The domains, ticked scans and block ticks of ``domains.json`` beside the file."""
+        from mbo_utilities.vnoiser.pipeline import read_domains
+
+        path = self._mesc_path().parent / DOMAINS_FILE
+        try:
+            spec = read_domains(path)
+            ticked = spec["run"]
+            rows = [
+                DomainRow.from_entry(n, v, ticked is None or n in ticked)
+                for n, v in spec["domains"].items()
+            ]
+        except (OSError, ValueError, KeyError) as e:
+            self._set_status(f"{path.name}: {e}", error=True)
+            return
+        self._domains, self._selected = rows, 0
+        self._set_blocks(spec["first_env"], spec["labels"], spec["scan_labels"])
+        if spec["scan_ids"]:
+            for u in self._units:
+                self._scans[u["key"]] = u["key"].rsplit("_", 1)[-1] in spec["scan_ids"]
+        self._seed_slicing()
+        self._domains_path = str(path)
+        self._set_status(f"Loaded {path.name}")
+
+    def _save_domains_file(self) -> None:
+        """Write the table, its run ticks, ticked scans and block ticks to ``domains.json`` beside the file."""
+        rows = self._check_domains()
+        if not rows:
+            return
+        mesc = self._mesc_path()
+        path = mesc.parent / DOMAINS_FILE
+        scans = [u["key"] for u in self._units if self._scans.get(u["key"])]
+        doc = {
+            "mesc": mesc.name,
+            "scans": [k.rsplit("_", 1)[-1] for k in scans],
+            **self._block_args(scans),
+            "domains": {r.name.strip(): r.entry() for r in rows},
+            "run": [r.name.strip() for r in rows if r.run],
+        }
+        path.write_text(json.dumps(doc, indent=2))
+        self._domains_path = str(path)
+        self._set_status(f"Saved {path.name}")
+
     def _draw_domain_presets(self, n_rois: int) -> None:
         """Buttons that rebuild the table, wrapping to new lines when the panel is narrow."""
         right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
         if imgui.small_button("One per ROI##vnoiser_dom_each"):
-            self._domains = one_per_roi(n_rois, self._comment_names())
+            self._domains = one_per_roi(n_rois)
             self._selected = 0
         set_tooltip("Every ROI its own domain, every pixel.", show_mark=False)
         self._inline("All in one", right)
@@ -948,31 +1117,34 @@ class VnoiserPipelineWidget(PipelineWidget):
             self._domains = [DomainRow("all", list(range(n_rois)))]
             self._selected = 0
         set_tooltip("One domain of every ROI.", show_mark=False)
-        self._inline("Groups of 00", right)
-        if imgui.small_button(f"Groups of {self._group_n}##vnoiser_dom_groups"):
-            k = max(1, int(self._group_n))
-            self._domains = [
-                DomainRow(f"domain{i + 1}", list(range(lo, min(lo + k, n_rois))))
-                for i, lo in enumerate(range(0, n_rois, k))
-            ]
+        self._inline("Groups of 0000000", right)
+        if imgui.small_button("Groups of##vnoiser_dom_groups"):
+            self._domains = groups_of(n_rois, self._group_n)
             self._selected = 0
         set_tooltip(
-            "Consecutive ROIs in groups (the archive's three lines per soma or branch). "
-            "Right-click to change the size.",
+            "Consecutive ROIs, this many to a group (the box beside it).",
             show_mark=False,
         )
-        if imgui.begin_popup_context_item("##vnoiser_dom_groups_ctx"):
-            imgui.set_next_item_width(hello_imgui.em_size(6))
-            _, self._group_n = imgui.input_int("ROIs per group", int(self._group_n))
-            self._group_n = max(1, self._group_n)
-            imgui.end_popup()
-        names = self._comment_names()
-        if names:
+        imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
+        imgui.set_next_item_width(hello_imgui.em_size(5))
+        _, self._group_n = imgui.input_int("##vnoiser_dom_group_n", self._group_n)
+        self._group_n = max(1, self._group_n)
+        mapped = self._comment_map()
+        if mapped:
+            unit, groups = mapped
             self._inline("From comment", right)
             if imgui.small_button("From comment##vnoiser_dom_comment"):
-                self._domains = one_per_roi(n_rois, names)
+                # the pipeline gives bg no trace of its own; it stays a background
+                self._domains = [
+                    DomainRow(name, rois, run=name != "bg")
+                    for name, rois in groups.items()
+                ]
                 self._selected = 0
-            set_tooltip(f"One per ROI, named {', '.join(names)}.", show_mark=False)
+            set_tooltip(
+                f"The groups in {unit}'s comment: "
+                + ", ".join(f"{name} {rois}" for name, rois in groups.items()),
+                show_mark=False,
+            )
         drawn = self.drawn_domains()
         self._inline("Drawn ROIs (00)", right)
         if not drawn:
@@ -1005,7 +1177,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         if imgui.small_button("Save##vnoiser_dom_save"):
             self._save_domains_file()
         set_tooltip(
-            f"Save the domains, ticked scans and new-environment ticks to {DOMAINS_FILE} beside the file.",
+            f"Save the domains, ticked scans and block ticks to {DOMAINS_FILE} beside the file.",
             show_mark=False,
         )
 
@@ -1057,6 +1229,15 @@ class VnoiserPipelineWidget(PipelineWidget):
         )
         _, n_rois, _ = self._dims()
         self._draw_domain_presets(n_rois)
+        counts = {int(u["nrois"]) for u in self._units if self._scans.get(u["key"])}
+        if len(counts) > 1:
+            imgui.push_style_color(imgui.Col_.text, _MODIFIED_COLOR)
+            imgui.text_wrapped(
+                f"The ticked scans have {min(counts)} to {max(counts)} ROIs. This table "
+                f"applies to all of them, up to ROI {n_rois - 1}, and an ROI number may "
+                "not be the same line in each. Run each layout on its own."
+            )
+            imgui.pop_style_color()
         flags = (
             imgui.TableFlags_.row_bg
             | imgui.TableFlags_.borders_inner_h
@@ -1371,7 +1552,7 @@ class VnoiserPipelineWidget(PipelineWidget):
             self._f_combo(
                 dfof,
                 "noise",
-                {"sd": "/ SD (archive)", "mad": "/ robust SD (MAD)"},
+                {"sd": "/ SD", "mad": "/ robust SD (MAD)"},
                 "What the z-score divides by: the SD of dF/F, or 1.4826 x the median "
                 "absolute deviation, which spikes do not inflate.",
                 hello_imgui.em_size(10),
@@ -1496,7 +1677,16 @@ class VnoiserPipelineWidget(PipelineWidget):
         # a slider being dragged waits for its release before the next read
         if not imgui.is_any_item_active():
             self._request_preview()
-        imgui.text(f"{row.name} on {unit['key'].rsplit('/', 1)[-1]}")
+        imgui.set_next_item_width(hello_imgui.em_size(9))
+        _, self._selected = imgui.combo(
+            "##vnoiser_preview_domain",
+            min(self._selected, len(self._domains) - 1),
+            [r.name for r in self._domains],
+        )
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("The domain the preview reads; its ROIs are averaged.")
+        imgui.same_line()
+        imgui.text(f"on {unit['key'].rsplit('/', 1)[-1]}")
         imgui.same_line()
         lengths = [f"{s:g} s" if s else "whole" for s in PREVIEW_SECONDS]
         current = (
@@ -1551,10 +1741,12 @@ class VnoiserPipelineWidget(PipelineWidget):
             changed, index = imgui.combo(
                 "##vnoiser_preview_roi",
                 rois.index(roi),
-                [f"ROI {r}" for r in rois],
+                [f"{result['name']}: ROI {r}" for r in rois],
             )
             if changed:
                 self._preview_roi = index
+        else:
+            imgui.text(f"{result['name']}: ROI {roi}")
         height = side * min(4.0, max(0.25, h / max(w, 1)))
         with plot_style():
             flags = (
@@ -1602,7 +1794,8 @@ class VnoiserPipelineWidget(PipelineWidget):
         imgui.end_group()
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                f"ROI {roi}'s mean image ({h} x {w}); the red pixels are the domain's."
+                f"ROI {roi}'s mean image ({h} x {w}); the red pixels are {result['name']}'s. "
+                "The traces average every ROI of the domain."
             )
 
     def _draw_preview_traces(self, result: dict) -> None:
@@ -2266,13 +2459,12 @@ class VnoiserPipelineWidget(PipelineWidget):
     def _submit(self, mesc: Path, scans: list[str], domains: dict, window) -> None:
         from mbo_utilities.gui.widgets.process_manager import get_process_manager
 
-        first_env = [k.rsplit("_", 1)[-1] for k in scans if self._first_env.get(k)]
         args = {
             "input_path": str(mesc),
             "reader_kwargs": widget_reader_kwargs(self.parent.image_widget),
             "output_dir": self._outdir,
             "units": scans,
-            "first_env": first_env,
+            **self._block_args(scans),
             "domains": domains,
             "channel": self._channel(),
             "frames": None if window is None else [window[0], window[1]],

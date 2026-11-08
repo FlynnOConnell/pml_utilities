@@ -18,6 +18,7 @@ pytest.importorskip("vnoiser")
 from mbo_utilities.vnoiser.params import VnoiserSettings  # noqa: E402
 from mbo_utilities.vnoiser.pipeline import (  # noqa: E402
     DOMAINS_FILE,
+    comment_groups,
     default_pf_dir,
     read_domains,
     run_vnoiser_pipeline,
@@ -64,9 +65,23 @@ def test_read_domains_json(tmp_path):
     spec = read_domains(path)
     assert spec == {
         "domains": {"soma1": [0, 1], "apical1": [2]},
+        "run": None,
         "scan_ids": ["35", "38"],
         "first_env": [],
+        "labels": None,
+        "scan_labels": {},
     }
+    path.write_text(
+        json.dumps(
+            {
+                "domains": {"soma1": [0]},
+                "labels": ["Odor on"],
+                "scan_labels": {35: ["Odor on"]},
+            }
+        )
+    )
+    spec = read_domains(path)
+    assert spec["labels"] == ["Odor on"] and spec["scan_labels"] == {"35": ["Odor on"]}
     path.write_text(json.dumps({"domains": {}}))
     with pytest.raises(ValueError):
         read_domains(path)
@@ -243,13 +258,14 @@ def test_chessboard_patches_run_as_scans(tmp_path):
         mesc,
         domains=doc["domains"],
         units=["MUnit_1"],
-        first_env=["1"],
         out=tmp_path / "PF",
         settings=pkl_settings(),
     )
     assert "denoised_trace_scans.pkl" in paths and "detected_events_peaks.pkl" in paths
     files = read_pf(tmp_path / "PF")
     assert files.scan_ids == ["1"] and set(files.domains) >= {"roi0", "roi1", "roi2"}
+    # no block ticks given: the first scan still starts a block
+    assert files.rois["scanID_1st_env"] == ["1"]
     prov = files.provenance
     assert prov["source"]["units"] == {"1": "MSession_0/MUnit_1"}
     assert prov["fs_hz"]["1"] == pytest.approx(200.0)
@@ -456,7 +472,11 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
         units=["MUnit_1"],
         first_env=["1"],
         settings=settings,
-        provenance={"settings": settings.to_dict()},
+        provenance={
+            "settings": settings.to_dict(),
+            "labels": ["New env"],
+            "scan_labels": {"1": ["New env"]},
+        },
     )
     zarr_path = newest_results(tmp_path, "vnoiser")
     zarr_name = zarr_path.name
@@ -492,6 +512,8 @@ def test_zarr_is_the_default_output_and_holds_the_whole_run(tmp_path):
     assert (
         scan.attrs["source_unit"] == "MSession_0/MUnit_1"
         and scan.attrs["first_env"] is True
+        and scan.attrs["block"] == 0
+        and scan.attrs["labels"] == ["New env"]
     )
     np.testing.assert_allclose(
         scan.traces["denoised"], np.load(traces / "scan1_denoised.npy"), rtol=1e-6
@@ -912,6 +934,8 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
                 "domains": {"All_domains": [0, 1, 2], "soma": [0, 1], "basal": [2]},
                 "scan_ids": ["3"],
                 "first_env": ["3"],
+                "labels": ["Odor on"],
+                "scan_labels": {"3": ["Odor on", "Reward switch"]},
                 "settings": {
                     "runtime": {"output_format": "zarr", "reference_fs": 1000.0}
                 },
@@ -931,6 +955,8 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
     ]
     assert widget._scans == {"MSession_0/MUnit_3": True}
     assert widget._first_env == {"MSession_0/MUnit_3": True}
+    assert widget._labels == ["Odor on", "Reward switch"]
+    assert widget._scan_labels == {"MSession_0/MUnit_3": ["Odor on", "Reward switch"]}
     assert widget.settings.runtime.reference_fs == 1000.0
     assert widget._outdir == str(tmp_path)
 
@@ -938,6 +964,7 @@ def test_widget_seeds_from_a_previous_zarr_run(tmp_path, layout):
 def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     """The Scans table ticks only the unit on screen, even over a previous
     run's scans, and moves the tick when another unit of the file is shown.
+    Block ticks stay: they mark the experiment, not what is on screen.
     """
     pytest.importorskip("imgui_bundle")
     from types import SimpleNamespace
@@ -985,14 +1012,201 @@ def test_widget_ticks_the_unit_on_screen_and_follows_it(tmp_path):
     widget = VnoiserPipelineWidget(parent)
     widget._ensure_state()
     assert widget._scans == {"MSession_0/MUnit_3": False, "MSession_0/MUnit_5": True}
-    assert widget._first_env == {"MSession_0/MUnit_5": True}
+    blocks = {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": False}
+    assert widget._first_env == blocks
     assert [(r.name, r.rois) for r in widget._domains] == [("a", [0])]
 
     parent.image_widget.data = [SimpleNamespace(unit_key="MSession_0/MUnit_3")]
     widget._ensure_state()
     assert widget._scans == {"MSession_0/MUnit_3": True, "MSession_0/MUnit_5": False}
-    assert widget._first_env == {"MSession_0/MUnit_3": True}
+    assert widget._first_env == blocks
     assert [(r.name, r.rois) for r in widget._domains] == [("a", [0])]
+
+
+def test_a_runs_first_scan_always_starts_a_block():
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
+
+    widget = VnoiserPipelineWidget(SimpleNamespace())
+    widget._first_env = {"S/MUnit_32": True, "S/MUnit_38": True}
+    scans = ["S/MUnit_28", "S/MUnit_30", "S/MUnit_32", "S/MUnit_38"]
+    assert widget._block_args(scans)["first_env"] == ["28", "32", "38"]
+    assert widget._block_args(scans[1:2])["first_env"] == ["30"]
+    # a label on a scan that starts no block is not written
+    widget._scan_labels = {"S/MUnit_30": ["New env"], "S/MUnit_32": ["Reward switch"]}
+    assert widget._block_args(scans)["scan_labels"] == {"32": ["Reward switch"]}
+
+
+def test_a_scan_label_ticks_the_block_and_the_list_is_the_experiments(monkeypatch):
+    """A label names what changed at a block start, so picking one ticks it;
+    removing a label from the list takes it off its scans.
+    """
+    imgui = pytest.importorskip("imgui_bundle").imgui
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
+
+    widget = VnoiserPipelineWidget(SimpleNamespace())
+    key = "S/MUnit_38"
+    widget._scans = {key: True}
+    clicks = []
+    press = imgui.small_button
+    monkeypatch.setattr(
+        imgui,
+        "small_button",
+        lambda label: press(label) or label.split("##")[0] in clicks,
+    )
+    context = imgui.create_context()
+    io = imgui.get_io()
+    io.display_size = imgui.ImVec2(800, 600)
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+    try:
+        imgui.new_frame()
+        imgui.begin("tab")
+        clicks[:] = ["Reward switch"]
+        widget._draw_scan_labels(key)
+        assert widget._scan_labels == {key: ["Reward switch"]}
+        assert widget._first_env == {key: True}
+        clicks[:] = ["New env"]
+        widget._draw_scan_labels(key)
+        assert widget._scan_labels == {key: ["New env", "Reward switch"]}
+        clicks[:] = ["Reward switch x"]
+        widget._draw_label_list()
+        assert widget._labels == ["New env"]
+        assert widget._scan_labels == {key: ["New env"]}
+        clicks[:] = ["New env x"]
+        widget._draw_label_list()
+        assert widget._labels == [] and widget._scan_labels == {}
+        imgui.end()
+        imgui.end_frame()
+    finally:
+        imgui.destroy_context(context)
+
+
+def test_preview_names_the_domain_it_read(tmp_path):
+    from mbo_utilities.vnoiser.pipeline import preview_domain
+
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc)
+    found = preview_domain(mesc, "MUnit_1", {"soma": [0, 2], "api": [1]}, "soma")
+    assert found["name"] == "soma" and found["rois"] == [0, 2]
+
+
+def test_comment_groups_reads_the_rigs_maps_and_refuses_broken_ones():
+    assert comment_groups("soma,bas1,api1,each2lines", 6) == {
+        "soma": [0, 1],
+        "bas1": [2, 3],
+        "api1": [4, 5],
+    }
+    # text before the names is not part of the first one
+    for prefixed in (
+        "20:soma,bas1,api1,each2lines",
+        "fam\nsoma, bas1, api1, each2lines",
+    ):
+        assert list(comment_groups(prefixed, 6)) == ["soma", "bas1", "api1"]
+    assert comment_groups("20:ROI0,13,14:soma,1-12:bg,15-17:bas1;fam", 18) == {
+        "soma": [0, 13, 14],
+        "bg": list(range(1, 13)),
+        "bas1": [15, 16, 17],
+    }
+    assert comment_groups("ROI0-2:soma,3-5:api5(otherCell)6-8:bg;fam", 9) == {
+        "soma": [0, 1, 2],
+        "api5": [3, 4, 5],
+        "bg": [6, 7, 8],
+    }
+    assert comment_groups("ROI0-2:soma,3-5:api1,151620:api4", 9) is None
+    assert comment_groups("ROI01:soma,23:bas1", 4) is None
+    assert comment_groups("ROI0-3:soma,3-5:bas1", 6) is None
+    assert comment_groups("soma,bas1,each2lines", 6) is None
+    for free in ("", None, "rew switch", "ROIsame;nov1", "fam;rew1500", "soma,bas1"):
+        assert comment_groups(free, 2) is None
+
+
+def test_from_comment_finds_the_map_on_an_earlier_scan_of_the_layout():
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import VnoiserPipelineWidget
+
+    widget = VnoiserPipelineWidget(SimpleNamespace())
+    widget._units = [
+        {"key": "S/MUnit_1", "nrois": 4, "comment": "a,b,each2lines"},
+        {"key": "S/MUnit_2", "nrois": 4, "comment": "rew2400"},
+        {"key": "S/MUnit_3", "nrois": 6, "comment": ""},
+    ]
+    widget._scans = {"S/MUnit_2": True}
+    assert widget._comment_map() == ("MUnit_1", {"a": [0, 1], "b": [2, 3]})
+    widget._scans = {"S/MUnit_3": True}
+    assert widget._comment_map() is None
+
+
+def test_groups_of_n_keep_the_leftover_rois():
+    pytest.importorskip("imgui_bundle")
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import groups_of
+
+    assert [(r.name, r.rois) for r in groups_of(5, 2)] == [
+        ("domain1", [0, 1]),
+        ("domain2", [2, 3]),
+        ("domain3", [4]),
+    ]
+
+
+def test_widget_saves_and_loads_its_domains_file(tmp_path):
+    """Save writes the table and ticks beside the file, in the form ``mbo vnoiser``
+    reads, and Load brings them back; a broken file leaves the table alone.
+    """
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import (
+        DomainRow,
+        VnoiserPipelineWidget,
+    )
+
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc, extra_unit=True)
+    widget = VnoiserPipelineWidget(
+        SimpleNamespace(fpath=mesc, image_widget=None, invert_deflection=False)
+    )
+    widget._ensure_state()
+    first, second = (u["key"] for u in widget._units)
+    widget._domains = [
+        DomainRow("soma", [0, 2]),
+        DomainRow("cell", [1], "correlated", 0.2, run=False),
+    ]
+    widget._scans = {first: True, second: True}
+    widget._first_env = {first: True, second: True}
+    widget._labels = ["Odor on"]
+    widget._scan_labels = {second: ["Odor on"]}
+    widget._save_domains_file()
+    spec = read_domains(tmp_path / DOMAINS_FILE)
+    assert spec["scan_ids"] == ["1", "2"] and spec["first_env"] == ["1", "2"]
+    assert spec["domains"]["soma"] == [0, 2] and spec["run"] == ["soma"]
+    assert spec["labels"] == ["Odor on"] and spec["scan_labels"] == {"2": ["Odor on"]}
+
+    widget._domains, widget._scans, widget._first_env = [], {first: True}, {}
+    widget._labels, widget._scan_labels = [], {}
+    widget._load_domains_file()
+    assert [(r.name, r.rois, r.pixels, r.run) for r in widget._domains] == [
+        ("soma", [0, 2], "all", True),
+        ("cell", [1], "correlated", False),
+    ]
+    assert widget._scans == {first: True, second: True}
+    assert widget._first_env == {first: True, second: True}
+    assert widget._labels == ["Odor on"]
+    assert widget._scan_labels == {second: ["Odor on"]}
+    # an emptied label list stays empty
+    widget._labels, widget._scan_labels = [], {}
+    widget._save_domains_file()
+    widget._load_domains_file()
+    assert widget._labels == []
+
+    (tmp_path / DOMAINS_FILE).write_text("{")
+    widget._load_domains_file()
+    assert widget._last_status.startswith(DOMAINS_FILE)
+    assert [r.name for r in widget._domains] == ["soma", "cell"]
 
 
 def test_widget_loads_its_own_run_when_the_worker_finishes(tmp_path, monkeypatch):

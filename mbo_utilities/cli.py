@@ -2181,8 +2181,11 @@ def vnoiser(
         n_rois = int(first[0]["nrois"])
         spec = {
             "domains": {f"roi{r}": [r] for r in range(n_rois)},
+            "run": None,
             "scan_ids": [],
             "first_env": [],
+            "labels": None,
+            "scan_labels": {},
         }
         click.echo(
             f"no {DOMAINS_FILE}: one domain per ROI ({n_rois}); --init writes one to edit"
@@ -2226,6 +2229,14 @@ def vnoiser(
             )
         frames = (start - 1, stop)
     domains = spec["domains"]
+    if spec["run"] is not None:
+        # the domains the tab had ticked, and the background domain the trace subtracts
+        tr = settings.traces
+        keep = {
+            *spec["run"],
+            tr.background_domain if tr.background == "domain" else None,
+        }
+        domains = {n: v for n, v in domains.items() if n in keep}
     if pixels is not None:
         domains = {
             name: {"rois": list(value), "pixels": pixels, "fraction": fraction}
@@ -2271,7 +2282,11 @@ def vnoiser(
             settings=settings,
             overwrite=overwrite,
             logger=logger,
-            provenance={"settings": settings.to_dict()},
+            provenance={
+                "settings": settings.to_dict(),
+                "labels": spec["labels"],
+                "scan_labels": spec["scan_labels"],
+            },
         )
     except (ValueError, KeyError, FileExistsError) as e:
         click.echo(f"error: {e}", err=True)

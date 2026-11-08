@@ -70,11 +70,7 @@ from mbo_utilities.gui.imgui.lines import (
 from mbo_utilities.gui.imgui.motion import MOTION_COLORS, MotionPlot
 from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.gui.imgui.scatter import ScatterPlot
-from mbo_utilities.gui.imgui.vnoiser_help import (
-    KEYBINDS,
-    TOOLTIP,
-    draw_vnoiser_help,
-)
+from mbo_utilities.gui.imgui.vnoiser_help import KEYBINDS, draw_vnoiser_help
 from mbo_utilities.gui.slow_fast_panels import SlowFastPanelsMixin
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.install import VNOISER_HINT
@@ -136,19 +132,17 @@ METHODS = {"vnoiser": "vnoiser", SLOW_FAST: "slow + fast"}
 COMPARE_COLOR = (0.85, 0.45, 0.95, 0.55)
 COMPARE_LABELS = {"vnoiser": "vnoiser events", SLOW_FAST: "slow + fast peaks"}
 CHANCE_COLOR = (0.62, 0.62, 0.65, 0.3)
+METHOD_TOOLTIPS = {
+    "vnoiser": "m: candidates on the denoised trace; labels are per method",
+    SLOW_FAST: "m: fast peaks in slow events of the raw dF/F; labels are per method",
+}
 COUPLING_TOOLTIP = (
-    "the share of this trace's 1-50 Hz power the motion correction explains, past what "
-    "the same trace gets moved along in time; p is how many of those moves reach it. "
-    "The plot under the trace shows it by frequency: a line above the grey band follows "
-    "the motion there. It says the two move together, never which moved which: a cell "
-    "that fires with movement looks the same."
+    "share of 1-50 Hz trace power the motion explains, above time-shifted copies\n"
+    "a cell that fires with movement also scores high"
 )
 DPRIME_TOOLTIP = (
-    "d': how far the peaks stand above the trace just before them, in noise SDs: the "
-    "1 ms at each peak against the 1 ms ending 3 ms before it, over the n isolated "
-    "candidates not called no. A threshold between the two gets Phi(d' / 2) right: "
-    "1 is 69%, 2 is 84%, 3 is 93%. Candidates are picked at peaks, so noise alone "
-    "scores above 0."
+    "d': a measure of how well peaks stand out from noise, over candidates not called no\n"
+    "1 = 69% called right, 2 = 84%, 3 = 93%; noise alone scores above 0"
 )
 
 
@@ -1023,15 +1017,14 @@ class EventCurationWidget(SlowFastPanelsMixin):
         imgui.same_line(0, em(0.6))
         if imgui.small_button("guide"):
             self.show_help = not self.show_help
-        set_tooltip(f"h: {TOOLTIP}", show_mark=False)
+        set_tooltip("h", show_mark=False)
         if plot is not None:
             imgui.same_line(0, em(1.2))
             _changed, self.show_motion = imgui.checkbox(
                 "MC##curation_motion", self.show_motion
             )
             set_tooltip(
-                f"{plot.y_label}: the motion correction applied while the scan ran, "
-                "over the trace on the same time axis",
+                f"{plot.y_label} over the trace, coherence under it",
                 show_mark=False,
             )
             self._draw_coupling_share(session, plot.motion.source)
@@ -1107,10 +1100,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 "inverted##raw_inverted", self.raw_inverted
             )
             set_tooltip(
-                "Turn the raw traces over about their mean (2 x mean - F) before the "
-                "denoiser, so a dimming indicator's (JEDI, ASAP) events are the peaks "
-                "curation looks for. Off for an indicator that brightens. Each polarity "
-                "keeps its own labels.",
+                "2 x mean - F, so a dimming indicator's events point up; labels are "
+                "per polarity",
                 show_mark=False,
             )
             if changed:
@@ -1130,15 +1121,12 @@ class EventCurationWidget(SlowFastPanelsMixin):
             if imgui.radio_button(f"{caption}##method", self.method == method):
                 self.set_method(method)
             imgui.end_disabled()
-        set_tooltip(
-            "m: vnoiser curates candidates on its denoised trace with a seed template; "
-            "slow + fast curates the fast peaks inside slow events of the raw dF/F. "
-            "Each keeps its own labels."
-            + (
-                f"\nvnoiser is not installed: {VNOISER_HINT}" if not HAS_VNOISER else ""
-            ),
-            show_mark=False,
-        )
+            if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+                imgui.set_tooltip(
+                    f"vnoiser is not installed: {VNOISER_HINT}"
+                    if disabled
+                    else METHOD_TOOLTIPS[method]
+                )
         imgui.same_line(0, em(0.8))
         imgui.begin_disabled(not HAS_VNOISER)
         _changed, self.compare = imgui.checkbox(
@@ -1146,8 +1134,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
         )
         imgui.end_disabled()
         set_tooltip(
-            "c: the other method's events on this trace (all but the ones called no) "
-            "as faint lines over the trace",
+            "c: the other method's events, except those called no, as faint lines",
             show_mark=False,
         )
 
@@ -1391,17 +1378,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
         """
         title = "A1 - A4" if session.seeded else "A1"
         with card("##curation_sliders", title, height, width):
-            set_tooltip(
-                "Sliders apply on release. A1 threshold: candidates are local "
-                "maxima of the trace above it. A2 peak: a candidate peaking at "
-                "or above it passes whatever its shape. A3 PC1: every candidate on "
-                "the passing side of this value along the snippets' first "
-                "principal component passes (the arrow flips the side). A4 "
-                "cosine: a candidate whose similarity to the seed template is "
-                "at or above it passes, below it is rejected; at the bottom "
-                "nothing is rejected. Manual labels always win. All saved per "
-                "recording.",
-            )
+            set_tooltip("sliders apply on release; manual labels always win")
             lo, hi, _step = session.threshold_range
             self._slider_column(
                 "a1",
@@ -1429,8 +1406,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 "off"
                 if session.auto_pass is None
                 else f"{session.auto_pass_count()}/{session.n}",
-                "auto-pass peak: candidates whose marker sits at or above the teal "
-                "line on the trace pass; at the bottom all pass",
+                "candidates at or above this pass (teal line); at the bottom all pass",
             )
             plo, phi, _step = session.auto_pass_pc1_range
             side = session.auto_pass_pc1_side
@@ -1446,8 +1422,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 "off"
                 if session.auto_pass_pc1 is None
                 else f"{session.auto_pass_pc1_count()}/{session.n}",
-                f"PC1 auto-pass: candidates at or {'above' if side == 'right' else 'below'} this "
-                "value along the snippets' first principal component pass; the arrow flips the side",
+                f"candidates at or {'above' if side == 'right' else 'below'} this on the "
+                "snippets' PC1 pass; the arrow flips the side",
                 side=side,
                 flip=lambda: session.set_auto_pass_pc1_side(
                     "left" if side == "right" else "right"
@@ -1464,8 +1440,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 session.set_auto_template_threshold,
                 COSINE_COLOR,
                 f"{session.auto_template_count()}/{session.n}",
-                "cosine auto-pass: candidates whose seed-template cosine is at or above it pass, "
-                "below it they are rejected",
+                "seed-template cosine: at or above passes, below is rejected",
             )
 
     def _slider_column(
@@ -1531,10 +1506,11 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 flip()
             imgui.same_line(0, em(0.3))
             imgui.text_disabled(name)
-        set_tooltip(tooltip, show_mark=False)
         _centred_text(x0, width, count)
         imgui.dummy(imgui.ImVec2(width, 1))
         imgui.end_group()
+        if not imgui.is_any_item_active():
+            set_tooltip(tooltip, show_mark=False)
 
     def draw_tab(self) -> None:
         """The controls column, two tabs: Decision (with the event, navigation,
@@ -1724,8 +1700,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 if imgui.button(caption, wide):
                     self.set_box_mode(mode)
             set_tooltip(
-                f"box mode: right-drag a box on the trace or panel D, adjust its edges, "
-                f"then Apply (enter) labels every candidate inside {mode}; again or esc leaves",
+                f"right-drag a box on the trace; enter labels what's inside {mode}, esc leaves",
                 show_mark=False,
             )
         imgui.same_line(0, em(0.5))
@@ -1734,11 +1709,9 @@ class EventCurationWidget(SlowFastPanelsMixin):
         if imgui.button("Clear all", width):
             session.clear_labels()
         set_tooltip(
-            "drop every label of the peaks found now (the file keeps the settings)"
+            "drop the labels of the peaks found now; settings stay"
             if session.mode == SLOW_FAST
-            else "drop every manual label of this recording (the file keeps its "
-            "thresholds): the A2 / A3 / A4 rules decide every candidate again. "
-            "Manual labels, including boxed ones, always win over the rules.",
+            else "drop this recording's manual labels; A2 - A4 decide again",
             show_mark=False,
         )
         if not session.n:
@@ -1758,7 +1731,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
             self.exit_box_mode()
         set_tooltip("esc", show_mark=False)
         if self._box_rect is None:
-            imgui.text_disabled("right-drag a box on the trace or panel D")
+            imgui.text_disabled("right-drag a box on the trace")
         else:
             imgui.text_colored(
                 theme.to_vec4(BOX_COLORS[self.box_mode]),

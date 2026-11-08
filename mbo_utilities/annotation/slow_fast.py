@@ -129,6 +129,8 @@ class SlowFastSession:
         self.fs = 0.0
         self.recording_id = ""
         self.recording_label = ""
+        self.block = None
+        self.scan_labels: list[str] = []
         self.label_path: Path | None = None
         self.labels: dict[int, str] = {}
         self.excluded = False
@@ -142,6 +144,8 @@ class SlowFastSession:
         found = arr.results.units.get(unit)
         if found is None or roi not in found.roi_names:
             raise KeyError(f"{arr.path} has no trace for {unit} / {roi}")
+        self.block = found.attrs.get("block")
+        self.scan_labels = list(found.attrs.get("labels") or [])
         return self._open(
             events_positive_dff(arr, unit, roi),
             found.fs,
@@ -389,9 +393,10 @@ class SlowFastSession:
 def export_tables(sessions, folder) -> list[Path]:
     """Write loaded sessions' tables as three CSVs in ``folder`` (:data:`TABLE_FILES`).
 
-    ``recordings`` has one row per trace (excluded, counts, noise, d', settings),
-    ``slow`` and ``fast`` one row per event, keyed by ``recording_id``; the fast
-    table's ``label`` is the curation's yes / no / unlabeled.
+    ``recordings`` has one row per trace (block, its scan's labels, excluded,
+    counts, noise, d', settings), ``slow`` and ``fast`` one row per event, keyed
+    by ``recording_id``; the fast table's ``label`` is the curation's yes / no /
+    unlabeled.
     """
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
@@ -409,6 +414,8 @@ def export_tables(sessions, folder) -> list[Path]:
             {
                 **key,
                 "fs": session.fs,
+                "block": session.block,
+                "scan_labels": ";".join(session.scan_labels),
                 "excluded": session.excluded,
                 "n_slow": len(slow["slow_id"]),
                 "n_fast": len(fast["sample_index"]),
@@ -435,6 +442,8 @@ def export_tables(sessions, folder) -> list[Path]:
         "recordings": [
             *key_columns,
             "fs",
+            "block",
+            "scan_labels",
             "excluded",
             "n_slow",
             "n_fast",

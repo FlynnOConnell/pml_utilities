@@ -14,6 +14,7 @@ import logging
 import pickle
 import traceback
 from pathlib import Path
+from unittest.mock import Mock
 
 import h5py
 import numpy as np
@@ -851,6 +852,23 @@ class TestWidget:
         curation.exit_box_mode()
         assert curation.box_mode is None
         _each_panel(curation)
+
+    def test_no_tooltip_is_a_paragraph(self, curation, data_root, monkeypatch):
+        from mbo_utilities.gui import event_curation, slow_fast_panels
+
+        spy = Mock()
+        monkeypatch.setattr(event_curation, "set_tooltip", spy)
+        _load(curation, data_root)
+        _each_panel(curation)
+        tips = {call.args[0] for call in spy.call_args_list}
+        tips |= {
+            event_curation.COUPLING_TOOLTIP,
+            *event_curation.METHOD_TOOLTIPS.values(),
+        }
+        tips |= {row[-1] for row in slow_fast_panels.CARD + slow_fast_panels.ADVANCED}
+        assert len(tips) > 15
+        assert max(tip.count("\n") for tip in tips) <= 1
+        assert max(len(row) for tip in tips for row in tip.splitlines()) <= 90
 
     def test_close_gives_the_strip_back(self, curation):
         strip = curation.strip
