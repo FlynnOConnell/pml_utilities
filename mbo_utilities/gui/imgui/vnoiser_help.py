@@ -60,10 +60,6 @@ WIDTH_EM = 44
 WINDOW_SIZE = (760, 1000)
 
 TITLE = "vnoiser"
-TOOLTIP = (
-    "the steps, what each stage does to a trace, the vnoiser window and its domains, the curation "
-    "window and its rules, the files, the keybinds"
-)
 # the curation window's keys; its handler and its popup read this table
 KEYBINDS = (
     ("y", "label the focused candidate yes"),
@@ -196,8 +192,10 @@ WINDOW = (
         (
             "the scan on screen is ticked to start",
             "On screen only and All set the ticks",
-            "New environment: the first scan after the animal changed arena or track; a note for later "
-            "analysis, the pipeline does not use it",
+            "New block: the first scan after a condition changed; later analysis cuts scans into blocks "
+            "here",
+            "Change: names what changed at a block's first scan (New env, Reward switch, or your own words "
+            "under Labels)",
         ),
     ),
     (
@@ -254,8 +252,8 @@ DOMAIN_RULES = (
     ("to start", "one domain per ROI of the scan on screen: roi0, roi1, ..."),
     (
         "presets",
-        "One per ROI, All in one, Groups of N (right-click for N), From comment (when the unit's comment "
-        "names every ROI), Drawn ROIs (each ROI drawn in the ROI tool, exactly its pixels)",
+        "One per ROI, All in one, Groups of N (the box beside it), From comment (when a unit's comment "
+        "maps every ROI), Drawn ROIs (each ROI drawn in the ROI tool, exactly its pixels)",
     ),
     (
         "another scan",
@@ -273,7 +271,7 @@ DOMAIN_RULES = (
     ("Add, x", "a new row; remove a row"),
     (
         "Load, Save",
-        "domains.json beside the file: the domains, the ticked scans and the new-environment ticks; "
+        "domains.json beside the file: the domains, the ticked scans, the block ticks and labels; "
         "mbo vnoiser reads the same file",
     ),
 )
@@ -1007,8 +1005,6 @@ def draw_window(state: dict) -> None:
     imgui.same_line(0, 12)
     if imgui.small_button(f"{fa.ICON_FA_CIRCLE_QUESTION} vnoiser guide"):
         state["open"] = True
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(TOOLTIP)
     state["open"], state["keys"] = draw_vnoiser_help(state["open"], state["keys"])
     state["keys"] = draw_keybinds_popup(KEYBINDS, state["keys"], "Curation keybinds")
 

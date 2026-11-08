@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import time
 from dataclasses import asdict
@@ -84,6 +85,8 @@ __all__ = [
 DOMAINS_FILE = "domains.json"
 TRACES_DIR = "traces"
 TIMINGS_FILE = "timings.json"
+_ROI_MAP = re.compile(r"((?:\d+(?:-\d+)?,)*\d+(?:-\d+)?):([A-Za-z_]\w*)")
+_EACH_LINES = re.compile(r"((?:[A-Za-z_]\w*,\s*)+)each(\d+)lines?", re.IGNORECASE)
 
 
 def _munit_number(unit_key: str) -> str:
@@ -317,14 +320,17 @@ def scan_traces_from_mesc(
 
 
 def read_domains(path) -> dict:
-    """``{"domains", "scan_ids", "first_env"}`` from a ``domains.json`` or an
-    archive ``scanIDs_ROIs.pkl``.
+    """``{"domains", "run", "scan_ids", "first_env", "labels", "scan_labels"}``
+    from a ``domains.json`` or an archive ``scanIDs_ROIs.pkl``.
 
     The JSON holds ``{"domains": {"soma1": [0, 1, 2], "cell": {"rois": [3],
     "pixels": "correlated", "fraction": 0.3}, ...}, "scans": ["35", "38"],
-    "first_env": ["35"]}``: a domain is an ROI list (every pixel of those
-    ROIs) or a :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json`
-    entry; ``scans`` and ``first_env`` are optional. ``domains`` comes back
+    "first_env": ["35"], "labels": ["New env"], "scan_labels": {"38":
+    ["New env"]}}``: a domain is an ROI list (every pixel of those ROIs) or a
+    :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json` entry;
+    everything but ``domains`` is optional. ``run`` names the domains a run
+    takes (None: all), ``labels`` is the experiment's list (None when not
+    given) and ``scan_labels`` what changed at a scan. ``domains`` comes back
     as given, checked.
     """
     path = Path(path)
@@ -332,8 +338,11 @@ def read_domains(path) -> dict:
         rois = load_scan_rois(path)
         return {
             "domains": rois["domains"],
+            "run": None,
             "scan_ids": rois["scan_ids"],
             "first_env": rois["first_env"],
+            "labels": None,
+            "scan_labels": {},
         }
     doc = json.loads(path.read_text())
     found = domains_from_json(doc.get("domains") or {})
@@ -341,22 +350,41 @@ def read_domains(path) -> dict:
         raise ValueError(f"{path} defines no domains")
     return {
         "domains": {d.name: d.to_json() for d in found},
+        "run": None if "run" not in doc else [str(n) for n in doc["run"]],
         "scan_ids": [str(s) for s in doc.get("scans", [])],
         "first_env": [str(s) for s in doc.get("first_env", [])],
+        "labels": None
+        if "labels" not in doc
+        else [str(label) for label in doc["labels"]],
+        "scan_labels": {
+            str(s): [str(label) for label in picked]
+            for s, picked in doc.get("scan_labels", {}).items()
+        },
     }
 
 
-def comment_names(comment: str, n_rois: int) -> list[str] | None:
-    """One name per ROI from a unit comment that lists as many
-    (``"soma, bas1, api1"``), else None: ``"soma,bas1-3,api1-5"`` names
-    groups, not ROIs, and a free comment names nothing.
+def comment_groups(comment: str, n_rois: int) -> dict[str, list[int]] | None:
+    """``{name: rois}`` from a unit comment that maps every ROI exactly once, else None.
+
+    Reads the two forms the rig uses: ``"ROI0,13,14:soma,1-3:bg"`` and
+    ``"soma,bas1,api1,each2lines"`` (consecutive ROIs, as many as the count
+    says). A dropped separator (``151620:api4``, ``ROI01:soma``) leaves an
+    ROI out or names one twice, so that comment names nothing.
     """
-    names = [n.strip() for n in str(comment or "").split(",") if n.strip()]
-    if len(names) != n_rois or len(set(names)) != len(names):
-        return None
-    if any(not n.replace("_", "").replace("-", "").isalnum() for n in names):
-        return None
-    return names
+    text = str(comment or "")
+    groups = {}
+    for spec, name in _ROI_MAP.findall(text.partition("ROI")[2]):
+        bounds = [part.partition("-") for part in spec.split(",")]
+        groups[name] = [
+            r for lo, _, hi in bounds for r in range(int(lo), int(hi or lo) + 1)
+        ]
+    each = _EACH_LINES.search(text)
+    if each and not groups:
+        k = int(each[2])
+        names = [name.strip() for name in each[1].split(",")[:-1]]
+        groups = {n: list(range(i * k, (i + 1) * k)) for i, n in enumerate(names)}
+    named = sorted(r for rois in groups.values() for r in rois)
+    return groups if named == list(range(n_rois)) else None
 
 
 def write_domains_template(
@@ -365,8 +393,8 @@ def write_domains_template(
     """Write a ``domains.json`` to edit: the file's recordings as
     ``scans`` and one domain per ROI (``roi0: [0]``, ...; ``per_domain``
     groups consecutive ROIs instead, the archive's three lines per
-    domain), named from the unit comment when it lists as many names
-    (``'soma,bas1-3,api1-5'`` does not). Returns the path.
+    domain), or the named groups of the first scan's comment when it maps
+    every ROI (:func:`comment_groups`). Returns the path.
     """
     mesc_path = Path(mesc_path)
     path = Path(path) if path is not None else mesc_path.parent / DOMAINS_FILE
@@ -378,18 +406,20 @@ def write_domains_template(
         list(range(i, min(i + per_domain, n_rois)))
         for i in range(0, n_rois, per_domain)
     ]
-    names = comment_names(scans[0].get("comment"), len(groups)) or [
-        f"roi{g[0]}" if len(g) == 1 else f"domain{i + 1}" for i, g in enumerate(groups)
-    ]
+    domains = comment_groups(scans[0].get("comment"), n_rois) or {
+        f"roi{g[0]}" if len(g) == 1 else f"domain{i + 1}": g
+        for i, g in enumerate(groups)
+    }
     doc = {
         "mesc": mesc_path.name,
         "scans": [_munit_number(u["key"]) for u in scans],
         "first_env": [_munit_number(scans[0]["key"])],
-        "domains": {name: rois for name, rois in zip(names, groups, strict=True)},
+        "domains": domains,
         "note": "domains: name -> ROI indices (0-based, the order the lines or patches were drawn), "
         'or {"rois": [...], "pixels": "all|bright|active|correlated|mask", "fraction": 0.3, '
         '"mask": {"<roi>": [flat pixel indices]}}; scans: MUnit numbers in order; '
-        "first_env: the first scan of each environment",
+        "first_env: the first scan of each block, a change of condition, in order; "
+        'scan_labels: what changed there, {"<scan>": ["Reward switch"]}',
     }
     path.write_text(json.dumps(doc, indent=2))
     return path
@@ -715,6 +745,9 @@ def run_vnoiser_pipeline(
         info.update(provenance or {})
         processed = {s.scan_id for s in scans}
         first_env = [str(s) for s in first_env if str(s) in processed]
+        # analysis cuts blocks at this list by position, so the first scan always starts one
+        if scans and scans[0].scan_id not in first_env:
+            first_env.insert(0, scans[0].scan_id)
         writer = None
         if denoise:
             writer = PfWriter(
@@ -1043,8 +1076,8 @@ def preview_domain(
     (seconds), ``pixel_mean``, ``measured``, ``F`` (what dF/F is taken
     of), ``f0`` (its baseline), ``background``, ``reference``, ``dfof``,
     ``z`` (each ``(T,)`` or None), ``images`` / ``mask`` /
-    ``shape`` per ROI of the domain, ``rois``, ``fs`` and ``info``. The Run
-    tab draws it; it holds no pipeline rule of its own.
+    ``shape`` per ROI of the domain, ``name``, ``rois``, ``fs`` and ``info``.
+    The Run tab draws it; it holds no pipeline rule of its own.
     """
     from mbo_utilities.arrays.mesc import MescArray
 
@@ -1090,6 +1123,7 @@ def preview_domain(
         "reference": None if ex.reference is None else ex.reference[row],
         "dfof": dfof[0],
         "z": z[0],
+        "name": name,
         "rois": list(found[name].rois),
         "images": {r: ex.images[r] for r in found[name].rois},
         "mask": {r: ex.masks[name][r] for r in found[name].rois},

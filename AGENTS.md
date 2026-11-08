@@ -635,7 +635,9 @@ has as many ROIs. `seed_from_view` ticks `run` on the domains holding the ROI on
 screen, adding one when the table leaves it out; the task gets the ticked domains
 and the background domain. `drawn_domains` turns the ROI tool's ROIs into mask
 domains (`Domain.from_frame_mask`). The viewer's Invert Deflection seeds polarity
-`invert_f` and stays display only.
+`invert_f` and stays display only. `first_env` is the ordered block starts analysis
+slices by position (`scanID_1st_env`), so a run's first scan is always in it and a
+label never adds or removes an entry: `scan_labels` names what changed, beside it.
 
 **Runs and the viewer.** `MescArray.results` is the newest vnoiser run of the file
 that processed the unit on screen (`vnoiser_run_for_mesc`, `unit_for_source`), never
