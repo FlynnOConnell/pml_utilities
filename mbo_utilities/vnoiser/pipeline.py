@@ -61,6 +61,7 @@ from mbo_utilities.analysis.roi_traces import (
     extract_traces,
     roi_geometry,
 )
+from mbo_utilities.annotation.domains import DomainFile, domains_path
 from mbo_utilities.vnoiser.params import (
     OUTPUT_FORMATS,
     VnoiserDfofSettings,
@@ -319,19 +320,22 @@ def scan_traces_from_mesc(
     )
 
 
-def read_domains(path) -> dict:
+def read_domains(path, scans=None) -> dict:
     """``{"domains", "run", "scan_ids", "first_env", "labels", "scan_labels"}``
-    from a ``domains.json`` or an archive ``scanIDs_ROIs.pkl``.
+    from a domain file (:class:`~mbo_utilities.annotation.domains.DomainFile`)
+    or an archive ``scanIDs_ROIs.pkl``.
 
-    The JSON holds ``{"domains": {"soma1": [0, 1, 2], "cell": {"rois": [3],
-    "pixels": "correlated", "fraction": 0.3}, ...}, "scans": ["35", "38"],
-    "first_env": ["35"], "labels": ["New env"], "scan_labels": {"38":
-    ["New env"]}}``: a domain is an ROI list (every pixel of those ROIs) or a
-    :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json` entry;
-    everything but ``domains`` is optional. ``run`` names the domains a run
-    takes (None: all), ``labels`` is the experiment's list (None when not
-    given) and ``scan_labels`` what changed at a scan. ``domains`` comes back
-    as given, checked.
+    A domain is an ROI list (every pixel of those ROIs) or a
+    :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json` entry. The
+    table is the layout holding ``scans`` (MUnit numbers), or the file's only
+    one; ``scan_ids`` are that layout's scans, ``run`` the domains a run takes
+    (None: all), ``labels`` the experiment's list (None when not given) and
+    ``scan_labels`` what changed at a scan.
+
+    Raises
+    ------
+    ValueError
+        When ``scans`` span layouts, or none is given and the file has several.
     """
     path = Path(path)
     if path.suffix.lower() == ".pkl":
@@ -344,22 +348,31 @@ def read_domains(path) -> dict:
             "labels": None,
             "scan_labels": {},
         }
-    doc = json.loads(path.read_text())
-    found = domains_from_json(doc.get("domains") or {})
-    if not found:
-        raise ValueError(f"{path} defines no domains")
+    found = DomainFile.read(path)
+    scans = [str(s) for s in scans or []]
+    if scans:
+        layouts = [found.layout_of(s) for s in scans]
+        if any(lay is None for lay in layouts):
+            raise ValueError(f"{path.name} has no table for scans {scans}")
+        if any(lay is not layouts[0] for lay in layouts):
+            raise ValueError(
+                f"scans {scans} use different tables in {path.name}; run each layout on its own"
+            )
+        layout = layouts[0]
+    elif len(found.layouts) == 1:
+        layout = found.layouts[0]
+    else:
+        raise ValueError(
+            f"{path.name} holds {len(found.layouts)} layouts "
+            f"({'; '.join(', '.join(lay.scans) for lay in found.layouts)}); name the scans"
+        )
     return {
-        "domains": {d.name: d.to_json() for d in found},
-        "run": None if "run" not in doc else [str(n) for n in doc["run"]],
-        "scan_ids": [str(s) for s in doc.get("scans", [])],
-        "first_env": [str(s) for s in doc.get("first_env", [])],
-        "labels": None
-        if "labels" not in doc
-        else [str(label) for label in doc["labels"]],
-        "scan_labels": {
-            str(s): [str(label) for label in picked]
-            for s, picked in doc.get("scan_labels", {}).items()
-        },
+        "domains": dict(layout.domains),
+        "run": layout.run,
+        "scan_ids": list(layout.scans),
+        "first_env": list(found.first_env),
+        "labels": found.labels,
+        "scan_labels": dict(found.scan_labels),
     }
 
 
@@ -388,16 +401,18 @@ def comment_groups(comment: str, n_rois: int) -> dict[str, list[int]] | None:
 
 
 def write_domains_template(
-    mesc_path, path=None, *, units=None, per_domain: int = 1
+    mesc_path, path=None, *, units=None, per_domain: int = 1, root=None
 ) -> Path:
-    """Write a ``domains.json`` to edit: the file's recordings as
+    """Write a domain file to edit (``<stem>.domains.json`` in the ROI folder
+    under ``root``, see :func:`~mbo_utilities.annotation.domains.domains_path`,
+    unless ``path`` is given): the file's recordings as
     ``scans`` and one domain per ROI (``roi0: [0]``, ...; ``per_domain``
     groups consecutive ROIs instead, the archive's three lines per
     domain), or the named groups of the first scan's comment when it maps
     every ROI (:func:`comment_groups`). Returns the path.
     """
     mesc_path = Path(mesc_path)
-    path = Path(path) if path is not None else mesc_path.parent / DOMAINS_FILE
+    path = Path(path) if path is not None else domains_path(mesc_path, root)
     scans = scan_units(mesc_path, units)
     if not scans:
         raise ValueError(f"no recording with traces in {mesc_path}")
@@ -421,6 +436,7 @@ def write_domains_template(
         "first_env: the first scan of each block, a change of condition, in order; "
         'scan_labels: what changed there, {"<scan>": ["Reward switch"]}',
     }
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2))
     return path
 
