@@ -82,6 +82,17 @@ class TestDispatch:
         assert path.name in caplog.text
         assert isinstance(imread([path]), BrukerArray)
 
+    def test_a_dataset_folder_opens_its_nested_recordings(self, bruker_h5, tmp_path):
+        """A dataset folder holding only a subfolder of recordings opens the first of those."""
+        path, _ = bruker_h5
+        dir_imagings = tmp_path / "dataset" / "imagings"
+        dir_imagings.mkdir(parents=True)
+        nested = dir_imagings / path.name
+        nested.write_bytes(path.read_bytes())
+        (tmp_path / "dataset" / "dataset.toml").write_text('category = "dataset"\n')
+        arr = imread(tmp_path / "dataset")
+        assert isinstance(arr, BrukerArray) and arr.filenames == [nested]
+
 
 class TestShape:
     def test_labels_decide_axes(self, bruker_h5):

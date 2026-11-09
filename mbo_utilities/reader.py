@@ -322,7 +322,15 @@ def _imread_impl(
                     return TiffArray(p)
 
                 # a folder of whole recordings (a Bruker h5, a MESc each): the first by name opens
-                opened = _open_first_recording(sorted(p.iterdir()), p, kwargs)
+                entries = sorted(p.iterdir())
+                opened = _open_first_recording(entries, p, kwargs)
+                if opened is None and not any(
+                    f.is_file() and f.suffix.lower() in MBO_READABLE_FTYPES
+                    for f in entries
+                ):
+                    # a dataset folder with its recordings one level down
+                    nested = [f for d in entries if d.is_dir() for f in sorted(d.iterdir())]
+                    opened = _open_first_recording(nested, p, kwargs)
                 if opened is not None:
                     return opened
 
