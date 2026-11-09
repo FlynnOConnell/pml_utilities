@@ -999,11 +999,17 @@ def run_vnoiser_pipeline(
         )
         prov = _write_timing(pf_dir, usage)
         if as_zarr:
-            from mbo_utilities.results import Results, pipeline_files
+            from mbo_utilities.results import (
+                Results,
+                carry_curation,
+                newest_results,
+                pipeline_files,
+            )
 
             if progress_callback is not None:
                 progress_callback(0.97, "writing the results zarr")
             usage.begin("results")
+            previous = newest_results(results_path.parent, "vnoiser", source=mesc_path)
             results_path = Results.from_pf(pf_dir).write(results_path, overwrite=True)
             usage.end(f"wrote {results_path.name}")
             prov = _write_timing(pf_dir, usage)
@@ -1021,6 +1027,12 @@ def run_vnoiser_pipeline(
                     paths[f"{own.name}/{item.relative_to(own).as_posix()}"] = item
             paths[results_path.name] = results_path
             zarr.open_group(str(results_path), mode="r+").attrs["provenance"] = prov
+            if previous is not None and previous != results_path:
+                carried = carry_curation(results_path, previous)
+                if carried:
+                    logger.info(
+                        f"curation of {len(carried)} recordings carried over from {previous.name}"
+                    )
             timings_at = own / TIMINGS_FILE
         else:
             timings_at = pf_dir / TIMINGS_FILE
