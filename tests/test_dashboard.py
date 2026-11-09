@@ -19,6 +19,7 @@ from mbo_utilities.analysis.filters import (
     gaussian,
 )
 from mbo_utilities.analysis.mesc_placement import StackPlacement
+from mbo_utilities.analysis.roi_traces import roi_geometry
 from mbo_utilities.analysis.trace_readouts import (
     correlation_matrix,
     detect_events,
@@ -32,10 +33,12 @@ from mbo_utilities.annotation.display import (
     computed_zscore,
     display_trace,
 )
+from mbo_utilities.annotation.domains import DomainFile, Layout, domains_path
 from mbo_utilities.annotation.ngff import RoiFile
 from mbo_utilities.annotation.store import RoiLabelStore
 from mbo_utilities.arrays.features import MotionCorrection
 from mbo_utilities.dashboard import (
+    DOMAIN_SOURCE,
     FigureOutline,
     FigureSettings,
     FigureTrace,
@@ -332,6 +335,47 @@ def test_load_rows_reads_lines_and_drawn_rois_in_photons(tmp_path, mbo_dir):
     again = load_rows(path, "MSession_0/MUnit_35")
     np.testing.assert_array_equal(again[-1].F, drawn.F)
     assert len(list((mbo_dir / "cache" / "dashboard").glob("rec_*.npz"))) == 1
+
+
+def test_load_rows_adds_the_layouts_whole_roi_domains(tmp_path, mbo_dir):
+    """A domain row is its lines' pixel-weighted mean; a domain that picks
+    pixels inside its lines is left out; the app shows the scan's block, and
+    picking a domain colours its lines on the tissue.
+    """
+    path = mesc_with_conversion(tmp_path)
+    DomainFile(
+        [
+            Layout(
+                ["35", "38"],
+                {
+                    "pair": [0, 1],
+                    "cell": {"rois": [2], "pixels": "bright", "fraction": 0.3},
+                },
+            )
+        ],
+        first_env=["38"],
+        scan_labels={"38": ["Odor on"]},
+    ).write(domains_path(path))
+
+    rows = load_rows(path, "MSession_0/MUnit_35")
+    domains = [r for r in rows if r.source == DOMAIN_SOURCE]
+    assert [(r.name, r.extra["lines"]) for r in domains] == [("pair", [0, 1])]
+    sizes = {
+        k: h * w
+        for k, (h, w) in roi_geometry(imread(path, unit="MSession_0/MUnit_35")).items()
+    }
+    weighted = (sizes[0] * rows[0].F + sizes[1] * rows[1].F) / (sizes[0] + sizes[1])
+    np.testing.assert_allclose(domains[0].F, weighted, rtol=1e-6)
+
+    app = DashboardApp(path, unit="MUnit_38")
+    wait(app)
+    assert app.block == "block from MUnit_38: Odor on"
+    pair = next(r for r in app.rows if r.source == DOMAIN_SOURCE)
+    app.picked = {pair.key}
+    assert set(app._line_owners()) == {0, 1}
+    app.choose("MSession_0/MUnit_35")
+    wait(app)
+    assert app.block == ""
 
 
 def test_app_opens_a_unit_switches_kind_and_exports(tmp_path, mbo_dir):

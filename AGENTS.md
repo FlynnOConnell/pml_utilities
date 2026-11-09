@@ -38,7 +38,7 @@ pml_utilities/
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
 │   ├── analysis/             # scan-phase, linescan, phasecorr math, MESc stack placement; filters.py: zero-phase trace filters sized in Hz and ms; trace_readouts.py: spectrum, correlation, triggered average, d', motion coupling
-│   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation
+│   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation; the domain file
 │   ├── cli.py                # `mbo` (click)
 │   └── assets/docs/          # in-app help pages
 ├── pollen/                   # pollen calibration (console script `pollen`)
@@ -610,7 +610,7 @@ trace (`analysis/roi_traces.py`, GUI-free, no vnoiser import). An ROI is one Z
 index: on an AOD unit a line, patch or box cropped to `mesc_roi_extents` (a ragged
 box sits at the frame's top left); elsewhere the plane's whole frame, so a
 single-patch chessboard or a raster is a scan too (`arrays.mesc.is_trace_unit`: at
-least `MIN_TRACE_FRAMES`). `domains.json` and the task's `domains` take an ROI list
+least `MIN_TRACE_FRAMES`). The domain file and the task's `domains` take an ROI list
 (every pixel; the archive's `domain_ROInumber`) or `{"rois", "pixels", "fraction" |
 "mask"}`: `bright` / `active` / `correlated` keep the top fraction of each ROI's
 pixels by mean, high-passed SD or correlation with the ROI's mean (scored on
@@ -625,6 +625,26 @@ before dF/F) or `none`; `VnoiserSettings.polarity` raises when both are set and 
 runner reads it first. The results' `raw` kind is each domain's trace before
 inversion, so the Traces tab's own Invert Deflection is the only flip applied on
 screen.
+
+**The domain file** (`annotation/domains.py`, GUI-free, no vnoiser import) is the
+one table every window reads: `<stem>.domains.json` in the recording's
+`roi_folder` (`domains_path`; `find_domains` falls back to a `domains.json`
+beside the data, the one-table form). A `DomainFile` holds one `Layout` per set of
+scans whose ROI numbers mean the same lines (scans, domains, `run`), never found
+from line positions (stan110_expt1's move up to 7.6 um under one archive table),
+plus the file-wide `first_env`, `labels` and `scan_labels`. The vnoiser tab seeds
+from the shown scan's layout before the newest run, Save and Run write the ticked
+scans' layout (`put`; block ticks as given, a layout's first scan is not a file
+block start), and showing a scan of another layout brings its table; `mbo vnoiser`
+reads the layout of `--unit` (`read_domains(path, scans)`). The dashboard adds each
+whole-ROI domain of the unit's layout as a row (`domain_means`: the lines' means
+weighted by pixel count, the mean of every pixel; a pixel rule needs a pixel read
+and is left out), colours a picked domain's lines on the tissue and shows the
+scan's block; `mesc_reference.roi_domains` reads the layout before the newest run.
+The curation window orders recordings by scan or by domain and keeps to the
+blocks of one label (`Recording.block`, `labels`). A zarr run copies the previous
+run's curation of every recording whose scan and domain entry held, on the same
+channel, frames and planes (`results.carry_curation`).
 
 **The vnoiser widget** holds no trace math (the preview is
 `vnoiser.pipeline.preview_domain` on a `TracePreview` thread). Its domain table

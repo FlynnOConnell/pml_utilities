@@ -37,6 +37,12 @@ from mbo_utilities.analysis.roi_traces import (
     PIXEL_RULES,
     Domain,
 )
+from mbo_utilities.annotation.domains import (
+    DomainFile,
+    Layout,
+    domains_path,
+    find_domains,
+)
 from mbo_utilities.arrays.features._dim_labels import slider_roles
 from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._imgui_helpers import (
@@ -76,7 +82,7 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
 )
 from mbo_utilities.install import VNOISER_HINT
 from mbo_utilities.lazy_array import base_array
-from mbo_utilities.preferences import get_last_dir, set_last_dir
+from mbo_utilities.preferences import get_last_dir, get_roi_folder, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
 from mbo_utilities.results import (
     EXCLUDED_DOMAINS,
@@ -99,7 +105,6 @@ _IMPORTANT_FIELDS = {
     "thres_bp_sd",
     "thres_amp_sd",
 }
-DOMAINS_FILE = "domains.json"
 SCAN_LABELS = ("New env", "Reward switch")  # what an experiment starts with
 SCAN_COLUMN_HELP = {
     "New block": "the first scan after a condition changed; a run's first scan always is one",
@@ -444,7 +449,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         """Seed units, scans, domains, output folder and slicing when the dataset changes."""
         from mbo_utilities.vnoiser import vnoiser_run_for_mesc
         from mbo_utilities.vnoiser.params import VnoiserSettings
-        from mbo_utilities.vnoiser.pipeline import read_domains, scan_units
+        from mbo_utilities.vnoiser.pipeline import scan_units
 
         fpath = self.parent.fpath
         shown = getattr(self._array(), "unit_key", None)
@@ -452,9 +457,15 @@ class VnoiserPipelineWidget(PipelineWidget):
             # another unit of the same file on screen: the selection follows it
             if shown != self._last_unit and any(u["key"] == shown for u in self._units):
                 was = self._dims()[1]
+                book = self._read_book()
+                left = book and book.layout_of(str(self._last_unit).rsplit("_", 1)[-1])
+                entered = book and book.layout_of(str(shown).rsplit("_", 1)[-1])
                 self._last_unit = shown
                 self._scans = {u["key"]: u["key"] == shown for u in self._units}
                 self._seed_slicing()
+                if entered and entered is not left:
+                    # another layout's scan: its own table, edits to this one stay unsaved
+                    self._domains, self._selected = self._layout_rows(entered), 0
                 self._fit_domains(was)
             return
         self._last_fpath = fpath
@@ -513,19 +524,23 @@ class VnoiserPipelineWidget(PipelineWidget):
                 self._set_status(
                     f"The previous run at {run.name} could not be read: {e}", error=True
                 )
-        elif (mesc.parent / DOMAINS_FILE).exists():
-            try:
-                spec = read_domains(mesc.parent / DOMAINS_FILE)
-                domains, scan_ids, first_env = (
-                    spec["domains"],
-                    spec["scan_ids"],
-                    spec["first_env"],
-                )
-                labels, scan_labels = spec["labels"], spec["scan_labels"]
-                ticked = spec["run"]
-                self._domains_path = str(mesc.parent / DOMAINS_FILE)
-            except (OSError, ValueError, KeyError) as e:
-                self._domain_error = f"{DOMAINS_FILE}: {e}"
+        # the domain file is the table every window reads; it wins over the run's copy
+        book = self._read_book()
+        if book is not None:
+            layout = (
+                book.layout_of(str(shown).rsplit("_", 1)[-1])
+                if on_screen
+                else next(iter(book.layouts), None)
+            )
+            if layout is not None:
+                domains, ticked = layout.domains, layout.run
+                scan_ids = layout.scans or scan_ids
+            first_env, labels, scan_labels = (
+                book.first_env,
+                book.labels,
+                book.scan_labels,
+            )
+            self._set_status(f"Domains from {Path(self._domains_path).name}")
         if run is None and self.parent.invert_deflection:
             # the viewer shows the movie inverted: the run inverts the same way, once
             self.settings.polarity = "invert_f"
@@ -1062,46 +1077,103 @@ class VnoiserPipelineWidget(PipelineWidget):
             },
         }
 
-    def _load_domains_file(self) -> None:
-        """The domains, ticked scans and block ticks of ``domains.json`` beside the file."""
-        from mbo_utilities.vnoiser.pipeline import read_domains
-
-        path = self._mesc_path().parent / DOMAINS_FILE
+    def _read_book(self) -> DomainFile | None:
+        """The file's domain file (:func:`find_domains`), or None when there is none or it does not read (the reason in ``_domain_error``)."""
+        mesc = self._mesc_path()
+        found = None if mesc is None else find_domains(mesc, get_roi_folder() or None)
+        if found is None:
+            return None
         try:
-            spec = read_domains(path)
-            ticked = spec["run"]
-            rows = [
-                DomainRow.from_entry(n, v, ticked is None or n in ticked)
-                for n, v in spec["domains"].items()
-            ]
+            book = DomainFile.read(found)
         except (OSError, ValueError, KeyError) as e:
-            self._set_status(f"{path.name}: {e}", error=True)
+            self._domain_error = f"{found.name}: {e}"
+            return None
+        self._domains_path = str(found)
+        return book
+
+    @staticmethod
+    def _layout_rows(layout: Layout) -> list[DomainRow]:
+        return [
+            DomainRow.from_entry(n, v, layout.run is None or n in layout.run)
+            for n, v in layout.domains.items()
+        ]
+
+    def _load_domains_file(self) -> None:
+        """The table of the first ticked scan's layout in the domain file, its scans and every block tick."""
+        mesc = self._mesc_path()
+        found = find_domains(mesc, get_roi_folder() or None)
+        if found is None:
+            self._set_status(
+                f"No {domains_path(mesc, get_roi_folder() or None).name} yet: Save writes one.",
+                error=True,
+            )
+            return
+        ticked = [u["key"] for u in self._units if self._scans.get(u["key"])]
+        try:
+            book = DomainFile.read(found)
+            layout = (
+                book.layout_of(ticked[0].rsplit("_", 1)[-1])
+                if ticked
+                else next(iter(book.layouts), None)
+            )
+            if layout is None:
+                raise ValueError(f"no table for scan {ticked[0].rsplit('_', 1)[-1]}")
+            rows = self._layout_rows(layout)
+        except (OSError, ValueError, KeyError) as e:
+            self._set_status(f"{found.name}: {e}", error=True)
             return
         self._domains, self._selected = rows, 0
-        self._set_blocks(spec["first_env"], spec["labels"], spec["scan_labels"])
-        if spec["scan_ids"]:
+        self._set_blocks(book.first_env, book.labels, book.scan_labels)
+        if layout.scans:
             for u in self._units:
-                self._scans[u["key"]] = u["key"].rsplit("_", 1)[-1] in spec["scan_ids"]
+                self._scans[u["key"]] = u["key"].rsplit("_", 1)[-1] in layout.scans
         self._seed_slicing()
-        self._domains_path = str(path)
-        self._set_status(f"Loaded {path.name}")
+        self._domains_path = str(found)
+        self._set_status(f"Loaded {found.name}")
 
     def _save_domains_file(self) -> None:
-        """Write the table, its run ticks, ticked scans and block ticks to ``domains.json`` beside the file."""
+        """Write the table and its run ticks as the ticked scans' layout in the domain file, with their block ticks and the label list; other layouts and scans keep theirs."""
         rows = self._check_domains()
         if not rows:
             return
         mesc = self._mesc_path()
-        path = mesc.parent / DOMAINS_FILE
+        root = get_roi_folder() or None
+        path = domains_path(mesc, root)
+        found = find_domains(mesc, root)
+        try:
+            book = DomainFile() if found is None else DomainFile.read(found)
+        except (OSError, ValueError, KeyError) as e:
+            self._set_status(
+                f"{found.name} does not read, not overwritten: {e}", error=True
+            )
+            return
         scans = [u["key"] for u in self._units if self._scans.get(u["key"])]
-        doc = {
-            "mesc": mesc.name,
-            "scans": [k.rsplit("_", 1)[-1] for k in scans],
-            **self._block_args(scans),
-            "domains": {r.name.strip(): r.entry() for r in rows},
-            "run": [r.name.strip() for r in rows if r.run],
-        }
-        path.write_text(json.dumps(doc, indent=2))
+        numbers = [k.rsplit("_", 1)[-1] for k in scans]
+        book.put(
+            Layout(
+                numbers,
+                {r.name.strip(): r.entry() for r in rows},
+                [r.name.strip() for r in rows if r.run],
+            )
+        )
+        # only the ticks given: a layout's first scan starts a run's block, not the file's
+        file_first = self._units[0]["key"] if self._units else None
+        blocks = self._block_args(scans)
+        book.set_blocks(
+            numbers,
+            [
+                k.rsplit("_", 1)[-1]
+                for k in scans
+                if self._first_env.get(k) or k == file_first
+            ],
+            blocks["scan_labels"],
+        )
+        book.labels = blocks["labels"]
+        try:
+            book.write(path)
+        except OSError as e:
+            self._set_status(f"Cannot write {path}: {e}", error=True)
+            return
         self._domains_path = str(path)
         self._set_status(f"Saved {path.name}")
 
@@ -1172,12 +1244,15 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._inline("Load", right)
         if imgui.small_button("Load##vnoiser_dom_load"):
             self._load_domains_file()
-        set_tooltip(f"Load {DOMAINS_FILE} from beside the file.", show_mark=False)
+        set_tooltip(
+            "Load the ticked scan's table from the domain file (<file>.domains.json).",
+            show_mark=False,
+        )
         self._inline("Save", right)
         if imgui.small_button("Save##vnoiser_dom_save"):
             self._save_domains_file()
         set_tooltip(
-            f"Save the domains, ticked scans and block ticks to {DOMAINS_FILE} beside the file.",
+            "Save the table, ticked scans and block ticks to the domain file.",
             show_mark=False,
         )
 
@@ -2459,6 +2534,8 @@ class VnoiserPipelineWidget(PipelineWidget):
     def _submit(self, mesc: Path, scans: list[str], domains: dict, window) -> None:
         from mbo_utilities.gui.widgets.process_manager import get_process_manager
 
+        # the table a run used is the one the dashboard and curation window show
+        self._save_domains_file()
         args = {
             "input_path": str(mesc),
             "reader_kwargs": widget_reader_kwargs(self.parent.image_widget),

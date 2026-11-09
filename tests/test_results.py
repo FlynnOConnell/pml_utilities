@@ -3,6 +3,7 @@ round trip, and reading suite2p-shaped folders into it. The vnoiser
 pipeline's PF conversion is in ``test_vnoiser_pipeline.py``.
 """
 
+import json
 from datetime import datetime
 
 import numpy as np
@@ -453,3 +454,83 @@ def test_from_suite2p_refuses_two_dirs_of_one_plane(tmp_path):
     _suite2p_plane(tmp_path / "zplane01_tp00031-00060")
     with pytest.raises(ValueError, match="are both zplane01"):
         Results.from_suite2p(tmp_path)
+
+
+def test_carry_curation_copies_only_recordings_whose_domain_held(tmp_path):
+    """A rerun takes the previous run's labels of every scan and domain that
+    kept its lines; a changed domain and another channel start empty.
+    """
+    from mbo_utilities.results import CURATION_DIR, carry_curation
+
+    unit = ResultUnit(
+        "scan28",
+        "scan",
+        28,
+        fs=100.0,
+        roi_names=["soma", "dend"],
+        traces={"dff": np.zeros((2, 5), np.float32)},
+        member_kind="line",
+        members=[np.array([0, 1]), np.array([2])],
+        attrs={"scan_id": "28"},
+    )
+    source = {
+        "mesc": "x.mesc",
+        "units": {"28": "MSession_0/MUnit_28"},
+        "channel": 0,
+        "domains": {"soma": [0, 1], "dend": [2]},
+    }
+    old = Results(pipeline="vnoiser", units={"scan28": unit}, source=source).write(
+        tmp_path / "x.2026-11-08-10-00-00.vnoiser.zarr"
+    )
+    (old / CURATION_DIR).mkdir()
+    (old / CURATION_DIR / "slow_fast_curation.json").write_text(
+        json.dumps(
+            {
+                "method": "slow_fast",
+                "recordings": {
+                    "scan=28/domain=soma": {"labels": {"40": "yes"}},
+                    "scan=28/domain=dend": {"labels": {"7": "no"}},
+                },
+            }
+        )
+    )
+    (old / CURATION_DIR / "fast_template_curation.json").write_text(
+        json.dumps(
+            {
+                "mode": "fast",
+                "data_path": str(old),
+                "candidate_detection": {
+                    "thresholds": {
+                        "scan=28/domain=soma": 0.3,
+                        "scan=28/domain=dend": 0.4,
+                    }
+                },
+                "events": {
+                    "scan=28/domain=soma|sample=40": {
+                        "label": "yes",
+                        "recording": "scan=28/domain=soma",
+                    },
+                    "scan=28/domain=dend|sample=7": {
+                        "label": "no",
+                        "recording": "scan=28/domain=dend",
+                    },
+                },
+            }
+        )
+    )
+    moved = {**source, "domains": {"soma": [0, 1], "dend": [2, 3]}}
+    new = Results(pipeline="vnoiser", units={"scan28": unit}, source=moved).write(
+        tmp_path / "x.2026-11-08-11-00-00.vnoiser.zarr"
+    )
+    assert carry_curation(new, old) == ["scan=28/domain=soma"]
+    slow_fast = json.loads((new / CURATION_DIR / "slow_fast_curation.json").read_text())
+    assert list(slow_fast["recordings"]) == ["scan=28/domain=soma"]
+    fast = json.loads((new / CURATION_DIR / "fast_template_curation.json").read_text())
+    assert list(fast["events"]) == ["scan=28/domain=soma|sample=40"]
+    assert fast["candidate_detection"]["thresholds"] == {"scan=28/domain=soma": 0.3}
+    assert fast["data_path"] == str(new)
+
+    other = Results(
+        pipeline="vnoiser", units={"scan28": unit}, source={**source, "channel": 1}
+    ).write(tmp_path / "x.2026-11-08-12-00-00.vnoiser.zarr")
+    assert carry_curation(other, old) == []

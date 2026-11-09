@@ -48,12 +48,15 @@ from mbo_utilities.analysis.mesc_placement import (
     place_scan,
     zstack_files,
 )
+from mbo_utilities.analysis.roi_traces import domains_from_json
+from mbo_utilities.annotation.domains import DomainFile, find_domains
 from mbo_utilities.annotation.store import CLASS_COLORS
 from mbo_utilities.arrays.features._dim_labels import find_slider_name, slider_roles
 from mbo_utilities.arrays.mesc import list_mesc_units
 from mbo_utilities.arrays.mesc_geometry import image_overlays
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.imgui.summary import SummaryImageViewer
+from mbo_utilities.preferences import get_roi_folder
 from mbo_utilities.results import unit_for_source
 
 logger = log.get("gui.mesc_reference")
@@ -214,7 +217,22 @@ def stack_images(
 
 
 def roi_domains(mesc) -> dict[int, str]:
-    """``{roi: domain}`` from the newest run's line membership; empty without one."""
+    """``{roi: domain}`` from the unit's layout in the domain file, else the
+    newest run's line membership; empty without either. A line in several
+    domains takes the last.
+    """
+    found = find_domains(mesc.filenames[0], get_roi_folder() or None)
+    layout = (
+        None
+        if found is None
+        else DomainFile.read(found).layout_of(mesc.unit_key.rsplit("_", 1)[-1])
+    )
+    if layout is not None:
+        return {
+            int(line): d.name
+            for d in domains_from_json(layout.domains)
+            for line in d.rois
+        }
     results = mesc.results
     name = None if results is None else unit_for_source(results, mesc.unit_key)
     if name is None or results.units[name].member_kind != "line":

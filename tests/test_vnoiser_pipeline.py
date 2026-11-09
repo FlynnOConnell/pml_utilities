@@ -1153,18 +1153,20 @@ def test_groups_of_n_keep_the_leftover_rois():
     ]
 
 
-def test_widget_saves_and_loads_its_domains_file(tmp_path):
-    """Save writes the table and ticks beside the file, in the form ``mbo vnoiser``
+def test_widget_saves_and_loads_its_domains_file(tmp_path, monkeypatch):
+    """Save writes the table and ticks to the domain file, in the form ``mbo vnoiser``
     reads, and Load brings them back; a broken file leaves the table alone.
     """
     pytest.importorskip("imgui_bundle")
     from types import SimpleNamespace
 
+    from mbo_utilities.gui.widgets.pipelines import vnoiser as tab
     from mbo_utilities.gui.widgets.pipelines.vnoiser import (
         DomainRow,
         VnoiserPipelineWidget,
     )
 
+    monkeypatch.setattr(tab, "get_roi_folder", lambda: "")
     mesc = tmp_path / "chess.mesc"
     _chessboard_mesc(mesc, extra_unit=True)
     widget = VnoiserPipelineWidget(
@@ -1181,7 +1183,7 @@ def test_widget_saves_and_loads_its_domains_file(tmp_path):
     widget._labels = ["Odor on"]
     widget._scan_labels = {second: ["Odor on"]}
     widget._save_domains_file()
-    spec = read_domains(tmp_path / DOMAINS_FILE)
+    spec = read_domains(tmp_path / "chess.domains.json")
     assert spec["scan_ids"] == ["1", "2"] and spec["first_env"] == ["1", "2"]
     assert spec["domains"]["soma"] == [0, 2] and spec["run"] == ["soma"]
     assert spec["labels"] == ["Odor on"] and spec["scan_labels"] == {"2": ["Odor on"]}
@@ -1203,10 +1205,76 @@ def test_widget_saves_and_loads_its_domains_file(tmp_path):
     widget._load_domains_file()
     assert widget._labels == []
 
-    (tmp_path / DOMAINS_FILE).write_text("{")
+    (tmp_path / "chess.domains.json").write_text("{")
     widget._load_domains_file()
-    assert widget._last_status.startswith(DOMAINS_FILE)
+    assert widget._last_status.startswith("chess.domains.json")
     assert [r.name for r in widget._domains] == ["soma", "cell"]
+
+
+def test_widget_keeps_one_table_per_layout(tmp_path, monkeypatch):
+    """Saving one scan's table leaves the other layout's alone, a layout's first
+    scan is not made a block start of the file, and showing a scan of the other
+    layout brings its table.
+    """
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.annotation.domains import DomainFile
+    from mbo_utilities.gui.widgets.pipelines import vnoiser as tab
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import (
+        DomainRow,
+        VnoiserPipelineWidget,
+    )
+
+    monkeypatch.setattr(tab, "get_roi_folder", lambda: "")
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc, extra_unit=True)
+    parent = SimpleNamespace(
+        fpath=mesc,
+        image_widget=SimpleNamespace(
+            data=[SimpleNamespace(unit_key="MSession_0/MUnit_1")]
+        ),
+        invert_deflection=False,
+    )
+    widget = VnoiserPipelineWidget(parent)
+    widget._ensure_state()
+    first, second = (u["key"] for u in widget._units)
+    widget._domains = [DomainRow("soma", [0, 1])]
+    widget._scans = {first: True, second: False}
+    widget._save_domains_file()
+    widget._domains = [DomainRow("dend", [2])]
+    widget._scans = {first: False, second: True}
+    widget._save_domains_file()
+
+    book = DomainFile.read(tmp_path / "chess.domains.json")
+    assert [(lay.scans, list(lay.domains)) for lay in book.layouts] == [
+        (["1"], ["soma"]),
+        (["2"], ["dend"]),
+    ]
+    assert book.first_env == ["1"]
+
+    parent.image_widget.data = [SimpleNamespace(unit_key="MSession_0/MUnit_2")]
+    widget._ensure_state()
+    assert [r.name for r in widget._domains] == ["dend"]
+    parent.image_widget.data = [SimpleNamespace(unit_key="MSession_0/MUnit_1")]
+    widget._ensure_state()
+    assert [r.name for r in widget._domains] == ["soma"]
+
+
+def test_read_domains_picks_the_layout_of_the_scans(tmp_path):
+    from mbo_utilities.annotation.domains import DomainFile, Layout
+
+    path = DomainFile(
+        [Layout(["1", "2"], {"soma": [0, 1]}), Layout(["3"], {"dend": [2]})],
+        first_env=["1", "3"],
+    ).write(tmp_path / "x.domains.json")
+    assert read_domains(path, ["3"])["domains"] == {"dend": [2]}
+    spec = read_domains(path, ["1", "2"])
+    assert spec["scan_ids"] == ["1", "2"] and spec["first_env"] == ["1", "3"]
+    with pytest.raises(ValueError, match="different tables"):
+        read_domains(path, ["2", "3"])
+    with pytest.raises(ValueError, match="2 layouts"):
+        read_domains(path)
 
 
 def test_widget_loads_its_own_run_when_the_worker_finishes(tmp_path, monkeypatch):
