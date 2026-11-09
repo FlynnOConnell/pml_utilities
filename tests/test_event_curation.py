@@ -1753,3 +1753,51 @@ class TestMotion:
         assert not curation.motion[(str(mesc), unit)]
         _each_panel(curation)
         assert curation.panel.height == PANEL_HEIGHT
+
+
+def test_the_catalog_carries_blocks_and_orders_by_domain(curation):
+    """Each recording carries its block and what changed at the block's start;
+    the table orders by scan or by domain and keeps to one label's blocks.
+    """
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.event_curation import _build_catalog
+    from mbo_utilities.results import ResultUnit
+
+    units = {
+        f"scan{s}": ResultUnit(
+            f"scan{s}",
+            "scan",
+            s,
+            fs=100.0,
+            roi_names=["soma", "dend"],
+            traces={"dff": np.zeros((2, 4), np.float32)},
+            attrs={"scan_id": str(s), "block": block, "labels": labels},
+        )
+        for s, block, labels in ((1, 0, []), (2, 1, ["Odor on"]), (3, 1, []))
+    }
+    catalog = _build_catalog(
+        SimpleNamespace(results=SimpleNamespace(units=units), path="run")
+    )
+    assert [(r.unit, r.block, r.labels) for r in catalog[::2]] == [
+        ("scan1", 0, []),
+        ("scan2", 1, ["Odor on"]),
+        ("scan3", 1, ["Odor on"]),
+    ]
+    curation.catalog = catalog
+    assert [r.rid for r in curation.shown][:3] == [
+        "scan=1/domain=soma",
+        "scan=1/domain=dend",
+        "scan=2/domain=soma",
+    ]
+    curation.group_by = "domain"
+    assert [r.rid for r in curation.shown] == [
+        "scan=1/domain=soma",
+        "scan=2/domain=soma",
+        "scan=3/domain=soma",
+        "scan=1/domain=dend",
+        "scan=2/domain=dend",
+        "scan=3/domain=dend",
+    ]
+    curation.label_filter = "Odor on"
+    assert [r.unit for r in curation.shown] == ["scan2", "scan3", "scan2", "scan3"]
