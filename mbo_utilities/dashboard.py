@@ -51,6 +51,7 @@ __all__ = [
     "MinMaxPyramid",
     "PALETTES",
     "ReadoutSettings",
+    "DOMAIN_SOURCE",
     "Readouts",
     "TraceView",
     "bar_label",
@@ -112,6 +113,7 @@ EDITABLE_TEXT = {"svg.fonttype": "none", "pdf.fonttype": 42}
 KIND_UNITS = {"raw": "photons", "dff": "% dF/F", "zscore": "SD"}
 # bump when what a cache file holds changes
 CACHE_VERSION = 2
+DOMAIN_SOURCE = "domains"  # a domain row's source; its lines are extra["lines"]
 PYRAMID_FACTOR = 4
 
 
@@ -309,14 +311,20 @@ def _drawn_store(path: Path, arr):
 
 def load_rows(path, unit: str, channel: int = 0, progress=None) -> list[RoiTrace]:
     """One ``RoiTrace`` per ROI of a ``.mesc`` unit: each line's or patch's
-    raw mean in photon counts, then each ROI drawn on it in the ROI tool
-    (the mean of its pixels on its ROI), all read from ``channel``.
+    raw mean in photon counts, then each whole-ROI domain of the unit's layout
+    in the domain file (:func:`~mbo_utilities.annotation.domains.domain_means`,
+    source :data:`DOMAIN_SOURCE`, its lines in ``extra["lines"]``), then each
+    ROI drawn on it in the ROI tool (the mean of its pixels on its ROI), all
+    read from ``channel``.
 
     The traces are cached under ``~/.mbo/cache/dashboard``; nothing is
     written beside the data. ``progress(i, k, seconds)`` follows each ROI of
     a first read.
     """
+    from mbo_utilities.analysis.roi_traces import roi_geometry
+    from mbo_utilities.annotation.domains import DomainFile, domain_means, find_domains
     from mbo_utilities.lazy_array import base_array
+    from mbo_utilities.preferences import get_roi_folder
     from mbo_utilities.reader import imread
     from mbo_utilities.roi_workflow import as_movie, measure_mean, unit_roi_means
 
@@ -376,6 +384,35 @@ def load_rows(path, unit: str, channel: int = 0, progress=None) -> list[RoiTrace
                 extra=extra,
             )
         )
+    found = find_domains(path, get_roi_folder() or None)
+    layout = (
+        None
+        if found is None
+        else DomainFile.read(found).layout_of(munit.rsplit("_", 1)[-1])
+    )
+    if layout is not None:
+        sizes = {r: h * w for r, (h, w) in roi_geometry(arr).items()}
+        means = domain_means(lines, layout.domains, sizes)
+        if len(means) < len(layout.domains):
+            logger.info(
+                f"dashboard: {', '.join(n for n in layout.domains if n not in means)} "
+                "pick pixels inside their lines and need a pixel read; left out"
+            )
+        for name, trace in means.items():
+            rois = list(layout.domains[name])
+            rows.append(
+                RoiTrace(
+                    uid=0,
+                    member=name,
+                    source=DOMAIN_SOURCE,
+                    label=name,
+                    fs=fs,
+                    z=rois[0],
+                    c=int(channel),
+                    F=trace,
+                    extra={"unit": "photons", "lines": rois},
+                )
+            )
     for i, trace in enumerate(drawn):
         record = store.rois[i]
         rows.append(

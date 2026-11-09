@@ -37,8 +37,10 @@ from mbo_utilities import log
 from mbo_utilities.analysis.dff import NOISE_ESTIMATES
 from mbo_utilities.analysis.filters import FILTERS, describe
 from mbo_utilities.annotation.display import DFF_METHODS
+from mbo_utilities.annotation.domains import DomainFile, find_domains
 from mbo_utilities.dashboard import (
     COLORS,
+    DOMAIN_SOURCE,
     KIND_UNITS,
     KINDS,
     PALETTES,
@@ -71,6 +73,7 @@ from mbo_utilities.gui.imgui.lines import (
     vec4,
 )
 from mbo_utilities.gui.launch import launch_window
+from mbo_utilities.preferences import get_roi_folder
 from mbo_utilities.roi_workflow import roi_folder
 
 logger = log.get("gui.dashboard_app")
@@ -170,6 +173,7 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         self.active = -1
         self.folder = ""
         self.status = ""
+        self.block = ""
         self.error = ""
         self.row_height = ROW_HEIGHT
         self.frames = 0
@@ -315,11 +319,27 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         self.windows, self.active = [], -1
         self.folder = str(roi_folder(self.path) / "figures")
         drawn = sum(r.source == "drawn" for r in rows)
+        domains = sum(r.source == DOMAIN_SOURCE for r in rows)
         self.status = (
-            f"{self.unit.rsplit('/', 1)[-1]}: {len(rows) - drawn} ROIs"
+            f"{self.unit.rsplit('/', 1)[-1]}: {len(rows) - drawn - domains} ROIs"
+            + (f", {domains} domains" if domains else "")
             + (f", {drawn} drawn" if drawn else "")
             + f" at {fs:.0f} Hz, {self.duration[1]:.0f} s"
         )
+        self.block = self._block_line()
+
+    def _block_line(self) -> str:
+        """The unit's block in the domain file: its start and what changed there."""
+        found = find_domains(self.path, get_roi_folder() or None)
+        if found is None:
+            return ""
+        book = DomainFile.read(found)
+        scans = [u["key"].rsplit("_", 1)[-1] for u in self.units]
+        start = book.block_start(self.unit.rsplit("_", 1)[-1], scans)
+        if start is None:
+            return ""
+        changed = ", ".join(book.scan_labels.get(start, []))
+        return f"block from MUnit_{start}" + (f": {changed}" if changed else "")
 
     def _picked_rows(self) -> list:
         return [r for r in self.rows if r.key in self.picked]
@@ -415,6 +435,9 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             imgui.text_colored(ERROR, self.error)
         else:
             imgui.text_disabled(self.status)
+        if self.block and self.rows:
+            imgui.same_line()
+            imgui.text(self.block)
         imgui.separator()
 
     def _draw_open(self) -> None:
@@ -493,11 +516,11 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         imgui.same_line()
         if imgui.small_button("none"):
             self.picked = set()
-        drawn_header = False
+        headers = set()
         for row in self.rows:
-            if row.source == "drawn" and not drawn_header:
-                imgui.separator_text("drawn")
-                drawn_header = True
+            if row.source in ("drawn", DOMAIN_SOURCE) and row.source not in headers:
+                imgui.separator_text(row.source)
+                headers.add(row.source)
             r, g, b = rgb(self._color(row))
             imgui.color_button(
                 f"##c{row.key}",
@@ -519,6 +542,9 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
                     f"{e.get('length_um', 0):.1f} um long, a sample every "
                     f"{e.get('sample_um', 0):.2f} um"
                 )
+            if imgui.is_item_hovered() and row.source == DOMAIN_SOURCE:
+                lines = ", ".join(f"ROI {k}" for k in row.extra["lines"])
+                imgui.set_tooltip(f"mean of every pixel of {lines}")
 
     def _draw_plots(self) -> None:
         if self.show_morphology:
