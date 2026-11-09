@@ -269,6 +269,8 @@ class Recording:
     errors: dict[str, str] = field(default_factory=dict)  # mode -> why it did not load
     unit: str = ""
     roi: str = ""
+    block: int | None = None  # the run's block number, None before the run had blocks
+    labels: list[str] = field(default_factory=list)  # what changed at its block's start
 
 
 class EventCurationWidget(SlowFastPanelsMixin):
@@ -325,6 +327,8 @@ class EventCurationWidget(SlowFastPanelsMixin):
         self.on_recording = None
         self._last_recording = None
         self.scope = None
+        self.group_by = "scan"
+        self.label_filter = ""
         self.data_path = ""
         self.prompt = PathPrompt(
             "Curation data",
@@ -392,13 +396,21 @@ class EventCurationWidget(SlowFastPanelsMixin):
         return session if session is not None and session.loaded else None
 
     def in_scope(self, rec: Recording) -> bool:
-        """True when the host shows this recording (see ``scope``)."""
-        return self.scope is None or bool(self.scope(rec))
+        """True when the host shows this recording (see ``scope``) and it is in a block of ``label_filter``."""
+        return (self.scope is None or bool(self.scope(rec))) and (
+            not self.label_filter or self.label_filter in rec.labels
+        )
 
     @property
     def shown(self) -> list[Recording]:
-        """The catalog narrowed to the host's scope."""
-        return [r for r in self.catalog if self.in_scope(r)]
+        """The catalog narrowed to the host's scope and the label filter, by
+        scan or, with ``group_by`` ``"domain"``, each domain across its scans.
+        """
+        rows = [r for r in self.catalog if self.in_scope(r)]
+        if self.group_by == "domain":
+            order = {roi: i for i, roi in enumerate(dict.fromkeys(r.roi for r in rows))}
+            rows.sort(key=lambda r: order[r.roi])
+        return rows
 
     def recording(self, rid: str) -> Recording | None:
         return next((r for r in self.catalog if r.rid == rid), None)
@@ -1609,9 +1621,16 @@ class EventCurationWidget(SlowFastPanelsMixin):
             | imgui.TableFlags_.borders_inner_h
             | imgui.TableFlags_.sizing_fixed_fit
         )
-        if not imgui.begin_table("##curation_recordings", 3, flags):
+        self._draw_grouping()
+        blocks = any(r.block is not None for r in self.catalog)
+        columns = (
+            ("recording", "block", "cand", "yes / no")
+            if blocks
+            else ("recording", "cand", "yes / no")
+        )
+        if not imgui.begin_table("##curation_recordings", len(columns), flags):
             return
-        for name in ("recording", "cand", "yes / no"):
+        for name in columns:
             imgui.table_setup_column(name)
         imgui.table_headers_row()
         for rec in rows_shown:
@@ -1631,6 +1650,11 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 imgui.set_tooltip(
                     rec.label if not rec.pre_denoised else f"{rec.label}\n{rec.source}"
                 )
+            if blocks:
+                imgui.table_next_column()
+                imgui.text("" if rec.block is None else str(rec.block))
+                if rec.labels and imgui.is_item_hovered():
+                    imgui.set_tooltip(", ".join(rec.labels))
             imgui.table_next_column()
             if ready and session.mode == SLOW_FAST and session.excluded:
                 imgui.text_disabled("excl")
@@ -1649,6 +1673,25 @@ class EventCurationWidget(SlowFastPanelsMixin):
                 yes, no, _un = session.counts()
                 imgui.text(f"{yes} / {no}")
         imgui.end_table()
+
+    def _draw_grouping(self) -> None:
+        """Order the table by scan or by domain, and narrow it to the blocks of one label."""
+        for value in ("scan", "domain"):
+            if imgui.radio_button(f"by {value}##rec_group", self.group_by == value):
+                self.group_by = value
+            imgui.same_line(0, em(0.6))
+        imgui.new_line()
+        set_tooltip("the order of the table and of the arrow keys", show_mark=False)
+        labels = list(dict.fromkeys(x for r in self.catalog for x in r.labels))
+        if not labels:
+            return
+        imgui.set_next_item_width(em(9))
+        names = ["every block", *labels]
+        index = names.index(self.label_filter) if self.label_filter in names else 0
+        changed, index = imgui.combo("##rec_label", index, names)
+        if changed:
+            self.label_filter = "" if index == 0 else names[index]
+        set_tooltip("only the blocks that start with this change", show_mark=False)
 
     def _draw_filter(self, session) -> None:
         section("View")
@@ -1833,8 +1876,16 @@ class EventCurationWidget(SlowFastPanelsMixin):
 def _build_catalog(run: ResultsArray) -> list[Recording]:
     """Every ROI trace a run holds that a method can curate (a denoised trace
     for vnoiser, dF/F or raw for slow / fast), units in the pipeline's order
-    and ROIs in the run's; a unit without a sampling rate is left out.
+    and ROIs in the run's; a unit without a sampling rate is left out. Each
+    carries its unit's block and the labels of that block's start.
     """
+    units = run.results.units
+    changed: dict[int, list[str]] = {}
+    for unit in units.values():
+        if unit.attrs.get("block") is not None:
+            changed.setdefault(unit.attrs["block"], []).extend(
+                unit.attrs.get("labels") or []
+            )
     return [
         Recording(
             recording_id(unit, roi),
@@ -1843,8 +1894,10 @@ def _build_catalog(run: ResultsArray) -> list[Recording]:
             True,
             unit=name,
             roi=roi,
+            block=unit.attrs.get("block"),
+            labels=list(dict.fromkeys(changed.get(unit.attrs.get("block"), []))),
         )
-        for name, unit in run.results.units.items()
+        for name, unit in units.items()
         if unit.fs and {"denoised", "dff", "raw"} & set(unit.traces)
         for roi in unit.roi_names
     ]

@@ -1903,8 +1903,8 @@ def spike_average(
     "domains_path",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
-    help="domains.json (or an archive scanIDs_ROIs.pkl) naming which ROIs make each domain. "
-    "Default: domains.json beside the file.",
+    help="Domain file (or an archive scanIDs_ROIs.pkl) naming which ROIs make each domain. "
+    "Default: <stem>.domains.json in the ROI folder, else domains.json beside the file.",
 )
 @click.option(
     "--unit",
@@ -1974,7 +1974,7 @@ def spike_average(
     "--init",
     is_flag=True,
     default=False,
-    help="Write a domains.json template beside the file (one domain per ROI) and exit.",
+    help="Write a <stem>.domains.json template in the ROI folder (one domain per ROI) and exit.",
 )
 @click.option(
     "--recommended",
@@ -2138,9 +2138,10 @@ def vnoiser(
 
     if not HAS_VNOISER:
         raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
+    from mbo_utilities.annotation.domains import find_domains
+    from mbo_utilities.preferences import get_roi_folder
     from mbo_utilities.vnoiser.params import VnoiserSettings
     from mbo_utilities.vnoiser.pipeline import (
-        DOMAINS_FILE,
         read_domains,
         run_vnoiser_pipeline,
         scan_units,
@@ -2158,17 +2159,25 @@ def vnoiser(
                 param_hint="MESC_PATH",
             )
         mesc_path = Path(found)
+    root = get_roi_folder() or None
     if init:
-        path = write_domains_template(mesc_path, units=list(units) or None)
+        path = write_domains_template(mesc_path, units=list(units) or None, root=root)
         click.echo(
             f"wrote {path}; name the domains and group the ROIs, then run `mbo vnoiser` again"
         )
         return
-    if domains_path is not None:
-        spec = read_domains(domains_path)
-    elif (mesc_path.parent / DOMAINS_FILE).exists():
-        spec = read_domains(mesc_path.parent / DOMAINS_FILE)
-        click.echo(f"domains: {mesc_path.parent / DOMAINS_FILE}")
+    domains_file = (
+        Path(domains_path)
+        if domains_path is not None
+        else find_domains(mesc_path, root)
+    )
+    if domains_file is not None:
+        try:
+            spec = read_domains(domains_file, [u.rsplit("_", 1)[-1] for u in units])
+        except ValueError as e:
+            raise click.BadParameter(str(e), param_hint="--unit")
+        if domains_path is None:
+            click.echo(f"domains: {domains_file}")
     else:
         try:
             first = scan_units(mesc_path, list(units) or None)
@@ -2188,7 +2197,7 @@ def vnoiser(
             "scan_labels": {},
         }
         click.echo(
-            f"no {DOMAINS_FILE}: one domain per ROI ({n_rois}); --init writes one to edit"
+            f"no domain file: one domain per ROI ({n_rois}); --init writes one to edit"
         )
     settings = VnoiserSettings.recommended() if recommended else VnoiserSettings()
     if convert:

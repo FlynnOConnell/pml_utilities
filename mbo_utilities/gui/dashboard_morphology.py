@@ -25,6 +25,7 @@ from mbo_utilities.analysis.mesc_placement import StackPlacement
 from mbo_utilities.arrays.mesc import MescArray
 from mbo_utilities.arrays.mesc_geometry import viewport_geometry
 from mbo_utilities.dashboard import (
+    DOMAIN_SOURCE,
     FigureOutline,
     bar_label,
     export_morphology,
@@ -225,7 +226,7 @@ class MorphologyMixin:
         image = self.morph_images[self.morph_key]
         rois = None
         if self.morph_picked_only:
-            rois = {r.member for r in self._picked_rows() if r.source != "drawn"}
+            rois = set(self._line_owners())
         span = slice_range(image, rois, self.morph_pad)
         return image.key, None if span == slice_range(image, None, 0) else span
 
@@ -252,7 +253,22 @@ class MorphologyMixin:
         return self._morph_textures[self._morph_on]
 
     def _roi_rows(self) -> dict:
-        return {r.member: r for r in self.rows if r.source != "drawn"}
+        """``{line: row}`` of the unit's own lines or patches."""
+        return {r.extra["line"]: r for r in self.rows if "line" in (r.extra or {})}
+
+    def _line_owners(self) -> dict:
+        """``{line: row}`` for the lines drawn in colour: a picked line in its
+        own row's, a line of a picked domain in the domain's.
+        """
+        owners = {
+            line: r
+            for r in self._picked_rows()
+            if r.source == DOMAIN_SOURCE
+            for line in r.extra["lines"]
+        }
+        return owners | {
+            line: r for line, r in self._roi_rows().items() if r.key in self.picked
+        }
 
     def _toggle_row(self, row) -> None:
         self.picked = (
@@ -276,12 +292,12 @@ class MorphologyMixin:
         return best
 
     def _draw_outlines(self, image: ReferenceImage) -> None:
-        """Unpicked ROIs in grey, then the picked ones over them in their rows' colours."""
-        rows = self._roi_rows()
+        """Unpicked ROIs in grey, then the picked ones and the picked domains' over them in their rows' colours."""
+        rows = self._line_owners()
         for picked in (False, True):
             for record in image.records:
                 row = rows.get(record["roi"])
-                if (row is not None and row.key in self.picked) != picked:
+                if (row is not None) != picked:
                     continue
                 col, y = record["pixels"].T
                 line(
@@ -435,17 +451,22 @@ class MorphologyMixin:
         draw thread; :func:`write_morphology` is the worker's half.
         """
         image = self.morph_images[self.morph_key]
-        rows = self._roi_rows()
+        rows = self._line_owners()
         settings = self._settings(*self.x_view)
-        outlines = [
-            FigureOutline(
-                rows[r["roi"]].name,
-                np.asarray(r["pixels"]),
-                self._color(rows[r["roi"]], "dark"),
+        outlines, named = [], set()
+        for r in image.records:
+            if r["roi"] not in rows:
+                continue
+            row = rows[r["roi"]]
+            # a domain's name goes on its first line only
+            outlines.append(
+                FigureOutline(
+                    "" if row.key in named else row.name,
+                    np.asarray(r["pixels"]),
+                    self._color(row, "dark"),
+                )
             )
-            for r in image.records
-            if r["roi"] in rows and rows[r["roi"]].key in self.picked
-        ]
+            named.add(row.key)
         munit = str(self.unit).rsplit("/", 1)[-1]
         stem = Path(self.folder) / f"{self.path.stem}_{munit}_morphology"
         info = {

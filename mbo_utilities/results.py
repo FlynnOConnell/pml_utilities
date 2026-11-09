@@ -1058,6 +1058,74 @@ def recording_id(unit: ResultUnit, roi: str) -> str:
     return f"scan={unit.attrs.get('scan_id', unit.index)}/domain={roi}"
 
 
+def carry_curation(run, previous) -> list[str]:
+    """Copy ``previous``'s curation into ``run``'s (both results files, under
+    :data:`CURATION_DIR`) for every recording whose scan and domain (name,
+    ROIs, pixel rule) are the same in both, read on the same channel, frames
+    and planes; returns the recording ids carried. Labels sit on samples, so
+    one whose peak a changed setting moved matches nothing.
+    """
+    run, previous = Path(run), Path(previous)
+    old_dir, new_dir = previous / CURATION_DIR, run / CURATION_DIR
+    if not old_dir.is_dir():
+        return []
+    was = (
+        json.loads((previous / "zarr.json").read_text())["attributes"].get("source")
+        or {}
+    )
+    now = json.loads((run / "zarr.json").read_text())["attributes"].get("source") or {}
+    if any(was.get(k) != now.get(k) for k in ("channel", "frames", "planes")):
+        return []
+    old_domains = was.get("domains") or {}
+    same = [
+        n
+        for n, entry in (now.get("domains") or {}).items()
+        if old_domains.get(n) == entry
+    ]
+    scans = [s for s in now.get("units") or {} if s in (was.get("units") or {})]
+    rids = {f"scan={s}/domain={d}" for s in scans for d in same}
+    carried = set()
+    for file in sorted(old_dir.glob("*.json")):
+        doc = json.loads(file.read_text())
+        target = new_dir / file.name
+        out = json.loads(target.read_text()) if target.is_file() else {}
+        if isinstance(doc.get("recordings"), dict):
+            # slow / fast: one entry per recording
+            taken = {k: v for k, v in doc["recordings"].items() if k in rids}
+            out = {**doc, **out, "recordings": taken | out.get("recordings", {})}
+        elif isinstance(doc.get("events"), dict):
+            # vnoiser's: events keyed "<rid>|sample=<n>", detection settings keyed by rid
+            taken = {
+                k: v
+                for k, v in doc["events"].items()
+                if v.get("recording", k.split("|sample=")[0]) in rids
+            }
+            detection = {
+                key: {r: x for r, x in value.items() if r in rids}
+                if isinstance(value, dict)
+                else value
+                for key, value in (doc.get("candidate_detection") or {}).items()
+            }
+            out = {
+                **doc,
+                **out,
+                "data_path": str(run),
+                "candidate_detection": detection | out.get("candidate_detection", {}),
+                "events": taken | out.get("events", {}),
+            }
+            taken = {
+                v.get("recording", k.split("|sample=")[0]) for k, v in taken.items()
+            }
+        else:
+            continue
+        if not taken:
+            continue
+        carried |= set(taken)
+        new_dir.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(out, indent=2))
+    return sorted(carried)
+
+
 def _read_pickle(path):
     """A PF folder's pickle, or None when it is not there."""
     path = Path(path)

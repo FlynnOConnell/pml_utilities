@@ -372,7 +372,7 @@ same baseline durations. One run takes scans of one frame rate.
 
 `--recommended` sets what new recordings want (the conversion offset and the
 robust z-score); without it every default is the archive's. Without a
-`domains.json` every ROI is its own domain.
+domain file every ROI is its own domain.
 
 Until 2026-10-09 this pipeline was called `voltage` (`mbo voltage`, the
 **Voltage** tab, `*.voltage.zarr`). `python scripts/convert_vnoiser_results.py
@@ -383,20 +383,26 @@ that still say so, and `--write` renames them.
 mbo vnoiser scan.mesc --recommended --unit MUnit_5         # one single-patch chessboard, every ROI its own domain
 mbo vnoiser scan.mesc --recommended --pixels correlated --fraction 0.2 --background outside
 mbo vnoiser scan.mesc --polarity invert_f --reference regress --dfof percentile --no-denoise
-mbo vnoiser stan112_expt12.mesc --init                      # domains.json template beside the file
-mbo vnoiser stan112_expt12.mesc                             # every scan in domains.json
+mbo vnoiser stan112_expt12.mesc --init                      # stan112_expt12.domains.json template in the ROI folder
+mbo vnoiser stan112_expt12.mesc                             # every scan in the domain file's one layout
 mbo vnoiser stan112_expt12.mesc --unit MUnit_35 -o PF_new   # one scan, elsewhere
 mbo vnoiser stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl --overwrite
 mbo vnoiser stan112_expt12.mesc -p 1 -p 2 -p 3              # only ROIs 1-3 (the unit's Z axis); domains are cut down to them
 mbo curate X:/data/asako/stan112/stan112_expt12             # then curate it
 ```
 
-`domains.json` names the domains and their 0-based ROI indices (lines or
-patches, in drawing order), optionally the domains to run (`"run"`; all
-when absent), the scans in order, the first scan of each block and,
-optionally, what changed there (`"scan_labels": {"38": ["Reward
-switch"]}`). `--init` writes one domain per ROI (`roi0: [0]`, ...); merge
-the lines of a soma or branch by hand, as the archive's layout below does:
+The domain file, `<stem>.domains.json` in the ROI folder (beside the file
+unless a root is set in the ROI tool), is the table the vnoiser tab, `mbo
+vnoiser`, the dashboard and the curation window all read; a `domains.json`
+beside the file still reads. It holds one table per layout (the scans whose
+ROI numbers mean the same lines), and `--unit` picks the layout when there
+are several. A table names the domains and their 0-based ROI indices (lines
+or patches, in drawing order), optionally the domains to run (`"run"`; all
+when absent) and the scans it covers; beside the tables sit the first scan of
+each block and, optionally, what changed there (`"scan_labels": {"38":
+["Reward switch"]}`). `--init` writes one domain per ROI (`roi0: [0]`, ...);
+merge the lines of a soma or branch by hand, as the archive's layout below
+does (one table, the form `--init` writes):
 
 ```json
 {"domains": {"soma1": [0, 1, 2], "basal1": [3, 4, 5]}, "scans": ["35", "38"], "first_env": ["35"]}
@@ -483,8 +489,8 @@ The same pipeline is the **vnoiser** entry of the viewer's Process tab (`mbo
 scan.mesc`, or `mbo <expt>/PF` to run it again on a folder's source scan): the dataset block, output folder, slice popup
 (a frame window and the channel; every line is used), a Scans block ticking
 which units become scans, a Domains table naming which lines make each domain
-(loaded from or saved to `domains.json`, seeded from a `PF` folder beside the
-file when one exists), the settings popup with the archive's values as
+(loaded from or saved to the domain file, which Run also writes, seeded from
+it, else from the newest run or a `PF` folder beside the file), the settings popup with the archive's values as
 defaults, and Run, which spawns a worker the process console tracks: its
 progress follows each ROI read and each domain denoised, and its log lists
 every step with its time and memory. **Curate** opens the curation window
