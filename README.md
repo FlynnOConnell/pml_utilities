@@ -5,24 +5,30 @@
 </p>
 
 <p align="center">
-<a href="https://github.com/FlynnOConnell/pml_utilities/actions/workflows/install-check.yml"><img src="https://github.com/FlynnOConnell/pml_utilities/actions/workflows/install-check.yml/badge.svg" alt="Install from git URL beside masknmf"></a>
-<a href="https://millerbrainobservatory.github.io/mbo_utilities/"><img src="https://img.shields.io/badge/docs-online-green" alt="Documentation"></a>
+<a href="https://github.com/FlynnOConnell/pml_utilities/actions/workflows/install-check.yml"><img src="https://github.com/FlynnOConnell/pml_utilities/actions/workflows/install-check.yml/badge.svg" alt="Install from git URL"></a>
 </p>
 
 <p align="center">
 <a href="#installation"><b>Installation</b></a> ·
-<a href="https://millerbrainobservatory.github.io/mbo_utilities/"><b>Documentation</b></a> ·
-<a href="https://millerbrainobservatory.github.io/mbo_utilities/user_guide.html"><b>User Guide</b></a> ·
-<a href="https://millerbrainobservatory.github.io/mbo_utilities/file_formats.html"><b>Supported Formats</b></a> ·
-<a href="https://github.com/MillerBrainObservatory/mbo_utilities/issues"><b>Issues</b></a>
+<a href="docs/usage/gui_guide.md"><b>The Studio</b></a> ·
+<a href="docs/usage/cli.md"><b>CLI</b></a> ·
+<a href="docs/file_formats.md"><b>Formats</b></a> ·
+<a href="https://gitlab.com/losonczylab/pml_utilities/-/issues"><b>Issues</b></a>
 </p>
 
-Image processing utilities for the [Miller Brain Observatory](https://github.com/MillerBrainObservatory) (MBO).
+Readers, pipelines and viewers for the lab's imaging data. It installs the
+`mbo_utilities` Python package and the `mbo` command.
 
-- **Modern Image Reader/Writer**: Fast, lazy I/O for ScanImage/generic TIFFs, Suite2p `.bin`, Zarr, HDF5, and Numpy (in memeory or saved to `.npy`)
-- **Run processing pipelines** for calcium imaging - motion correction, cell extraction, and signal analysis
-- Operates on **3D timeseries** natively and is extendable to ND-arrays
-- **Visualize data interactively** with **The Studio**, a GPU-accelerated GUI for exploring large datasets with [fastplotlib](https://fastplotlib.org/user_guide/guide.html#what-is-fastplotlib)
+- **Lazy reading and writing** of ScanImage and other TIFFs, Femtonics MESc, Bruker
+  and lab4 HDF5, Zarr, suite2p folders, NumPy and IsoView trees, each as one
+  `(T, C, Z, Y, X)` array
+- **The Studio**, a GPU viewer built on [fastplotlib](https://fastplotlib.org/user_guide/guide.html#what-is-fastplotlib):
+  hand-drawn ROIs, traces, motion correction and behavior on one time axis; `mbo serve`
+  shows it in a browser
+- **Pipelines** from the Studio or the command line: suite2p, MaskNMF, vnoiser and
+  pre-registration denoising, each writing one results zarr
+- **MESc line-scan tools**: vnoiser domain tables, trace figures (`mbo dashboard`) and
+  event curation (`mbo curate`)
 
 <p align="center">
   <img src="docs/_images/gui/readme/01_step_file_dialog.png" height="280" alt="File Selection" />
@@ -32,9 +38,6 @@ Image processing utilities for the [Miller Brain Observatory](https://github.com
   <em>Select data, visualize, and inspect metadata</em>
 </p>
 
-> **Note:**
-> `mbo_utilities` is in **late-beta** stage of active development. There will be bugs that can be addressed quickly, file an [issue](https://github.com/MillerBrainObservatory/mbo_utilities/issues) or reach out on slack.
-
 ## Installation
 
 Python 3.12.7 to 3.13. The distribution is `pml_utilities`; it installs the
@@ -42,33 +45,55 @@ Python 3.12.7 to 3.13. The distribution is `pml_utilities`; it installs the
 with the PyPI `mbo_utilities`.
 
 ```bash
-uv venv --python 3.12
-uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+uv venv --python 3.12.9
+uv pip install "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```
 
-With MaskNMF, install both in one command so the shared pins resolve together:
+Without extras you get the readers, The Studio and MaskNMF. The extras add:
 
-```bash
-uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox" "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
-```
+| Extra | Adds |
+|-------|------|
+| `vnoiser` | the vnoiser pipeline (`mbo vnoiser`) and its curation methods |
+| `suite2p` | suite2p and rastermap; the suite2p pipeline also needs `lbm-suite2p-python`, below |
+| `server` | `mbo serve` |
+| `hpc` | submitit, to run suite2p on SLURM |
+| `napari` | the napari viewer mode |
+| `notebooks` | JupyterLab and jupyter_rfb, for the notebooks `mbo init` writes |
+| `docs` | Sphinx, to build `docs/` |
+| `all` | every extra but `docs` |
 
-With suite2p (`lbm-suite2p-python` depends on the PyPI `mbo_utilities`, so `--no-deps`):
+The suite2p pipeline also needs `lbm-suite2p-python`. Install it without its
+dependencies: it asks for the PyPI `mbo_utilities`, which this package replaces, and
+`[all]` already brings the rest.
 
 ```bash
 uv pip install --no-deps lbm-suite2p-python
-uv pip install suite2p rastermap torch torchvision
 ```
+
+Upgrade to the newest `main`:
+
+```bash
+uv pip install --reinstall-package pml-utilities "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+```
+
+Add `@<branch>` or `@<commit>` to the URL for anything other than `main`. The GitHub
+repository is a public mirror of the lab's GitLab one. A branch that hasn't reached
+the mirror installs from GitLab over SSH, with your SSH key added to GitLab:
+
+```bash
+uv pip install "pml_utilities[all] @ git+ssh://git@gitlab.com/losonczylab/pml_utilities.git@<branch>"
+```
+
+The GitLab `https://` URL does not work for an install: the repository is private and
+uv cannot ask for a login.
+
+MaskNMF is pinned to a commit of its `ui/launcher-pages` branch. To try a masknmf
+checkout instead, run `uv pip install -e path/to/masknmf-toolbox` after this package.
 
 Quick viewer without installing:
 
 ```bash
 uvx --from "git+https://github.com/FlynnOConnell/pml_utilities.git" mbo /path/to/data
-```
-
-Upgrade:
-
-```bash
-uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```
 
 On a minimal Ubuntu/Debian install the viewer's window needs Qt's system libraries:
@@ -89,39 +114,46 @@ command for anything missing.
 
 ## Usage
 
+`mbo init path/to/data` writes the starter notebooks with your data path filled in.
+The [CLI guide](docs/usage/cli.md), [Studio guide](docs/usage/gui_guide.md),
+[formats guide](docs/file_formats.md) and [HPC guide](docs/usage/hpc.md) cover the rest.
+
 ### Supported Formats
 
-| Format | Read | Write | Description |
-|--------|:----:|:-----:|-------------|
-| ScanImage TIFF | ✓ | ✓ | Native LBM acquisition format |
-| Generic TIFF | ✓ | ✓ | Standard TIFF stacks |
-| Zarr | ✓ | ✓ | Chunked cloud-ready arrays |
-| HDF5 | ✓ | ✓ | Hierarchical data format |
-| Suite2p | ✓ | ✓ | Binary and ops.npy files |
-| NumPy | ✓ | ✓ | In-memory arrays or `.npy` files |
+| Format | Read | Write |
+|--------|:----:|:-----:|
+| ScanImage, ImageJ, OME and plain TIFF | ✓ | ✓ |
+| Femtonics MESc (`.mesc`) | ✓ | |
+| HDF5, including Bruker and lab4 | ✓ | ✓ |
+| Zarr (OME-NGFF 0.5) | ✓ | ✓ |
+| Suite2p folders and `.bin` | ✓ | ✓ |
+| NumPy (`.npy` or in memory) | ✓ | ✓ |
+| IsoView light-sheet trees | ✓ | |
+| suite2p, MaskNMF and vnoiser results | ✓ | ✓ (`mbo results`) |
 
-→ [Formats Guide](https://millerbrainobservatory.github.io/mbo_utilities/file_formats.html)
-
-To get started quickly, `mbo init path/to/data` will download the starter notebooks and auto-fill your data path.
-
-The [user-guide](https://millerbrainobservatory.github.io/mbo_utilities/user_guide.html) covers usage in a jupyter notebook.
-The [CLI Guide](https://millerbrainobservatory.github.io/mbo_utilities/cli.html) provides a more in-depth overview of the CLI commands.
-The [GUI Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/gui_guide.html) provides a more in-depth overview of the GUI.
-The [ScanPhase Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/cli.html#scan-phase-analysis) describes the bi-directional scan-phase analysis tool with output figures and figure descriptions.
+### Commands
 
 | Command | Description |
 |---------|-------------|
-| `mbo init` | Create starter notebooks (mbo + LBM-Suite2p user guides) |
-| `mbo /path/to/data.tiff` | View a supported file/folder |
-| `mbo info /path/to/data.tiff` | Show file info and metadata |
-| `mbo convert input.tiff output.zarr` | Convert between formats |
-| `mbo scanphase /path/to/data.tiff` | Run scan-phase analysis |
-| `mbo formats` | List supported formats |
-| `mbo shortcut` | Create a desktop shortcut for a local installation |
-| `mbo pollen` | Pollen calibration tool (WIP) |
-| `mbo pollen path/to/data` | Pollen calibration - Skip data collection |
-
-→ [CLI Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/cli.html)
+| `mbo [PATH]` | open The Studio, on a file or folder if given |
+| `mbo info PATH` | shape and metadata of a dataset |
+| `mbo convert IN OUT` | convert between formats |
+| `mbo formats` | list the formats read and written |
+| `mbo scanphase PATH` | bidirectional scan-phase analysis |
+| `mbo vnoiser FILE.mesc` | the vnoiser pipeline on a `.mesc`'s line scans |
+| `mbo curate [PATH]` | event curation of a vnoiser run or a line-scan `.mesc` |
+| `mbo dashboard [PATH]` | trace figures of a `.mesc` unit's ROIs, for slides |
+| `mbo results PATH` | write a suite2p, MaskNMF or vnoiser folder as one results zarr |
+| `mbo reg-denoise PATH` | pre-registration denoising: compress, register, compress again |
+| `mbo spike-average PATH` | spike-triggered averages of one ROI of a run |
+| `mbo asap7 PATH` | the ASAP7 spine pipeline |
+| `mbo serve` | serve The Studio to browsers |
+| `mbo init [DATA_PATH]` | write the starter notebooks |
+| `mbo processes` | list or stop background runs |
+| `mbo gpu` | show which GPU renders and which computes |
+| `mbo download-models` | download the cellpose model suite2p detection uses |
+| `mbo shortcut` | add a desktop icon that opens The Studio |
+| `pollen` | pollen calibration |
 
 ### The Studio
 
@@ -134,7 +166,7 @@ mbo --check-install    # verify GPU configuration
 mbo shortcut           # add a desktop icon (Windows/Linux)
 ```
 
-→ [GUI Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/gui_guide.html)
+→ [GUI Guide](docs/usage/gui_guide.md)
 
 ### Scan-Phase Analysis
 
@@ -143,8 +175,6 @@ Measure and correct bidirectional scan-phase offset in resonant scanning microsc
 ```bash
 mbo scanphase /path/to/data.tiff -o ./output
 ```
-
-→ [Scan-Phase Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/cli.html#scan-phase-analysis)
 
 ### Axial (Z-plane) Registration
 
@@ -235,12 +265,13 @@ If CUDA is not installed, download from [NVIDIA CUDA Downloads](https://develope
 <details>
 <summary><b>Error: "libcudnn.so.9: cannot open shared object file"</b></summary>
 
-PyTorch can't load a CUDA library that `pip list` still reports as installed — its files were removed, usually when a conflicting CUDA build was uninstalled. Reinstall the environment:
+PyTorch can't load a CUDA library that `pip list` still reports as installed — its files were removed, usually when a conflicting CUDA build was uninstalled. Reinstall every package:
 
 ```bash
-cd my_env
-uv sync --reinstall --no-cache --all-extras
+uv pip install --reinstall --no-cache "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```
+
+In a checkout, `uv sync --reinstall --no-cache --all-extras` does the same.
 
 </details>
 
@@ -268,10 +299,9 @@ source ~/.bashrc
 
 - **[Suite2p](https://github.com/MouseLand/suite2p)** - Integration support
 - **[Rastermap](https://github.com/MouseLand/rastermap)** - Visualization
-- **[Suite3D](https://github.com/alihaydaroglu/suite3d)** - Volumetric processing
+- **[masknmf](https://github.com/apasarkar/masknmf-toolbox)** - MaskNMF pipeline and curation viewers
+- **[fastplotlib](https://github.com/fastplotlib/fastplotlib)** - The Studio's rendering
 
 ## Issues & Support
 
-- **Bug reports:** [GitHub Issues](https://github.com/MillerBrainObservatory/mbo_utilities/issues)
-- **Questions:** See [documentation](https://millerbrainobservatory.github.io/mbo_utilities/) or open a discussion
-
+Report problems on the lab's [GitLab](https://gitlab.com/losonczylab/pml_utilities/-/issues) or on Slack.

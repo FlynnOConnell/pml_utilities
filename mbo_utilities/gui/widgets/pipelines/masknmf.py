@@ -39,6 +39,7 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
     _draw_md_field,
     _format_size,
 )
+from mbo_utilities.install import MASKNMF_HINT
 from mbo_utilities.metadata import get_param
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
@@ -186,9 +187,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
     name = "MaskNMF"
     run_label = "Run MaskNMF"
-    install_command = (
-        "uv pip install git+https://github.com/apasarkar/masknmf-toolbox.git"
-    )
+    install_command = MASKNMF_HINT
 
     @property
     def is_available(self) -> bool:

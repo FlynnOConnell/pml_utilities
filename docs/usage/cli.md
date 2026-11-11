@@ -52,7 +52,7 @@ you drag.
 
 Run the GUI on a server, where the GPU and the data are, and use it from a
 browser on your own machine. Needs the `server` extra
-(`uv pip install "pml_utilities[server]"`).
+(`uv pip install "pml_utilities[server] @ git+https://github.com/FlynnOConnell/pml_utilities.git"`).
 
 ```bash
 mbo serve --host tailscale                    # launcher on the tailnet address, port 8800
@@ -524,5 +524,5 @@ mbo formats
 ## Upgrade
 
 ```bash
-uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+uv pip install --reinstall-package pml-utilities "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```

@@ -14,7 +14,7 @@ The time-series viewer: image canvas with axes and histogram, plus the side pane
 ## Quick Start
 
 ```bash
-uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+uv pip install "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 mbo                    # opens file dialog
 mbo /path/to/data      # opens specific file
 mbo /path --metadata   # metadata only
@@ -572,12 +572,6 @@ The GUI can launch external tools when installed:
 - grid search viewer for parameter exploration
 
 ## Pre-registration denoising
-
-Needs masknmf's `ui/launcher-pages` branch until it is released:
-
-```bash
-uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox.git@ui/launcher-pages"
-```
 
 For fast, noisy recordings such as voltage imaging, motion is estimated on a denoised copy.
 

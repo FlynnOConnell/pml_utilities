@@ -56,9 +56,10 @@ pml_utilities/
 hint in its `ImportError`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers),
 `mbo_utilities.pipelines` (pipelines).
 
-- The suite2p pipeline is a uv dependency group only: `lbm-suite2p-python` depends on
-  the PyPI `mbo_utilities`, which `[tool.uv] override-dependencies` removes for a
-  checkout and nothing can remove for a consumer.
+- `lbm-suite2p-python` is in the `suite2p` uv dependency group only: it depends on the
+  PyPI `mbo_utilities`, which `[tool.uv] override-dependencies` removes for a checkout;
+  a consumer installs the `suite2p` extra (suite2p, rastermap) and then
+  `uv pip install --no-deps lbm-suite2p-python`.
 - masknmf is a base dependency pinned to a commit of its `ui/launcher-pages` branch:
   the ROI tool draws with its imgui widgets (§7.6); the MaskNMF pipeline and
   `mbo reg-denoise` run it. Bump the pin when the branch moves; `uv pip install -e
@@ -1399,8 +1400,8 @@ MBO_PIPELINE_TIFF=/path/to/raw uv run pytest tests/local/ -v   # needs real Scan
 cd docs && uv run make html
 ```
 
-MyST + Sphinx book theme; published on merge to `main` by
-`.github/workflows/deploy_docs.yml`. `docs/file_formats.md` (formats and shapes),
+MyST + Sphinx book theme, not published (the build is `docs/_build/html`).
+`docs/file_formats.md` (formats and shapes),
 `docs/canonical_metadata.md` (metadata design), `docs/development.md` (internals),
 `docs/usage/` (GUI, CLI, HPC). In-app help pages live in
 `mbo_utilities/assets/docs/`. This file is the contract; the docs explain usage.
