@@ -1,6 +1,8 @@
-# Miller Brain Observatory: Utilities
+# PML Utilities
 
-Image processing utilities for the [Miller Brain Observatory](https://github.com/MillerBrainObservatory) (MBO).
+Readers, pipelines and viewers for the lab's imaging data: a fork of
+[mbo_utilities](https://github.com/MillerBrainObservatory/mbo_utilities) for Program in
+Memory Longevity (PML).
 
 ## Contents
 
@@ -23,7 +25,7 @@ glossary
 
 ```bash
 # install
-uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+uv pip install "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 
 # launch gui
 mbo

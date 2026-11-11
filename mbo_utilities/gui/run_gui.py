@@ -859,7 +859,7 @@ def _run_gui_impl(
         ):
             import importlib.util
 
-            from mbo_utilities.install import _MASKNMF_HINT
+            from mbo_utilities.install import MASKNMF_HINT
 
             if (
                 importlib.util.find_spec("masknmf") is None
@@ -867,7 +867,7 @@ def _run_gui_impl(
             ):
                 raise click.ClickException(
                     f"{Path(data_in).name} is a masknmf demixing result and opens in masknmf's "
-                    f"viewers, but masknmf (with torch) is not installed here: {_MASKNMF_HINT}"
+                    f"viewers, but masknmf (with torch) is not installed here: {MASKNMF_HINT}"
                 )
             from mbo_utilities.gui.masknmf_vis import MasknmfViewers
 

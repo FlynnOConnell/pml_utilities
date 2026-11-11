@@ -38,6 +38,7 @@ from mbo_utilities.gui._selection_ui import (
     source_timepoints,
 )
 from mbo_utilities.gui.widgets.pipelines._s2p_schema import is_default as _is_default
+from mbo_utilities.install import SUITE2P_HINT
 from mbo_utilities.metadata import get_param
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
@@ -2686,10 +2687,7 @@ def _draw_section_suite2p_content(self):
             imgui.ImVec4(1.0, 0.7, 0.2, 1.0), "Suite2p is not installed."
         )
         imgui.text("Install with:")
-        imgui.text_colored(
-            imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
-            "uv pip install --no-deps lbm-suite2p-python && uv pip install suite2p rastermap torch torchvision",
-        )
+        imgui.text_colored(imgui.ImVec4(0.6, 0.8, 1.0, 1.0), SUITE2P_HINT)
         return
 
     max_frames, num_planes, num_channels = _init_s2p_selection_state(self)
@@ -2933,7 +2931,7 @@ def _draw_section_suite2p_content(self):
     if self._install_error:
         imgui.text_colored(
             imgui.ImVec4(1.0, 0.0, 0.0, 1.0),
-            "lbm_suite2p_python is not installed: uv pip install lbm_suite2p_python",
+            f"lbm_suite2p_python is not installed: {SUITE2P_HINT}",
         )
 
     rows = [
@@ -3280,8 +3278,7 @@ def run_process(self):
     if not _check_lsp_available():
         if not self._lsp_missing_warned:
             self.logger.warning(
-                "lbm_suite2p_python is not installed. Please install it to run the Suite2p pipeline."
-                "`uv pip install lbm_suite2p_python`",
+                f"lbm_suite2p_python is not installed: {SUITE2P_HINT}",
             )
             self._lsp_missing_warned = True
         self._install_error = True

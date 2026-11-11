@@ -66,15 +66,16 @@ numpy = "mbo_utilities.arrays.numpy:NumpyArray"
 isoview = "mbo_utilities.arrays.isoview.array:IsoviewArray"
 
 [project.urls]
-Homepage = "https://github.com/millerbrainobservatory/mbo_utilities"
-Documentation = "https://millerbrainobservatory.github.io/mbo_utilities/index.html"
+Homepage = "https://github.com/FlynnOConnell/pml_utilities"
+Documentation = "https://github.com/FlynnOConnell/pml_utilities/tree/main/docs"
 Repository = "https://github.com/FlynnOConnell/pml_utilities"
-Issues = "https://github.com/MillerBrainObservatory/mbo_utilities/issues"
+Upstream = "https://github.com/MillerBrainObservatory/mbo_utilities"
 
 [project.optional-dependencies]
 hpc = ["submitit>=1.5.0"]
 server = ["uvicorn>=0.30", "websockets>=13", "simplejpeg>=1.8", "av>=14"]
 vnoiser = ["vnoiser @ git+https://github.com/FlynnOConnell/vnoiser@27dcb630e0b0202968fc0d69d911403c48c35f63"]
+suite2p = ["suite2p>=1.1.0", "rastermap>=0.9"]
 napari = [
     "napari",
     "napari-ome-zarr",
@@ -108,7 +109,7 @@ docs = [
     "jupytext",
     "myst_nb",
 ]
-all = ["pml_utilities[hpc,napari,notebooks,server,vnoiser]"]
+all = ["pml_utilities[hpc,napari,notebooks,server,suite2p,vnoiser]"]
 
 [tool.uv]
 default-groups = ["dev", "suite2p", "napari", "notebooks", "docs"]
