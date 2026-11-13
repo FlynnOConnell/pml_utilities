@@ -1782,23 +1782,6 @@ wheels = [
 ]
 
 [[package]]
-name = "imgui-debugger"
-version = "0.2.0"
-source = { git = "https://github.com/FlynnOConnell/imgui_debugger?rev=ad9986a59b19428c4fa42f0b64891f8e03bac592#ad9986a59b19428c4fa42f0b64891f8e03bac592" }
-dependencies = [
-    { name = "imgui-bundle" },
-    { name = "numpy" },
-]
-
-[[package]]
-name = "imgui-notebooks"
-version = "0.1.0"
-source = { git = "https://github.com/FlynnOConnell/imgui_notebooks?rev=82c33f18f6def75383daa9ad39e78972293f3777#82c33f18f6def75383daa9ad39e78972293f3777" }
-dependencies = [
-    { name = "imgui-bundle" },
-]
-
-[[package]]
 name = "importlib-metadata"
 version = "9.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4131,9 +4114,6 @@ dependencies = [
     { name = "imagecodecs" },
     { name = "imageio", extra = ["ffmpeg"] },
     { name = "imgui-bundle" },
-    { name = "imgui-debugger" },
-    { name = "imgui-notebooks" },
-    { name = "masknmf" },
     { name = "matplotlib" },
     { name = "numba" },
     { name = "numcodecs" },
@@ -4231,6 +4211,7 @@ vnoiser = [
 [package.dev-dependencies]
 dev = [
     { name = "graphviz" },
+    { name = "masknmf" },
     { name = "pillow" },
     { name = "pyautogui" },
     { name = "pygetwindow" },
@@ -4291,15 +4272,12 @@ requires-dist = [
     { name = "imagecodecs", specifier = ">=2026.6.6" },
     { name = "imageio", extras = ["ffmpeg"] },
     { name = "imgui-bundle", specifier = ">=1.92.801,<1.92.900" },
-    { name = "imgui-debugger", git = "https://github.com/FlynnOConnell/imgui_debugger?rev=ad9986a59b19428c4fa42f0b64891f8e03bac592" },
-    { name = "imgui-notebooks", git = "https://github.com/FlynnOConnell/imgui_notebooks?rev=82c33f18f6def75383daa9ad39e78972293f3777" },
     { name = "ipykernel", marker = "extra == 'docs'" },
     { name = "ipykernel", marker = "extra == 'notebooks'" },
     { name = "ipywidgets", marker = "extra == 'notebooks'", specifier = ">=8.0.0,<9" },
     { name = "jupyter-rfb", marker = "extra == 'notebooks'", specifier = ">=0.5.1" },
     { name = "jupyterlab", marker = "extra == 'notebooks'", specifier = ">=4.2.6" },
     { name = "jupytext", marker = "extra == 'docs'" },
-    { name = "masknmf", git = "https://github.com/apasarkar/masknmf-toolbox?rev=3e3507a244364ba3cfdded9214df1f9f785c1155" },
     { name = "matplotlib", specifier = ">=3.10.1" },
     { name = "myst-nb", marker = "extra == 'docs'" },
     { name = "napari", marker = "extra == 'napari'" },
@@ -4350,6 +4328,7 @@ provides-extras = ["hpc", "server", "vnoiser", "suite2p", "napari", "notebooks",
 [package.metadata.requires-dev]
 dev = [
     { name = "graphviz", specifier = ">=0.21" },
+    { name = "masknmf", git = "https://github.com/apasarkar/masknmf-toolbox?rev=3e3507a244364ba3cfdded9214df1f9f785c1155" },
     { name = "pillow", specifier = ">=12.1.0" },
     { name = "pyautogui", specifier = ">=0.9.54" },
     { name = "pygetwindow", specifier = ">=0.0.9" },

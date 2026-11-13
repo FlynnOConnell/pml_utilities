@@ -87,9 +87,6 @@ uv pip install "pml_utilities[all] @ git+ssh://git@gitlab.com/losonczylab/pml_ut
 The GitLab `https://` URL does not work for an install: the repository is private and
 uv cannot ask for a login.
 
-MaskNMF is pinned to a commit of its `ui/launcher-pages` branch. To try a masknmf
-checkout instead, run `uv pip install -e path/to/masknmf-toolbox` after this package.
-
 Quick viewer without installing:
 
 ```bash
