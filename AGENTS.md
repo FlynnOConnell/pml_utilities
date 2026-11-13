@@ -60,11 +60,11 @@ hint in its `ImportError`. Entry-point groups: `mbo_utilities.lazy_arrays` (read
   PyPI `mbo_utilities`, which `[tool.uv] override-dependencies` removes for a checkout;
   a consumer installs the `suite2p` extra (suite2p, rastermap) and then
   `uv pip install --no-deps lbm-suite2p-python`.
-- masknmf is a base dependency pinned to a commit of its `ui/launcher-pages` branch:
-  the ROI tool draws with its imgui widgets (§7.6); the MaskNMF pipeline and
-  `mbo reg-denoise` run it. Bump the pin when the branch moves; `uv pip install -e
-  ~/repos/masknmf-toolbox` tests a local checkout. `import mbo_utilities` never
-  imports it; only GUI modules and runners do.
+- masknmf is not a dependency (it is not on PyPI); the user installs it. The `dev`
+  uv group pins a commit of its `ui/launcher-pages` branch for a checkout: the ROI
+  tool draws with its imgui widgets (§7.6); the MaskNMF pipeline and
+  `mbo reg-denoise` run it. `import mbo_utilities` never imports it; only GUI
+  modules and runners do.
 
 ## 2. Layer responsibilities
 
@@ -1216,10 +1216,9 @@ One logger tree, one console sink per process, one log file per background task.
   through a `GuiLogHandler` attached in `preview_data._init_logging`; it filters by
   level and logger, and its master level dropdown calls `set_global_level`. The
   Widgets menu (`gui/widgets/widget_toggles.py`, one checkbox per `WidgetEntry`, no
-  submenus; a widget's `toggle_key` is an entry's key) also opens the floating tool
-  windows with no debug gate: Style Editor (§14) and ImGui Debugger
-  (`gui/widgets/imgui_debug.py`: `imgui_debugger`'s variable inspector plus Dear
-  ImGui's metrics, debug log, ID stack, demo and about windows, drawn from
+  submenus; a widget's `toggle_key` is an entry's key) also opens the ImGui Debugger
+  window with no debug gate (`gui/widgets/imgui_debug.py`: Dear ImGui's metrics,
+  debug log, ID stack, demo and about windows, drawn from
   `PreviewDataWidget.draw` every frame).
 
 | Level | Use |
@@ -1412,24 +1411,6 @@ When they disagree, fix the docs.
 - User state under `~/.mbo/`: `settings/preferences.json`, `logs/` (§8.5),
   `cache/`, `imgui/`, `hpc/runs/`, `tests/` (test data), `templates/`. Resolve with
   `get_mbo_dirs()`, never hardcode.
-- The imgui style is the user's, not the theme's. `gui/widgets/style_editor.py`
-  holds the one `imgui_debugger.StyleEditor` for the process (Widgets > Style
-  Editor), backed by an `imgui_debugger.ConfigStore` at `get_mbo_dirs()["imgui"]`:
-  `state.json` (the style as last left) and `styles/<name>.json` (presets),
-  autosaved a second after the last slider moves. `apply_saved_style()` runs in
-  `PreviewDataWidget.__init__` right after `style_imgui_opaque()`, so a saved style
-  wins over the shipped theme. Window geometry stays imgui's, in
-  `imgui/assets/app_settings/preview_settings.ini`. Nothing else writes the style;
-  `imgui_debug.py` deliberately has no style entry. `imgui_debugger` and
-  `imgui_notebooks` are base dependencies pinned to GitHub commits in
-  `pyproject.toml` (PyPI lags the API used here); bump the pins when they move.
-- File > Open Notebook (`gui/widgets/notebooks.py`) is `imgui_notebooks`. Its sources
-  are the `scripts` folder beside the open recording and the shipped templates that
-  fit it (`notebook_templates.py`, the table `mbo init` writes from; `demos/` is the
-  source of truth, copied into the package at build time by `setup.py`). A template
-  is written beside the data with the path and `.mesc` unit filled in when first
-  picked. Servers run in the Studio's own interpreter; added folders and the recent
-  list are in `get_mbo_dirs()["imgui"]/notebooks.json`.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,
   `KEEP_TEST_OUTPUT`, `MBO_PIPELINE_TIFF`; logging and retention variables in §8.5.
 - HPC: `hpc.toml` written by `mbo hpc init`; the shared cluster environment is
