@@ -36,9 +36,6 @@ dependencies = [
 	"rendercanvas>=2.7.2",
 	"wgpu>=0.30.1",
 	"imgui-bundle>=1.92.801,<1.92.900",
-	"imgui_debugger @ git+https://github.com/FlynnOConnell/imgui_debugger@ad9986a59b19428c4fa42f0b64891f8e03bac592",
-	"imgui_notebooks @ git+https://github.com/FlynnOConnell/imgui_notebooks@82c33f18f6def75383daa9ad39e78972293f3777",
-	"masknmf @ git+https://github.com/apasarkar/masknmf-toolbox@3e3507a244364ba3cfdded9214df1f9f785c1155",
 ]
 
 [project.scripts]
@@ -226,6 +223,7 @@ dev = [
     "pyautogui>=0.9.54",
     "pygetwindow>=0.0.9",
     "pytest>=8.4.2",
+    "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox@3e3507a244364ba3cfdded9214df1f9f785c1155",
 ]
 suite2p = [
     "lbm-suite2p-python[rastermap]>=3.3.2",

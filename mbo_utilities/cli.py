@@ -1513,8 +1513,7 @@ def init(data_path, output_dir, overwrite, unit):
     Create starter notebooks: the user guides, and the ASAP7 spine pipeline for a .mesc.
 
     With DATA_PATH, notebooks go in <DATA_PATH>/../scripts and the data path
-    is filled in. Without it, notebooks go in the current directory. The
-    Studio's File > Open Notebook writes the same notebooks to the same place.
+    is filled in. Without it, notebooks go in the current directory.
 
     \b
     Examples:

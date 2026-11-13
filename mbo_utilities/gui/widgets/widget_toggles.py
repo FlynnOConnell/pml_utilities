@@ -2,8 +2,7 @@
 
 Every toggleable piece of UI is one :class:`WidgetEntry`, drawn as one
 checkbox; the draw code for each widget asks :func:`widget_enabled` before
-rendering. Below the checkboxes the menu opens the floating tool windows:
-the style editor and the imgui debugger.
+rendering. Below the checkboxes the menu opens the imgui debugger window.
 
 State is keyed by entry (``"preview"``) and persisted in preferences, so
 toggles survive a restart. Anything absent from the stored mapping falls
@@ -19,7 +18,6 @@ from typing import Any
 from imgui_bundle import imgui
 
 from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_menu_item
-from mbo_utilities.gui.widgets.style_editor import draw_style_menu_item
 from mbo_utilities.preferences import get_widget_toggles, set_widget_toggles
 
 __all__ = [
@@ -206,17 +204,10 @@ def draw_widgets_menu(parent: Any) -> None:
         reset_widget_toggles(parent)
 
     imgui.separator()
-    # windows, not tabs: these open as floating windows over the viewer
-    draw_style_menu_item()
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(
-            "Sizes, spacing and colours of the running imgui style. "
-            "Saved under ~/.mbo/imgui and applied at the next launch."
-        )
+    # a window, not a tab: it opens floating over the viewer
     draw_imgui_debug_menu_item()
     if imgui.is_item_hovered():
         imgui.set_tooltip(
-            "The variable inspector over this window's state, and Dear "
-            "ImGui's own metrics, debug log, ID stack tool and demo."
+            "Dear ImGui's own metrics, debug log, ID stack tool and demo."
         )
     imgui.end_menu()
