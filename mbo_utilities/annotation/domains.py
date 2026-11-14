@@ -4,7 +4,9 @@ A file's scans fall into layouts: scans whose ROI numbers mean the same lines,
 which share one domain table (the archive's ``scanIDs_ROIs.pkl`` holds one per
 experiment). Stored line positions cannot tell layouts apart (stan110_expt1's
 lines move up to 7.6 um between scans that share a table), so a layout lists its
-scans. Block starts (``first_env``) and labels are per scan and sit at the top.
+scans. Block starts (``first_env``) and labels are per scan and sit at the top,
+with the trim: the seconds every reader leaves off the start of a scan
+(``trim_s`` for the file, ``scan_trim`` for a scan with its own).
 
 The file is ``<stem>.domains.json`` in the recording's ROI folder
 (:func:`~mbo_utilities.roi_workflow.roi_folder`), beside the data unless the
@@ -32,6 +34,11 @@ __all__ = [
     "domain_means",
     "domains_path",
     "find_domains",
+    "scan_of",
+    "trim_frames",
+    "trim_seconds",
+    "trimmed_window",
+    "write_trim",
 ]
 
 DOMAINS_SUFFIX = ".domains.json"
@@ -67,14 +74,32 @@ class Layout:
 @dataclass
 class DomainFile:
     """Every layout of a recording file, its block starts in order, the
-    experiment's label list (None when never set) and what changed at each
-    block start.
+    experiment's label list (None when never set), what changed at each
+    block start, and the seconds left off the start of every scan
+    (``trim_s``) or of one (``scan_trim``).
     """
 
     layouts: list[Layout] = field(default_factory=list)
     first_env: list[str] = field(default_factory=list)
     labels: list[str] | None = None
     scan_labels: dict[str, list[str]] = field(default_factory=dict)
+    trim_s: float = 0.0
+    scan_trim: dict[str, float] = field(default_factory=dict)
+
+    def trim_of(self, scan) -> float:
+        """Seconds left off the start of ``scan``: its own, else the file's."""
+        return float(self.scan_trim.get(str(scan), self.trim_s))
+
+    def set_trim(self, seconds: float | None, scan=None) -> None:
+        """Set the file's trim, or ``scan``'s own; None gives a scan back the file's."""
+        if seconds is not None and seconds < 0:
+            raise ValueError(f"a trim is 0 s or more, got {seconds}")
+        if scan is None:
+            self.trim_s = float(seconds or 0.0)
+        elif seconds is None:
+            self.scan_trim.pop(str(scan), None)
+        else:
+            self.scan_trim[str(scan)] = float(seconds)
 
     def layout_of(self, scan) -> Layout | None:
         """The layout listing ``scan``, else the one listing no scans."""
@@ -125,6 +150,10 @@ class DomainFile:
         }
         if self.labels is not None:
             out["labels"] = list(self.labels)
+        if self.trim_s:
+            out["trim_s"] = self.trim_s
+        if self.scan_trim:
+            out["scan_trim"] = dict(self.scan_trim)
         return out
 
     @classmethod
@@ -139,6 +168,7 @@ class DomainFile:
             layouts = [
                 Layout(doc.get("scans", []), doc.get("domains") or {}, doc.get("run"))
             ]
+        scan_trim = {str(s): float(v) for s, v in (doc.get("scan_trim") or {}).items()}
         return cls(
             layouts,
             [str(s) for s in doc.get("first_env", [])],
@@ -147,6 +177,8 @@ class DomainFile:
                 str(s): [str(x) for x in v]
                 for s, v in (doc.get("scan_labels") or {}).items()
             },
+            float(doc.get("trim_s") or 0.0),
+            scan_trim,
         )
 
     @classmethod
@@ -176,6 +208,46 @@ def find_domains(fpath, root=None) -> Path | None:
         return path
     legacy = Path(fpath).parent / LEGACY_FILE
     return legacy if legacy.is_file() else None
+
+
+def scan_of(unit) -> str:
+    """The scan a unit is in the domain file: ``MSession_0/MUnit_35`` is ``35``."""
+    return str(unit).rsplit("_", 1)[-1]
+
+
+def trim_seconds(fpath, unit, root=None) -> float:
+    """Seconds every reader leaves off the start of ``unit`` of ``fpath``; 0 with no domain file."""
+    found = find_domains(fpath, root)
+    return 0.0 if found is None else DomainFile.read(found).trim_of(scan_of(unit))
+
+
+def trim_frames(fpath, unit, fs, root=None) -> int:
+    """:func:`trim_seconds` in timepoints at ``fs``."""
+    return round(trim_seconds(fpath, unit, root) * float(fs or 0.0))
+
+
+def trimmed_window(frames, n_timepoints: int, trim: int) -> tuple[int, int]:
+    """The half-open ``(start, stop)`` window read of a scan of ``n_timepoints``:
+    ``frames`` (None: all of it) starting no earlier than ``trim``. The window
+    stays in the recording's frames, so what is read sits where it was recorded.
+    """
+    start, stop = (0, int(n_timepoints)) if frames is None else map(int, frames)
+    start = max(start, int(trim))
+    if start >= stop:
+        raise ValueError(
+            f"a trim of {trim} frames leaves nothing of frames {start} to {stop}"
+        )
+    return start, stop
+
+
+def write_trim(fpath, seconds: float | None, unit=None, root=None) -> Path:
+    """Store the trim of ``fpath`` (``unit`` None) or of one unit in its domain
+    file, writing one with no layouts when there is none yet.
+    """
+    found = find_domains(fpath, root)
+    book = DomainFile() if found is None else DomainFile.read(found)
+    book.set_trim(seconds, None if unit is None else scan_of(unit))
+    return book.write(domains_path(fpath, root))
 
 
 def domain_means(lines: np.ndarray, domains: dict, sizes: dict[int, int]) -> dict:

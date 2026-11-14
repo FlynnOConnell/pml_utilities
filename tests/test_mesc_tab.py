@@ -106,8 +106,9 @@ def test_unit_row_reports_shape_rate_and_comment(mesc_path):
     assert cells[7:12] == ("8", "1", "1", "16", "24")
     assert cells[12] == "20.0 Hz"
     assert cells[13] == "0 s"
-    assert cells[14].startswith("2023-11-14 ") and "T" not in cells[14]
-    assert cells[15] == "baseline / second line"
+    assert cells[14] == "0" and unit_row(first, 1.5)[0][14] == "1.5"
+    assert cells[15].startswith("2023-11-14 ") and "T" not in cells[15]
+    assert cells[16] == "baseline / second line"
     # numeric columns sort as numbers, not strings
     assert keys[4] == 0 and keys[6] == 0
     assert keys[7] == 8 and keys[12] == 20.0

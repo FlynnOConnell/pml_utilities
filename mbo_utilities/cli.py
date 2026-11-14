@@ -2137,7 +2137,7 @@ def vnoiser(
 
     if not HAS_VNOISER:
         raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
-    from mbo_utilities.annotation.domains import find_domains
+    from mbo_utilities.annotation.domains import DomainFile, find_domains
     from mbo_utilities.preferences import get_roi_folder
     from mbo_utilities.vnoiser.params import VnoiserSettings
     from mbo_utilities.vnoiser.pipeline import (
@@ -2170,6 +2170,10 @@ def vnoiser(
         if domains_path is not None
         else find_domains(mesc_path, root)
     )
+    if domains_path is None and domains_file is not None:
+        # a file holding only trims has no table to run
+        if not DomainFile.read(domains_file).layouts:
+            domains_file = None
     if domains_file is not None:
         try:
             spec = read_domains(domains_file, [u.rsplit("_", 1)[-1] for u in units])

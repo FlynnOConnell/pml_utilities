@@ -633,7 +633,14 @@ one table every window reads: `<stem>.domains.json` in the recording's
 beside the data, the one-table form). A `DomainFile` holds one `Layout` per set of
 scans whose ROI numbers mean the same lines (scans, domains, `run`), never found
 from line positions (stan110_expt1's move up to 7.6 um under one archive table),
-plus the file-wide `first_env`, `labels` and `scan_labels`. The vnoiser tab seeds
+plus the file-wide `first_env`, `labels` and `scan_labels`, and the trim: the
+seconds left off the start of every scan (`trim_s`) or of one (`scan_trim`), set
+in the MESc tab's `trim` column or the dashboard and read through `trim_seconds`.
+A reader applies it as a frame window (`trimmed_window`), never as a shorter
+array, so what is kept stays on the recording's clock: `load_rows` stamps
+`RoiTrace.frames`, the vnoiser run and preview start each scan there and a
+trimmed run records `trim_s` and `scan_frames` per scan in its source block
+(`results.unit_frames` reads a unit's window back). The vnoiser tab seeds
 from the shown scan's layout before the newest run, Save and Run write the ticked
 scans' layout (`put`; block ticks as given, a layout's first scan is not a file
 block start), and showing a scan of another layout brings its table; `mbo vnoiser`

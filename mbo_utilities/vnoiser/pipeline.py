@@ -61,7 +61,14 @@ from mbo_utilities.analysis.roi_traces import (
     extract_traces,
     roi_geometry,
 )
-from mbo_utilities.annotation.domains import DomainFile, domains_path
+from mbo_utilities.annotation.domains import (
+    DomainFile,
+    domains_path,
+    trim_frames,
+    trim_seconds,
+    trimmed_window,
+)
+from mbo_utilities.preferences import get_roi_folder
 from mbo_utilities.vnoiser.params import (
     OUTPUT_FORMATS,
     VnoiserDfofSettings,
@@ -545,7 +552,9 @@ def run_vnoiser_pipeline(
     convert : bool, optional
         Overrides ``settings.traces.convert`` when given.
     frames : (start, stop), optional
-        The half-open window of frames read.
+        The half-open window of frames read, starting no earlier than each
+        scan's trim in the domain file
+        (:func:`~mbo_utilities.annotation.domains.trim_seconds`).
     planes : sequence of int, optional
         The pipeline input contract's 1-based Z selection. On an AOD ROI
         unit Z is the ROI index, so these are the ROIs (lines, patches) to
@@ -697,6 +706,7 @@ def run_vnoiser_pipeline(
     )
     try:
         scans, extracted = [], {}
+        roi_root = get_roi_folder() or None
         for k, u in enumerate(chosen):
             sid = _munit_number(u["key"])
             logger.info(
@@ -704,12 +714,13 @@ def run_vnoiser_pipeline(
             )
             usage.begin("read", scan=sid, unit=u["key"])
             arr = MescArray(mesc_path, unit=u["key"])
+            trim = trim_frames(mesc_path, u["key"], arr.metadata["fs"], roi_root)
             ex = extract_traces(
                 arr,
                 found,
                 settings.traces,
                 channel=channel,
-                frames=frames,
+                frames=trimmed_window(frames, arr.nt, trim),
                 progress=partial(
                     _read_progress, logger, progress_callback, sid, k, len(chosen)
                 ),
@@ -731,6 +742,19 @@ def run_vnoiser_pipeline(
             )
 
         example = denoiser_factory(scans[0].fs_hz)
+        trims = {
+            s.scan_id: trim_seconds(mesc_path, u["key"], roi_root)
+            for s, u in zip(scans, chosen, strict=True)
+        }
+        # only a trimmed run names each scan's window, so untrimmed runs compare equal to earlier ones
+        trim_record = {}
+        if any(trims.values()):
+            trim_record = {
+                "trim_s": trims,
+                "scan_frames": {
+                    sid: [int(v) for v in ex.frames] for sid, ex in extracted.items()
+                },
+            }
         info = {
             "pipeline": "mbo_utilities.vnoiser.pipeline.run_vnoiser_pipeline",
             "versions": versions,
@@ -752,6 +776,7 @@ def run_vnoiser_pipeline(
                 "channel": int(channel),
                 "convert": bool(settings.traces.convert),
                 "frames": None if frames is None else [int(frames[0]), int(frames[1])],
+                **trim_record,
                 "planes": None if planes is None else [int(p) for p in planes],
                 # the table as given; `planes` cuts the one the run works on
                 "domains": given,
@@ -1114,6 +1139,9 @@ def preview_domain(
         raise KeyError(f"no domain {name!r}")
     arr = MescArray(mesc_path, unit=unit)
     fs = float(arr.metadata["fs"])
+    frames = trimmed_window(
+        frames, arr.nt, trim_frames(mesc_path, unit, fs, get_roi_folder() or None)
+    )
     settings = (settings or VnoiserSettings()).at_fs(fs)
     wanted = [found[name]]
     if settings.traces.background == "domain":

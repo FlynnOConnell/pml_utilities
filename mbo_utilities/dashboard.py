@@ -309,20 +309,30 @@ def _drawn_store(path: Path, arr):
     return store, rois
 
 
-def load_rows(path, unit: str, channel: int = 0, progress=None) -> list[RoiTrace]:
+def load_rows(
+    path, unit: str, channel: int = 0, progress=None, trim_s: float | None = None
+) -> list[RoiTrace]:
     """One ``RoiTrace`` per ROI of a ``.mesc`` unit: each line's or patch's
     raw mean in photon counts, then each whole-ROI domain of the unit's layout
     in the domain file (:func:`~mbo_utilities.annotation.domains.domain_means`,
     source :data:`DOMAIN_SOURCE`, its lines in ``extra["lines"]``), then each
     ROI drawn on it in the ROI tool (the mean of its pixels on its ROI), all
-    read from ``channel``.
+    read from ``channel``. Every row starts ``trim_s`` into the recording (None:
+    the unit's trim in the domain file) and says so in ``frames``, so it stays
+    on the recording's clock.
 
     The traces are cached under ``~/.mbo/cache/dashboard``; nothing is
     written beside the data. ``progress(i, k, seconds)`` follows each ROI of
     a first read.
     """
     from mbo_utilities.analysis.roi_traces import roi_geometry
-    from mbo_utilities.annotation.domains import DomainFile, domain_means, find_domains
+    from mbo_utilities.annotation.domains import (
+        DomainFile,
+        domain_means,
+        find_domains,
+        trim_seconds,
+        trimmed_window,
+    )
     from mbo_utilities.lazy_array import base_array
     from mbo_utilities.preferences import get_roi_folder
     from mbo_utilities.reader import imread
@@ -427,6 +437,13 @@ def load_rows(path, unit: str, channel: int = 0, progress=None) -> list[RoiTrace
                 extra={"unit": "photons"},
             )
         )
+    if trim_s is None:
+        trim_s = trim_seconds(path, unit, get_roi_folder() or None)
+    start, stop = trimmed_window(None, lines.shape[1], round(trim_s * fs))
+    if start:
+        for row in rows:
+            row.F = row.F[start:stop]
+            row.frames = (start, stop, 1)
     return rows
 
 

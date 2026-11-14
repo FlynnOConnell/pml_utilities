@@ -40,7 +40,12 @@ from mbo_utilities import log
 from mbo_utilities.analysis.dff import NOISE_ESTIMATES
 from mbo_utilities.analysis.filters import FILTERS, describe
 from mbo_utilities.annotation.display import DFF_METHODS
-from mbo_utilities.annotation.domains import DomainFile, find_domains
+from mbo_utilities.annotation.domains import (
+    DomainFile,
+    find_domains,
+    trim_seconds,
+    write_trim,
+)
 from mbo_utilities.dashboard import (
     COLORS,
     DOMAIN_SOURCE,
@@ -217,6 +222,8 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         self.progress = (0, 0)
         self.x_view = (0.0, 1.0)
         self.duration = (0.0, 1.0)
+        self.trim_s = 0.0
+        self._kept: tuple | None = None
         self._set_x: tuple[float, float] | None = None
         self._loader = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="dashboard-load"
@@ -343,14 +350,20 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
 
     def _loaded(self, rows) -> None:
         self.rows = rows
-        self.picked = {r.key for r in rows[:4]}
         self.error = ""
         n = max((r.n_frames for r in rows), default=0)
         fs = float(rows[0].fs or 1.0) if rows else 1.0
-        self.duration = (0.0, max(n - 1, 1) / fs)
+        first = rows[0].frames[0] if rows and rows[0].frames else 0
+        self.duration = (first / fs, (first + max(n - 1, 1)) / fs)
+        self.trim_s = trim_seconds(self.path, self.unit, get_roi_folder() or None)
         self.x_view = self.duration
         self._set_x = self.duration
-        self.windows, self.active = [], -1
+        if self._kept is None:
+            self.picked = {r.key for r in rows[:4]}
+            self.windows, self.active = [], -1
+        else:
+            self.picked, self.windows, self.active = self._kept
+            self._kept = None
         self.folder = str(roi_folder(self.path) / "figures")
         drawn = sum(r.source == "drawn" for r in rows)
         domains = sum(r.source == DOMAIN_SOURCE for r in rows)
@@ -359,8 +372,23 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             + (f", {domains} domains" if domains else "")
             + (f", {drawn} drawn" if drawn else "")
             + f" at {fs:.0f} Hz, {self.duration[1]:.0f} s"
+            + (f", first {self.trim_s:g} s trimmed" if first else "")
         )
         self.block = self._block_line()
+
+    def set_trim(self, seconds: float, every_unit: bool = False) -> None:
+        """Store the seconds left off the start of this unit, or of every unit
+        of the file without a trim of its own, and reload the rows; the picked
+        ROIs and the windows stay.
+        """
+        root = get_roi_folder() or None
+        if every_unit:
+            write_trim(self.path, seconds, None, root)
+            write_trim(self.path, None, self.unit, root)
+        else:
+            write_trim(self.path, seconds, self.unit, root)
+        self._kept = (self.picked, self.windows, self.active)
+        self.choose(self.unit)
 
     def _block_line(self) -> str:
         """The unit's block in the domain file: its start and what changed there."""
@@ -879,6 +907,17 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
 
     def _draw_processing(self) -> None:
         v, d, f = self.view, self.view.dff, self.view.filter
+        _, value = imgui.input_float("trim start (s)", self.trim_s, 0.0, 0.0, "%g")
+        self.trim_s = max(value, 0.0)
+        if imgui.is_item_deactivated_after_edit():
+            self.set_trim(self.trim_s)
+        imgui.set_item_tooltip(
+            "Seconds left off the start of this unit, here and in vnoiser."
+        )
+        if imgui.small_button("trim every unit"):
+            self.set_trim(self.trim_s, every_unit=True)
+        imgui.set_item_tooltip("Use this trim for every unit of the file.")
+        imgui.separator()
         kinds = list(KINDS)
         changed, i = imgui.combo("kind", kinds.index(v.kind), list(KINDS.values()))
         if changed:

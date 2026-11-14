@@ -33,6 +33,7 @@ from mbo_utilities.results import (
     ResultUnit,
     recording_id,
     results_dir_of,
+    unit_frames,
 )
 from mbo_utilities.roi_workflow import PlaneMovie
 
@@ -216,7 +217,7 @@ class SpikeSource:
             else int(found.attrs.get("z") or 0)
         )
         n = found.n_timepoints
-        first = int((results.source.get("frames") or [0])[0])
+        first = (unit_frames(results, found) or (0, n))[0]
         movie = PlaneMovie(arr, z=z, c=c)
         if movie.shape[0] < first + n:
             raise ValueError(

@@ -33,7 +33,12 @@ from mbo_utilities.annotation.display import (
     computed_zscore,
     display_trace,
 )
-from mbo_utilities.annotation.domains import DomainFile, Layout, domains_path
+from mbo_utilities.annotation.domains import (
+    DomainFile,
+    Layout,
+    domains_path,
+    write_trim,
+)
 from mbo_utilities.annotation.ngff import RoiFile
 from mbo_utilities.annotation.store import RoiLabelStore
 from mbo_utilities.arrays.features import MotionCorrection
@@ -335,6 +340,30 @@ def test_load_rows_reads_lines_and_drawn_rois_in_photons(tmp_path, mbo_dir):
     again = load_rows(path, "MSession_0/MUnit_35")
     np.testing.assert_array_equal(again[-1].F, drawn.F)
     assert len(list((mbo_dir / "cache" / "dashboard").glob("rec_*.npz"))) == 1
+
+
+def test_load_rows_leaves_off_the_units_trim_and_keeps_the_clock(tmp_path, mbo_dir):
+    path = mesc_with_conversion(tmp_path)
+    whole = load_rows(path, "MSession_0/MUnit_35")
+    write_trim(path, 0.01, "MSession_0/MUnit_35")
+    rows = load_rows(path, "MSession_0/MUnit_35")
+    assert all(r.frames == (10, 40, 1) and r.n_frames == 30 for r in rows)
+    np.testing.assert_array_equal(rows[0].F, whole[0].F[10:])
+    t, shown, _ = process(rows[0], TraceView(kind="raw"))
+    assert t[0] == pytest.approx(0.01) and len(shown) == 30
+    assert load_rows(path, "MSession_0/MUnit_38")[0].frames is None
+    assert load_rows(path, "MSession_0/MUnit_35", trim_s=0.0)[0].n_frames == 40
+
+    app = DashboardApp(path, unit="MUnit_35")
+    wait(app)
+    assert app.duration == pytest.approx((0.01, 0.039)) and app.trim_s == 0.01
+    app.picked = {app.rows[5].key}
+    app.add_window(0.02, 0.03)
+    app.set_trim(0.02, every_unit=True)
+    wait(app)
+    assert app.duration[0] == pytest.approx(0.02) and len(app.windows) == 1
+    assert app.picked == {app.rows[5].key}
+    assert load_rows(path, "MSession_0/MUnit_38")[0].frames == (20, 40, 1)
 
 
 def test_load_rows_adds_the_layouts_whole_roi_domains(tmp_path, mbo_dir):

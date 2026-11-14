@@ -10,6 +10,10 @@ from mbo_utilities.annotation.domains import (
     domain_means,
     domains_path,
     find_domains,
+    trim_frames,
+    trim_seconds,
+    trimmed_window,
+    write_trim,
 )
 
 
@@ -88,3 +92,42 @@ def test_domain_means_weigh_lines_by_their_pixels():
     assert list(means) == ["ab", "c"]
     np.testing.assert_allclose(means["ab"], [3.25, 3.25])
     np.testing.assert_allclose(means["c"], [10.0, 10.0])
+
+
+def test_a_scan_takes_its_own_trim_else_the_files(tmp_path):
+    book = DomainFile([Layout(["35"], {"soma": [0]})], trim_s=2.0)
+    book.set_trim(0.5, "38")
+    assert (book.trim_of("35"), book.trim_of("38")) == (2.0, 0.5)
+    assert DomainFile.from_json(book.to_json()) == book
+    book.set_trim(None, "38")
+    assert book.trim_of("38") == 2.0 and "scan_trim" not in book.to_json()
+    with pytest.raises(ValueError, match="0 s or more"):
+        book.set_trim(-1.0)
+    assert "trim_s" not in DomainFile([Layout([], {"a": [0]})]).to_json()
+
+
+def test_write_trim_keeps_the_tables_and_needs_none(tmp_path):
+    mesc = tmp_path / "rec.mesc"
+    assert trim_seconds(mesc, "MSession_0/MUnit_35") == 0.0
+    path = write_trim(mesc, 1.5)
+    assert path == domains_path(mesc) and DomainFile.read(path).layouts == []
+    write_trim(mesc, 0.25, "MSession_0/MUnit_38")
+    assert trim_seconds(mesc, "MSession_0/MUnit_35") == 1.5
+    assert trim_seconds(mesc, "MUnit_38") == 0.25
+    assert trim_frames(mesc, "MUnit_38", 1000.0) == 250
+
+    book = DomainFile.read(path)
+    book.put(Layout(["35"], {"soma": [0, 1]}))
+    book.write(path)
+    write_trim(mesc, None, "MUnit_38")
+    again = DomainFile.read(path)
+    assert again.scan_trim == {} and list(again.layouts[0].domains) == ["soma"]
+
+
+def test_trimmed_window_starts_no_earlier_than_the_trim():
+    assert trimmed_window(None, 100, 0) == (0, 100)
+    assert trimmed_window(None, 100, 30) == (30, 100)
+    assert trimmed_window((50, 80), 100, 30) == (50, 80)
+    assert trimmed_window((10, 80), 100, 30) == (30, 80)
+    with pytest.raises(ValueError, match="leaves nothing"):
+        trimmed_window((10, 20), 100, 30)

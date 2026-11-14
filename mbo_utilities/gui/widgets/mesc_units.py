@@ -33,6 +33,12 @@ from imgui_bundle import icons_fontawesome_6 as fa
 from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities import log
+from mbo_utilities.annotation.domains import (
+    DomainFile,
+    find_domains,
+    scan_of,
+    write_trim,
+)
 from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui.mesc_reference import ReferenceView
@@ -42,6 +48,7 @@ from mbo_utilities.gui.widgets.pipelines import (
     quick_pipelines,
     shown_name,
 )
+from mbo_utilities.preferences import get_roi_folder
 from mbo_utilities.results import TRACES_PKL, results_pipeline, results_stamp
 
 logger = log.get("gui.mesc_units")
@@ -68,6 +75,7 @@ UNIT_COLUMNS = (  # (header, hidden by default); columns fit their content and t
     ("X", False),
     ("fs", False),
     ("duration", False),
+    ("trim", False),
     ("start", False),
     ("comment", False),
 )
@@ -83,6 +91,10 @@ PICTURE_COLUMN = next(
 RTMC_COLUMN = next(
     i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "RTMC"
 )
+TRIM_COLUMN = next(
+    i for i, (name, _hidden) in enumerate(UNIT_COLUMNS) if name == "trim"
+)
+TRIM_WIDTH_EM = 4.0
 
 COLUMN_HELP = {
     # what each column means, on its header
@@ -127,6 +139,12 @@ COLUMN_HELP = {
     "X": "Columns per frame: samples along a line, or pixels across a patch.",
     "fs": "Timepoints per second.",
     "duration": "Recorded length. Shorter than the planned length when the run was stopped early.",
+    "trim": (
+        "Seconds left off the start of the recording by the dashboard and vnoiser; "
+        "what they keep stays on the recording's clock. Grey: the file's value, set "
+        "above the table. Type a value to give this recording its own; a negative "
+        "one gives it back the file's."
+    ),
     "start": "Acquisition start, UTC-05:00.",
     "comment": "The comment typed in MESc.",
 }
@@ -272,9 +290,10 @@ def describe_unit(info: dict, by_key: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
-def unit_row(info: dict) -> tuple[tuple[str, ...], tuple]:
+def unit_row(info: dict, trim_s: float = 0.0) -> tuple[tuple[str, ...], tuple]:
     """One table row per `list_mesc_units` entry: the cell texts and the sort
-    keys, both in UNIT_COLUMNS order (numbers sort as numbers).
+    keys, both in UNIT_COLUMNS order (numbers sort as numbers). ``trim_s`` is
+    the unit's trim in the domain file.
     """
     t, c, z_size, y, x = info["shape"]
     fs = info.get("fs")
@@ -301,6 +320,7 @@ def unit_row(info: dict) -> tuple[tuple[str, ...], tuple]:
         str(x),
         f"{fs:.1f} Hz" if fs else "-",
         f"{dur:.0f} s" if dur else "-",
+        f"{trim_s:g}",
         start,
         comment,
     )
@@ -319,6 +339,7 @@ def unit_row(info: dict) -> tuple[tuple[str, ...], tuple]:
         x,
         fs or 0.0,
         dur or 0.0,
+        trim_s,
         start,
         comment.lower(),
     )
@@ -352,6 +373,8 @@ class MescTabWidget(Widget):
         # the reference-image popup, drawn from the strip's hook whatever tab
         # is up; the host offers it wherever a recording's ROIs are on screen
         self._curation: tuple[str, Path | None] | None = None
+        self._trims: tuple[Path, int, DomainFile] | None = None
+        # the open file's domain file as last read: (path, mtime, contents)
         # the vnoiser run beside the open file the curation window can take,
         # looked up once per file: (file, PF folder or results file, or None)
         parent.reference_view = self.open_reference
@@ -388,6 +411,39 @@ class MescTabWidget(Widget):
         iw = getattr(self.parent, "image_widget", None)
         data = getattr(iw, "data", None) or []
         return mesc_array_of(data[0]) if len(data) else None
+
+    def _trim_book(self, path) -> DomainFile:
+        """The open file's domain file, re-read when it changes on disk (the
+        dashboard writes trims too); an empty one when there is none.
+        """
+        found = find_domains(path, get_roi_folder() or None)
+        if found is None:
+            return DomainFile()
+        stamp = found.stat().st_mtime_ns
+        if self._trims is None or self._trims[:2] != (found, stamp):
+            self._trims = (found, stamp, DomainFile.read(found))
+        return self._trims[2]
+
+    def _draw_trim_cell(self, path, info: dict, book: DomainFile) -> None:
+        scan = scan_of(info["key"])
+        own = scan in book.scan_trim
+        imgui.set_next_item_width(imgui.get_font_size() * TRIM_WIDTH_EM)
+        if not own:
+            imgui.push_style_color(
+                imgui.Col_.text, imgui.get_style_color_vec4(imgui.Col_.text_disabled)
+            )
+        _, value = imgui.input_float(
+            f"##trim_{info['key']}", book.trim_of(scan), 0.0, 0.0, "%g"
+        )
+        if not own:
+            imgui.pop_style_color()
+        if imgui.is_item_deactivated_after_edit():
+            write_trim(
+                path,
+                None if value < 0 else value,
+                info["key"],
+                get_roi_folder() or None,
+            )
 
     def _cache(self) -> dict:
         """Open units, kept on the parent so a widget rebuild doesn't drop them."""
@@ -579,6 +635,19 @@ class MescTabWidget(Widget):
                 )
                 if changed:
                     self._show_companions = on
+            book = self._trim_book(path)
+            imgui.align_text_to_frame_padding()
+            imgui.text("trim start (s)")
+            imgui.same_line()
+            imgui.set_next_item_width(imgui.get_font_size() * TRIM_WIDTH_EM)
+            _, value = imgui.input_float("##trim_file", book.trim_s, 0.0, 0.0, "%g")
+            if imgui.is_item_deactivated_after_edit():
+                write_trim(path, max(value, 0.0), None, get_roi_folder() or None)
+            set_tooltip(
+                "Seconds the dashboard and vnoiser leave off the start of every "
+                "recording of this file; the trim column gives one its own.",
+                show_mark=False,
+            )
             if self._note:
                 imgui.text_disabled(self._note)
             if self._error:
@@ -600,7 +669,7 @@ class MescTabWidget(Widget):
                 # a new table id whenever the columns change: imgui restores a
                 # saved layout by column index, so the old widths would land on
                 # the wrong columns
-                "##mesc_units_v5",
+                "##mesc_units_v6",
                 len(UNIT_COLUMNS),
                 flags,
                 imgui.ImVec2(0, avail.y),
@@ -640,7 +709,11 @@ class MescTabWidget(Widget):
                 specs.specs_dirty = False
             column, ascending = self._sort
             rows = sorted(
-                ((*unit_row(u), u) for u in units if u["key"] not in folded),
+                (
+                    (*unit_row(u, book.trim_of(scan_of(u["key"]))), u)
+                    for u in units
+                    if u["key"] not in folded
+                ),
                 key=lambda row: row[1][column],
                 reverse=not ascending,
             )
@@ -696,6 +769,9 @@ class MescTabWidget(Widget):
                             "and on every Z-stack it matches.",
                             show_mark=False,
                         )
+                        continue
+                    if i == TRIM_COLUMN:
+                        self._draw_trim_cell(path, info, book)
                         continue
                     if i == RTMC_COLUMN:
                         imgui.text(cells[i])

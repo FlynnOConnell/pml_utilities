@@ -91,6 +91,7 @@ from mbo_utilities.preferences import (
 from mbo_utilities.results import (
     Results,
     results_pipeline,
+    unit_frames,
 )
 from mbo_utilities.roi_workflow import (
     RUN_PIPELINE,
@@ -996,10 +997,9 @@ class ManualRoiWidget(
         n = unit.n_rois
         lines = unit.member_kind == "line"
         channel = int(results.source.get("channel") or 0)
-        window = results.source.get(
-            "frames"
-        )  # a frame-window run's traces sit where they were recorded
-        frames = None if not window else (int(window[0]), int(window[1]), 1)
+        # a frame-window run's traces sit where they were recorded
+        window = unit_frames(results, unit)
+        frames = None if window is None else (*window, 1)
         # the reader's geometry places the lines when the shown recording is the scan these results came from
         src = base_array(self.iw.data[0])
         positions = (

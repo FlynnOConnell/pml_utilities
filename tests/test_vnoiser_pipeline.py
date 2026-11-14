@@ -1094,6 +1094,32 @@ def test_preview_names_the_domain_it_read(tmp_path):
     assert found["name"] == "soma" and found["rois"] == [0, 2]
 
 
+def test_a_trimmed_scan_is_read_from_its_trim_and_says_so(tmp_path, monkeypatch):
+    """The domain file's trim starts the preview and the run there, on the
+    recording's clock, and the run records each scan's window.
+    """
+    from mbo_utilities.annotation.domains import write_trim
+    from mbo_utilities.results import Results, newest_results, unit_frames
+    from mbo_utilities.vnoiser.pipeline import preview_domain
+
+    monkeypatch.setenv("MBO_DIR", str(tmp_path / "mbo"))
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc)
+    domains = {"soma": [0, 2], "api": [1]}
+    write_trim(mesc, 0.5, "MUnit_1")
+    found = preview_domain(mesc, "MUnit_1", domains, "soma")
+    assert found["t"][0] == pytest.approx(0.5) and len(found["t"]) == 1100
+    late = preview_domain(mesc, "MUnit_1", domains, "soma", frames=(400, 600))
+    assert late["t"][0] == pytest.approx(2.0) and len(late["t"]) == 200
+
+    run_vnoiser_pipeline(mesc, domains=domains, units=["MUnit_1"], first_env=["1"])
+    results = Results.open(newest_results(tmp_path, "vnoiser"))
+    assert results.source["trim_s"] == {"1": 0.5}
+    assert results.source["scan_frames"] == {"1": [100, 1200]}
+    unit = next(iter(results.units.values()))
+    assert unit_frames(results, unit) == (100, 1200) and unit.n_timepoints == 1100
+
+
 def test_comment_groups_reads_the_rigs_maps_and_refuses_broken_ones():
     assert comment_groups("soma,bas1,api1,each2lines", 6) == {
         "soma": [0, 1],
