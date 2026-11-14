@@ -18,10 +18,18 @@ MESc attrs into microns and pixels; the attrs are read directly with h5py:
   (MethodType 9) is one long side then the other walked back, 50-150
   points, with the short edges implied by the closing jumps.
 - An image unit's ``ReferenceViewportJSON["viewports"][0]``: where its
-  ``[0, 0]`` pixel is, its rotation about z and its size (``geomTransTransl``,
-  ``geomTransRot``, ``width``, ``height``).
+  ``[0, 0]`` pixel is, its rotation and its size (``geomTransTransl``,
+  ``geomTransRot``, ``width``, ``height``). The rotation is a quaternion
+  ``[x, y, z, w]``: image x, image y and the slice axis are the columns of its
+  matrix, so a tilted viewport's slices step along its own normal, not world z.
 - A Z-stack unit's ``MinZ`` / ``MaxZ`` / ``ZDim`` attrs: the stack's depth
   range (relative to that Z origin) and slice count, uniformly stepped.
+- A fast (AO z) Z-stack's RTMC curves: the tissue under stack coordinate ``P``
+  sits at ``P + mean RTMC``, so a point stored at ``P`` is found in the stack at
+  ``P - mean RTMC``. Slow (objective) stacks are already right as stored, and
+  the one tilted fast stack on disk matched no better with it, so only a flat
+  fast stack carries the term. The RTMC of the layer under the point fits no
+  better than the mean (1.1 against 0.8 um in xy on six stacks).
 
 Z-origin: the stack's Z origin is ``geomTransTransl[2]``, not the unit's
 ``LabelingOriginTransl`` attr.
@@ -42,6 +50,12 @@ import json
 
 import h5py
 import numpy as np
+from scipy.spatial.transform import Rotation
+
+from mbo_utilities.arrays.mesc import _attr, _parse_curves, _rtmc_traces
+
+# cos(1 degree): a viewport tilted less than that is read as flat
+TILT_TOLERANCE = 0.99985
 
 __all__ = [
     "roi_outlines_um",
@@ -49,6 +63,8 @@ __all__ = [
     "zstack_depth_info",
     "z_step_um",
     "um_to_pixels",
+    "um_to_voxels",
+    "voxels_to_um",
     "image_overlays",
     "line_positions",
 ]
@@ -98,12 +114,12 @@ def _viewport_of(unit) -> dict | None:
     if transl == (0.0, 0.0, 0.0) and width == 1.0 and height == 1.0:
         return None
     # [x, y, z, w]; FemtoAPI's quatMult is anti-Hamilton, so its q^-1 p q is this active rotation
-    _qx, _qy, qz, qw = vp.get("geomTransRot", (0.0, 0.0, 0.0, 1.0))
+    quaternion = [float(v) for v in vp.get("geomTransRot", (0.0, 0.0, 0.0, 1.0))]
     return {
         "transl": transl,
         "width": width,
         "height": height,
-        "angle": 2.0 * float(np.arctan2(qz, qw)),
+        "rotation": Rotation.from_quat(quaternion).as_matrix(),
     }
 
 
@@ -122,9 +138,9 @@ def roi_outlines_um(mesc_path, unit_key: str) -> list[np.ndarray] | None:
 
 
 def viewport_geometry(mesc_path, unit_key: str) -> dict | None:
-    """``{"transl": (x, y, z), "width": um, "height": um, "angle": rad}`` for a
-    unit's FOV: a pixel at ``p`` microns from the corner is at
-    ``transl + R(angle) p``.
+    """``{"transl": (x, y, z), "width": um, "height": um, "rotation": (3, 3)}``
+    for a unit's FOV: a pixel ``(x, y)`` microns from the corner, ``z`` microns
+    along the slice axis, is at ``transl + rotation @ (x, y, z)``.
 
     ``None`` if this unit has no ``ReferenceViewportJSON``, or only the
     1 um placeholder MEScan writes on an RTMC reference unit.
@@ -134,41 +150,62 @@ def viewport_geometry(mesc_path, unit_key: str) -> dict | None:
         return None if unit is None else _viewport_of(unit)
 
 
+def _depth_of(unit, viewport: dict) -> dict | None:
+    """:func:`zstack_depth_info` of an open unit group and its viewport."""
+    if not {"MinZ", "MaxZ", "ZDim"} <= set(unit.attrs.keys()):
+        return None
+    # NOTE: every stack seen so far is bottomToTop (0); FemtoAPI negates z otherwise
+    if unit.attrs.get("ScanningDirection", 0) != 0:
+        raise ValueError(
+            f"{unit.name}: slice depths of a topToBottom stack are unverified"
+        )
+    flat = viewport["rotation"][2, 2] >= TILT_TOLERANCE
+    fast = _attr(unit, "ZModeDebugString", "") == "fast"
+    rtmc = _rtmc_traces(_parse_curves(unit)) if flat and fast else {}
+    return {
+        "min_z": float(unit.attrs["MinZ"]),
+        "max_z": float(unit.attrs["MaxZ"]),
+        "zdim": int(unit.attrs["ZDim"]),
+        "rtmc_um": tuple(
+            float(
+                np.mean(
+                    [
+                        np.mean(trace["um"])
+                        for label, trace in rtmc.items()
+                        if label.startswith(axis) and "total" in label
+                    ]
+                    or [0.0]
+                )
+            )
+            for axis in "XYZ"
+        ),
+    }
+
+
 def zstack_depth_info(mesc_path, unit_key: str) -> dict | None:
-    """``{"transl_z", "min_z", "max_z", "zdim"}`` for a Z-stack unit's depth axis.
+    """``{"min_z", "max_z", "zdim", "rtmc_um"}`` for a Z-stack unit's depth axis.
 
     ``None`` if this unit is missing ``ReferenceViewportJSON``, ``MinZ``,
-    ``MaxZ`` or ``ZDim``. ``transl_z`` is ``geomTransTransl[2]`` (module
-    docstring: why this and not ``LabelingOriginTransl``).
+    ``MaxZ`` or ``ZDim``. ``min_z`` and ``max_z`` are microns along the slice
+    axis from ``geomTransTransl`` (module docstring: why this and not
+    ``LabelingOriginTransl``). ``rtmc_um`` is the ``(x, y, z)`` mean over the
+    layers of a flat fast stack's ``total`` RTMC curves, zeros for any other
+    stack.
     """
-    vp = viewport_geometry(mesc_path, unit_key)
-    if vp is None:
-        return None
     with h5py.File(mesc_path, "r") as f:
         unit = f.get(unit_key)
-        if unit is None or not {"MinZ", "MaxZ", "ZDim"} <= set(unit.attrs.keys()):
-            return None
-        # NOTE: every stack seen so far is bottomToTop (0); FemtoAPI negates z otherwise
-        if unit.attrs.get("ScanningDirection", 0) != 0:
-            raise ValueError(
-                f"{unit_key}: slice depths of a topToBottom stack are unverified"
-            )
-        return {
-            "transl_z": vp["transl"][2],
-            "min_z": float(unit.attrs["MinZ"]),
-            "max_z": float(unit.attrs["MaxZ"]),
-            "zdim": int(unit.attrs["ZDim"]),
-        }
+        vp = None if unit is None else _viewport_of(unit)
+        return None if vp is None else _depth_of(unit, vp)
 
 
 def z_step_um(depth: dict) -> float:
     return (depth["max_z"] - depth["min_z"]) / max(depth["zdim"] - 1, 1)
 
 
-def um_to_pixels(
-    points_xy_um: np.ndarray, viewport: dict, ny: int, nx: int
-) -> np.ndarray:
-    """``(N, 2)`` physical ``[x, y]`` microns -> ``(N, 2)`` pixel ``[col, row]``.
+def um_to_pixels(points_um: np.ndarray, viewport: dict, ny: int, nx: int) -> np.ndarray:
+    """``(N, 3)`` physical ``[x, y, z]`` microns -> ``(N, 3)`` ``[col, row, depth_um]``:
+    the pixel a point projects to along the viewport's slice axis, and how far
+    along that axis it sits from the viewport's plane.
 
     ``geomTransTransl`` is the micron position of the array's ``[0, 0]``
     pixel and rows increase with +y: checked on the 2026-07-30 spine file
@@ -179,11 +216,40 @@ def um_to_pixels(
     what puts a 45 degree rig's patches inside their pictures, with their
     edges along the pixel axes.
     """
-    cos, sin = np.cos(viewport["angle"]), np.sin(viewport["angle"])
-    dx, dy = (np.asarray(points_xy_um, dtype=float) - viewport["transl"][:2]).T
-    col = (cos * dx + sin * dy) * nx / viewport["width"]
-    row = (cos * dy - sin * dx) * ny / viewport["height"]
-    return np.stack([col, row], axis=1)
+    local = (np.asarray(points_um, dtype=float) - viewport["transl"]) @ viewport[
+        "rotation"
+    ]  ## (N, 3): rows are R.T @ (point - transl)
+    scale = (nx / viewport["width"], ny / viewport["height"], 1.0)
+    return local * scale
+
+
+def um_to_voxels(
+    points_um: np.ndarray, viewport: dict, depth: dict, ny: int, nx: int
+) -> np.ndarray:
+    """``(N, 3)`` physical ``[x, y, z]`` microns -> ``(N, 3)`` ``[col, row, slice]``
+    of a Z-stack, fractional, after taking the stack's RTMC off the point.
+    """
+    voxels = um_to_pixels(
+        np.asarray(points_um, dtype=float) - depth["rtmc_um"], viewport, ny, nx
+    )
+    voxels[:, 2] = (voxels[:, 2] - depth["min_z"]) / z_step_um(depth)
+    return voxels
+
+
+def voxels_to_um(
+    voxels: np.ndarray, viewport: dict, depth: dict, ny: int, nx: int
+) -> np.ndarray:
+    """The inverse of :func:`um_to_voxels`."""
+    col, row, k = np.asarray(voxels, dtype=float).T
+    local = np.stack(
+        [
+            col * viewport["width"] / nx,
+            row * viewport["height"] / ny,
+            depth["min_z"] + k * z_step_um(depth),
+        ],
+        axis=1,
+    )
+    return viewport["transl"] + local @ viewport["rotation"].T + depth["rtmc_um"]
 
 
 def image_overlays(
@@ -201,7 +267,7 @@ def image_overlays(
     ``mesc_placement.StackPlacement``'s shift for a Z-stack. A snapshot carries
     every ROI, which is what the MESc GUI draws on it, whatever its depth. A
     Z-stack carries the ROIs inside its field **and its depth range**, each on
-    the slice nearest its depth. An ROI scanned above or below the stack is
+    the slice nearest it along the stack's slice axis. An ROI scanned above or below the stack is
     left out: the stack holds no picture of it, and drawing it on an edge slice
     puts an outline on tissue it was never scanned in.
 
@@ -215,12 +281,12 @@ def image_overlays(
         slice      0-based Z-stack slice, None on a snapshot
     """
     image_path = mesc_path if image_path is None else image_path
-    vp = viewport_geometry(image_path, image_key)
-    depth = zstack_depth_info(image_path, image_key)
     with h5py.File(image_path, "r") as f:
         image = f.get(image_key)
-        if vp is None or image is None or "Channel_0" not in image:
+        vp = None if image is None else _viewport_of(image)
+        if vp is None or "Channel_0" not in image:
             return []
+        depth = _depth_of(image, vp)
         ny, nx = (int(v) for v in image["Channel_0"].shape[-2:])
     with h5py.File(mesc_path, "r") as f:
         unit = f.get(unit_key)
@@ -244,20 +310,20 @@ def image_overlays(
     for i, seg in enumerate(outlines):
         k = None
         if depth is not None:
-            col, row = um_to_pixels(seg[:2].mean(axis=1)[None], vp, ny, nx)[0]
-            z_um = float(seg[2].mean()) - depth["transl_z"]
-            k = int(np.round((z_um - depth["min_z"]) / z_step_um(depth)))
+            col, row, k = um_to_voxels(seg.mean(axis=1)[None], vp, depth, ny, nx)[0]
+            k = int(np.round(k))
             if not (0 <= col <= nx and 0 <= row <= ny and 0 <= k < depth["zdim"]):
                 continue
+            seg = seg - np.asarray(depth["rtmc_um"])[:, None]
         kind = "patch" if _is_patch(seg) else "line"
-        xy = seg[:2].T
+        points = seg.T
         if kind == "patch":
-            xy = np.vstack([xy, xy[:1]])
+            points = np.vstack([points, points[:1]])
         out.append(
             {
                 "roi": i,
                 "kind": kind,
-                "pixels": um_to_pixels(xy, vp, ny, nx),
+                "pixels": um_to_pixels(points, vp, ny, nx)[:, :2],
                 "color": colors[i],
                 "slice": k,
             }

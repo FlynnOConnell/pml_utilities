@@ -246,8 +246,10 @@ def roi_domains(mesc) -> dict[int, str]:
 
 
 def write_positions(path, mesc, images, domains: dict[int, str]) -> None:
-    """One CSV row per ROI on each placed stack: its ends in that stack's microns,
-    and its ROI and slice counted from 1 as the caption counts them.
+    """One CSV row per ROI on each placed stack: its ends in the microns
+    ``mesc_geometry.um_to_voxels`` reads for that stack (a fast stack's stored
+    position plus its RTMC), and its ROI and slice counted from 1 as the
+    caption counts them.
     """
     rows = []
     for im in images:

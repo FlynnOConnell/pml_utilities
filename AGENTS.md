@@ -1049,8 +1049,11 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   never the shorter hand-drawn `guideLine`, never `ROIJSON`, whose vertices are in the
   unrolled scan's pixels) in microns, where
   `ReferenceViewportJSON.geomTransTransl` is the `[0, 0]` corner of an image,
-  `geomTransRot` its rotation, rows grow with +y, and a stack's slice `k` sits at
-  `geomTransTransl[2] + MinZ + k·step`. A scan shares that frame with its picture, not
+  `geomTransRot` its rotation (the full quaternion: image x, image y and the slice
+  axis are its matrix's columns), rows grow with +y, and a stack's slice `k` sits
+  `MinZ + k·step` along the slice axis from `geomTransTransl`. A point stored at `P` is
+  found in a flat fast (AO z) stack at `P` minus the stack's mean RTMC
+  (`um_to_voxels`, `voxels_to_um`). A scan shares that frame with its picture, not
   with a Z-stack. The reader flips no patch rows.
   `line_positions(path, unit)` gives each ROI `start_um` / `end_um`, `length_um`,
   `sample_um`; `image_overlays` draws them. An AOD
@@ -1066,7 +1069,7 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   stored position + the shift that lands its picture on the stack (none under
   `NCC_PASS`), + the mean RTMC only when the ROIs' time means fit the stack better with
   it (`with_rtmc`), on the channel they fit best, never the one on screen. `confirmed`
-  is that fit beating random offsets.
+  is that fit beating random offsets. A picture rotated against its stack is not placed.
 - **Reference image.** `gui/mesc_reference.py` shows where an AOD unit's lines or
   patches sit: `picture_image` is the picture the ROIs were drawn on
   (`background_unit`), `stack_images` every Z-stack `place_scan` placed them on, each

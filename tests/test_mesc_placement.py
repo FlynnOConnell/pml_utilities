@@ -377,3 +377,58 @@ def test_stack_files_are_found_beside_the_scan_or_one_folder_up(tmp_path):
         inner / "expt_zstack.mesc",
         inner.parent / "expt_z.mesc",
     ]
+
+
+def test_a_fast_stacks_rtmc_is_a_file_coordinate_not_drift(scan_path, tmp_path):
+    """The same pixels under a fast stack that stores RTMC: the shift grows by
+    it, because the stack's own coordinates now carry that much, and the lines
+    still land on the slice the tissue is on.
+    """
+    stack_rtmc = (3.0, -2.0, 4.0)
+    path = tmp_path / "scan.mesc"
+    shutil.copy(scan_path, path)
+    with h5py.File(path, "a") as f:
+        stack = f["MSession_0/MUnit_0"]
+        stack.attrs["ZModeDebugString"] = "fast"
+        for i, (axis, value) in enumerate(zip("XYZ", stack_rtmc)):
+            curve = stack.create_group(f"Curve_{i}")
+            curve.attrs["Name"] = f"RTMC {axis} correction (total)"
+            curve.attrs["CurveDataXRawDelta"] = 1.0
+            curve.create_dataset("CurveDataYIdxNextSample", data=np.arange(1, 5))
+            curve.create_dataset("CurveDataYRawData", data=np.full(4, value))
+    arr = open_scan(path)
+    arr._rtmc = {}
+    try:
+        placement = place_scan(arr, path, "MSession_0/MUnit_0")
+    finally:
+        arr.close()
+    assert placement.placed and placement.confirmed
+    expected = np.array(stack_rtmc) - STAGE_ERROR
+    np.testing.assert_allclose(placement.shift_um, expected, atol=1.0)
+    records = image_overlays(
+        path, "MSession_0/MUnit_1", "MSession_0/MUnit_0", shift_um=placement.shift_um
+    )
+    assert [r["slice"] for r in records] == [PICTURE_AT[2]] * N_LINES
+
+
+@pytest.mark.parametrize(
+    "quaternion", [[0.0, 0.259, 0.0, 0.966], [0.0, 0.0, 0.3827, 0.9239]]
+)
+def test_a_picture_rotated_against_its_stack_is_not_placed(
+    scan_path, tmp_path, quaternion
+):
+    """Tilted 30 degrees about y, or turned 45 degrees in its own plane: the
+    match is a translation, so neither is placed.
+    """
+    path = tmp_path / "scan.mesc"
+    shutil.copy(scan_path, path)
+    with h5py.File(path, "a") as f:
+        picture = f["MSession_1/MUnit_0"]
+        viewports = json.loads(picture.attrs["ReferenceViewportJSON"])
+        viewports["viewports"][0]["geomTransRot"] = quaternion
+        picture.attrs["ReferenceViewportJSON"] = json.dumps(viewports)
+    arr = open_scan(path)
+    try:
+        assert place_scan(arr, path, "MSession_0/MUnit_0") is None
+    finally:
+        arr.close()
