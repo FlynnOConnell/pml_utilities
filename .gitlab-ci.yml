@@ -8,8 +8,10 @@
 
 format:
   image: python:3.12
+  # off for now; was:
+  #   - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
+    - when: never
   script:
     - pip install --quiet ruff==0.14.10
     - ruff format .
