@@ -24,7 +24,6 @@ from mbo_utilities.gui.imgui.lines import line, vec4, vlines
 __all__ = ["PAGES", "ReadoutsMixin", "run_readouts", "write_readouts"]
 
 PAGES = ("Traces", "Spectrum", "Correlation", "Triggered average")
-FIELD_WIDTH = 90
 SCALE_WIDTH = 60
 EVENT_RGB = (0.95, 0.85, 0.35)
 SEM_ALPHA = 0.15
@@ -223,21 +222,17 @@ class ReadoutsMixin:
             vlines("##events", r.event_times[first:last], EVENT_RGB, legend=False)
 
     def _draw_readout_settings(self) -> None:
-        if not imgui.collapsing_header("Read-outs", imgui.TreeNodeFlags_.default_open):
-            return
         s = self.readout
         picked = self._picked_rows()
         name, *_ = self._readout_span()
         imgui.text_disabled(f"over {name}")
         if picked:
             trigger = self._trigger_row(picked)
-            imgui.set_next_item_width(FIELD_WIDTH * 1.5)
             changed, i = imgui.combo(
                 "trigger", picked.index(trigger), [r.name for r in picked]
             )
             if changed:
                 self.trigger = picked[i].key
-        imgui.set_next_item_width(FIELD_WIDTH * 1.5)
         changed, i = imgui.combo(
             "events are", 0 if s.polarity == 1 else 1, ["peaks", "troughs"]
         )
@@ -251,7 +246,6 @@ class ReadoutsMixin:
             ("bins (Hz)", "resolution_hz", 0.01),
             ("skip start (s)", "skip_s", 0.0),
         ):
-            imgui.set_next_item_width(FIELD_WIDTH)
             _, value = imgui.input_float(label, getattr(s, name), 0.0, 0.0, "%g")
             setattr(s, name, max(value, low))
         imgui.set_item_tooltip(

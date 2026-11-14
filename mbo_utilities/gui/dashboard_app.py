@@ -4,11 +4,14 @@ exported for slides, in a hello_imgui window of its own.
 Open a ``.mesc``, pick a unit with ROIs (:func:`~mbo_utilities.dashboard.trace_units`),
 and its line or patch means load with any ROIs drawn on it in the ROI tool
 (:func:`~mbo_utilities.dashboard.load_rows`, cached after the first read).
-The ROIs are on the left, the processing (kind, dF/F baseline, filter),
-read-outs, windows and export on the right, and in the middle the ROIs on their
-tissue (``gui/dashboard_morphology.py``) beside an overview of the whole
-recording over one plot per ROI on a shared time axis, or a read-out of them
-(``gui/dashboard_readouts.py``). Every trace is processed on a worker thread
+The window is a hello_imgui dock space: the ROI table over the settings
+(processing, read-outs, windows, export) in a left column, and in the rest an
+overview of the whole recording over one plot per ROI on a shared time axis, or
+a read-out of them (``gui/dashboard_readouts.py``). The ROIs on their tissue
+(``gui/dashboard_morphology.py``, ``m``) and the figure preview open floating;
+every panel drags to another dock or out of it, and the View menu restores the
+layout.
+Every trace is processed on a worker thread
 and drawn from a min/max pyramid, so the window never waits on a computation
 and draws about two points per pixel column at any zoom.
 
@@ -82,11 +85,23 @@ __all__ = ["DashboardApp", "launch_dashboard", "open_dashboard"]
 
 TITLE = "Dashboard"
 WINDOW_SIZE = (1700, 1000)
-LEFT_WIDTH = 230
-RIGHT_WIDTH = 360
-FIELD_WIDTH = 90
+PANEL_ROIS = "ROIs"
+PANEL_SETTINGS = "Settings"
+PANEL_PLOTS = "Plots"
+PANEL_IMAGE = "Image"
+PANEL_PREVIEW = "Figure preview"
+DOCKED_PANELS = (PANEL_ROIS, PANEL_SETTINGS, PANEL_PLOTS)
+SIDE_PANELS = (PANEL_ROIS, PANEL_SETTINGS)
+LEFT_RATIO = 0.17
+SETTINGS_RATIO = 0.55
+IMAGE_SIZE = (PANEL_WIDTH, PANEL_WIDTH + 100)
+PREVIEW_SIZE = (900, 600)
+FLOAT_MARGIN = 40
+LABEL_EM = 8.0
 OVERVIEW_HEIGHT = 110
 ROW_HEIGHT = 140
+MIN_ROW_HEIGHT = 40
+ROW_HANDLE = 6
 PREVIEW_DPI = 100
 UNDER_RGB = (0.45, 0.45, 0.45)
 WINDOW_RGB = (0.95, 0.85, 0.35)
@@ -130,6 +145,23 @@ def compute_row(row, view: TraceView, view_key: str) -> RowResult:
         MinMaxPyramid(float(t[0]), dt, shown),
         None if under is None else MinMaxPyramid(float(t[0]), dt, under),
     )
+
+
+def natural_key(row) -> list:
+    """A row's name with its digit runs as numbers, so ROI 10 sorts after ROI 2."""
+    return [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", row.name)]
+
+
+def row_length(row) -> float:
+    return (row.extra or {}).get("length_um", 0.0)
+
+
+def row_source(row) -> str:
+    """The kind of row without the unit it came from: lines, drawn, domains."""
+    return str(row.source).rsplit(" ", 1)[-1]
+
+
+ROI_SORT_KEYS = (natural_key, row_length, row_source)
 
 
 def rgb(color: str) -> tuple[float, float, float]:
@@ -176,6 +208,10 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         self.block = ""
         self.error = ""
         self.row_height = ROW_HEIGHT
+        self.show_image = False
+        self.show_preview = False
+        self.roi_filter = ""
+        self.roi_sort: tuple[int, bool] | None = None
         self.frames = 0
         self.max_frames: int | None = None
         self.progress = (0, 0)
@@ -197,7 +233,6 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         self._previewing: Future | None = None
         self._preview: np.ndarray | None = None
         self._preview_new = False
-        self._show_preview = False
         self._dialog = None
         self.process_error = ""
         self.page = PAGES[0]
@@ -211,7 +246,6 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         self._reading: Future | None = None
         self._reading_rows: list = []
         self._readouts_key: tuple | None = None
-        self.show_morphology = True
         self.morph_picked_only = False
         self.morph_pad = 0
         self.morph_view = (0.0, 1.0, 0.0, 1.0)
@@ -370,20 +404,125 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
     def _y_unit(self) -> str:
         return KIND_UNITS[self.view.kind]
 
-    def draw(self) -> None:
-        """One frame of the window."""
+    def update(self) -> None:
+        """One frame's bookkeeping, before any panel draws."""
         self.frames += 1
         if self.max_frames is not None and self.frames >= self.max_frames:
             hello_imgui.get_runner_params().app_shall_exit = True
         self._poll()
-        self._draw_header()
-        if self.path is None:
-            self._draw_open()
-        elif self.rows:
+        if self._dialog is not None and self._dialog.ready():
+            picked = self._dialog.result()
+            self._dialog = None
+            if picked:
+                self.unit = None
+                self.open(picked[0])
+        if self.rows:
             self._schedule()
             self._schedule_readouts()
             self._keys()
-            self._draw_main()
+        self.show_image = self._draw_floating(
+            PANEL_IMAGE, self.show_image, IMAGE_SIZE, self._draw_image
+        )
+        self.show_preview = self._draw_floating(
+            PANEL_PREVIEW, self.show_preview, PREVIEW_SIZE, self._draw_preview
+        )
+
+    def _draw_floating(self, label: str, shown: bool, size, draw) -> bool:
+        """A window that opens floating and docks where it is dragged;
+        returns whether it is still open.
+        """
+        if not shown:
+            return False
+        work = imgui.get_main_viewport()
+        corner = imgui.ImVec2(
+            work.work_pos.x + work.work_size.x - FLOAT_MARGIN,
+            work.work_pos.y + FLOAT_MARGIN,
+        )
+        imgui.set_next_window_pos(
+            corner, imgui.Cond_.first_use_ever, imgui.ImVec2(1.0, 0.0)
+        )
+        imgui.set_next_window_size(imgui.ImVec2(*size), imgui.Cond_.first_use_ever)
+        expanded, shown = imgui.begin(label, True)
+        if expanded:
+            draw()
+        imgui.end()
+        return bool(shown)
+
+    def side_shown(self) -> bool:
+        docking = hello_imgui.get_runner_params().docking_params
+        return any(docking.dockable_window_of_name(p).is_visible for p in SIDE_PANELS)
+
+    def show_side(self, shown: bool) -> None:
+        """Collapse the ROIs and Settings panels so the plots take the whole
+        window, or bring them back to where they were docked.
+        """
+        docking = hello_imgui.get_runner_params().docking_params
+        for label in SIDE_PANELS:
+            docking.dockable_window_of_name(label).is_visible = shown
+
+    def _draw_view_menu(self) -> None:
+        if not imgui.begin_menu("View"):
+            return
+        docking = hello_imgui.get_runner_params().docking_params
+        for label in DOCKED_PANELS:
+            window = docking.dockable_window_of_name(label)
+            _, window.is_visible = imgui.menu_item(label, "", window.is_visible)
+        _, self.show_image = imgui.menu_item(PANEL_IMAGE, "m", self.show_image)
+        _, self.show_preview = imgui.menu_item(PANEL_PREVIEW, "", self.show_preview)
+        imgui.separator()
+        if imgui.menu_item("Restore default layout", "", False)[0]:
+            docking.layout_reset = True
+            for label in DOCKED_PANELS:
+                docking.dockable_window_of_name(label).is_visible = True
+        imgui.end_menu()
+
+    def _draw_app_menu(self) -> None:
+        if imgui.menu_item("Open .mesc", "", False)[0]:
+            self._dialog = pfd.open_file(
+                "Open a .mesc",
+                str(self.path.parent if self.path else Path.home()),
+                ["MESc", "*.mesc"],
+            )
+
+    def _draw_menu_bar(self) -> None:
+        self._draw_view_menu()
+        shown = self.side_shown()
+        if imgui.menu_item("Hide panels" if shown else "Show panels", "", False)[0]:
+            self.show_side(not shown)
+        imgui.set_item_tooltip("Collapse or bring back ROIs and Settings (s)")
+        if self.path is not None:
+            imgui.text_disabled(self.path.name)
+        if self.units and self.rows:
+            keys = [u["key"] for u in self.units]
+            imgui.set_next_item_width(hello_imgui.em_size(9))
+            index = keys.index(self.unit) if self.unit in keys else 0
+            changed, index = imgui.combo(
+                "##unit", index, [k.rsplit("/", 1)[-1] for k in keys]
+            )
+            if changed:
+                self.choose(keys[index])
+            n_channels = int(self._unit_info().get("nchannels") or 1)
+            imgui.set_next_item_width(hello_imgui.em_size(4))
+            changed, c = imgui.combo(
+                "channel##ch", self.channel, [str(c) for c in range(n_channels)]
+            )
+            if changed:
+                self.choose(self.unit, c)
+
+    def _draw_status(self) -> None:
+        if self.error:
+            imgui.text_colored(ERROR, self.error)
+        else:
+            imgui.text_disabled(self.status)
+        if self.block and self.rows:
+            imgui.same_line()
+            imgui.text(self.block)
+
+    def _draw_center(self) -> None:
+        if self.path is None:
+            self._draw_open()
+        elif self.rows:
+            self._draw_pages()
         elif self._loading is not None:
             done, total = self.progress
             imgui.text(f"Reading the ROIs of {self.unit} (channel {self.channel})")
@@ -394,54 +533,9 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             )
         else:
             self._draw_units()
-        self._draw_preview()
-
-    def _draw_header(self) -> None:
-        if imgui.button("Open .mesc"):
-            self._dialog = pfd.open_file(
-                "Open a .mesc",
-                str(self.path.parent if self.path else Path.home()),
-                ["MESc", "*.mesc"],
-            )
-        if self._dialog is not None and self._dialog.ready():
-            picked = self._dialog.result()
-            self._dialog = None
-            if picked:
-                self.unit = None
-                self.open(picked[0])
-        if self.path is not None:
-            imgui.same_line()
-            imgui.text(self.path.name)
-        if self.units and self.rows:
-            keys = [u["key"] for u in self.units]
-            imgui.same_line()
-            imgui.set_next_item_width(140)
-            index = keys.index(self.unit) if self.unit in keys else 0
-            changed, index = imgui.combo(
-                "##unit", index, [k.rsplit("/", 1)[-1] for k in keys]
-            )
-            if changed:
-                self.choose(keys[index])
-            n_channels = int(self._unit_info().get("nchannels") or 1)
-            imgui.same_line()
-            imgui.set_next_item_width(70)
-            changed, c = imgui.combo(
-                "channel##ch", self.channel, [str(c) for c in range(n_channels)]
-            )
-            if changed:
-                self.choose(self.unit, c)
-        imgui.same_line()
-        if self.error:
-            imgui.text_colored(ERROR, self.error)
-        else:
-            imgui.text_disabled(self.status)
-        if self.block and self.rows:
-            imgui.same_line()
-            imgui.text(self.block)
-        imgui.separator()
 
     def _draw_open(self) -> None:
-        imgui.text("Open a .mesc to plot the ROIs of one of its units.")
+        imgui.text("File > Open .mesc plots the ROIs of one of a file's units.")
 
     def _draw_units(self) -> None:
         if self._listing is not None:
@@ -488,45 +582,86 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             self.add_window(*self.x_view)
         if imgui.is_key_pressed(imgui.Key.f, False):
             self._set_x = self.duration
+        if imgui.is_key_pressed(imgui.Key.s, False):
+            self.show_side(not self.side_shown())
         if imgui.is_key_pressed(imgui.Key.m, False):
-            self.show_morphology = not self.show_morphology
+            self.show_image = not self.show_image
 
-    def _draw_main(self) -> None:
-        avail = imgui.get_content_region_avail()
-        with imgui_ctx.begin_child("##rois", imgui.ImVec2(LEFT_WIDTH, 0)):
-            self._draw_rois()
-        imgui.same_line()
-        center = (
-            avail.x - LEFT_WIDTH - RIGHT_WIDTH - 2 * imgui.get_style().item_spacing.x
-        )
-        with imgui_ctx.begin_child("##plots", imgui.ImVec2(center, 0)):
-            self._draw_plots()
-        imgui.same_line()
-        with imgui_ctx.begin_child("##side", imgui.ImVec2(RIGHT_WIDTH, 0)):
-            self._draw_processing()
-            self._draw_readout_settings()
-            self._draw_windows()
-            self._draw_export()
+    def _draw_settings(self) -> None:
+        if not self.rows:
+            imgui.text_disabled("no unit open")
+            return
+        if not imgui.begin_tab_bar("##settings"):
+            return
+        for label, draw in (
+            ("Processing", self._draw_processing),
+            ("Read-outs", self._draw_readout_settings),
+            ("Windows", self._draw_windows),
+            ("Export", self._draw_export),
+        ):
+            if imgui.begin_tab_item(label)[0]:
+                imgui.push_item_width(-hello_imgui.em_size(LABEL_EM))
+                draw()
+                imgui.pop_item_width()
+                imgui.end_tab_item()
+        imgui.end_tab_bar()
+
+    def _shown_rows(self) -> list:
+        """The rows the ROI table lists: those the filter keeps, as sorted."""
+        needle = self.roi_filter.lower()
+        rows = [r for r in self.rows if needle in f"{r.name} {r.source}".lower()]
+        if self.roi_sort is None:
+            return rows
+        column, ascending = self.roi_sort
+        return sorted(rows, key=ROI_SORT_KEYS[column], reverse=not ascending)
 
     def _draw_rois(self) -> None:
-        imgui.text("ROIs")
-        imgui.same_line()
+        if not self.rows:
+            imgui.text_disabled("no unit open")
+            return
+        shown = self._shown_rows()
         if imgui.small_button("all"):
-            self.picked = {r.key for r in self.rows}
+            self.picked |= {r.key for r in shown}
         imgui.same_line()
         if imgui.small_button("none"):
-            self.picked = set()
-        headers = set()
-        for row in self.rows:
-            if row.source in ("drawn", DOMAIN_SOURCE) and row.source not in headers:
-                imgui.separator_text(row.source)
-                headers.add(row.source)
+            self.picked -= {r.key for r in shown}
+        imgui.same_line()
+        imgui.set_next_item_width(-imgui.FLT_MIN)
+        _, self.roi_filter = imgui.input_text_with_hint(
+            "##filter", "filter", self.roi_filter
+        )
+        flags = (
+            imgui.TableFlags_.row_bg
+            | imgui.TableFlags_.scroll_y
+            | imgui.TableFlags_.sortable
+            | imgui.TableFlags_.sort_tristate
+        )
+        if not imgui.begin_table("##rois", 3, flags):
+            return
+        imgui.table_setup_scroll_freeze(0, 1)
+        imgui.table_setup_column("ROI", imgui.TableColumnFlags_.width_stretch)
+        imgui.table_setup_column("um", imgui.TableColumnFlags_.width_fixed)
+        imgui.table_setup_column("source", imgui.TableColumnFlags_.width_fixed)
+        imgui.table_headers_row()
+        specs = imgui.table_get_sort_specs()
+        if specs is not None and specs.specs_dirty:
+            self.roi_sort = None
+            if specs.specs_count > 0:
+                self.roi_sort = (
+                    int(specs.specs.column_index),
+                    specs.specs.sort_direction == imgui.SortDirection.ascending,
+                )
+            specs.specs_dirty = False
+        swatch = imgui.get_font_size()
+        for row in shown:
+            imgui.table_next_row()
+            imgui.table_next_column()
             r, g, b = rgb(self._color(row))
             imgui.color_button(
                 f"##c{row.key}",
                 imgui.ImVec4(r, g, b, 1.0),
                 imgui.ColorEditFlags_.no_tooltip,
-                imgui.ImVec2(12, 12),
+                imgui.ImVec2(swatch, swatch),
             )
             imgui.same_line()
             changed, on = imgui.checkbox(
@@ -545,14 +680,18 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             if imgui.is_item_hovered() and row.source == DOMAIN_SOURCE:
                 lines = ", ".join(f"ROI {k}" for k in row.extra["lines"])
                 imgui.set_tooltip(f"mean of every pixel of {lines}")
+            imgui.table_next_column()
+            if "length_um" in (row.extra or {}):
+                imgui.text(f"{row.extra['length_um']:.0f}")
+            imgui.table_next_column()
+            imgui.text_disabled(row_source(row))
+        imgui.end_table()
 
-    def _draw_plots(self) -> None:
-        if self.show_morphology:
-            with imgui_ctx.begin_child("##morph", imgui.ImVec2(PANEL_WIDTH, 0)):
-                self._draw_morphology()
-            imgui.same_line()
-        with imgui_ctx.begin_child("##pages", imgui.ImVec2(0, 0)):
-            self._draw_pages()
+    def _draw_image(self) -> None:
+        if self.path is None or self.unit is None:
+            imgui.text_disabled("no unit open")
+            return
+        self._draw_morphology()
 
     def _draw_pages(self) -> None:
         if not imgui.begin_tab_bar("##pages_bar"):
@@ -588,6 +727,7 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             )
             with imgui_ctx.begin_child("##rows_scroll", imgui.ImVec2(0, 0)):
                 width = imgui.get_content_region_avail().x
+                self._draw_row_handles(len(picked), height, width)
                 self._draw_rows(picked, height, width)
 
     def _draw_overview(self, row) -> None:
@@ -651,12 +791,30 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             self._set_x = (mouse - width / 2, mouse + width / 2)
         implot.end_plot()
 
+    def _draw_row_handles(self, n: int, height: float, width: float) -> None:
+        """A grab strip on the lower border of every row: dragging it sets the
+        height of all rows.
+        """
+        origin = imgui.get_cursor_screen_pos()
+        pitch = height / n
+        for k in range(1, n + 1):
+            y = origin.y + min(k * pitch - ROW_HANDLE / 2, height - ROW_HANDLE)
+            imgui.set_cursor_screen_pos(imgui.ImVec2(origin.x, y))
+            ## NOTE: submitted before the plots so the strip, not the plot under it, takes the hover
+            imgui.invisible_button(f"##row_height{k}", imgui.ImVec2(width, ROW_HANDLE))
+            if imgui.is_item_hovered() or imgui.is_item_active():
+                imgui.set_mouse_cursor(imgui.MouseCursor_.resize_ns)
+            if imgui.is_item_active():
+                dragged = pitch + imgui.get_io().mouse_delta.y / k
+                self.row_height = max(dragged, MIN_ROW_HEIGHT)
+        imgui.set_cursor_screen_pos(origin)
+
     def _draw_rows(self, picked, height: float, width: float) -> None:
         """One plot per ROI on a shared time axis, each fitting its own y to
         what is in view; the bottom one carries the time axis.
         """
         flags = implot.SubplotFlags_.link_all_x | implot.SubplotFlags_.no_title
-        flags |= implot.SubplotFlags_.no_legend
+        flags |= implot.SubplotFlags_.no_legend | implot.SubplotFlags_.no_resize
         columns = int(width)
         with subplots("##rows", len(picked), 1, height=height, flags=flags) as ok:
             if not ok:
@@ -720,17 +878,13 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         implot.end_plot()
 
     def _draw_processing(self) -> None:
-        if not imgui.collapsing_header("Processing", imgui.TreeNodeFlags_.default_open):
-            return
         v, d, f = self.view, self.view.dff, self.view.filter
         kinds = list(KINDS)
-        imgui.set_next_item_width(FIELD_WIDTH * 1.5)
         changed, i = imgui.combo("kind", kinds.index(v.kind), list(KINDS.values()))
         if changed:
             v.kind = kinds[i]
         if v.kind != "raw":
             methods = list(DFF_METHODS)
-            imgui.set_next_item_width(FIELD_WIDTH * 1.5)
             changed, i = imgui.combo("baseline", methods.index(d.method), methods)
             if changed:
                 d.method = methods[i]
@@ -745,29 +899,24 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
                 ("gaussian (s)", "gaussian_s"),
             ):
                 if self._dff_field_used(d.method, name):
-                    imgui.set_next_item_width(FIELD_WIDTH)
                     _, value = imgui.input_float(
                         label, getattr(d, name), 0.0, 0.0, "%g"
                     )
                     setattr(d, name, max(value, 0.0))
             if d.method == "window":
-                imgui.set_next_item_width(FIELD_WIDTH)
                 _, d.f0_start_s = imgui.input_float(
                     "F0 from (s)", d.f0_start_s, 0.0, 0.0, "%g"
                 )
-                imgui.set_next_item_width(FIELD_WIDTH)
                 _, d.f0_stop_s = imgui.input_float(
                     "F0 to (s)", d.f0_stop_s, 0.0, 0.0, "%g"
                 )
         if v.kind == "zscore":
-            imgui.set_next_item_width(FIELD_WIDTH)
             _, value = imgui.input_float("slow drift (s)", d.slow_s, 0.0, 0.0, "%g")
             d.slow_s = max(value, 0.0)
             imgui.set_item_tooltip(
                 "A Gaussian of this many seconds is taken off first; 0 keeps it."
             )
             noises = list(NOISE_ESTIMATES)
-            imgui.set_next_item_width(FIELD_WIDTH)
             changed, i = imgui.combo("noise", noises.index(d.noise), noises)
             if changed:
                 d.noise = noises[i]
@@ -780,29 +929,22 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         _, v.flip = imgui.checkbox("flip", v.flip)
         imgui.set_item_tooltip("Negate what is shown.")
         imgui.separator_text("filter")
-        imgui.set_next_item_width(FIELD_WIDTH * 1.5)
         changed, i = imgui.combo(
             "##filter", FILTERS.index(f.kind), [FILTER_LABELS[k] for k in FILTERS]
         )
         if changed:
             f.kind = FILTERS[i]
         if f.kind in ("highpass", "bandpass"):
-            imgui.set_next_item_width(FIELD_WIDTH)
             _, f.low_hz = imgui.input_float("low (Hz)", f.low_hz, 0.0, 0.0, "%g")
         if f.kind in ("lowpass", "bandpass"):
-            imgui.set_next_item_width(FIELD_WIDTH)
             _, f.high_hz = imgui.input_float("high (Hz)", f.high_hz, 0.0, 0.0, "%g")
         if f.kind in ("lowpass", "highpass", "bandpass"):
-            imgui.set_next_item_width(FIELD_WIDTH)
             _, order = imgui.input_int("order", f.order, 0, 0)
             f.order = min(max(order, 1), 8)
         if f.kind == "notch":
-            imgui.set_next_item_width(FIELD_WIDTH)
             _, f.notch_hz = imgui.input_float("line (Hz)", f.notch_hz, 0.0, 0.0, "%g")
-            imgui.set_next_item_width(FIELD_WIDTH)
             _, f.notch_q = imgui.input_float("Q", f.notch_q, 0.0, 0.0, "%g")
         if f.kind in ("gaussian", "mean"):
-            imgui.set_next_item_width(FIELD_WIDTH)
             _, value = imgui.input_float("width (ms)", f.width_ms, 0.0, 0.0, "%g")
             f.width_ms = max(value, 0.01)
         if f.kind != "none":
@@ -833,8 +975,6 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         self.active = len(self.windows) - 1
 
     def _draw_windows(self) -> None:
-        if not imgui.collapsing_header("Windows", imgui.TreeNodeFlags_.default_open):
-            return
         if imgui.button("Add the view (w)"):
             self.add_window(*self.x_view)
         imgui.same_line()
@@ -842,21 +982,29 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             self._set_x = self.duration
         imgui.text_disabled(f"view {self.x_view[0]:.3f} to {self.x_view[1]:.3f} s")
         remove = None
+        style = imgui.get_style()
+        fixed = (
+            imgui.get_frame_height()
+            + imgui.calc_text_size("x").x
+            + 2 * style.frame_padding.x
+            + 4 * style.item_spacing.x
+        )
+        field = (imgui.get_content_region_avail().x - fixed) / 3
         for i, window in enumerate(self.windows):
             imgui.push_id(i)
             if imgui.radio_button("##active", i == self.active):
                 self.active = i
                 self._set_x = (window["start"], window["stop"])
             imgui.same_line()
-            imgui.set_next_item_width(60)
+            imgui.set_next_item_width(field)
             _, window["name"] = imgui.input_text("##name", window["name"])
             imgui.same_line()
-            imgui.set_next_item_width(75)
+            imgui.set_next_item_width(field)
             _, window["start"] = imgui.input_float(
                 "##start", window["start"], 0.0, 0.0, "%.3f"
             )
             imgui.same_line()
-            imgui.set_next_item_width(75)
+            imgui.set_next_item_width(field)
             _, window["stop"] = imgui.input_float(
                 "##stop", window["stop"], 0.0, 0.0, "%.3f"
             )
@@ -869,8 +1017,6 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             self.active = min(self.active, len(self.windows) - 1)
 
     def _draw_export(self) -> None:
-        if not imgui.collapsing_header("Export", imgui.TreeNodeFlags_.default_open):
-            return
         s = self.figure
         for label, name, fmt, low in (
             ("width (in)", "width_in", "%.1f", 1.0),
@@ -878,16 +1024,13 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             ("font (pt)", "font_pt", "%.0f", 4.0),
             ("line (pt)", "line_pt", "%.2f", 0.1),
         ):
-            imgui.set_next_item_width(FIELD_WIDTH)
             _, value = imgui.input_float(label, getattr(s, name), 0.0, 0.0, fmt)
             setattr(s, name, max(value, low))
-        imgui.set_next_item_width(FIELD_WIDTH)
         _, bar = imgui.input_float("time bar (s)", s.time_bar_s or 0.0, 0.0, 0.0, "%g")
         s.time_bar_s = bar if bar > 0 else None
         imgui.set_item_tooltip(
             "The time bar, or the axis's tick spacing. 0 picks a round one."
         )
-        imgui.set_next_item_width(FIELD_WIDTH)
         _, bar = imgui.input_float("y bar", s.y_bar or 0.0, 0.0, 0.0, "%g")
         s.y_bar = bar if bar > 0 else None
         imgui.set_item_tooltip(
@@ -898,21 +1041,18 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             ("background", "theme", THEMES),
             ("scale", "scale", SCALES),
         ):
-            imgui.set_next_item_width(FIELD_WIDTH)
             changed, i = imgui.combo(
                 label, options.index(getattr(s, name)), list(options)
             )
             if changed:
                 setattr(s, name, options[i])
-        imgui.set_next_item_width(FIELD_WIDTH)
         _, dpi = imgui.input_int("dpi", s.dpi, 0, 0)
         s.dpi = min(max(dpi, 50), 1200)
         _, s.time_axis = imgui.checkbox("time axis", s.time_axis)
         imgui.same_line()
         _, s.labels = imgui.checkbox("labels", s.labels)
-        imgui.same_line()
         _, s.transparent = imgui.checkbox("transparent", s.transparent)
-        imgui.set_next_item_width(-1)
+        imgui.set_next_item_width(-imgui.FLT_MIN)
         _, self.folder = imgui.input_text("##folder", self.folder)
         imgui.set_item_tooltip("The folder figures are written to.")
         ready = self._ready()
@@ -923,7 +1063,7 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             self._previewing = self._worker.submit(
                 render_preview, self.figure_traces(settings.theme), settings
             )
-            self._show_preview = True
+            self.show_preview = True
         imgui.same_line()
         if imgui.button("Export view"):
             self._exporting = self._worker.submit(
@@ -933,7 +1073,6 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
             self.windows[self.active] if 0 <= self.active < len(self.windows) else None
         )
         imgui.begin_disabled(active is None)
-        imgui.same_line()
         if imgui.button("Export window") and active is not None:
             self._exporting = self._worker.submit(
                 write_exports,
@@ -1044,24 +1183,46 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         subprocess.Popen([opener, str(folder)])
 
     def _draw_preview(self) -> None:
-        if not self._show_preview:
+        if self._preview is None:
+            imgui.text_disabled("rendering..." if self._previewing else "no preview")
             return
-        imgui.set_next_window_size(imgui.ImVec2(900, 600), imgui.Cond_.first_use_ever)
-        expanded, self._show_preview = imgui.begin("Figure preview", self._show_preview)
-        if expanded:
-            if self._preview is None:
-                imgui.text_disabled("rendering...")
-            else:
-                h, w = self._preview.shape[:2]
-                scale = min(imgui.get_content_region_avail().x / w, 1.0)
-                immvision.image_display(
-                    "##preview",
-                    self._preview,
-                    (int(w * scale), int(h * scale)),
-                    refresh_image=self._preview_new,
-                )
-                self._preview_new = False
-        imgui.end()
+        h, w = self._preview.shape[:2]
+        scale = min(imgui.get_content_region_avail().x / w, 1.0)
+        immvision.image_display(
+            "##preview",
+            self._preview,
+            (int(w * scale), int(h * scale)),
+            refresh_image=self._preview_new,
+        )
+        self._preview_new = False
+
+    def docking_params(self) -> hello_imgui.DockingParams:
+        """ROIs over Settings in a left column, the plots in the rest."""
+        left = hello_imgui.DockingSplit()
+        left.initial_dock = "MainDockSpace"
+        left.new_dock = "Left"
+        left.direction = imgui.Dir.left
+        left.ratio = LEFT_RATIO
+        lower = hello_imgui.DockingSplit()
+        lower.initial_dock = "Left"
+        lower.new_dock = "LeftLower"
+        lower.direction = imgui.Dir.down
+        lower.ratio = SETTINGS_RATIO
+        windows = []
+        for label, dock, draw in (
+            (PANEL_ROIS, "Left", self._draw_rois),
+            (PANEL_SETTINGS, "LeftLower", self._draw_settings),
+            (PANEL_PLOTS, "MainDockSpace", self._draw_center),
+        ):
+            window = hello_imgui.DockableWindow()
+            window.label = label
+            window.dock_space_name = dock
+            window.gui_function = draw
+            windows.append(window)
+        docking = hello_imgui.DockingParams()
+        docking.docking_splits = [left, lower]
+        docking.dockable_windows = windows
+        return docking
 
     def runner_params(self) -> hello_imgui.RunnerParams:
         params = hello_imgui.RunnerParams()
@@ -1071,12 +1232,21 @@ class DashboardApp(MorphologyMixin, ReadoutsMixin):
         params.app_window_params.resizable = True
         params.ini_filename = _setup.get_default_ini_path("dashboard")
         params.imgui_window_params.default_imgui_window_type = (
-            hello_imgui.DefaultImGuiWindowType.provide_full_screen_window
+            hello_imgui.DefaultImGuiWindowType.provide_full_screen_dock_space
         )
+        params.imgui_window_params.show_menu_bar = True
+        params.imgui_window_params.menu_app_title = "File"
+        params.imgui_window_params.show_menu_view = False
+        params.imgui_window_params.show_status_bar = True
+        params.imgui_window_params.show_status_fps = False
+        params.docking_params = self.docking_params()
+        params.callbacks.show_app_menu_items = self._draw_app_menu
+        params.callbacks.show_menus = self._draw_menu_bar
+        params.callbacks.show_status = self._draw_status
         params.imgui_window_params.tweaked_theme.theme = (
             hello_imgui.ImGuiTheme_.darcula_darker
         )
-        params.callbacks.show_gui = self.draw
+        params.callbacks.show_gui = self.update
         ## NOTE: a texture outliving the GL context segfaults when it is collected
         params.callbacks.before_exit = self._morph_textures.clear
         return params
