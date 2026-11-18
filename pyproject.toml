@@ -54,7 +54,7 @@ Upstream = "https://github.com/MillerBrainObservatory/mbo_utilities"
 
 [project.optional-dependencies]
 gui = [
-	"fastplotlib[imgui]>=0.7.0,<0.8",
+	"fastplotlib[imgui] @ git+https://github.com/fastplotlib/fastplotlib@docking/main",
 	"imgui-bundle>=1.92.801,<1.92.900",
 	"rendercanvas>=2.7.2",
 	"wgpu>=0.30.1",
