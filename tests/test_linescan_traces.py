@@ -60,14 +60,14 @@ def viewer(tmp_path):
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui.manual_roi import ManualRoiWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(
         write_mesc(tmp_path / "scan.mesc", munits=(35,), frames=40), unit="MUnit_35"
     )
     # the launch path names the sliders after the array (run_gui)
     iw = MboNDViewer(
-        data=display_wrap(arr),
+        data=_squeeze_for_viewer(arr),
         slider_dim_names=arr.slider_dim_labels,
         figure_kwargs={"size": FIGURE_SIZE},
     )
@@ -84,7 +84,7 @@ def run_viewer(tmp_path):
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui.manual_roi import ManualRoiWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     from tests.test_results_array import write_pf
 
@@ -92,7 +92,7 @@ def run_viewer(tmp_path):
     write_pf(tmp_path / "PF", source=mesc, units={"35": "MSession_0/MUnit_35"})
     arr = MescArray(mesc, unit="MUnit_35")
     iw = MboNDViewer(
-        data=display_wrap(arr),
+        data=_squeeze_for_viewer(arr),
         slider_dim_names=arr.slider_dim_labels,
         figure_kwargs={"size": FIGURE_SIZE},
     )
@@ -252,11 +252,11 @@ def patch_viewer(tmp_path):
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui.manual_roi import ManualRoiWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(write_chessboard_mesc(tmp_path / "chess.mesc"), unit="MUnit_9")
     iw = MboNDViewer(
-        data=display_wrap(arr),
+        data=_squeeze_for_viewer(arr),
         slider_dim_names=arr.slider_dim_labels,
         figure_kwargs={"size": FIGURE_SIZE},
     )
@@ -466,7 +466,7 @@ def single_patch_viewer(tmp_path):
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui.manual_roi import ManualRoiWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     from tests.test_voltage_traces import _single_patch_mesc
 
@@ -474,7 +474,7 @@ def single_patch_viewer(tmp_path):
     green, _red = _single_patch_mesc(path, n_frames=200)
     arr = MescArray(path, unit="MUnit_4")
     iw = MboNDViewer(
-        data=display_wrap(arr),
+        data=_squeeze_for_viewer(arr),
         slider_dim_names=arr.slider_dim_labels,
         figure_kwargs={"size": FIGURE_SIZE},
     )
@@ -565,3 +565,26 @@ def test_a_vnoiser_run_reaches_its_panel_from_the_scan(single_patch_viewer):
     assert [label for label, _y, _rgb in vlines] == ["cell"]
     assert np.isfinite(vlines[0][1]).any()
     traces.close()
+
+
+def test_a_named_line_carries_its_domain_in_its_row(viewer, monkeypatch):
+    from mbo_utilities.annotation.domains import write_roi_name
+    from mbo_utilities.gui import linescan_viewer
+    from mbo_utilities.gui.linescan_viewer import attach_standard_traces
+
+    monkeypatch.setattr(linescan_viewer, "get_roi_folder", lambda: "")
+    parent, arr = viewer
+    traces = attach_standard_traces(parent)
+    if traces.job.idle:
+        traces.job.start()
+    traces.job.wait()
+    traces()
+    path = write_roi_name(arr.filenames[0], arr.unit_key, 1, "apical1", 7)
+    try:
+        traces.relabel()
+        rows = sorted(
+            parent.manual_roi.traces.from_source(traces.name), key=lambda t: t.member
+        )
+        assert [t.name for t in rows[:3]] == ["ROI 0", "ROI 1 (apical1)", "ROI 2"]
+    finally:
+        path.unlink()

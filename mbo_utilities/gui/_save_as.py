@@ -16,7 +16,6 @@ from mbo_utilities.arrays import _sanitize_suffix
 from mbo_utilities.arrays.features import (
     TAG_REGISTRY,
     DimensionTag,
-    parse_timepoint_selection,
 )
 from mbo_utilities.gui._colormaps import listed_name
 from mbo_utilities.gui._files import NATIVE_DIALOGS, no_dialog_hint
@@ -29,6 +28,7 @@ from mbo_utilities.gui._selection_ui import (
     draw_frame_average_input,
     draw_selection_table,
     resolve_dim_labels,
+    set_selection,
     source_timepoints,
 )
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
@@ -58,9 +58,9 @@ def _display_timepoints(parent: Any) -> int:
     return int(getattr(data, "num_timepoints", None) or data.shape[0])
 
 
-def _save_as_worker(path, **imwrite_kwargs):
-    """The foreground save: every ROI is read and imwrite splits them and applies the read features (``fix_phase``, ``frame_average``, ...)."""
-    imwrite(imread(path), **imwrite_kwargs)
+def _save_as_worker(path, reader_kwargs=None, **imwrite_kwargs):
+    """The foreground save: the recording on screen is re-opened (``reader_kwargs``), every ROI is read and imwrite splits them and applies the read features (``fix_phase``, ``frame_average``, ...)."""
+    imwrite(imread(path, **(reader_kwargs or {})), **imwrite_kwargs)
 
 
 def _init_state(parent: Any) -> None:
@@ -71,14 +71,8 @@ def _init_state(parent: Any) -> None:
     parent._saveas_modal_open = True
     parent._saveas_options_open = False
     parent._saveas_options_needs_reset = False
-    parent._saveas_last_fpath = None
-    parent._saveas_tp_selection = None
-    parent._saveas_tp_error = ""
-    parent._saveas_tp_parsed = None
-    parent._saveas_last_max_tp = None
-    parent._saveas_last_num_planes = None
-    parent._saveas_last_num_channels = None
-    parent._selected_channels = {0}
+    parent._saveas_last_source = None
+    parent._saveas_unit_tag = ""
 
 
 def draw_saveas_popup(parent: Any):
@@ -722,15 +716,16 @@ def _draw_selection_section(parent: Any):
         imgui.begin_tooltip()
         imgui.push_text_wrap_pos(imgui.get_font_size() * 35.0)
         imgui.text_unformatted(
-            "Select which data to save using start:stop:step notation.\n\n"
+            "Every row takes start:stop:step notation.\n\n"
             "Format: start:stop or start:stop:step\n"
-            "  start = first index (1-based)\n"
-            "  stop = last index (inclusive)\n"
+            "  start = first index (1-based; empty = 1)\n"
+            "  stop = last index (inclusive; empty = the end)\n"
             "  step = interval (default 1)\n\n"
-            "To exclude frames, add comma + exclude range:\n"
-            "  1:100,50:60 = frames 1-100 excluding 50-60\n\n"
+            "To exclude indices, add comma + exclude range:\n"
+            "  1:100,50:60 = 1-100 excluding 50-60\n\n"
             "Examples:\n"
             "  1:100 = frames 1-100\n"
+            "  20: = frame 20 to the end\n"
             "  1:100:2 = every other frame (1,3,5...99)\n"
             "  1:1000,200:300 = 1-1000 excluding 200-300"
         )
@@ -743,24 +738,26 @@ def _draw_selection_section(parent: Any):
     num_planes = parent.nz
     num_channels = parent.nc
 
-    # a new file, or a changed extent, puts every selection back to the full range
-    current_fpath = parent.fpath[0] if isinstance(parent.fpath, list) else parent.fpath
-    current_fpath = str(current_fpath) if current_fpath else ""
-    file_changed = parent._saveas_last_fpath != current_fpath
-    parent._saveas_last_fpath = current_fpath
-    if file_changed or parent._saveas_last_max_tp != max_frames:
-        parent._saveas_tp_selection = f"1:{max_frames}"
-        parent._saveas_tp_error = ""
-        parent._saveas_tp_parsed = None
-        parent._saveas_last_max_tp = max_frames
-    if file_changed or parent._saveas_last_num_planes != num_planes:
-        parent._saveas_last_num_planes = num_planes
-    if file_changed or parent._saveas_last_num_channels != num_channels:
-        parent._saveas_last_num_channels = num_channels
+    # another recording (a file, or a unit of the same file) or extent puts every selection back to its full range
+    reader_kwargs = widget_reader_kwargs(parent.image_widget)
+    source = repr((parent.fpath, reader_kwargs, max_frames, num_channels, num_planes))
+    if parent._saveas_last_source != source:
+        parent._saveas_last_source = source
+        for attr, size in (
+            ("_saveas_tp", max_frames),
+            ("_saveas_z", num_planes),
+            ("_saveas_c", num_channels),
+        ):
+            set_selection(parent, attr, size)
+        # units of one file share an output folder; the unit in the name keeps them apart
+        tag = str(reader_kwargs.get("unit", "")).strip("/").replace("/", "_")
+        if parent._saveas_output_suffix in ("", parent._saveas_unit_tag):
+            parent._saveas_output_suffix = tag
+        parent._saveas_unit_tag = tag
 
     # row labels follow the array's slider names (isoview Tile / Cam / Zplane); the indices do not
     tp_label, z_label, c_label = resolve_dim_labels(parent)
-    tp_parsed, z_start, z_stop, z_step, c_start, c_stop, c_step = draw_selection_table(
+    tp_parsed, z_parsed, c_parsed = draw_selection_table(
         parent,
         max_frames,
         num_planes,
@@ -775,55 +772,34 @@ def _draw_selection_section(parent: Any):
         c_label=c_label,
     )
 
-    if num_planes > 1:
-        parent._selected_planes = set(range(z_start - 1, z_stop, z_step))
-    else:
-        parent._selected_planes = {0}
-    if num_channels > 1:
-        parent._selected_channels = set(range(c_start - 1, c_stop, c_step))
-    else:
-        parent._selected_channels = {0}
-
-    if parent._saveas_tp_parsed is None and not parent._saveas_tp_error:
-        try:
-            parent._saveas_tp_parsed = parse_timepoint_selection(
-                parent._saveas_tp_selection, max_frames
-            )
-        except ValueError as e:
-            parent._saveas_tp_error = str(e)
+    parent._selected_planes = set(z_parsed.final_indices) if z_parsed else set()
+    parent._selected_channels = set(c_parsed.final_indices) if c_parsed else set()
 
     imgui.spacing()
 
     ext = parent._ext.lstrip(".")
     is_video = parent._ext == ".mp4"
-    tp_parsed = parent._saveas_tp_parsed
-    t_tag = None
-    n_frames = 0
-    if tp_parsed:
-        n_frames = tp_parsed.count
-        final_indices = tp_parsed.final_indices
-        if final_indices:
-            tp_step = (
-                final_indices[1] - final_indices[0] if len(final_indices) > 1 else 1
-            )
-            t_tag = _range_tag(
-                "T", final_indices[0] + 1, final_indices[-1] + 1, tp_step
-            )
-
+    n_frames = tp_parsed.count if tp_parsed else 0
+    # the writers' own tags (DimensionTag.from_dim_size), so the preview names what lands on disk
+    picked = {
+        dim: [i + 1 for i in parsed.final_indices] if parsed else []
+        for dim, parsed in (("T", tp_parsed), ("Z", z_parsed), ("C", c_parsed))
+    }
+    sizes = {"T": max_frames, "Z": num_planes, "C": num_channels}
     if is_video:
         # one file per (z, channel); the preview names the first, in zplane_ch_tp order
-        tags = [
-            _range_tag("Z", z_start, z_start, 1),
-            _range_tag("C", c_start, c_start, 1),
-        ]
-        if t_tag is not None:
-            tags.append(t_tag)
+        dims = (("Z", picked["Z"][:1]), ("C", picked["C"][:1]), ("T", picked["T"]))
     else:
-        tags = [t_tag] if t_tag is not None else []
+        dims = [("T", picked["T"])]
         if num_channels > 1:
-            tags.append(_range_tag("C", c_start, c_stop, c_step))
+            dims.append(("C", picked["C"]))
         if num_planes > 1:
-            tags.append(_range_tag("Z", z_start, z_stop, z_step))
+            dims.append(("Z", picked["Z"]))
+    tags = [
+        DimensionTag.from_dim_size(TAG_REGISTRY[dim], sizes[dim], indices)
+        for dim, indices in dims
+        if indices
+    ]
 
     suffix = parent._saveas_output_suffix
     sanitized_suffix = _sanitize_suffix(suffix).lstrip("_") if suffix else ""
@@ -914,20 +890,14 @@ def _draw_selection_section(parent: Any):
         imgui.end_table()
 
 
-def _range_tag(dim: str, start: int, stop: int, step: int) -> DimensionTag:
-    """The 1-based filename tag for ``start:stop:step`` of ``dim``; a single index has no stop."""
-    if start == stop:
-        return DimensionTag(TAG_REGISTRY[dim], start=start, stop=None, step=1)
-    return DimensionTag(TAG_REGISTRY[dim], start=start, stop=stop, step=step)
-
-
 def _draw_save_button(parent: Any):
     """The Save, Options and Cancel buttons; Save starts the write and closes the dialog."""
-    no_planes = (
-        parent._selected_planes is not None and len(parent._selected_planes) == 0
+    invalid = not (
+        parent._saveas_tp_parsed
+        and parent._selected_planes
+        and parent._selected_channels
     )
-    no_valid_tp = parent._saveas_tp_error or parent._saveas_tp_parsed is None
-    num_channels = parent._saveas_last_num_channels
+    num_channels = parent.nc
     averaged = parent._saveas_frame_average
     if averaged > 1:
         imgui.text_colored(
@@ -939,29 +909,19 @@ def _draw_save_button(parent: Any):
             " Options). Timepoints above are counted in averaged frames."
         )
 
-    if no_planes:
+    if invalid:
         imgui.begin_disabled()
         imgui.button("Save", imgui.ImVec2(100, 0))
         imgui.end_disabled()
         imgui.same_line()
-        imgui.text_colored(
-            imgui.ImVec4(1.0, 0.4, 0.4, 1.0), "Select at least one z-plane"
-        )
-    elif no_valid_tp:
-        imgui.begin_disabled()
-        imgui.button("Save", imgui.ImVec2(100, 0))
-        imgui.end_disabled()
-        imgui.same_line()
-        imgui.text_colored(
-            imgui.ImVec4(1.0, 0.4, 0.4, 1.0), "Invalid timepoint selection"
-        )
+        imgui.text_colored(imgui.ImVec4(1.0, 0.4, 0.4, 1.0), "Invalid selection")
     elif imgui.button("Save", imgui.ImVec2(100, 0)):
         if not parent._saveas_outdir:
             last_dir = get_last_dir("save_as") or Path().home()
             parent._saveas_outdir = str(last_dir)
         try:
-            save_planes = [p + 1 for p in parent._selected_planes]
-            save_channels = [c + 1 for c in parent._selected_channels]
+            save_planes = [p + 1 for p in sorted(parent._selected_planes)]
+            save_channels = [c + 1 for c in sorted(parent._selected_channels)]
             if not save_planes:
                 parent.logger.error(
                     "No z-planes selected! Please select at least one plane."
@@ -1003,12 +963,13 @@ def _draw_save_button(parent: Any):
 
                 save_kwargs = {
                     "path": parent.fpath,
+                    "reader_kwargs": widget_reader_kwargs(parent.image_widget),
                     "outpath": parent._saveas_outdir,
                     "planes": save_planes,
                     "channels": save_channels
                     if len(save_channels) < num_channels
                     else None,
-                    "frames": frames,
+                    "timepoints": frames,
                     "roi": rois,
                     "roi_mode": roi_mode,
                     "overwrite": parent._overwrite,
@@ -1082,8 +1043,7 @@ def _draw_save_button(parent: Any):
                     fname = (src.name or "data") if src else "data"
                     worker_args = {
                         "input_path": input_path,
-                        # a .mesc worker re-opens the unit on screen, not unit 0
-                        "reader_kwargs": widget_reader_kwargs(parent.image_widget),
+                        "reader_kwargs": save_kwargs["reader_kwargs"],
                         "output_path": str(parent._saveas_outdir),
                         "ext": parent._ext,
                         "planes": save_planes,

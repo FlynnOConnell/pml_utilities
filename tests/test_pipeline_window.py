@@ -369,7 +369,8 @@ def test_quick_pipelines_are_the_view_seeded_ones_that_apply(roi_mesc, tmp_path)
 
 def test_the_mesc_tab_offers_the_button(roi_mesc):
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
     from mbo_utilities.gui.widgets.pipelines import _register_pipelines
 
     _register_pipelines()
@@ -377,7 +378,7 @@ def test_the_mesc_tab_offers_the_button(roi_mesc):
     host = SimpleNamespace(
         fpath=roi_mesc,
         image_widget=FakeImageWidget(
-            [display_wrap(arr)], ("Timepoint", "ROI"), {"Timepoint": 0, "ROI": 1}
+            [_squeeze_for_viewer(arr)], ("Timepoint", "ROI"), {"Timepoint": 0, "ROI": 1}
         ),
         _pipeline_applies_cache=None,
     )

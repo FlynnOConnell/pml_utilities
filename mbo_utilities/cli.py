@@ -13,6 +13,7 @@ Usage patterns:
   mbo info INPUT                # Show array info (CLI only)
 """
 
+import importlib.util
 import logging
 import sys
 import threading
@@ -119,6 +120,13 @@ def _version_callback(ctx: click.Context, param: click.Parameter, value: bool) -
         return
     click.echo(_get_version_info())
     ctx.exit()
+
+
+def _require_gui():
+    if importlib.util.find_spec("imgui_bundle") is None:
+        from mbo_utilities.install import GUI_HINT
+
+        raise SystemExit(f"The Studio needs the gui extra: {GUI_HINT}")
 
 
 @click.group(cls=PathAwareGroup, invoke_without_command=True)
@@ -257,6 +265,7 @@ def main(
 
         ensure_cache()
 
+    _require_gui()
     spinner = LoadingSpinner("Loading GUI")
     spinner.start()
     try:
@@ -456,6 +465,7 @@ def view(
             "First run detected - initial startup may take longer while caches are built.",
             fg="yellow",
         )
+    _require_gui()
     spinner = LoadingSpinner("Loading GUI")
     spinner.start()
     try:
@@ -2137,7 +2147,7 @@ def vnoiser(
 
     if not HAS_VNOISER:
         raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
-    from mbo_utilities.annotation.domains import find_domains
+    from mbo_utilities.annotation.domains import DomainFile, find_domains
     from mbo_utilities.preferences import get_roi_folder
     from mbo_utilities.vnoiser.params import VnoiserSettings
     from mbo_utilities.vnoiser.pipeline import (
@@ -2170,6 +2180,10 @@ def vnoiser(
         if domains_path is not None
         else find_domains(mesc_path, root)
     )
+    if domains_path is None and domains_file is not None:
+        # a file holding only trims has no table to run
+        if not DomainFile.read(domains_file).layouts:
+            domains_file = None
     if domains_file is not None:
         try:
             spec = read_domains(domains_file, [u.rsplit("_", 1)[-1] for u in units])

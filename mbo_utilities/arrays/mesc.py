@@ -82,6 +82,7 @@ from mbo_utilities.arrays.features import (
 )
 from mbo_utilities.arrays.features._slicing import listify_index
 from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.metadata.output import select_axis_values
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 if TYPE_CHECKING:
@@ -1486,6 +1487,9 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
                 "roi_mode": self.roi_mode,
             }
         )
+        if isinstance(self.roi, (int, np.integer)) and self.roi > 0:
+            md = select_axis_values(md, {"Z": self._layout.nz}, {"Z": [self.roi - 1]})
+            md["num_mrois"] = 1
         return md
 
     @metadata.setter
@@ -1758,6 +1762,8 @@ class MescArray(RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMi
         **kwargs,
     ):
         """Write this unit to disk in any supported output format."""
+        if self.roi is not None and self._layout.z_meaning == "roi_index":
+            planes = None  # the ROI selection already picked the Z entries
         return _imwrite_base(
             self,
             outpath,

@@ -10,6 +10,7 @@ expectations read straight out of h5py.
 
 from __future__ import annotations
 
+import ast
 import json
 from types import SimpleNamespace
 
@@ -738,6 +739,201 @@ def test_imwrite_roi_zero_fans_out_one_directory_per_roi(mesc_path, tmp_path):
     ]
 
 
+@pytest.mark.parametrize("unit", range(7))
+@pytest.mark.parametrize("ext", [".tiff", ".zarr", ".h5", ".npy"])
+def test_imwrite_selection_carries_its_metadata(mesc_path, tmp_path, unit, ext):
+    """Every other timepoint of the last channel and Z entry: the data, the
+    rate and the per-ROI and per-channel metadata follow the selection.
+    """
+    from mbo_utilities import imwrite
+
+    arr = MescArray(mesc_path, unit=unit)
+    nt, nc, nz = arr.shape[:3]
+    timepoints = list(range(1, nt + 1, 2))
+    imwrite(arr, tmp_path, ext=ext, timepoints=timepoints, planes=[nz], channels=[nc])
+    (written,) = tmp_path.iterdir()
+    back = imread(written)
+    md = arr.metadata
+    # h5 attrs keep scalars and str() the rest (AGENTS.md §5.6)
+    written_md = {
+        k: ast.literal_eval(v) if ext == ".h5" and k != "mesc_unit" else v
+        for k, v in back.metadata.items()
+        if k in ("mesc_unit", "channel_names", "mesc_roi_extents")
+    }
+
+    assert np.array_equal(np.asarray(back[:]), np.asarray(arr[::2, [nc - 1], [nz - 1]]))
+    assert back.fs == pytest.approx(arr.fs / (2 if len(timepoints) > 1 else 1))
+    assert written_md == {
+        "mesc_unit": arr.unit_key,
+        "channel_names": md["channel_names"][nc - 1 :],
+        "mesc_roi_extents": [e for e in md["mesc_roi_extents"] if e["index"] == nz - 1],
+    }
+
+
+def test_npy_writes_one_file_per_channel_and_plane(mesc_path, tmp_path):
+    from mbo_utilities import imwrite
+
+    arr = MescArray(mesc_path, unit=1)
+    imwrite(arr, tmp_path, ext=".npy", planes=[1])
+    for c in range(2):
+        (written,) = tmp_path.glob(f"*_ch0{c + 1}_zplane01.npy")
+        assert np.array_equal(np.asarray(imread(written)[:, 0, 0]), arr[:, c, 0])
+
+
+def test_bin_of_the_second_channel_alone_is_its_data_raw(mesc_path, tmp_path):
+    """suite2p reads ``data_raw.bin``; the first channel written is it."""
+    from mbo_utilities import imwrite
+
+    arr = MescArray(mesc_path, unit=1)
+    imwrite(arr, tmp_path, ext=".bin", planes=[1], channels=[2])
+    (plane_dir,) = tmp_path.iterdir()
+    assert [p.name for p in plane_dir.glob("*.bin")] == ["data_raw.bin"]
+    assert np.array_equal(np.asarray(imread(plane_dir)[:, 0, 0]), arr[:, 1, 0])
+
+
+def test_split_rois_write_each_roi_once_with_its_own_geometry(mesc_path, tmp_path):
+    """Z is the ROI index on an AOD unit, so the plane selection the Save As
+    dialog sends alongside a split neither repeats an ROI nor renames it.
+    """
+    from mbo_utilities import imwrite
+
+    imwrite(
+        MescArray(mesc_path, unit=2),
+        tmp_path,
+        ext=".zarr",
+        roi=[1, 2],
+        roi_mode="separate",
+        planes=[1, 2],
+    )
+    arr = MescArray(mesc_path, unit=2)
+    for r in (1, 2):
+        (written,) = (tmp_path / f"roi{r:02d}").glob("*.zarr")
+        back = imread(written)
+        assert "zplane01-02" not in written.name
+        assert np.array_equal(np.asarray(back[:]), arr[:, :, [r - 1]])
+        assert back.metadata["mesc_roi_extents"] == [
+            arr.metadata["mesc_roi_extents"][r - 1]
+        ]
+        assert back.metadata["num_mrois"] == 1
+
+
+def test_foreground_save_reopens_the_unit_on_screen(mesc_path, tmp_path):
+    from mbo_utilities.gui._save_as import _save_as_worker
+
+    _save_as_worker(
+        str(mesc_path),
+        reader_kwargs={"unit": "MSession_0/MUnit_3"},
+        outpath=tmp_path,
+        ext=".zarr",
+    )
+    (written,) = tmp_path.glob("*.zarr")
+    assert imread(written).metadata["mesc_unit"] == "MSession_0/MUnit_3"
+
+
+def _save_as_host(arr, fpath):
+    """What the Save As selection section reads off its host, showing ``arr``."""
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
+
+    return SimpleNamespace(
+        image_widget=SimpleNamespace(
+            data=[_squeeze_for_viewer(arr)],
+            dim_names=(),
+            _slider_dim_names=arr.slider_dim_labels,
+        ),
+        fpath=str(fpath),
+        nc=arr.shape[1],
+        nz=arr.shape[2],
+        _ext=".zarr",
+        _saveas_output_suffix="",
+        _saveas_frame_average=1,
+        _saveas_outdir="",
+    )
+
+
+def _draw_selection(host):
+    from imgui_bundle import imgui
+
+    from mbo_utilities.gui._save_as import _draw_selection_section, _init_state
+
+    ctx = imgui.create_context()
+    io = imgui.get_io()
+    io.display_size = imgui.ImVec2(1200, 800)
+    io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
+    try:
+        imgui.new_frame()
+        imgui.begin("host")
+        _init_state(host)
+        _draw_selection_section(host)
+        imgui.end()
+        imgui.end_frame()
+    finally:
+        imgui.destroy_context(ctx)
+
+
+def test_save_as_selection_follows_a_unit_switch(mesc_path):
+    """Units of one file share its path: switching units resets every row to
+    the new unit's extent and names the output after the unit, and a suffix
+    the user typed stays.
+    """
+    from mbo_utilities.gui._selection_ui import set_selection
+
+    host = _save_as_host(MescArray(mesc_path, unit=3), mesc_path)  # 2 lines
+    _draw_selection(host)
+    assert host._saveas_z_selection == "1:2"
+    assert host._saveas_output_suffix == "MSession_0_MUnit_3"
+    set_selection(host, "_saveas_z", 2, "2")
+
+    chessboard = MescArray(mesc_path, unit=1)  # 4 patches, 2 channels
+    host.image_widget.data = [_save_as_host(chessboard, mesc_path).image_widget.data[0]]
+    host.nc, host.nz = chessboard.shape[1:3]
+    _draw_selection(host)
+    assert host._saveas_z_selection == "1:4"
+    assert host._saveas_c_selection == "1:2"
+    assert host._selected_planes == {0, 1, 2, 3}
+    assert host._saveas_output_suffix == "MSession_0_MUnit_1"
+
+    host._saveas_output_suffix = "baseline"
+    host.image_widget.data = [_save_as_host(MescArray(mesc_path, unit=3), mesc_path).image_widget.data[0]]
+    host.nc, host.nz = 1, 2
+    _draw_selection(host)
+    assert host._saveas_output_suffix == "baseline"
+
+
+@pytest.mark.parametrize(
+    ("rois", "channels", "planes_0", "channels_0"),
+    [
+        ("2:", "1", {1, 2, 3}, {0}),
+        (":2", "2:", {0, 1}, {1}),
+        ("1:4,2", "1:2", {0, 2, 3}, {0, 1}),
+        ("1:4:2", ":1", {0, 2}, {0}),
+    ],
+)
+def test_save_as_roi_and_channel_rows_take_the_timepoint_syntax(
+    mesc_path, rois, channels, planes_0, channels_0
+):
+    from mbo_utilities.gui._selection_ui import set_selection
+
+    host = _save_as_host(MescArray(mesc_path, unit=1), mesc_path)  # 4 patches, 2 channels
+    _draw_selection(host)
+    set_selection(host, "_saveas_z", 4, rois)
+    set_selection(host, "_saveas_c", 2, channels)
+    _draw_selection(host)
+    assert host._selected_planes == planes_0
+    assert host._selected_channels == channels_0
+
+
+@pytest.mark.parametrize("rois", ["3:1", "x", "1:2,3:4"])
+def test_save_as_refuses_a_row_that_selects_nothing(mesc_path, rois):
+    from mbo_utilities.gui._selection_ui import set_selection
+
+    host = _save_as_host(MescArray(mesc_path, unit=1), mesc_path)
+    _draw_selection(host)
+    set_selection(host, "_saveas_z", 4, rois)
+    _draw_selection(host)
+    assert host._saveas_z_error
+    assert host._selected_planes == set()
+
+
 @pytest.fixture(scope="module")
 def single_unit_mesc(tmp_path_factory):
     """A .mesc holding exactly one MUnit."""
@@ -805,11 +1001,11 @@ class TestViewerFit:
 
     @pytest.mark.parametrize("unit", [0, 2, 3, 4, 5, 6])
     def test_every_unit_reports_one_label_per_scrollable_axis(self, mesc_path, unit):
-        from mbo_utilities.gui.widgets.mesc_units import display_wrap
+        from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
         arr = MescArray(mesc_path, unit=unit)
         assert arr.roi is None
-        view = display_wrap(arr)
+        view = _squeeze_for_viewer(arr)
         assert len(view.shape) - 2 == len(arr.slider_dim_labels), arr.unit_key
 
     def test_roi_axis_is_labelled_roi_not_z(self, mesc_path):
@@ -824,13 +1020,17 @@ class TestViewerFit:
         )
 
     def test_mesc_array_is_found_through_the_display_wrappers(self, mesc_path):
-        from mbo_utilities.gui.widgets.mesc_units import display_wrap, mesc_array_of
+        from mbo_utilities.arrays.features._frame_average import apply_read_features
+        from mbo_utilities.gui.run_gui import _squeeze_for_viewer
+        from mbo_utilities.gui.widgets.mesc_units import mesc_array_of
 
         arr = MescArray(mesc_path, unit=1)
-        assert mesc_array_of(display_wrap(arr)) is arr
+        assert mesc_array_of(_squeeze_for_viewer(arr)) is arr
+        averaged, _ = apply_read_features(arr, frame_average=2)
+        assert mesc_array_of(_squeeze_for_viewer(averaged)) is arr
         # a squeeze layer is only inserted when a singleton axis exists
         arr.roi = 1
-        assert mesc_array_of(display_wrap(arr)) is arr
+        assert mesc_array_of(_squeeze_for_viewer(arr)) is arr
         assert mesc_array_of(np.zeros((3, 3))) is None
 
 
@@ -1054,13 +1254,13 @@ def _viewer_on(arr, mean_subtraction, invert_deflection):
     """A `PreviewDataWidget` holding only what the spatial functions read."""
     from mbo_utilities.gui.playhead import Playhead
     from mbo_utilities.gui.slice import Slice
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
     from mbo_utilities.gui.widgets.preview_data import PreviewDataWidget
 
     names = arr.slider_dim_labels
     w = object.__new__(PreviewDataWidget)
     w.image_widget = _Sliders(
-        data=[display_wrap(arr)],
+        data=[_squeeze_for_viewer(arr)],
         dim_names=names,
         _slider_dim_names=names,
         indices=dict.fromkeys(names, 0),

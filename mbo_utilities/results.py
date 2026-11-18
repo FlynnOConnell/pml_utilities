@@ -1003,6 +1003,17 @@ def vnoiser_run_for_mesc(mesc_path) -> Path | None:
     return None
 
 
+def unit_frames(results: Results, unit: ResultUnit) -> tuple[int, int] | None:
+    """The half-open window of the recording's frames ``unit``'s traces cover:
+    its scan's own (``scan_frames``, a run of trimmed scans), else the run's
+    (``frames``), else None for the whole recording.
+    """
+    source = results.source or {}
+    scan = str(unit.attrs.get("scan_id", ""))
+    window = (source.get("scan_frames") or {}).get(scan) or source.get("frames")
+    return None if not window else (int(window[0]), int(window[1]))
+
+
 def unit_for_source(results: Results, source_unit: str) -> str | None:
     """The unit of ``results`` that processed recording unit ``source_unit``
     (``MSession_0/MUnit_30``, or just ``MUnit_30``), or None.
@@ -1074,7 +1085,9 @@ def carry_curation(run, previous) -> list[str]:
         or {}
     )
     now = json.loads((run / "zarr.json").read_text())["attributes"].get("source") or {}
-    if any(was.get(k) != now.get(k) for k in ("channel", "frames", "planes")):
+    if any(
+        was.get(k) != now.get(k) for k in ("channel", "frames", "scan_frames", "planes")
+    ):
         return []
     old_domains = was.get("domains") or {}
     same = [

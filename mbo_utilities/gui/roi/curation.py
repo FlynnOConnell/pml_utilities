@@ -32,7 +32,7 @@ from mbo_utilities.annotation import (
     ENGINES,
     UNLABELED,
 )
-from mbo_utilities.annotation.imagej import export_roiset, export_traces, import_roiset
+from mbo_utilities.annotation.traces import export_traces
 from mbo_utilities.gui._theme import THEME, em, label_button, to_vec4
 from mbo_utilities.gui.imgui import (
     UNLABEL_ALL,
@@ -58,17 +58,9 @@ class CurationMixin:
     """The ROIs tab: labels, on-disk and exchange rows, the Curation and ROIs sub-tabs."""
 
     def draw_rois(self):
-        """The ROIs tab, masknmf's Tools panel: Full FOV, guide and keybinds buttons, then the Curation and ROIs tabs, each scrolling on its own."""
+        """The ROIs tab, masknmf's Tools panel: guide and keybinds buttons, then the Curation and ROIs tabs, each scrolling on its own."""
         self._note_hover()
-        if imgui.button(f"{fa.ICON_FA_IMAGE} Full FOV"):
-            self.open_full_fov()
-        tooltip(
-            "the frame on screen and the ROI labels at full size: zoom, colormap, contrast, pixel values"
-        )
         buttons_w = help_buttons_width("ROI Guide")
-        imgui.same_line()
-        if imgui.get_content_region_avail().x < buttons_w + em(0.6):
-            imgui.new_line()
         imgui.set_cursor_pos_x(
             imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - buttons_w
         )
@@ -252,37 +244,10 @@ class CurationMixin:
         imgui.end_tooltip()
 
     def _draw_exchange_buttons(self, g):
-        """Fiji and CSV exchange: export the drawn ROIs as a RoiSet.zip, import one, export the trace table's rows as a CSV."""
+        """The trace table's rows as one CSV."""
         g.row("exchange")
         start = str(self.folder if self.fpath is not None else Path.home())
         busy = self._file_dialog is not None
-        imgui.begin_disabled(self.n_rois == 0 or busy)
-        if imgui.button("export RoiSet##roi_export_roiset"):
-            self._file_dialog = (
-                "export_roiset",
-                pfd.save_file(
-                    "Export ROIs for Fiji", f"{start}/RoiSet.zip", ["RoiSet", "*.zip"]
-                ),
-            )
-        tooltip(
-            "Every drawn ROI as a RoiSet.zip Fiji's ROI Manager opens: its "
-            "polygon as drawn, on its z-plane and channel"
-        )
-        imgui.end_disabled()
-        imgui.same_line(0, g.gap)
-        imgui.begin_disabled(busy)
-        if imgui.button("import RoiSet##roi_import_roiset"):
-            self._file_dialog = (
-                "import_roiset",
-                pfd.open_file(
-                    "Import ROIs from Fiji", start, ["RoiSet", "*.zip *.roi"]
-                ),
-            )
-        tooltip(
-            "Add the ROIs of a RoiSet.zip (or one .roi), each on the plane it names"
-        )
-        imgui.end_disabled()
-        imgui.same_line(0, g.gap)
         imgui.begin_disabled(not self.has_traces() or busy)
         if imgui.button("export traces##roi_export_traces"):
             self._file_dialog = (
@@ -312,21 +277,10 @@ class CurationMixin:
             self.exchange(kind, picked)
 
     def exchange(self, kind: str, path) -> None:
-        """Run one exchange action on ``path``: ``export_roiset``, ``import_roiset`` (one undo step) or ``export_traces`` (the listed rows); errors land in the status row."""
+        """Run one exchange action on ``path``: ``export_traces`` (the listed rows); errors land in the status row."""
         path = Path(path)
         try:
-            if kind == "export_roiset":
-                export_roiset(self.store, path)
-                self.status = f"exported {self.n_rois} ROIs to {path}"
-            elif kind == "import_roiset":
-                self._push_undo()
-                added = import_roiset(self.store, path)
-                if not added:
-                    self._undo.pop()
-                self.status = f"imported {len(added)} ROIs from {path.name}"
-                if added:
-                    self.select_roi(added[-1])
-            elif kind == "export_traces":
+            if kind == "export_traces":
                 rows = [self.traces.get(k) for k in self._sorted_trace_rows()]
                 export_traces([t for t in rows if t is not None], path, fs=self.fs())
                 self.status = f"exported {len(rows)} traces to {path}"

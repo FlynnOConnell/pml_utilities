@@ -639,17 +639,17 @@ def _create_image_widget(
     }
     graphic_kwargs = {"vmin": 0, "vmax": 1000} if is_isoview else {}
 
+    base_name = None
+    if getattr(data_array, "filenames", None):
+        first_file = Path(data_array.filenames[0])
+        base_name = first_file.stem
+        if base_name in ("data", "data_raw"):
+            base_name = first_file.parent.name
+        if len(base_name) > 24:
+            base_name = base_name[:21] + "..."
     if hasattr(data_array, "roi_mode") and hasattr(data_array, "iter_rois"):
         arrays = []
         names = []
-        base_name = None
-        if getattr(data_array, "filenames", None):
-            first_file = Path(data_array.filenames[0])
-            base_name = first_file.stem
-            if base_name in ("data", "data_raw"):
-                base_name = first_file.parent.name
-            if len(base_name) > 24:
-                base_name = base_name[:21] + "..."
         for r in data_array.iter_rois():
             arr = copy.copy(data_array)
             arr.fix_phase = False
@@ -658,7 +658,7 @@ def _create_image_widget(
             names.append(f"ROI {r}" if r else (base_name or "Full Image"))
     else:
         arrays = [_squeeze_for_viewer(data_array)]
-        names = None
+        names = [base_name] if base_name else None
 
     from mbo_utilities.gui._ndviewer import MboNDViewer, sliders_height
 
@@ -667,12 +667,13 @@ def _create_image_widget(
     else:
         from fastplotlib.utils import calculate_figure_shape
 
+        from mbo_utilities.behavior import behavior_for
         from mbo_utilities.gui._top_strip import (
             MENU_HEIGHT,
             MENU_MIN_WIDTH,
             strip_height,
         )
-        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
+        from mbo_utilities.gui.roi._shared import traces_panel_height
         from mbo_utilities.gui.widgets.preview_data import ZSTATS_PANEL_HEIGHT
 
         rgb = bool(getattr(arrays[0], "rgb", False))
@@ -682,7 +683,14 @@ def _create_image_widget(
             top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
         # the strip is as tall as the tab that opens first: the Traces panel, else the Signal Quality plot
         if manual_roi:
-            top = strip_height(PANEL_HEIGHT)
+            base = base_array(data_array)
+            top = strip_height(
+                traces_panel_height(
+                    motion=getattr(base, "motion_correction", None) is not None,
+                    vnoiser=results is not None and results.pipeline == "vnoiser",
+                    behavior=behavior_for(base) is not None,
+                )
+            )
         elif signal_quality:
             top = strip_height(ZSTATS_PANEL_HEIGHT)
         figure_kwargs = _figure_kwargs_for_here(

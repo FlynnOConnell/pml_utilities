@@ -106,8 +106,9 @@ def test_unit_row_reports_shape_rate_and_comment(mesc_path):
     assert cells[7:12] == ("8", "1", "1", "16", "24")
     assert cells[12] == "20.0 Hz"
     assert cells[13] == "0 s"
-    assert cells[14].startswith("2023-11-14 ") and "T" not in cells[14]
-    assert cells[15] == "baseline / second line"
+    assert cells[14] == "0" and unit_row(first, 1.5)[0][14] == "1.5"
+    assert cells[15].startswith("2023-11-14 ") and "T" not in cells[15]
+    assert cells[16] == "baseline / second line"
     # numeric columns sort as numbers, not strings
     assert keys[4] == 0 and keys[6] == 0
     assert keys[7] == 8 and keys[12] == 20.0
@@ -186,11 +187,11 @@ def test_companions_fold_into_the_scans_row(linked_mesc_path):
     from mbo_utilities.gui.widgets.mesc_units import (
         IMAGE_ICON,
         MescTabWidget,
-        display_wrap,
     )
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(linked_mesc_path, unit=0)
-    widget = MescTabWidget(FakeParent([display_wrap(arr)]))
+    widget = MescTabWidget(FakeParent([_squeeze_for_viewer(arr)]))
     BUTTONS.clear()
     ROWS.clear()
     imgui.small_button = spy_small_button
@@ -218,11 +219,50 @@ def test_companions_fold_into_the_scans_row(linked_mesc_path):
     assert [r[0] for r in unfolded[-3:]] == ["MSession_0", "MSession_1", "MSession_1"]
 
 
+def press_rois_button(label):
+    return "##rois_" in label
+
+
+def enter_soma(label, text, *a, **k):
+    return True, "soma"
+
+
+def always_edited():
+    return True
+
+
+def test_the_rois_cell_names_a_scans_lines(linked_mesc_path, monkeypatch):
+    """The ROIs count is a button onto one name per line; a name entered there
+    lands in the domain file, where lines given one name are one domain.
+    """
+    from mbo_utilities.annotation.domains import DomainFile, domains_path
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui.widgets import mesc_units
+    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
+
+    monkeypatch.setattr(mesc_units, "get_roi_folder", lambda: "")
+    monkeypatch.setattr(imgui, "small_button", press_rois_button)
+    monkeypatch.setattr(imgui, "input_text", enter_soma)
+    monkeypatch.setattr(imgui, "is_item_deactivated_after_edit", always_edited)
+    arr = MescArray(linked_mesc_path, unit=0)
+    widget = MescTabWidget(FakeParent([_squeeze_for_viewer(arr)]))
+    scan = next(u for u in arr.units if u.get("n_outlines"))
+    path = domains_path(linked_mesc_path)
+    try:
+        draw_frames(widget)
+        (layout,) = DomainFile.read(path).layouts
+    finally:
+        arr.close()
+        path.unlink(missing_ok=True)
+    assert layout.domains == {"soma": list(range(scan["n_outlines"]))}
+    assert scan["key"].rsplit("_", 1)[-1] in layout.scans
+
+
 def test_unit_row_names_the_companions(linked_mesc_path):
     from mbo_utilities.arrays.mesc import list_mesc_units
     from mbo_utilities.gui.widgets.mesc_units import (
-        PICTURE_COLUMN,
-        RTMC_COLUMN,
+        COLUMN,
         companions,
         describe_unit,
         rtmc_on,
@@ -242,31 +282,31 @@ def test_unit_row_names_the_companions(linked_mesc_path):
     assert cells[:2] == ("MSession_0", "MUnit_0")
     assert (
         cells[4] == "4 lines"
-        and cells[PICTURE_COLUMN] == "MUnit_0"
-        and cells[RTMC_COLUMN] == "no"
+        and cells[COLUMN["picture"]] == "MUnit_0"
+        and cells[COLUMN["RTMC"]] == "no"
     )
-    assert keys[4] == 4 and keys[RTMC_COLUMN] == 0
+    assert keys[4] == 4 and keys[COLUMN["RTMC"]] == 0
     moved = unit_row({**scan, "rtmc": ["X total"], "rtmc_armed": True})
-    assert moved[0][RTMC_COLUMN] == "yes" and moved[1][RTMC_COLUMN] == 1
+    assert moved[0][COLUMN["RTMC"]] == "yes" and moved[1][COLUMN["RTMC"]] == 1
     assert unit_row(snap)[0][:2] == ("MSession_1", "MUnit_0")
-    assert unit_row(snap)[0][PICTURE_COLUMN] == "-"
+    assert unit_row(snap)[0][COLUMN["picture"]] == "-"
     by_key = {u["key"]: u for u in (scan, snap, stream)}
     text = describe_unit(scan, by_key)
     assert text.startswith(
-        "MSession_0/MUnit_0\nLine scan: 4 lines of 2 samples, 1 px wide, 500 times a second"
+        "MSession_0/MUnit_0\nLine scan: 4 lines x 2 samples, 500 Hz"
     )
     assert "Picture: MSession_1/MUnit_0" in text
-    assert "RTMC off; reference pixels MSession_1/MUnit_1" in text
-    assert "RTMC on; reference pixels MSession_1/MUnit_1" in describe_unit(
+    assert "RTMC off; reference scan MSession_1/MUnit_1" in text
+    assert "RTMC on; reference scan MSession_1/MUnit_1" in describe_unit(
         {**scan, "rtmc": [], "rtmc_armed": True}, by_key
     )
     assert (
         describe_unit(snap, by_key)
         .splitlines()[1]
-        .startswith("The picture the lines or patches were drawn on")
+        .startswith("Picture: 1 raster frame")
     )
     assert "Picture of MSession_0/MUnit_0" in describe_unit(snap, by_key)
-    assert "RTMC reference pixels of MSession_0/MUnit_0" in describe_unit(
+    assert "RTMC reference scan of MSession_0/MUnit_0" in describe_unit(
         stream, by_key
     )
 
@@ -277,16 +317,17 @@ def test_tab_appears_first_and_only_for_mesc_data(mesc_path):
     """
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui.widgets import get_tab_widgets
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(mesc_path, unit=0)
     try:
         names = [
-            type(w).__name__ for w in get_tab_widgets(FakeParent([display_wrap(arr)]))
+            type(w).__name__ for w in get_tab_widgets(FakeParent([_squeeze_for_viewer(arr)]))
         ]
         assert "MescTabWidget" in names
         assert names.index("MescTabWidget") < names.index("PreviewTabWidget")
-        assert MescTabWidget.is_supported(FakeParent([display_wrap(arr)]))
+        assert MescTabWidget.is_supported(FakeParent([_squeeze_for_viewer(arr)]))
         assert not MescTabWidget.is_supported(FakeParent([np.zeros((2, 4, 4))]))
         assert not MescTabWidget.is_supported(FakeParent([]))
         assert not MescTabWidget.is_supported(FakeParent(None))
@@ -299,10 +340,11 @@ def test_table_draws_every_unit_and_highlights_the_open_one(mesc_path):
     selected, the comment in the last column.
     """
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(mesc_path, unit=1)
-    widget = MescTabWidget(FakeParent([display_wrap(arr)]))
+    widget = MescTabWidget(FakeParent([_squeeze_for_viewer(arr)]))
     ROWS.clear()
     TEXTS.clear()
     DISABLED.clear()
@@ -319,7 +361,7 @@ def test_table_draws_every_unit_and_highlights_the_open_one(mesc_path):
     assert "MUnit_0" in TEXTS and "MUnit_1" in TEXTS
     assert "baseline / second line" in TEXTS
     assert "drug on" in TEXTS
-    assert "Click a row to display that unit." in DISABLED
+    assert "Click a row to show it." in DISABLED
 
 
 def test_split_roi_views_stand_down(mesc_path):
@@ -327,10 +369,11 @@ def test_split_roi_views_stand_down(mesc_path):
     all but one, so the tab says so instead of offering to switch.
     """
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(mesc_path, unit=0)
-    widget = MescTabWidget(FakeParent([display_wrap(arr), display_wrap(arr)]))
+    widget = MescTabWidget(FakeParent([_squeeze_for_viewer(arr), _squeeze_for_viewer(arr)]))
     DISABLED.clear()
     imgui.text_disabled = spy_text_disabled
     try:
@@ -339,7 +382,7 @@ def test_split_roi_views_stand_down(mesc_path):
         imgui.text_disabled = REAL_TEXT_DISABLED
         arr.close()
     assert "Split ROIs: reopen without --roi to switch units." in DISABLED
-    assert "Click a row to display that unit." not in DISABLED
+    assert "Click a row to show it." not in DISABLED
 
 
 @pytest.fixture(scope="module")
@@ -411,12 +454,12 @@ def test_the_table_says_nothing_about_z_stacks(stack_mesc_path):
     from mbo_utilities.gui.widgets.mesc_units import (
         UNIT_COLUMNS,
         MescTabWidget,
-        display_wrap,
     )
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     assert "Z-stack" not in [name for name, _hidden in UNIT_COLUMNS]
     arr = MescArray(stack_mesc_path, unit=1)
-    parent = FakeParent([display_wrap(arr)], arr.slider_dim_labels)
+    parent = FakeParent([_squeeze_for_viewer(arr)], arr.slider_dim_labels)
     widget = MescTabWidget(parent)
     BUTTONS.clear()
     imgui.small_button = spy_small_button
@@ -545,10 +588,11 @@ def test_a_row_stays_clickable_when_the_session_column_is_hidden(mesc_path):
     must not leave the row without a click target.
     """
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget, display_wrap
+    from mbo_utilities.gui.widgets.mesc_units import MescTabWidget
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(mesc_path, unit=0)
-    widget = MescTabWidget(FakeParent([display_wrap(arr)]))
+    widget = MescTabWidget(FakeParent([_squeeze_for_viewer(arr)]))
     imgui.table_header = hide_session_header
     imgui.selectable = measure_selectable
     try:
@@ -559,3 +603,11 @@ def test_a_row_stays_clickable_when_the_session_column_is_hidden(mesc_path):
         imgui.selectable = REAL_SELECTABLE
         arr.close()
     assert ROW_WIDTHS and min(ROW_WIDTHS[-2:]) > 100
+
+
+def test_no_header_tip_is_a_paragraph():
+    from mbo_utilities.gui.widgets.mesc_units import COLUMN_HELP, MODALITY_HELP
+
+    tips = [*COLUMN_HELP.values(), *MODALITY_HELP.values()]
+    assert max(len(tip) for tip in tips) <= 160
+    assert not any("\n" in tip for tip in tips)

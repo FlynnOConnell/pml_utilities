@@ -269,11 +269,11 @@ def test_trace_rows_on_a_line_scan_know_their_line(mesc_path):
     from mbo_utilities.arrays.mesc import MescArray
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui.manual_roi import ManualRoiWidget
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(mesc_path, unit=1)
     iw = MboNDViewer(
-        data=display_wrap(arr),
+        data=_squeeze_for_viewer(arr),
         slider_dim_names=arr.slider_dim_labels,
         figure_kwargs={"size": (640, 480)},
     )
@@ -333,11 +333,11 @@ def test_the_status_says_what_became_of_the_stacks():
     assert view.status() == "no Z-stack found"
     stack = StackPlacement("z.mesc", "MSession_0/MUnit_3", (0.0, 0.0, 0.0), 0.8, 0.0)
     view.images = {"z": ReferenceImage("z", np.zeros((2, 2)), [], stack)}
-    assert view.status().startswith("Z-stacks placed: 1")
+    assert view.status().startswith("placed on 1 Z-stack")
     view.refused = [
         StackPlacement("z.mesc", "MSession_0/MUnit_9", (0.0, 0.0, 0.0), 0.1, 0.0)
     ]
-    assert "MUnit_9 not placed (0.10)" in view.status()
+    assert "MUnit_9 not placed (match 0.10)" in view.status()
 
 
 def test_a_placement_says_what_the_recording_found():
@@ -380,11 +380,11 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         ReferenceView,
         roi_slider,
     )
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(mesc_path, unit=1)
     iw = MboNDViewer(
-        data=display_wrap(arr),
+        data=_squeeze_for_viewer(arr),
         slider_dim_names=arr.slider_dim_labels,
         figure_kwargs={"size": (640, 480)},
     )
@@ -417,7 +417,7 @@ def test_reference_popup_draws_and_highlights_the_sliders_roi(mesc_path):
         assert list(view.images) == ["MUnit_4 picture", "MUnit_0 slices 4-8"]
         assert view.viewer.current_key == "MUnit_4 picture"
         caption = view.caption(view.images["MUnit_0 slices 4-8"])
-        assert "ROI 1 slice 4" in caption and "3 of 4 lines" in caption
+        assert "ROI 1 on slice 4" in caption and "3 of 4 lines" in caption
         lines = view.contours("MUnit_4 picture")
         # the others dimmed, the selected one last over a white halo
         assert [t for _p, _c, t in lines] == [
@@ -496,11 +496,11 @@ def test_a_replaced_image_keeps_its_texture_until_the_frame_is_drawn(mesc_path):
     from mbo_utilities.gui._ndviewer import MboNDViewer
     from mbo_utilities.gui._top_strip import TopStrip
     from mbo_utilities.gui.imgui.summary import SummaryImageViewer
-    from mbo_utilities.gui.widgets.mesc_units import display_wrap
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
 
     arr = MescArray(mesc_path, unit=1)
     iw = MboNDViewer(
-        data=display_wrap(arr),
+        data=_squeeze_for_viewer(arr),
         slider_dim_names=arr.slider_dim_labels,
         figure_kwargs={"size": (640, 480)},
     )

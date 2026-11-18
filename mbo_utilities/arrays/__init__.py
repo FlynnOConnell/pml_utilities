@@ -21,8 +21,18 @@ from mbo_utilities.arrays._base import (
 )
 
 
+def _dask_array():
+    try:
+        import dask.array as da
+    except ImportError as e:
+        from mbo_utilities.install import DASK_HINT
+
+        raise ImportError(f"files_to_dask needs dask: {DASK_HINT}") from e
+    return da
+
+
 def _load_lazy(f, chunk_t: int):
-    import dask.array as da
+    da = _dask_array()
     import numpy as np
     from tifffile import tifffile
 
@@ -43,7 +53,7 @@ def files_to_dask(files: list[str | Path], astype=None, chunk_t=250):
     - "roi" -> list of 3D (T,Y,X) arrays, one per ROI
     - otherwise -> concatenate all files in time (T)
     """
-    import dask.array as da
+    da = _dask_array()
     import numpy as np
     from tifffile import tifffile
 

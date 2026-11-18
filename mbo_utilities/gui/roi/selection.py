@@ -455,6 +455,22 @@ class SelectionMixin:
         else:
             self.select_derived(si, k)
 
+    def select_first_trace(self):
+        """Select the first row with a trace on the plane on screen, so the Traces panel opens on a line."""
+        if self._selection_pair() is not None:
+            return
+        for si, k in self.rows:
+            if si < 0:
+                record = self.store.rois[k]
+                z, has_trace = record.plane, bool(self.traces.for_roi(record.uid))
+            else:
+                z, has_trace = self.derived[si].z, bool(self._member_keys(si, k))
+            if z == self.z and has_trace:
+                status = self.status  # what the restore reported stays on the status line
+                self.select_pair(si, k)
+                self.status = status
+                return
+
     def _table_shift(self, item):
         if isinstance(item, tuple):
             pid = item[1:]

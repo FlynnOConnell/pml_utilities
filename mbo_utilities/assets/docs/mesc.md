@@ -3,17 +3,17 @@
 One HDF5 file, one unit per recording, all from a Femtonics AOD two-photon
 microscope. The MESc tab lists them, one row each.
 
-| session | holds |
+| session | contents |
 |---|---|
 | `MSession_0` | what the operator ran |
-| `MSession_1` | what MEScan saved beside each run, on its own |
+| `MSession_1` | the picture and RTMC reference scan MEScan saves for each scan |
 
 Units number from 0 in every session, so `MSession_0/MUnit_3` and
 `MSession_1/MUnit_3` are different recordings.
 
 ## Kinds of recording
 
-| modality | the laser | what you get |
+| modality | the laser | result |
 |---|---|---|
 | `timeseries` | rasters the whole field | one frame per timepoint; a single frame is a **picture** |
 | `zstack` | rasters at each depth | one frame per slice, no time axis |
@@ -27,48 +27,57 @@ and the laser jumps only between those spots, thousands of times a second,
 never recording the rest of the field. Each line or patch is one step of the
 viewer's ROI slider.
 
-## What MEScan saves beside a scan
+## Units MEScan saves for each scan
 
-| in the table | what it is |
+| in the table | contents |
 |---|---|
 | the **picture** cell | the picture the lines were drawn on: its own unit, role `background`, named by the scan's `BackgroundImagePath` |
-| behind the **RTMC** cell | the region RTMC re-scanned each cycle: its own unit, role `motionCorrection`, named by `MotionCorrectionImagePath` |
+| the **RTMC** cell's reference scan | the region RTMC re-scanned each cycle (for a line scan, two reference lines stored as rows): its own unit, role `motionCorrection`, named by `MotionCorrectionImagePath` |
 | the MC plot under the traces | the X, Y, Z microns RTMC moved the scan, once per cycle: curves on the scan unit itself |
 
-**companion units as rows** gives the two units rows of their own.
+**show MSession_1 units** lists both as rows.
 
 ## Columns
 
-| column | means |
+| column | meaning |
 |---|---|
 | session, unit | which recording; hover a name for what it is |
 | modality | how the laser moved |
-| layout | how the reader unpacks the raw pixels |
-| ROIs | lines or patches the operator drew |
+| layout | how the raw pixels are stored (table below) |
+| ROIs | lines or patches the operator drew; click the count to name them (`soma`, `apical1`), and ROIs sharing a name form one domain in vnoiser, the dashboard and the curation window |
 | picture | the picture they were drawn on; click to see them on it |
 | RTMC | real-time motion correction was on (`yes`) or off (`no`) |
 | T C Z Y X | the 5D shape: timepoints, colors, slices or ROIs, rows, columns |
 | fs, duration | timepoints per second; recorded length, short if stopped early |
 | start, comment | acquisition time (UTC-05:00) and the comment typed in MESc |
 
-Hover a header for the long version. Right-click one to show or hide columns.
+Right-click a header to show or hide columns.
 
-## Where the lines were drawn
+| layout | raw pixels |
+|---|---|
+| `frames` | one picture per timepoint |
+| `zstack` | one picture per depth |
+| `packed` | every line's samples stacked into one tall page |
+| `tiled` | patches side by side on one page |
+| `boxes` | patches cut out of a page |
+| `multicube` | slices interleaved along time |
+
+## ROI positions
 
 Every picture and Z-stack records the micron position of its top-left pixel
 and its size; every AOD scan records the micron coordinates of each line's
 ends or each patch's corners. The **picture** button draws them back on:
 
-| image | shows |
+| image | contents |
 |---|---|
 | the picture | every line, whatever its depth, because that is where they were drawn |
 | a Z-stack | the lines inside it, placed by matching the picture to the stack; the caption gives the slice, the match and whether the recording confirms it |
 
 The ROI slider's line is drawn thicker; click a line to move the slider to it.
 
-## Clicks
+## Mouse actions
 
-| do | gets |
+| action | result |
 |---|---|
 | click a row | displays that recording; its ROIs, runs and traces are parked and come back when you return |
 | click the picture cell | the reference image |

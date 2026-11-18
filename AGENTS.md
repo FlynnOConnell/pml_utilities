@@ -50,8 +50,10 @@ pml_utilities/
 ```
 
 `pip install -e .`, Python 3.12.7 to 3.13, `uv` for environments. Console scripts
-`mbo`, `pollen`. Extras: `hpc` (submitit), `server` (uvicorn, websockets), `napari`,
-`notebooks`, `docs`, `all`. Every base dependency is imported somewhere under
+`mbo`, `pollen`. The base is the reading and writing core (numpy, scipy, h5py, tifffile, zarr,
+tqdm, click) and adds no package to a masknmf install. Extras: `gui` (The Studio),
+`qt`, `video`, `codecs`, `pyramid`, `dask`, `hpc` (submitit), `server`
+(uvicorn, websockets), `napari`, `notebooks`, `suite2p`, `all`. Every base dependency is imported somewhere under
 `mbo_utilities/`; a package one optional command needs is an extra, with the install
 hint in its `ImportError`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers),
 `mbo_utilities.pipelines` (pipelines).
@@ -234,7 +236,7 @@ metadata placement are fixed:
 | `.zarr` | one Zarr v3 group, array `0`, sharded per (c, z) | **4D TZYX** when C == 1, **5D TCZYX** when C > 1 | `dimension_names` (lowercase) and `attrs["dims"]` | `attrs["ome"]` NGFF 0.5 multiscales with axes + per-axis scale; every other key as a group attr; `0/.attrs["scale"]` for napari; `attrs["scanphase"]` when phase correction was baked in |
 | `.h5` | one file, dataset `/mov` (override `dataset_name`) | 4D TZYX when C == 1, 5D TCZYX when C > 1 | `dset.attrs["dims"]` | root attrs = flat metadata (scalars as-is, others `str()`) |
 | `.bin` | `zplaneNN_tpAAAAA-BBBBB/data_raw.bin` per plane (+`data_chan2.bin`) | 3D TYX int16 per (c, z) | none | `ops.npy` beside it via `write_ops`; `scanphase.npy` sidecar |
-| `.npy` | `tpAAAAA-BBBBB_zplaneNN.npy` per plane | 3D TYX | none | packaged with the array (`npz` layout, `.npy` suffix) |
+| `.npy` | `tpAAAAA-BBBBB[_chNN]_zplaneNN.npy` per (c, z), `ch` when C > 1 | 3D TYX | none | packaged with the array (`npz` layout, `.npy` suffix) |
 | `.mp4` | one file per (z, c) | video | none | none |
 
 - Filenames come from `features/_dim_tags.OutputFilename`: tags in T, C, Z order,
@@ -447,7 +449,9 @@ PrairieView has no reader yet; the column is the deposit contract for when one l
   batch.
 - `OutputMetadata(source, source_shape, source_dims, selections)` is the only
   output-side layer: it scales `dz` by the Z stride, divides `fs` by the T stride,
-  nulls `fs` for non-contiguous T, recomputes every count and `Lx`/`Ly`, repairs every
+  nulls `fs` for non-contiguous T, recomputes every count and `Lx`/`Ly`, cuts every
+  per-index list (`AXIS_KEYS`: channel names, MESc ROI geometry) to the selection
+  (`select_axis_values`), repairs every
   rate alias present in the source, drops a carried OME block, and stamps
   `_metadata_provenance = {field: {base, stride}}` so a second hop never
   double-scales. Do not replace it with `DimensionSpecs.with_selections`.
@@ -633,7 +637,21 @@ one table every window reads: `<stem>.domains.json` in the recording's
 beside the data, the one-table form). A `DomainFile` holds one `Layout` per set of
 scans whose ROI numbers mean the same lines (scans, domains, `run`), never found
 from line positions (stan110_expt1's move up to 7.6 um under one archive table),
-plus the file-wide `first_env`, `labels` and `scan_labels`. The vnoiser tab seeds
+plus the file-wide `first_env`, `labels` and `scan_labels`, and the trim: the
+seconds left off the start of every scan (`trim_s`) or of one (`scan_trim`), set
+in the MESc tab's `trim` column or the dashboard and read through `trim_seconds`.
+An ROI's name is its domain's: `DomainFile.name_roi` (`write_roi_name`) moves a line
+into the whole-ROI domain of that name, so lines given one name (`soma`, `apical1`)
+are one domain, and a scan with no layout first gets one domain per ROI shared by
+the scans passed. `roi_names(scan)` reads `{roi: domain}` back and `line_label` is
+the one spelling of a named line (`ROI 6 (apical1)`): the Traces tab's line rows
+(`StandardTraces.relabel`), the dashboard's and the reference image's caption.
+A reader applies it as a frame window (`trimmed_window`; a trim as long as the
+scan leaves it whole), never as a shorter
+array, so what is kept stays on the recording's clock: `load_rows` stamps
+`RoiTrace.frames`, the vnoiser run and preview start each scan there and a
+trimmed run records `trim_s` and `scan_frames` per scan in its source block
+(`results.unit_frames` reads a unit's window back). The vnoiser tab seeds
 from the shown scan's layout before the newest run, Save and Run write the ticked
 scans' layout (`put`; block ticks as given, a layout's first scan is not a file
 block start), and showing a scan of another layout brings its table; `mbo vnoiser`
@@ -648,7 +666,10 @@ run's curation of every recording whose scan and domain entry held, on the same
 channel, frames and planes (`results.carry_curation`).
 
 **The vnoiser widget** holds no trace math (the preview is
-`vnoiser.pipeline.preview_domain` on a `TracePreview` thread). Its domain table
+`vnoiser.pipeline.preview_domain` on a `TracePreview` thread). Its Parameters popup
+is drawn from `gui/widgets/pipelines/vnoiser_hints.py` (`HINTS`: label, tooltip and tier per
+field; `COLUMNS`: each stage's sections), laid out as masknmf's; a new settings field gets a
+`Hint` and a place in `COLUMNS` (`tests/test_vnoiser_pipeline.py`). Its domain table
 (`DomainRow`: name, ROIs, pixel rule, mask, `run`) fits the scans ticked from the
 screen (`_fit_domains`): one domain per ROI unless a loaded or edited table names
 only ROIs those scans have; a previous run's uncut `domains` seed a scan only when it
@@ -1014,25 +1035,16 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   one Ctrl+z step (`_undo`). A click picks a drawn ROI before an algo one; ctrl
   toggles a row in the group (`buffer`), shift adds; a group plots one line per
   member in its `GROUP_COLORS` colour, shared by mask and table row. The ROIs tab is
-  masknmf's Tools panel (Full FOV, guide `h`, keybinds `k`; a Curation tab with
+  masknmf's Tools panel (guide `h`, keybinds `k`; a Curation tab with
   OVERLAY, SELECTION, LABELS, RUN; an ROIs tab with masknmf's filter and table); the
   Traces tab is the trace table in `draw_roi_table`.
 - **Draw -> run.** `ManualRoiWidget(auto_trace=True)` traces every ROI the moment it
   is added (its mean at the run coordinates); no tab is selected for the user. The
   RUN section, `shift+t` and the Process tab run ROIs the way the widget is set
   (`engine`, `run_where`, `run_frames`, `run_tag`).
-- **Fiji and CSV exchange.** `annotation/imagej.py` (`roifile`, a base dependency) is
-  the one place ROIs and traces leave or enter in another tool's format:
-  `export_roiset` writes every drawn ROI as its polygon (`mask_outline` for a
-  promoted mask) into a `RoiSet.zip` Fiji's ROI Manager opens (`c`, `z` 1-based,
-  `t_position` 0 so it shows on every frame); `import_roiset` fills each polygon on
-  the plane its positions name, ImageJ name as the note; `export_label_tiff` is the
-  label image as an ImageJ hyperstack (`slices`, `channels` from `plane_axes`);
-  `export_traces` is one CSV, `time_s` or `frame` then one column per row named by
-  `RoiTrace.name`; `export_footprints_npz` is masknmf's `spatial_footprints` seed
-  file. The ROIs tab's exchange row runs them through
-  `ManualRoiWidget.exchange(kind, path)`; an import is one undo step. Nothing else in
-  `gui` imports `roifile` or writes a TIFF of ROIs.
+- **CSV export.** `annotation/traces.export_traces` is one CSV, `time_s` or `frame`
+  then one column per row named by `RoiTrace.name`. The ROIs tab's exchange row runs
+  it through `ManualRoiWidget.exchange(kind, path)`.
 - **Any slice.** The viewer's sliders are the array's T, C, Z axes by position
   (`_dim_labels.slider_roles`, the table the viewer names its sliders from and
   `resolve_dim_labels` uses), whatever the array labels them (`Timepoint` /
@@ -1049,8 +1061,11 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   never the shorter hand-drawn `guideLine`, never `ROIJSON`, whose vertices are in the
   unrolled scan's pixels) in microns, where
   `ReferenceViewportJSON.geomTransTransl` is the `[0, 0]` corner of an image,
-  `geomTransRot` its rotation, rows grow with +y, and a stack's slice `k` sits at
-  `geomTransTransl[2] + MinZ + k·step`. A scan shares that frame with its picture, not
+  `geomTransRot` its rotation (the full quaternion: image x, image y and the slice
+  axis are its matrix's columns), rows grow with +y, and a stack's slice `k` sits
+  `MinZ + k·step` along the slice axis from `geomTransTransl`. A point stored at `P` is
+  found in a flat fast (AO z) stack at `P` minus the stack's mean RTMC
+  (`um_to_voxels`, `voxels_to_um`). A scan shares that frame with its picture, not
   with a Z-stack. The reader flips no patch rows.
   `line_positions(path, unit)` gives each ROI `start_um` / `end_um`, `length_um`,
   `sample_um`; `image_overlays` draws them. An AOD
@@ -1066,7 +1081,7 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   stored position + the shift that lands its picture on the stack (none under
   `NCC_PASS`), + the mean RTMC only when the ROIs' time means fit the stack better with
   it (`with_rtmc`), on the channel they fit best, never the one on screen. `confirmed`
-  is that fit beating random offsets.
+  is that fit beating random offsets. A picture rotated against its stack is not placed.
 - **Reference image.** `gui/mesc_reference.py` shows where an AOD unit's lines or
   patches sit: `picture_image` is the picture the ROIs were drawn on
   (`background_unit`), `stack_images` every Z-stack `place_scan` placed them on, each
@@ -1088,7 +1103,10 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
 - **The MESc table.** One row per recording: a scan's picture (`background_unit`)
   and RTMC reference unit (`rtmc_unit`) fold into its row (`mesc_units.companions`).
   The `picture` cell is **one** button (`IMAGE_ICON`) that opens the reference image;
-  no second button, no popup, no Z-stack column. The `RTMC` cell is `yes` or `no`
+  no second button, no popup, no Z-stack column. The `ROIs` cell is a button onto one
+  name per line or patch (`_draw_names` → `write_roi_name`, shared by the session's
+  scans with as many ROIs of that kind); the vnoiser tab takes a table another window
+  rewrote on its next poll (`_adopt_domain_file`). The `RTMC` cell is `yes` or `no`
   (`rtmc_on`: `list_mesc_units`' `rtmc` or `rtmc_armed`), detail on hover. Every header carries its meaning
   (`COLUMN_HELP`); `?` opens `assets/docs/mesc.md`. The header line carries one
   button per `quick_pipelines` entry (`vnoiser on MUnit_3`) that opens the pipeline
@@ -1186,9 +1204,9 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   its unit and rebuilds the widget for the incoming one.
 
 Pinned by `tests/test_roi_model.py`, `tests/test_playhead.py`,
-`tests/test_trace_display.py`, `tests/test_imagej.py`, `tests/test_manual_roi.py`
+`tests/test_trace_display.py`, `tests/test_manual_roi.py`
 (`TestRunCoordinates`, `TestAutoTrace`, `TestRoiPipelineTab`, `TestPlayheadWiring`,
-`TestColorBy`, `TestFullImage`, `TestSliderRoles`), `tests/test_roi_runs.py`.
+`TestColorBy`, `TestSliderRoles`), `tests/test_roi_runs.py`.
 
 ## 8. Logging and the Process Console
 
@@ -1413,8 +1431,7 @@ When they disagree, fix the docs.
   `get_mbo_dirs()`, never hardcode.
 - Environment: `MBO_GPU` (GPU toggle; also `mbo gpu`), `RENDERCANVAS_FORCE_OFFSCREEN`,
   `KEEP_TEST_OUTPUT`, `MBO_PIPELINE_TIFF`; logging and retention variables in §8.5.
-- HPC: `hpc.toml` written by `mbo hpc init`; the shared cluster environment is
-  described in `docs/usage/hpc.md`. Nothing in this repo contains cluster
+- HPC: `hpc.toml` written by `mbo hpc init`; Nothing in this repo contains cluster
   credentials or any other secret; do not add any.
 
 ## 15. Imgui layout
