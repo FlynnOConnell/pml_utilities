@@ -2523,5 +2523,42 @@ def asap7(
     click.echo(f"wrote {run}\nview with: masknmf view {run / 'results.glutamate.hdf5'}")
 
 
+@main.command("stack-annotate")
+@click.argument("path", type=click.Path(exists=True))
+@click.option(
+    "--unit",
+    default=None,
+    help="The .mesc unit, e.g. MSession_0/MUnit_1 (default: the first Z-stack).",
+)
+@click.option(
+    "--voxel",
+    type=float,
+    nargs=3,
+    default=None,
+    metavar="DZ DY DX",
+    help="Voxel size in microns, for a file that stores none.",
+)
+def stack_annotate(path, unit, voxel):
+    """Annotate dendrites, spines and other structures through a Z-stack, in 3D.
+
+    XY, XZ, YZ and 3D views of the stack with the ROI tool's panel; a brush
+    that paints on all three planes, filling between two ROIs, one surface
+    per class in 3D, and an automatic trace of one channel to edit. Saves
+    <stem>.rois.zarr and <stem>.trace.json beside the stack. Needs the
+    annotate extra.
+
+    \b
+      mbo stack-annotate stack.mesc
+      mbo stack-annotate stack.mesc --unit MSession_0/MUnit_1
+      mbo stack-annotate stack.zarr --voxel 2 0.5 0.5
+    """
+    import fastplotlib as fpl
+
+    from mbo_utilities.gui.stack_annotate import build
+
+    build(filepath_stack=path, unit=unit, voxel_um=voxel)
+    fpl.loop.run()
+
+
 if __name__ == "__main__":
     main()
