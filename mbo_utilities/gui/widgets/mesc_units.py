@@ -39,8 +39,9 @@ from mbo_utilities.annotation.domains import (
     write_trim,
 )
 from mbo_utilities.arrays.mesc import MescArray
-from mbo_utilities.gui._availability import HAS_VNOISER
+from mbo_utilities.gui._availability import HAS_SKAN, HAS_VNOISER
 from mbo_utilities.gui._imgui_helpers import set_tooltip
+from mbo_utilities.gui.launch import launch_window
 from mbo_utilities.gui.mesc_reference import ReferenceView
 from mbo_utilities.gui.widgets._base import Widget
 from mbo_utilities.gui.widgets.pipelines import (
@@ -558,6 +559,21 @@ class MescTabWidget(Widget):
                     launch_curation_window(self._curation[1])
                 set_tooltip(
                     f"Open {self._curation[1].name} in the curation window (`mbo curate`).",
+                    show_mark=False,
+                )
+            if HAS_SKAN and by_key[mesc.unit_key].get("kind") == "zstack":
+                imgui.same_line(0, 12)
+                if imgui.small_button("Annotate in 3D##mesc_annotate"):
+                    # the window is its own process, through `mbo stack-annotate`
+                    launch_window(
+                        "mbo_utilities.cli",
+                        ["stack-annotate", str(path), "--unit", mesc.unit_key],
+                        f"stack_annotate_{path.stem}",
+                    )
+                set_tooltip(
+                    f"Open {unit_name} in the stack annotator (`mbo stack-annotate`): XY, XZ, "
+                    "YZ and 3D views, a brush on all three, the trace. Its ROIs are this "
+                    "unit's rois zarr; edit them in one window at a time.",
                     show_mark=False,
                 )
             imgui.same_line(0, 12)

@@ -43,6 +43,7 @@ HAS_TORCH: bool = _get_cached_flag("torch", lambda: _check_import("torch"))
 HAS_RASTERMAP: bool = _get_cached_flag("rastermap", lambda: _check_import("rastermap"))
 HAS_MASKNMF: bool = _get_cached_flag("masknmf", lambda: _check_import("masknmf"))
 HAS_VNOISER: bool = _get_cached_flag("vnoiser", lambda: _check_import("vnoiser"))
+HAS_SKAN: bool = _get_cached_flag("skan", lambda: _check_import("skan"))
 HAS_IMGUI: bool = _get_cached_flag(
     "imgui_bundle", lambda: _check_import("imgui_bundle")
 )
