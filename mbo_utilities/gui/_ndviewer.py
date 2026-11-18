@@ -496,6 +496,8 @@ class MboNDViewer:
             title="NDWidget controls",
         )
         self._ndw._sliders_ui = ui
+        ## NOTE: on only after the sliders are replaced; from here a window added to an occupied edge docks as a tab
+        self._ndw.figure.imgui_docking = True
 
         # offscreen there is no loop to run fetches: index changes render now
         self._offscreen = "offscreen" in type(self._ndw.figure.canvas).__module__
@@ -1159,8 +1161,6 @@ class MboNDViewer:
         return self._make_dim_names(n, None)
 
     def show(self, **kwargs):
-        ## NOTE: the dock layout is built once, on the first frame after this
-        self._ndw.figure.imgui_docking = True
         return self._ndw.show(**kwargs)
 
     def close(self):

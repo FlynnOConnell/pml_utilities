@@ -57,6 +57,9 @@ class BaseViewer(ABC):
         """Main render callback. Must be implemented by subclasses."""
         ...
 
+    def draw_docked(self, label: str) -> None:
+        """Draw the tab ``label`` in its own docked window. Override as needed."""
+
     def on_data_loaded(self) -> None:
         """Called by _dialogs when new data is loaded. Override as needed."""
 

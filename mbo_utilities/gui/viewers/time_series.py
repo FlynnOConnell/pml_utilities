@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 
 __all__ = ["TimeSeriesViewer"]
 
+# tabs that leave the tab bar for a window of their own while the figure docks
+DOCKED_TABS = ("Image",)
+
 
 class TimeSeriesViewer(BaseViewer):
     """Viewer for time-series calcium imaging data (TZYX)."""
@@ -36,10 +39,24 @@ class TimeSeriesViewer(BaseViewer):
 
     def draw(self) -> None:
         """Draw the main tab bar."""
+        docking = self.image_widget.figure.imgui_docking
         if imgui.begin_tab_bar("MainPreviewTabs"):
             for widget in self._widgets():
+                if docking and self._label(widget) in DOCKED_TABS:
+                    continue
                 self._draw_tab(widget)
             imgui.end_tab_bar()
+
+    def draw_docked(self, label: str) -> None:
+        from mbo_utilities.gui.widgets import widget_is_visible
+
+        for widget in self._widgets():
+            if self._label(widget) == label and widget_is_visible(widget):
+                self._draw_body(widget)
+
+    @staticmethod
+    def _label(widget) -> str:
+        return widget.tab_label or widget.name
 
     def _widgets(self) -> list:
         """Supported tab widgets, in priority order (built once)."""
@@ -56,6 +73,22 @@ class TimeSeriesViewer(BaseViewer):
         cleanup_all_widgets(self._tab_widgets or [])
         self._tab_widgets = None
 
+    def _draw_body(self, widget) -> None:
+        """Draw one tab's contents; a failure shows as an error line in its place."""
+        imgui.push_style_var(imgui.StyleVar_.window_padding, imgui.ImVec2(8, 8))
+        imgui.push_style_var(imgui.StyleVar_.frame_padding, imgui.ImVec2(4, 3))
+        try:
+            widget.draw()
+        except Exception as e:
+            self.logger.exception(f"{self._label(widget)} tab failed")
+            imgui.push_text_wrap_pos(
+                imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x
+            )
+            imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), f"Error: {e}")
+            imgui.pop_text_wrap_pos()
+        finally:
+            imgui.pop_style_var(2)
+
     def _draw_tab(self, widget) -> None:
         """Draw one tab, unless the Widgets menu has it switched off."""
         from mbo_utilities.gui.widgets import widget_is_visible
@@ -63,7 +96,7 @@ class TimeSeriesViewer(BaseViewer):
         if not widget_is_visible(widget):
             return
 
-        label = widget.tab_label or widget.name
+        label = self._label(widget)
         reason = widget.tab_disabled()
         if reason is not None:
             imgui.begin_disabled()
@@ -74,19 +107,7 @@ class TimeSeriesViewer(BaseViewer):
             else imgui.TabItemFlags_.none
         )
         if imgui.begin_tab_item(label, None, flags)[0]:
-            imgui.push_style_var(imgui.StyleVar_.window_padding, imgui.ImVec2(8, 8))
-            imgui.push_style_var(imgui.StyleVar_.frame_padding, imgui.ImVec2(4, 3))
-            try:
-                widget.draw()
-            except Exception as e:
-                self.logger.exception(f"{label} tab failed")
-                imgui.push_text_wrap_pos(
-                    imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x
-                )
-                imgui.text_colored(imgui.ImVec4(1.0, 0.3, 0.3, 1.0), f"Error: {e}")
-                imgui.pop_text_wrap_pos()
-            finally:
-                imgui.pop_style_var(2)
+            self._draw_body(widget)
             imgui.end_tab_item()
 
         if reason is not None:

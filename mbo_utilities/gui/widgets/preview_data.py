@@ -676,10 +676,32 @@ class PreviewDataWidget(EdgeWindow):
         elif not want:
             self.top_strip.unregister("zstats")
 
+    def _init_docked_tabs(self) -> None:
+        """One figure window per docked tab; they outlive the viewer, which is rebuilt when data loads."""
+        from fastplotlib.ui import ImguiWindow
+
+        from mbo_utilities.gui.viewers.time_series import DOCKED_TABS
+
+        figure = self.image_widget.figure
+        if not figure.imgui_docking:
+            return
+        for label in DOCKED_TABS:
+            figure.add_imgui_window(
+                ImguiWindow(update_call=functools.partial(self._draw_docked_tab, label)),
+                location=self.location,
+                size=self.size,
+                title=label,
+            )
+
+    def _draw_docked_tab(self, label: str) -> None:
+        with fit_width():
+            self._viewer.draw_docked(label)
+
     def _init_viewer(self):
         from mbo_utilities.gui.viewers import get_viewer_class
 
         self._init_top_strip()
+        self._init_docked_tabs()
         viewer_cls = get_viewer_class(self.image_widget.data[0])
         self._viewer = viewer_cls(self.image_widget, self.fpath, parent=self)
         self.logger.debug(f"Viewer: {self._viewer.name}")
