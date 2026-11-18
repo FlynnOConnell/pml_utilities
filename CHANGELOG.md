@@ -50,3 +50,7 @@ smaller internal tweaks are left out.
 - vnoiser is no longer an extra; it installs separately.
 - The online documentation is `mbo_utilities`'; the `docs` extra is gone and `docs/` stays as its source.
 - The base install is the reading and writing core; The Studio is the `gui` extra, and PyQt6, dask, imagecodecs, numba and ffmpeg are extras of their own.
+
+## Unreleased
+
+- `mbo stack-annotate`: annotate dendrites, spines and other structures through a Z-stack in XY, XZ, YZ and 3D, with a brush on all three planes and an editable automatic trace. Install the `annotate` extra.
