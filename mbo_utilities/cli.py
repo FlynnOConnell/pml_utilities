@@ -2528,7 +2528,7 @@ def asap7(
 @click.option(
     "--unit",
     default=None,
-    help="The .mesc unit, e.g. MSession_0/MUnit_1 (default: the first Z-stack).",
+    help="The .mesc Z-stack unit, e.g. MUnit_1 or MSession_0/MUnit_1; left out, a file with several lists them.",
 )
 @click.option(
     "--voxel",
@@ -2548,10 +2548,21 @@ def stack_annotate(path, unit, voxel):
     annotate extra.
 
     \b
-      mbo stack-annotate stack.mesc
-      mbo stack-annotate stack.mesc --unit MSession_0/MUnit_1
+      mbo stack-annotate stack.mesc                  # list the Z-stacks, or open the only one
+      mbo stack-annotate stack.mesc --unit MUnit_1
       mbo stack-annotate stack.zarr --voxel 2 0.5 0.5
     """
+    if unit is None and Path(path).suffix.lower() == ".mesc":
+        from mbo_utilities.arrays.mesc import list_mesc_units
+
+        stacks = [u for u in list_mesc_units(path) if u["kind"] == "zstack"]
+        if len(stacks) > 1:
+            click.echo(f"{Path(path).name} holds {len(stacks)} Z-stacks (C, Z, Y, X):")
+            for u in stacks:
+                c, z, y, x = u["shape"][1:]
+                click.echo(f"  {u['munit']:<10}{c} x {z} x {y} x {x}   {u['comment']}")
+            click.echo(f"\nchoose one with --unit, e.g. --unit {stacks[-1]['munit']}", err=True)
+            raise click.Abort
     import fastplotlib as fpl
 
     from mbo_utilities.gui.stack_annotate import build

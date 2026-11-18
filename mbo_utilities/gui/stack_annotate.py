@@ -133,7 +133,7 @@ def open_stack(filepath_stack: str, unit: Optional[str], voxel_um: Optional[tupl
     filepath_stack : str
         A ``.mesc`` file, or any file ``mbo_utilities.imread`` opens.
     unit : str, optional
-        The MESc unit key. ``None`` takes the file's first Z-stack unit.
+        The MESc unit: its key, ``MUnit_N`` or index. ``None`` takes the file's first Z-stack unit.
     voxel_um : tuple, optional
         ``(dz, dy, dx)`` in microns. ``None`` reads it from a ``.mesc`` and is 1 µm otherwise.
 
@@ -145,12 +145,13 @@ def open_stack(filepath_stack: str, unit: Optional[str], voxel_um: Optional[tupl
     if Path(filepath_stack).suffix.lower() != ".mesc":
         arr = mbo_utilities.imread(filepath_stack)
         return arr, tuple(voxel_um) if voxel_um is not None else (1.0, 1.0, 1.0)
-    if unit is None:
-        units_stack = [u["key"] for u in list_mesc_units(filepath_stack) if u["kind"] == "zstack"]
-        if not units_stack:
-            raise ValueError(f"{filepath_stack} holds no Z-stack unit; name one with --unit")
-        unit = units_stack[0]
-    arr = MescArray(filepath_stack, unit=unit)
+    units_stack = [u["key"] for u in list_mesc_units(filepath_stack) if u["kind"] == "zstack"]
+    if not units_stack:
+        raise ValueError(f"{filepath_stack} holds no Z-stack unit")
+    arr = MescArray(filepath_stack, unit=units_stack[0] if unit is None else unit)
+    unit = arr.unit_key
+    if unit not in units_stack:
+        raise ValueError(f"{unit} is not a Z-stack; the Z-stacks in {Path(filepath_stack).name} are {', '.join(units_stack)}")
     if voxel_um is not None:
         return arr, tuple(voxel_um)
     viewport = viewport_geometry(filepath_stack, unit)
