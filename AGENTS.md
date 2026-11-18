@@ -39,7 +39,7 @@ pml_utilities/
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
 │   ├── analysis/             # scan-phase, linescan, phasecorr math, MESc stack placement; filters.py: zero-phase trace filters sized in Hz and ms; trace_readouts.py: spectrum, correlation, triggered average, d', motion coupling; neurite_tracing.py: one z-stack channel traced into paths and link proposals (skan)
-│   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation; the domain file
+│   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation; the domain file; the trace zarr of `mbo stack-annotate` (neurite_trace.py)
 │   ├── cli.py                # `mbo` (click)
 │   └── assets/docs/          # in-app help pages
 ├── pollen/                   # pollen calibration (console script `pollen`)

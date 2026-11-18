@@ -551,9 +551,15 @@ adds [skan](https://skeleton-analysis.org) to the `gui` extra.
 | Edit the trace | **Delete paths**, **Accept links** (each becomes a path joining the two ends), **Reject links** |
 | Everything else | the ROI panel; `k` lists its keys |
 
-Saving writes `<stem>.rois.zarr` beside the stack, label image included. **Save
-trace** writes `<stem>.trace.json` (each path's points and each link's ends, z y
-x in voxels), which opens with the stack next time.
+Saving writes `<stem>.rois.zarr` beside the stack, label image included (for a
+`.mesc`, `<stem>_<unit>.rois.zarr`). **Save trace** writes the trace zarr beside it,
+named the same way with `.trace.zarr`, and the stack opens with it next time. It
+is a zarr v3 group: `paths/offsets` and `paths/points` (path k is
+`points[offsets[k]:offsets[k+1]]`, z y x in voxels), `links` (the two ends of each
+proposal), `labels/paths`, an OME-NGFF label image of the paths that napari
+opens, and the voxel size, channel and source stack in its attrs.
+`mbo_utilities.annotation.neurite_trace.read_trace(path)` reads it back; plain
+`zarr` reads it too.
 
 The trace (`mbo_utilities/analysis/neurite_tracing.py`) is a ridge filter on
 each plane (Sato et al. 1998), a two-level threshold in 3D (Canny 1986),
