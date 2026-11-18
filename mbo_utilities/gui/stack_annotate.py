@@ -7,7 +7,7 @@ two ROIs, XZ and YZ views that take the brush too, and a 3D view of the stack wi
 surface. XZ, YZ and the 3D view are images of the same stack in the viewer's ``NDWidget``, each with
 its own display dims, so the sliders move all four. A trace of one channel (``analysis/neurite_tracing.py``) is drawn
 over XY and 3D as paths and link proposals to pick, delete, accept or reject (``stack_trace_layer.py``),
-and is saved beside the stack as ``<stack>.trace.json``.
+and is saved beside the rois zarr as ``<stem>.trace.zarr``.
 
     mbo stack-annotate <stack.mesc or any file imread opens>
         [--unit MSession_0/MUnit_1] [--voxel dz dy dx]
@@ -29,6 +29,7 @@ from imgui_bundle import imgui
 import mbo_utilities
 from mbo_utilities.analysis import neurite_tracing as tracing
 from mbo_utilities.annotation import UNLABELED
+from mbo_utilities.annotation.neurite_trace import TRACE_SUFFIX, Trace, read_trace, write_trace
 from mbo_utilities.annotation.store import class_color
 from mbo_utilities.arrays.mesc import MescArray, list_mesc_units
 from mbo_utilities.arrays.mesc_geometry import viewport_geometry, zstack_depth_info
@@ -37,6 +38,7 @@ from mbo_utilities.gui._imgui_helpers import selected_button_style
 from mbo_utilities.gui._ndviewer import MboNDViewer, _ref_to_index, sliders_height
 from mbo_utilities.gui._theme import em
 from mbo_utilities.gui.manual_roi import ManualRoiWidget
+from mbo_utilities.roi_workflow import ROIS_SUFFIX
 
 WINDOW_SIZE = (1700, 1000)
 PANEL_WIDTH_PX = 460
@@ -438,7 +440,7 @@ def build(filepath_stack: str, unit: Optional[str] = None, voxel_um: Optional[tu
     )
     move_crosshair(state=state, y=n_y // 2, x=n_x // 2)
     if Path(filepath_trace(state=state)).exists():
-        show_trace(state=state, trace=tracing.load_trace(filepath=filepath_trace(state=state)))
+        show_trace(state=state, trace=read_trace(filepath_trace(state=state)))
     for subplot in (subplot_xz, subplot_yz):
         subplot.auto_scale()
     subplot_3d.camera.show_object(subplot_3d.scene, view_dir=VIEW_DIRECTION_3D, up=(0, 0, -1))
@@ -446,8 +448,16 @@ def build(filepath_stack: str, unit: Optional[str] = None, voxel_um: Optional[tu
 
 
 def filepath_trace(state: StackAnnotator) -> str:
-    """The trace file beside the stack: ``<stack without suffix>.trace.json``."""
-    return str(Path(state.filepath_stack).with_suffix("")) + ".trace.json"
+    """The trace zarr beside the rois zarr, named like it: ``<stem>.trace.zarr``, ``<stem>_<unit>.trace.zarr``."""
+    return str(state.widget._save_target()).removesuffix(ROIS_SUFFIX) + TRACE_SUFFIX
+
+
+def save_trace(state: StackAnnotator) -> None:
+    """Write the trace on screen to its trace zarr."""
+    filepath = filepath_trace(state=state)
+    write_trace(state.trace.trace, filepath, shape=state.stack.shape[1:], source=state.widget._source_block())
+    state.trace.unsaved = False
+    state.widget.status = f"saved {Path(filepath).name}"
 
 
 def trace_clicks_allowed(state: StackAnnotator) -> bool:
@@ -455,7 +465,7 @@ def trace_clicks_allowed(state: StackAnnotator) -> bool:
     return not state.brush.active and not state.widget._drawing() and not over_imgui()
 
 
-def show_trace(state: StackAnnotator, trace: tracing.Trace) -> None:
+def show_trace(state: StackAnnotator, trace: Trace) -> None:
     """Replace the trace on screen."""
     if state.trace is not None:
         trace_layer.remove_layer(layer=state.trace)
@@ -1090,9 +1100,7 @@ def draw_trace_controls(state: StackAnnotator) -> None:
         return
     imgui.same_line()
     if imgui.button("Save trace"):
-        tracing.save_trace(trace=layer.trace, filepath=filepath_trace(state=state))
-        layer.unsaved = False
-        state.widget.status = f"saved {Path(filepath_trace(state=state)).name}"
+        save_trace(state=state)
     imgui.same_line()
     changed_paths, layer.show_paths = imgui.checkbox("paths", layer.show_paths)
     imgui.same_line()

@@ -2544,7 +2544,7 @@ def stack_annotate(path, unit, voxel):
     XY, XZ, YZ and 3D views of the stack with the ROI tool's panel; a brush
     that paints on all three planes, filling between two ROIs, one surface
     per class in 3D, and an automatic trace of one channel to edit. Saves
-    <stem>.rois.zarr and <stem>.trace.json beside the stack. Needs the
+    <stem>.rois.zarr and <stem>.trace.zarr beside the stack. Needs the
     annotate extra.
 
     \b

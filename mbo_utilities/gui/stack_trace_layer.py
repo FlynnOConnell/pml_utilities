@@ -13,7 +13,7 @@ from functools import partial
 import fastplotlib as fpl
 import numpy as np
 
-from mbo_utilities.analysis.neurite_tracing import Trace
+from mbo_utilities.annotation.neurite_trace import Trace
 
 COLOR_PATH = (0.3, 0.85, 1.0)
 COLOR_LINK = (1.0, 0.55, 0.1)

@@ -1,5 +1,7 @@
 """The stack annotator offscreen, on a small synthetic stack: build, paint, fill, trace, undo."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import skimage.draw
@@ -88,3 +90,15 @@ def test_one_undo_history_covers_rois_and_trace_edits(state):
     assert len(layer.trace.paths) == n_paths and len(store.rois) == 1
     widget.undo()
     assert len(store.rois) == 0
+
+
+def test_a_saved_trace_sits_beside_the_rois_zarr_and_opens_with_the_stack(state):
+    stack_annotate.start_trace(state=state)
+    state.trace_job.result()
+    render(state)
+    stack_annotate.save_trace(state=state)
+    filepath = Path(stack_annotate.filepath_trace(state=state))
+    assert filepath.name == "stack.trace.zarr" and filepath.parent == Path(state.widget._save_target()).parent
+    reopened = stack_annotate.build(filepath_stack=state.filepath_stack, voxel_um=VOXEL_UM)
+    assert len(reopened.trace.trace.paths) == len(state.trace.trace.paths)
+    assert reopened.trace.trace.channel == state.trace.trace.channel
