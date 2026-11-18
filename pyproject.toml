@@ -74,6 +74,7 @@ dask = ["dask>=2025.3.0"]
 hpc = ["submitit>=1.5.0"]
 server = ["pml_utilities[gui]", "uvicorn>=0.30", "websockets>=13", "simplejpeg>=1.8", "av>=14"]
 suite2p = ["pml_utilities[gui]", "suite2p>=1.1.0", "rastermap>=0.9"]
+annotate = ["pml_utilities[gui]", "skan>=0.13.1"]
 napari = [
     "napari",
     "napari-ome-zarr",
@@ -88,7 +89,7 @@ notebooks = [
     "jupyter_rfb>=0.5.1",
     "seaborn>=0.13.2",
 ]
-all = ["pml_utilities[gui,qt,video,codecs,pyramid,dask,hpc,napari,notebooks,server,suite2p]"]
+all = ["pml_utilities[gui,qt,video,codecs,pyramid,dask,hpc,napari,notebooks,server,suite2p,annotate]"]
 
 [tool.uv]
 default-groups = ["dev", "suite2p", "napari", "notebooks"]
