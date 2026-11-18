@@ -1,20 +1,25 @@
 """vnoiser pipeline widget: domain traces from a .mesc, then the wavelet denoiser.
 
-Top to bottom: the dataset, the output folder and frame window, the Scans
-table (every recording of the file traces come from: line scans, chessboard
-and ribbon patches, a single patch), the Domains table (each domain's ROIs as
-toggles, the pixels it averages, whether this run takes it, and presets that
-build the table: one per ROI, all in one, groups, the unit's comment, the ROIs
-drawn in the ROI tool), the Trace block (channel, polarity, photon counts,
-background, reference channel, dF/F and z-score), a live preview of the
-selected domain on the scan on screen (its pixels over the ROI's mean image,
-F, dF/F and z, computed off the draw thread by
-:func:`~mbo_utilities.vnoiser.pipeline.preview_domain`), the denoiser and peak
-settings popup with (?) hints and modified-orange tinting, the modified table
-and a green Run button that spawns the "vnoiser" worker. Settings are written
-for the archive's frame rate and scaled to the scans'. Results are the run's
-results zarr beside the input (``pkl`` writes a PF folder instead), which the
-Curate button opens in the curation window (``mbo curate``, its own process).
+The tab is a summary, top to bottom: the dataset, the output (folder, frame
+window, channel), the Scans table (every recording of the file traces come
+from: line scans, chessboard and ribbon patches, a single patch; their blocks
+behind the Blocks button), the Domains summary (one line per domain with its
+run tick), the Parameters button over the table of changed values, and a green
+Run button that spawns the "vnoiser" worker. Two modals hold the editing. The
+domain editor is one row per domain with a box per ROI, the pixels it averages
+and presets that build the table (one per ROI, all in one, groups, the unit's
+comment, the ROIs drawn in the ROI tool), over a live preview of the picked
+domain on the scan on screen (its pixels over the ROI's mean image, F, dF/F
+and z, computed off the draw thread by
+:func:`~mbo_utilities.vnoiser.pipeline.preview_domain`). The Parameters popup
+is laid out as masknmf's: one bordered column per stage (trace, dF/F and
+z-score, wavelet denoiser, peaks) from
+:mod:`~mbo_utilities.gui.widgets.pipelines.vnoiser_hints`, a changed value in
+orange with a reset button and its default beside it, advanced and stable
+fields in folds, the runtime under the columns. Settings are written for the
+archive's frame rate and scaled to the scans'. Results are the run's results
+zarr beside the input (``pkl`` writes a PF folder instead), which the Curate
+button opens in the curation window (``mbo curate``, its own process).
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ import json
 import math
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,20 +48,18 @@ from mbo_utilities.annotation.domains import (
     Layout,
     domains_path,
     find_domains,
+    scan_of,
 )
 from mbo_utilities.arrays.features._dim_labels import slider_roles
 from mbo_utilities.gui._availability import HAS_VNOISER
 from mbo_utilities.gui._imgui_helpers import (
-    PopupAutoSize,
     button_width,
-    checkbox_with_tooltip,
     draw_boxed_label,
     fit_width,
     selected_button_style,
     set_tooltip,
     settings_row,
     settings_table,
-    tooltip_marks_right,
 )
 from mbo_utilities.gui._selection_ui import draw_selection_table, resolve_dim_labels
 from mbo_utilities.gui.imgui.lines import (
@@ -76,9 +80,19 @@ from mbo_utilities.gui.widgets.pipelines.settings import (
     _MODIFIED_COLOR,
     _SUBSECTION_COLOR,
     _dataset_size_bytes,
-    _draw_md_field,
     _format_size,
     _truncate_to_width,
+)
+from mbo_utilities.gui.widgets.pipelines.vnoiser_hints import (
+    COLUMNS,
+    HIDDEN,
+    HINTS,
+    POLARITY,
+    POLARITY_DEFAULT,
+    RUNTIME,
+    STAGE_DENOISER,
+    STAGE_PEAKS,
+    applies,
 )
 from mbo_utilities.install import VNOISER_HINT
 from mbo_utilities.lazy_array import base_array
@@ -99,18 +113,18 @@ _BACKGROUND_COLOR = (0.95, 0.65, 0.2)
 _PIXEL_MEAN_COLOR = (0.55, 0.55, 0.6)
 _TRACE_COLOR = (0.9, 0.92, 0.95)
 _F0_COLOR = (0.35, 0.65, 1.0)
-_IMPORTANT_FIELDS = {
-    "thres_type",
-    "soft_levels",
-    "thres_bp_sd",
-    "thres_amp_sd",
-}
 SCAN_LABELS = ("New env", "Reward switch")  # what an experiment starts with
 SCAN_COLUMN_HELP = {
     "New block": "the first scan after a condition changed; a run's first scan always is one",
     "Change": "what changed at this block's first scan; Labels below sets the words",
 }
-MAX_ROI_TOGGLES = 48  # one toggle per ROI up to this many; more take a typed list
+MATRIX_MAX = 32  # one box per ROI up to this many; more take a typed list
+WIDTH_INPUT_EM = 7.5
+WIDTH_COLUMN_EM = (19.0, 27.0)  # a Parameters column, narrowest and widest
+POPUP_PARAMETERS = "vnoiser parameters##vnoiser_parameters"
+POPUP_DOMAINS = "vnoiser domains##vnoiser_domains"
+COLORS_DEFAULTS = ((0.60, 0.35, 0.10), (0.70, 0.42, 0.14), (0.50, 0.28, 0.08))
+COLORS_CLOSE = ((0.55, 0.13, 0.13), (0.65, 0.18, 0.18), (0.45, 0.10, 0.10))
 PREVIEW_SECONDS = (5.0, 15.0, 30.0, 60.0, 0.0)
 KIND_LABELS = {  # the Scans table's word for a MESc modality
     "linescan": "lines",
@@ -138,60 +152,52 @@ PIXEL_HELP = (
     "mean best (the pixels that share the cell's signal).\n"
     "drawn mask: the pixels of an ROI drawn in the ROI tool ('Drawn ROIs')."
 )
-POLARITY_LABELS = {
-    "flip_z": "dims: flip z (vnoiser)",
-    "invert_f": "dims: invert F (pml_utilities)",
-    "none": "brightens: as recorded",
+DOMAIN_COLUMN_HELP = {
+    "View": "The domain the preview below reads.",
+    "Run": "Whether this run takes the domain.",
+    "Name": "The trace's name everywhere: soma, basal1, apical1, bg.",
+    "ROIs": "The ROIs averaged into this trace, as 0,1,2 or 0:2.",
+    "Pixels": PIXEL_HELP,
+    "Share": "The fraction of each ROI's pixels the rule keeps.",
 }
-POLARITY_HELP = (
-    "Which way the indicator's events point, and who turns them up.\n\n"
-    "dims: flip z (vnoiser): JEDI and ASAP dim on depolarization; vnoiser negates "
-    "the z-score, the archive's way. dF/F stays negative-going.\n"
-    "dims: invert F (pml_utilities): the trace is turned over about its mean "
-    "(2 x mean - F) before dF/F, which is the viewer's Invert Deflection on these "
-    "pixels; dF/F and z both rise.\n"
-    "brightens: as recorded: an indicator that brightens.\n\n"
-    "Exactly one inversion is ever applied. The viewer's own Invert Deflection is "
-    "display only and never reaches the run."
-)
-BACKGROUND_LABELS = {
-    "none": "none",
-    "dim": "dimmest pixels",
-    "outside": "outside the domain",
-    "domain": "a background domain",
-}
-BACKGROUND_HELP = (
-    "Subtracted from each domain's mean before dF/F.\n\n"
-    "dimmest pixels: a low percentile of the ROI's pixels, frame by frame.\n"
-    "outside the domain: the mean of the ROI's pixels the domain leaves out "
-    "(a domain of every pixel gets none).\n"
-    "a background domain: the F of one domain of the table (often 'bg'), "
-    "which then gets no trace of its own."
-)
-REFERENCE_LABELS = {"none": "none", "ratio": "divide", "regress": "regress out"}
-REFERENCE_HELP = (
-    "A structural channel recorded beside the indicator (mScarlet beside ASAP7), "
-    "read through the same pixels.\n\n"
-    "divide: F / R x mean(R), for brightness changes both channels share.\n"
-    "regress out: removes the least-squares fit of R from F, for motion and "
-    "hemodynamic artifacts."
-)
-BASELINE_LABELS = {
-    "gaussian": "Gaussian",
-    "percentile": "rolling percentile",
-    "maxmin": "rolling max-min",
-    "exponential": "bleaching fit",
-    "window": "fixed window (MESc F0)",
-    "none": "none (z of F)",
-}
-BASELINE_HELP = (
-    "F0 under dF/F = (F - F0) / F0.\n\n"
-    "Gaussian: a Gaussian low-pass of F, the archive's.\n"
-    "rolling percentile / max-min: a low envelope over a window, robust to spikes.\n"
-    "bleaching fit: a decaying exponential plus a constant.\n"
-    "fixed window: the mean over a stretch you name, as MESc's dF/F does.\n"
-    "none: no division; the z-score is taken of F itself."
-)
+
+
+@contextmanager
+def button_colors(button, hovered, active):
+    """Draw the buttons inside the block in these three RGB colours."""
+    imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(*button, 1.0))
+    imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(*hovered, 1.0))
+    imgui.push_style_color(imgui.Col_.button_active, imgui.ImVec4(*active, 1.0))
+    yield
+    imgui.pop_style_color(3)
+
+
+def draw_divider() -> None:
+    """A rule with air on both sides, between the parts of a panel."""
+    imgui.spacing()
+    imgui.separator()
+    imgui.spacing()
+    imgui.spacing()
+
+
+def same_line_if_fits(width: float) -> None:
+    """Keep the next item on the line when ``width`` fits in what is left of it."""
+    spacing = imgui.get_style().item_inner_spacing.x
+    right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
+    if imgui.get_item_rect_max().x + spacing + width <= right:
+        imgui.same_line(0, spacing)
+
+
+def roi_ranges(rois) -> str:
+    """ROI indices with runs folded: ``[0, 1, 2, 5]`` is ``0-2, 5``."""
+    parts, rois = [], sorted(rois)
+    start = 0
+    for i in range(1, len(rois) + 1):
+        if i == len(rois) or rois[i] != rois[i - 1] + 1:
+            first, last = rois[start], rois[i - 1]
+            parts.append(str(first) if first == last else f"{first}-{last}")
+            start = i
+    return ", ".join(parts)
 
 
 def parse_roi_text(text: str, n_lines: int) -> list[int]:
@@ -374,7 +380,11 @@ class VnoiserPipelineWidget(PipelineWidget):
         )  # workers this tab started, until each run is loaded
         self._polled = 0.0
         self._show_settings_popup = False
-        self._settings_sizer: PopupAutoSize | None = None
+        self._parameters_chrome = (
+            0.0  # height of the Parameters popup around its columns
+        )
+        self._show_domains_popup = False
+        self._show_blocks_popup = False
         self._show_slice_popup = False
         self._last_fpath = None
         self._last_unit = None
@@ -389,6 +399,9 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._group_n = 3
         self._domain_error = ""
         self._domains_path = ""
+        self._book_seen: tuple | None = (
+            None  # the domain file as last polled: (mtime, the ticked scan's layout)
+        )
         self._channel_index = 0
         self._vnoiser_tp_selection = ""
         self._vnoiser_tp_parsed = None
@@ -473,6 +486,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._units, self._scans, self._first_env, self._domains = [], {}, {}, []
         self._labels, self._scan_labels = list(SCAN_LABELS), {}
         self._domain_error, self._domains_path = "", ""
+        self._book_seen = None
         mesc = self._mesc_path()
         if mesc is None:
             return
@@ -693,32 +707,15 @@ class VnoiserPipelineWidget(PipelineWidget):
             ):
                 self._help_open = not self._help_open
             self._draw_dataset_block()
-            imgui.separator()
-            self._draw_output_row()
-            self._draw_slice_row()
-            imgui.spacing()
+            self._draw_output_block()
             self._draw_scans_block()
-            imgui.spacing()
             self._draw_domains_block()
-            imgui.spacing()
-            self._draw_trace_block()
-            imgui.spacing()
-            self._draw_preview()
-            imgui.spacing()
-            if imgui.button(
-                "Denoiser and peaks##vnoiser_settings",
-                imgui.ImVec2(hello_imgui.em_size(11), 0),
-            ):
-                self._show_settings_popup = True
-            set_tooltip(
-                "The wavelet denoiser, the peak detector, start-up samples and output options. "
-                "Defaults are the archive's, so an untouched run reproduces its PF folders."
-            )
-            self._draw_settings_popup()
-            imgui.spacing()
-            self._draw_modified_table()
-            imgui.spacing()
+            self._draw_parameters_block()
+            draw_divider()
             self._draw_run()
+            self._draw_blocks_popup()
+            self._draw_domains_popup()
+            self._draw_parameters()
         self._help_open, self._help_keys = draw_vnoiser_help(
             self._help_open, self._help_keys
         )
@@ -727,8 +724,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         )
 
     def _draw_dataset_block(self) -> None:
-        imgui.text_colored(_SUBSECTION_COLOR, "Current dataset")
-        imgui.spacing()
+        imgui.separator_text("Dataset")
         arr = self._array()
         if arr is None:
             imgui.text_disabled("(no file loaded)")
@@ -740,29 +736,30 @@ class VnoiserPipelineWidget(PipelineWidget):
         if shown != path_str and imgui.is_item_hovered():
             imgui.set_tooltip(path_str)
         filenames = getattr(arr, "filenames", None) or ([str(mesc)] if mesc else [])
-        if filenames:
-            imgui.text(f"Size on disk: {_format_size(_dataset_size_bytes(filenames))}")
-        imgui.text(f"On screen: {getattr(arr, 'unit_key', '?')}")
-        set_tooltip(
-            "The measurement unit on screen; the Scans block below picks which units become scans."
-        )
-        imgui.text_disabled(f"{len(self._units)} recording(s) with traces in the file")
+        facts = [f"{str(getattr(arr, 'unit_key', '?')).rsplit('/', 1)[-1]} on screen"]
         ticked = [u for u in self._units if self._scans.get(u["key"])]
         if ticked:
-            fs = float(ticked[0]["fs"])
-            _draw_md_field("Frame rate", fs, "Hz")
-            ref = float(self.settings.runtime.reference_fs or 0)
-            if ref > 0 and not math.isclose(fs, ref, rel_tol=1e-6):
-                imgui.text_disabled(
-                    f"Sample-count settings scale by {fs / ref:.3f} from {ref:.1f} Hz"
+            facts.append(f"{float(ticked[0]['fs']):.1f} Hz")
+        if filenames:
+            facts.append(_format_size(_dataset_size_bytes(filenames)))
+        facts.append(f"{len(self._units)} recordings with traces")
+        imgui.text_disabled(" · ".join(facts))
+        if not ticked:
+            return
+        fs = float(ticked[0]["fs"])
+        ref = float(self.settings.runtime.reference_fs or 0)
+        if ref > 0 and not math.isclose(fs, ref, rel_tol=1e-6):
+            imgui.text_disabled(
+                f"Sample counts scale by {fs / ref:.3f} from {ref:.1f} Hz"
+            )
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    "Start-up samples, wavelet scales and peak spacing are written for the "
+                    "reference rate and scaled to this scan's."
                 )
-                set_tooltip(
-                    "dF/F sigmas, start-up samples, wavelet scales and peak spacing are written for the "
-                    "reference rate and scaled to this scan's; the peak band-pass is capped below Nyquist."
-                )
-            comment = str(ticked[0].get("comment") or "")
-            if comment:
-                imgui.text_disabled(f"Comment: {comment}")
+        comment = str(ticked[0].get("comment") or "")
+        if comment:
+            imgui.text_disabled(f"Comment: {comment}")
 
     def _default_outdir(self) -> str:
         """The folder a run of this format writes into: the file's own for a zarr run (the runner names the file), else the PF folder."""
@@ -778,7 +775,8 @@ class VnoiserPipelineWidget(PipelineWidget):
             return str(arr.path)
         return str(default_pf_dir(mesc))
 
-    def _draw_output_row(self) -> None:
+    def _draw_output_block(self) -> None:
+        """The output folder, the frame window and the channel read."""
         if self._outdir_dialog is not None and self._outdir_dialog.ready():
             result = self._outdir_dialog.result()
             if result:
@@ -786,50 +784,69 @@ class VnoiserPipelineWidget(PipelineWidget):
                 set_last_dir("vnoiser_outdir", result)
             self._outdir_dialog = None
         zarr_out = self.settings.runtime.output_format == "zarr"
-        imgui.text_colored(
-            _SUBSECTION_COLOR, "Output folder" if zarr_out else "Output folder (PF)"
-        )
-        set_tooltip(
-            "The folder the results file goes in; it is named after the input with a timestamp, "
-            "so a run never overwrites an earlier one."
-            if zarr_out
-            else "The PF folder the curation window opens: <animal>/<expt>/PF for the archive layout, else PF beside the file."
-        )
-        btn_w = hello_imgui.em_size(6)
-        imgui.set_next_item_width(
-            max(
-                imgui.get_content_region_avail().x
-                - btn_w
-                - imgui.get_style().item_spacing.x,
-                hello_imgui.em_size(6),
+        imgui.spacing()
+        imgui.separator_text("Output")
+        max_frames, _, n_channels = self._dims()
+        with settings_table(
+            "##vnoiser_output", ("Folder", "Frames", "Channel")
+        ) as shown:
+            if not shown:
+                return
+            settings_row("Folder")
+            btn_w = button_width("Browse")
+            imgui.set_next_item_width(
+                max(
+                    imgui.get_content_region_avail().x
+                    - btn_w
+                    - imgui.get_style().item_spacing.x,
+                    hello_imgui.em_size(6),
+                )
             )
-        )
-        _, self._outdir = imgui.input_text("##vnoiser_outdir", self._outdir)
-        if self._outdir and imgui.is_item_hovered():
-            imgui.set_tooltip(self._outdir)
-        imgui.same_line()
-        if imgui.button("Browse##vnoiser_outdir_btn", imgui.ImVec2(btn_w, 0)):
-            start = str(get_last_dir("vnoiser_outdir") or Path.home())
-            self._outdir_dialog = pfd.select_folder("Select output folder", start)
+            _, self._outdir = imgui.input_text("##vnoiser_outdir", self._outdir)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    f"{self._outdir}\nThe results file lands here, named after the input and the time."
+                    if zarr_out
+                    else f"{self._outdir}\nThe PF folder the curation window opens."
+                )
+            imgui.same_line()
+            if imgui.button("Browse##vnoiser_outdir_btn"):
+                start = str(get_last_dir("vnoiser_outdir") or Path.home())
+                self._outdir_dialog = pfd.select_folder("Select output folder", start)
 
-    def _draw_slice_row(self) -> None:
-        max_frames, _, _ = self._dims()
-        if imgui.button(
-            "Frames##vnoiser_slice", imgui.ImVec2(hello_imgui.em_size(6), 0)
-        ):
-            self._show_slice_popup = True
-        set_tooltip(
-            "The window of frames read: one contiguous stretch, since the baselines and the "
-            "z-score use the whole trace.",
-            show_mark=False,
-        )
-        imgui.same_line()
-        try:
-            window = self._frame_window()
-            n_frames = max_frames if window is None else window[1] - window[0]
-            imgui.text_colored(_DIM_COLOR, f"{n_frames} of {max_frames} frames")
-        except ValueError as e:
-            imgui.text_colored(_MISSING_COLOR, str(e))
+            settings_row("Frames")
+            try:
+                window = self._frame_window()
+                n_frames = max_frames if window is None else window[1] - window[0]
+                text, color = f"{n_frames} of {max_frames}", None
+            except ValueError as e:
+                text, color = str(e), _MISSING_COLOR
+            if color is not None:
+                imgui.push_style_color(imgui.Col_.text, color)
+            if imgui.button(f"{text}##vnoiser_slice"):
+                self._show_slice_popup = True
+            if color is not None:
+                imgui.pop_style_color()
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    "The window of frames read: one contiguous stretch, since the baselines "
+                    "and the z-score use the whole trace."
+                )
+            self._draw_slice_popup(max_frames)
+
+            settings_row("Channel")
+            imgui.set_next_item_width(hello_imgui.em_size(WIDTH_INPUT_EM))
+            changed, index = imgui.combo(
+                "##vnoiser_channel",
+                min(self._channel_index, n_channels - 1),
+                [f"ch {c + 1}" for c in range(n_channels)],
+            )
+            if changed:
+                self._channel_index = index
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("The channel the indicator is on.")
+
+    def _draw_slice_popup(self, max_frames: int) -> None:
         if self._show_slice_popup:
             imgui.open_popup("Frames##vnoiser_slice_popup")
             self._show_slice_popup = False
@@ -849,19 +866,19 @@ class VnoiserPipelineWidget(PipelineWidget):
                 axes=self.axes_consumed,
             )
             imgui.spacing()
-            if imgui.button(
-                "Close##vnoiser_slice_close", imgui.ImVec2(hello_imgui.em_size(6), 0)
-            ):
+            if imgui.button("Close##vnoiser_slice_close"):
                 imgui.close_current_popup()
             imgui.end_popup()
 
     def _draw_scans_block(self) -> None:
-        imgui.text_colored(_SUBSECTION_COLOR, "Scans")
-        set_tooltip(
-            "The recordings in this file traces come from: line scans, chessboard and "
-            "ribbon scans, a single patch. Ticked ones are processed together with the "
-            "same domains; the one on screen is ticked by default."
-        )
+        """The recordings a run takes, ticked; their blocks sit behind the Blocks button."""
+        imgui.spacing()
+        imgui.separator_text("Scans")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "The recordings of this file traces come from. Ticked ones are processed "
+                "together with the same domains."
+            )
         if not self._units:
             imgui.text_disabled("No recording with traces in this file.")
             return
@@ -871,74 +888,116 @@ class VnoiserPipelineWidget(PipelineWidget):
             | imgui.TableFlags_.borders_inner_h
             | imgui.TableFlags_.sizing_fixed_fit
         )
-        if imgui.begin_table("##vnoiser_scans", 6, flags):
+        if imgui.begin_table("##vnoiser_scans", 4, flags):
+            kinds = [
+                KIND_LABELS.get(kind, kind)
+                for kind in (
+                    str(u.get("modality_name") or u.get("kind") or "")
+                    for u in self._units
+                )
+            ]
             fixed = imgui.TableColumnFlags_.width_fixed
             imgui.table_setup_column("Unit", imgui.TableColumnFlags_.width_stretch)
+            ## NOTE: sized by hand, since the tab's text wrap breaks a word in a fit-to-content column
             imgui.table_setup_column(
-                "Kind", fixed, imgui.calc_text_size("chessboard").x
+                "Kind",
+                fixed,
+                max(imgui.calc_text_size(kind).x for kind in [*kinds, "Kind"]),
             )
             imgui.table_setup_column("ROIs", fixed)
             imgui.table_setup_column("Length", fixed)
-            imgui.table_setup_column("New block", fixed)
-            imgui.table_setup_column("Change", imgui.TableColumnFlags_.width_stretch)
-            imgui.table_next_row(imgui.TableRowFlags_.headers)
-            for column in range(6):
-                imgui.table_set_column_index(column)
-                name = imgui.table_get_column_name(column)
-                imgui.table_header(name)
-                if name in SCAN_COLUMN_HELP:
-                    set_tooltip(SCAN_COLUMN_HELP[name], show_mark=False)
-            first_run = next(
-                (u["key"] for u in self._units if self._scans.get(u["key"])), None
-            )
-            for u in self._units:
+            imgui.table_headers_row()
+            for u, kind in zip(self._units, kinds, strict=True):
                 key = u["key"]
-                munit = key.rsplit("/", 1)[-1]
                 imgui.table_next_row()
-                imgui.table_set_column_index(0)
-                label = f"{munit} (on screen)" if key == shown else munit
+                imgui.table_next_column()
+                on_screen = key == shown
+                if on_screen:
+                    imgui.push_style_color(imgui.Col_.text, _SUBSECTION_COLOR)
                 _, self._scans[key] = imgui.checkbox(
-                    f"{label}##vnoiser_scan_{key}", self._scans.get(key, False)
+                    f"{key.rsplit('/', 1)[-1]}##vnoiser_scan_{key}",
+                    self._scans.get(key, False),
                 )
+                if on_screen:
+                    imgui.pop_style_color()
                 if imgui.is_item_hovered():
                     comment = str(u.get("comment") or "")
-                    imgui.set_tooltip(f"{key}\n{comment}" if comment else key)
-                imgui.table_set_column_index(1)
-                kind = str(u.get("modality_name") or u.get("kind") or "")
-                imgui.text(KIND_LABELS.get(kind, kind))
-                if imgui.is_item_hovered():
                     imgui.set_tooltip(
-                        f"{kind}, {u.get('outline_kind') or 'frame'} ROIs"
+                        "\n".join(
+                            t
+                            for t in (key, "on screen" if on_screen else "", comment)
+                            if t
+                        )
                     )
-                imgui.table_set_column_index(2)
+                imgui.table_next_column()
+                imgui.text(kind)
+                imgui.table_next_column()
                 imgui.text(str(u["nrois"]))
-                imgui.table_set_column_index(3)
+                imgui.table_next_column()
                 seconds = u.get("duration_s")
                 imgui.text(f"{seconds:.0f} s" if seconds else "-")
-                imgui.table_set_column_index(4)
-                fixed_tick = key == first_run or not self._scans[key]
-                if fixed_tick:
-                    imgui.begin_disabled()
-                changed, ticked = imgui.checkbox(
-                    f"##vnoiser_env_{key}",
-                    key == first_run or self._first_env.get(key, False),
-                )
-                if changed:
-                    self._first_env[key] = ticked
-                    if not ticked:
-                        self._scan_labels.pop(key, None)
-                if fixed_tick:
-                    imgui.end_disabled()
-                imgui.table_set_column_index(5)
-                if self._scans[key] and (key == first_run or self._first_env.get(key)):
-                    self._draw_scan_labels(key)
             imgui.end_table()
-        if imgui.small_button("On screen only##vnoiser_scans_shown"):
+        if imgui.small_button("On screen##vnoiser_scans_shown"):
             self._scans = {u["key"]: u["key"] == shown for u in self._units}
         imgui.same_line()
         if imgui.small_button("All##vnoiser_scans_all"):
             self._scans = {u["key"]: True for u in self._units}
+        ticked = [u["key"] for u in self._units if self._scans.get(u["key"])]
+        starts = self._block_args(ticked)["first_env"]
+        imgui.same_line()
+        if imgui.small_button(f"Blocks ({len(starts)})##vnoiser_blocks"):
+            self._show_blocks_popup = True
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Mark the scans where a condition changed and what changed there."
+            )
+
+    def _draw_blocks_popup(self) -> None:
+        """Which ticked scans start a block and what changed there, then the experiment's labels."""
+        if self._show_blocks_popup:
+            imgui.open_popup("##vnoiser_blocks_popup")
+            self._show_blocks_popup = False
+        imgui.set_next_window_size(
+            imgui.ImVec2(hello_imgui.em_size(34), 0), imgui.Cond_.appearing
+        )
+        if not imgui.begin_popup("##vnoiser_blocks_popup"):
+            return
+        imgui.text_colored(_TITLE_COLOR, "Blocks")
+        imgui.text_disabled(
+            "A block starts at the first scan after a condition changed; a run's first scan always starts one."
+        )
+        ticked = [u["key"] for u in self._units if self._scans.get(u["key"])]
+        flags = imgui.TableFlags_.row_bg | imgui.TableFlags_.borders_inner_h
+        if imgui.begin_table("##vnoiser_blocks", 3, flags):
+            fixed = imgui.TableColumnFlags_.width_fixed
+            imgui.table_setup_column("Scan", fixed)
+            imgui.table_setup_column("New block", fixed)
+            imgui.table_setup_column("Change", imgui.TableColumnFlags_.width_stretch)
+            imgui.table_headers_row()
+            for i, key in enumerate(ticked):
+                imgui.table_next_row()
+                imgui.table_next_column()
+                imgui.align_text_to_frame_padding()
+                imgui.text(key.rsplit("/", 1)[-1])
+                imgui.table_next_column()
+                imgui.begin_disabled(i == 0)
+                changed, start = imgui.checkbox(
+                    f"##vnoiser_env_{key}", i == 0 or self._first_env.get(key, False)
+                )
+                imgui.end_disabled()
+                if changed:
+                    self._first_env[key] = start
+                    if not start:
+                        self._scan_labels.pop(key, None)
+                imgui.table_next_column()
+                if i == 0 or self._first_env.get(key):
+                    self._draw_scan_labels(key)
+            imgui.end_table()
+        if not ticked:
+            imgui.text_disabled("Tick a scan first.")
+        imgui.spacing()
         self._draw_label_list()
+        imgui.end_popup()
 
     def _draw_scan_labels(self, key: str) -> None:
         """One toggle per label; a picked label keeps New block ticked if this stops being the run's first scan."""
@@ -1040,13 +1099,6 @@ class VnoiserPipelineWidget(PipelineWidget):
             rows.append(DomainRow(d.name, d.rois, d.pixels, d.fraction, d.mask))
         return rows
 
-    @staticmethod
-    def _inline(label: str, right: float) -> None:
-        """Keep the next button on the line when ``label`` fits before ``right``."""
-        spacing = imgui.get_style().item_spacing.x
-        if imgui.get_item_rect_max().x + spacing + button_width(label) <= right:
-            imgui.same_line()
-
     def _set_blocks(self, first_env, labels, scan_labels) -> None:
         """Block ticks and labels by scan id, from a run or a ``domains.json``; a run without them takes the ticks alone."""
         scan_labels = scan_labels or {}
@@ -1131,6 +1183,31 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._domains_path = str(found)
         self._set_status(f"Loaded {found.name}")
 
+    def _adopt_domain_file(self) -> None:
+        """Take the first ticked scan's table from the domain file when another window rewrote it (the MESc tab's ROI names)."""
+        mesc = self._mesc_path() if self._units else None
+        found = None if mesc is None else find_domains(mesc, get_roi_folder() or None)
+        if found is None:
+            return
+        stamp = found.stat().st_mtime_ns
+        if self._book_seen is not None and self._book_seen[0] == stamp:
+            return
+        ticked = [u["key"] for u in self._units if self._scans.get(u["key"])]
+        try:
+            layout = ticked and DomainFile.read(found).layout_of(scan_of(ticked[0]))
+            rows = self._layout_rows(layout) if layout else None
+        except (OSError, ValueError, KeyError):
+            return
+        table = layout.to_json() if layout else None
+        was, self._book_seen = self._book_seen, (stamp, table)
+        ## NOTE: a trim or a block written by another window leaves the table alone, so unsaved edits stay
+        if rows is None or was is None or was[1] == table:
+            return
+        self._domains, self._selected = rows, 0
+        self._fit_domains(self._dims()[1])
+        self._domains_path = str(found)
+        self._set_status(f"Domains from {found.name}")
+
     def _save_domains_file(self) -> None:
         """Write the table and its run ticks as the ticked scans' layout in the domain file, with their block ticks and the label list; other layouts and scans keep theirs."""
         rows = self._check_domains()
@@ -1178,25 +1255,24 @@ class VnoiserPipelineWidget(PipelineWidget):
         self._set_status(f"Saved {path.name}")
 
     def _draw_domain_presets(self, n_rois: int) -> None:
-        """Buttons that rebuild the table, wrapping to new lines when the panel is narrow."""
-        right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
-        if imgui.small_button("One per ROI##vnoiser_dom_each"):
+        """Buttons that rebuild the table."""
+        if imgui.button("One per ROI##vnoiser_dom_each"):
             self._domains = one_per_roi(n_rois)
             self._selected = 0
-        set_tooltip("Every ROI its own domain, every pixel.", show_mark=False)
-        self._inline("All in one", right)
-        if imgui.small_button("All in one##vnoiser_dom_all"):
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Every ROI its own domain, every pixel.")
+        imgui.same_line()
+        if imgui.button("All in one##vnoiser_dom_all"):
             self._domains = [DomainRow("all", list(range(n_rois)))]
             self._selected = 0
-        set_tooltip("One domain of every ROI.", show_mark=False)
-        self._inline("Groups of 0000000", right)
-        if imgui.small_button("Groups of##vnoiser_dom_groups"):
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("One domain of every ROI.")
+        imgui.same_line()
+        if imgui.button("Groups of##vnoiser_dom_groups"):
             self._domains = groups_of(n_rois, self._group_n)
             self._selected = 0
-        set_tooltip(
-            "Consecutive ROIs, this many to a group (the box beside it).",
-            show_mark=False,
-        )
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Consecutive ROIs, this many to a domain.")
         imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
         imgui.set_next_item_width(hello_imgui.em_size(5))
         _, self._group_n = imgui.input_int("##vnoiser_dom_group_n", self._group_n)
@@ -1204,24 +1280,23 @@ class VnoiserPipelineWidget(PipelineWidget):
         mapped = self._comment_map()
         if mapped:
             unit, groups = mapped
-            self._inline("From comment", right)
-            if imgui.small_button("From comment##vnoiser_dom_comment"):
+            imgui.same_line()
+            if imgui.button("From comment##vnoiser_dom_comment"):
                 # the pipeline gives bg no trace of its own; it stays a background
                 self._domains = [
                     DomainRow(name, rois, run=name != "bg")
                     for name, rois in groups.items()
                 ]
                 self._selected = 0
-            set_tooltip(
-                f"The groups in {unit}'s comment: "
-                + ", ".join(f"{name} {rois}" for name, rois in groups.items()),
-                show_mark=False,
-            )
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    f"The groups in {unit}'s comment: "
+                    + ", ".join(f"{name} {rois}" for name, rois in groups.items())
+                )
         drawn = self.drawn_domains()
-        self._inline("Drawn ROIs (00)", right)
-        if not drawn:
-            imgui.begin_disabled()
-        if imgui.small_button(f"Drawn ROIs ({len(drawn)})##vnoiser_dom_drawn"):
+        imgui.same_line()
+        imgui.begin_disabled(not drawn)
+        if imgui.button(f"Drawn ROIs ({len(drawn)})##vnoiser_dom_drawn"):
             have = {r.name for r in self._domains}
             for row in drawn:
                 if row.name in have:
@@ -1231,79 +1306,108 @@ class VnoiserPipelineWidget(PipelineWidget):
                 else:
                     self._domains.append(row)
             self._selected = len(self._domains) - 1
-        if not drawn:
-            imgui.end_disabled()
+        imgui.end_disabled()
         if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
             imgui.set_tooltip(
-                "Add every ROI drawn in the ROI tool (Manual ROI Labeling) on the recording "
-                "on screen as a domain of exactly its pixels, named by its note."
-                if drawn
-                else "Draw ROIs with the ROI tool on the recording on screen (a to draw, r to "
-                "add) and they appear here as domains of exactly their pixels."
+                "Add every ROI drawn in the ROI tool on the recording on screen as a domain "
+                "of exactly its pixels, named by its note."
             )
-        self._inline("Load", right)
-        if imgui.small_button("Load##vnoiser_dom_load"):
-            self._load_domains_file()
-        set_tooltip(
-            "Load the ticked scan's table from the domain file (<file>.domains.json).",
-            show_mark=False,
-        )
-        self._inline("Save", right)
-        if imgui.small_button("Save##vnoiser_dom_save"):
-            self._save_domains_file()
-        set_tooltip(
-            "Save the table, ticked scans and block ticks to the domain file.",
-            show_mark=False,
-        )
-
-    def _draw_roi_toggles(self, i: int, row: DomainRow, n_rois: int) -> None:
-        """One toggle per ROI (a typed list past ``MAX_ROI_TOGGLES``); a mask row's ROIs are fixed."""
-        if row.pixels == "mask":
-            imgui.text(", ".join(str(r) for r in row.rois))
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("A drawn mask belongs to the ROI it was drawn on.")
-            return
-        if n_rois == 1:
-            imgui.text_disabled("0 (the frame)")
-            return
-        if n_rois > MAX_ROI_TOGGLES:
-            imgui.set_next_item_width(-1)
-            text = ",".join(str(r) for r in row.rois)
-            changed, text = imgui.input_text(f"##vnoiser_dom_rois_{i}", text)
-            if changed:
-                try:
-                    row.rois = parse_roi_text(text, n_rois)
-                except ValueError:
-                    pass
-            return
-        right = imgui.get_cursor_screen_pos().x + imgui.get_content_region_avail().x
-        spacing = imgui.get_style().item_spacing.x * 0.5
-        for roi in range(n_rois):
-            label = f"{roi}##vnoiser_dom_{i}_roi_{roi}"
-            if (
-                roi
-                and imgui.get_item_rect_max().x + spacing + button_width(str(roi))
-                <= right
-            ):
-                imgui.same_line(0, spacing)
-            with selected_button_style(roi in row.rois):
-                if imgui.small_button(label):
-                    rois = set(row.rois) ^ {roi}
-                    if rois:
-                        row.rois = sorted(rois)
 
     def _draw_domains_block(self) -> None:
-        imgui.text_colored(_SUBSECTION_COLOR, "Domains")
-        set_tooltip(
-            "A domain is one trace: the pixels of one or more ROIs averaged together "
-            "(the lines of a soma, a patch, the part of a patch the cell covers).\n\n"
-            "Run: whether this run takes the domain. The dot picks the domain the preview "
-            "shows. ROIs: click to add or remove a line or patch (0-based, drawing order). "
-            "Pixels: which of each ROI's pixels are averaged.\n\n"
-            "The buttons rebuild the table; Drawn ROIs adds the ROI tool's ROIs."
+        """The table as it stands, one line per domain with its run tick; Edit opens the editor."""
+        imgui.spacing()
+        imgui.separator_text("Domains")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "A domain is one trace: the pixels of one or more ROIs averaged together "
+                "(the lines of a soma, a patch, the part of a patch the cell covers)."
+            )
+        flags = imgui.TableFlags_.row_bg | imgui.TableFlags_.sizing_fixed_fit
+        if imgui.begin_table("##vnoiser_domains_summary", 3, flags):
+            imgui.table_setup_column("##run", imgui.TableColumnFlags_.width_fixed)
+            ## NOTE: sized by hand, since the tab's text wrap breaks a word in a fit-to-content column
+            imgui.table_setup_column(
+                "##name",
+                imgui.TableColumnFlags_.width_fixed,
+                max(
+                    (imgui.calc_text_size(r.name).x for r in self._domains), default=0.0
+                ),
+            )
+            imgui.table_setup_column("##rois", imgui.TableColumnFlags_.width_stretch)
+            for i, row in enumerate(self._domains):
+                imgui.table_next_row()
+                imgui.table_next_column()
+                _, row.run = imgui.checkbox(f"##vnoiser_dom_sum_run_{i}", row.run)
+                if imgui.is_item_hovered():
+                    imgui.set_tooltip("Whether this run takes the domain.")
+                imgui.table_next_column()
+                imgui.align_text_to_frame_padding()
+                if row.run:
+                    imgui.text(row.name)
+                else:
+                    imgui.text_disabled(row.name)
+                imgui.table_next_column()
+                rule = "" if row.pixels == "all" else f", {PIXEL_LABELS[row.pixels]}"
+                imgui.align_text_to_frame_padding()
+                imgui.text_disabled(f"ROI {roi_ranges(row.rois)}{rule}")
+            imgui.end_table()
+        if imgui.button(f"{fa.ICON_FA_PEN}  Edit domains##vnoiser_dom_edit"):
+            self._show_domains_popup = True
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Name the domains, pick their ROIs and pixels, and preview each one."
+            )
+        self._draw_domains_status()
+
+    def _draw_domains_status(self) -> None:
+        """How many domains run and how many ROIs they read, or what is wrong with the table."""
+        self._domains_to_run()
+        if self._domain_error:
+            imgui.text_colored(_MISSING_COLOR, self._domain_error)
+            return
+        ticked = [r for r in self._domains if r.run]
+        imgui.text_disabled(
+            f"{len(ticked)} of {len(self._domains)} domains run, "
+            f"{len({roi for r in ticked for roi in r.rois})} ROIs read"
         )
+
+    def _draw_domains_popup(self) -> None:
+        """The domain editor: presets, one row per domain with an ROI's box per column, the preview of the picked row, then Load, Save and Close."""
+        if self._show_domains_popup:
+            imgui.open_popup(POPUP_DOMAINS)
+            self._show_domains_popup = False
+        viewport = imgui.get_main_viewport()
+        ## NOTE: centered every frame, since an auto-resized popup is 0 wide on the frame it appears
+        imgui.set_next_window_pos(
+            viewport.get_center(), imgui.Cond_.always, imgui.ImVec2(0.5, 0.5)
+        )
+        imgui.set_next_window_size_constraints(
+            imgui.ImVec2(hello_imgui.em_size(44), 0),
+            imgui.ImVec2(viewport.size.x * 0.96, viewport.size.y * 0.94),
+        )
+        flags = (
+            imgui.WindowFlags_.always_auto_resize
+            | imgui.WindowFlags_.no_saved_settings
+            | imgui.WindowFlags_.no_move
+        )
+        opened, visible = imgui.begin_popup_modal(POPUP_DOMAINS, True, flags)
+        if not opened:
+            return
+        if not visible or (
+            imgui.is_key_pressed(imgui.Key.escape) and not imgui.is_any_item_active()
+        ):
+            imgui.close_current_popup()
         _, n_rois, _ = self._dims()
-        self._draw_domain_presets(n_rois)
+        scans = [
+            u["key"].rsplit("/", 1)[-1]
+            for u in self._units
+            if self._scans.get(u["key"])
+        ]
+        imgui.text_colored(_TITLE_COLOR, "Domains")
+        imgui.same_line()
+        imgui.text_disabled(
+            f"of {', '.join(scans) or 'no scan'}: each row is one trace, the pixels of its ticked ROIs averaged"
+        )
         counts = {int(u["nrois"]) for u in self._units if self._scans.get(u["key"])}
         if len(counts) > 1:
             imgui.push_style_color(imgui.Col_.text, _MODIFIED_COLOR)
@@ -1313,367 +1417,159 @@ class VnoiserPipelineWidget(PipelineWidget):
                 "not be the same line in each. Run each layout on its own."
             )
             imgui.pop_style_color()
+        imgui.spacing()
+        imgui.separator_text("Start from")
+        self._draw_domain_presets(n_rois)
+        imgui.spacing()
+        imgui.separator_text("Table")
+        self._draw_domain_table(n_rois)
+        if imgui.button(f"{fa.ICON_FA_PLUS}  Add domain##vnoiser_dom_add"):
+            self._domains.append(DomainRow(f"domain{len(self._domains) + 1}", [0]))
+            self._selected = len(self._domains) - 1
+        imgui.same_line()
+        imgui.align_text_to_frame_padding()
+        self._draw_domains_status()
+        imgui.spacing()
+        imgui.separator_text("Preview")
+        self._draw_preview()
+        draw_divider()
+        if imgui.button("Load##vnoiser_dom_load"):
+            self._load_domains_file()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Load the ticked scan's table from the domain file.")
+        imgui.same_line()
+        if imgui.button("Save##vnoiser_dom_save"):
+            self._save_domains_file()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Save the table, the ticked scans and their blocks to the domain file; a run saves it too."
+            )
+        if self._domains_path:
+            imgui.same_line()
+            imgui.align_text_to_frame_padding()
+            imgui.text_disabled(Path(self._domains_path).name)
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(self._domains_path)
+        imgui.same_line()
+        close_w = button_width("Close")
+        imgui.set_cursor_pos_x(
+            max(
+                imgui.get_cursor_pos_x(),
+                imgui.get_window_width() - imgui.get_style().window_padding.x - close_w,
+            )
+        )
+        with button_colors(*COLORS_CLOSE):
+            if imgui.button("Close##vnoiser_dom_close"):
+                imgui.close_current_popup()
+        imgui.end_popup()
+
+    def _draw_domain_table(self, n_rois: int) -> None:
+        """One row per domain: the row the preview shows, its run tick, its name, a box per ROI (a typed list past ``MATRIX_MAX`` ROIs), the pixels it averages and their share."""
+        matrix = 1 < n_rois <= MATRIX_MAX
+        roi_columns = n_rois if matrix else 1
         flags = (
             imgui.TableFlags_.row_bg
-            | imgui.TableFlags_.borders_inner_h
-            | imgui.TableFlags_.sizing_stretch_prop
+            | imgui.TableFlags_.borders_inner
+            | imgui.TableFlags_.borders_outer
+            | imgui.TableFlags_.sizing_fixed_fit
         )
         remove = None
-        pick_w = imgui.get_frame_height()
-        if imgui.begin_table("##vnoiser_domains", 6, flags):
-            imgui.table_setup_column("", imgui.TableColumnFlags_.width_fixed, pick_w)
-            imgui.table_setup_column("Run", imgui.TableColumnFlags_.width_fixed, pick_w)
-            imgui.table_setup_column("Name", imgui.TableColumnFlags_.width_stretch, 2.0)
-            imgui.table_setup_column("ROIs", imgui.TableColumnFlags_.width_stretch, 3.0)
-            imgui.table_setup_column(
-                "Pixels", imgui.TableColumnFlags_.width_stretch, 3.0
-            )
-            imgui.table_setup_column(
-                "", imgui.TableColumnFlags_.width_fixed, hello_imgui.em_size(1.8)
-            )
-            imgui.table_headers_row()
-            for i, row in enumerate(self._domains):
-                imgui.table_next_row()
-                imgui.table_set_column_index(0)
-                if imgui.radio_button(f"##vnoiser_dom_pick_{i}", self._selected == i):
-                    self._selected = i
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip("Preview this domain.")
-                imgui.table_set_column_index(1)
-                _, row.run = imgui.checkbox(f"##vnoiser_dom_run_{i}", row.run)
-                imgui.table_set_column_index(2)
-                imgui.set_next_item_width(-1)
-                _, row.name = imgui.input_text(f"##vnoiser_dom_name_{i}", row.name)
-                imgui.table_set_column_index(3)
-                bad = any(not 0 <= r < n_rois for r in row.rois)
+        if not imgui.begin_table("##vnoiser_domains", 6 + roi_columns, flags):
+            return
+        fixed = imgui.TableColumnFlags_.width_fixed
+        imgui.table_setup_column("View", fixed)
+        imgui.table_setup_column("Run", fixed)
+        imgui.table_setup_column("Name", fixed, hello_imgui.em_size(9))
+        if matrix:
+            for roi in range(n_rois):
+                imgui.table_setup_column(str(roi), fixed)
+        else:
+            imgui.table_setup_column("ROIs", fixed, hello_imgui.em_size(14))
+        imgui.table_setup_column("Pixels", fixed, hello_imgui.em_size(10))
+        imgui.table_setup_column("Share", fixed, hello_imgui.em_size(6))
+        imgui.table_setup_column("##remove", fixed)
+        imgui.table_next_row(imgui.TableRowFlags_.headers)
+        for column in range(6 + roi_columns):
+            imgui.table_set_column_index(column)
+            name = imgui.table_get_column_name(column)
+            imgui.table_header(name)
+            if imgui.is_item_hovered() and name in DOMAIN_COLUMN_HELP:
+                imgui.set_tooltip(DOMAIN_COLUMN_HELP[name])
+            elif imgui.is_item_hovered() and matrix and name.isdigit():
+                imgui.set_tooltip(
+                    f"ROI {name}: tick it in a row to add it to that domain."
+                )
+        for i, row in enumerate(self._domains):
+            imgui.table_next_row()
+            imgui.table_next_column()
+            if imgui.radio_button(f"##vnoiser_dom_pick_{i}", self._selected == i):
+                self._selected = i
+            imgui.table_next_column()
+            _, row.run = imgui.checkbox(f"##vnoiser_dom_run_{i}", row.run)
+            imgui.table_next_column()
+            imgui.set_next_item_width(-1)
+            _, row.name = imgui.input_text(f"##vnoiser_dom_name_{i}", row.name)
+            bad = any(not 0 <= r < n_rois for r in row.rois)
+            if matrix:
+                for roi in range(n_rois):
+                    imgui.table_next_column()
+                    # a drawn mask belongs to the ROI it was drawn on
+                    imgui.begin_disabled(row.pixels == "mask")
+                    changed, on = imgui.checkbox(
+                        f"##vnoiser_dom_{i}_roi_{roi}", roi in row.rois
+                    )
+                    imgui.end_disabled()
+                    if changed and (on or len(row.rois) > 1):
+                        row.rois = sorted(set(row.rois) ^ {roi})
+            else:
+                imgui.table_next_column()
                 if bad:
                     imgui.push_style_color(imgui.Col_.text, _MISSING_COLOR)
-                self._draw_roi_toggles(i, row, n_rois)
+                if n_rois == 1:
+                    imgui.text_disabled("0 (the frame)")
+                else:
+                    imgui.set_next_item_width(-1)
+                    imgui.begin_disabled(row.pixels == "mask")
+                    changed, text = imgui.input_text(
+                        f"##vnoiser_dom_rois_{i}", ",".join(str(r) for r in row.rois)
+                    )
+                    imgui.end_disabled()
+                    if changed:
+                        try:
+                            row.rois = parse_roi_text(text, n_rois)
+                        except ValueError:
+                            pass
                 if bad:
                     imgui.pop_style_color()
-                imgui.table_set_column_index(4)
-                self._draw_pixel_rule(i, row)
-                imgui.table_set_column_index(5)
-                if imgui.small_button(f"x##vnoiser_dom_rm_{i}"):
-                    remove = i
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip("Remove this domain.")
-            imgui.end_table()
+            imgui.table_next_column()
+            rules = [p for p in PIXEL_RULES if p != "mask" or row.mask]
+            imgui.set_next_item_width(-1)
+            changed, current = imgui.combo(
+                f"##vnoiser_dom_px_{i}",
+                rules.index(row.pixels) if row.pixels in rules else 0,
+                [PIXEL_LABELS[p] for p in rules],
+            )
+            if changed:
+                row.pixels = rules[current]
+            imgui.table_next_column()
+            if row.pixels in ("bright", "active", "correlated"):
+                imgui.set_next_item_width(-1)
+                _, percent = imgui.slider_float(
+                    f"##vnoiser_dom_frac_{i}", row.fraction * 100, 1.0, 100.0, "%.0f %%"
+                )
+                row.fraction = min(1.0, max(0.01, percent / 100))
+            else:
+                imgui.align_text_to_frame_padding()
+                imgui.text_disabled("all" if row.pixels == "all" else "mask")
+            imgui.table_next_column()
+            if imgui.small_button(f"{fa.ICON_FA_XMARK}##vnoiser_dom_rm_{i}"):
+                remove = i
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("Remove this domain.")
+        imgui.end_table()
         if remove is not None:
             del self._domains[remove]
             self._selected = min(self._selected, max(len(self._domains) - 1, 0))
-        if imgui.small_button("Add##vnoiser_dom_add"):
-            self._domains.append(DomainRow(f"domain{len(self._domains) + 1}", [0]))
-            self._selected = len(self._domains) - 1
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Add a domain of ROI 0; click ROIs to change it.")
-        imgui.same_line()
-        self._domains_to_run()
-        if self._domain_error:
-            imgui.text_colored(_MISSING_COLOR, self._domain_error)
-        else:
-            ticked = [r for r in self._domains if r.run]
-            imgui.text_disabled(
-                f"{len(ticked)} of {len(self._domains)} domains run, "
-                f"{len({roi for r in ticked for roi in r.rois})} ROIs read"
-            )
-        if self._domains_path:
-            shown = _truncate_to_width(
-                self._domains_path, imgui.get_content_region_avail().x
-            )
-            imgui.text_disabled(shown)
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(self._domains_path)
-
-    def _draw_pixel_rule(self, i: int, row: DomainRow) -> None:
-        rules = [p for p in PIXEL_RULES if p != "mask" or row.mask]
-        current = rules.index(row.pixels) if row.pixels in rules else 0
-        scored = row.pixels in ("bright", "active", "correlated")
-        imgui.set_next_item_width(
-            -1 if not scored else imgui.get_content_region_avail().x * 0.6
-        )
-        changed, current = imgui.combo(
-            f"##vnoiser_dom_px_{i}", current, [PIXEL_LABELS[p] for p in rules]
-        )
-        if changed:
-            row.pixels = rules[current]
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(PIXEL_HELP)
-        if scored:
-            imgui.same_line()
-            imgui.set_next_item_width(-1)
-            _, percent = imgui.slider_float(
-                f"##vnoiser_dom_frac_{i}", row.fraction * 100, 1.0, 100.0, "%.0f %%"
-            )
-            row.fraction = min(1.0, max(0.01, percent / 100))
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("The share of each ROI's pixels kept.")
-
-    def _f_combo(
-        self, obj, field: str, labels: dict, help_text: str, width=None
-    ) -> bool:
-        """A combo over ``labels`` (value -> shown) for ``obj.field``, orange when modified."""
-        values = list(labels)
-        current = (
-            values.index(getattr(obj, field)) if getattr(obj, field) in values else 0
-        )
-        pushed = self._mod_push(obj, field)
-        imgui.set_next_item_width(width or hello_imgui.em_size(13))
-        changed, current = imgui.combo(
-            f"##vnoiser_{field}", current, [labels[v] for v in values]
-        )
-        if pushed:
-            imgui.pop_style_color()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(help_text)
-        if changed:
-            setattr(obj, field, values[current])
-        return changed
-
-    def _seconds_field(self, obj, field: str, tooltip: str) -> None:
-        """A sample-count field shown and edited in seconds at the reference rate."""
-        fs = float(self.settings.runtime.reference_fs or 1.0)
-        pushed = self._mod_push(obj, field)
-        imgui.set_next_item_width(hello_imgui.em_size(6))
-        changed, seconds = imgui.input_float(
-            f"##vnoiser_{field}_s", float(getattr(obj, field)) / fs, 0.1, 1.0, "%.2f s"
-        )
-        if pushed:
-            imgui.pop_style_color()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(tooltip)
-        if changed:
-            setattr(obj, field, max(0.0, seconds) * fs)
-
-    def _draw_trace_block(self) -> None:
-        from mbo_utilities.vnoiser.params import POLARITIES, VnoiserSettings
-
-        imgui.text_colored(_SUBSECTION_COLOR, "Trace")
-        set_tooltip(
-            "What each domain's pixel mean goes through before the denoiser, in order: "
-            "the conversion offset, the background, the reference channel, the polarity, "
-            "then dF/F and the z-score. The preview below shows the result."
-        )
-        tr, dfof = self.settings.traces, self.settings.dfof
-        _, _, n_channels = self._dims()
-        captions = (
-            "Channel",
-            "Polarity",
-            "Background",
-            "Reference",
-            "dF/F baseline",
-            "z-score",
-            "Stages",
-        )
-        with settings_table("##vnoiser_trace", captions) as shown:
-            if not shown:
-                return
-            settings_row("Channel")
-            imgui.set_next_item_width(hello_imgui.em_size(6))
-            changed, index = imgui.combo(
-                "##vnoiser_channel",
-                min(self._channel_index, n_channels - 1),
-                [f"ch {c + 1}" for c in range(n_channels)],
-            )
-            if changed:
-                self._channel_index = index
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("The channel the indicator is on.")
-            imgui.same_line()
-            self._f_check(
-                tr,
-                "convert",
-                "photon counts",
-                "Apply the file's conversion offset so zero means no photons. MESc's raw "
-                "counts sit about 1000 above it, which makes dF/F several times too small. "
-                "Off reproduces the archive.",
-            )
-
-            settings_row("Polarity")
-            pushed = self.settings.polarity != "flip_z"
-            if pushed:
-                imgui.push_style_color(imgui.Col_.text, _MODIFIED_COLOR)
-            values = list(POLARITIES)
-            imgui.set_next_item_width(hello_imgui.em_size(15))
-            changed, index = imgui.combo(
-                "##vnoiser_polarity",
-                values.index(self.settings.polarity),
-                [POLARITY_LABELS[v] for v in values],
-            )
-            if pushed:
-                imgui.pop_style_color()
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(POLARITY_HELP)
-            if changed:
-                self.settings.polarity = values[index]
-            if self.parent.invert_deflection:
-                imgui.same_line()
-                imgui.text_disabled(fa.ICON_FA_CIRCLE_INFO)
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip(
-                        "The viewer shows the movie inverted (Invert Deflection). That is "
-                        "display only; this setting is the run's one inversion."
-                    )
-
-            settings_row("Background")
-            self._f_combo(tr, "background", BACKGROUND_LABELS, BACKGROUND_HELP)
-            if tr.background == "dim":
-                imgui.same_line()
-                imgui.set_next_item_width(hello_imgui.em_size(6))
-                _, tr.background_percentile = imgui.slider_float(
-                    "##vnoiser_bg_pct",
-                    float(tr.background_percentile),
-                    1.0,
-                    50.0,
-                    "%.0f th",
-                )
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip(
-                        "The percentile of the ROI's pixels taken each frame."
-                    )
-            elif tr.background == "domain":
-                imgui.same_line()
-                names = [r.name for r in self._domains] or ["bg"]
-                current = (
-                    names.index(tr.background_domain)
-                    if tr.background_domain in names
-                    else 0
-                )
-                imgui.set_next_item_width(hello_imgui.em_size(7))
-                changed, current = imgui.combo("##vnoiser_bg_domain", current, names)
-                if changed or tr.background_domain not in names:
-                    tr.background_domain = names[current]
-            if tr.background != "none":
-                imgui.same_line()
-                imgui.set_next_item_width(hello_imgui.em_size(5))
-                _, tr.background_coeff = imgui.input_float(
-                    "##vnoiser_bg_coeff", float(tr.background_coeff), 0.0, 0.0, "x %.2f"
-                )
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip(
-                        "The background is multiplied by this before it is subtracted."
-                    )
-
-            settings_row("Reference")
-            if n_channels < 2:
-                imgui.text_disabled("one channel")
-                tr.reference = "none"
-            else:
-                self._f_combo(
-                    tr,
-                    "reference",
-                    REFERENCE_LABELS,
-                    REFERENCE_HELP,
-                    hello_imgui.em_size(8),
-                )
-                if tr.reference != "none":
-                    imgui.same_line()
-                    others = [c for c in range(n_channels) if c != self._channel_index]
-                    if tr.reference_channel not in others:
-                        tr.reference_channel = others[0]
-                    imgui.set_next_item_width(hello_imgui.em_size(6))
-                    changed, index = imgui.combo(
-                        "##vnoiser_ref_channel",
-                        others.index(tr.reference_channel),
-                        [f"ch {c + 1}" for c in others],
-                    )
-                    if changed:
-                        tr.reference_channel = others[index]
-                else:
-                    tr.reference_channel = None
-
-            settings_row("dF/F baseline")
-            self._f_combo(dfof, "method", BASELINE_LABELS, BASELINE_HELP)
-            if dfof.method == "gaussian":
-                imgui.same_line()
-                self._seconds_field(
-                    dfof,
-                    "sigma_dfof",
-                    "The Gaussian's sigma (the archive's 1500 samples at 1075 Hz, 1.4 s).",
-                )
-            elif dfof.method in ("percentile", "maxmin"):
-                imgui.same_line()
-                imgui.set_next_item_width(hello_imgui.em_size(6))
-                _, dfof.window_s = imgui.input_float(
-                    "##vnoiser_window_s", float(dfof.window_s), 0.5, 5.0, "%.1f s"
-                )
-                dfof.window_s = max(0.05, dfof.window_s)
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip("The rolling window.")
-                if dfof.method == "percentile":
-                    imgui.same_line()
-                    imgui.set_next_item_width(hello_imgui.em_size(6))
-                    _, dfof.percentile = imgui.slider_float(
-                        "##vnoiser_pct", float(dfof.percentile), 1.0, 50.0, "%.0f th"
-                    )
-            elif dfof.method == "window":
-                imgui.same_line()
-                imgui.set_next_item_width(hello_imgui.em_size(9))
-                _, span = imgui.input_float2(
-                    "##vnoiser_f0",
-                    [float(dfof.f0_start_s), float(dfof.f0_stop_s)],
-                    "%.2f s",
-                )
-                dfof.f0_start_s, dfof.f0_stop_s = (
-                    max(0.0, span[0]),
-                    max(span[0] + 1e-3, span[1]),
-                )
-                if imgui.is_item_hovered():
-                    imgui.set_tooltip(
-                        "F0 is the mean of F from the first to the second time."
-                    )
-
-            settings_row("z-score")
-            self._f_combo(
-                dfof,
-                "noise",
-                {"sd": "/ SD", "mad": "/ robust SD (MAD)"},
-                "What the z-score divides by: the SD of dF/F, or 1.4826 x the median "
-                "absolute deviation, which spikes do not inflate.",
-                hello_imgui.em_size(10),
-            )
-            imgui.same_line()
-            imgui.text_disabled("slow baseline")
-            imgui.same_line()
-            self._seconds_field(
-                dfof,
-                "sigma_baseline",
-                "The slow Gaussian removed from dF/F before the z-score (archive: 5000 samples, 4.7 s).",
-            )
-
-            settings_row("Stages")
-            rt = self.settings.runtime
-            denoise = not rt.denoise
-            pushed = self._mod_push(rt, "denoise")
-            changed, denoise = imgui.checkbox("traces only##vnoiser_denoise", denoise)
-            if pushed:
-                imgui.pop_style_color()
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(
-                    "Stop after dF/F and the z-score: no wavelet denoising, no peaks. "
-                    "Writes the results zarr."
-                )
-            if changed:
-                rt.denoise = not denoise
-                if not rt.denoise:
-                    rt.output_format = "zarr"
-        if imgui.small_button("Archive defaults##vnoiser_preset_archive"):
-            self.settings = VnoiserSettings()
-            self._outdir = self._default_outdir()
-        set_tooltip(
-            "Every setting as the archive (Noguchi & Terada): raw counts, Gaussian dF/F, "
-            "SD z-score, z flipped.",
-            show_mark=False,
-        )
-        imgui.same_line()
-        if imgui.small_button("Recommended##vnoiser_preset_recommended"):
-            self.settings = VnoiserSettings.recommended()
-            self._outdir = self._default_outdir()
-        set_tooltip(
-            "For new recordings: the archive's settings on photon counts (the conversion "
-            "offset applied, so dF/F has its real size) with a robust z-score.",
-            show_mark=False,
-        )
 
     def _preview_unit(self) -> dict | None:
         """The scan the preview reads: the one on screen when ticked, else the first ticked."""
@@ -1735,10 +1631,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         )
 
     def _draw_preview(self) -> None:
-        imgui.set_next_item_open(self._preview_open, imgui.Cond_.once)
-        self._preview_open = imgui.collapsing_header("Preview##vnoiser_preview")
-        if not self._preview_open:
-            return
+        """The picked domain on the scan on screen: its pixels over an ROI's mean image, then F, dF/F and z."""
         unit = self._preview_unit()
         if unit is None or not self._domains:
             imgui.text_disabled("Tick a scan and add a domain to see its trace.")
@@ -1761,7 +1654,7 @@ class VnoiserPipelineWidget(PipelineWidget):
         if imgui.is_item_hovered():
             imgui.set_tooltip("The domain the preview reads; its ROIs are averaged.")
         imgui.same_line()
-        imgui.text(f"on {unit['key'].rsplit('/', 1)[-1]}")
+        imgui.text(f"on {unit['key'].rsplit('/', 1)[-1]}, first")
         imgui.same_line()
         lengths = [f"{s:g} s" if s else "whole" for s in PREVIEW_SECONDS]
         current = (
@@ -1777,26 +1670,27 @@ class VnoiserPipelineWidget(PipelineWidget):
             imgui.set_tooltip(
                 "How much of the recording the preview reads, from the start of the frame window."
             )
+        result = self._preview.result
+        imgui.same_line()
         if self._preview.busy:
-            imgui.same_line()
             imgui.text_disabled("reading...")
+        elif result is not None and not self._preview.error:
+            pixels = sum(len(v) for v in result["mask"].values())
+            total = sum(h * w for h, w in result["shape"].values())
+            imgui.text_disabled(
+                f"{pixels} of {total} pixels · dF/F {np.nanpercentile(result['dfof'], 1) * 100:.1f} to "
+                f"{np.nanpercentile(result['dfof'], 99.9) * 100:.1f} % · z peak {np.nanmax(result['z']):.1f}"
+            )
+        else:
+            imgui.text_disabled("")
         if self._preview.error:
             imgui.text_colored(_MISSING_COLOR, self._preview.error)
             return
-        result = self._preview.result
         if result is None:
             return
         self._draw_preview_image(result)
         imgui.same_line()
         self._draw_preview_traces(result)
-        z = result["z"]
-        dfof = result["dfof"]
-        pixels = sum(len(v) for v in result["mask"].values())
-        total = sum(h * w for h, w in result["shape"].values())
-        imgui.text_disabled(
-            f"{pixels} of {total} pixels · dF/F {np.nanpercentile(dfof, 1) * 100:.1f} to "
-            f"{np.nanpercentile(dfof, 99.9) * 100:.1f} % · z peak {np.nanmax(z):.1f}"
-        )
         if result["f0"] is not None and np.nanmin(result["f0"]) <= 0:
             imgui.text_colored(
                 _MODIFIED_COLOR,
@@ -1945,481 +1839,433 @@ class VnoiserPipelineWidget(PipelineWidget):
                     line(name, values, x=t[idx.astype(int)], color=color, legend=legend)
                 implot.end_plot()
 
-    def _mod_push(self, obj, field: str) -> bool:
-        if not _is_default(obj, field):
-            imgui.push_style_color(imgui.Col_.text, _MODIFIED_COLOR)
-            return True
-        return False
+    def _value(self, group: str, name: str):
+        if (group, name) == POLARITY:
+            return self.settings.polarity
+        return getattr(getattr(self.settings, group), name)
 
-    def _row_tail(self, obj, field: str, label: str, tooltip: str) -> None:
-        imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
-        pushed = self._mod_push(obj, field)
-        if field in _IMPORTANT_FIELDS:
-            draw_boxed_label(label, font=self.parent._bold_font)
+    def _set_value(self, group: str, name: str, value) -> None:
+        if (group, name) == POLARITY:
+            self.settings.polarity = value
         else:
-            imgui.text(label)
-        if pushed:
-            imgui.pop_style_color()
-        set_tooltip(tooltip)
+            setattr(getattr(self.settings, group), name, value)
 
-    def _f_int(self, obj, field: str, label: str, tooltip: str, lo=0) -> None:
-        pushed = self._mod_push(obj, field)
-        imgui.set_next_item_width(hello_imgui.em_size(6))
-        _, val = imgui.input_int(f"##vnoiser_{field}", int(getattr(obj, field)))
-        if pushed:
-            imgui.pop_style_color()
-        setattr(obj, field, max(lo, val))
-        self._row_tail(obj, field, label, tooltip)
+    def _default_of(self, group: str, name: str):
+        """The archive's value of a field."""
+        if (group, name) == POLARITY:
+            return POLARITY_DEFAULT
+        return _field_default(getattr(self.settings, group), name)
 
-    def _f_float(
-        self, obj, field: str, label: str, tooltip: str, step=0.1, fmt="%.2f"
-    ) -> None:
-        pushed = self._mod_push(obj, field)
-        imgui.set_next_item_width(hello_imgui.em_size(6))
-        _, val = imgui.input_float(
-            f"##vnoiser_{field}", float(getattr(obj, field)), step, step * 10, fmt
-        )
-        if pushed:
-            imgui.pop_style_color()
-        setattr(obj, field, val)
-        self._row_tail(obj, field, label, tooltip)
+    def _modified(self, group: str, name: str) -> bool:
+        if (group, name) == POLARITY:
+            return self.settings.polarity != POLARITY_DEFAULT
+        return not _is_default(getattr(self.settings, group), name)
 
-    def _f_check(self, obj, field: str, label: str, tooltip: str) -> None:
-        pushed = self._mod_push(obj, field)
-        val = checkbox_with_tooltip(
-            f"{label}##vnoiser_{field}", bool(getattr(obj, field)), tooltip
-        )
-        if pushed:
-            imgui.pop_style_color()
-        setattr(obj, field, bool(val))
+    def _text_of(self, group: str, name: str, value) -> str:
+        """A field's value as the popup writes it beside ``default``."""
+        hint = HINTS[group][name]
+        if hint.choices is not None and value in hint.choices:
+            return str(hint.choices[value])
+        if value is None:
+            return "none"
+        if isinstance(value, bool):
+            return "on" if value else "off"
+        if isinstance(value, (tuple, list)):
+            return ", ".join(f"{float(v):g}" for v in value)
+        if isinstance(value, float):
+            fs = float(self.settings.runtime.reference_fs or 1.0)
+            return (hint.fmt % (value / fs if hint.seconds else value)).strip()
+        return str(value)
 
-    def _draw_settings_popup(self) -> None:
-        popup_title = "vnoiser Settings##vnoiser_settings_popup"
-        if self._settings_sizer is None:
-            self._settings_sizer = PopupAutoSize(popup_title)
+    def _fields_of(self, sections, tiers: tuple) -> list[tuple[str, str]]:
+        """The ``(group, name)`` of a column's fields of these tiers that apply now, in order."""
+        return [
+            (group, name)
+            for _title, group, names in sections
+            for name in names
+            if HINTS[group][name].tier in tiers and applies(self.settings, group, name)
+        ]
+
+    def _draw_parameters_block(self) -> None:
+        """The Parameters button, then every value that differs from the archive's."""
+        imgui.spacing()
+        imgui.separator_text("Parameters")
+        if imgui.button(f"{fa.ICON_FA_SLIDERS}  Parameters##vnoiser_settings"):
+            self._show_settings_popup = True
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "The trace, dF/F, wavelet denoiser and peak settings, with a preview."
+            )
+        imgui.same_line()
+        self._draw_defaults()
+        self._draw_modified_table()
+
+    def _draw_defaults(self) -> None:
+        """An orange Defaults button back to the archive's settings, disabled while nothing differs, then Recommended."""
+        from mbo_utilities.vnoiser.params import VnoiserSettings
+
+        changed = len(self._modified_rows()) > 0
+        with button_colors(*COLORS_DEFAULTS):
+            imgui.begin_disabled(not changed)
+            if imgui.button(
+                f"{fa.ICON_FA_ARROW_ROTATE_LEFT}  Defaults##vnoiser_defaults"
+            ):
+                self.settings = VnoiserSettings()
+                self._outdir = self._default_outdir()
+            imgui.end_disabled()
+        if imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
+            imgui.set_tooltip(
+                "Reset every parameter to the archive's (Noguchi & Terada): raw counts, "
+                "Gaussian dF/F, SD z-score, z flipped."
+                if changed
+                else "Every value is the archive's."
+            )
+        imgui.same_line()
+        if imgui.button("Recommended##vnoiser_recommended"):
+            self.settings = VnoiserSettings.recommended()
+            self._outdir = self._default_outdir()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "For new recordings: the archive's settings on photon counts, so dF/F has "
+                "its real size, with a robust z-score."
+            )
+
+    def _draw_parameters(self) -> None:
+        """The Parameters popup: a column per stage, the preview and the runtime under them, then Defaults and Close."""
         if self._show_settings_popup:
-            imgui.open_popup(popup_title)
+            imgui.open_popup(POPUP_PARAMETERS)
             self._show_settings_popup = False
+        em = imgui.get_font_size()
+        style = imgui.get_style()
         viewport = imgui.get_main_viewport()
-        self._settings_sizer.before_open()
+        room = (
+            viewport.size.x * 0.96
+            - 2 * style.window_padding.x
+            - (len(COLUMNS) - 1) * style.item_spacing.x
+        )
+        width_column = min(
+            max(room / len(COLUMNS), WIDTH_COLUMN_EM[0] * em), WIDTH_COLUMN_EM[1] * em
+        )
+        height_column = viewport.size.y * 0.94 - self._parameters_chrome
+        ## NOTE: centered every frame, since an auto-resized popup is 0 wide on the frame it appears
+        imgui.set_next_window_pos(
+            viewport.get_center(), imgui.Cond_.always, imgui.ImVec2(0.5, 0.5)
+        )
         imgui.set_next_window_size_constraints(
-            imgui.ImVec2(
-                min(hello_imgui.em_size(62), viewport.size.x * 0.9),
-                hello_imgui.em_size(12),
-            ),
-            imgui.ImVec2(viewport.size.x * 0.98, viewport.size.y * 0.98),
+            imgui.ImVec2(0, 0),
+            imgui.ImVec2(viewport.size.x * 0.96, viewport.size.y * 0.94),
         )
-        opened, visible = imgui.begin_popup_modal(
-            popup_title,
-            p_open=True,
-            flags=self._settings_sizer.flags(imgui.WindowFlags_.no_saved_settings),
+        flags = (
+            imgui.WindowFlags_.always_auto_resize
+            | imgui.WindowFlags_.no_saved_settings
+            | imgui.WindowFlags_.no_move
         )
+        opened, visible = imgui.begin_popup_modal(POPUP_PARAMETERS, True, flags)
         if not opened:
             return
-        try:
-            if not visible:
+        if not visible or (
+            imgui.is_key_pressed(imgui.Key.escape) and not imgui.is_any_item_active()
+        ):
+            imgui.close_current_popup()
+        rt = self.settings.runtime
+        tr = self.settings.traces
+        if self._dims()[2] < 2:
+            tr.reference = "none"
+        if tr.reference == "none":
+            tr.reference_channel = None
+        y_columns = imgui.get_cursor_pos_y()
+        for i, (stage, sections) in enumerate(COLUMNS):
+            if i > 0:
+                imgui.same_line()
+            self._draw_column(stage, sections, width_column, height_column)
+        height_columns = imgui.get_cursor_pos_y() - y_columns
+        draw_divider()
+        imgui.set_next_item_open(self._preview_open, imgui.Cond_.once)
+        self._preview_open = imgui.collapsing_header("Preview##vnoiser_preview")
+        if self._preview_open:
+            self._draw_preview()
+        draw_divider()
+        folder, fmt = self._default_outdir(), rt.output_format
+        imgui.text_colored(_TITLE_COLOR, "Runtime")
+        if imgui.begin_table(
+            "##vnoiser_runtime", len(COLUMNS), imgui.TableFlags_.sizing_stretch_same
+        ):
+            for name in RUNTIME:
+                if applies(self.settings, "runtime", name):
+                    imgui.table_next_column()
+                    self._draw_param("runtime", name)
+            imgui.end_table()
+        # an untouched folder follows the format; a chosen one stays
+        if rt.output_format != fmt and self._outdir in ("", folder):
+            self._outdir = self._default_outdir()
+        draw_divider()
+        self._draw_defaults()
+        imgui.same_line()
+        imgui.set_cursor_pos_x(
+            imgui.get_window_width() - style.window_padding.x - button_width("Close")
+        )
+        with button_colors(*COLORS_CLOSE):
+            if imgui.button("Close##vnoiser_settings_close"):
                 imgui.close_current_popup()
-                return
-            with imgui_ctx.push_style_var(
-                imgui.StyleVar_.item_spacing, imgui.ImVec2(8, 4)
-            ):
-                self._draw_settings_columns()
-                imgui.spacing()
-                imgui.separator()
-                imgui.text_colored(_SUBSECTION_COLOR, "Runtime")
-                from mbo_utilities.vnoiser.params import OUTPUT_FORMATS
+        self._parameters_chrome = (
+            imgui.get_cursor_pos_y()
+            + style.window_padding.y
+            + style.popup_border_size
+            - height_columns
+        )
+        imgui.end_popup()
 
-                rt = self.settings.runtime
-                self._f_check(
-                    rt,
-                    "save_cwt",
-                    "Save cwts.h5",
-                    "The wavelet coefficients, about 20 bytes per sample per domain.",
+    def _draw_column(
+        self, stage: str, sections, width: float, height_max: float
+    ) -> None:
+        """One stage's column: its name, each section's fields, then folds holding its advanced and its stable fields; it scrolls once taller than ``height_max``."""
+        flags = (
+            imgui.ChildFlags_.borders
+            | imgui.ChildFlags_.auto_resize_y
+            | imgui.ChildFlags_.always_use_window_padding
+        )
+        padding = imgui.get_style().window_padding
+        rt, ev = self.settings.runtime, self.settings.events
+        imgui.set_next_window_size_constraints(
+            imgui.ImVec2(width, 0), imgui.ImVec2(width, height_max)
+        )
+        ## NOTE: whole-pixel padding, since imgui truncates an auto-fit height and a scaled padding such as 8.4 px
+        ## leaves every column 0.8 px short of its content and so scrolling
+        with (
+            imgui_ctx.push_style_var(
+                imgui.StyleVar_.window_padding,
+                imgui.ImVec2(round(padding.x), round(padding.y)),
+            ),
+            imgui_ctx.begin_child(
+                f"##vnoiser_column_{stage}", imgui.ImVec2(width, 0), flags
+            ),
+        ):
+            imgui.text_colored(_TITLE_COLOR, stage)
+            if stage == STAGE_DENOISER:
+                self._draw_denoise_toggle()
+            imgui.begin_disabled(
+                stage in (STAGE_DENOISER, STAGE_PEAKS) and not rt.denoise
+            )
+            for title, group, names in sections:
+                fields = self._fields_of(
+                    ((title, group, names),), ("important", "normal")
                 )
-                self._f_check(
-                    rt,
-                    "overwrite",
-                    "Overwrite PF",
-                    "Replace an existing PF folder's pipeline files; .curation stays.",
+                if not fields:
+                    continue
+                imgui.spacing()
+                imgui.separator_text(title)
+                for _group, name in fields:
+                    imgui.begin_disabled(
+                        group == "events" and name != "detect" and not ev.detect
+                    )
+                    self._draw_field(group, name)
+                    imgui.end_disabled()
+            for tier, title in (("advanced", "Advanced"), ("stable", "Stable")):
+                folded = self._fields_of(sections, (tier,))
+                if not folded:
+                    continue
+                changed = sum(self._modified(g, n) for g, n in folded)
+                color = (
+                    _MODIFIED_COLOR
+                    if changed
+                    else _DIM_COLOR
+                    if tier == "stable"
+                    else None
                 )
-                pushed = self._mod_push(rt, "output_format")
-                imgui.set_next_item_width(hello_imgui.em_size(6))
-                current = (
-                    OUTPUT_FORMATS.index(rt.output_format)
-                    if rt.output_format in OUTPUT_FORMATS
-                    else 0
+                imgui.spacing()
+                if color is not None:
+                    imgui.push_style_color(imgui.Col_.text, color)
+                opened = imgui.tree_node(
+                    f"{title}{f' ({changed} changed)' if changed else ''}###vnoiser_{tier}_{stage}"
                 )
-                changed, chosen = imgui.combo(
-                    "##vnoiser_output_format", current, list(OUTPUT_FORMATS)
-                )
-                if pushed:
+                if color is not None:
                     imgui.pop_style_color()
-                if changed:
-                    was = self._default_outdir()
-                    rt.output_format = OUTPUT_FORMATS[chosen]
-                    # an untouched folder follows the format; a chosen one stays
-                    if self._outdir in ("", was):
-                        self._outdir = self._default_outdir()
-                self._row_tail(
-                    rt,
-                    "output_format",
-                    "Output format",
-                    "zarr: one <input>.<timestamp>.vnoiser.zarr results file beside the input (the shape "
-                    "every pipeline's results share), the run's own files in a vnoiser/ folder inside it. "
-                    "pkl: the archive's PF folder of pickles.",
-                )
-                imgui.spacing()
-                imgui.separator()
-                btn_w = hello_imgui.em_size(6)
-                imgui.push_style_color(
-                    imgui.Col_.button, imgui.ImVec4(0.60, 0.35, 0.10, 1.0)
-                )
-                imgui.push_style_color(
-                    imgui.Col_.button_hovered, imgui.ImVec4(0.70, 0.42, 0.14, 1.0)
-                )
-                imgui.push_style_color(
-                    imgui.Col_.button_active, imgui.ImVec4(0.50, 0.28, 0.08, 1.0)
-                )
-                if imgui.button("Defaults##vnoiser_defaults", imgui.ImVec2(btn_w, 0)):
-                    from mbo_utilities.vnoiser.params import VnoiserSettings
+                if tier == "stable" and imgui.is_item_hovered():
+                    imgui.set_tooltip(
+                        "Choices the archive made; change one only to depart from it on purpose."
+                    )
+                if opened:
+                    for group, name in folded:
+                        self._draw_field(group, name)
+                    imgui.tree_pop()
+            imgui.end_disabled()
 
-                    self.settings = VnoiserSettings()
-                imgui.pop_style_color(3)
-                set_tooltip(
-                    "Reset every parameter to the archive's settings (Noguchi & Terada).",
-                    show_mark=False,
-                )
-                imgui.same_line()
-                imgui.set_cursor_pos_x(
-                    imgui.get_window_width()
-                    - btn_w
-                    - imgui.get_style().window_padding.x
-                )
-                imgui.push_style_color(
-                    imgui.Col_.button, imgui.ImVec4(0.55, 0.13, 0.13, 1.0)
-                )
-                imgui.push_style_color(
-                    imgui.Col_.button_hovered, imgui.ImVec4(0.65, 0.18, 0.18, 1.0)
-                )
-                imgui.push_style_color(
-                    imgui.Col_.button_active, imgui.ImVec4(0.45, 0.10, 0.10, 1.0)
-                )
-                if imgui.button(
-                    "Close##vnoiser_settings_close", imgui.ImVec2(btn_w, 0)
-                ):
-                    imgui.close_current_popup()
-                imgui.pop_style_color(3)
-        finally:
-            imgui.end_popup()
-
-    def _draw_settings_columns(self) -> None:
-        columns = (
-            ("Start-up and pixel scoring", "dfof", self._draw_dfof_params),
-            ("Wavelet denoiser", "denoiser", self._draw_denoiser_params),
-            ("Peaks", "events", self._draw_event_params),
-        )
-        avail_w = imgui.get_content_region_avail().x
-        col_w = max(
-            (avail_w - 2 * imgui.get_style().item_spacing.x) / 3,
-            hello_imgui.em_size(18),
-        )
-        for i, (title, key, body) in enumerate(columns):
-            if i:
-                imgui.same_line()
-            imgui.begin_child(
-                f"##vnoiser_col_{key}",
-                imgui.ImVec2(col_w, 0),
-                imgui.ChildFlags_.borders | imgui.ChildFlags_.auto_resize_y,
-            )
-            try:
-                imgui.text_colored(_TITLE_COLOR, title)
-                imgui.separator()
-                with tooltip_marks_right():
-                    body()
-            finally:
-                imgui.end_child()
-
-    def _draw_dfof_params(self) -> None:
-        d, tr = self.settings.dfof, self.settings.traces
-        self._f_int(
-            d,
-            "n_startup",
-            "Start-up samples",
-            "Leading samples replaced by the mean of the rest (filter start-up).",
-        )
-        self._f_float(
-            d,
-            "sigma_dfof",
-            "Gaussian sigma",
-            "The Gaussian dF/F baseline's sigma in samples at the reference rate "
-            "(1500 = 1.4 s at 1075 Hz); the Trace block shows it in seconds.",
-            step=100,
-            fmt="%.0f",
-        )
-        self._f_float(
-            tr,
-            "score_seconds",
-            "Pixel scoring s",
-            "How much of the middle of the recording the brightest / most active / most "
-            "correlated pixel rules rank pixels on.",
-            step=5,
-            fmt="%.0f",
-        )
-        self._f_float(
-            tr,
-            "score_highpass_hz",
-            "Scoring high-pass Hz",
-            "Fluctuations below this are left out of the active and correlated scores, "
-            "so slow drift and motion shared by every pixel do not count.",
-            step=1,
-            fmt="%.0f",
-        )
-
-    def _draw_denoiser_params(self) -> None:
-        den = self.settings.denoiser
-        pushed = self._mod_push(den, "thres_type")
-        idx = 0 if den.thres_type == "soft" else 1
-        imgui.set_next_item_width(hello_imgui.em_size(6))
-        changed, idx = imgui.combo("##vnoiser_thres_type", idx, ["Soft", "Hard"])
+    def _draw_denoise_toggle(self) -> None:
+        """Whether the run goes past dF/F and the z-score; off greys the denoiser and the peaks."""
+        rt = self.settings.runtime
+        pushed = not rt.denoise
+        if pushed:
+            imgui.push_style_color(imgui.Col_.text, _MODIFIED_COLOR)
+        changed, rt.denoise = imgui.checkbox("denoise and find peaks", rt.denoise)
         if pushed:
             imgui.pop_style_color()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Off stops after dF/F and the z-score: no wavelet denoising, no peaks. "
+                "The run then writes the results zarr."
+            )
+        if changed and not rt.denoise:
+            rt.output_format = "zarr"
+
+    def _draw_field(self, group: str, name: str) -> None:
+        """A column's field, with the choices only the tab knows: the table's domains, the other channels."""
+        tr = self.settings.traces
+        _, _, n_channels = self._dims()
+        if (group, name) == ("traces", "reference") and n_channels < 2:
+            imgui.text_disabled("one channel")
+        elif (group, name) == ("traces", "background_domain"):
+            names = [r.name for r in self._domains] or [tr.background_domain]
+            self._draw_param(group, name, {n: n for n in names})
+        elif (group, name) == ("traces", "reference_channel"):
+            others = [c for c in range(n_channels) if c != self._channel_index]
+            self._draw_param(group, name, {c: f"ch {c + 1}" for c in others})
+        else:
+            self._draw_param(group, name)
+        if (group, name) == POLARITY and self.parent.invert_deflection:
+            imgui.text_disabled(
+                f"{fa.ICON_FA_CIRCLE_INFO} the viewer's Invert Deflection is display only"
+            )
+
+    def _draw_param(self, group: str, name: str, choices: dict | None = None) -> None:
+        """One field: a widget chosen by the value it holds, its label to the right (boxed when important), and once it differs from the archive's value an orange tint, a reset button and the default beside it."""
+        hint = HINTS[group][name]
+        choices = hint.choices if choices is None else choices
+        value, default = self._value(group, name), self._default_of(group, name)
+        modified = self._modified(group, name)
+        style = imgui.get_style()
+        width = hello_imgui.em_size(WIDTH_INPUT_EM)
+        path = f"##vnoiser_{group}_{name}"
+        fs = float(self.settings.runtime.reference_fs or 1.0) if hint.seconds else 1.0
+        if modified:
+            imgui.push_style_color(imgui.Col_.text, _MODIFIED_COLOR)
+        if choices is not None:
+            keys = list(choices)
+            labels = [str(choices[k]) for k in keys]
+            widest = max(imgui.calc_text_size(text).x for text in labels)
+            imgui.set_next_item_width(
+                max(
+                    width, widest + 2 * style.frame_padding.x + imgui.get_frame_height()
+                )
+            )
+            changed, index = imgui.combo(
+                path, keys.index(value) if value in keys else 0, labels
+            )
+            new = keys[index]
+            changed = changed or value not in keys
+        elif isinstance(value, bool):
+            changed, new = imgui.checkbox(path, value)
+        elif isinstance(value, int):
+            imgui.set_next_item_width(width)
+            changed, new = imgui.input_int(path, value, 0, 0)
+        elif isinstance(value, (tuple, list)):
+            imgui.set_next_item_width(width * len(value) * 0.55)
+            changed, levels = imgui.input_float4(
+                path, [float(v) for v in value], hint.fmt
+            )
+            new = tuple(float(v) for v in levels)
+        else:
+            imgui.set_next_item_width(width)
+            changed, seconds = imgui.input_float(
+                path, float(value) / fs, 0.0, 0.0, hint.fmt
+            )
+            new = seconds * fs
+        if modified:
+            imgui.pop_style_color()
+        if hint.lo is not None and not isinstance(new, (bool, tuple, str)):
+            new = max(type(new)(hint.lo * fs), new)
         if changed:
-            den.thres_type = "soft" if idx == 0 else "hard"
-        self._row_tail(
-            den,
-            "thres_type",
-            "Mask type",
-            "Soft keeps a fraction of every band outside events; the archive used soft.",
-        )
-        pushed = self._mod_push(den, "soft_levels")
-        imgui.set_next_item_width(hello_imgui.em_size(12))
-        _, levels = imgui.input_float4(
-            "##vnoiser_soft_levels", list(den.soft_levels), "%.2f"
-        )
-        if pushed:
+            self._set_value(group, name, new)
+        if hint.tier == "important":
+            imgui.same_line(0, style.item_inner_spacing.x + 0.3 * imgui.get_font_size())
+        else:
+            imgui.same_line(0, style.item_inner_spacing.x)
+        if modified:
+            imgui.push_style_color(imgui.Col_.text, _MODIFIED_COLOR)
+        if hint.tier == "important":
+            draw_boxed_label(hint.label, font=self.parent._bold_font)
+        else:
+            imgui.text(hint.label)
+        if modified:
             imgui.pop_style_color()
-        den.soft_levels = tuple(float(v) for v in levels)
-        self._row_tail(
-            den,
-            "soft_levels",
-            "Soft levels",
-            "Attenuation outside events for bands below 5, 5-30, 30-80 and above 80 Hz.",
-        )
-        self._f_float(
-            den,
-            "hard_floor",
-            "Hard floor",
-            "Attenuation outside events in hard mode.",
-            step=0.01,
-        )
-        self._f_check(
-            den,
-            "complex_bands",
-            "Complex bands above 75 Hz",
-            "As the original code; off takes the real part first.",
-        )
-        self._f_int(
-            den,
-            "n_scales",
-            "Scales",
-            "Wavelet scales, log-spaced between the two below.",
-            lo=8,
-        )
-        self._f_float(
-            den,
-            "scale_min",
-            "Scale min",
-            "Smallest wavelet scale in samples.",
-            step=0.5,
-            fmt="%.1f",
-        )
-        self._f_float(
-            den,
-            "scale_max",
-            "Scale max",
-            "Largest wavelet scale in samples.",
-            step=50,
-            fmt="%.0f",
-        )
-        self._f_float(
-            den,
-            "lp_cutoff_hz",
-            "Baseline cutoff Hz",
-            "FIR low-pass of the z-score saved as lp_FIR1Hz; not added to the curated trace.",
-            step=0.5,
-            fmt="%.1f",
-        )
-        self._f_float(
-            den,
-            "fir_window_ms",
-            "FIR window ms",
-            "Hamming window length of the baseline filter.",
-            step=100,
-            fmt="%.0f",
-        )
-        self._f_check(
-            den,
-            "fir_odd_taps",
-            "Odd FIR taps",
-            "Trim the tap count to odd. Off reproduces the archive.",
-        )
-        imgui.set_next_item_open(False, imgui.Cond_.appearing)
-        if imgui.collapsing_header("Clustering and windows##vnoiser_adv"):
-            self._f_int(
-                den,
-                "n_components",
-                "PCA components",
-                "PCA components of the wavelet rows.",
-                lo=2,
-            )
-            self._f_int(
-                den,
-                "n_comp_clu",
-                "Components clustered",
-                "Leading components the clustering uses.",
-                lo=1,
-            )
-            self._f_int(
-                den,
-                "n_clusters",
-                "Clusters",
-                "Coarse cut of the frequency tree (unused downstream).",
-                lo=1,
-            )
-            self._f_int(
-                den, "n_subclusters", "Bands", "Frequency bands reconstructed.", lo=1
-            )
-            self._f_float(
-                den,
-                "slow_upthres",
-                "Open level, slow (SD)",
-                "Event window opens at this many SD for bands below 30 Hz.",
-            )
-            self._f_float(
-                den,
-                "fast_upthres",
-                "Open level, fast (SD)",
-                "Event window opens at this many SD for bands at or above 30 Hz.",
-            )
+        text_default = self._text_of(group, name, default)
+        if imgui.is_item_hovered():
+            imgui.begin_tooltip()
+            imgui.push_text_wrap_pos(imgui.get_font_size() * 32.0)
+            if hint.tooltip:
+                imgui.text_unformatted(hint.tooltip)
+            imgui.text_disabled(f"{group}.{name}, archive default {text_default}")
+            imgui.pop_text_wrap_pos()
+            imgui.end_tooltip()
+        resettable = choices is None or default in choices
+        if modified and resettable and self._draw_reset(path, text_default):
+            self._set_value(group, name, default)
 
-    def _draw_event_params(self) -> None:
-        ev = self.settings.events
-        self._f_check(
-            ev,
-            "detect",
-            "Detect peaks",
-            "Write detected_events_peaks.pkl; the curation window does not need it.",
-        )
-        if not ev.detect:
-            imgui.begin_disabled()
-        try:
-            self._f_float(
-                ev,
-                "bp_low",
-                "Band-pass low Hz",
-                "Low edge of the Butterworth band-pass.",
-                step=1,
-                fmt="%.0f",
+    def _draw_reset(self, path: str, text_default: str) -> bool:
+        """A reset button after a changed value, then its default in dim text; True when the button was clicked."""
+        imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
+        clicked = imgui.small_button(f"{fa.ICON_FA_ARROW_ROTATE_LEFT}##reset_{path}")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(f"Reset to {text_default}")
+        same_line_if_fits(imgui.calc_text_size(f"default {text_default}").x)
+        imgui.text_disabled(f"default {text_default}")
+        return clicked
+
+    def _modified_rows(self) -> list[tuple[str, str, str]]:
+        """``(field, current, default)`` of every setting that differs from the archive's, as the popup words it."""
+        rows = []
+        if self._modified(*POLARITY):
+            rows.append(
+                (
+                    "traces.polarity",
+                    self._text_of(*POLARITY, self.settings.polarity),
+                    self._text_of(*POLARITY, POLARITY_DEFAULT),
+                )
             )
-            self._f_float(
-                ev,
-                "bp_high",
-                "Band-pass high Hz",
-                "High edge of the Butterworth band-pass.",
-                step=10,
-                fmt="%.0f",
-            )
-            self._f_float(
-                ev,
-                "thres_bp_sd",
-                "Band-passed SD",
-                "Peaks of the band-passed trace above mean + this many SD.",
-            )
-            self._f_float(
-                ev,
-                "thres_amp_sd",
-                "Amplitude SD",
-                "Peak height on the trace itself above mean + this many SD.",
-            )
-            self._f_float(
-                ev,
-                "duration_thres_ms",
-                "Min duration ms",
-                "Shortest stretch above the on/off level a peak may sit on.",
-                step=1,
-                fmt="%.1f",
-            )
-            self._f_int(
-                ev,
-                "distance_samples",
-                "Min spacing",
-                "Samples between peaks; 3 reproduces the archive.",
-                lo=1,
-            )
-        finally:
-            if not ev.detect:
-                imgui.end_disabled()
+        for group in ("traces", "dfof", "denoiser", "events", "runtime"):
+            obj = getattr(self.settings, group)
+            for f in dataclasses.fields(obj):
+                if (group, f.name) in HIDDEN and group != "runtime":
+                    continue
+                if _is_default(obj, f.name):
+                    continue
+                current, default = getattr(obj, f.name), _field_default(obj, f.name)
+                if f.name in HINTS[group]:
+                    current = self._text_of(group, f.name, current)
+                    default = self._text_of(group, f.name, default)
+                rows.append((f"{group}.{f.name}", str(current), str(default)))
+        return rows
 
     def _draw_modified_table(self) -> None:
-        mods = []
-        for prefix, obj in (
-            ("traces", self.settings.traces),
-            ("dfof", self.settings.dfof),
-            ("denoiser", self.settings.denoiser),
-            ("events", self.settings.events),
-            ("runtime", self.settings.runtime),
-        ):
-            for f in dataclasses.fields(obj):
-                if not _is_default(obj, f.name):
-                    mods.append(
-                        (
-                            f"{prefix}.{f.name}",
-                            getattr(obj, f.name),
-                            _field_default(obj, f.name),
-                        )
-                    )
-        imgui.text(f"Modified parameters ({len(mods)})")
-        set_tooltip(
-            "Every parameter that differs from the archive's value, with the default beside it."
-        )
-        if not mods:
+        """Every changed value beside its default."""
+        rows = self._modified_rows()
+        if not rows:
             imgui.text_disabled("All parameters at the archive's defaults")
             return
-        mod_h = min(
-            hello_imgui.em_size(10),
-            imgui.get_frame_height_with_spacing() * (len(mods) + 2),
+        imgui.text(f"Modified parameters ({len(rows)})")
+        flags = (
+            imgui.TableFlags_.row_bg
+            | imgui.TableFlags_.borders_inner_h
+            | imgui.TableFlags_.borders_outer
+            | imgui.TableFlags_.sizing_stretch_prop
         )
-        if imgui.begin_child(
-            "##vnoiser_mod_params", imgui.ImVec2(-1, mod_h), imgui.ChildFlags_.borders
-        ):
-            flags = (
-                imgui.TableFlags_.row_bg
-                | imgui.TableFlags_.borders_inner_h
-                | imgui.TableFlags_.sizing_stretch_prop
+        if not imgui.begin_table("##vnoiser_mod_tbl", 3, flags):
+            return
+        for heading, weight in (("Parameter", 4.0), ("Current", 2.5), ("Default", 2.5)):
+            imgui.table_setup_column(
+                heading, imgui.TableColumnFlags_.width_stretch, weight
             )
-            if imgui.begin_table("##vnoiser_mod_tbl", 3, flags):
-                imgui.table_setup_column(
-                    "Parameter", imgui.TableColumnFlags_.width_stretch, 4.0
-                )
-                imgui.table_setup_column(
-                    "Current", imgui.TableColumnFlags_.width_stretch, 2.5
-                )
-                imgui.table_setup_column(
-                    "Default", imgui.TableColumnFlags_.width_stretch, 2.5
-                )
-                imgui.table_headers_row()
-                for field, cur, default in mods:
-                    imgui.table_next_row()
-                    imgui.table_set_column_index(0)
-                    imgui.text_colored(_MODIFIED_COLOR, field)
-                    imgui.table_set_column_index(1)
-                    imgui.text(f"{cur:.3g}" if isinstance(cur, float) else str(cur))
-                    imgui.table_set_column_index(2)
-                    imgui.text_disabled(
-                        f"{default:.3g}" if isinstance(default, float) else str(default)
-                    )
-                imgui.end_table()
-        imgui.end_child()
+        imgui.table_headers_row()
+        for name, current, default in rows:
+            imgui.table_next_row()
+            imgui.table_next_column()
+            imgui.text_colored(_MODIFIED_COLOR, name)
+            imgui.table_next_column()
+            imgui.text_wrapped(current)
+            imgui.table_next_column()
+            imgui.push_style_color(imgui.Col_.text, _DIM_COLOR)
+            imgui.text_wrapped(default)
+            imgui.pop_style_color()
+        imgui.end_table()
 
     def _draw_run(self) -> None:
         mesc = self._mesc_path()
@@ -2564,9 +2410,12 @@ class VnoiserPipelineWidget(PipelineWidget):
 
     def poll(self) -> None:
         """Once a second, whatever tab is showing: a finished worker this tab started lands in the Traces tab (:meth:`_load_traces`), a failed one in the status row."""
-        if not self._spawned or time.monotonic() - self._polled < 1.0:
+        if time.monotonic() - self._polled < 1.0:
             return
         self._polled = time.monotonic()
+        self._adopt_domain_file()
+        if not self._spawned:
+            return
         from mbo_utilities.gui.widgets.process_manager import get_process_manager
 
         for info in get_process_manager().get_running():

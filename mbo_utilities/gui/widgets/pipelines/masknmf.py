@@ -31,6 +31,7 @@ from mbo_utilities.gui._selection_ui import (
     draw_frame_average_input,
     draw_selection_table,
     resolve_dim_labels,
+    set_selection,
     source_timepoints,
 )
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
@@ -210,8 +211,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
         self._masknmf_last_num_planes = None
         self._masknmf_last_num_channels = None
         self._masknmf_tp_parsed = None
-        self._masknmf_z_start = self._masknmf_z_stop = self._masknmf_z_step = 1
-        self._masknmf_c_start = self._masknmf_c_stop = self._masknmf_c_step = 1
+        self._masknmf_z_parsed = self._masknmf_c_parsed = None
         # the windows View movies and Spike average started, until they exit
         self._windows: list = []
 
@@ -260,41 +260,21 @@ class MaskNMFPipelineWidget(PipelineWidget):
         if fpath_changed or self._masknmf_last_max_tp != max_frames:
             self._last_fpath = fpath
             self._masknmf_last_max_tp = max_frames
-            self._masknmf_tp_selection = f"1:{max_frames}"
-            self._masknmf_tp_parsed = None
-            self._masknmf_tp_error = ""
+            set_selection(self, "_masknmf_tp", max_frames)
         if self._masknmf_last_num_planes != num_planes:
             self._masknmf_last_num_planes = num_planes
-            self._masknmf_z_selection = f"1:{num_planes}"
-            self._masknmf_z_start = 1
-            self._masknmf_z_stop = num_planes
-            self._masknmf_z_step = 1
-            self._masknmf_z_error = ""
+            set_selection(self, "_masknmf_z", num_planes)
         if self._masknmf_last_num_channels != num_channels:
             self._masknmf_last_num_channels = num_channels
-            self._masknmf_c_selection = f"1:{num_channels}"
-            self._masknmf_c_start = 1
-            self._masknmf_c_stop = num_channels
-            self._masknmf_c_step = 1
-            self._masknmf_c_error = ""
+            set_selection(self, "_masknmf_c", num_channels)
 
     def _selected_planes(self) -> list[int]:
-        _, num_planes, _ = self._dims()
-        if num_planes <= 1:
-            return [1]
-        start = self._masknmf_z_start
-        stop = min(self._masknmf_z_stop, num_planes)
-        step = max(self._masknmf_z_step, 1)
-        return list(range(start, stop + 1, step))
+        parsed = self._masknmf_z_parsed
+        return [i + 1 for i in parsed.final_indices] if parsed else []
 
     def _selected_channels(self) -> list[int]:
-        _, _, num_channels = self._dims()
-        if num_channels <= 1:
-            return [1]
-        start = self._masknmf_c_start
-        stop = min(self._masknmf_c_stop, num_channels)
-        step = max(self._masknmf_c_step, 1)
-        return list(range(start, stop + 1, step))
+        parsed = self._masknmf_c_parsed
+        return [i + 1 for i in parsed.final_indices] if parsed else []
 
     def _tp_indices(self) -> list[int] | None:
         parsed = self._masknmf_tp_parsed
@@ -883,7 +863,8 @@ class MaskNMFPipelineWidget(PipelineWidget):
         planes = self._selected_planes()
         fpath = self.parent.fpath
         has_save_path = bool(self._outdir)
-        ready = has_save_path and bool(fpath) and bool(planes)
+        channels = self._selected_channels()
+        ready = has_save_path and bool(fpath) and bool(planes) and bool(channels)
 
         imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.13, 0.55, 0.13, 1.0))
         imgui.push_style_color(

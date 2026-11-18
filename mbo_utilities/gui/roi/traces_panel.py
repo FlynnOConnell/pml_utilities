@@ -33,9 +33,8 @@ from mbo_utilities.gui.roi._shared import (
     _TRACE_MODES,
     BEHAVIOR_PLOT_HEIGHT,
     DEFLECTION_MODES,
-    MOTION_PANEL_HEIGHT,
     NOISE_LABELS,
-    PANEL_HEIGHT,
+    traces_panel_height,
 )
 from mbo_utilities.gui.roi_runs import (
     component_color,
@@ -556,11 +555,8 @@ class TracesPanelMixin:
                 self.trace_plot.set(traces_panel, [])
                 self._plot_mode([])
             return
-        self._traces_panel.height = (
-            PANEL_HEIGHT
-            + (MOTION_PANEL_HEIGHT - PANEL_HEIGHT)
-            * (int(show_motion) + int(show_vnoiser))
-            + BEHAVIOR_PLOT_HEIGHT * int(show_behavior)
+        self._traces_panel.height = traces_panel_height(
+            show_motion, show_vnoiser, show_behavior
         )
         if self.strip.collapsed or self.tdim is None:
             return

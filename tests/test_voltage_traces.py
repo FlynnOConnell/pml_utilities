@@ -528,12 +528,14 @@ def test_the_run_tab_previews_the_domain_on_screen(patch):
     from mbo_utilities.analysis.dff import BASELINES
     from mbo_utilities.analysis.roi_traces import BACKGROUNDS, PIXEL_RULES, REFERENCES
     from mbo_utilities.gui.widgets.pipelines.vnoiser import (
+        PIXEL_LABELS,
+        VnoiserPipelineWidget,
+    )
+    from mbo_utilities.gui.widgets.pipelines.vnoiser_hints import (
         BACKGROUND_LABELS,
         BASELINE_LABELS,
-        PIXEL_LABELS,
         POLARITY_LABELS,
         REFERENCE_LABELS,
-        VnoiserPipelineWidget,
     )
     from mbo_utilities.vnoiser.params import POLARITIES
 
@@ -556,6 +558,8 @@ def test_the_run_tab_previews_the_domain_on_screen(patch):
     row.pixels, row.fraction = "bright", 36 / 400
     widget.settings.traces.background = "outside"
     widget._preview_seconds = 5.0
+    # the preview sits in the domain editor
+    widget._show_domains_popup = True
     _draw_frames(widget.draw_config, n=1)
     widget._preview.wait()
     result = widget._preview.result

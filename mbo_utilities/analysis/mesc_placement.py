@@ -1,10 +1,12 @@
 """Where a MESc scan's lines or patches sit in a Z-stack, measured from its picture.
 
-The file cannot say. ``geomTransTransl`` leaves the stage out and a stack
-carries a z error of its own, so a line's stored position and a stack's are in
-different frames: 170 um apart in x after a stage move, 8 to 12 um in z at one
-stage (stan110_expt1). The picture a scan was drawn on shares the scan's frame,
-so the shift that lands the picture on the stack is the shift its ROIs need.
+The file says part of it: a viewport's tilt and a fast stack's RTMC are stored
+and ``mesc_geometry.um_to_voxels`` applies both. What is left is not in the
+file. ``geomTransTransl`` leaves the stage out and the tissue drifts 4 to 18 um
+per hour between a scan and its stack, so a line's stored position and a
+stack's are in different frames: 170 um apart in x after a stage move
+(stan110_expt1). The picture a scan was drawn on shares the scan's frame, so
+the shift that lands the picture on the stack is the shift its ROIs need.
 
 RTMC holds a line on the tissue through a scan, but it jumps within the scan's
 first half second, and on some scans that step took the beam off the tissue: the
@@ -12,6 +14,7 @@ lines then sit at their stored position plus the mean RTMC. Nothing in the file
 says which scans, so the recording decides::
 
     position in the stack = stored position + shift (+ mean RTMC during the scan)
+                            - mean RTMC of a fast stack
 
 Both the picture and the stack go onto one grid, are band-passed to the scale
 of cells and dendrites, and meet by masked normalized cross-correlation
@@ -19,7 +22,8 @@ of cells and dendrites, and meet by masked normalized cross-correlation
 than the stack still matches. Under ``NCC_PASS`` the scan is not placed. The
 recording then checks the answer without the picture: each ROI's time mean
 against the stack under it, with and without RTMC, compared with the same score
-at random offsets.
+at random offsets. The picture is matched slice by slice and by translation
+alone, so a picture and a stack whose rotations differ are not placed.
 """
 
 from __future__ import annotations
@@ -35,14 +39,20 @@ from skimage.registration._masked_phase_cross_correlation import (
     cross_correlate_masked,
 )
 
+from mbo_utilities import log
 from mbo_utilities.analysis.roi_traces import roi_geometry
 from mbo_utilities.arrays.mesc_geometry import (
+    TILT_TOLERANCE,
     roi_outlines_um,
-    um_to_pixels,
+    um_to_voxels,
     viewport_geometry,
-    z_step_um,
+    voxels_to_um,
     zstack_depth_info,
 )
+
+logger = log.get("analysis.mesc_placement")
+
+_UNPLACED_WARNED: set[tuple[str, str]] = set()
 
 __all__ = ["NCC_PASS", "P_CONFIRMED", "StackPlacement", "place_scan", "zstack_files"]
 
@@ -61,9 +71,10 @@ N_NULL = 200
 
 @dataclass(frozen=True)
 class StackPlacement:
-    """One scan on one Z-stack: ``shift_um`` moves its stored ROIs into the
-    stack, ``score`` is the picture's match, ``gap_s`` how long after the
-    stack the scan started. ``profile_r`` is the ROIs' time means against the
+    """One scan on one Z-stack: ``shift_um`` is what moved between the two
+    after the file's own coordinates (``mesc_geometry.um_to_voxels`` of a
+    stored ROI moved by it is its place in the stack), ``score`` is the
+    picture's match, ``gap_s`` how long after the stack the scan started. ``profile_r`` is the ROIs' time means against the
     stack under them and ``profile_p`` how often random offsets did as well;
     both None when the scan is not placed or has no ROI to check.
     ``with_rtmc`` says the recording put the mean RTMC into ``shift_um``,
@@ -174,12 +185,10 @@ def _roi_points_um(seg: np.ndarray, ny: int, nx: int) -> np.ndarray | None:
 def _profile_score(volume, points, means, viewport, depth, offset_um) -> float:
     """Mean r, through Fisher z, of each ROI's time mean with the stack under it."""
     ny, nx = volume.shape[1:]
-    step = z_step_um(depth)
     scores = []
     for at, mean in zip(points, means):
         flat = at.reshape(3, -1) + offset_um[:, None]
-        col, row = um_to_pixels(flat[:2].T, viewport, ny, nx).T
-        k = (flat[2] - depth["transl_z"] - depth["min_z"]) / step
+        col, row, k = um_to_voxels(flat.T, viewport, depth, ny, nx).T
         under = ndimage.map_coordinates(
             volume, [k, row - 0.5, col - 0.5], order=1, cval=np.nan
         )
@@ -237,7 +246,8 @@ def _check_profiles(mesc, c, volume, viewport, depth, stored, moved):
 def place_scan(mesc, stack_path, stack_key: str) -> StackPlacement | None:
     """Measure where ``mesc``'s scan sits in one Z-stack, on the channel its time
     means fit best: the answer must not follow the viewer's channel slider. None
-    when the scan links no picture or either unit has no position.
+    when the scan links no picture, either unit has no position, or the two
+    are rotated differently.
     """
     path = mesc.filenames[0]
     picture_key = next(
@@ -248,7 +258,15 @@ def place_scan(mesc, stack_path, stack_key: str) -> StackPlacement | None:
     depth = zstack_depth_info(stack_path, stack_key)
     if picture_vp is None or stack_vp is None or depth is None:
         return None
-    cos, sin = np.cos(stack_vp["angle"]), np.sin(stack_vp["angle"])
+    turn = (np.trace(picture_vp["rotation"].T @ stack_vp["rotation"]) - 1) / 2
+    if turn < TILT_TOLERANCE:
+        if (picture_key, stack_key) not in _UNPLACED_WARNED:
+            _UNPLACED_WARNED.add((picture_key, stack_key))
+            logger.warning(
+                f"{picture_key} and {stack_key} are rotated differently; "
+                f"{mesc.unit_key} is not placed"
+            )
+        return None
     matches = []
     for c in range(mesc.nc):
         with h5py.File(path, "r") as f:
@@ -265,14 +283,10 @@ def place_scan(mesc, stack_path, stack_key: str) -> StackPlacement | None:
         stack_grid = _on_grid(volume, stack_vp, um_per_px)
         picture_grid = _on_grid(picture, picture_vp, um_per_px)[0]
         score, fractional, col, row = _match(picture_grid, stack_grid)
-        dx = col * stack_vp["width"] / stack_grid.shape[2]
-        dy = row * stack_vp["height"] / stack_grid.shape[1]
-        found = (
-            stack_vp["transl"][0] + cos * dx - sin * dy,
-            stack_vp["transl"][1] + sin * dx + cos * dy,
-            depth["transl_z"] + depth["min_z"] + fractional * z_step_um(depth),
-        )
-        stored = np.array(found) - np.array(picture_vp["transl"])
+        found = voxels_to_um(
+            [[col, row, fractional]], stack_vp, depth, *stack_grid.shape[1:]
+        )[0]
+        stored = found - np.array(picture_vp["transl"])
         matches.append((score, c, stored, volume))
     matches.sort(key=lambda m: m[0], reverse=True)
     placement = {

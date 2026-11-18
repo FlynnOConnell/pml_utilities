@@ -30,6 +30,16 @@ PANEL_HEIGHT = (
 MOTION_PANEL_HEIGHT = 300
 BEHAVIOR_PLOT_HEIGHT = 140
 
+
+def traces_panel_height(motion: bool, vnoiser: bool, behavior: bool) -> int:
+    """Height of the Traces panel with these parts over or under its traces."""
+    return (
+        PANEL_HEIGHT
+        + (MOTION_PANEL_HEIGHT - PANEL_HEIGHT) * (int(motion) + int(vnoiser))
+        + BEHAVIOR_PLOT_HEIGHT * int(behavior)
+    )
+
+
 ADOPT_INTERVAL_S = 1.0  # the finished-run check reads one progress file per process, so not every frame
 DEFLECTION_MODES = ("viewer", "off", "on")
 NOISE_LABELS = {

@@ -14,6 +14,7 @@ row, so the plot and the tables redraw from the event.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,7 +22,7 @@ import numpy as np
 
 from mbo_utilities.annotation.events import Observable
 
-__all__ = ["ENGINES", "RoiTrace", "RoiTraceTable", "trace_key"]
+__all__ = ["ENGINES", "RoiTrace", "RoiTraceTable", "export_traces", "trace_key"]
 
 # selector order; a run dir's ops["roi_workflow"]["engine"] uses the same names
 ENGINES: tuple[str, ...] = ("mean", "suite2p", "masknmf")
@@ -235,3 +236,32 @@ class RoiTraceTable(Observable):
 
     def records(self) -> list[dict]:
         return [t.record() for t in self._rows.values()]
+
+
+def export_traces(rows: list[RoiTrace], path, fs: float | None = None) -> Path:
+    """One CSV: a ``time_s`` column when every row shares a rate (``fs``
+    when given), else ``frame``; then one column per row named by
+    ``RoiTrace.name``, each placed at the frames it covers, empty elsewhere.
+    """
+    path = Path(path)
+    rates = {t.fs for t in rows if t.fs}
+    rate = fs or (rates.pop() if len(rates) == 1 else None)
+    starts = [t.frames[0] if t.frames else 0 for t in rows]
+    steps = [t.frames[2] if t.frames and len(t.frames) > 2 else 1 for t in rows]
+    n = max((s + t.n_frames * k for s, k, t in zip(starts, steps, rows)), default=0)
+    columns = []
+    for start, step, t in zip(starts, steps, rows):
+        column = [""] * n
+        values = np.asarray(t.F if t.F is not None else [], np.float32)
+        for k, v in enumerate(values):
+            at = start + k * step
+            if at < n:
+                column[at] = f"{float(v):.6g}"
+        columns.append(column)
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["time_s" if rate else "frame"] + [t.name for t in rows])
+        for i in range(n):
+            first = f"{i / rate:.6g}" if rate else str(i)
+            writer.writerow([first] + [c[i] for c in columns])
+    return path

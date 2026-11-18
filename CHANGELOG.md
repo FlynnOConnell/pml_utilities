@@ -40,3 +40,13 @@ smaller internal tweaks are left out.
 - `MP4Array` unifies reading and writing mp4s; `to_video` now streams frame by frame.
 - GPU toggle via the `MBO_GPU` environment variable, the `mbo gpu` CLI command, or the Options panel. Warns if you select Cellpose without a GPU build of PyTorch.
 - Python 3.13 is now supported.
+
+## v4.0.0 — 2026-11-15
+
+- First release on PyPI as `pml_utilities`, the beta channel of `mbo_utilities`: features land here first and move into `mbo_utilities` once they settle.
+- MESc line-scan tools: named ROIs and domains, `mbo dashboard` trace figures, slow / fast event curation.
+- The results zarr: one output format for suite2p, MaskNMF, vnoiser and hand-drawn ROI runs.
+- `mbo serve` shows The Studio in a browser.
+- vnoiser is no longer an extra; it installs separately.
+- The online documentation is `mbo_utilities`'; the `docs` extra is gone and `docs/` stays as its source.
+- The base install is the reading and writing core; The Studio is the `gui` extra, and PyQt6, dask, imagecodecs, numba and ffmpeg are extras of their own.

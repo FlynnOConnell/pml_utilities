@@ -43,7 +43,6 @@ from mbo_utilities.behavior import behavior_for
 from mbo_utilities.gui._top_strip import TopPanel, TopStrip
 from mbo_utilities.gui.imgui import (
     LabelSet,
-    SummaryImageViewer,
 )
 from mbo_utilities.gui.imgui.behavior import BehaviorPlot
 from mbo_utilities.gui.imgui.motion import MotionPlot
@@ -91,6 +90,7 @@ from mbo_utilities.preferences import (
 from mbo_utilities.results import (
     Results,
     results_pipeline,
+    unit_frames,
 )
 from mbo_utilities.roi_workflow import (
     RUN_PIPELINE,
@@ -306,7 +306,6 @@ class ManualRoiWidget(
         renderer = self.subplot.renderer
         renderer.add_event_handler(self._pointer_down, "pointer_down")
         renderer.add_event_handler(self._pointer_up, "pointer_up")
-        self.summary = SummaryImageViewer(iw.figure, title="Full FOV")
 
         self.trace_uid = 0  # the last ROI a trace landed for
         self._trace_results: queue.Queue = queue.Queue()
@@ -386,6 +385,7 @@ class ManualRoiWidget(
         self.model.add_event_handler(self._on_view, "view")
         self.playhead.add_event_handler(self._on_playhead, "time")
         self._resync()
+        self.select_first_trace()
         self.refresh_overlay()
 
     def _bind_recording(self) -> None:
@@ -432,8 +432,6 @@ class ManualRoiWidget(
         self.model.close()  # the parked store and table must not call into a closed widget
         for graphic in (self.overlay, self.outline):
             self.subplot.delete_graphic(graphic)
-        self.summary.close()
-        self.summary.cleanup()
         self.strip.remove_hook(self._frame)
         self.strip.unregister("traces")
         if self._own_strip:
@@ -996,10 +994,9 @@ class ManualRoiWidget(
         n = unit.n_rois
         lines = unit.member_kind == "line"
         channel = int(results.source.get("channel") or 0)
-        window = results.source.get(
-            "frames"
-        )  # a frame-window run's traces sit where they were recorded
-        frames = None if not window else (int(window[0]), int(window[1]), 1)
+        # a frame-window run's traces sit where they were recorded
+        window = unit_frames(results, unit)
+        frames = None if window is None else (*window, 1)
         # the reader's geometry places the lines when the shown recording is the scan these results came from
         src = base_array(self.iw.data[0])
         positions = (

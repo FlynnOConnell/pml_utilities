@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from mbo_utilities.metadata.base import METADATA_PARAMS, VoxelSize
+from mbo_utilities.metadata.base import AXIS_KEYS, METADATA_PARAMS, VoxelSize
 from mbo_utilities.metadata.params import get_param
 
 # lowercase spellings of every registered rate key, used to keep all rate
@@ -22,6 +22,21 @@ _FS_ALIASES_LOWER = frozenset(a.lower() for a in ("fs", *METADATA_PARAMS["fs"].a
 _FINTERVAL_ALIASES_LOWER = frozenset(
     a.lower() for a in ("finterval", *METADATA_PARAMS["finterval"].aliases)
 )
+
+
+def select_axis_values(
+    md: dict, sizes: dict[str, int], selections: dict[str, list[int]]
+) -> dict:
+    """``md`` with every per-index list (``AXIS_KEYS``) cut to the 0-based
+    ``selections``; a list whose length is not its axis's size is left alone.
+    """
+    out = dict(md)
+    for dim, selected in selections.items():
+        for key in AXIS_KEYS.get(dim, ()):
+            values = out.get(key)
+            if isinstance(values, (list, tuple)) and len(values) == sizes.get(dim):
+                out[key] = [values[i] for i in selected]
+    return out
 
 
 @dataclass
@@ -558,6 +573,12 @@ class OutputMetadata:
         result["num_channels"] = self.num_zplanes
         # lbm: z-planes as channels
         result["num_color_channels"] = self.num_color_channels
+
+        result = select_axis_values(
+            result,
+            dict(zip(self.source_dims, self.source_shape, strict=False)),
+            self.selections,
+        )
 
         if self._z_step_factor > 1:
             result["z_step_factor"] = self._z_step_factor

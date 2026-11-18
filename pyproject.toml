@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pml_utilities"
-version = "3.3.4"
-description = "A fork of mbo_utilities for Program in Memory Longevity (PML)"
+version = "4.0.0"
+description = "Readers, pipelines and viewers for imaging data; the beta channel of mbo_utilities"
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.12.7,<3.14"
@@ -14,28 +14,12 @@ dependencies = [
 	"click",
 	"numpy>=2.2.5",
 	"scipy",
+	"h5py",
 	"tifffile>=2025.3.30",
-	"roifile>=2025.5.10",
-	"imagecodecs>=2026.6.6",
-	"scikit-image",
 	"zarr>=3.1.3",
 	"numcodecs>=0.16",
-	"dask>=2025.3.0",
-	"imageio[ffmpeg]",
-	"matplotlib>=3.10.1",
-	"cmap>=0.7.2",
-	"opencv-contrib-python-headless",
-	"h5py",
-	"psutil>=7.0",
 	"tqdm",
 	"packaging",
-	"glfw",
-	"pyqt6>=6.7 ; sys_platform == 'linux'",
-	"numba>=0.60.0",
-	"fastplotlib[imgui]>=0.7.0,<0.8",
-	"rendercanvas>=2.7.2",
-	"wgpu>=0.30.1",
-	"imgui-bundle>=1.92.801,<1.92.900",
 ]
 
 [project.scripts]
@@ -64,15 +48,32 @@ isoview = "mbo_utilities.arrays.isoview.array:IsoviewArray"
 
 [project.urls]
 Homepage = "https://github.com/FlynnOConnell/pml_utilities"
-Documentation = "https://github.com/FlynnOConnell/pml_utilities/tree/main/docs"
+Documentation = "https://millerbrainobservatory.github.io/mbo_utilities/"
 Repository = "https://github.com/FlynnOConnell/pml_utilities"
 Upstream = "https://github.com/MillerBrainObservatory/mbo_utilities"
 
 [project.optional-dependencies]
+gui = [
+	"fastplotlib[imgui]>=0.7.0,<0.8",
+	"imgui-bundle>=1.92.801,<1.92.900",
+	"rendercanvas>=2.7.2",
+	"wgpu>=0.30.1",
+	"glfw",
+	"cmap>=0.7.2",
+	"matplotlib>=3.10.1",
+	"opencv-contrib-python-headless",
+	"scikit-image",
+	"imageio",
+	"psutil>=7.0",
+]
+qt = ["pyqt6>=6.7"]
+video = ["imageio[ffmpeg]"]
+codecs = ["imagecodecs>=2026.6.6"]
+pyramid = ["numba>=0.60.0"]
+dask = ["dask>=2025.3.0"]
 hpc = ["submitit>=1.5.0"]
-server = ["uvicorn>=0.30", "websockets>=13", "simplejpeg>=1.8", "av>=14"]
-vnoiser = ["vnoiser @ git+https://github.com/FlynnOConnell/vnoiser@27dcb630e0b0202968fc0d69d911403c48c35f63"]
-suite2p = ["suite2p>=1.1.0", "rastermap>=0.9"]
+server = ["pml_utilities[gui]", "uvicorn>=0.30", "websockets>=13", "simplejpeg>=1.8", "av>=14"]
+suite2p = ["pml_utilities[gui]", "suite2p>=1.1.0", "rastermap>=0.9"]
 napari = [
     "napari",
     "napari-ome-zarr",
@@ -87,29 +88,10 @@ notebooks = [
     "jupyter_rfb>=0.5.1",
     "seaborn>=0.13.2",
 ]
-docs = [
-    "sphinx>=6.1.3",
-    "docutils>=0.19",
-    "nbsphinx",
-    "numpydoc",
-    "ipykernel",
-    "sphinx-autodoc2",
-    "sphinx_tippy",
-    "sphinx_gallery",
-    "sphinx-togglebutton",
-    "sphinx-copybutton",
-    "sphinx_book_theme",
-    "sphinx_design",
-    "sphinxcontrib-images",
-    "sphinxcontrib-video",
-    "sphinxcontrib-bibtex",
-    "jupytext",
-    "myst_nb",
-]
-all = ["pml_utilities[hpc,napari,notebooks,server,suite2p,vnoiser]"]
+all = ["pml_utilities[gui,qt,video,codecs,pyramid,dask,hpc,napari,notebooks,server,suite2p]"]
 
 [tool.uv]
-default-groups = ["dev", "suite2p", "napari", "notebooks", "docs"]
+default-groups = ["dev", "suite2p", "napari", "notebooks"]
 override-dependencies = [
 	"mbo-utilities ; python_version < '0'",
 	"scanimage-tiff-reader ; python_version < '0'",
@@ -162,7 +144,7 @@ package-dir = {"" = "."}
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["mbo_utilities*", "pollen*"]
-exclude = ["dev*", "gists*", "demos*", "assets*", "docs*", "tests*"]
+exclude = ["dev*", "gists*", "demos*", "assets*", "tests*"]
 
 [tool.setuptools.package-data]
 mbo_utilities = ["assets/**/*"]
@@ -198,6 +180,20 @@ notebooks = [
     "jupyter_rfb>=0.5.1",
     "seaborn>=0.13.2",
 ]
+dev = [
+    "graphviz>=0.21",
+    "pillow>=12.1.0",
+    "pyautogui>=0.9.54",
+    "pygetwindow>=0.0.9",
+    "pytest>=8.4.2",
+    "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox@3e3507a244364ba3cfdded9214df1f9f785c1155",
+    "vnoiser @ git+https://github.com/FlynnOConnell/vnoiser@27dcb630e0b0202968fc0d69d911403c48c35f63",
+]
+suite2p = [
+    "lbm-suite2p-python[rastermap]>=3.3.2",
+    "suite2p>=1.1.0",
+    "rastermap>=0.9",
+]
 docs = [
     "sphinx>=6.1.3",
     "docutils>=0.19",
@@ -216,17 +212,4 @@ docs = [
     "sphinxcontrib-bibtex",
     "jupytext",
     "myst_nb",
-]
-dev = [
-    "graphviz>=0.21",
-    "pillow>=12.1.0",
-    "pyautogui>=0.9.54",
-    "pygetwindow>=0.0.9",
-    "pytest>=8.4.2",
-    "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox@3e3507a244364ba3cfdded9214df1f9f785c1155",
-]
-suite2p = [
-    "lbm-suite2p-python[rastermap]>=3.3.2",
-    "suite2p>=1.1.0",
-    "rastermap>=0.9",
 ]

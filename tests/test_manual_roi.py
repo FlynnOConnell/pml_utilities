@@ -904,6 +904,8 @@ class TestPersistence:
             assert w2.store.rois[0].class_index == 0
             assert w2.store.rois[0].note == "check me"
             assert "restored" in w2.status
+            # the restored ROI has a trace, so the Traces panel opens on it
+            assert w2.selected == 0 and w2._plot_lines()[0] == "ROI 0"
             # the quick trace came back with the rois
             (trace,) = w2.traces.for_roi(w2.store.rois[0].uid)
             assert trace.source == "quick" and trace.F.shape == (4,)
@@ -971,23 +973,7 @@ class TestPersistence:
 
 
 class TestExchange:
-    """The on-disk row's Fiji and CSV exchange runs through ``exchange``."""
-
-    def test_rois_round_trip_through_a_roiset(self, widget, tmp_path):
-        import roifile
-
-        widget.add_roi(square(10, 10, 9))
-        widget.add_roi(square(30, 30, 7))
-        widget.exchange("export_roiset", tmp_path / "RoiSet.zip")
-        assert len(roifile.roiread(tmp_path / "RoiSet.zip")) == 2
-        assert "exported 2 ROIs" in widget.status
-        before = [r.uid for r in widget.store.rois]
-        widget.exchange("import_roiset", tmp_path / "RoiSet.zip")
-        assert widget.n_rois == 4 and widget.selected == 3
-        assert widget.store.rois[2].source == "imagej"
-        assert widget.store.mask(2).sum() == widget.store.mask(0).sum()
-        widget.undo()
-        assert [r.uid for r in widget.store.rois] == before
+    """The on-disk row's CSV export runs through ``exchange``."""
 
     def test_traces_export_as_a_csv(self, widget, tmp_path):
         import csv
@@ -1003,8 +989,10 @@ class TestExchange:
 
     def test_a_failed_export_lands_in_the_status(self, widget, tmp_path):
         widget.add_roi(square(10, 10, 9))
-        widget.exchange("export_roiset", tmp_path / "missing" / "RoiSet.zip")
-        assert "export roiset failed" in widget._run_error
+        widget.quick_trace(0)
+        pump(widget)
+        widget.exchange("export_traces", tmp_path / "missing" / "traces.csv")
+        assert "export traces failed" in widget._run_error
 
 
 def _read_only():

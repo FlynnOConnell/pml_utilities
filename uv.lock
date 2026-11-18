@@ -2288,7 +2288,7 @@ wheels = [
 
 [[package]]
 name = "jupytext"
-version = "1.19.5"
+version = "1.19.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "markdown-it-py" },
@@ -2297,9 +2297,9 @@ dependencies = [
     { name = "packaging" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a1/ca/473f8ebb101553fb2ea6ab1d34324d6677844c968947ac050c759d539f2c/jupytext-1.19.5.tar.gz", hash = "sha256:605026446d605aa54fd7f7fc69df6ae51c7a46053d4cebf05afdc64d66de3df0", size = 4600916, upload-time = "2026-07-21T22:00:29.198Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/7f/5d2cc9618eca61dbc2d76628da3622a311702abd6b15c824bbf2b53e0db6/jupytext-1.19.6.tar.gz", hash = "sha256:ba1d143bb3751e054d3164376b148ee8fa74e1a860fc9411e1da93ff588b8a17", size = 4603767, upload-time = "2026-10-04T21:00:31.103Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7c/c6/76ee9dacedcd8c67d8fa53dd975613733bdd28242a4c41518ff1c8aeaa64/jupytext-1.19.5-py3-none-any.whl", hash = "sha256:af22351202171116b986fe1f4f9233a13ca4a85d5eec57a87900ed48521dbae4", size = 229246, upload-time = "2026-07-21T22:00:27.218Z" },
+    { url = "https://files.pythonhosted.org/packages/70/c3/c4eff5bdbe79b688dda8f06f2b66dbcf9a483cf660e5ced0b2dd5c21623d/jupytext-1.19.6-py3-none-any.whl", hash = "sha256:eb725d66841f1a91707bdcf4703b194a53151a060ecb3fd31d78139cc9ec090a", size = 230809, upload-time = "2026-10-04T21:00:29.143Z" },
 ]
 
 [[package]]
@@ -4101,79 +4101,75 @@ wheels = [
 
 [[package]]
 name = "pml-utilities"
-version = "3.3.4"
+version = "4.0.0"
 source = { editable = "." }
-default-groups = ["dev", "docs", "napari", "notebooks", "suite2p"]
+default-groups = ["dev", "napari", "notebooks", "suite2p"]
 dependencies = [
     { name = "click" },
-    { name = "cmap" },
-    { name = "dask" },
-    { name = "fastplotlib", extra = ["imgui"] },
-    { name = "glfw" },
     { name = "h5py" },
-    { name = "imagecodecs" },
-    { name = "imageio", extra = ["ffmpeg"] },
-    { name = "imgui-bundle" },
-    { name = "matplotlib" },
-    { name = "numba" },
     { name = "numcodecs" },
     { name = "numpy" },
-    { name = "opencv-contrib-python-headless" },
     { name = "packaging" },
-    { name = "psutil" },
-    { name = "pyqt6", marker = "sys_platform == 'linux'" },
-    { name = "rendercanvas" },
-    { name = "roifile" },
-    { name = "scikit-image" },
     { name = "scipy" },
     { name = "tifffile" },
     { name = "tqdm" },
-    { name = "wgpu" },
     { name = "zarr" },
 ]
 
 [package.optional-dependencies]
 all = [
     { name = "av" },
+    { name = "cmap" },
+    { name = "dask" },
+    { name = "fastplotlib", extra = ["imgui"] },
+    { name = "glfw" },
+    { name = "imagecodecs" },
+    { name = "imageio", extra = ["ffmpeg"] },
+    { name = "imgui-bundle" },
     { name = "ipykernel", version = "6.31.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' and sys_platform == 'win32'" },
     { name = "ipykernel", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or sys_platform != 'win32'" },
     { name = "ipywidgets" },
     { name = "jupyter-rfb" },
     { name = "jupyterlab" },
+    { name = "matplotlib" },
     { name = "napari", version = "0.6.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or sys_platform != 'win32'" },
     { name = "napari", version = "0.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' and sys_platform == 'win32'" },
     { name = "napari-animation" },
     { name = "napari-ome-zarr" },
+    { name = "numba" },
+    { name = "opencv-contrib-python-headless" },
+    { name = "psutil" },
     { name = "pyqt6" },
     { name = "qtpy" },
     { name = "rastermap" },
+    { name = "rendercanvas" },
+    { name = "scikit-image" },
     { name = "seaborn" },
     { name = "simplejpeg" },
     { name = "submitit" },
     { name = "suite2p" },
     { name = "uvicorn" },
-    { name = "vnoiser" },
     { name = "websockets" },
+    { name = "wgpu" },
 ]
-docs = [
-    { name = "docutils" },
-    { name = "ipykernel", version = "6.31.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' and sys_platform == 'win32'" },
-    { name = "ipykernel", version = "7.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or sys_platform != 'win32'" },
-    { name = "jupytext" },
-    { name = "myst-nb" },
-    { name = "nbsphinx" },
-    { name = "numpydoc" },
-    { name = "sphinx" },
-    { name = "sphinx-autodoc2" },
-    { name = "sphinx-book-theme" },
-    { name = "sphinx-copybutton" },
-    { name = "sphinx-design" },
-    { name = "sphinx-gallery" },
-    { name = "sphinx-tippy" },
-    { name = "sphinx-togglebutton" },
-    { name = "sphinxcontrib-bibtex" },
-    { name = "sphinxcontrib-images" },
-    { name = "sphinxcontrib-video" },
+codecs = [
+    { name = "imagecodecs" },
+]
+dask = [
+    { name = "dask" },
+]
+gui = [
+    { name = "cmap" },
+    { name = "fastplotlib", extra = ["imgui"] },
+    { name = "glfw" },
+    { name = "imageio" },
+    { name = "imgui-bundle" },
+    { name = "matplotlib" },
+    { name = "opencv-contrib-python-headless" },
+    { name = "psutil" },
+    { name = "rendercanvas" },
+    { name = "scikit-image" },
+    { name = "wgpu" },
 ]
 hpc = [
     { name = "submitit" },
@@ -4194,18 +4190,46 @@ notebooks = [
     { name = "jupyterlab" },
     { name = "seaborn" },
 ]
+pyramid = [
+    { name = "numba" },
+]
+qt = [
+    { name = "pyqt6" },
+]
 server = [
     { name = "av" },
+    { name = "cmap" },
+    { name = "fastplotlib", extra = ["imgui"] },
+    { name = "glfw" },
+    { name = "imageio" },
+    { name = "imgui-bundle" },
+    { name = "matplotlib" },
+    { name = "opencv-contrib-python-headless" },
+    { name = "psutil" },
+    { name = "rendercanvas" },
+    { name = "scikit-image" },
     { name = "simplejpeg" },
     { name = "uvicorn" },
     { name = "websockets" },
+    { name = "wgpu" },
 ]
 suite2p = [
+    { name = "cmap" },
+    { name = "fastplotlib", extra = ["imgui"] },
+    { name = "glfw" },
+    { name = "imageio" },
+    { name = "imgui-bundle" },
+    { name = "matplotlib" },
+    { name = "opencv-contrib-python-headless" },
+    { name = "psutil" },
     { name = "rastermap" },
+    { name = "rendercanvas" },
+    { name = "scikit-image" },
     { name = "suite2p" },
+    { name = "wgpu" },
 ]
-vnoiser = [
-    { name = "vnoiser" },
+video = [
+    { name = "imageio", extra = ["ffmpeg"] },
 ]
 
 [package.dev-dependencies]
@@ -4216,6 +4240,7 @@ dev = [
     { name = "pyautogui" },
     { name = "pygetwindow" },
     { name = "pytest" },
+    { name = "vnoiser" },
 ]
 docs = [
     { name = "docutils" },
@@ -4263,67 +4288,51 @@ suite2p = [
 requires-dist = [
     { name = "av", marker = "extra == 'server'", specifier = ">=14" },
     { name = "click" },
-    { name = "cmap", specifier = ">=0.7.2" },
-    { name = "dask", specifier = ">=2025.3.0" },
-    { name = "docutils", marker = "extra == 'docs'", specifier = ">=0.19" },
-    { name = "fastplotlib", extras = ["imgui"], specifier = ">=0.7.0,<0.8" },
-    { name = "glfw" },
+    { name = "cmap", marker = "extra == 'gui'", specifier = ">=0.7.2" },
+    { name = "dask", marker = "extra == 'dask'", specifier = ">=2025.3.0" },
+    { name = "fastplotlib", extras = ["imgui"], marker = "extra == 'gui'", specifier = ">=0.7.0,<0.8" },
+    { name = "glfw", marker = "extra == 'gui'" },
     { name = "h5py" },
-    { name = "imagecodecs", specifier = ">=2026.6.6" },
-    { name = "imageio", extras = ["ffmpeg"] },
-    { name = "imgui-bundle", specifier = ">=1.92.801,<1.92.900" },
-    { name = "ipykernel", marker = "extra == 'docs'" },
+    { name = "imagecodecs", marker = "extra == 'codecs'", specifier = ">=2026.6.6" },
+    { name = "imageio", marker = "extra == 'gui'" },
+    { name = "imageio", extras = ["ffmpeg"], marker = "extra == 'video'" },
+    { name = "imgui-bundle", marker = "extra == 'gui'", specifier = ">=1.92.801,<1.92.900" },
     { name = "ipykernel", marker = "extra == 'notebooks'" },
     { name = "ipywidgets", marker = "extra == 'notebooks'", specifier = ">=8.0.0,<9" },
     { name = "jupyter-rfb", marker = "extra == 'notebooks'", specifier = ">=0.5.1" },
     { name = "jupyterlab", marker = "extra == 'notebooks'", specifier = ">=4.2.6" },
-    { name = "jupytext", marker = "extra == 'docs'" },
-    { name = "matplotlib", specifier = ">=3.10.1" },
-    { name = "myst-nb", marker = "extra == 'docs'" },
+    { name = "matplotlib", marker = "extra == 'gui'", specifier = ">=3.10.1" },
     { name = "napari", marker = "extra == 'napari'" },
     { name = "napari-animation", marker = "extra == 'napari'" },
     { name = "napari-ome-zarr", marker = "extra == 'napari'" },
-    { name = "nbsphinx", marker = "extra == 'docs'" },
-    { name = "numba", specifier = ">=0.60.0" },
+    { name = "numba", marker = "extra == 'pyramid'", specifier = ">=0.60.0" },
     { name = "numcodecs", specifier = ">=0.16" },
     { name = "numpy", specifier = ">=2.2.5" },
-    { name = "numpydoc", marker = "extra == 'docs'" },
-    { name = "opencv-contrib-python-headless" },
+    { name = "opencv-contrib-python-headless", marker = "extra == 'gui'" },
     { name = "packaging" },
-    { name = "pml-utilities", extras = ["hpc", "napari", "notebooks", "server", "suite2p", "vnoiser"], marker = "extra == 'all'" },
-    { name = "psutil", specifier = ">=7.0" },
-    { name = "pyqt6", marker = "sys_platform == 'linux'", specifier = ">=6.7" },
+    { name = "pml-utilities", extras = ["gui"], marker = "extra == 'server'" },
+    { name = "pml-utilities", extras = ["gui"], marker = "extra == 'suite2p'" },
+    { name = "pml-utilities", extras = ["gui", "qt", "video", "codecs", "pyramid", "dask", "hpc", "napari", "notebooks", "server", "suite2p"], marker = "extra == 'all'" },
+    { name = "psutil", marker = "extra == 'gui'", specifier = ">=7.0" },
     { name = "pyqt6", marker = "extra == 'napari'", specifier = ">=6.7" },
+    { name = "pyqt6", marker = "extra == 'qt'", specifier = ">=6.7" },
     { name = "qtpy", marker = "extra == 'napari'" },
     { name = "rastermap", marker = "extra == 'suite2p'", specifier = ">=0.9" },
-    { name = "rendercanvas", specifier = ">=2.7.2" },
-    { name = "roifile", specifier = ">=2025.5.10" },
-    { name = "scikit-image" },
+    { name = "rendercanvas", marker = "extra == 'gui'", specifier = ">=2.7.2" },
+    { name = "scikit-image", marker = "extra == 'gui'" },
     { name = "scipy" },
     { name = "seaborn", marker = "extra == 'notebooks'", specifier = ">=0.13.2" },
     { name = "simplejpeg", marker = "extra == 'server'", specifier = ">=1.8" },
-    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=6.1.3" },
-    { name = "sphinx-autodoc2", marker = "extra == 'docs'" },
-    { name = "sphinx-book-theme", marker = "extra == 'docs'" },
-    { name = "sphinx-copybutton", marker = "extra == 'docs'" },
-    { name = "sphinx-design", marker = "extra == 'docs'" },
-    { name = "sphinx-gallery", marker = "extra == 'docs'" },
-    { name = "sphinx-tippy", marker = "extra == 'docs'" },
-    { name = "sphinx-togglebutton", marker = "extra == 'docs'" },
-    { name = "sphinxcontrib-bibtex", marker = "extra == 'docs'" },
-    { name = "sphinxcontrib-images", marker = "extra == 'docs'" },
-    { name = "sphinxcontrib-video", marker = "extra == 'docs'" },
     { name = "submitit", marker = "extra == 'hpc'", specifier = ">=1.5.0" },
     { name = "suite2p", marker = "extra == 'suite2p'", specifier = ">=1.1.0" },
     { name = "tifffile", specifier = ">=2025.3.30" },
     { name = "tqdm" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
-    { name = "vnoiser", marker = "extra == 'vnoiser'", git = "https://github.com/FlynnOConnell/vnoiser?rev=27dcb630e0b0202968fc0d69d911403c48c35f63" },
     { name = "websockets", marker = "extra == 'server'", specifier = ">=13" },
-    { name = "wgpu", specifier = ">=0.30.1" },
+    { name = "wgpu", marker = "extra == 'gui'", specifier = ">=0.30.1" },
     { name = "zarr", specifier = ">=3.1.3" },
 ]
-provides-extras = ["hpc", "server", "vnoiser", "suite2p", "napari", "notebooks", "docs", "all"]
+provides-extras = ["gui", "qt", "video", "codecs", "pyramid", "dask", "hpc", "server", "suite2p", "napari", "notebooks", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -4333,6 +4342,7 @@ dev = [
     { name = "pyautogui", specifier = ">=0.9.54" },
     { name = "pygetwindow", specifier = ">=0.0.9" },
     { name = "pytest", specifier = ">=8.4.2" },
+    { name = "vnoiser", git = "https://github.com/FlynnOConnell/vnoiser?rev=27dcb630e0b0202968fc0d69d911403c48c35f63" },
 ]
 docs = [
     { name = "docutils", specifier = ">=0.19" },
@@ -5956,27 +5966,27 @@ wheels = [
 
 [[package]]
 name = "sphinx-design"
-version = "0.7.0"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "sphinx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/13/7b/804f311da4663a4aecc6cf7abd83443f3d4ded970826d0c958edc77d4527/sphinx_design-0.7.0.tar.gz", hash = "sha256:d2a3f5b19c24b916adb52f97c5f00efab4009ca337812001109084a740ec9b7a", size = 2203582, upload-time = "2026-01-19T13:12:53.297Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/c3/5d0f3aff52337edea9fe1d3f35ecba8a235b0490afb185544299a03a97d0/sphinx_design-0.8.0.tar.gz", hash = "sha256:57fa4d96378525122947ab6109c6e490190e3119dc10f3e3adf6b71444bf3bb4", size = 2254778, upload-time = "2026-11-10T17:16:39.673Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/cf/45dd359f6ca0c3762ce0490f681da242f0530c49c81050c035c016bfdd3a/sphinx_design-0.7.0-py3-none-any.whl", hash = "sha256:f82bf179951d58f55dca78ab3706aeafa496b741a91b1911d371441127d64282", size = 2220350, upload-time = "2026-01-19T13:12:51.077Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/9a/e929b7fb9497d8e12bcda1777a7076f7c38d644216e91665bcfff6cab90d/sphinx_design-0.8.0-py3-none-any.whl", hash = "sha256:861fecb064c3da5ff48031a237692ccb7c2e671f8c4aa84d4b9eef3cb8fd9c91", size = 2288922, upload-time = "2026-11-10T17:16:37.538Z" },
 ]
 
 [[package]]
 name = "sphinx-gallery"
-version = "0.21.0"
+version = "0.22.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pillow" },
     { name = "sphinx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fb/9d/91334ba9370de74564c8a1e0c54ce1bc638b35e00177cc02cb25c9c14348/sphinx_gallery-0.21.0.tar.gz", hash = "sha256:72a7734ad9100878345b8b65c249148cc0f1cd0e274adf3e3900214e4c2c5bee", size = 483616, upload-time = "2026-04-24T03:09:28.173Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/64/5f1e9b7780d387c6804d0f9d6f2f2dd89ac70e3bee73f61ffbfcc38defde/sphinx_gallery-0.22.1.tar.gz", hash = "sha256:15560a4c2dc0b4a4924c64e3bcb8c6dba7ddad6dcb77c50e255615e645eb18aa", size = 509262, upload-time = "2026-09-18T19:38:54.518Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/dd/d95843947392524418aa9fc4e8d205e82b4261ab2d2fab4abce7a14ee7c0/sphinx_gallery-0.21.0-py3-none-any.whl", hash = "sha256:f37bea4012f1cd7439c7782081e4259945207cf179e79b81330a6db3b18bca8b", size = 466808, upload-time = "2026-04-24T03:09:25.992Z" },
+    { url = "https://files.pythonhosted.org/packages/64/fb/bbaef2395227fd4053184383a32fc43d6d42aa7c49097d9518103ffb6615/sphinx_gallery-0.22.1-py3-none-any.whl", hash = "sha256:5a5ef17bd1d1d127845b09f2cf33a4d4295033a0ef00e1f2623fabcc9365aff3", size = 487224, upload-time = "2026-09-18T19:38:52.964Z" },
 ]
 
 [[package]]

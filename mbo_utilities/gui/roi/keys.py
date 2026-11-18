@@ -115,4 +115,3 @@ class KeysMixin:
         self.keybinds_open = draw_keybinds_popup(
             ROI_KEYS, self.keybinds_open, "ROI keybinds"
         )
-        self.summary.draw()

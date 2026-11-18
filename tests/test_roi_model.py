@@ -5,6 +5,8 @@ numpy; no canvas.
 
 from __future__ import annotations
 
+import csv
+
 import numpy as np
 import pytest
 from mbo_utilities.annotation import (
@@ -17,6 +19,7 @@ from mbo_utilities.annotation import (
     RoiTrace,
     RoiTraceTable,
     RunTarget,
+    export_traces,
     trace_key,
 )
 
@@ -390,3 +393,32 @@ class TestColorize:
             1: (31, 119, 180)
         }
         assert model.colorize({2: 5.0}, cmap="viridis") == {2: (68, 1, 84)}
+
+
+def test_traces_csv_has_one_column_per_row(tmp_path):
+    rows = [
+        RoiTrace(
+            uid=1, z=0, c=0, engine="mean", source="quick", F=np.arange(4.0), fs=2.0
+        ),
+        RoiTrace(
+            uid=2,
+            z=0,
+            c=0,
+            engine="mean",
+            source="quick",
+            F=np.array([7.0, 8.0]),
+            frames=(2, 4, 1),
+            fs=2.0,
+            label="cell b",
+        ),
+    ]
+    path = export_traces(rows, tmp_path / "traces.csv")
+    with open(path) as f:
+        got = list(csv.reader(f))
+    assert got[0] == ["time_s", "quick None", "cell b"]
+    assert got[1] == ["0", "0", ""] and got[3] == ["1", "2", "7"]
+    assert len(got) == 5
+    rows[1].fs = 3.0
+    path = export_traces(rows, tmp_path / "frames.csv")
+    with open(path) as f:
+        assert next(csv.reader(f))[0] == "frame"

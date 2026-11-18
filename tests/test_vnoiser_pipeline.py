@@ -5,6 +5,7 @@ folder) and skip without it; the end-to-end one is marked slow (about 15
 minutes: eight wavelet transforms of a 120 s scan).
 """
 
+import dataclasses
 import json
 import os
 from logging.handlers import BufferingHandler
@@ -1094,6 +1095,32 @@ def test_preview_names_the_domain_it_read(tmp_path):
     assert found["name"] == "soma" and found["rois"] == [0, 2]
 
 
+def test_a_trimmed_scan_is_read_from_its_trim_and_says_so(tmp_path, monkeypatch):
+    """The domain file's trim starts the preview and the run there, on the
+    recording's clock, and the run records each scan's window.
+    """
+    from mbo_utilities.annotation.domains import write_trim
+    from mbo_utilities.results import Results, newest_results, unit_frames
+    from mbo_utilities.vnoiser.pipeline import preview_domain
+
+    monkeypatch.setenv("MBO_DIR", str(tmp_path / "mbo"))
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc)
+    domains = {"soma": [0, 2], "api": [1]}
+    write_trim(mesc, 0.5, "MUnit_1")
+    found = preview_domain(mesc, "MUnit_1", domains, "soma")
+    assert found["t"][0] == pytest.approx(0.5) and len(found["t"]) == 1100
+    late = preview_domain(mesc, "MUnit_1", domains, "soma", frames=(400, 600))
+    assert late["t"][0] == pytest.approx(2.0) and len(late["t"]) == 200
+
+    run_vnoiser_pipeline(mesc, domains=domains, units=["MUnit_1"], first_env=["1"])
+    results = Results.open(newest_results(tmp_path, "vnoiser"))
+    assert results.source["trim_s"] == {"1": 0.5}
+    assert results.source["scan_frames"] == {"1": [100, 1200]}
+    unit = next(iter(results.units.values()))
+    assert unit_frames(results, unit) == (100, 1200) and unit.n_timepoints == 1100
+
+
 def test_comment_groups_reads_the_rigs_maps_and_refuses_broken_ones():
     assert comment_groups("soma,bas1,api1,each2lines", 6) == {
         "soma": [0, 1],
@@ -1209,6 +1236,46 @@ def test_widget_saves_and_loads_its_domains_file(tmp_path, monkeypatch):
     widget._load_domains_file()
     assert widget._last_status.startswith("chess.domains.json")
     assert [r.name for r in widget._domains] == ["soma", "cell"]
+
+
+def test_widget_takes_the_names_another_window_wrote(tmp_path, monkeypatch):
+    """The MESc tab names ROIs in the domain file; the tab's table follows on
+    its next poll, and a trim written there leaves an edited table alone.
+    """
+    pytest.importorskip("imgui_bundle")
+    from types import SimpleNamespace
+
+    from mbo_utilities.annotation.domains import write_roi_name, write_trim
+    from mbo_utilities.gui.widgets.pipelines import vnoiser as tab
+    from mbo_utilities.gui.widgets.pipelines.vnoiser import (
+        DomainRow,
+        VnoiserPipelineWidget,
+    )
+
+    monkeypatch.setattr(tab, "get_roi_folder", lambda: "")
+    mesc = tmp_path / "chess.mesc"
+    _chessboard_mesc(mesc, extra_unit=True)
+    widget = VnoiserPipelineWidget(
+        SimpleNamespace(fpath=mesc, image_widget=None, invert_deflection=False)
+    )
+    widget._ensure_state()
+    first, second = (u["key"] for u in widget._units)
+    n_rois = widget._dims()[1]
+    widget._scans = {first: True, second: False}
+    write_trim(mesc, 0.5)
+    widget._adopt_domain_file()
+    assert [r.name for r in widget._domains] == [f"roi{i}" for i in range(n_rois)]
+
+    write_roi_name(mesc, first, 0, "soma", n_rois, [first, second])
+    write_roi_name(mesc, first, 1, "soma", n_rois, [first, second])
+    widget._adopt_domain_file()
+    assert (widget._domains[0].name, widget._domains[0].rois) == ("soma", [0, 1])
+    assert len(widget._domains) == n_rois - 1
+
+    widget._domains.append(DomainRow("unsaved", [0]))
+    write_trim(mesc, 1.0)
+    widget._adopt_domain_file()
+    assert widget._domains[-1].name == "unsaved"
 
 
 def test_widget_keeps_one_table_per_layout(tmp_path, monkeypatch):
@@ -1383,3 +1450,33 @@ def test_widget_loads_its_own_run_when_the_worker_finishes(tmp_path, monkeypatch
     assert widget._spawned == set()
     assert "boom" in widget._last_status
     assert widget._status_color is _MISSING_COLOR
+
+
+def test_every_setting_has_a_hint_and_a_place_in_the_parameters_popup():
+    """A field added to the settings fails here until the popup shows it."""
+    from mbo_utilities.gui.widgets.pipelines.vnoiser_hints import (
+        COLUMNS,
+        HIDDEN,
+        HINTS,
+        POLARITY,
+        POLARITY_DEFAULT,
+        RUNTIME,
+    )
+    from mbo_utilities.vnoiser.params import OUTPUT_FORMATS, POLARITIES, VnoiserSettings
+
+    settings = VnoiserSettings()
+    placed = [
+        (group, name)
+        for _stage, sections in COLUMNS
+        for _title, group, names in sections
+        for name in names
+    ] + [("runtime", name) for name in RUNTIME]
+    assert len(placed) == len(set(placed))
+    assert set(placed) == {
+        (group, name) for group, hints in HINTS.items() for name in hints
+    }
+    for group in ("traces", "dfof", "denoiser", "events"):
+        fields = {(group, f.name) for f in dataclasses.fields(getattr(settings, group))}
+        assert fields - HIDDEN == {p for p in placed if p[0] == group} - {POLARITY}
+    assert POLARITY in placed and POLARITY_DEFAULT == POLARITIES[0] == settings.polarity
+    assert set(HINTS["runtime"]["output_format"].choices) == set(OUTPUT_FORMATS)

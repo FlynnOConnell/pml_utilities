@@ -119,7 +119,7 @@ STAGES = (
         "domain",
         "the chosen pixels averaged into one trace, every pixel weighing the same; then the background "
         "(the dimmest pixels, the rest of the ROI, or a background domain) and the reference channel "
-        "(divided by, or regressed out) when the Trace block asks for them",
+        "(divided by, or regressed out) when the Parameters popup's Trace column asks for them",
     ),
     (
         "dF/F",
@@ -200,22 +200,20 @@ WINDOW = (
     ),
     (
         "Domains",
-        "which ROIs and pixels make each trace, and which this run takes (below)",
+        "which ROIs and pixels make each trace, and which this run takes (below); Edit domains opens "
+        "the table",
     ),
     (
-        "Trace",
-        "channel, photon counts, polarity, background, reference channel, the dF/F baseline and the "
-        "z-score, times in seconds; Archive defaults and Recommended set them all",
+        "Parameters",
+        "a column per stage. Trace and dF/F: photon counts, polarity, background, reference channel, "
+        "the dF/F baseline and the z-score, times in seconds. Wavelet denoiser and Peaks: every number "
+        "of those stages. A changed value turns orange and is listed under Modified parameters; "
+        "Defaults puts the archive's back, Recommended sets what new recordings want",
     ),
     (
         "Preview",
-        "the domain the dot picks, on the scan on screen: its pixels in red over the ROI's mean image, "
+        "in the domain table and the Parameters popup, the domain the dot picks, on the scan on screen: its pixels in red over the ROI's mean image, "
         "then F with its baseline, dF/F and z over the first seconds; it follows every change",
-    ),
-    (
-        "Denoiser and peaks",
-        "every number of the wavelet and peak stages; a changed one turns orange and is listed under "
-        "Modified parameters, Defaults puts them back",
     ),
     (
         "Run vnoiser",

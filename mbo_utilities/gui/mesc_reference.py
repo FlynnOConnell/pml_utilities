@@ -23,8 +23,7 @@ Every ROI is drawn in the colour MESc used, the one the viewer's ROI slider
 is on thicker; a click on a line or patch moves the slider to it.
 
 The popup is ``gui.imgui.summary.SummaryImageViewer``, masknmf's full-FOV
-popup and the one behind the ROI widget's Open full FOV: pan, zoom,
-colormap, contrast, pixel values. :func:`picture_image` and
+popup: pan, zoom, colormap, contrast, pixel values. :func:`picture_image` and
 :func:`stack_images` are GUI-free and pinned on synthetic files;
 :class:`ReferenceView` is the popup, opened from the MESc tab and redrawn
 every frame from the top strip's hook.
@@ -48,8 +47,7 @@ from mbo_utilities.analysis.mesc_placement import (
     place_scan,
     zstack_files,
 )
-from mbo_utilities.analysis.roi_traces import domains_from_json
-from mbo_utilities.annotation.domains import DomainFile, find_domains
+from mbo_utilities.annotation.domains import DomainFile, find_domains, scan_of
 from mbo_utilities.annotation.store import CLASS_COLORS
 from mbo_utilities.arrays.features._dim_labels import find_slider_name, slider_roles
 from mbo_utilities.arrays.mesc import list_mesc_units
@@ -222,17 +220,10 @@ def roi_domains(mesc) -> dict[int, str]:
     domains takes the last.
     """
     found = find_domains(mesc.filenames[0], get_roi_folder() or None)
-    layout = (
-        None
-        if found is None
-        else DomainFile.read(found).layout_of(mesc.unit_key.rsplit("_", 1)[-1])
-    )
-    if layout is not None:
-        return {
-            int(line): d.name
-            for d in domains_from_json(layout.domains)
-            for line in d.rois
-        }
+    if found is not None:
+        names = DomainFile.read(found).roi_names(scan_of(mesc.unit_key))
+        if names:
+            return names
     results = mesc.results
     name = None if results is None else unit_for_source(results, mesc.unit_key)
     if name is None or results.units[name].member_kind != "line":
@@ -246,8 +237,10 @@ def roi_domains(mesc) -> dict[int, str]:
 
 
 def write_positions(path, mesc, images, domains: dict[int, str]) -> None:
-    """One CSV row per ROI on each placed stack: its ends in that stack's microns,
-    and its ROI and slice counted from 1 as the caption counts them.
+    """One CSV row per ROI on each placed stack: its ends in the microns
+    ``mesc_geometry.um_to_voxels`` reads for that stack (a fast stack's stored
+    position plus its RTMC), and its ROI and slice counted from 1 as the
+    caption counts them.
     """
     rows = []
     for im in images:
@@ -341,6 +334,11 @@ class ReferenceView:
     @property
     def is_open(self) -> bool:
         return self.viewer.is_open
+
+    def reload_domains(self) -> None:
+        """Read the shown unit's ROI names again after the domain file changed."""
+        if self._source is not None:
+            self.domains = roi_domains(self._source[0])
 
     def open(self, mesc, open_unit: Callable) -> bool:
         """Show the popup for ``mesc``, on the picture its ROIs were drawn on;
@@ -502,24 +500,24 @@ class ReferenceView:
         if roi in self.domains:
             name += f" ({self.domains[roi]})"
         if im.placement is None:
-            return f"{self.unit}: {drawn} drawn here, {name} thick"
+            return f"{self.unit}: {drawn}, {name} selected"
         record = next((r for r in im.records if r["roi"] == roi), None)
         where = (
-            "not in this stack" if record is None else f"slice {record['slice'] + 1}"
+            "not in this stack" if record is None else f"on slice {record['slice'] + 1}"
         )
         check = "confirmed" if im.placement.confirmed else "unconfirmed"
-        return f"{self.unit}: {name} {where}, {drawn}, match {im.placement.score:.2f}, {check}"
+        return f"{self.unit}: {name} {where} · {drawn} · match {im.placement.score:.2f}, {check}"
 
     def status(self) -> str:
         """The stacks' state: still measuring, failed, or what became of them."""
         if self.placing:
-            return "measuring Z-stacks..."
+            return "placing on Z-stacks..."
         if self.error is not None:
             return f"placement failed: {self.error}"
         placed = sum(im.placement is not None for im in self.images.values())
-        states = [f"Z-stacks placed: {placed}, in the image list"] if placed else []
+        states = [f"placed on {placed} Z-stack{'s' if placed != 1 else ''}"] if placed else []
         states += [
-            f"{p.stack_key.rsplit('/', 1)[-1]} not placed ({p.score:.2f})"
+            f"{p.stack_key.rsplit('/', 1)[-1]} not placed (match {p.score:.2f})"
             for p in self.refused
         ]
         return "  ".join(states) or "no Z-stack found"
@@ -533,7 +531,7 @@ class ReferenceView:
             start = str(Path(self._built[0]).parent)
             self._dialog = pfd.open_file("Z-stack file", start, ["MESc", "*.mesc"])
         set_tooltip(
-            "Measure this scan against the stacks of another .mesc file.",
+            "Place this scan's ROIs on the Z-stacks of another .mesc file.",
             show_mark=False,
         )
         imgui.same_line()
@@ -547,15 +545,15 @@ class ReferenceView:
             )
         imgui.end_disabled()
         set_tooltip(
-            "Every ROI's slice and microns on each placed Z-stack, as one CSV.",
+            "Save each ROI's slice and position (um) on every placed Z-stack as one CSV.",
             show_mark=False,
         )
         im = self.images.get(viewer.current_key)
         if im is not None and im.placement is not None:
             imgui.same_line()
-            _, self.one_slice = imgui.checkbox("ROI's slice", self.one_slice)
+            _, self.one_slice = imgui.checkbox("single slice", self.one_slice)
             set_tooltip(
-                "Show the slice under the ROI slider's line, not the projection.",
+                "Show the slice the selected ROI sits on. Off: the max projection.",
                 show_mark=False,
             )
         if im is not None:

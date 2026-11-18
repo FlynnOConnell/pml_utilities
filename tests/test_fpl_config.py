@@ -25,6 +25,22 @@ class TestConfig:
         finally:
             iw.close()
 
+    def test_the_image_starts_under_the_title(self):
+        """fastplotlib draws the title 4 px below the frame's top; the render
+        area must start under its text or the image covers it.
+        """
+        from mbo_utilities.gui._ndviewer import MboNDViewer
+
+        data = np.random.default_rng(0).random((4, 32, 32)).astype(np.float32)
+        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
+        try:
+            iw.show()
+            frame = iw.figure[0, 0].frame
+            title_bottom = frame.rect[1] + iw.figure[0, 0].title.font_size + 4
+            assert frame.get_render_rect()[1] >= title_bottom
+        finally:
+            iw.close()
+
     def test_the_image_fills_its_viewport(self):
         """auto_scale sets the camera to the image's bounding box; zoom 1 shows
         exactly that, so the camera's world window matches the image.
@@ -140,3 +156,60 @@ class TestFitFigureSize:
         finally:
             for key, value in was.items():
                 set_widget_enabled(key, value, persist=False)
+
+    def test_a_recording_with_traces_and_motion_opens_on_both(
+        self, monkeypatch, tmp_path
+    ):
+        """A suite2p plane with ROIs and rigid offsets: the subplot carries the
+        plane's name, the strip is sized for the motion panel over the traces,
+        and the first ROI's trace is plotted.
+        """
+        from mbo_utilities import imread
+        from mbo_utilities.gui._top_strip import strip_height
+        from mbo_utilities.gui.manual_roi import MOTION_PANEL_HEIGHT
+        from mbo_utilities.gui.run_gui import _create_image_widget
+        from mbo_utilities.gui.widgets.widget_toggles import (
+            set_widget_enabled,
+            widget_enabled,
+        )
+
+        monkeypatch.setenv("RENDERCANVAS_FORCE_OFFSCREEN", "1")
+        plane = tmp_path / "zplane01_tp00001-00020"
+        plane.mkdir()
+        nt, ny, nx = 20, 64, 64
+        rng = np.random.default_rng(0)
+        rng.integers(0, 100, (nt, ny, nx)).astype(np.int16).tofile(plane / "data.bin")
+        ops = {"Ly": ny, "Lx": nx, "fs": 5.0, "nframes": nt, "plane": 1}
+        ops["xoff"], ops["yoff"] = rng.standard_normal((2, nt)).astype(np.float32)
+        np.save(plane / "ops.npy", ops, allow_pickle=True)
+        ypix, xpix = np.mgrid[10:14, 10:14].reshape(2, -1)
+        stat = np.array(
+            [{"ypix": ypix, "xpix": xpix, "lam": np.ones(16, np.float32)}],
+            dtype=object,
+        )
+        np.save(plane / "stat.npy", stat)
+        np.save(plane / "F.npy", rng.random((1, nt)).astype(np.float32) + 10)
+        np.save(plane / "Fneu.npy", np.ones((1, nt), np.float32))
+        np.save(plane / "spks.npy", np.ones((1, nt), np.float32))
+        np.save(plane / "iscell.npy", np.array([[1, 0.9]], np.float32))
+
+        was = widget_enabled("signal_quality")
+        set_widget_enabled("signal_quality", False, persist=False)
+        try:
+            iw = _create_image_widget(imread(plane), widget="preview")
+            try:
+                assert iw.figure[0, 0].title.text == plane.name
+                strip = iw.figure.imgui_windows["top"]
+                for _ in range(3):
+                    iw.figure.canvas.draw()
+                (panel,) = strip.panels
+                assert panel.height == MOTION_PANEL_HEIGHT
+                assert strip.size == strip_height(MOTION_PANEL_HEIGHT)
+                roi = panel.draw.__self__
+                assert roi.selected_derived == (0, 0)
+                assert len(roi._plot_lines()[1]) == 1
+            finally:
+                iw.close()
+        finally:
+            set_widget_enabled("signal_quality", was, persist=False)
+            set_widget_enabled("manual_roi", False, persist=False)

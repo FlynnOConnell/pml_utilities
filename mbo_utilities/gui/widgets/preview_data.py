@@ -305,8 +305,7 @@ class PreviewDataWidget(EdgeWindow):
         self._s2p_tp_selection = ""
         self._s2p_tp_error = ""
         self._s2p_tp_parsed = None
-        self._s2p_z_start = self._s2p_z_stop = self._s2p_z_step = 1
-        self._s2p_c_start = self._s2p_c_stop = self._s2p_c_step = 1
+        self._s2p_z_parsed = self._s2p_c_parsed = None
         self._files_popup_sizer = None
         self._data_options_sizer = None
         self._pipe_settings_sizer = None
