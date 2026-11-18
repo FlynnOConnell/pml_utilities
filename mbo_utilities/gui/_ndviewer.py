@@ -1159,6 +1159,8 @@ class MboNDViewer:
         return self._make_dim_names(n, None)
 
     def show(self, **kwargs):
+        ## NOTE: the dock layout is built once, on the first frame after this
+        self._ndw.figure.imgui_docking = True
         return self._ndw.show(**kwargs)
 
     def close(self):
