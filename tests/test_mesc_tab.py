@@ -472,6 +472,30 @@ def test_the_table_says_nothing_about_z_stacks(stack_mesc_path):
     assert not any("##stack" in b or "##pic" in b for b in BUTTONS)
 
 
+
+def press_annotate_button(label):
+    return label.startswith("Annotate in 3D")
+
+
+def test_a_z_stack_on_screen_opens_in_the_stack_annotator(stack_mesc_path, monkeypatch):
+    """The button shows for a Z-stack only and launches `mbo stack-annotate` on that unit in its own process."""
+    from mbo_utilities.arrays.mesc import MescArray
+    from mbo_utilities.gui.run_gui import _squeeze_for_viewer
+    from mbo_utilities.gui.widgets import mesc_units
+
+    launched = []
+    monkeypatch.setattr(mesc_units, "HAS_SKAN", True)
+    monkeypatch.setattr(mesc_units, "launch_window", lambda module, args, log_name: launched.append((module, args)))
+    monkeypatch.setattr(imgui, "small_button", press_annotate_button)
+    for unit in (1, 0):
+        arr = MescArray(stack_mesc_path, unit=unit)
+        try:
+            draw_frames(mesc_units.MescTabWidget(FakeParent([_squeeze_for_viewer(arr)], arr.slider_dim_labels)))
+        finally:
+            arr.close()
+    assert launched[0] == ("mbo_utilities.cli", ["stack-annotate", str(stack_mesc_path), "--unit", "MSession_0/MUnit_0"])
+    assert {args[-1] for _module, args in launched} == {"MSession_0/MUnit_0"}
+
 def pump(widget, seconds: float = 60.0):
     """Poll the ROI widget's background work until it finishes."""
     deadline = time.time() + seconds

@@ -34,11 +34,12 @@ pml_utilities/
 │   │   ├── gateway.py        # `mbo serve`: launcher + one studio_server process per browser session
 │   │   ├── studio_server.py  # one Studio on a BrowserCanvas (canvas_server.py), served over http
 │   │   ├── playhead.py       # one time in seconds shared by every view (§7.6)
+│   │   ├── stack_annotate.py # `mbo stack-annotate`: XY, XZ, YZ and 3D views of a Z-stack over the ROI tool, a brush on all three planes, the trace (stack_trace_layer.py)
 │   │   ├── widgets/pipelines # Run tab: one PipelineWidget per pipeline
 │   │   ├── tasks.py          # worker task table: task_<name>(args, logger)
 │   │   └── _worker.py        # python -m mbo_utilities.gui._worker <task_type> <args_json>
-│   ├── analysis/             # scan-phase, linescan, phasecorr math, MESc stack placement; filters.py: zero-phase trace filters sized in Hz and ms; trace_readouts.py: spectrum, correlation, triggered average, d', motion coupling
-│   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation; the domain file
+│   ├── analysis/             # scan-phase, linescan, phasecorr math, MESc stack placement; filters.py: zero-phase trace filters sized in Hz and ms; trace_readouts.py: spectrum, correlation, triggered average, d', motion coupling; neurite_tracing.py: one z-stack channel traced into paths and link proposals (skan)
+│   ├── annotation/           # GUI-free manual-ROI model: label store, trace table, RoiModel, NGFF labels zarr; slow / fast event curation; the domain file; the trace zarr of `mbo stack-annotate` (neurite_trace.py)
 │   ├── cli.py                # `mbo` (click)
 │   └── assets/docs/          # in-app help pages
 ├── pollen/                   # pollen calibration (console script `pollen`)
@@ -53,7 +54,7 @@ pml_utilities/
 `mbo`, `pollen`. The base is the reading and writing core (numpy, scipy, h5py, tifffile, zarr,
 tqdm, click) and adds no package to a masknmf install. Extras: `gui` (The Studio),
 `qt`, `video`, `codecs`, `pyramid`, `dask`, `hpc` (submitit), `server`
-(uvicorn, websockets), `napari`, `notebooks`, `suite2p`, `all`. Every base dependency is imported somewhere under
+(uvicorn, websockets), `napari`, `notebooks`, `suite2p`, `annotate` (skan, for `mbo stack-annotate`), `all`. Every base dependency is imported somewhere under
 `mbo_utilities/`; a package one optional command needs is an extra, with the install
 hint in its `ImportError`. Entry-point groups: `mbo_utilities.lazy_arrays` (readers),
 `mbo_utilities.pipelines` (pipelines).

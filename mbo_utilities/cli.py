@@ -2523,5 +2523,53 @@ def asap7(
     click.echo(f"wrote {run}\nview with: masknmf view {run / 'results.glutamate.hdf5'}")
 
 
+@main.command("stack-annotate")
+@click.argument("path", type=click.Path(exists=True))
+@click.option(
+    "--unit",
+    default=None,
+    help="The .mesc Z-stack unit, e.g. MUnit_1 or MSession_0/MUnit_1; left out, a file with several lists them.",
+)
+@click.option(
+    "--voxel",
+    type=float,
+    nargs=3,
+    default=None,
+    metavar="DZ DY DX",
+    help="Voxel size in microns, for a file that stores none.",
+)
+def stack_annotate(path, unit, voxel):
+    """Annotate dendrites, spines and other structures through a Z-stack, in 3D.
+
+    XY, XZ, YZ and 3D views of the stack with the ROI tool's panel; a brush
+    that paints on all three planes, filling between two ROIs, one surface
+    per class in 3D, and an automatic trace of one channel to edit. Saves
+    <stem>.rois.zarr and <stem>.trace.zarr beside the stack. Needs the
+    annotate extra.
+
+    \b
+      mbo stack-annotate stack.mesc                  # list the Z-stacks, or open the only one
+      mbo stack-annotate stack.mesc --unit MUnit_1
+      mbo stack-annotate stack.zarr --voxel 2 0.5 0.5
+    """
+    if unit is None and Path(path).suffix.lower() == ".mesc":
+        from mbo_utilities.arrays.mesc import list_mesc_units
+
+        stacks = [u for u in list_mesc_units(path) if u["kind"] == "zstack"]
+        if len(stacks) > 1:
+            click.echo(f"{Path(path).name} holds {len(stacks)} Z-stacks (C, Z, Y, X):")
+            for u in stacks:
+                c, z, y, x = u["shape"][1:]
+                click.echo(f"  {u['munit']:<10}{c} x {z} x {y} x {x}   {u['comment']}")
+            click.echo(f"\nchoose one with --unit, e.g. --unit {stacks[-1]['munit']}", err=True)
+            raise click.Abort
+    import fastplotlib as fpl
+
+    from mbo_utilities.gui.stack_annotate import build
+
+    build(filepath_stack=path, unit=unit, voxel_um=voxel)
+    fpl.loop.run()
+
+
 if __name__ == "__main__":
     main()

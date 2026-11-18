@@ -14,6 +14,7 @@ The `mbo` command provides tools for viewing, converting, and analyzing imaging 
 | `mbo shortcut` | Create a desktop icon |
 | `mbo gpu` | Show render/compute GPU and memory |
 | `mbo serve` | Serve the GUI to a browser from a remote machine |
+| `mbo stack-annotate` | Annotate structures through a Z-stack in 3D |
 
 ## GUI Mode
 
@@ -511,6 +512,65 @@ mbo dashboard path/to/file.mesc --unit MUnit_28 --channel 1
 Opens the trace dashboard (see the GUI guide's MESc section): each line's or
 patch's mean and every ROI drawn on the unit, as raw, dF/F or z-score through a
 filter, over windows you mark, exported as PNG, SVG, PDF, CSV and JSON.
+
+## Stack annotation
+
+```bash
+uv pip install "pml_utilities[annotate]"
+mbo stack-annotate stack.mesc                           # lists the Z-stacks, or opens the only one
+mbo stack-annotate stack.mesc --unit MUnit_1
+mbo stack-annotate stack.zarr --voxel 2 0.5 0.5         # dz dy dx in µm, for a file that stores none
+```
+
+Annotates dendrites, spines and other structures through a Z-stack, in 3D. The
+window is The Studio's viewer and ROI tool (polygons, labels, table, undo,
+saving) with XZ, YZ and 3D views of the same stack, a brush that paints on XY,
+XZ and YZ, and an automatic trace of one channel to edit. The `annotate` extra
+adds [skan](https://skeleton-analysis.org) to the `gui` extra.
+
+In The Studio, show a Z-stack from the MESc tab and click **Annotate in 3D**: the
+annotator opens on that unit in its own window. Its ROIs are the unit's rois
+zarr, the same file The Studio's ROI tool reads and writes, so ROIs drawn in
+either open in the other. Both write the whole file, so edit them in one window
+at a time.
+
+![XY, YZ, XZ and 3D views with the ROI panel](../_images/stack_annotate.png)
+
+| Action | How |
+|---|---|
+| Draw a polygon | `a`, click points, click the first to close, `r` adds it |
+| Paint | `b` or **Brush**, drag on XY; the stroke joins the selected ROI on this plane or starts a new one |
+| Paint in depth | brush on, drag on XZ or YZ; every plane the stroke crosses gets it, in the selected ROI's class. A closed loop is filled. The stroke is one brush diameter thick around the crosshair |
+| Erase | brush on, shift + drag takes the stroke out of the selected ROI; on XZ or YZ, out of every ROI of its class |
+| Label | add a label under LABELS in the Curation tab; `1` to `9` or its button labels the selection or the whole group. There are no labels to start with |
+| Merge | pick ROIs (ctrl / shift + click in the image or the ROIs table), **Merge**; the ones that share a plane become one ROI |
+| Delete several | pick ROIs, **Delete** |
+| Group ROIs | ctrl + click toggles an ROI in the group, shift + click adds one; works with the brush on |
+| Undo | ctrl + z, pointer over the image or the panel; one history for ROIs and trace |
+| Fill between planes | ctrl + click two ROIs on different planes, **Fill between planes** |
+| Show, hide or fade a class in 3D | its row under LABELS: checkbox and opacity slider; the stack has its own at the top of the panel |
+| Recolour a class | the colour square in its row under LABELS; XY, XZ, YZ and 3D follow. Lasts for the session |
+| Move through the stack | z slider, or click in XZ or YZ |
+| Move the crosshair | click in XY, or the y and x sliders; ctrl + click with the brush on |
+| Trace | **Trace channel N** under Trace traces the channel on screen in about 8 s: paths (cyan) that meet at junctions, and dashed link proposals (orange) across gaps. XY shows the paths through the plane on screen, 3D shows all. A new trace replaces the old one; ctrl + z brings it back |
+| Pick paths and links | click a line in XY or 3D; shift + click picks more. Not while the brush or the polygon tool is on |
+| Edit the trace | **Delete paths**, **Accept links** (each becomes a path joining the two ends), **Reject links** |
+| Everything else | the ROI panel; `k` lists its keys |
+
+Saving writes `<stem>.rois.zarr` beside the stack, label image included (for a
+`.mesc`, `<stem>_<unit>.rois.zarr`). **Save trace** writes the trace zarr beside it,
+named the same way with `.trace.zarr`, and the stack opens with it next time. It
+is a zarr v3 group: `paths/offsets` and `paths/points` (path k is
+`points[offsets[k]:offsets[k+1]]`, z y x in voxels), `links` (the two ends of each
+proposal), `labels/paths`, an OME-NGFF label image of the paths that napari
+opens, and the voxel size, channel and source stack in its attrs.
+`mbo_utilities.annotation.neurite_trace.read_trace(path)` reads it back; plain
+`zarr` reads it too.
+
+The trace (`mbo_utilities/analysis/neurite_tracing.py`) is a ridge filter on
+each plane (Sato et al. 1998), a two-level threshold in 3D (Canny 1986),
+thinning, and skan to cut the skeleton into paths. Its parameters are an untuned
+first guess.
 
 ## Formats
 
