@@ -682,20 +682,30 @@ class PreviewDataWidget(EdgeWindow):
 
         from mbo_utilities.gui.viewers.time_series import DOCKED_TABS
 
+        self._docked_windows: dict[str, ImguiWindow] = {}
         figure = self.image_widget.figure
         if not figure.imgui_docking:
             return
         for label in DOCKED_TABS:
-            figure.add_imgui_window(
-                ImguiWindow(update_call=functools.partial(self._draw_docked_tab, label)),
-                location=self.location,
-                size=self.size,
-                title=label,
+            window = ImguiWindow(
+                update_call=functools.partial(self._draw_docked_tab, label)
             )
+            figure.add_imgui_window(
+                window, location=self.location, size=self.size, title=label
+            )
+            self._docked_windows[label] = window
 
     def _draw_docked_tab(self, label: str) -> None:
         with fit_width():
             self._viewer.draw_docked(label)
+
+    def _focus_docked_tabs(self) -> None:
+        """Bring a docked tab to the front when its widget asks, e.g. ROIs when Manual ROI Labeling is switched on."""
+        for label, window in self._docked_windows.items():
+            target = imgui.internal.find_window_by_name(window._imgui_name)
+            if target is not None and self._viewer.docked_wants_focus(label):
+                ## NOTE: imgui.set_window_focus(name) segfaults on a docked window in imgui_bundle 1.92.801
+                imgui.internal.focus_window(target)
 
     def _init_viewer(self):
         from mbo_utilities.gui.viewers import get_viewer_class
@@ -1160,17 +1170,12 @@ class PreviewDataWidget(EdgeWindow):
             draw_segment(self)
             draw_deadpixel(self)
 
+        self._poll()
+        self._focus_docked_tabs()
         super().draw()
 
-    def update(self):
-        """The per-frame callback: the widget's tabs, the top panels and the pipeline polls."""
-        t0 = time.perf_counter()
-        prev = self._last_frame_t
-        # a gap well over the 16 ms frame interval means the main thread was blocked between
-        # frames (a worker holding the GIL, the canvas swap); it is the signal behind "the gui froze"
-        gap_ms = (t0 - prev) * 1000.0 if prev is not None else 0.0
-        self._last_frame_t = t0
-
+    def _poll(self) -> None:
+        """Per-frame work that draws nothing; the window's own callback is skipped while it is a hidden dock tab."""
         from mbo_utilities.gui.widgets.pipelines.isoview import (
             maybe_refresh_raw_projections,
         )
@@ -1179,6 +1184,21 @@ class PreviewDataWidget(EdgeWindow):
         for pipeline in list(self._pipeline_instances.values()):
             pipeline.poll()
         self._sync_top_panels()
+
+        if self._mean_ready:
+            self._mean_ready = False
+            if self._mean_subtraction or self._invert_deflection:
+                self._update_mean_subtraction()
+                self.image_widget.reset_vmin_vmax_frame()
+
+    def update(self):
+        """The window's callback: the tab bar."""
+        t0 = time.perf_counter()
+        prev = self._last_frame_t
+        # a gap well over the 16 ms frame interval means the main thread was blocked between
+        # frames (a worker holding the GIL, the canvas swap); it is the signal behind "the gui froze"
+        gap_ms = (t0 - prev) * 1000.0 if prev is not None else 0.0
+        self._last_frame_t = t0
         t1 = time.perf_counter()
         with fit_width():
             # imgui wraps per window, so each tab's child re-applies the wrap
@@ -1190,12 +1210,6 @@ class PreviewDataWidget(EdgeWindow):
             self.logger.debug(
                 f"SLOW FRAME: gap={gap_ms:.0f}ms menu={menu_ms:.1f}ms draw={draw_ms:.1f}ms"
             )
-
-        if self._mean_ready:
-            self._mean_ready = False
-            if self._mean_subtraction or self._invert_deflection:
-                self._update_mean_subtraction()
-                self.image_widget.reset_vmin_vmax_frame()
 
     def draw_stats_section(self):
         """The Signal Quality tab: the metric table; the plot is the top strip's panel."""

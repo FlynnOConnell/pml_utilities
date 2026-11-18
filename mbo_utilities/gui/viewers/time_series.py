@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 __all__ = ["TimeSeriesViewer"]
 
 # tabs that leave the tab bar for a window of their own while the figure docks
-DOCKED_TABS = ("Image",)
+DOCKED_TABS = ("Image", "Signal Quality", "Process", "ROIs")
 
 
 class TimeSeriesViewer(BaseViewer):
@@ -50,9 +50,34 @@ class TimeSeriesViewer(BaseViewer):
     def draw_docked(self, label: str) -> None:
         from mbo_utilities.gui.widgets import widget_is_visible
 
+        widget = self._widget(label)
+        if widget is None:
+            return
+        if not widget_is_visible(widget):
+            imgui.text_disabled("Switched off in the Widgets menu.")
+            return
+        reason = widget.tab_disabled()
+        if reason is not None:
+            imgui.push_text_wrap_pos(0.0)
+            imgui.text_disabled(reason or f"{label} is not available yet.")
+            imgui.pop_text_wrap_pos()
+            return
+        self._draw_body(widget)
+
+    def docked_wants_focus(self, label: str) -> bool:
+        from mbo_utilities.gui.widgets import widget_is_visible
+
+        widget = self._widget(label)
+        return (
+            widget is not None and widget_is_visible(widget) and widget.wants_focus()
+        )
+
+    def _widget(self, label: str):
+        """The tab widget captioned ``label``, None when this data has none."""
         for widget in self._widgets():
-            if self._label(widget) == label and widget_is_visible(widget):
-                self._draw_body(widget)
+            if self._label(widget) == label:
+                return widget
+        return None
 
     @staticmethod
     def _label(widget) -> str:

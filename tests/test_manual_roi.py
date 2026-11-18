@@ -2471,7 +2471,9 @@ class TestWidgetAttach:
         assert "ROIs" in seen, f"ROIs tab missing from tab bar: {seen}"
         assert "Traces" in seen, f"Traces tab missing from tab bar: {seen}"
         assert "Runs" not in seen, "the Runs tab was removed"
-        assert "Image" in seen and "Process" in seen, "the other tabs must survive"
+        assert {"Image", "Process", "ROIs"} <= set(
+            gui._docked_windows
+        ), "the other tabs must survive, as docked windows"
         assert guarded.calls, "ROI tab body never drew"
         assert not guarded.errors, f"ROI tab raised: {guarded.errors}"
         assert roi.focus_tab is False, "focus must be one-shot"

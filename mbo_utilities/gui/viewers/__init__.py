@@ -60,6 +60,10 @@ class BaseViewer(ABC):
     def draw_docked(self, label: str) -> None:
         """Draw the tab ``label`` in its own docked window. Override as needed."""
 
+    def docked_wants_focus(self, label: str) -> bool:
+        """Whether the docked tab ``label`` asks to be brought to the front this frame."""
+        return False
+
     def on_data_loaded(self) -> None:
         """Called by _dialogs when new data is loaded. Override as needed."""
 
