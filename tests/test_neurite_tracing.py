@@ -5,6 +5,7 @@ import pytest
 import skimage.draw
 
 from mbo_utilities.analysis import neurite_tracing as tracing
+from mbo_utilities.annotation.neurite_trace import read_trace, write_trace
 
 VOXEL_UM = (3.0, 0.5, 0.5)
 
@@ -57,9 +58,9 @@ def test_an_empty_stack_gives_an_empty_trace():
 def test_save_and_load_keep_points_links_and_metadata(tmp_path):
     volume = stack_with_lines([(2, (48, 5, 48, 40)), (2, (48, 56, 48, 90))])
     trace = tracing.trace_volume(volume=volume, voxel_um=VOXEL_UM, channel=1, link_distance_um=10.0)
-    filepath = str(tmp_path / "stack.trace.json")
-    tracing.save_trace(trace=trace, filepath=filepath)
-    loaded = tracing.load_trace(filepath=filepath)
+    filepath = tmp_path / "stack.trace.zarr"
+    write_trace(trace, filepath, shape=volume.shape)
+    loaded = read_trace(filepath)
     assert loaded.voxel_um == VOXEL_UM and loaded.channel == 1
     assert len(loaded.paths) == len(trace.paths)
     for points, points_loaded in zip(trace.paths.values(), loaded.paths.values()):

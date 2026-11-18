@@ -9,14 +9,13 @@ lie close together become link proposals, which the annotator accepts or rejects
 The default parameters are an untuned first guess, made on one in vivo two-photon stack.
 """
 
-import json
-from dataclasses import dataclass, field
-
 import numpy as np
 import scipy.ndimage
 import scipy.spatial
 import skimage.filters
 import skimage.morphology
+
+from mbo_utilities.annotation.neurite_trace import Trace
 
 try:
     import skan
@@ -31,20 +30,6 @@ SIGMAS_PX = (1.0, 2.0)
 QUANTILES_HYSTERESIS = (0.985, 0.997)
 N_VOXELS_MIN = 30
 LINK_DISTANCE_UM = 8.0
-
-
-@dataclass
-class Trace:
-    """Paths through a stack, and proposed links across the gaps between them."""
-
-    paths: dict = field(default_factory=dict)  ## path id -> (n_points, 3) float32 (z, y, x) in voxels
-    links: np.ndarray = field(default_factory=lambda: np.zeros((0, 2, 3), np.float32))  ## (n_links, 2, 3) ends joined
-    voxel_um: tuple = (1.0, 1.0, 1.0)  ## (dz, dy, dx)
-    channel: int = 0
-
-    @property
-    def next_id(self) -> int:
-        return max(self.paths, default=-1) + 1
 
 
 def trace_volume(
@@ -179,26 +164,3 @@ def links_between_pieces(skeleton: np.ndarray, voxel_um: tuple, link_distance_um
     pairs = pairs[piece_of_end[pairs[:, 0]] != piece_of_end[pairs[:, 1]]]
     return ends[pairs].astype(np.float32)
 
-
-def save_trace(trace: Trace, filepath: str) -> None:
-    """Write a trace as JSON: voxel size, channel, each path's points and each link's two ends, (z, y, x) in voxels."""
-    record = {
-        "voxel_um": list(trace.voxel_um),
-        "channel": trace.channel,
-        "paths": [np.round(points, 3).tolist() for points in trace.paths.values()],
-        "links": np.round(trace.links, 3).tolist(),
-    }
-    with open(filepath, "w") as file:
-        json.dump(record, file)
-
-
-def load_trace(filepath: str) -> Trace:
-    """Read a trace written by ``save_trace``; its paths get ids ``0 .. n - 1`` in file order."""
-    with open(filepath) as file:
-        record = json.load(file)
-    return Trace(
-        paths={index: np.asarray(points, np.float32).reshape(-1, 3) for index, points in enumerate(record["paths"])},
-        links=np.asarray(record["links"], np.float32).reshape(-1, 2, 3),
-        voxel_um=tuple(record["voxel_um"]),
-        channel=int(record["channel"]),
-    )
