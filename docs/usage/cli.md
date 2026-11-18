@@ -517,8 +517,8 @@ filter, over windows you mark, exported as PNG, SVG, PDF, CSV and JSON.
 
 ```bash
 uv pip install "pml_utilities[annotate]"
-mbo stack-annotate stack.mesc                           # the file's first Z-stack unit
-mbo stack-annotate stack.mesc --unit MSession_0/MUnit_1
+mbo stack-annotate stack.mesc                           # lists the Z-stacks, or opens the only one
+mbo stack-annotate stack.mesc --unit MUnit_1
 mbo stack-annotate stack.zarr --voxel 2 0.5 0.5         # dz dy dx in µm, for a file that stores none
 ```
 
@@ -527,6 +527,12 @@ window is The Studio's viewer and ROI tool (polygons, labels, table, undo,
 saving) with XZ, YZ and 3D views of the same stack, a brush that paints on XY,
 XZ and YZ, and an automatic trace of one channel to edit. The `annotate` extra
 adds [skan](https://skeleton-analysis.org) to the `gui` extra.
+
+In The Studio, show a Z-stack from the MESc tab and click **Annotate in 3D**: the
+annotator opens on that unit in its own window. Its ROIs are the unit's rois
+zarr, the same file The Studio's ROI tool reads and writes, so ROIs drawn in
+either open in the other. Both write the whole file, so edit them in one window
+at a time.
 
 ![XY, YZ, XZ and 3D views with the ROI panel](../_images/stack_annotate.png)
 

@@ -53,4 +53,4 @@ smaller internal tweaks are left out.
 
 ## Unreleased
 
-- `mbo stack-annotate`: annotate dendrites, spines and other structures through a Z-stack in XY, XZ, YZ and 3D, with a brush on all three planes and an editable automatic trace, saved as `<stem>.trace.zarr` (paths, link proposals and an OME-NGFF label image). Install the `annotate` extra.
+- `mbo stack-annotate`: annotate dendrites, spines and other structures through a Z-stack in XY, XZ, YZ and 3D, with a brush on all three planes and an editable automatic trace, saved as `<stem>.trace.zarr` (paths, link proposals and an OME-NGFF label image). A `.mesc` with several Z-stacks lists them; the MESc tab's **Annotate in 3D** opens the one on screen. Install the `annotate` extra.
