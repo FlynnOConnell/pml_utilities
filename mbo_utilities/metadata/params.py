@@ -305,11 +305,7 @@ def get_voxel_size(
     dy: float | None = None,
     dz: float | None = None,
 ) -> VoxelSize:
-    """The voxel size in µm: the given overrides, else the canonical keys, the ``pixel_resolution`` tuple, the OME ``PhysicalSize*`` keys, ScanImage's piezo step, else 1.0.
-
-    ``dz`` is None for an LBM stack with none stored: the beamlet spacing is
-    user-supplied, never inferred.
-    """
+    """The voxel size in µm: the given overrides, else the canonical keys, the ``pixel_resolution`` tuple, the OME ``PhysicalSize*`` keys; ``dx`` and ``dy`` default to 1.0, an unknown ``dz`` is None."""
     if metadata is None:
         metadata = {}
 
@@ -324,17 +320,6 @@ def get_voxel_size(
                 pass
         elif isinstance(pixel_res, (int, float)):
             px_x = px_y = float(pixel_res)
-
-    si_dz = None
-    is_lbm = metadata.get("lbm_stack", False) or metadata.get("stack_type") == "lbm"
-    if not is_lbm:
-        si = metadata.get("si", {})
-        if isinstance(si, dict):
-            h_stack = si.get("hStackManager", {})
-            if isinstance(h_stack, dict):
-                si_dz = h_stack.get("actualStackZStepSize")
-                if si_dz is None:
-                    si_dz = h_stack.get("stackZStepSize")
 
     resolved_dx = dx
     if resolved_dx is None:
@@ -357,11 +342,6 @@ def get_voxel_size(
         resolved_dz = _first_float(
             metadata, ["dz", "z_step", "PhysicalSizeZ", "spacing"]
         )
-    if resolved_dz is None and si_dz is not None:
-        with contextlib.suppress(TypeError, ValueError):
-            resolved_dz = float(si_dz)
-    if resolved_dz is None and not is_lbm:
-        resolved_dz = 1.0
 
     return VoxelSize(dx=resolved_dx, dy=resolved_dy, dz=resolved_dz)
 
