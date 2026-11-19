@@ -310,6 +310,12 @@ _OME_LENGTH_TO_UM = {
     "mm": 1e3,
     "cm": 1e4,
     "m": 1e6,
+    "picometer": 1e-6,  # ome-ngff spells units out (udunits names)
+    "nanometer": 1e-3,
+    "micrometer": 1.0,
+    "millimeter": 1e3,
+    "centimeter": 1e4,
+    "meter": 1e6,
 }
 _OME_TIME_TO_S = {
     "ns": 1e-9,

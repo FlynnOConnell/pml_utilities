@@ -14,6 +14,7 @@ import numpy as np
 
 from mbo_utilities import log
 from mbo_utilities.arrays._base import (
+    DIMS,
     ReductionMixin,
     Shape5DMixin,
     _imwrite_base,
@@ -22,7 +23,9 @@ from mbo_utilities.arrays._base import (
 from mbo_utilities.arrays.suite2p import _add_suite2p_labels
 from mbo_utilities.file_io import HAS_ZARR
 from mbo_utilities.lazy_array import register_array_class
+from mbo_utilities.arrays.features._dim_labels import DEFAULT_DIMS
 from mbo_utilities.metadata import _build_ome_metadata, get_param, get_voxel_size
+from mbo_utilities.metadata.io import _OME_LENGTH_TO_UM
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 if TYPE_CHECKING:
@@ -82,53 +85,80 @@ def _read_index(idx):
 
 def _keep_slice(k):
     if isinstance(k, (int, np.integer)):
-        return slice(int(k), int(k) + 1)
+        return slice(int(k), int(k) + 1 or None)  # -1 reads the last element, not slice(-1, 0)
     return _read_index(k)
 
 
+def _ngff_multiscale(attrs: dict) -> dict | None:
+    """The first OME-NGFF multiscales entry of a group's attrs (0.5 under ``ome``, 0.4 at the top)."""
+    ome = attrs.get("ome")
+    multiscales = ome.get("multiscales") if isinstance(ome, dict) else attrs.get("multiscales")
+    if isinstance(multiscales, list) and multiscales and isinstance(multiscales[0], dict):
+        return multiscales[0]
+    return None
+
+
+def _store_labels(z, attrs: dict) -> tuple[str, ...] | None:
+    """The axis labels a store declares: NGFF axes, then zarr v3 ``dimension_names``, then an mbo ``dims`` attr."""
+    entry = _ngff_multiscale(attrs)
+    if entry is not None and isinstance(entry.get("axes"), list):
+        return tuple(str(ax["name"] if isinstance(ax, dict) else ax) for ax in entry["axes"])
+    names = getattr(z.metadata, "dimension_names", None)
+    if names and all(n is not None for n in names):
+        return tuple(names)
+    if attrs.get("dims"):
+        return tuple(attrs["dims"])
+    return None
+
+
+def _valid_labels(labels, ndim: int) -> tuple[str, ...] | None:
+    """``labels`` upper-cased when they name ``ndim`` distinct axes of TCZYX, else None."""
+    labels = tuple(str(c).upper() for c in labels)
+    if len(labels) == ndim and len(set(labels)) == ndim and set(labels) <= set(DIMS):
+        return labels
+    return None
+
+
+def _ngff_voxel_size(attrs: dict) -> dict:
+    """``dx``, ``dy``, ``dz`` in um from the level-0 NGFF scale, for the space axes that carry one."""
+    entry = _ngff_multiscale(attrs)
+    if entry is None:
+        return {}
+    try:
+        scale = next(t["scale"] for t in entry["datasets"][0]["coordinateTransformations"] if t.get("type") == "scale")
+    except (KeyError, IndexError, TypeError, StopIteration):
+        return {}
+    out = {}
+    for ax, value in zip(entry.get("axes", []), scale, strict=False):
+        if not isinstance(ax, dict) or ax.get("type") != "space":
+            continue
+        to_um = _OME_LENGTH_TO_UM.get(ax.get("unit", "micrometer"))
+        if to_um is not None and str(ax.get("name", "")).lower() in ("x", "y", "z"):
+            out["d" + ax["name"].lower()] = float(value) * to_um
+    return out
+
+
+def _index_by_labels(data, key: tuple, labels: tuple[str, ...]) -> np.ndarray:
+    """Reads ``data``, whose axes are ``labels`` (a subset of TCZYX in any order), with a full 5D key; numpy 5D semantics on the result."""
+    by_dim = dict(zip(DIMS, key, strict=True))
+    out = np.asarray(data.oindex[tuple(_keep_slice(by_dim[d]) for d in labels)])
+    order = sorted(range(len(labels)), key=lambda i: DIMS.index(labels[i]))
+    out = np.transpose(out, order)  ## axes now in TCZYX order of the labels present
+    present = {labels[i] for i in order}
+    for i, d in enumerate(DIMS):
+        if d not in present:
+            out = np.expand_dims(out, axis=i)
+    ints = tuple(i for i, k in enumerate(key) if isinstance(k, (int, np.integer)))
+    return out.reshape([n for i, n in enumerate(out.shape) if i not in ints]) if ints else out
+
+
 class ZarrArray(ReductionMixin, Shape5DMixin):
-    """
-    Reader for Zarr stores (including OME-Zarr).
+    """One zarr array, OME-Zarr group, or a folder of same-shape stores as (T, C, Z, Y, X).
 
-    Presents data as (T, Z, H, W) with Z=1..nz. Supports both standard
-    zarr arrays and OME-Zarr groups with "0" arrays.
-
-    Parameters
-    ----------
-    filenames : str, Path, or sequence
-        Path(s) to zarr store(s).
-    compressor : str, optional
-        Compressor name (not currently used for reading).
-    rois : list[int] or int, optional
-        ROI filter (not currently used).
-    dims : str | tuple | None, optional
-        Dimension labels. Defaults to "TZYX" for 4D data.
-        Supports custom orderings like "ZTYX", "sTZYX", etc.
-
-    Attributes
-    ----------
-    shape : tuple[int, int, int, int]
-        Shape as (T, Z, H, W).
-    dtype : np.dtype
-        Data type.
-    dims : tuple[str, ...]
-        Dimension labels (e.g., ('T', 'Z', 'Y', 'X')).
-    zs : list
-        List of zarr arrays.
-
-    Examples
-    --------
-    >>> arr = ZarrArray("data.zarr")
-    >>> arr.shape
-    (10000, 1, 512, 512)
-    >>> arr.dims
-    ('T', 'Z', 'Y', 'X')
-    >>> frame = arr[0, 0]  # Get first frame of first z-plane
-
-    >>> # custom dimension ordering
-    >>> arr = ZarrArray("data.zarr", dims="ZTYX")
-    >>> arr.dims
-    ('Z', 'T', 'Y', 'X')
+    Axis labels come from ``dims``, else the store's NGFF ``axes``, zarr v3
+    ``dimension_names`` or ``dims`` attr, else the rank (§5.2). Several stores
+    stack onto Z, so their own labels must not include Z. Pixel sizes come from
+    the level-0 NGFF scale when the attrs carry no ``dx``/``dy``/``dz``.
     """
 
     @classmethod
@@ -197,6 +227,10 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
                 self._metadata.append(dict(z.attrs))
         self.compressor = compressor
         self._target_dtype = None
+        self._labels = self._resolve_labels(dims)
+        for md in self._metadata:
+            for key, value in _ngff_voxel_size(md).items():
+                md.setdefault(key, value)
 
     @property
     def metadata(self) -> dict:
@@ -207,11 +241,8 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
             md = self._metadata[0].copy() if self._metadata[0] else {}
 
         md["dtype"] = self.dtype
-        if "num_timepoints" not in md and self.zs:
-            tp = int(self.zs[0].shape[0])
-            md["num_timepoints"] = tp
-            md["nframes"] = tp
-            md["num_frames"] = tp
+        nt, nc, nz, ny, nx = self._shape5d()
+        md.update(num_timepoints=nt, num_color_channels=nc, num_zplanes=nz, Ly=ny, Lx=nx)
 
         time_scale = _ome_time_scale_attr(md)
         if time_scale is not None:
@@ -301,24 +332,29 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         """Cache summary stats in the first backing zarr store."""
         return str(self.filenames[0]) if self.filenames else None
 
+    def _resolve_labels(self, dims) -> tuple[str, ...]:
+        """Axis labels of one store: declared, else what the store says, else the rank guess."""
+        z = self.zs[0]
+        declared = _valid_labels(dims, z.ndim) if dims is not None else None
+        if dims is not None and declared is None:
+            logger.warning(f"dims={dims!r} does not name the {z.ndim} axes of {self.filenames[0].name}; using the store's own labels")
+        stored = _store_labels(z, self._metadata[0] if self._metadata else {})
+        labels = declared or (_valid_labels(stored, z.ndim) if stored else None)
+        if labels is None:
+            if z.ndim not in DEFAULT_DIMS:
+                raise ValueError(f"{self.filenames[0]}: a {z.ndim}D zarr array has no axis labels to read it by")
+            labels = DEFAULT_DIMS[z.ndim]
+        if len(self.zs) > 1:
+            if "Z" in labels:
+                raise ValueError(
+                    f"{len(self.zs)} stores stack onto Z, but each already has a Z axis ({''.join(labels)}); open one store"
+                )
+        return labels
+
     @property
-    def _shape_tzyx(self) -> tuple[int, int, int, int]:
-        """Internal 4D shape for zarr indexing (used by 2D/3D/4D source paths;
-        5D sources skip this and feed _shape5d directly).
-        """
-        first_shape = self.zs[0].shape
-        if len(first_shape) == 4:
-            return first_shape
-        if len(first_shape) == 3:
-            t, h, w = first_shape
-            return t, len(self.zs), h, w
-        if len(first_shape) == 2:
-            h, w = first_shape
-            return 1, len(self.zs), h, w
-        raise ValueError(
-            f"Unexpected zarr shape: {first_shape}. "
-            f"Expected 2D (Y, X), 3D (T, Y, X), 4D (T, Z, Y, X), or 5D (T, C, Z, Y, X)"
-        )
+    def input_dims(self) -> tuple[str, ...]:
+        """The store's own axis labels, as read."""
+        return self._labels
 
     @property
     def dtype(self):
@@ -340,17 +376,14 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
         return np.prod(self.shape)
 
     def __array__(self, dtype=None, copy=None):
-        data = self[0]
-        if dtype is not None:
-            data = data.astype(dtype)
-        return data
+        data = self[0, 0, 0]
+        return data if dtype is None else data.astype(dtype)
 
     def _shape5d(self) -> tuple[int, int, int, int, int]:
-        first_shape = self.zs[0].shape
-        if len(first_shape) == 5:
-            return first_shape
-        s = self._shape_tzyx
-        return (s[0], 1, s[1], s[2], s[3])
+        sizes = dict(zip(self._labels, self.zs[0].shape, strict=True))
+        if len(self.zs) > 1:
+            sizes["Z"] = len(self.zs)
+        return tuple(int(sizes.get(d, 1)) for d in DIMS)
 
     def __len__(self) -> int:
         return self.nt
@@ -358,65 +391,17 @@ class ZarrArray(ReductionMixin, Shape5DMixin):
     def __getitem__(self, key):
         key = _normalize_key(key, 5)
         key = key + (slice(None),) * (5 - len(key))
-        t_key, c_key, z_key, y_key, x_key = key
-
-        # NOTE: integer T/C/Z keys are read as slices of one and squeezed at the end, so the C insert below never lands on the wrong axis
-        t_read = _keep_slice(t_key)
-        c_read = _keep_slice(c_key)
-        z_read = _keep_slice(z_key)
-        y_read = _read_index(y_key)
-        x_read = _read_index(x_key)
-
-        first_ndim = len(self.zs[0].shape)
-        is_single_5d = len(self.zs) == 1 and first_ndim == 5
-        is_single_4d = len(self.zs) == 1 and first_ndim == 4
-        is_single_2d = len(self.zs) == 1 and first_ndim == 2
-
-        if is_single_5d:
-            out = self.zs[0][t_read, c_read, z_read, y_read, x_read]
-        elif is_single_4d:
-            out = self.zs[0][t_read, z_read, y_read, x_read]
-        elif is_single_2d:
-            if isinstance(t_key, (int, np.integer)) and int(t_key) != 0:
-                raise IndexError("T dimension has size 1, only index 0 is valid")
-            if isinstance(z_key, (int, np.integer)) and int(z_key) != 0:
-                raise IndexError("Z dimension has size 1, only index 0 is valid")
-            data = self.zs[0][y_read, x_read]
-            out = data[np.newaxis, np.newaxis, ...]
-        elif len(self.zs) == 1:
-            if isinstance(z_key, (int, np.integer)) and int(z_key) != 0:
-                raise IndexError("Z dimension has size 1, only index 0 is valid")
-            data = self.zs[0][t_read, y_read, x_read]
-            out = np.expand_dims(data, axis=1)
-        elif isinstance(z_key, (int, np.integer)):
-            z_int = int(z_key)
-            data = self.zs[z_int][t_read, y_read, x_read]
-            out = np.expand_dims(data, axis=1)
+        if len(self.zs) == 1:
+            out = _index_by_labels(self.zs[0], key, self._labels)
         else:
-            if isinstance(z_key, slice):
-                z_indices = range(len(self.zs))[z_key]
-            elif isinstance(z_key, (np.ndarray, list)):
-                z_indices = list(z_key)
+            z_key = key[2]
+            per_store = key[:2] + (0,) + key[3:]
+            if isinstance(z_key, (int, np.integer)):
+                out = _index_by_labels(self.zs[int(z_key)], per_store, self._labels)
             else:
-                z_indices = range(len(self.zs))
-            arrs = [self.zs[i][t_read, y_read, x_read] for i in z_indices]
-            out = np.stack(arrs, axis=1)
-
-        if not is_single_5d:
-            out = np.expand_dims(
-                out, axis=1
-            )  # 4D sources give TZYX; the stores never carry C
-
-        squeeze_axes = []
-        if isinstance(t_key, (int, np.integer)):
-            squeeze_axes.append(0)
-        if isinstance(c_key, (int, np.integer)):
-            squeeze_axes.append(1)
-        if isinstance(z_key, (int, np.integer)):
-            squeeze_axes.append(2)
-        for ax in sorted(squeeze_axes, reverse=True):
-            out = np.squeeze(out, axis=ax)
-
+                stores = range(len(self.zs))[z_key] if isinstance(z_key, slice) else [int(i) for i in np.atleast_1d(z_key)]
+                z_axis = sum(not isinstance(k, (int, np.integer)) for k in key[:2])
+                out = np.stack([_index_by_labels(self.zs[i], per_store, self._labels) for i in stores], axis=z_axis)
         if self._target_dtype is not None:
             out = out.astype(self._target_dtype)
         return out
