@@ -19,6 +19,14 @@ from mbo_utilities import log
 from mbo_utilities.file_io import get_files, load_npy
 
 from .params import get_param, normalize_resolution
+from .scanimage import (
+    detect_stack_type,
+    get_num_color_channels,
+    get_num_zplanes,
+    get_roi_info,
+    layout_metadata,
+    scan_layout,
+)
 
 __all__ = [
     "_build_ome_metadata",
@@ -462,7 +470,6 @@ def _scanimage_tiff_metadata(tiff_file, file: Path) -> dict:
     zoom_factor = si.get("SI.hRoiManager.scanZoomFactor")
     uniform_sampling = si.get("SI.hScan2D.uniformSampling", "NA")
     objective_resolution = si.get("SI.objectiveResolution", 1.0)
-    frame_rate = si.get("SI.hRoiManager.scanFrameRate")
 
     fly_to_time = float(si.get("SI.hScan2D.flytoTimePerScanfield", 0))
     line_period = float(si.get("SI.hRoiManager.linePeriod", 1))
@@ -488,17 +495,10 @@ def _scanimage_tiff_metadata(tiff_file, file: Path) -> dict:
         return {"source": "scanimage_no_roi_sizes"}
 
     size_xy = sizes[0]
-    num_pixel_xy = num_pixel_xys[0]
-    roi_fov_x_um = round(objective_resolution * size_xy[0])
-    roi_fov_y_um = round(objective_resolution * size_xy[1])
-    pixel_resolution = (
-        roi_fov_x_um / num_pixel_xy[0],
-        roi_fov_y_um / num_pixel_xy[1],
-    )
-    roi_width, roi_height = (
-        num_pixel_xy[0],
-        num_pixel_xy[1],
-    )
+    roi_width, roi_height = num_pixel_xys[0]
+    roi_fov_x_um = objective_resolution * size_xy[0]
+    roi_fov_y_um = objective_resolution * size_xy[1]
+    pixel_resolution = (roi_fov_x_um / roi_width, roi_fov_y_um / roi_height)
 
     metadata = {
         "nchannels": nchannels,
@@ -506,10 +506,9 @@ def _scanimage_tiff_metadata(tiff_file, file: Path) -> dict:
         "roi": (roi_width, roi_height),  # one strip; fov is every strip side by side
         "fov": (num_rois * roi_width, roi_height),
         "fov_um": (num_rois * roi_fov_x_um, roi_fov_y_um),
-        "frame_rate": frame_rate,
-        "pixel_resolution": np.round(pixel_resolution, 2),
+        "pixel_resolution": pixel_resolution,
         "ndim": len(shape),
-        "dtype": "int16",
+        "dtype": str(tiff_file.pages[0].dtype),
         "size": np.prod(shape),
         "page_height": shape[0],
         "page_width": shape[1],
@@ -521,7 +520,9 @@ def _scanimage_tiff_metadata(tiff_file, file: Path) -> dict:
         "roi_groups": _serialize(roi_group),
         "si": _serialize(si),
     }
-    return clean_scanimage_metadata(metadata)
+    metadata = clean_scanimage_metadata(metadata)
+    layout = scan_layout(metadata, query_tiff_pages(file))
+    return metadata | layout_metadata(metadata, layout, average=False)
 
 
 def get_metadata_single(file: Path):
@@ -571,14 +572,16 @@ def get_metadata_batch(file_paths: list | tuple):
     )
 
     total_frames = sum(frames_per_file)
-    return metadata | {
+    metadata = metadata | {
         "num_timepoints": total_frames,
-        "nframes": total_frames,
-        "num_frames": total_frames,
         "frames_per_file": frames_per_file,
         "file_paths": [str(fp) for fp in file_paths],
         "num_files": len(file_paths),
     }
+    if metadata.get("si"):
+        layout = scan_layout(metadata, total_frames * nchannels)
+        metadata |= layout_metadata(metadata, layout, average=False)
+    return metadata
 
 
 def query_tiff_pages(file_path):
@@ -623,7 +626,6 @@ def query_tiff_pages(file_path):
             tag_count_size = 2
             tag_size = 12
             first_ifd_offset = struct.unpack(offset_fmt, header[4:8])[0]
-            header_size = 8
 
         elif version == 43:
             offset_fmt = f"{bo}Q"
@@ -633,7 +635,6 @@ def query_tiff_pages(file_path):
             tag_size = 20
             f.seek(8)
             first_ifd_offset = struct.unpack(offset_fmt, f.read(offset_size))[0]
-            header_size = 16
 
         else:
             raise ValueError(f"Unknown TIFF version: {version}")
@@ -687,9 +688,9 @@ def query_tiff_pages(file_path):
                 offset_size,
             )
 
-        data_size = file_size - header_size
         # NOTE: assumes [IFD][data][IFD][data]; writers that cluster IFDs (Femtonics, Bio-Formats OME) would inflate this ~1000x, so the stride is bounded by one page of data above
-        num_pages = data_size // page_size
+        # NOTE: counted from the first IFD: ScanImage's static header sits before it and can outweigh a small page
+        num_pages = (file_size - first_ifd_offset) // page_size
 
         return int(num_pages)
 
@@ -860,45 +861,17 @@ def clean_scanimage_metadata(meta: dict) -> dict:
 
     result = _prune_empty(result)
 
-    from .scanimage import (
-        detect_stack_type,
-        get_frame_rate,
-        get_num_color_channels,
-        get_num_zplanes,
-        get_roi_info,
-        get_z_step_size,
-    )
-
     if result.get("si"):
         stack_type = detect_stack_type(result)
         result["stack_type"] = stack_type
         result["lbm_stack"] = stack_type == "lbm"
         result["piezo_stack"] = stack_type == "piezo"
         result["num_color_channels"] = get_num_color_channels(result)
+        result.setdefault("num_zplanes", get_num_zplanes(result))
 
-        if "num_zplanes" not in result and "num_planes" not in result:
-            num_z = get_num_zplanes(result)
-            result["num_zplanes"] = num_z
-            result["num_planes"] = num_z
-
-        if stack_type != "lbm":
-            dz = get_z_step_size(result)
-            if dz is not None:
-                result["dz"] = dz
-
-        fs = get_frame_rate(result)
-        if fs is not None:
-            result["fs"] = fs
-
-        roi_info = get_roi_info(result)
-        for k, v in roi_info.items():
+        for k, v in get_roi_info(result).items():
             if v is not None and k not in result:
                 result[k] = v
-
-    from .params import normalize_metadata
-
-    normalize_metadata(result)
-
     return result
 
 

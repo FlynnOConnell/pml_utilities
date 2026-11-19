@@ -278,18 +278,17 @@ class TestGetVoxelSize:
         vs = get_voxel_size(meta, dx=0.3)
         assert vs.dx == 0.3
 
-    def test_from_scanimage_nested(self):
-        """Extract dz from ScanImage nested structure."""
+    def test_a_raw_scanimage_header_is_not_read(self):
+        """The reader deposits a stack's step as ``dz``; a disabled stack's step setting is no z-spacing."""
         meta = {"si": {"hStackManager": {"stackZStepSize": 5.0}}}
-        vs = get_voxel_size(meta)
-        assert vs.dz == 5.0
+        assert get_voxel_size(meta).dz is None
 
-    def test_defaults_to_1(self):
-        """Missing values default to 1.0 for non-LBM."""
+    def test_defaults(self):
+        """dx and dy default to 1.0; an unknown dz stays None."""
         vs = get_voxel_size({})
         assert vs.dx == 1.0
         assert vs.dy == 1.0
-        assert vs.dz == 1.0
+        assert vs.dz is None
 
     def test_lbm_no_default_dz(self):
         """LBM stacks should not get default dz - must be user-supplied."""
@@ -443,9 +442,11 @@ class TestPiezoStackParams:
         assert get_log_average_factor(meta) == 5
 
     def test_get_z_step_size(self):
-        """StackZStepSize from hStackManager."""
-        meta = {"si": {"hStackManager": {"stackZStepSize": 2.5}}}
+        """StackZStepSize from hStackManager, only when the stack ran."""
+        meta = {"si": {"hStackManager": {"enable": True, "stackZStepSize": 2.5}}}
         assert get_z_step_size(meta) == 2.5
+        meta["si"]["hStackManager"]["enable"] = False
+        assert get_z_step_size(meta) is None
 
 
 class TestRoiInfo:
@@ -600,7 +601,6 @@ class TestCleanScanImageMetadata:
         assert result["lbm_stack"] is True
         assert result["piezo_stack"] is False
         assert result["num_zplanes"] == 14
-        assert result["fs"] == 7.5
         assert result["roi"] == (512, 512)
 
     def test_adds_piezo_stack_fields(self):
@@ -621,7 +621,6 @@ class TestCleanScanImageMetadata:
         assert result["lbm_stack"] is False
         assert result["piezo_stack"] is True
         assert result["num_zplanes"] == 17
-        assert result["dz"] == 2.5
 
 
 class TestExtractRoiSlices:
@@ -642,11 +641,24 @@ class TestExtractRoiSlices:
         }
         rois = extract_roi_slices(meta)
 
-        assert len(rois) == 2
-        assert rois[0]["y_start"] == 0
+        # 200 + 280 rows leave 20 fly-to lines, whatever the rounded timing said
+        assert [(r["y_start"], r["y_end"]) for r in rois] == [(0, 200), (220, 500)]
         assert rois[0]["width"] == 100
-        assert rois[1]["y_start"] == rois[0]["y_end"] + 10  # fly-to lines
-        assert rois[1]["y_end"] == 500  # last roi ends at page_height
+
+    def test_scales_strips_when_the_heights_overfill_the_page(self):
+        from mbo_utilities.metadata import extract_roi_slices
+
+        meta = {
+            "page_height": 390,
+            "page_width": 100,
+            "num_fly_to_lines": 10,
+            "roi_groups": [
+                {"scanfields": {"pixelResolutionXY": [100, 200]}},
+                {"scanfields": {"pixelResolutionXY": [100, 200]}},
+            ],
+        }
+        rois = extract_roi_slices(meta)
+        assert [(r["y_start"], r["y_end"]) for r in rois] == [(0, 190), (200, 390)]
 
     def test_empty_roi_groups(self):
         """extract_roi_slices should return empty list for no roi_groups."""
