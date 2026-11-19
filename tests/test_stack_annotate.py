@@ -68,6 +68,16 @@ def test_a_stack_opens_in_four_views_and_draws(state):
     assert render(state).std() > 0
 
 
+def test_the_crosshair_marks_where_the_side_views_cut_xy_and_hides(state):
+    stack_annotate.move_crosshair(state=state, y=20, x=30)
+    assert set(state.guides["xy_y"].data[:, 1]) == {20}
+    assert set(state.guides["xy_x"].data[:, 0]) == {30}
+    stack_annotate.show_crosshair(state=state, visible=False)
+    assert not any(graphic.visible for graphic in (*state.guides.values(), state.graphic_plane))
+    stack_annotate.show_crosshair(state=state, visible=True)
+    assert all(graphic.visible for graphic in (*state.guides.values(), state.graphic_plane))
+
+
 def test_a_brush_stroke_on_xy_is_one_roi_on_that_plane_and_undo_takes_it_back(state):
     widget, store = state.widget, state.widget.store
     state.viewer.indices[widget.zdim] = 3
