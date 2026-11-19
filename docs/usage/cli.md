@@ -552,7 +552,8 @@ at a time.
 | Recolour a class | the colour square in its row under LABELS; XY, XZ, YZ and 3D follow. Lasts for the session |
 | Move through the stack | z slider, or click in XZ or YZ |
 | Move the crosshair | click in XY, or the y and x sliders; ctrl + click with the brush on |
-| Show or hide the crosshair | `g` or **crosshair**: the lines where XZ and YZ cut XY, and the slice's line in XZ, YZ and 3D |
+| Show or hide the crosshair | `g` or **crosshair**: the lines where XZ and YZ cut XY, and the slice's line in XZ and YZ |
+| Show or hide the 3D slices | **slices**: the XY, XZ and YZ planes through the crosshair inside the 3D view, outlined in their guide colours |
 | Trace | **Trace channel N** under Trace traces the channel on screen in about 8 s: paths (cyan) that meet at junctions, and dashed link proposals (orange) across gaps. XY shows the paths through the plane on screen, 3D shows all. A new trace replaces the old one; ctrl + z brings it back |
 | Pick paths and links | click a line in XY or 3D; shift + click picks more. Not while the brush or the polygon tool is on |
 | Edit the trace | **Delete paths**, **Accept links** (each becomes a path joining the two ends), **Reject links** |
