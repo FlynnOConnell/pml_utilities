@@ -345,7 +345,7 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             s2p_settings = dict(s2p_settings)
             s2p_settings["workers"] = resolved
 
-    writer_kwargs = {
+    read_features = {
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
         "frame_average": int(args.get("frame_average") or 1),
@@ -436,19 +436,10 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
 
 
 def _masknmf_progress(
-    monitor: TaskMonitor, plane=0, total_planes=1, step="", message="", **kw
+    monitor: TaskMonitor, plane=0, total_planes=1, message="", **kw
 ) -> None:
-    """Map the masknmf runner's (plane, stage) progress onto 0.1 to 0.95."""
-    slot = 0.85 / max(total_planes, 1)
-    offsets = {
-        "registration": 0.02,
-        "compression": 0.35,
-        "demixing": 0.55,
-        "exports": 0.85,
-        "figures": 0.92,
-    }
-    frac = 0.1 + slot * plane + slot * offsets.get(step, 0.0)
-    monitor.update(min(frac, 0.95), message)
+    """Map the plane masknmf is starting onto 0.05 to 0.95."""
+    monitor.update(0.05 + 0.9 * plane / max(total_planes, 1), message)
 
 
 def _heartbeat(stop: threading.Event, logger: logging.Logger, name: str) -> None:
@@ -458,14 +449,14 @@ def _heartbeat(stop: threading.Event, logger: logging.Logger, name: str) -> None
 
 
 def task_masknmf(args: dict, logger: logging.Logger) -> None:
-    """Run ``mbo_utilities.masknmf.run_volume``: registration, PMD compression and demixing per plane, into one run folder each."""
+    """Run one masknmf pipeline per plane (``mbo_utilities.masknmf.run_planes``), each into masknmf's own run folder."""
     monitor = TaskMonitor(args.get("output_dir") or ".", uuid=args.get("_uuid"))
     monitor.update(0.01, "Initializing masknmf pipeline...")
 
     input_path = args["input_path"]
     output_dir = Path(args["output_dir"])
     planes = args.get("planes")
-    settings = args.get("settings") or {}
+    config = args.get("config") or {"pipeline": "TwoPhotonCalciumPipeline", "configs": {}}
     custom_metadata = args.get("custom_metadata") or {}
     tp_indices = args.get("tp_indices")
     channel = args.get("channel")
@@ -477,11 +468,11 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
         logger.exception(f"masknmf: cannot open input {input_path!r}: {e}")
         raise
 
-    # the runner reads fs from here and scales it by the frame stride itself
+    # plane_view reads fs from here and scales it by the frame stride itself
     metadata = dict(src_arr.metadata or {})
     metadata.update(custom_metadata)
 
-    writer_kwargs = {
+    read_features = {
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
         "frame_average": int(args.get("frame_average") or 1),
@@ -493,17 +484,6 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
     logger.info(f"Output: {output_dir}")
     logger.info(f"Planes: {planes}")
 
-    # a stage resuming from a plane dir reads its ops.npy, where an older export left the summary images as json lists
-    from mbo_utilities.metadata import repair_ops_tree
-
-    for target in (input_path, output_dir):
-        fixed = repair_ops_tree(target)
-        if fixed:
-            logger.info(
-                f"task_masknmf: repaired {fixed} ops.npy file(s) under {target} "
-                "(summary images were stored as lists)"
-            )
-
     _stop_heartbeat = threading.Event()
     threading.Thread(
         target=_heartbeat, args=(_stop_heartbeat, logger, "masknmf"), daemon=True
@@ -511,17 +491,19 @@ def task_masknmf(args: dict, logger: logging.Logger) -> None:
 
     try:
         monitor.update(0.05, "Running masknmf pipeline...")
-        from mbo_utilities.masknmf import run_volume
+        from mbo_utilities.masknmf import run_planes
 
-        runs = run_volume(
+        runs = run_planes(
             src_arr,
             output_dir,
+            config,
+            runtime=args.get("runtime"),
+            run_args=args.get("run_args"),
             planes=planes,
-            settings=settings,
-            metadata=metadata,
             frame_indices=tp_indices,
             channel=channel,
-            writer_kwargs=writer_kwargs,
+            read_features=read_features,
+            metadata=metadata,
             logger=logger,
             progress_callback=functools.partial(_masknmf_progress, monitor),
         )

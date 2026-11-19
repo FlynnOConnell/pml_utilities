@@ -1,32 +1,22 @@
 """masknmf pipeline widget.
 
-Mirrors the Suite2p run experience: Current-dataset block, output folder
-row, Frames & Planes slicing popup (draw_selection_table), a Pipeline
-Settings popup with Skip/Run/Force stage columns and modified-orange
-tinting against dataclass defaults, a modified-parameters table, and a
-green centered Run button. Run spawns the "masknmf" worker task; each plane
-lands in a masknmf run folder (``masknmf.runner``) with a results zarr.
-Denoise before registration estimates the shifts on a quick denoised copy
-(``alignment.hdf5``); View movies opens the last run in the
-Registration-Denoising Quality Control viewer, Spike average the last run
-that demixed in the spike-triggered average window.
+pml_utilities prepares the data and masknmf processes it: the Current-dataset
+block, the output folder and the Frames & Planes selection here pick what each
+plane's ``(T, Y, X)`` view holds, and masknmf's own Parameters popup
+(``masknmf.visualization.imgui.parameters.Parameters``) sets the pipeline and
+its stages. Run spawns the "masknmf" worker task, which runs masknmf's pipeline
+per plane into masknmf's run folder plus a results zarr. View results opens
+the last run in masknmf's viewer, Spike average in the spike-triggered average
+window.
 """
 
-import dataclasses
-import math
-from collections.abc import Callable
-from functools import partial
 from pathlib import Path
 from typing import Any
 
 from imgui_bundle import imgui
 from imgui_bundle import portable_file_dialogs as pfd
 
-from mbo_utilities.gui._imgui_helpers import (
-    PopupAutoSize,
-    draw_boxed_label,
-    set_tooltip,
-)
+from mbo_utilities.gui._imgui_helpers import set_tooltip
 from mbo_utilities.gui._selection_ui import (
     draw_frame_average_input,
     draw_selection_table,
@@ -48,43 +38,12 @@ from mbo_utilities.reader import widget_reader_kwargs
 _TITLE_COLOR = imgui.ImVec4(1.0, 0.85, 0.4, 1.0)
 _SUB_COLOR = imgui.ImVec4(0.55, 0.75, 1.0, 1.0)
 _DIM_COLOR = imgui.ImVec4(0.6, 0.6, 0.6, 1.0)
-_WARN_COLOR = imgui.ImVec4(1.0, 0.75, 0.3, 1.0)
 _MODIFIED_COLOR = imgui.ImVec4(1.0, 0.72, 0.40, 1.0)
 
 _RUN_W = 220
 _BTN_W = 90
 
-# "look at these first" — bold boxed labels, like the suite2p popup's
-# _IMPORTANT_FIELDS. Chosen from the reference notebook's guidance: raise
-# max_shifts if shift traces clip; mad_correlation_threshold is the main
-# signal-vs-noise knob; block_sizes tracks feature size; merge_threshold
-# is the notebook's ####-flagged tuning point; filter_sigma drives init.
-_IMPORTANT_FIELDS: set[str] = {
-    "max_shifts",
-    "block_sizes",
-    "mad_correlation_threshold",
-    "filter_sigma",
-    "merge_threshold",
-}
-
-# marked stable / do-not-change by the upstream notebook; grouped under a
-# collapsed header and flagged in the modified table
-_STABLE_FIELDS: set[str] = {
-    "sim_conf",
-    "spatial_avg_factor",
-    "temporal_avg_factor",
-    "num_epochs",
-    "noise_variance_quantile",
-    "mad_threshold",
-    "residual_threshold",
-    "patch_size",
-    "min_peak_distance",
-    "deletion_threshold",
-    "support_threshold_hi",
-    "min_brightness",
-    "update_frequency",
-    "background_downsampling_factor",
-}
+PIPELINE_INITIAL = "two-photon-calcium"
 
 _HAS_MASKNMF: bool | None = None
 
@@ -99,15 +58,16 @@ def _check_masknmf_available() -> bool:
 
 
 def find_masknmf_run(fpath) -> tuple[dict | None, str | None]:
-    """Locate a masknmf run at/around ``fpath``.
+    """
+    The newest masknmf run at or under ``fpath``.
 
-    Returns ``(params, outdir)``: the settings the newest run folder's
-    ``config.json`` recorded, and the folder its run folders sit in, so Run
-    writes the next run beside it and reuses its stages. Both None when
-    ``fpath`` is neither a run folder nor a folder holding one.
+    Returns
+    -------
+    tuple[dict | None, str | None]
+        The run's ``config.json`` and the output folder Run writes the next run into (the folder holding its
+        ``zplaneNN/``); both None when ``fpath`` is neither a run folder nor a folder holding one.
     """
     from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_config
-    from mbo_utilities.masknmf.runner import PIPELINE
 
     if fpath is None:
         return None, None
@@ -123,64 +83,12 @@ def find_masknmf_run(fpath) -> tuple[dict | None, str | None]:
     if is_masknmf_run(p):
         run = p
     else:
-        runs = sorted(c for c in p.iterdir() if c.is_dir() and is_masknmf_run(c))
+        runs = sorted(c.parent for c in p.glob("**/config.json") if is_masknmf_run(c.parent))
         if not runs:
             return None, None
         run = runs[-1]
-    config = run_config(run)
-    params = config.get("configs") if config.get("pipeline") == PIPELINE else None
-    return params, str(run.parent)
-
-
-def _field_default(obj, name: str):
-    for f in dataclasses.fields(obj):
-        if f.name == name:
-            if f.default is not dataclasses.MISSING:
-                return f.default
-            if f.default_factory is not dataclasses.MISSING:
-                return f.default_factory()
-    return None
-
-
-def _is_default(obj, name: str) -> bool:
-    cur = getattr(obj, name)
-    default = _field_default(obj, name)
-    if isinstance(cur, float) and isinstance(default, (int, float)):
-        # imgui.input_float truncates doubles to C float after one frame
-        return math.isclose(cur, float(default), rel_tol=1e-6, abs_tol=1e-9)
-    if isinstance(cur, (tuple, list)) and isinstance(default, (tuple, list)):
-        return tuple(cur) == tuple(default)
-    return cur == default
-
-
-def _collect_modified(settings) -> list[tuple[str, Any, Any]]:
-    """(field, current, default) rows for every non-default parameter.
-
-    Stage tri-states are excluded — they show in the column-title radios.
-    """
-    rows = []
-    sections = (
-        ("reg", settings.registration),
-        ("pmd", settings.compression),
-        ("demix", settings.demixing),
-        ("runtime", settings.runtime),
-    )
-    for prefix, obj in sections:
-        for f in dataclasses.fields(obj):
-            if f.name.startswith("do_"):
-                continue
-            if not _is_default(obj, f.name):
-                rows.append(
-                    (
-                        f"{prefix}.{f.name}",
-                        getattr(obj, f.name),
-                        _field_default(obj, f.name),
-                    )
-                )
-    return rows
-
-
-_SETTINGS_POPUP_TITLE = "MaskNMF Pipeline Settings##masknmf_settings_popup"
+    outdir = run.parent.parent if run.parent.name.startswith("zplane") else run.parent
+    return run_config(run), str(outdir)
 
 
 class MaskNMFPipelineWidget(PipelineWidget):
@@ -196,15 +104,13 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
     def __init__(self, parent: Any):
         super().__init__(parent)
-        self.settings = self.default_settings()
+        self._parameters = None
         self._outdir = ""
         self._outdir_dialog = None
         self._fix_phase = True
         self._use_fft = True
         self._invert_deflection = False
         self._last_status = ""
-        self._show_settings_popup = False
-        self._settings_sizer = PopupAutoSize(_SETTINGS_POPUP_TITLE)
         self._show_slice_popup = False
         self._last_fpath = None
         self._masknmf_last_max_tp = None
@@ -212,14 +118,17 @@ class MaskNMFPipelineWidget(PipelineWidget):
         self._masknmf_last_num_channels = None
         self._masknmf_tp_parsed = None
         self._masknmf_z_parsed = self._masknmf_c_parsed = None
-        # the windows View movies and Spike average started, until they exit
+        # the windows View results and Spike average started, until they exit
         self._windows: list = []
 
-    def default_settings(self):
-        """The settings Defaults resets to."""
-        from mbo_utilities.masknmf.params import MasknmfSettings
+    @property
+    def parameters(self):
+        """masknmf's Parameters popup and its values, built on first use since masknmf imports torch."""
+        if self._parameters is None:
+            from masknmf.visualization.imgui.parameters import Parameters
 
-        return MasknmfSettings()
+            self._parameters = Parameters(PIPELINE_INITIAL)
+        return self._parameters
 
     def _array(self):
         iw = self.parent.image_widget
@@ -234,20 +143,17 @@ class MaskNMFPipelineWidget(PipelineWidget):
         return max_frames, int(self.parent.nz or 1), int(self.parent.nc or 1)
 
     def _hydrate_from_run(self, fpath) -> None:
-        """Fill parameters + output dir from a previous run's tree
-        (suite2p parity: opening results hydrates the Run tab).
-        """
-        from mbo_utilities.masknmf.params import MasknmfSettings
-
-        params, outdir = find_masknmf_run(fpath)
+        """Fill the parameters and output folder from a previous run's tree (opening results hydrates the Run tab)."""
+        config, outdir = find_masknmf_run(fpath)
         if outdir is None:
             return
         self._outdir = outdir
-        if params is not None:
-            self.settings = MasknmfSettings.from_dict(params)
-            self._last_status = "Loaded parameters from previous run"
-        else:
-            self._last_status = "Previous run found (no saved parameters)"
+        try:
+            self.parameters.load(config)
+        except ValueError as e:
+            self._last_status = f"Previous run found; its parameters do not load: {e}"
+            return
+        self._last_status = "Loaded parameters from previous run"
 
     def _ensure_slice_state(self) -> None:
         """Seed/reset slicing state when the dataset changes (suite2p parity)."""
@@ -288,28 +194,57 @@ class MaskNMFPipelineWidget(PipelineWidget):
         self._draw_dataset_block()
         from mbo_utilities.gui._gpu_status import draw_gpu_status
 
-        draw_gpu_status(self.settings.runtime.device)
+        draw_gpu_status(str(self.parameters.runtime().get("device", "auto")))
         imgui.separator()
         self._draw_output_row()
         self._draw_slice_row()
         imgui.spacing()
-        if imgui.button("Pipeline Settings##masknmf_settings", imgui.ImVec2(160, 0)):
-            self._show_settings_popup = True
-        set_tooltip("Per-stage Skip/Run/Force and parameters.", show_mark=False)
-        self._f_check(
-            self.settings.registration,
-            "denoised_reference",
-            "Denoise before registration",
-            tooltip="Estimate the shifts on a quick denoised copy of the movie "
-            "and apply them to the raw frames. Steadier shifts on noisy or "
-            "fast recordings; the copy is saved as alignment.hdf5. Its block "
-            "sizes are under Pipeline Settings > Registration.",
-        )
-        self._draw_settings_popup()
+        self._draw_pipeline_row()
+        self.parameters.draw()
         imgui.spacing()
         self._draw_modified_table()
         imgui.spacing()
         self._draw_run()
+
+    def _draw_pipeline_row(self) -> None:
+        """The masknmf pipeline, and the button that opens its Parameters popup."""
+        from masknmf.pipelines import scraper
+
+        slugs = sorted(scraper.pipeline_registry())
+        imgui.text_colored(_SUB_COLOR, "Pipeline")
+        imgui.set_next_item_width(max(imgui.get_content_region_avail().x - _BTN_W * 1.3 - 12, 100))
+        index = slugs.index(self.parameters.slug)
+        changed, index = imgui.combo("##masknmf_pipeline", index, slugs)
+        if changed:
+            self.parameters.select(slugs[index])
+        set_tooltip("The masknmf pipeline each plane runs through.", show_mark=False)
+        imgui.same_line()
+        if imgui.button("Parameters##masknmf_parameters", imgui.ImVec2(_BTN_W * 1.3, 0)):
+            self.parameters.open()
+        set_tooltip("masknmf's parameters: a column per stage, the runtime under them.", show_mark=False)
+
+    def _draw_modified_table(self) -> None:
+        """The parameters that differ from the pipeline's defaults, one row each."""
+        rows = self.parameters.modified()
+        if not rows:
+            imgui.text_colored(_DIM_COLOR, "All parameters at their defaults.")
+            return
+        imgui.text_colored(_MODIFIED_COLOR, f"{len(rows)} parameter(s) changed")
+        flags = imgui.TableFlags_.borders_inner_h | imgui.TableFlags_.sizing_stretch_prop
+        if imgui.begin_table("##masknmf_modified", 3, flags):
+            imgui.table_setup_column("parameter")
+            imgui.table_setup_column("value")
+            imgui.table_setup_column("default")
+            imgui.table_headers_row()
+            for name, value, default in rows:
+                imgui.table_next_row()
+                imgui.table_next_column()
+                imgui.text(name)
+                imgui.table_next_column()
+                imgui.text_colored(_MODIFIED_COLOR, value)
+                imgui.table_next_column()
+                imgui.text_disabled(default)
+            imgui.end_table()
 
     def _draw_dataset_block(self) -> None:
         imgui.text_colored(_TITLE_COLOR, "Current dataset")
@@ -350,7 +285,7 @@ class MaskNMFPipelineWidget(PipelineWidget):
         )
         _, self._outdir = imgui.input_text("##masknmf_outdir", self._outdir)
         set_tooltip(
-            "Save path. Each plane runs into its own <time>_masknmf_zplaneNN folder.",
+            "Save path. Each plane runs into masknmf's own run folder under zplaneNN/.",
             show_mark=False,
         )
         imgui.same_line()
@@ -421,450 +356,13 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 imgui.close_current_popup()
             imgui.end_popup()
 
-    def _mod_push(self, obj, field: str) -> bool:
-        if not _is_default(obj, field):
-            imgui.push_style_color(imgui.Col_.text, _MODIFIED_COLOR)
-            return True
-        return False
-
-    @staticmethod
-    def _mod_pop(pushed: bool) -> None:
-        if pushed:
-            imgui.pop_style_color()
-
-    def _param_label(self, obj, field: str, text: str) -> None:
-        """suite2p _emp_label pattern: bold boxed label for important
-        fields, plain text otherwise; modified-orange tint on both.
-        """
-        pushed = self._mod_push(obj, field)
-        if field in _IMPORTANT_FIELDS:
-            draw_boxed_label(text, font=self.parent._bold_font)
-        else:
-            imgui.text(text)
-        self._mod_pop(pushed)
-
-    def _row_tail(self, obj, field: str, label: str, tooltip: str | None) -> None:
-        imgui.same_line(0, imgui.get_style().item_inner_spacing.x)
-        self._param_label(obj, field, label)
-        if tooltip:
-            set_tooltip(tooltip, show_mark=False)
-
-    def _f_int(self, obj, field: str, label: str, lo=1, tooltip=None) -> None:
-        pushed = self._mod_push(obj, field)
-        imgui.set_next_item_width(110)
-        _, val = imgui.input_int(f"##masknmf_{field}", getattr(obj, field))
-        self._mod_pop(pushed)
-        setattr(obj, field, max(lo, val))
-        self._row_tail(obj, field, label, tooltip)
-
-    def _f_int2(self, obj, field: str, label: str, lo=1, tooltip=None) -> None:
-        pushed = self._mod_push(obj, field)
-        imgui.set_next_item_width(110)
-        _, v = imgui.input_int2(f"##masknmf_{field}", list(getattr(obj, field)))
-        self._mod_pop(pushed)
-        setattr(obj, field, (max(lo, v[0]), max(lo, v[1])))
-        self._row_tail(obj, field, label, tooltip)
-
-    def _f_float(
-        self, obj, field: str, label: str, step=0.05, fmt="%.2f", tooltip=None
-    ) -> None:
-        pushed = self._mod_push(obj, field)
-        imgui.set_next_item_width(110)
-        _, val = imgui.input_float(
-            f"##masknmf_{field}", getattr(obj, field), step, step * 2, fmt
-        )
-        self._mod_pop(pushed)
-        setattr(obj, field, val)
-        self._row_tail(obj, field, label, tooltip)
-
-    def _f_check(self, obj, field: str, label: str, tooltip=None) -> None:
-        pushed = self._mod_push(obj, field)
-        _, val = imgui.checkbox(f"{label}##masknmf_{field}", getattr(obj, field))
-        self._mod_pop(pushed)
-        setattr(obj, field, bool(val))
-        if tooltip:
-            set_tooltip(tooltip, show_mark=False)
-
-    def _stable_header(self, id_suffix: str, body: Callable[[], None]) -> None:
-        imgui.set_next_item_open(False, imgui.Cond_.appearing)
-        imgui.push_style_color(imgui.Col_.text, _DIM_COLOR)
-        opened = imgui.collapsing_header(f"Stable — don't change##masknmf_{id_suffix}")
-        imgui.pop_style_color()
-        set_tooltip(
-            "Marked stable by the masknmf authors — leave at defaults unless "
-            "you have a reason. Changes show orange here and (stable) in the "
-            "modified table.",
-            show_mark=False,
-        )
-        if opened:
-            body()
-
-    def _draw_settings_popup(self) -> None:
-        popup_title = _SETTINGS_POPUP_TITLE
-        if self._show_settings_popup:
-            imgui.open_popup(popup_title)
-            self._show_settings_popup = False
-
-        # suite2p popup sizing: always_auto_resize tracks content every
-        # frame; constraints cap at the viewport so nothing is cut off
-        viewport = imgui.get_main_viewport()
-        self._settings_sizer.before_open()
-        imgui.set_next_window_size_constraints(
-            imgui.ImVec2(min(720.0, viewport.size.x * 0.9), 200.0),
-            imgui.ImVec2(viewport.size.x * 0.98, viewport.size.y * 0.98),
-        )
-        opened, visible = imgui.begin_popup_modal(
-            popup_title,
-            p_open=True,
-            flags=self._settings_sizer.flags(imgui.WindowFlags_.no_saved_settings),
-        )
-        if not opened:
-            return
-        try:
-            if not visible:
-                imgui.close_current_popup()
-                return
-            columns = (
-                (
-                    "Registration",
-                    self.settings.registration,
-                    "do_registration",
-                    self._draw_registration_params,
-                ),
-                (
-                    "Compression (PMD)",
-                    self.settings.compression,
-                    "do_compression",
-                    self._draw_compression_params,
-                ),
-                (
-                    "Demixing",
-                    self.settings.demixing,
-                    "do_demixing",
-                    self._draw_demixing_params,
-                ),
-            )
-            avail_w = imgui.get_content_region_avail().x
-            col_w = max((avail_w - 16) / 3, 220)
-            for i, (title, obj, tri_attr, body) in enumerate(columns):
-                if i:
-                    imgui.same_line()
-                self._draw_stage_column(title, obj, tri_attr, body, col_w)
-
-            imgui.spacing()
-            imgui.separator()
-            self._draw_runtime_row()
-            imgui.spacing()
-            imgui.separator()
-
-            imgui.push_style_color(
-                imgui.Col_.button, imgui.ImVec4(0.60, 0.35, 0.10, 1.0)
-            )
-            imgui.push_style_color(
-                imgui.Col_.button_hovered, imgui.ImVec4(0.70, 0.42, 0.14, 1.0)
-            )
-            imgui.push_style_color(
-                imgui.Col_.button_active, imgui.ImVec4(0.50, 0.28, 0.08, 1.0)
-            )
-            if imgui.button("Defaults##masknmf_defaults", imgui.ImVec2(_BTN_W, 0)):
-                self.settings = self.default_settings()
-            imgui.pop_style_color(3)
-            set_tooltip("Reset every parameter to its default.", show_mark=False)
-
-            imgui.same_line()
-            _pad_x = imgui.get_style().window_padding.x
-            imgui.set_cursor_pos_x(imgui.get_window_width() - _BTN_W - _pad_x)
-            imgui.push_style_color(
-                imgui.Col_.button, imgui.ImVec4(0.55, 0.13, 0.13, 1.0)
-            )
-            imgui.push_style_color(
-                imgui.Col_.button_hovered, imgui.ImVec4(0.65, 0.18, 0.18, 1.0)
-            )
-            imgui.push_style_color(
-                imgui.Col_.button_active, imgui.ImVec4(0.45, 0.10, 0.10, 1.0)
-            )
-            if imgui.button("Close##masknmf_settings_close", imgui.ImVec2(_BTN_W, 0)):
-                imgui.close_current_popup()
-            imgui.pop_style_color(3)
-        finally:
-            imgui.end_popup()
-
-    def _draw_stage_column(
-        self, title: str, obj, tri_attr: str, body: Callable[[], None], width: float
-    ) -> None:
-        imgui.begin_child(
-            f"##masknmf_col_{tri_attr}",
-            imgui.ImVec2(width, 0),
-            imgui.ChildFlags_.borders | imgui.ChildFlags_.auto_resize_y,
-        )
-        # end_child must run even when begin_child returns False
-        try:
-            imgui.text_colored(_TITLE_COLOR, title)
-            value = getattr(obj, tri_attr)
-            for i, label in enumerate(("Skip", "Run", "Force")):
-                if imgui.radio_button(f"{label}##{tri_attr}", value == i):
-                    setattr(obj, tri_attr, i)
-                if i < 2:
-                    imgui.same_line()
-            set_tooltip(
-                "Skip: bypass the stage (compression: reuse the last run's when it "
-                "matches). Run: copy the last run folder's stage when its settings "
-                "and input match, else compute. Force: always recompute.",
-                show_mark=False,
-            )
-            imgui.separator()
-            skip = getattr(obj, tri_attr) == 0
-            if skip:
-                imgui.begin_disabled()
-            try:
-                body()
-            finally:
-                if skip:
-                    imgui.end_disabled()
-        finally:
-            imgui.end_child()
-
-    def _draw_registration_params(self) -> None:
-        reg = self.settings.registration
-        pushed = self._mod_push(reg, "strategy")
-        idx = 1 if reg.strategy == "pwrigid" else 0
-        imgui.set_next_item_width(140)
-        changed, idx = imgui.combo(
-            "Strategy##masknmf_reg_strategy", idx, ["Rigid", "Piecewise rigid"]
-        )
-        self._mod_pop(pushed)
-        if changed:
-            reg.strategy = "pwrigid" if idx == 1 else "rigid"
-        self._f_int2(
-            reg,
-            "max_shifts",
-            "Max shifts",
-            tooltip="Max allowed shift in px (y, x). Raise it if the shift "
-            "traces look clipped/flat at the extremes.",
-        )
-        if reg.strategy == "pwrigid":
-            self._f_int2(
-                reg,
-                "minimum_patch_sizes",
-                "Patch size",
-                tooltip="Smallest (y, x) patch in px a local shift is estimated in.",
-            )
-            self._f_int2(reg, "overlaps", "Overlaps", lo=0)
-            self._f_int2(reg, "max_deviation_rigid", "Max deviation", lo=0)
-        self._f_check(
-            reg,
-            "denoised_reference",
-            "Denoise before registration",
-            tooltip="Estimate the shifts on a quick denoised copy of the movie "
-            "and apply them to the raw frames; the copy is saved as alignment.hdf5.",
-        )
-        if reg.denoised_reference:
-            self._f_int2(
-                reg,
-                "reference_block_sizes",
-                "Copy block sizes",
-                lo=2,
-                tooltip="Patch size in px of the denoised copy, like the main "
-                "compression's Block sizes. The block count, and the time, grows "
-                "with the square of the FOV over the block: 4x4 on a 2P plane "
-                "is tens of thousands of blocks and a day of registration.",
-            )
-            self._f_int(reg, "reference_max_components", "Copy components")
-            self._f_int(reg, "reference_spatial_avg_factor", "Copy spatial avg")
-            self._f_int(reg, "reference_temporal_avg_factor", "Copy temporal avg")
-
-    def _draw_compression_params(self) -> None:
-        comp = self.settings.compression
-        self._f_check(
-            comp,
-            "denoise",
-            "Temporal denoiser",
-            tooltip="Train a blind-spot denoiser and re-run PMD.",
-        )
-        self._f_check(
-            comp,
-            "detrend",
-            "Detrend",
-            tooltip="Maximin spline detrend sized from the frame rate.",
-        )
-        self._f_int2(
-            comp,
-            "block_sizes",
-            "Block sizes",
-            lo=4,
-            tooltip="PMD patch size in px; ~2x the largest feature you "
-            "expect (10-20 for dendrites/spines, 20+ for somata).",
-        )
-        self._f_int(
-            comp,
-            "max_components",
-            "Max components",
-            tooltip="Max PMD components per block.",
-        )
-
-        self._stable_header("pmd_stable", partial(self._draw_compression_stable, comp))
-
-    def _draw_compression_stable(self, comp) -> None:
-        self._f_int(comp, "sim_conf", "Sim conf")
-        self._f_int(comp, "spatial_avg_factor", "Spatial avg")
-        self._f_int(comp, "temporal_avg_factor", "Temporal avg")
-        if comp.denoise:
-            self._f_int(comp, "num_epochs", "Denoiser epochs")
-            self._f_float(comp, "noise_variance_quantile", "Noise quantile")
-
-    def _draw_demixing_params(self) -> None:
-        dmx = self.settings.demixing
-        self._f_float(
-            dmx,
-            "mad_correlation_threshold",
-            "Correlation thr",
-            tooltip="Superpixel seed threshold — the main signal-vs-noise "
-            "knob. Lower finds more, dimmer cells.",
-        )
-        self._f_float(
-            dmx,
-            "filter_sigma",
-            "Highpass sigma",
-            step=0.5,
-            fmt="%.1f",
-            tooltip="Spatial highpass width (px) for the init passes.",
-        )
-        self._f_float(
-            dmx,
-            "merge_threshold",
-            "Merge thr",
-            tooltip="Temporal correlation above which overlapping components merge.",
-        )
-        self._f_int(
-            dmx,
-            "maxiter",
-            "NMF iterations",
-            tooltip="HALS iterations per pass.",
-        )
-        pushed = self._mod_push(dmx, "sign")
-        sign_idx = ("positive", "negative", "unconstrained").index(dmx.sign)
-        imgui.set_next_item_width(140)
-        changed, sign_idx = imgui.combo(
-            "Signal sign##masknmf_sign",
-            sign_idx,
-            ["Positive", "Negative", "Unconstrained"],
-        )
-        self._mod_pop(pushed)
-        if changed:
-            dmx.sign = ("positive", "negative", "unconstrained")[sign_idx]
-        imgui.set_next_item_open(False, imgui.Cond_.appearing)
-        if imgui.collapsing_header("Advanced##masknmf_demix_adv"):
-            self._f_int(dmx, "filtered_passes", "Filtered passes")
-            self._f_int(dmx, "unfiltered_passes", "Unfiltered passes")
-            self._f_int(dmx, "ring_radius", "Ring radius")
-            self._f_float(dmx, "support_threshold_lo", "Support thr")
-            self._f_float(dmx, "unfiltered_support_lo", "Unfiltered support")
-            self._f_float(dmx, "merge_overlap_threshold", "Merge overlap")
-            self._f_check(dmx, "reassign_background", "Reassign background")
-
-        self._stable_header("demix_stable", partial(self._draw_demixing_stable, dmx))
-
-    def _draw_demixing_stable(self, dmx) -> None:
-        self._f_float(dmx, "mad_threshold", "MAD thr", step=0.1, fmt="%.1f")
-        self._f_float(dmx, "residual_threshold", "Residual thr")
-        self._f_int2(dmx, "patch_size", "Patch size", lo=8)
-        self._f_int(dmx, "min_peak_distance", "Min peak dist")
-        self._f_float(dmx, "deletion_threshold", "Deletion thr")
-        self._f_float(dmx, "support_threshold_hi", "Support thr hi")
-        self._f_float(dmx, "min_brightness", "Min brightness", step=0.1, fmt="%.1f")
-        self._f_int(dmx, "update_frequency", "Update freq")
-        self._f_int(dmx, "background_downsampling_factor", "Bg downsample")
-
-    def _draw_runtime_row(self) -> None:
-        rt = self.settings.runtime
-        imgui.text_colored(_SUB_COLOR, "Runtime")
-        pushed = self._mod_push(rt, "device")
-        dev_idx = ("auto", "cuda", "cpu").index(rt.device)
-        imgui.set_next_item_width(110)
-        changed, dev_idx = imgui.combo(
-            "Device##masknmf_device", dev_idx, ["Auto", "CUDA", "CPU"]
-        )
-        self._mod_pop(pushed)
-        if changed:
-            rt.device = ("auto", "cuda", "cpu")[dev_idx]
-        if rt.device == "cpu":
-            imgui.push_text_wrap_pos(0.0)
-            imgui.text_colored(
-                _WARN_COLOR, "masknmf superpixel init currently requires CUDA"
-            )
-            imgui.pop_text_wrap_pos()
-        pushed = self._mod_push(rt, "frame_batch_size")
-        imgui.set_next_item_width(110)
-        _, rt.frame_batch_size = imgui.input_int(
-            "Frame batch##masknmf_batch", rt.frame_batch_size
-        )
-        self._mod_pop(pushed)
-        rt.frame_batch_size = max(10, rt.frame_batch_size)
-        imgui.same_line()
-        pushed = self._mod_push(rt, "exclude_border_radius")
-        imgui.set_next_item_width(110)
-        _, rt.exclude_border_radius = imgui.input_int(
-            "Exclude border px##masknmf_border", rt.exclude_border_radius
-        )
-        self._mod_pop(pushed)
-        rt.exclude_border_radius = max(0, rt.exclude_border_radius)
-
-    def _draw_modified_table(self) -> None:
-        mods = _collect_modified(self.settings)
-        imgui.text(f"Modified parameters ({len(mods)})")
-        if not mods:
-            imgui.text_disabled("All parameters at defaults")
-            return
-        mod_h = min(160, imgui.get_frame_height_with_spacing() * (len(mods) + 2))
-        if imgui.begin_child(
-            "##masknmf_mod_params", imgui.ImVec2(-1, mod_h), imgui.ChildFlags_.borders
-        ):
-            flags = (
-                imgui.TableFlags_.row_bg
-                | imgui.TableFlags_.borders_inner_h
-                | imgui.TableFlags_.sizing_stretch_prop
-            )
-            if imgui.begin_table("##masknmf_mod_tbl", 3, flags):
-                imgui.table_setup_column(
-                    "Parameter", imgui.TableColumnFlags_.width_stretch, 4.0
-                )
-                imgui.table_setup_column(
-                    "Current", imgui.TableColumnFlags_.width_stretch, 2.5
-                )
-                imgui.table_setup_column(
-                    "Default", imgui.TableColumnFlags_.width_stretch, 2.5
-                )
-                imgui.table_headers_row()
-                for field, cur, default in mods:
-                    cur_s = f"{cur:.3g}" if isinstance(cur, float) else str(cur)
-                    def_s = (
-                        f"{default:.3g}" if isinstance(default, float) else str(default)
-                    )
-                    stable = field.split(".", 1)[-1] in _STABLE_FIELDS
-                    imgui.table_next_row()
-                    imgui.table_set_column_index(0)
-                    imgui.text_colored(_MODIFIED_COLOR, field)
-                    if stable:
-                        imgui.same_line()
-                        imgui.text_colored(_WARN_COLOR, "(stable)")
-                        set_tooltip(
-                            "Marked stable by the masknmf authors — change "
-                            "only with reason.",
-                            show_mark=False,
-                        )
-                    imgui.table_set_column_index(1)
-                    imgui.text(cur_s)
-                    imgui.table_set_column_index(2)
-                    imgui.text_disabled(def_s)
-                imgui.end_table()
-        imgui.end_child()
-
     def _draw_run(self) -> None:
         planes = self._selected_planes()
         fpath = self.parent.fpath
         has_save_path = bool(self._outdir)
         channels = self._selected_channels()
-        ready = has_save_path and bool(fpath) and bool(planes) and bool(channels)
+        problems = self.parameters.problems()
+        ready = has_save_path and bool(fpath) and bool(planes) and bool(channels) and not problems
 
         imgui.push_style_color(imgui.Col_.button, imgui.ImVec4(0.13, 0.55, 0.13, 1.0))
         imgui.push_style_color(
@@ -887,7 +385,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
         if not ready and imgui.is_item_hovered(imgui.HoveredFlags_.allow_when_disabled):
             imgui.set_tooltip(
-                "Load a dataset and set the output folder"
+                "\n".join(problems)
+                if problems
+                else "Load a dataset and set the output folder"
                 if not has_save_path
                 else "Load a dataset"
             )
@@ -899,11 +399,10 @@ class MaskNMFPipelineWidget(PipelineWidget):
 
         if not self._outdir:
             imgui.begin_disabled()
-        view = imgui.button("View movies##masknmf_view", imgui.ImVec2(_BTN_W * 1.5, 0))
+        view = imgui.button("View results##masknmf_view", imgui.ImVec2(_BTN_W * 1.5, 0))
         set_tooltip(
-            "The run folder last written under the output folder: raw and "
-            "registered over the same two as PMD, with RTMC, masknmf shifts, "
-            "frame means and the mean inside a box you move on any movie.",
+            "The last run under the output folder that demixed, in masknmf's own "
+            "viewer: raw, registered and demixed movies with the shifts.",
             show_mark=False,
         )
         imgui.same_line()
@@ -928,16 +427,11 @@ class MaskNMFPipelineWidget(PipelineWidget):
             (p.stat().st_mtime, p.parent)
             for p in Path(self._outdir).glob("**/config.json")
         )
-        if sta:
-            from mbo_utilities.arrays.masknmf_run import run_demixing
+        from mbo_utilities.arrays.masknmf_run import run_demixing
 
-            written = [(t, run) for t, run in written if run_demixing(run)]
+        written = [(t, run) for t, run in written if run_demixing(run)]
         if not written:
-            self._last_status = (
-                f"No run folder that demixed in {self._outdir} yet."
-                if sta
-                else f"No run folder in {self._outdir} yet."
-            )
+            self._last_status = f"No run folder that demixed in {self._outdir} yet."
             return
         from mbo_utilities.gui.launch import LaunchedWindow, launch_window
 
@@ -949,11 +443,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
             pid, log_name = launch_spike_average(run)
             self._windows.append(LaunchedWindow(pid, log_name, "Spike average"))
         else:
-            log_name = f"movies_{run.name}"
-            pid = launch_window(
-                "mbo_utilities.gui.reg_denoise_viewer", [str(run)], log_name
-            )
-            self._windows.append(LaunchedWindow(pid, log_name, "QC viewer"))
+            log_name = f"masknmf_view_{run.name}"
+            pid = launch_window("masknmf.cli", ["view", str(run_demixing(run))], log_name)
+            self._windows.append(LaunchedWindow(pid, log_name, "masknmf viewer"))
         self._last_status = f"Opening {run.name} in its own window (PID {pid})."
 
     def _submit(self, planes: list[int]) -> None:
@@ -979,7 +471,9 @@ class MaskNMFPipelineWidget(PipelineWidget):
                 "reader_kwargs": widget_reader_kwargs(self.parent.image_widget),
                 "output_dir": output_dir,
                 "planes": planes,
-                "settings": self.settings.to_dict(),
+                "config": self.parameters.config(),
+                "runtime": self.parameters.runtime(),
+                "run_args": self.parameters.run_args(),
                 "fix_phase": self._fix_phase,
                 "use_fft": self._use_fft,
                 "invert_deflection": self._invert_deflection,
