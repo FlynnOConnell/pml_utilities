@@ -75,6 +75,13 @@ ends or each patch's corners. The **picture** button draws them back on:
 
 The ROI slider's line is drawn thicker; click a line to move the slider to it.
 
+## Annotating a Z-stack
+
+With a Z-stack on screen, **Annotate in 3D** opens it in the stack annotator
+(`mbo stack-annotate`, the `annotate` extra) in its own window: XY, XZ, YZ and
+3D views, a brush on all three, and a trace of one channel. Its ROIs are this
+unit's rois zarr, so they show here too; edit them in one window at a time.
+
 ## Mouse actions
 
 | action | result |

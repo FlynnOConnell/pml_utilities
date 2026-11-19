@@ -41,6 +41,13 @@ the imgui/pygfx shell; everything here imports numpy/zarr only.
   block and the `runs` list (loaded runs with their curation).
   `write_label_image` is the one NGFF label writer in the package;
   `arrays/suite2p.py::_add_suite2p_labels` uses it too.
+- `neurite_trace.py` — `Trace`, `write_trace`, `read_trace`: the trace zarr,
+  `<stem>.trace.zarr` beside the rois zarr, that `mbo stack-annotate` saves.
+  `paths/` holds the paths in the rois zarr's ragged encoding (`offsets`,
+  `points` as z y x voxels), `links` the proposals across gaps, and
+  `labels/paths` a derived NGFF label image (path k is k + 1). Written whole
+  like the rois zarr; reading needs only zarr and numpy, so masknmf-toolbox can
+  read the layout without importing this package.
 
 ## Abstraction seam with masknmf-toolbox
 
