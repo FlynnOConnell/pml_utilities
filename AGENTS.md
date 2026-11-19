@@ -152,7 +152,7 @@ Format-specific labels win over the rank guess:
 | ImageJ / Fiji TIFF | `frames`, `slices`, `channels`. A plain stack (`slices>1`, no `hyperstack`, no `spacing`) is read as **T**; `dims="ZYX"` keeps it as Z. tifffile's `imagej=True` default writes `channels=N`, read as C until `dims` says otherwise. Page order XYCZT. |
 | Plain TIFF (no axis tags) | pages go on **T**; a three-letter `dims` (`"TYX"`, `"ZYX"`, `"CYX"`) puts the one populated axis on the axis named (`tiff._apply_dims_override`, `_declared_layout`). The Studio's Page Axis panel and `mbo view --dims` are the same `dims`. |
 | OME-TIFF | `SizeT`, `SizeZ`, `SizeC`; page order from `DimensionOrder`. |
-| ScanImage TIFF | `stack_type` from `si`: LBM (>2 saved channels) puts beamlets on Z and color ports on C; piezo puts slices on Z and volumes on T; single_plane has Z=1. |
+| ScanImage TIFF | `metadata/scanimage.ScanLayout` from `si`, volumes counted from the pages (never `numVolumes`). LBM (an AI port saves several channels; without virtual channels, more than four saved) puts beamlets on Z and ports on C. Piezo (`hStackManager.enable`, or `hFastZ.enable` with several slices) puts slices on Z and volumes on T; a slow stack's repeats per slice follow their slice on T unless `average_frames`; fast-z flyback frames are dropped. Pollen (LBM + piezo) puts piezo positions on T. single_plane has Z=1 and every saved PMT channel on C. mROI strips are cut where `pixelResolutionXY` and a whole number of fly-to lines fill the page. |
 | Multi-file TIFF | `planeNN` in the filename groups files onto Z; otherwise files concatenate along T; `roiN` yields one array per ROI. |
 | Suite2p dir | `ops.npy` per plane dir, or suite2p 1.0's `settings.npy` + `reg_outputs.npy` + `detect_outputs.npy` read as one ops dict (`file_io.load_plane_ops`; `ops.npy` wins when both exist; raw binary `data_raw.bin` or `raw_data.bin`); plane dirs stack onto Z; T comes from the binary's file size, not `ops["nframes"]`. |
 | MESc | `MethodType`: 1 timeseries `(T, C, 1, Y, X)`; 2 z-stack `(1, C, Z, Y, X)`; 6/7 linescan `(T, C, R, n_lines, width)`; 8 chessboard and 9/10 ribbon `(T, C, R, Y, X)`; 11 multicube has real depth on Z. `metadata["mesc_z_axis_meaning"]` says whether Z is `roi_index`, `depth` or `none`. |
@@ -209,7 +209,9 @@ never branch on rank.
    `register_array_class` calls) is asked `can_open(path)` in descending `PRIORITY`;
    ties keep entry-point order; first `True` wins. Today: `IsoviewArray` 90,
    `MasknmfRunArray` 75, `ResultsArray` 70, `Lab4H5Array` 65, `MescArray` 60,
-   `BrukerArray` 60, everything else 50.
+   `BrukerArray` 60, everything else 50 (the ScanImage subclasses too: a file is
+   part of one acquisition, so a folder concatenates; `ScanImageArray` 40,
+   `TiffArray` 30).
 4. Inputs no class claims (file lists, `.bin`, `.klb`, `.mp4`, `reg_tif/`, mixed
    directories) fall through to the legacy chain in `reader._imread_impl`.
 5. A directory or list of files a class above 50 claims (Bruker h5, MESc: whole
@@ -400,10 +402,10 @@ the left-hand keys; the registry does the rest.
 | Quantity | canonical | ScanImage (`si.*`) | Femtonics MESc | ImageJ / Fiji TIFF | OME (TIFF XML, NGFF) | Suite2p `ops` | IsoView XML | lab4 H5 (`/imaging` attrs) | PrairieView / Bruker |
 |---|---|---|---|---|---|---|---|---|---|
 | pixel size | `dx` `dy` | `objectiveResolution × scanfields.sizeXY / pixelResolutionXY` → `pixel_resolution` tuple | scan pattern `pixelSize` / `pixelSizeL` | `XResolution` `YResolution` (px per unit, needs `unit`) | `PhysicalSizeX/Y` + `*Unit`; NGFF scale[y], scale[x] | `dx` `dy` (`umPerPixX/Y` legacy) | `camera_pixel_pitch_um / magnification` → `pixel_resolution_um` | `pixel_size_um` | `micronsPerPixel` XAxis / YAxis |
-| z-step | `dz` | `hStackManager.actualStackZStepSize` else `stackZStepSize`; never for LBM | multicube `voxelSizeZ`; else `None` (ROI slots are not depths) | `spacing` | `PhysicalSizeZ`; NGFF scale[z] | `dz` (`umPerPixZ`, `z_step`) | `z_step` / `axial_step` | | ZSeries `positionCurrent` ZAxis step |
-| sampling rate | `fs` | `hRoiManager.scanFrameRate`, else `1/scanFramePeriod` | `1000 / TStepInMs ÷ light paths` (`mesc_raw_frame_rate` keeps the scanner rate) | `finterval` (s) | `TimeIncrement` + `TimeIncrementUnit`; NGFF time scale (s) | `fs` | `vps` = `fps / zplanes` (`fps` is the camera rate) | `frame_rate_hz`; `frame_period` (s) | `framePeriod` (s) |
+| z-step | `dz` | piezo: `hStackManager.actualStackZStepSize` else `stackZStepSize`; never for LBM, pollen or a disabled stack | multicube `voxelSizeZ`; else `None` (ROI slots are not depths) | `spacing` | `PhysicalSizeZ`; NGFF scale[z] | `dz` (`umPerPixZ`, `z_step`) | `z_step` / `axial_step` | | ZSeries `positionCurrent` ZAxis step |
+| sampling rate | `fs` | `hRoiManager.scanFrameRate`, else `1/scanFramePeriod`; piezo: `scanVolumeRate` (unset when repeats on T make it uneven); pollen: unset | `1000 / TStepInMs ÷ light paths` (`mesc_raw_frame_rate` keeps the scanner rate) | `finterval` (s) | `TimeIncrement` + `TimeIncrementUnit`; NGFF time scale (s) | `fs` | `vps` = `fps / zplanes` (`fps` is the camera rate) | `frame_rate_hz`; `frame_period` (s) | `framePeriod` (s) |
 | width, height | `Lx` `Ly` | page shape | `Channel_N` shape | page shape | `SizeX` `SizeY` | `Lx` `Ly` | `dimensions` | dataset shape | `pixelsPerLine` `linesPerFrame` |
-| timepoints | `num_timepoints` | pages ÷ `nchannels`, summed over files | axis 0 of `Channel_N` per `MethodType` | `frames` (or `slices` for a plain stack) | `SizeT` | `nframes` (reader trusts file size) | TM folders | dataset shape | TSeries frame count |
+| timepoints | `num_timepoints` | `ScanLayout.shape`: frames, volumes or piezo positions from the page count | axis 0 of `Channel_N` per `MethodType` | `frames` (or `slices` for a plain stack) | `SizeT` | `nframes` (reader trusts file size) | TM folders | dataset shape | TSeries frame count |
 | z-planes | `num_zplanes` | LBM: saved beamlets per color port; piezo: `hStackManager.numSlices` | ROI count / depth per `MethodType` | `slices` | `SizeZ` | `nplanes` / plane dirs | `zplanes` = `dimensions[-1]` | dataset shape | ZSeries frame count |
 | colors | `num_color_channels` | unique `hScan2D.virtualChannelSettings__N.source` ports | count of `Channel_N` | `channels` | `SizeC` | `nchannels` | cameras / views (`num_views`) | `n_channel` | `<File channel=...>` count |
 | dtype | `dtype` | page dtype | `Channel_N.dtype` | page dtype | `Type` | `int16` | volume dtype | dataset dtype | `bitDepth` |
