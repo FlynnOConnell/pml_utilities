@@ -72,7 +72,7 @@ def saved_roi_traces(ref_arr, channel: int = 0) -> tuple[np.ndarray, str] | None
 
 class TraceJob:
     """``(K, T)`` per-ROI traces for the Traces tab: the recording's vnoiser run
-    when it has them, else the raw reduction (``roi_workflow.linescan_roi_means``)
+    when it has them, else the raw reduction (``analysis.linescan.linescan_roi_means``)
     on a daemon thread so the window opens at once. The reads and means release the GIL, so the
     render loop stays responsive; ``result`` is set when done, ``error`` on
     failure, and ``progress`` is ``(rois done, rois total)`` meanwhile.
@@ -132,7 +132,7 @@ class TraceJob:
         print(f"  traces: ROI {i + 1}/{k} done ({seconds:.1f}s)")
 
     def _run(self) -> None:
-        from mbo_utilities.roi_workflow import unit_roi_means
+        from mbo_utilities.analysis.linescan import unit_roi_means
 
         try:
             self.result = unit_roi_means(

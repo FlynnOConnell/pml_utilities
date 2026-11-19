@@ -27,7 +27,6 @@ from masknmf.visualization.rois import SELECTED_ALPHA
 
 from mbo_utilities import log
 from mbo_utilities.annotation import (
-    ENGINES,
     UNLABELED,
     DffSettings,
     RoiFile,
@@ -53,7 +52,6 @@ from mbo_utilities.gui.roi._shared import (
     COLORMAPS,
     CONTOUR_SHAPES,
     DEFAULT_LABEL_NAMES,
-    ENGINE_HELP,
     KEYBINDS,
     MIN_ROI_PIXELS,
     MOTION_PANEL_HEIGHT,
@@ -75,7 +73,6 @@ from mbo_utilities.gui.roi.trace_table import TraceTableMixin
 from mbo_utilities.gui.roi.traces_panel import TracesPanelMixin
 from mbo_utilities.gui.roi_runs import (
     DerivedSet,
-    RoiRunManager,
     run_dir_complete,
     set_color,
 )
@@ -89,21 +86,16 @@ from mbo_utilities.preferences import (
 )
 from mbo_utilities.results import (
     Results,
+    detection_algo,
     results_pipeline,
     unit_frames,
 )
-from mbo_utilities.roi_workflow import (
-    RUN_PIPELINE,
-    detection_algo,
-    labels_path,
-    roi_folder,
-)
+from mbo_utilities.annotation.paths import labels_path, roi_folder
 
 __all__ = [
     "BEHAVIOR_PLOT_HEIGHT",
     "COLOR_BY",
     "COLORMAPS",
-    "ENGINE_HELP",
     "KEYBINDS",
     "MOTION_PANEL_HEIGHT",
     "PANEL_HEIGHT",
@@ -351,20 +343,15 @@ class ManualRoiWidget(
         self.color_by = COLOR_BY[0]
         self.color_cmap = COLORMAPS[0]
 
-        self.engine = ENGINES[0]
         self.run_where = "drawn"
         self.run_tp: list[int] | None = (
             None  # 0-based frames from parse_timepoint_selection; None every frame
         )
         self.auto_trace = bool(auto_trace)
-        self.run_tag = ""  # empty shows DEFAULT_RUN_TAG as the box's hint
-        self.manager = RoiRunManager()
         self._registry_extra: list[
             dict
         ] = []  # loaded runs no derived set stands for, saved with the ROIs
         self._saved_runs: list[dict] = []
-        self._adopted: set[int] = set()  # pids _adopt_finished_runs already pulled in
-        self._adopt_checked = 0.0
         self._results_loaded: set[str] = set()
         self._restoring = False
 
@@ -439,9 +426,8 @@ class ManualRoiWidget(
         self.strip = None
 
     def park_runs(self) -> dict:
-        """The state the next attach adopts: the live run manager, loaded sets, registry leftovers and the trace table."""
+        """The state the next attach adopts: loaded sets, registry leftovers and the trace table."""
         return {
-            "manager": self.manager,
             "derived": self.derived,
             "extra": self._registry_extra,
             "traces": self.traces,
@@ -833,7 +819,6 @@ class ManualRoiWidget(
             self.order.plane = (
                 self.z
             )  # per-plane results open the ROI table on the plane on screen
-        self._merge_run_traces(unit, s.name, path)
         for k in range(len(s)):
             if k not in s.discarded and (s.name, k) not in self._promoted:
                 trace = self._member_trace(s, k)
@@ -864,9 +849,7 @@ class ManualRoiWidget(
     ) -> bool:
         """Read one run (a results file, one unit of one, a plane dir, a masknmf run folder or a vnoiser PF folder) through ``Results.open``.
 
-        A pixel unit loads as a derived set, every row included; a manual
-        run's unit whose rows stand for drawn ROIs still in the store merges
-        into the trace table by uid. A line unit goes to the Traces tab, one
+        A pixel unit loads as a derived set, every row included. A line unit goes to the Traces tab, one
         row per ROI and one per member line; with a MESc unit on screen only
         the scan that processed it loads, without the member lines. Returns
         True when anything loaded.
@@ -917,20 +900,6 @@ class ManualRoiWidget(
                     lines += 1
                 continue
             if unit.member_kind == "pixel" and unit.image_shape is not None:
-                uids = unit.attrs.get("uids")
-                if (
-                    results.pipeline == RUN_PIPELINE
-                    and uids
-                    and len(uids) == unit.n_rois
-                ):
-                    name = self._set_name(file)
-                    if self._merge_run_traces(unit, name, file):
-                        loaded += 1
-                        if not any(
-                            str(e["path"]) == str(file) for e in self._registry_extra
-                        ):
-                            self._registry_extra.append({"path": str(file)})
-                    continue
                 plane_dir = unit.attrs.get("plane_dir")
                 key = (
                     Path(plane_dir)
@@ -1270,9 +1239,6 @@ class ManualRoiWidget(
     def _restore_runs(self, parked: dict | None):
         """Adopt the previous widget's parked runs, else re-load every surviving run the rois zarr lists."""
         if parked is not None:
-            manager = parked.get("manager")
-            if manager is not None:
-                self.manager = manager
             if self._adopted_store:
                 self.model.traces = parked.get("traces") or RoiTraceTable()
                 self._traces_changed()

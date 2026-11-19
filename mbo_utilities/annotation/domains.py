@@ -9,7 +9,7 @@ with the trim: the seconds every reader leaves off the start of a scan
 (``trim_s`` for the file, ``scan_trim`` for a scan with its own).
 
 The file is ``<stem>.domains.json`` in the recording's ROI folder
-(:func:`~mbo_utilities.roi_workflow.roi_folder`), beside the data unless the
+(:func:`~mbo_utilities.annotation.paths.roi_folder`), beside the data unless the
 user picked a root; a ``domains.json`` beside the data, the earlier one-table
 form, still reads as one layout. The vnoiser tab writes it, ``mbo vnoiser``,
 the dashboard and the curation window read it.
@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from mbo_utilities.analysis.roi_traces import Domain, domains_from_json
-from mbo_utilities.roi_workflow import roi_folder
+from mbo_utilities.annotation.paths import roi_folder
 
 __all__ = [
     "DOMAINS_SUFFIX",

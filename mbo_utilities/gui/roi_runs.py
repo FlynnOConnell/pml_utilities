@@ -1,43 +1,29 @@
-"""Run orchestration and derived-set state for the manual ROI widget.
-
-``RoiRunManager`` tracks the widget's background work: in-process runs
-(extract / demix / discover on a thread, shown as process-manager jobs)
-and full-plane suite2p / masknmf spawns (detached subprocesses polled
-through their progress files). GPU-heavy runs serialize on one lock so two
-demixes never fight over the device.
+"""Derived-set state for the manual ROI widget.
 
 ``DerivedSet`` wraps one pixel unit of a results file
-(:class:`~mbo_utilities.results.ResultUnit`: a suite2p plane, a masknmf run,
-a manual run's slice) for display - its footprints in the frame, per-set
+(:class:`~mbo_utilities.results.ResultUnit`: a suite2p plane, a masknmf run) for display - its footprints in the frame, per-set
 color, visibility, discarded rows, accept / reject state and a pick map.
 Traces live in the session model's :class:`~mbo_utilities.annotation.RoiTraceTable`,
 keyed by store uid so deleting an ROI never remaps anyone else's rows;
 :func:`unit_trace` turns one unit row into such a row.
-Everything here is figure-free and imports without masknmf, so it is
-unit-testable with a stub process manager.
+Everything here is figure-free and imports without masknmf.
 """
 
 from __future__ import annotations
 
-import queue
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
-from mbo_utilities import log
 from mbo_utilities.annotation import ROI_COLORS, RoiTrace, class_color
 from mbo_utilities.arrays.features._dim_tags import filename_tags
-from mbo_utilities.gui.widgets.process_manager import LocalJob, get_process_manager
 from mbo_utilities.results import ResultUnit
 
 __all__ = [
     "DerivedSet",
     "MASK_MODES",
     "RING_SCALE",
-    "RoiRun",
-    "RoiRunManager",
     "SELECTED_ALPHA",
     "SET_COLORS",
     "build_pick_map",
@@ -72,161 +58,6 @@ SET_COLORS: tuple[tuple[float, float, float], ...] = (
 def set_color(index: int) -> tuple[float, float, float]:
     """Rgb in 0-1 for a derived set (wraps past the palette end)."""
     return SET_COLORS[index % len(SET_COLORS)]
-
-
-@dataclass
-class RoiRun:
-    """One background run: an in-process job (``job``) or a spawn (``pid``)."""
-
-    kind: str  # "extract" | "demix" | "suite2p" | "masknmf"
-    tag: str
-    description: str
-    job: LocalJob | None = None
-    pid: int | None = None
-    out_root: Path | None = None
-    out_dirs: list[Path] = field(default_factory=list)
-    planes: list[int] = field(default_factory=list)
-    box: tuple[int, int, int, int] | None = None
-    error: str | None = None
-    finished: bool = False
-    loaded: bool = False
-
-
-def _raised_at(error: BaseException) -> str:
-    """`` (file.py:123)`` for the innermost frame of ``error``, or ""."""
-    import traceback
-
-    frames = traceback.extract_tb(error.__traceback__)
-    if not frames:
-        return ""
-    last = frames[-1]
-    return f" ({Path(last.filename).name}:{last.lineno})"
-
-
-def _run_in_thread(manager: RoiRunManager, run: RoiRun, fn, heavy: bool) -> None:
-    """``fn(job)`` on the manager's gpu lock when ``heavy``; the payload or the error goes on the results queue."""
-    job = run.job
-    try:
-        if heavy:
-            job.set_progress(0.0, "waiting for gpu")
-            with manager._heavy:
-                payload = fn(job)
-        else:
-            payload = fn(job)
-    except Exception as error:  # noqa: BLE001 - reported on the job
-        manager.logger.exception(f"{run.description} failed")
-        message = f"{type(error).__name__}: {error}{_raised_at(error)}"
-        job.fail(message)
-        manager._results.put((run, None, message))
-        return
-    job.done()
-    manager._results.put((run, payload, None))
-
-
-class RoiRunManager:
-    """Submit, poll and stop the ROI widget's background runs.
-
-    In-process runs go through :meth:`submit` - a ``LocalJob`` in the
-    process console plus a daemon thread; ``heavy=True`` runs queue on one
-    lock so the GPU is never shared. Full-plane pipelines go through
-    :meth:`spawn`. :meth:`poll` (once per frame) yields each finished run
-    exactly once.
-
-    Parameters
-    ----------
-    pm : optional
-        Process manager for ``submit`` / ``spawn``; the global one when
-        None. Tests inject a stub here and into ``poll``.
-    """
-
-    def __init__(self, pm=None):
-        self._pm = pm
-        self.runs: list[RoiRun] = []
-        self._results: queue.Queue = queue.Queue()
-        self._heavy = threading.Lock()
-        self.logger = log.get("gui.roi_runs")
-
-    def submit(self, run: RoiRun, fn, *, heavy: bool = False) -> RoiRun:
-        """Run ``fn(job)`` on a daemon thread; its return value reaches
-        :meth:`poll` as the run's payload (None and ``run.error`` set when
-        it raised).
-        """
-        pm = self._pm or get_process_manager()
-        run.job = pm.start_job(run.kind, run.description)
-        thread = threading.Thread(
-            target=_run_in_thread,
-            args=(self, run, fn, heavy),
-            name=f"roi-run-{run.tag}",
-            daemon=True,
-        )
-        thread.start()
-        self.runs.append(run)
-        return run
-
-    def spawn(self, run: RoiRun, task_type: str, args: dict) -> RoiRun:
-        """Start a detached worker for ``run``; progress arrives through the
-        process manager's sidecar polling.
-        """
-        pm = self._pm or get_process_manager()
-        if run.out_root is None and args.get("output_dir"):
-            run.out_root = Path(args["output_dir"])
-        pid = pm.spawn(
-            task_type,
-            args,
-            run.description,
-            output_path=str(run.out_root) if run.out_root is not None else None,
-        )
-        if pid is None:
-            self._results.put((run, None, "failed to start worker"))
-        else:
-            run.pid = pid
-        self.runs.append(run)
-        return run
-
-    def poll(self, pm) -> list[tuple[RoiRun, object]]:
-        """``(run, payload)`` per newly finished run; errors land on
-        ``run.error`` (spawned runs always carry a None payload).
-        """
-        done: list[tuple[RoiRun, object]] = []
-        while True:
-            try:
-                run, payload, error = self._results.get_nowait()
-            except queue.Empty:
-                break
-            run.finished = True
-            run.error = error
-            done.append((run, payload))
-        spawned = [r for r in self.runs if r.pid is not None and not r.finished]
-        if spawned:
-            by_pid = {p.pid: p for p in pm.get_running()}
-            for run in spawned:
-                info = by_pid.get(run.pid)
-                if info is None:
-                    # the console prunes a completed entry after a few minutes; outputs on disk mean success
-                    if run.out_root is None or not finished_dirs(
-                        run.out_root, run.planes
-                    ):
-                        run.error = "process stopped"
-                elif info.status == "error":
-                    run.error = info.status_message or "process failed"
-                elif info.status != "completed":
-                    continue
-                run.finished = True
-                done.append((run, None))
-        return done
-
-    def stop(self, run: RoiRun, pm) -> None:
-        """Kill a spawned run; in-process runs cannot be cancelled."""
-        if run.pid is not None and not run.finished:
-            pm.kill(run.pid)
-
-    @property
-    def active(self) -> list[RoiRun]:
-        return [r for r in self.runs if not r.finished]
-
-    @property
-    def busy(self) -> bool:
-        return bool(self.active)
 
 
 def build_pick_map(footprints, shape: tuple[int, int]) -> np.ndarray:
@@ -748,9 +579,3 @@ def finished_dirs(out_root, planes=None) -> list[Path]:
         if run_dir_complete(d):
             out.append(d)
     return out
-
-
-def masknmf_settings(host) -> dict | None:
-    """The masknmf settings the Run tab is holding, or None when it has not built that pipeline yet."""
-    widget = None if host is None else host._pipeline_instances.get("MaskNMF")
-    return None if widget is None else widget.settings.to_dict()

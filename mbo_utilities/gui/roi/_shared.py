@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
 
 import numpy as np
 from imgui_bundle import imgui
@@ -14,15 +11,9 @@ from masknmf.visualization.imgui import (
 )
 from masknmf.visualization.imgui.keybinds import CLASSIFICATION, DEMIXING, Bind
 
-from mbo_utilities.annotation import (
-    RoiLabelStore,
-)
 from mbo_utilities.arrays.features._slicing import index_window
 from mbo_utilities.gui.imgui.table import FILTER_ALL
 from mbo_utilities.lazy_array import base_array
-from mbo_utilities.roi_workflow import (
-    PlaneMovie,
-)
 
 PANEL_HEIGHT = (
     200  # the traces panel's height below the top strip's menu row and tab bar
@@ -40,7 +31,6 @@ def traces_panel_height(motion: bool, vnoiser: bool, behavior: bool) -> int:
     )
 
 
-ADOPT_INTERVAL_S = 1.0  # the finished-run check reads one progress file per process, so not every frame
 DEFLECTION_MODES = ("viewer", "off", "on")
 NOISE_LABELS = {
     "sd": "SD",
@@ -64,22 +54,10 @@ POSITION_KEYS = (
     "sample_um",
 )
 
-_STAGE_NAMES = ("skip", "run", "force")  # suite2p's 0 / 1 / 2
-
 MIN_ROI_PIXELS = 9
 PIXEL_RADIUS = 2  # masknmf's 5x5 pixel average
 DEFAULT_LABEL_NAMES: tuple[str, ...] = ()
-ENGINE_HELP = {  # tooltips for annotation.ENGINES
-    "mean": "mean - the raw mean of the pixels in each mask, frame by "
-    "frame, plus a neuropil ring around it. No pipeline needed.",
-    "suite2p": "suite2p - suite2p's own extractor: F from the mask and "
-    "Fneu from its neuropil ring, ready for its neuropil "
-    "subtraction.",
-    "masknmf": "masknmf - seeded NMF: each mask's demixed signal, with light "
-    "from overlapping neurons and background pulled back out.",
-}
 RUN_WHERE = ("drawn", "screen")
-DEFAULT_RUN_TAG = "manual"
 COLOR_BY = (
     "roi id",
     "class",
@@ -100,13 +78,11 @@ _CAPTIONS = (
     "weighting",
     "color by",
     "traces",
+    "reads",
+    "trace",
     "new label",
     "classes",
     "labeled",
-    "engine",
-    "where",
-    "run",
-    "options",
     "on disk",
     "filter",
     "label",
@@ -193,12 +169,6 @@ _OWN_KEYS: Mapping[str, Bind] = {
     ),
     "accept": Bind("x", "accept / reject the selected algo ROI", imgui.Key.x),
     "rings": Bind("o", "contours: each ROI's border, or a ring around it", imgui.Key.o),
-    "run": Bind(
-        "shift + t",
-        "run the selection through the RUN section's engine",
-        imgui.Key.t,
-        shift=True,
-    ),
 }
 # NOTE: masknmf leaves shift open so the arrows read it as a stride; every other key must pin
 # shift=False here, or shift+m toggles the masks as well as firing the viewer's own shift+m
@@ -232,10 +202,9 @@ _HELP_STEPS = (
     "plots at once. Ctrl+Z undoes, d deletes the selection.",
     "Label ROIs with the class buttons or keys 1-9 (0 clears); u jumps to "
     "the next unlabeled one and, with center on (f), labeling steps there on its own.",
-    "The Curation tab's RUN section runs the selected, grouped or listed "
-    "ROIs through mean (raw mask average), suite2p (suite2p's extractor) or "
-    "masknmf (seeded NMF, demixed), reading each mask where it was drawn or "
-    "on the slice on screen; shift+t runs the selection.",
+    "The Curation tab's TRACE section measures the mean of every listed "
+    "ROI, reading each mask where it was drawn or on the slice on screen. "
+    "Detection and demixing run from the Process tab.",
     "Every measurement is a row of the Traces tab: which ROI, on which "
     "z-plane and channel, with which engine. Re-running one replaces it.",
     "Detected components arrive as rows of the ROIs table: promote one into "
@@ -303,22 +272,6 @@ def _cleared_note(cleared) -> str:
         if cleared
         else ""
     )
-
-
-@dataclass
-class _RunSpec:
-    """One manual run's inputs and outputs, handed to the job thread."""
-
-    groups: dict[tuple[int, int, int], list[int]]
-    movies: dict[tuple[int, int, int], PlaneMovie]
-    store: RoiLabelStore
-    engine: str
-    tag: str
-    out_path: Path
-    source: Any
-    settings: dict | None = None
-    many_c: bool = False
-    work: Path = field(default_factory=Path)
 
 
 class _PlaneOrder(RoiOrder):

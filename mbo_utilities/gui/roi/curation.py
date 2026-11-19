@@ -28,10 +28,7 @@ from masknmf.visualization.imgui import (
 )
 from masknmf.visualization.rois import MARKED_COLOR
 
-from mbo_utilities.annotation import (
-    ENGINES,
-    UNLABELED,
-)
+from mbo_utilities.annotation import UNLABELED
 from mbo_utilities.annotation.traces import export_traces
 from mbo_utilities.gui._theme import THEME, em, label_button, to_vec4
 from mbo_utilities.gui.imgui import (
@@ -42,14 +39,10 @@ from mbo_utilities.gui.roi._shared import (
     _CAPTIONS,
     COLOR_BY,
     COLORMAPS,
-    DEFAULT_RUN_TAG,
-    ENGINE_HELP,
     ROI_KEYS,
     RUN_WHERE,
 )
-from mbo_utilities.roi_workflow import (
-    roi_folder,
-)
+from mbo_utilities.annotation.paths import roi_folder
 
 OPACITY_WHEEL_STEP = 0.05
 
@@ -189,11 +182,6 @@ class CurationMixin:
             return THEME.err, self._save_error
         if self._run_error is not None:
             return THEME.err, self._run_error
-        active = self.manager.active
-        if active:
-            verbs = {"extract": "extract", "demix": "masknmf"}
-            names = ", ".join(f"{verbs.get(r.kind, r.kind)} {r.tag}" for r in active)
-            return THEME.warn, f"{len(active)} running: {names}"
         return THEME.text_dim, self.status
 
     def _draw_save_controls(self, g):
@@ -610,49 +598,19 @@ class CurationMixin:
                 self._autosave()
 
     def _draw_run(self, g):
-        """RUN: the engine and where it reads, the run buttons, the tag."""
-        section("RUN")
-        g.row("engine")
-        imgui.set_next_item_width(g.w)
-        changed, index = imgui.combo(
-            "##roi_engine", ENGINES.index(self.engine), list(ENGINES)
-        )
-        if changed:
-            self.engine = ENGINES[index]
-        g.cell(1)
+        """TRACE: where a mean trace reads its pixels, and tracing every listed ROI."""
+        section("TRACE")
+        g.row("reads")
         imgui.set_next_item_width(g.w)
         changed, index = imgui.combo(
             "##roi_where", RUN_WHERE.index(self.run_where), ["as drawn", "on screen"]
         )
         if changed:
             self.run_where = RUN_WHERE[index]
-        help_mark(f"{ENGINE_HELP[self.engine]}\nReads each mask {self._where_label()}.")
-        g.row("run")
-        indices = self.selection_indices()
+        help_mark(f"Each mask's mean is read {self._where_label()}.")
+        g.row("trace")
         listed = self.listed_drawn()
-        no_path = self.fpath is None
         w = imgui.get_frame_height() * 1.6
-        imgui.begin_disabled(no_path or not indices)
-        if imgui.button(f"{fa.ICON_FA_PLAY}##roi_run_sel", imgui.ImVec2(w, 0)):
-            self.run_selection(indices)
-        imgui.end_disabled()
-        tooltip(
-            "no data path to write beside"
-            if no_path
-            else f"Run the {len(indices)} selected ROI(s) through {self.engine} -> "
-            f"<stem>.{self.effective_tag}.<stamp>.manual.zarr (shift+t)"
-            if indices
-            else "select a drawn ROI first"
-        )
-        imgui.same_line(0, g.gap)
-        imgui.begin_disabled(no_path or not listed)
-        if imgui.button(f"{fa.ICON_FA_FORWARD}##roi_run_all", imgui.ImVec2(w, 0)):
-            self.run_in_view()
-        imgui.end_disabled()
-        tooltip(
-            f"Run all {len(listed)} drawn ROIs the table lists through {self.engine}"
-        )
-        imgui.same_line(0, g.gap)
         why = "no drawn ROIs listed" if not listed else self.trace_disabled(listed[0])
         imgui.begin_disabled(why is not None)
         if imgui.button(f"{fa.ICON_FA_CHART_LINE}##roi_trace_all", imgui.ImVec2(w, 0)):
@@ -665,15 +623,6 @@ class CurationMixin:
         imgui.same_line(0, g.gap)
         marked = sum(len(s.discarded) for s in self.derived)
         right_aligned_text(f"{self.n_rois} drawn, {marked} marked")
-        g.row("options")
-        imgui.set_next_item_width(g.w)
-        _changed, self.run_tag = imgui.input_text_with_hint(
-            "##roi_run_tag", DEFAULT_RUN_TAG, self.run_tag
-        )
-        help_mark(
-            "the run's tag: it names the run file, <stem>.<tag>.<stamp>.manual.zarr, "
-            "in the ROI folder"
-        )
 
     def _selection_status(self) -> str:
         """Masknmf's footer names the group or the selection, else the first step."""

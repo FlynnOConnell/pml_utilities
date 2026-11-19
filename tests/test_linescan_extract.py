@@ -8,7 +8,7 @@ import h5py
 import numpy as np
 import pytest
 from mbo_utilities.arrays.mesc import MescArray
-from mbo_utilities.roi_workflow import (
+from mbo_utilities.analysis.linescan import (
     linescan_roi_means,
     linescan_roi_read,
 )

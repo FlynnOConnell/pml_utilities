@@ -90,8 +90,6 @@ class KeysMixin:
             self.keybinds_open = not self.keybinds_open
         if pressed(keys["unlabeled"]):
             self.next_unlabeled()
-        if pressed(keys["run"]):
-            self.run_selection()
         if self.selected_derived is not None:
             if pressed(keys["promote"]):
                 self.promote_derived(*self.selected_derived)

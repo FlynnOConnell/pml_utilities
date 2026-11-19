@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import numpy as np
 
+from mbo_utilities.arrays.plane import as_movie
+
 __all__ = [
     "experiment_linescan_mesc",
+    "linescan_roi_means",
+    "linescan_roi_read",
+    "unit_roi_means",
 ]
 
 _FIG_BG = "black"
@@ -174,3 +180,124 @@ def plot_traces(
     path = out_dir / save_name
     _save(fig, path)
     return path
+
+
+def linescan_roi_read(
+    arr,
+    *,
+    channel: int = 0,
+    batch_size: int = 5000,
+    bin_frames: int | None = None,
+    convert: bool = True,
+    dtype=np.float32,
+    progress=None,
+    rois=None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """One pass over a linescan unit: ``(K, T)`` per-ROI means and, when
+    ``bin_frames`` is set, ``(K, ceil(T / bin_frames), W)`` kymographs.
+    ``rois`` (0-based ROI indices, the unit's Z axis) reads only those, in
+    that order; the others are never touched.
+
+    With ``convert`` (default) the file's own linear conversion for the
+    channel (``metadata["mesc_channel_conversion"]``, ``raw * scale +
+    offset``) is applied, so zero means no photons. MESc's raw uint16 sit
+    about 1000 counts above that zero on the AOD rigs; left in, that
+    offset makes every dF/F several times too small.
+
+    Each ROI (its own Z-index of ``arr``) is cropped back to its true,
+    unpadded ``height x width`` from ``arr.metadata["mesc_roi_extents"]``
+    before averaging - the array pads ragged ROIs to
+    a shared frame with zeros, which would pull the mean down. The kymograph averages over the
+    ROI's lines (its height) and over ``bin_frames`` consecutive frames;
+    ``W`` is the widest ROI and narrower ROIs are NaN beyond their width.
+    Reads ``batch_size`` frames at a time; the means are accumulated and
+    returned in ``dtype`` (``float64`` reproduces a pixel mean exactly).
+    ``progress(i, K, seconds)`` is called after each ROI when given.
+    """
+    md = arr.metadata
+    extents = md["mesc_roi_extents"]
+    if rois is not None:
+        rois = [int(r) for r in rois]
+        bad = [r for r in rois if not 0 <= r < len(extents)]
+        if bad:
+            raise ValueError(f"ROI {bad[0]} is outside 0..{len(extents) - 1}")
+        extents = [extents[r] for r in rois]
+    K = len(extents)
+    scale, offset = 1.0, 0.0
+    conv = md.get("mesc_channel_conversion") or []
+    if convert and channel < len(conv):
+        scale, offset = float(conv[channel]["scale"]), float(conv[channel]["offset"])
+    movies = [as_movie(arr, z=int(e["index"]), c=channel) for e in extents]
+    T = movies[0].shape[0]
+    dtype = np.dtype(dtype)
+    F = np.zeros((K, T), dtype)
+    kymo = None
+    if bin_frames:
+        bin_frames = int(bin_frames)
+        batch_size = max(bin_frames, (batch_size // bin_frames) * bin_frames)
+        nb = int(np.ceil(T / bin_frames))
+        W = max(int(e["width"]) for e in extents)
+        kymo = np.full((K, nb, W), np.nan, dtype)
+    t0 = time.time()
+    for i, (movie, ext) in enumerate(zip(movies, extents)):
+        h, w = int(ext["height"]), int(ext["width"])
+        for tt0 in range(0, T, batch_size):
+            tt1 = min(T, tt0 + batch_size)
+            blk = movie.frames(tt0, tt1, slice(0, h), slice(0, w)).astype(
+                dtype, copy=False
+            )
+            if scale != 1.0 or offset != 0.0:
+                blk = blk * scale + offset
+            F[i, tt0:tt1] = blk.reshape(blk.shape[0], -1).mean(axis=1)
+            if kymo is not None:
+                prof = blk.mean(axis=1)  # (n, w): mean over the ROI's lines
+                b0 = tt0 // bin_frames
+                nfull = prof.shape[0] // bin_frames
+                if nfull:
+                    kymo[i, b0 : b0 + nfull, :w] = (
+                        prof[: nfull * bin_frames]
+                        .reshape(nfull, bin_frames, w)
+                        .mean(axis=1)
+                    )
+                if prof.shape[0] > nfull * bin_frames:
+                    kymo[i, b0 + nfull, :w] = prof[nfull * bin_frames :].mean(axis=0)
+        if progress is not None:
+            progress(i, K, time.time() - t0)
+    return F, kymo
+
+
+def linescan_roi_means(
+    arr, *, channel: int = 0, batch_size: int = 5000, progress=None
+) -> np.ndarray:
+    """``(K, T)`` mean fluorescence per ROI per timepoint of a linescan unit
+    (:func:`linescan_roi_read` without the kymograph).
+    """
+    F, _ = linescan_roi_read(
+        arr, channel=channel, batch_size=batch_size, progress=progress
+    )
+    return F
+
+
+def unit_roi_means(arr, channel: int = 0, progress=None) -> np.ndarray:
+    """``(K, T)`` float32 raw mean of each ROI of an AOD unit (a line, a
+    patch, a single-patch scan's frame) in photon counts, one per Z index:
+    :func:`linescan_roi_means` for a unit with ROI extents, else each ROI's
+    whole frame through ``analysis.roi_traces.extract_traces``.
+    ``progress(i, k, seconds)`` follows each ROI.
+    """
+    from mbo_utilities.analysis.roi_traces import (
+        TraceSettings,
+        extract_traces,
+        roi_geometry,
+    )
+
+    if arr.metadata.get("mesc_roi_extents"):
+        return linescan_roi_means(arr, channel=channel, progress=progress)
+    found = extract_traces(
+        arr,
+        {f"roi{k}": [k] for k in roi_geometry(arr)},
+        TraceSettings(convert=True),
+        channel=channel,
+        progress=progress,
+    )
+    return found.F.astype(np.float32)

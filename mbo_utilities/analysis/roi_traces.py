@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field, fields
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
-from mbo_utilities.roi_workflow import as_movie
+from mbo_utilities.arrays.plane import as_movie
 
 __all__ = [
     "BACKGROUNDS",

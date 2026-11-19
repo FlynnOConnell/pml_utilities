@@ -82,7 +82,7 @@ from mbo_utilities.gui.imgui.lines import (
 )
 from mbo_utilities.gui.launch import launch_window
 from mbo_utilities.preferences import get_roi_folder
-from mbo_utilities.roi_workflow import roi_folder
+from mbo_utilities.annotation.paths import roi_folder
 
 logger = log.get("gui.dashboard_app")
 

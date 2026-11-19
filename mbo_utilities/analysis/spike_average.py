@@ -35,7 +35,7 @@ from mbo_utilities.results import (
     results_dir_of,
     unit_frames,
 )
-from mbo_utilities.roi_workflow import PlaneMovie
+from mbo_utilities.arrays.plane import PlaneMovie
 
 __all__ = [
     "EVENTS",

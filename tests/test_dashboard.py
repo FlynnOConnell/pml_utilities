@@ -77,7 +77,7 @@ from mbo_utilities.gui.dashboard_morphology import (
 )
 from mbo_utilities.gui.mesc_reference import ReferenceImage, polyline_distance
 from mbo_utilities.reader import imread
-from mbo_utilities.roi_workflow import labels_path
+from mbo_utilities.annotation.paths import labels_path
 
 from tests.test_mesc_placement import (
     N_LINES,

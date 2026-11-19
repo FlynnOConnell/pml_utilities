@@ -20,9 +20,7 @@ from mbo_utilities.gui.roi_runs import (
     component_color,
     outline_data,
 )
-from mbo_utilities.roi_workflow import (
-    feather_mask,
-)
+from mbo_utilities.annotation.measure import feather_mask
 
 
 class OverlayMixin:
