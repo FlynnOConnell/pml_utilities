@@ -62,10 +62,6 @@ def _spec_for(parent: Any, arr: Any) -> SummaryStatsSpec:
 
         dims = DEFAULT_DIMS.get(len(shape), tuple("TCZYX"[: len(shape)]))
 
-    if hasattr(arr, "num_slices") and hasattr(arr, "average_frames"):
-        if not arr.average_frames and getattr(arr, "can_average", False):
-            arr.average_frames = True
-
     pref = str(parent._stats_axis_pref).lower()
     labels = _slider_labels(parent)
     spec_fn = getattr(arr, "summary_stats_spec", None)
