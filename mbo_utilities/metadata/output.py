@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mbo_utilities.metadata.base import AXIS_KEYS, METADATA_PARAMS, VoxelSize
+from mbo_utilities.metadata.io import OME_LAYOUT_KEYS
 from mbo_utilities.metadata.params import get_param
 
 # lowercase spellings of every registered rate key, used to keep all rate
@@ -481,7 +482,7 @@ class OutputMetadata:
         dict
             metadata dictionary with adjusted values
         """
-        result = dict(self.source)
+        result = {k: v for k, v in self.source.items() if k not in OME_LAYOUT_KEYS}
 
         result["shape"] = self.output_shape
 
