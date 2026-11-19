@@ -86,6 +86,7 @@ class OutputMetadata:
     _is_contiguous: bool = field(default=True, init=False)
     _frame_step: int = field(default=1, init=False)
     _z_step_factor: int = field(default=1, init=False)
+    _z_uniform: bool = field(default=True, init=False)
     _output_shape: tuple[int, ...] = field(default_factory=tuple, init=False)
 
     def __post_init__(self):
@@ -147,17 +148,9 @@ class OutputMetadata:
             self._z_step_factor = 1
             return
 
-        unique_steps = set(steps)
-        if len(unique_steps) == 1:
-            self._z_step_factor = steps[0]
-        else:
-            import logging
-
-            logging.getLogger("mbo_utilities").warning(
-                f"Non-uniform z-plane spacing detected (steps: {steps[:5]}...). "
-                f"Using first step ({steps[0]}) for dz calculation."
-            )
-            self._z_step_factor = steps[0]
+        # planes 1, 7, 14 have no one spacing, so dz is left unset like fs for a gapped T
+        self._z_step_factor = steps[0]
+        self._z_uniform = len(set(steps)) == 1
 
     def _compute_output_shape(self):
         """Compute output shape based on selections."""
@@ -301,7 +294,7 @@ class OutputMetadata:
     def dz(self) -> float | None:
         """Adjusted z-step for output planes."""
         base, prior = self._field_base_and_prior_stride("dz")
-        if base is None:
+        if base is None or not self._z_uniform:
             return None
         return float(base) * prior * self._z_step_factor
 
@@ -344,7 +337,7 @@ class OutputMetadata:
         prov = self._provenance()
         dz_base, dz_prior = self._field_base_and_prior_stride("dz")
         fs_base, fs_prior = self._field_base_and_prior_stride("fs")
-        if dz_base is not None:
+        if dz_base is not None and self._z_uniform:
             prov["dz"] = {
                 "base": float(dz_base),
                 "stride": int(dz_prior * self._z_step_factor),
