@@ -23,13 +23,10 @@ mbo                          # file dialog
 mbo /path/to/data            # open specific file
 mbo /path/to/data --metadata # show only metadata
 mbo /path/to/stack.tif --dims ZYX   # a plain TIFF whose pages are z-planes (CYX: channels)
-mbo /path/to/<time>_masknmf_zplane01 --qc   # a MaskNMF run in Registration-Denoising Quality Control
 ```
 
 A MaskNMF run folder opens in the Studio, or in masknmf's demixing viewer when
-the run demixed; `--qc` opens raw | registered over both as PMD, with the RTMC
-curves, the masknmf shifts, each movie's frame mean and its mean inside a box
-you drag.
+the run demixed.
 
 ::::{grid} 1 1 2 2
 :gutter: 3
@@ -113,8 +110,8 @@ a systemd user service (`Restart=on-failure`), as the results page is.
 
 What does not work in a browser yet:
 
-- Windows the GUI opens beside the viewer (spike average, Registration QC, the
-  curation dashboard) start on the server, which has no display.
+- Windows the GUI opens beside the viewer (spike average, the masknmf viewer,
+  the curation dashboard) start on the server, which has no display.
 - The browse buttons in the GUI's own dialogs; type the path.
 - Copy and paste stay inside the GUI; nothing reaches your clipboard.
 
@@ -263,14 +260,12 @@ Results
 
 ## Init
 
-Create starter notebooks: the mbo and LBM-Suite2p user guides, and for a `.mesc` the ASAP7 spine pipeline.
+Create starter notebooks: the mbo and LBM-Suite2p user guides.
 
 ```bash
 mbo init                       # notebooks in current directory
 mbo init /path/to/raw          # notebooks in /path/to/scripts, data path filled in
 mbo init /path/to/raw -o ./nb  # custom destination directory
-mbo init /path/to/scan.mesc    # the guides and the ASAP7 spine pipeline, path filled in
-mbo init /path/to/scan.mesc --unit MSession_0/MUnit_3   # and the unit
 ```
 
 | Option | Description |
