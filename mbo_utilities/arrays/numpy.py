@@ -341,18 +341,15 @@ class NumpyArray(ReductionMixin, Shape5DMixin):
     def metadata(self) -> dict:
         """Return metadata as dict. Always returns dict, never None.
 
-        Shape-derived keys (dims, Ly, Lx, num_timepoints) are computed from
-        the current canonical layout, so they stay reactive after .dims is
-        changed. User-set keys take precedence over the derived defaults.
+        Shape-derived keys (dims, counts, Ly, Lx) are computed from the current
+        canonical layout, so they stay reactive after .dims is changed and
+        always agree with the shape.
         """
         md = dict(self._metadata) if self._metadata is not None else {}
         md["dims"] = self.dims
         md["dimension_names"] = [d.lower() for d in self.dims]  # NGFF alias
-        md["num_timepoints"] = md.get("num_timepoints", self.shape[0])
-        md.setdefault("nframes", md["num_timepoints"])  # suite2p alias
-        md.setdefault("num_frames", md["num_timepoints"])  # legacy alias
-        md["Ly"] = md.get("Ly", self.shape[-2])
-        md["Lx"] = md.get("Lx", self.shape[-1])
+        nt, nc, nz, ny, nx = self.shape
+        md.update(num_timepoints=nt, num_color_channels=nc, num_zplanes=nz, Ly=ny, Lx=nx)
         return md
 
     @metadata.setter
