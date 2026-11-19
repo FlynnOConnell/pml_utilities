@@ -110,6 +110,7 @@ class StackAnnotator:
     show_volume: bool = True
     alpha_volume: float = 1.0
     show_surfaces: bool = True
+    show_crosshair: bool = True
     dirty_labels: bool = True
     press: Optional[tuple] = None
 
@@ -308,14 +309,23 @@ def move_crosshair(state: StackAnnotator, y: int, x: int, z: Optional[int] = Non
 
 
 def move_guides(state: StackAnnotator, indices: dict) -> None:
-    """Put the guide lines of XZ, YZ and the 3D view on the NDWidget's indices."""
+    """Put the crosshair on XY and the guide lines of XZ, YZ and the 3D view on the NDWidget's indices."""
     z, y, x = (_ref_to_index(indices[dim]) for dim in (DIM_Z, DIM_Y, DIM_X))
     depth = (z + 0.5) * state.z_scale
+    state.guides["xy_y"].data[:, 1] = y
+    state.guides["xy_x"].data[:, 0] = x
     state.guides["xz_z"].data[:, 1] = depth
     state.guides["xz_x"].data[:, 0] = x
     state.guides["yz_z"].data[:, 0] = depth
     state.guides["yz_y"].data[:, 1] = y
     state.graphic_plane.data[:, 2] = z * state.z_scale
+
+
+def show_crosshair(state: StackAnnotator, visible: bool) -> None:
+    """Show or hide the crosshair on XY and the guide lines of XZ, YZ and the 3D view."""
+    state.show_crosshair = visible
+    for graphic in (*state.guides.values(), state.graphic_plane):
+        graphic.visible = visible
 
 
 def build(filepath_stack: str, unit: Optional[str] = None, voxel_um: Optional[tuple] = None) -> StackAnnotator:
@@ -404,8 +414,10 @@ def build(filepath_stack: str, unit: Optional[str] = None, voxel_um: Optional[tu
             state.nd_images[f"labels_{view}"].graphic.scale = scale
 
     depth = n_z * z_scale
-    subplot_xz, subplot_yz, subplot_3d = figure[SUBPLOT_XZ], figure[SUBPLOT_YZ], figure[SUBPLOT_3D]
+    subplot_xy, subplot_xz, subplot_yz, subplot_3d = (figure[s] for s in (SUBPLOT_XY, SUBPLOT_XZ, SUBPLOT_YZ, SUBPLOT_3D))
     state.guides = {
+        "xy_y": guide_line(subplot=subplot_xy, points=[[0, 0, 2], [n_x, 0, 2]]),
+        "xy_x": guide_line(subplot=subplot_xy, points=[[0, 0, 2], [0, n_y, 2]]),
         "xz_z": guide_line(subplot=subplot_xz, points=[[0, 0, 2], [n_x, 0, 2]]),
         "xz_x": guide_line(subplot=subplot_xz, points=[[0, 0, 2], [0, depth, 2]]),
         "yz_z": guide_line(subplot=subplot_yz, points=[[0, 0, 2], [0, n_y, 2]]),
@@ -635,10 +647,13 @@ def apply_channel_limits(state: StackAnnotator, channel: int) -> None:
 
 
 def draw_frame(state: StackAnnotator) -> None:
-    """Per-frame work: the brush key, and whatever the last events left stale."""
+    """Per-frame work: the brush and crosshair keys, and whatever the last events left stale."""
     io = imgui.get_io()
-    if not io.want_text_input and state.widget._keys_live() and imgui.is_key_pressed(imgui.Key.b, False):
-        state.brush.active = not state.brush.active
+    if not io.want_text_input and state.widget._keys_live():
+        if imgui.is_key_pressed(imgui.Key.b, False):
+            state.brush.active = not state.brush.active
+        if imgui.is_key_pressed(imgui.Key.g, False):
+            show_crosshair(state=state, visible=not state.show_crosshair)
     _z, channel, _pos = view_position(state=state)
     if channel != state.channel:
         state.channel = channel
@@ -1078,6 +1093,12 @@ def draw_panel(state: StackAnnotator) -> None:
     changed_surfaces, state.show_surfaces = imgui.checkbox("surfaces", state.show_surfaces)
     if changed_surfaces:
         apply_class_display(state=state)
+    imgui.same_line()
+    changed_crosshair, visible = imgui.checkbox("crosshair (g)", state.show_crosshair)
+    if changed_crosshair:
+        show_crosshair(state=state, visible=visible)
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("Show the lines where XZ and YZ cut XY, and where the slice on screen sits in XZ, YZ and 3D (g)")
     draw_trace_controls(state=state)
     imgui.separator()
     widget.draw_rois()
