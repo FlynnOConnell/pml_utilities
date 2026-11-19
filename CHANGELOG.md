@@ -52,6 +52,7 @@ smaller internal tweaks are left out.
 - The online documentation is `mbo_utilities`'; the `docs` extra is gone and `docs/` stays as its source.
 - The base install is the reading and writing core; The Studio is the `gui` extra, and PyQt6, dask, imagecodecs, numba and ffmpeg are extras of their own.
 
-## Unreleased
+## v4.1.0 — unreleased
 
 - `mbo stack-annotate`: annotate dendrites, spines and other structures through a Z-stack in XY, XZ, YZ and 3D, with a brush on all three planes and an editable automatic trace, saved as `<stem>.trace.zarr` (paths, link proposals and an OME-NGFF label image). A `.mesc` with several Z-stacks lists them; the MESc tab's **Annotate in 3D** opens the one on screen. Install the `annotate` extra.
+- The stack annotator draws a crosshair on XY where XZ and YZ cut it; `g` or the **crosshair** checkbox shows or hides it with the side views' guide lines.
