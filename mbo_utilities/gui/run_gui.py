@@ -452,6 +452,9 @@ def _figure_kwargs_for_here(
         # a chosen backend is left to rendercanvas.auto, which honors the variable
         RenderCanvas = None
     else:
+        from mbo_utilities.gui._setup import _use_xwayland_for_pyqt6
+
+        _use_xwayland_for_pyqt6()
         try:
             from rendercanvas.pyqt6 import RenderCanvas
         except (ImportError, RuntimeError):
