@@ -1,11 +1,11 @@
 """The shipped notebook templates and how they are filled in beside a recording."""
 
-import json
 from datetime import date
 
 from mbo_utilities import notebook_templates
 from mbo_utilities.notebook_templates import (
     TEMPLATES,
+    Template,
     notebook_path,
     scripts_dir,
     template_dir,
@@ -13,26 +13,16 @@ from mbo_utilities.notebook_templates import (
     write_notebook,
 )
 
-SPINE = next(t for t in TEMPLATES if t.filename == "asap7_spine_pipeline.ipynb")
+# a .mesc template with a unit token, standing in for the per-unit notebooks the mechanism serves
+SPINE = Template("spine.ipynb", "spine", "D:/demo/scan.mesc", ".mesc", "MSession_0/MUnit_0")
 
 
-def test_templates_for_a_mesc_include_the_spine_pipeline():
-    names = [t.filename for t in templates_for("/data/scan.MESC")]
-    assert "asap7_spine_pipeline.ipynb" in names
-    assert "mbo_user_guide.ipynb" in names
-    assert "asap7_spine_pipeline.ipynb" not in [
-        t.filename for t in templates_for("/data/raw")
-    ]
+def test_the_generic_templates_ship_for_any_recording_with_their_path_token():
     assert templates_for(None) == [t for t in TEMPLATES if not t.suffix]
-
-
-def test_shipped_spine_template_is_clean_and_carries_its_tokens():
-    text = (template_dir() / SPINE.filename).read_text(encoding="utf-8")
-    assert SPINE.path_token in text
-    assert SPINE.unit_token in text
-    assert "pip install" not in text
-    nb = json.loads(text)
-    assert all(cell.get("outputs", []) == [] for cell in nb["cells"])
+    assert "mbo_user_guide.ipynb" in [t.filename for t in templates_for("/data/scan.MESC")]
+    for template in TEMPLATES:
+        text = (template_dir() / template.filename).read_text(encoding="utf-8")
+        assert template.path_token in text
 
 
 def test_scripts_dir_sits_beside_the_file_or_the_raw_folder(tmp_path):
@@ -55,7 +45,7 @@ def test_write_notebook_fills_path_and_unit_and_keeps_an_existing_copy(
     dest = scripts_dir(mesc)
     out = write_notebook(SPINE, dest, mesc, "MSession_0/MUnit_3")
     assert out == notebook_path(SPINE, dest, date.today(), "MSession_0/MUnit_3")
-    assert out.name.endswith("_asap7_spine_pipeline_MSession_0_MUnit_3.ipynb")
+    assert out.name.endswith("_spine_MSession_0_MUnit_3.ipynb")
     text = out.read_text(encoding="utf-8")
     assert mesc.resolve().as_posix() in text
     assert 'UNIT = "MSession_0/MUnit_3"' in text

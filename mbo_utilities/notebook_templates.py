@@ -29,13 +29,6 @@ class Template:
 TEMPLATES = (
     Template("mbo_user_guide.ipynb", "mbo user guide", "D:/demo/raw"),
     Template("lsp_user_guide.ipynb", "LBM-Suite2p user guide", "D:/demo/raw"),
-    Template(
-        "asap7_spine_pipeline.ipynb",
-        "ASAP7 spine pipeline (masknmf)",
-        "D:/demo/scan.mesc",
-        ".mesc",
-        "MSession_0/MUnit_0",
-    ),
 )
 
 

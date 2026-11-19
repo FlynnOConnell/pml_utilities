@@ -220,7 +220,6 @@ class FileDialog:
         self.gui_modes = [
             "Fastplotlib viewer (default)",
             "Napari viewer",
-            "Registration QC (MaskNMF run)",
             "Spike-triggered average (run with results)",
             "Dashboard (.mesc ROI traces)",
         ]
