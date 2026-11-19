@@ -73,9 +73,21 @@ def test_the_crosshair_marks_where_the_side_views_cut_xy_and_hides(state):
     assert set(state.guides["xy_y"].data[:, 1]) == {20}
     assert set(state.guides["xy_x"].data[:, 0]) == {30}
     stack_annotate.show_crosshair(state=state, visible=False)
-    assert not any(graphic.visible for graphic in (*state.guides.values(), state.graphic_plane))
+    assert not any(graphic.visible for graphic in state.guides.values())
     stack_annotate.show_crosshair(state=state, visible=True)
-    assert all(graphic.visible for graphic in (*state.guides.values(), state.graphic_plane))
+    assert all(graphic.visible for graphic in state.guides.values())
+
+
+def test_the_3d_slices_and_guide_lines_follow_the_crosshair(state):
+    stack_annotate.move_crosshair(state=state, y=40, x=12, z=5)
+    render(state)
+    z_px = 5 * VOXEL_UM[0] / VOXEL_UM[2]
+    assert state.graphics_slice["z"].plane == pytest.approx((0, 0, 1, -z_px))
+    assert state.graphics_slice["y"].plane == pytest.approx((0, 1, 0, -40))
+    assert state.graphics_slice["x"].plane == pytest.approx((1, 0, 0, -12))
+    assert state.outlines_slice["z"].data.value[:, 2] == pytest.approx(z_px)
+    assert state.guides["xy_x"].data.value[:, 0] == pytest.approx(12)
+    assert state.guides["xy_y"].data.value[:, 1] == pytest.approx(40)
 
 
 def test_a_brush_stroke_on_xy_is_one_roi_on_that_plane_and_undo_takes_it_back(state):

@@ -44,6 +44,8 @@ WINDOW_SIZE = (1700, 1000)
 PANEL_WIDTH_PX = 460
 COLOR_UNLABELED = (0.7, 0.7, 0.7)
 COLOR_GUIDE = (1.0, 0.85, 0.2, 0.6)
+## one colour per stack axis: a guide line in XY, XZ or YZ has the colour of the 3D slice plane it marks
+COLORS_AXIS = {"z": (0.31, 0.76, 0.97, 0.8), "y": (1.0, 0.72, 0.30, 0.8), "x": (0.90, 0.45, 0.45, 0.8)}
 ALPHA_ORTHO_LABELS = 150
 ALPHA_STROKE = 140
 SOURCE_INTERPOLATED = "interpolated"
@@ -91,7 +93,8 @@ class StackAnnotator:
     brush: Brush = field(default_factory=Brush)
     channel: int = -1
     nd_images: dict = field(default_factory=dict)  ## "xz", "yz", "volume", "labels_xz", "labels_yz" -> NDImage
-    graphic_plane: Any = None
+    graphics_slice: dict = field(default_factory=dict)  ## "z", "y", "x" -> the stack's slice in 3D through the crosshair
+    outlines_slice: dict = field(default_factory=dict)  ## "z", "y", "x" -> that slice's outline
     graphics_mesh: dict = field(default_factory=dict)  ## class volume value -> surface
     class_display: dict = field(default_factory=dict)  ## class volume value -> ClassDisplay
     tint_applied: dict = field(default_factory=dict)  ## ROI uid -> RGB bytes last given to the store
@@ -111,6 +114,7 @@ class StackAnnotator:
     alpha_volume: float = 1.0
     show_surfaces: bool = True
     show_crosshair: bool = True
+    show_slices: bool = True
     dirty_labels: bool = True
     press: Optional[tuple] = None
 
@@ -293,11 +297,42 @@ def hide_from_pointer(graphic) -> None:
         part.material.pick_write = False
 
 
-def guide_line(subplot, points: np.ndarray):
+def guide_line(subplot, points: np.ndarray, colors: tuple = COLOR_GUIDE, thickness: float = 1.0):
     """A thin guide line that the pointer passes through."""
-    graphic = subplot.add_line(np.asarray(points, np.float32), thickness=1.0, colors=COLOR_GUIDE)
+    graphic = subplot.add_line(np.asarray(points, np.float32), thickness=thickness, colors=colors)
     hide_from_pointer(graphic=graphic)
     return graphic
+
+
+def slice_outline(axis: str, crosshair_zyx: tuple, shape_zyx: tuple, z_scale: float) -> np.ndarray:
+    """
+    Closed outline of the 3D slice plane normal to ``axis`` through the crosshair.
+
+    Parameters
+    ----------
+    axis : str
+        ``"z"``, ``"y"`` or ``"x"``.
+    crosshair_zyx : tuple
+        ``(z, y, x)`` voxel the plane passes through.
+    shape_zyx : tuple
+        ``(n_z, n_y, n_x)``.
+    z_scale : float
+        Slice spacing in pixels.
+
+    Returns
+    -------
+    np.ndarray
+        ``(x, y, z)`` corners in the 3D view's world coordinates. Shape (5, 3) float32.
+    """
+    extent = dict(zip("zyx", shape_zyx))
+    position = dict(zip("zyx", crosshair_zyx))
+    scale = {"z": z_scale, "y": 1.0, "x": 1.0}
+    a, b = (other for other in "xyz" if other != axis)
+    points = []
+    for corner_a, corner_b in ((0, 0), (1, 0), (1, 1), (0, 1), (0, 0)):
+        voxel = {axis: position[axis], a: corner_a * extent[a] - 0.5, b: corner_b * extent[b] - 0.5}
+        points.append([voxel[k] * scale[k] for k in "xyz"])
+    return np.array(points, np.float32)
 
 
 def move_crosshair(state: StackAnnotator, y: int, x: int, z: Optional[int] = None) -> None:
@@ -309,7 +344,7 @@ def move_crosshair(state: StackAnnotator, y: int, x: int, z: Optional[int] = Non
 
 
 def move_guides(state: StackAnnotator, indices: dict) -> None:
-    """Put the crosshair on XY and the guide lines of XZ, YZ and the 3D view on the NDWidget's indices."""
+    """Put the crosshair on XY, the guide lines of XZ and YZ and the slices in the 3D view on the NDWidget's indices."""
     z, y, x = (_ref_to_index(indices[dim]) for dim in (DIM_Z, DIM_Y, DIM_X))
     depth = (z + 0.5) * state.z_scale
     state.guides["xy_y"].data[:, 1] = y
@@ -318,13 +353,21 @@ def move_guides(state: StackAnnotator, indices: dict) -> None:
     state.guides["xz_x"].data[:, 0] = x
     state.guides["yz_z"].data[:, 0] = depth
     state.guides["yz_y"].data[:, 1] = y
-    state.graphic_plane.data[:, 2] = z * state.z_scale
+    shape_zyx = state.arr.shape[-3:]
+    for axis, index in zip("zyx", (z, y, x)):
+        ## NOTE: a slice plane is in world coordinates, where z is stretched by z_scale
+        offset = index * (state.z_scale if axis == "z" else 1.0)
+        normal = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}[axis]
+        state.graphics_slice[axis].plane = (*normal, -offset)
+        state.outlines_slice[axis].data = slice_outline(
+            axis=axis, crosshair_zyx=(z, y, x), shape_zyx=shape_zyx, z_scale=state.z_scale
+        )
 
 
 def show_crosshair(state: StackAnnotator, visible: bool) -> None:
-    """Show or hide the crosshair on XY and the guide lines of XZ, YZ and the 3D view."""
+    """Show or hide the crosshair on XY and the guide lines of XZ and YZ."""
     state.show_crosshair = visible
-    for graphic in (*state.guides.values(), state.graphic_plane):
+    for graphic in state.guides.values():
         graphic.visible = visible
 
 
@@ -416,16 +459,32 @@ def build(filepath_stack: str, unit: Optional[str] = None, voxel_um: Optional[tu
     depth = n_z * z_scale
     subplot_xy, subplot_xz, subplot_yz, subplot_3d = (figure[s] for s in (SUBPLOT_XY, SUBPLOT_XZ, SUBPLOT_YZ, SUBPLOT_3D))
     state.guides = {
-        "xy_y": guide_line(subplot=subplot_xy, points=[[0, 0, 2], [n_x, 0, 2]]),
-        "xy_x": guide_line(subplot=subplot_xy, points=[[0, 0, 2], [0, n_y, 2]]),
-        "xz_z": guide_line(subplot=subplot_xz, points=[[0, 0, 2], [n_x, 0, 2]]),
-        "xz_x": guide_line(subplot=subplot_xz, points=[[0, 0, 2], [0, depth, 2]]),
-        "yz_z": guide_line(subplot=subplot_yz, points=[[0, 0, 2], [0, n_y, 2]]),
-        "yz_y": guide_line(subplot=subplot_yz, points=[[0, 0, 2], [depth, 0, 2]]),
+        "xy_x": guide_line(subplot=subplot_xy, points=[[0, 0, 2], [0, n_y, 2]], colors=COLORS_AXIS["x"]),
+        "xy_y": guide_line(subplot=subplot_xy, points=[[0, 0, 2], [n_x, 0, 2]], colors=COLORS_AXIS["y"]),
+        "xz_z": guide_line(subplot=subplot_xz, points=[[0, 0, 2], [n_x, 0, 2]], colors=COLORS_AXIS["z"]),
+        "xz_x": guide_line(subplot=subplot_xz, points=[[0, 0, 2], [0, depth, 2]], colors=COLORS_AXIS["x"]),
+        "yz_z": guide_line(subplot=subplot_yz, points=[[0, 0, 2], [0, n_y, 2]], colors=COLORS_AXIS["z"]),
+        "yz_y": guide_line(subplot=subplot_yz, points=[[0, 0, 2], [depth, 0, 2]], colors=COLORS_AXIS["y"]),
     }
-    state.graphic_plane = guide_line(
-        subplot=subplot_3d, points=[[0, 0, 0], [n_x, 0, 0], [n_x, n_y, 0], [0, n_y, 0], [0, 0, 0]]
-    )
+    graphic_volume = state.nd_images["volume"].graphic
+    ## NOTE: the max projection writes the depth of the stack's box, which would hide the slices inside it
+    for tile in graphic_volume.world_object.children:
+        tile.material.depth_write = False
+    for axis in "zyx":
+        ## NOTE: passing the stack's data property makes the slice share its texture, so a channel change reaches it too
+        graphic = subplot_3d.add_image_volume(
+            graphic_volume.data, mode="slice", cmap="gray", vmin=limits[0], vmax=limits[1]
+        )
+        graphic.scale = (1, 1, z_scale)
+        for tile in graphic.world_object.children:
+            tile.render_order = 1
+        state.graphics_slice[axis] = graphic
+        state.outlines_slice[axis] = guide_line(
+            subplot=subplot_3d,
+            points=slice_outline(axis=axis, crosshair_zyx=(0, 0, 0), shape_zyx=(n_z, n_y, n_x), z_scale=z_scale),
+            colors=COLORS_AXIS[axis],
+            thickness=2.0,
+        )
     n_depth = int(np.ceil(depth))
     for view, shape in (("xy", (n_y, n_x)), ("xz", (n_depth, n_x)), ("yz", (n_y, n_depth))):
         state.brush.strokes[view] = np.zeros(shape, np.uint8)
@@ -639,10 +698,9 @@ def apply_class_display(state: StackAnnotator) -> None:
 
 
 def apply_channel_limits(state: StackAnnotator, channel: int) -> None:
-    """Give XZ, YZ and the 3D view the contrast of ``channel``."""
+    """Give XZ, YZ, the 3D view and its slices the contrast of ``channel``."""
     vmin, vmax = state.limits[channel]
-    for view in ("xz", "yz", "volume"):
-        graphic = state.nd_images[view].graphic
+    for graphic in (*(state.nd_images[view].graphic for view in ("xz", "yz", "volume")), *state.graphics_slice.values()):
         graphic.vmin, graphic.vmax = vmin, vmax
 
 
@@ -1099,6 +1157,13 @@ def draw_panel(state: StackAnnotator) -> None:
         show_crosshair(state=state, visible=visible)
     if imgui.is_item_hovered():
         imgui.set_tooltip("Show the lines where XZ and YZ cut XY, and where the slice on screen sits in XZ, YZ and 3D (g)")
+    imgui.same_line()
+    changed_slices, state.show_slices = imgui.checkbox("slices", state.show_slices)
+    if imgui.is_item_hovered():
+        imgui.set_tooltip("The XY, XZ and YZ slices through the crosshair as planes in 3D, outlined in their guide colours.")
+    if changed_slices:
+        for graphic in (*state.graphics_slice.values(), *state.outlines_slice.values()):
+            graphic.visible = state.show_slices
     draw_trace_controls(state=state)
     imgui.separator()
     widget.draw_rois()
