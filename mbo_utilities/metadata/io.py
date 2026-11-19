@@ -300,6 +300,8 @@ def _imagej_to_metadata(tiff_file) -> dict:
     return md
 
 
+OME_LAYOUT_KEYS = ("DimensionOrder", "SizeX", "SizeY", "SizeZ", "SizeT", "SizeC")  # page layout of one OME file, never carried to another
+
 _OME_LENGTH_TO_UM = {
     "pm": 1e-6,
     "nm": 1e-3,
@@ -422,6 +424,9 @@ def _processed_tiff_metadata(tiff_file, file: Path) -> dict:
             layout = {k: meta[k] for k in ("frames", "slices", "channels")}
             meta.update(tag_meta)
             meta.update(layout)
+            # an OME page order carried in the Info JSON describes the file it was converted from; ImageJ pages are XYCZT
+            for key in OME_LAYOUT_KEYS:
+                meta.pop(key, None)
         return meta
     if tiff_file.is_ome:
         meta = _ome_to_metadata(tiff_file)
