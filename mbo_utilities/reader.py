@@ -334,7 +334,7 @@ def _imread_impl(
                 if opened is not None:
                     return opened
 
-                paths = [Path(f) for f in p.glob("*") if f.is_file()]
+                paths = sorted(f for f in p.iterdir() if f.is_file())
                 logger.debug(f"Found {len(paths)} files in {p}")
         else:
             paths = [p]
