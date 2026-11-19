@@ -406,18 +406,11 @@ def pollen_calibration_mbo(
     if not filepath.exists():
         raise FileNotFoundError(filepath)
 
-    # Load data using modern API - auto-detects stack type
-    # Use dims="ZCYX" for pollen calibration:
-    #   Z = piezo z-positions (scanning through depth)
-    #   C = channels/beamlets (each beamlet has different focal plane)
-    arr = open_scanimage(filepath, dims="ZCYX")
+    arr = open_scanimage(filepath)  # LBMPiezoArray: piezo positions on T, beamlets on Z
+    if arr.can_average:
+        arr.average_frames = True
     metadata = arr.metadata
-
-    # Get dimensions from array - shape is (Z, C, Y, X) for pollen calibration
-    nz = arr.shape[0]  # Z dimension = number of piezo z-positions
-    nc = arr.num_channels  # C dimension = number of beamlets/channels
-    ny = arr.shape[2]  # Y dimension
-    nx = arr.shape[3]  # X dimension
+    nz, nc, ny, nx = arr.nt, arr.num_channels, arr.ny, arr.nx
 
     # Get z-step from metadata or override
     if dz_override is not None:
@@ -502,10 +495,7 @@ def pollen_calibration_mbo(
     else:
         pass
 
-    # Load full volume into memory
-    # Array is (Z, C, Y, X) where Z=piezo positions, C=beamlets
-    # This matches our internal (nz, nc, ny, nx) convention
-    vol = np.asarray(arr[:]).astype(np.float32)  # Load all data
+    vol = np.asarray(arr[:], dtype=np.float32).reshape(nz, nc, ny, nx)  ## channelSave order: beamlets within a color
     vol -= vol.mean()
 
     # 1. Scan offset correction
