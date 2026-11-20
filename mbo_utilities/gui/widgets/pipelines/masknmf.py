@@ -10,6 +10,7 @@ the last run in masknmf's viewer, Spike average in the spike-triggered average
 window.
 """
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +66,7 @@ def find_masknmf_run(fpath) -> tuple[dict | None, str | None]:
     -------
     tuple[dict | None, str | None]
         The run's ``config.json`` and the output folder Run writes the next run into (the folder holding its
-        ``zplaneNN/``); both None when ``fpath`` is neither a run folder nor a folder holding one.
+        ``zplaneNN/`` or ``roiNN/zplaneNN/``); both None when ``fpath`` is neither a run folder nor a folder holding one.
     """
     from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_config
 
@@ -88,6 +89,8 @@ def find_masknmf_run(fpath) -> tuple[dict | None, str | None]:
             return None, None
         run = runs[-1]
     outdir = run.parent.parent if run.parent.name.startswith("zplane") else run.parent
+    if re.fullmatch(r"roi\d+", outdir.name):
+        outdir = outdir.parent
     return run_config(run), str(outdir)
 
 
