@@ -16,8 +16,8 @@ in a panel body.
 A grab bar along the strip's bottom edge drags it taller or shorter and
 double-clicks shut, the way fastplotlib's right and bottom edge windows work
 (it does not draw one for the top edge, so the strip draws its own). Shut,
-the strip keeps its tab row so the panels stay discoverable; clicking a tab
-or double-clicking the bar opens it again. The press that ends a double click
+the strip keeps only its tab row, no panel body, so the panels stay
+discoverable; clicking a tab or double-clicking the bar opens it again. The press that ends a double click
 never drags. Dragging pins the height until :meth:`TopStrip.reset_size`;
 until then the strip is exactly as tall as the panel showing asked for.
 
@@ -51,7 +51,7 @@ PANEL_PAD = 8 + 4 + TAB_BAR_HEIGHT + 8
 # the grab bar along the bottom edge
 HANDLE_HEIGHT = 14
 # a panel's first row of controls: a 20 px frame and the spacing under it;
-# the strip never shuts or drags smaller, so a panel's controls stay on screen
+# the strip never drags smaller, so a panel's controls stay on screen
 ROW_HEIGHT = 24
 # never size or drag the strip so far down that the canvas has less than
 # this left to render into, after the other edge windows (the NDWidget's
@@ -198,10 +198,8 @@ class TopStrip(ImguiWindow):
 
     @property
     def shut_size(self) -> int:
-        """Height of the strip with the panels shut: the menu row, the tab row,
-        the panel's first row of controls and the bar.
-        """
-        return strip_height(ROW_HEIGHT)
+        """Height of the strip with the panels shut: the menu row, the tab row and the bar."""
+        return strip_height(0)
 
     @property
     def collapsed(self) -> bool:
@@ -221,7 +219,7 @@ class TopStrip(ImguiWindow):
     def resize_to(self, size: int) -> None:
         """Hold the strip at ``size`` px instead of sizing it to its panel."""
         self._shut = False
-        self._manual = max(int(size), self.shut_size)
+        self._manual = max(int(size), strip_height(ROW_HEIGHT))
         self._resize()
 
     def reset_size(self) -> None:
@@ -399,7 +397,8 @@ class TopStrip(ImguiWindow):
                     reopen = True
                 if selected:
                     active = panel.key
-                    panel.draw()
+                    if not self._shut:
+                        panel.draw()
                     imgui.end_tab_item()
             imgui.end_tab_bar()
             if active is not None:

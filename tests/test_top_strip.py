@@ -356,13 +356,13 @@ class TestTopStripResize:
         strip.reset_size()
         assert strip.size != 320
 
-    def test_resize_never_goes_under_the_shut_height(self, figure):
-        from mbo_utilities.gui._top_strip import TopStrip
+    def test_a_drag_never_goes_under_the_controls_row(self, figure):
+        from mbo_utilities.gui._top_strip import ROW_HEIGHT, TopStrip, strip_height
 
         strip = TopStrip(figure)
         strip.register(panel("a", height=180))
         strip.resize_to(10)
-        assert strip.size == strip.shut_size
+        assert strip.size == strip_height(ROW_HEIGHT) > strip.shut_size
 
     def test_collapse_remembers_a_pinned_height(self, figure):
         from mbo_utilities.gui._top_strip import TopStrip
@@ -393,19 +393,17 @@ class TestTopStripResize:
         strip = TopStrip(figure)
         assert strip.size == MENU_HEIGHT
 
-    def test_shut_keeps_the_tabs_and_the_controls_row(self, figure):
-        """The tabs and the panel's first row of controls stay visible, so
-        a double click on the bar never hides a panel's checkboxes.
-        """
+    def test_shut_keeps_only_the_tabs(self, figure):
+        """Shut, the strip is the menu row, the tab row and the bar: no sliver of the panel's body."""
         from imgui_bundle import imgui
-        from mbo_utilities.gui._top_strip import ROW_HEIGHT, TopStrip, strip_height
+        from mbo_utilities.gui._top_strip import TopStrip, strip_height
 
         strip = TopStrip(figure)
         drawn = []
         strip.register(panel("a", height=180))
         strip.panels[0].draw = lambda: drawn.append(1)
         strip.toggle_collapsed()
-        assert strip.size == strip_height(ROW_HEIGHT)
+        assert strip.size == strip_height(0)
         bars = []
         real = imgui.begin_tab_bar
         imgui.begin_tab_bar = lambda *a, **k: bars.append(1) or real(*a, **k)
@@ -414,7 +412,7 @@ class TestTopStripResize:
         finally:
             imgui.begin_tab_bar = real
         assert bars == [1]
-        assert drawn == [1], "a shut strip still draws the panel's controls row"
+        assert drawn == [], "a shut strip draws no panel body"
 
     def test_clicking_a_tab_opens_a_shut_strip(self, figure, monkeypatch):
         from imgui_bundle import imgui
