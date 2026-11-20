@@ -212,6 +212,27 @@ def get_flyback_frames(metadata: dict) -> int:
     return max(int(with_flyback) - int(without), 0)
 
 
+def rois_form_one_row(roi_groups: list[dict]) -> bool:
+    """
+    True when the mROI scanfields sit side by side left to right, each touching the next, as the strips of one field.
+
+    Parameters
+    ----------
+    roi_groups : list[dict]
+        ScanImage ``RoiGroups.imagingRoiGroup.rois``, in page order.
+    """
+    fields = []
+    for roi in roi_groups:
+        scanfields = roi["scanfields"]
+        fields.append(scanfields[0] if isinstance(scanfields, list) else scanfields)
+    centers = np.array([f["centerXY"] for f in fields], dtype=float)  ## (n_rois, 2) in scan degrees
+    sizes = np.array([f["sizeXY"] for f in fields], dtype=float)
+    tolerance = 0.01 * sizes[:, 0].min()
+    same_row = np.all(np.abs(centers[:, 1] - centers[0, 1]) <= tolerance)
+    gaps = np.diff(centers[:, 0]) - (sizes[:-1, 0] + sizes[1:, 0]) / 2
+    return bool(same_row and np.all(np.abs(gaps) <= tolerance))
+
+
 def get_roi_info(metadata: dict) -> dict:
     """``num_mrois``, plus ``roi`` (one strip's width, height) and ``fov`` (every strip side by side) in px when the header has them."""
     roi_mgr = _si(metadata, "hRoiManager")

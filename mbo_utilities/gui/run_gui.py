@@ -986,6 +986,8 @@ def _load_for_viewer(data_in, roi=None, unit=None, dims=None):
         mesc_kwargs["dims"] = dims
     t0 = time.perf_counter()
     data_array = imread(data_in, roi=roi, **mesc_kwargs)
+    if roi is None and hasattr(data_array, "viewer_roi"):
+        data_array.roi = data_array.viewer_roi
     t_imread = time.perf_counter() - t0
     logger.debug(
         f"[boot] imread: {t_imread * 1000:.0f} ms  "
@@ -1164,6 +1166,8 @@ def _launch_napari(data_in, roi=None, unit=None, dims=None):
     if dims:
         mesc_kwargs["dims"] = dims
     arr = imread(data_in, roi=normalize_roi(roi), **mesc_kwargs)
+    if normalize_roi(roi) is None and hasattr(arr, "viewer_roi"):
+        arr.roi = arr.viewer_roi
     arr_dims = list(get_dims(arr))
     nz = int(arr.shape[arr_dims.index("Z")]) if "Z" in arr_dims else 1
     viewer = napari.Viewer(ndisplay=3 if nz > 1 else 2)

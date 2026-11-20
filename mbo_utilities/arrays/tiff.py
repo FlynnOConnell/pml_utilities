@@ -41,6 +41,7 @@ from mbo_utilities.metadata.scanimage import (
     detect_stack_type,
     get_log_average_factor,
     layout_metadata,
+    rois_form_one_row,
     scan_layout,
 )
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
@@ -741,6 +742,7 @@ class ScanImageArray(
     """
 
     STACK_TYPES: tuple[StackType, ...] = ("lbm", "piezo", "pollen", "single_plane")
+    STITCH_ROIS: bool = False  # True where the mROIs are always adjacent strips; otherwise their scanfields decide
     METADATA_CONTEXT: dict[str, str] = {  # the gui's tooltips; a subclass overrides per stack type
         "Ly": "Raw TIFF page height in pixels.",
         "Lx": "Raw TIFF page width in pixels.",
@@ -910,8 +912,18 @@ class ScanImageArray(
 
     @property
     def reader_kwargs(self) -> dict:
-        """``average_frames`` when on, so a worker re-opening the files reads the T on screen."""
-        return {"average_frames": True} if self._average_frames else {}
+        """``average_frames`` when on and the ROI selection when set, so a worker re-opening the files reads what is on screen."""
+        kwargs = {"average_frames": True} if self._average_frames else {}
+        if self.roi is not None:
+            kwargs["roi"] = list(self.roi) if isinstance(self.roi, (list, tuple)) else self.roi
+        return kwargs
+
+    @property
+    def viewer_roi(self) -> int | None:
+        """The ROI selection a viewer opens with when the user picks none: stitched strips (``None``) or split tiles (``0``)."""
+        if self.STITCH_ROIS or self.num_rois < 2 or rois_form_one_row(self.roi_groups):
+            return None
+        return 0
 
     @property
     def dtype(self):
@@ -1075,6 +1087,7 @@ class LBMArray(ScanImageArray):
     """A Light Beads Microscopy scan: the beamlets ScanImage saved as channels are the z-planes."""
 
     STACK_TYPES = ("lbm",)
+    STITCH_ROIS = True
     METADATA_CONTEXT: dict[str, str] = {
         "Ly": (
             "For LBM with multi-ROIs, this is the total vertical height of all ROI strips "
@@ -1129,6 +1142,7 @@ class LBMPiezoArray(ScanImageArray):
     """
 
     STACK_TYPES = ("pollen",)
+    STITCH_ROIS = True
     METADATA_CONTEXT: dict[str, str] = {
         "Ly": "Frame height in pixels.",
         "Lx": "Frame width in pixels.",
