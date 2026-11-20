@@ -360,7 +360,7 @@ class ManualRoiWidget(
         self.strip = TopStrip(iw.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
         self._traces_panel = TopPanel(
-            "traces", "Traces", self.draw_traces, PANEL_HEIGHT, 11
+            "traces", "Traces", self.draw_traces, PANEL_HEIGHT, 11, occupied=self.has_traces
         )
         self.strip.register(self._traces_panel)
 
@@ -444,6 +444,10 @@ class ManualRoiWidget(
     @property
     def traces(self) -> RoiTraceTable:
         return self.model.traces
+
+    def has_traces(self) -> bool:
+        """True once any trace is measured or loaded; until then the Traces tab takes no room."""
+        return len(self.traces) > 0
 
     @property
     def z(self) -> int:

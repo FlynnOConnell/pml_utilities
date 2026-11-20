@@ -596,7 +596,7 @@ def _create_image_widget(
 
     # the roi tool is a Widgets-menu toggle the preview widget builds from; it goes on for this
     # session (never persisted) when asked for or when rois or a pipeline's rois sit beside the data
-    manual_roi = signal_quality = False
+    manual_roi = signal_quality = traces_at_open = False
     if widget != "none":
         from mbo_utilities.gui.manual_roi import labels_path
         from mbo_utilities.gui.roi_runs import run_dir_complete
@@ -624,6 +624,11 @@ def _create_image_widget(
             )
         )
         signal_quality = widget_enabled("signal_quality")
+        # a results file or saved rois load traces at once; otherwise the Traces tab stays empty and takes no room
+        traces_at_open = results is not None or (
+            src is not None
+            and (labels_path(src).exists() or labels_path(src, root=root).exists())
+        )
 
     from mbo_utilities.arrays.features import get_slider_dims
 
@@ -685,7 +690,7 @@ def _create_image_widget(
         if widget != "none":
             top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
         # the strip is as tall as the tab that opens first: the Traces panel, else the Signal Quality plot
-        if manual_roi:
+        if manual_roi and traces_at_open:
             base = base_array(data_array)
             top = strip_height(
                 traces_panel_height(
