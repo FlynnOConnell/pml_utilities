@@ -347,7 +347,7 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
             s2p_settings = dict(s2p_settings)
             s2p_settings["workers"] = resolved
 
-    read_features = {
+    writer_kwargs = {
         "fix_phase": args.get("fix_phase", True),
         "use_fft": args.get("use_fft", True),
         "frame_average": int(args.get("frame_average") or 1),
