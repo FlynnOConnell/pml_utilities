@@ -80,10 +80,12 @@ def write_scanimage_tiff(
     fly_to_lines: int = 0,
     first_page: int = 0,
     size_um: float = 1.0,
+    roi_centers: list[tuple[float, float]] | None = None,
 ) -> Path:
     """Write ``num_pages`` pages of one ScanImage file; ``first_page`` continues the page count of the files before it.
 
     ``size_um`` is each scanfield's ``sizeXY`` in degrees; times ``SI.objectiveResolution`` it is the strip's width in µm.
+    ``roi_centers`` are the scanfields' ``centerXY``; None places them as adjacent strips, left to right.
     """
     roi_heights = list(roi_heights)
     height, width = page_shape(roi_heights, roi_width, fly_to_lines)
@@ -94,9 +96,17 @@ def write_scanimage_tiff(
             "SI.hScan2D.flytoTimePerScanfield", fly_to_lines * header["SI.hRoiManager.linePeriod"]
         )
     frame_data = "\n".join(f"{k} = {_matlab_value(v)}" for k, v in header.items()).encode() + b"\0"
+    if roi_centers is None:
+        roi_centers = [(i * size_um, 0.0) for i in range(len(roi_heights))]
     rois = [
-        {"scanfields": {"sizeXY": [size_um, size_um * h / roi_width], "pixelResolutionXY": [roi_width, h]}}
-        for h in roi_heights
+        {
+            "scanfields": {
+                "centerXY": list(center),
+                "sizeXY": [size_um, size_um * h / roi_width],
+                "pixelResolutionXY": [roi_width, h],
+            }
+        }
+        for h, center in zip(roi_heights, roi_centers, strict=True)
     ]
     roi_json = json.dumps({"RoiGroups": {"imagingRoiGroup": {"rois": rois}}}).encode() + b"\0"
 

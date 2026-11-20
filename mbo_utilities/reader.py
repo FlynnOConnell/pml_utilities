@@ -80,13 +80,19 @@ def source_reader_kwargs(arr) -> dict:
 
 
 def widget_reader_kwargs(image_widget) -> dict:
-    """`source_reader_kwargs` for the array an ImageWidget is displaying.
+    """`source_reader_kwargs` for the array an ImageWidget is displaying, with every ROI when it shows one subplot per ROI.
 
     Returns ``{}`` for a missing or empty widget, so a task's argument dict can
     always ask without guarding.
     """
     data = getattr(image_widget, "data", None) or []
-    return source_reader_kwargs(data[0]) if len(data) else {}
+    if not len(data):
+        return {}
+    kwargs = source_reader_kwargs(data[0])
+    rois = [getattr(arr, "roi", None) for arr in data]
+    if len(rois) > 1 and all(isinstance(r, int) and r > 0 for r in rois):
+        kwargs["roi"] = rois  ## one subplot per ROI of the same source
+    return kwargs
 
 
 @lru_cache(maxsize=32)
