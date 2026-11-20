@@ -430,6 +430,49 @@ class TestTopStripResize:
         strip._resize()
         assert strip.size == tall
 
+    def test_double_clicking_the_bar_shuts_and_opens_without_dragging(self, figure, monkeypatch):
+        """The press that ends a double click often moves a few pixels; it
+        must not drag the strip to a new height, nor undo the shut.
+        """
+        from imgui_bundle import imgui
+        from mbo_utilities.gui import _top_strip
+        from mbo_utilities.gui._top_strip import TopStrip
+
+        strip = TopStrip(figure)
+        strip.register(panel("a", height=180))
+        figure.canvas.draw()
+        tall = strip.size
+        mouse = {"double": False, "down": False}
+        monkeypatch.setattr(strip, "_render_height", lambda: 10_000.0)
+        monkeypatch.setattr(imgui, "is_item_hovered", lambda *a, **k: True)
+        monkeypatch.setattr(imgui, "is_item_active", lambda *a, **k: mouse["down"])
+        monkeypatch.setattr(imgui, "is_mouse_double_clicked", lambda *a, **k: mouse["double"])
+        monkeypatch.setattr(imgui, "is_mouse_down", lambda *a, **k: mouse["down"])
+        monkeypatch.setattr(imgui, "is_mouse_dragging", lambda *a, **k: mouse["down"])
+        monkeypatch.setattr(imgui, "get_mouse_drag_delta", lambda *a, **k: imgui.ImVec2(0, 40))
+        monkeypatch.setattr(_top_strip.imgui, "reset_mouse_drag_delta", lambda *a, **k: None)
+
+        def press(double):
+            mouse.update(double=double, down=True)
+            figure.canvas.draw()
+            mouse.update(double=False)
+
+        def release():
+            mouse.update(down=False)
+            figure.canvas.draw()
+
+        press(double=True)
+        figure.canvas.draw()  # the button still held, the mouse still moving
+        assert strip.collapsed and strip.size == strip.shut_size
+        release()
+        press(double=True)
+        figure.canvas.draw()
+        assert not strip.collapsed and strip.size == tall
+        release()
+        # a plain drag still resizes
+        press(double=False)
+        assert strip.size == tall + 40
+
     def test_a_panel_that_needs_more_width_widens_the_window_once(self, figure):
         from mbo_utilities.gui._top_strip import TopStrip
 

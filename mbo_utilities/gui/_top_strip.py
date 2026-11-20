@@ -17,7 +17,8 @@ A grab bar along the strip's bottom edge drags it taller or shorter and
 double-clicks shut, the way fastplotlib's right and bottom edge windows work
 (it does not draw one for the top edge, so the strip draws its own). Shut,
 the strip keeps its tab row so the panels stay discoverable; clicking a tab
-opens it again. Dragging pins the height until :meth:`TopStrip.reset_size`;
+or double-clicking the bar opens it again. The press that ends a double click
+never drags. Dragging pins the height until :meth:`TopStrip.reset_size`;
 until then the strip is exactly as tall as the panel showing asked for.
 
 A panel that knows the canvas width it needs to draw on one row says so with
@@ -121,6 +122,9 @@ class TopStrip(ImguiWindow):
         self._manual: int | None = None
         self._before_collapse: int | None = None
         self._cursor_set = False
+        # set by a double click on the bar until the button is released, so
+        # the press that ends the double click cannot drag the new height
+        self._drag_blocked = False
         # the last width the strip widened the window to, so a window the
         # user made narrower afterwards is left alone
         self._fit_tried = 0
@@ -322,6 +326,9 @@ class TopStrip(ImguiWindow):
 
         if hovered and imgui.is_mouse_double_clicked(0):
             self.toggle_collapsed()
+            self._drag_blocked = True
+        elif not imgui.is_mouse_down(0):
+            self._drag_blocked = False
 
         if hovered or active:
             if not self._cursor_set:
@@ -331,7 +338,7 @@ class TopStrip(ImguiWindow):
             self._set_cursor("default")
             self._cursor_set = False
 
-        if active and imgui.is_mouse_dragging(0):
+        if active and not self._drag_blocked and imgui.is_mouse_dragging(0):
             # the bar is the strip's bottom edge, so dragging down grows it -
             # but never past leaving the canvas too little to render into
             delta = imgui.get_mouse_drag_delta(0).y
