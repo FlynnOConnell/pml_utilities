@@ -369,7 +369,10 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
         s2p_settings.get("force_rastermap")
         and s2p_settings.get("rastermap_kwargs") is not None
     ):
-        cached_models = list(Path(output_dir).glob("plane*/model.npy"))
+        cached_models = [
+            *Path(output_dir).glob("plane*/model.npy"),
+            *Path(output_dir).glob("roi*/plane*/model.npy"),
+        ]
         for cached in cached_models:
             cached.unlink()
         if cached_models:
@@ -400,33 +403,42 @@ def task_suite2p(args: dict, logger: logging.Logger) -> None:
                 "task_suite2p: frame_indices=None (no slice — full range will be used)"
             )
 
-        pipeline(
-            pipeline_input,
-            save_path=str(output_dir),
-            ops=ops,
-            planes=planes,
-            num_timepoints=num_timepoints,
-            frame_indices=tp_indices,
-            keep_raw=s2p_settings.get("keep_raw", False),
-            keep_reg=s2p_settings.get("keep_reg", True),
-            force_reg=s2p_settings.get("force_reg", False),
-            force_detect=s2p_settings.get("force_detect", False),
-            accept_all_cells=s2p_settings.get("accept_all_cells", False),
-            norm_method=s2p_settings.get("norm_method", "dff"),
-            dff_window_size=s2p_settings.get("dff_window_size", 300),
-            dff_percentile=s2p_settings.get("dff_percentile", 20),
-            dff_smooth_window=s2p_settings.get("dff_smooth_window"),
-            save_json=s2p_settings.get("save_json", False),
-            correct_neuropil=s2p_settings.get("correct_neuropil", True),
-            cell_filters=s2p_settings.get("cell_filters") or None,
-            rastermap_kwargs=s2p_settings.get("rastermap_kwargs"),
-            writer_kwargs=writer_kwargs,
-            reader_kwargs=reader_kwargs or None,
-            progress_callback=functools.partial(_suite2p_progress, monitor),
-            workers=s2p_settings.get("workers", 1),
-            skip_volumetric=s2p_settings.get("skip_volumetric", False),
-            threads_per_worker=s2p_settings.get("threads_per_worker"),
-        )
+        # lsp reads one ROI per run, so a split selection runs once per ROI into its own roiNN folder
+        rois = list(_src_arr.iter_rois()) if hasattr(_src_arr, "iter_rois") else [None]
+        for roi in rois:
+            roi_reader_kwargs = {k: v for k, v in reader_kwargs.items() if k != "roi"}
+            roi_output_dir = output_dir
+            if roi is not None:
+                roi_reader_kwargs["roi"] = roi
+                roi_output_dir = output_dir / f"roi{roi:02d}"
+                logger.info(f"task_suite2p: ROI {roi} -> {roi_output_dir}")
+            pipeline(
+                pipeline_input,
+                save_path=str(roi_output_dir),
+                ops=ops,
+                planes=planes,
+                num_timepoints=num_timepoints,
+                frame_indices=tp_indices,
+                keep_raw=s2p_settings.get("keep_raw", False),
+                keep_reg=s2p_settings.get("keep_reg", True),
+                force_reg=s2p_settings.get("force_reg", False),
+                force_detect=s2p_settings.get("force_detect", False),
+                accept_all_cells=s2p_settings.get("accept_all_cells", False),
+                norm_method=s2p_settings.get("norm_method", "dff"),
+                dff_window_size=s2p_settings.get("dff_window_size", 300),
+                dff_percentile=s2p_settings.get("dff_percentile", 20),
+                dff_smooth_window=s2p_settings.get("dff_smooth_window"),
+                save_json=s2p_settings.get("save_json", False),
+                correct_neuropil=s2p_settings.get("correct_neuropil", True),
+                cell_filters=s2p_settings.get("cell_filters") or None,
+                rastermap_kwargs=s2p_settings.get("rastermap_kwargs"),
+                writer_kwargs=writer_kwargs,
+                reader_kwargs=roi_reader_kwargs or None,
+                progress_callback=functools.partial(_suite2p_progress, monitor),
+                workers=s2p_settings.get("workers", 1),
+                skip_volumetric=s2p_settings.get("skip_volumetric", False),
+                threads_per_worker=s2p_settings.get("threads_per_worker"),
+            )
 
         monitor.finish("Suite2p pipeline completed.")
         logger.info("Suite2p completed successfully")

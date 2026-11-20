@@ -10,6 +10,7 @@ a results zarr beside its ``results.hdf5`` for the viewers and ``mbo curate``.
 
 from __future__ import annotations
 
+import copy
 import inspect
 import json
 from pathlib import Path
@@ -91,8 +92,7 @@ def plane_view(
     reader_kwargs = source_reader_kwargs(arr)
     read_features = {k: v for k, v in (read_features or {}).items() if v is not None}
     arr, _ = apply_read_features(arr, read_features)
-    nz = int(arr._shape5d()[2]) if hasattr(arr, "_shape5d") else 1
-    z = plane - 1 if nz > 1 else 0
+    z = plane - 1 if arr.nz > 1 else 0
     c = int(channel) - 1 if channel is not None else 0
     inverted = isinstance(arr, InvertedDeflectionView)
     ## NOTE: 2 * mean - x holds a still mean against a moving frame, so masknmf registers the source and inverts after
@@ -137,7 +137,8 @@ def run_planes(
     input_data : LazyArray or str
         A recording, or a path ``mbo_utilities.imread`` opens.
     save_path : str or Path
-        Each plane's run folder goes in ``<save_path>/zplaneNN/``.
+        Each plane's run folder goes in ``<save_path>/zplaneNN/``, or ``<save_path>/roiNN/zplaneNN/`` per ROI when the
+        recording's ROI selection splits or picks ROIs.
     config : dict
         ``Parameters.config()``: the pipeline and its stage configs that differ from the defaults.
     runtime : dict, optional
@@ -157,7 +158,7 @@ def run_planes(
     Returns
     -------
     list[Path]
-        The run folders, in plane order.
+        The run folders, ROI by ROI and in plane order within each.
 
     Raises
     ------
@@ -171,19 +172,25 @@ def run_planes(
     cls = pipeline_class(config)
     arr = input_data if hasattr(input_data, "shape") else imread(input_data)
     if planes is None:
-        nz = int(arr._shape5d()[2]) if hasattr(arr, "_shape5d") else 1
-        planes = list(range(1, nz + 1))
+        planes = list(range(1, arr.nz + 1))
     takes = inspect.signature(cls.run).parameters
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
     filepath_config = save_path / "masknmf_config.json"
     filepath_config.write_text(json.dumps(config, indent=2))
+    rois = list(arr.iter_rois()) if hasattr(arr, "iter_rois") else [None]
+    jobs = [(roi, plane) for roi in rois for plane in planes]
     runs = []
-    for i, plane in enumerate(planes):
+    for i, (roi, plane) in enumerate(jobs):
+        roi_arr, roi_path = arr, save_path
+        if roi is not None:
+            roi_arr = copy.copy(arr)
+            roi_arr.roi = roi
+            roi_path = save_path / f"roi{roi:02d}"
         if progress_callback is not None:
-            progress_callback(plane=i, total_planes=len(planes), message=f"plane {plane}")
+            progress_callback(plane=i, total_planes=len(jobs), message=f"plane {plane}" + (f", ROI {roi}" if roi else ""))
         view, record, inverted = plane_view(
-            arr,
+            roi_arr,
             plane=plane,
             channel=channel,
             frame_indices=frame_indices,
@@ -195,9 +202,9 @@ def run_planes(
             raise ValueError("the recording has no frame rate; set frame_rate in the masknmf parameters")
         if inverted and "indicator_polarity" in takes:
             kwargs.setdefault("indicator_polarity", "negative")
-        pipeline = cls.from_config(filepath_config, output_folder=save_path / f"zplane{plane:02d}", **(runtime or {}))
+        pipeline = cls.from_config(filepath_config, output_folder=roi_path / f"zplane{plane:02d}", **(runtime or {}))
         pipeline.inputs = {"data": record}
-        logger.info(f"masknmf {cls.__name__}: plane {plane} of {len(planes)}")
+        logger.info(f"masknmf {cls.__name__}: plane {plane} of {len(planes)}" + (f", ROI {roi}" if roi else ""))
         run = Path(pipeline.run(view, **{k: v for k, v in kwargs.items() if k in takes}))
         run = run if run.is_dir() else run.parent
         write_results(run, view, plane, record, config, device=str(pipeline.torch_device))
