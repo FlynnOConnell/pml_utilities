@@ -19,7 +19,7 @@ from mbo_utilities.arrays._registration import (
     validate_axial_shifts,
 )
 from mbo_utilities.arrays.features import apply_read_features
-from mbo_utilities.metadata import get_param
+from mbo_utilities.metadata import RoiMode, get_param
 from mbo_utilities.preferences import get_debug_logging, get_mbo_dirs
 from mbo_utilities.writer import imwrite
 
@@ -132,6 +132,8 @@ def task_save_as(args: dict, logger: logging.Logger) -> None:
             channels=args.get("channels"),
             timepoints=args.get("frames"),
             roi=args.get("rois"),
+            # the dialog sends rois only to split them; concat_y would drop the selection
+            roi_mode=RoiMode.separate if args.get("rois") else RoiMode.concat_y,
             register_z=bool(args.get("register_z", False)),
             max_frames=int(args.get("max_frames", 200)),
             chunk_frames=int(args.get("chunk_frames", 10)),

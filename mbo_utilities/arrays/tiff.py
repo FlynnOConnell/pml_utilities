@@ -6,7 +6,6 @@ import copy
 import json
 import re
 import threading
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,13 +27,21 @@ from mbo_utilities.arrays.features import (
 )
 from mbo_utilities.arrays.features._slicing import index_length, listify_index
 from mbo_utilities.file_io import expand_paths
-from mbo_utilities.lazy_array import register_array_class
-from mbo_utilities.metadata import extract_roi_slices, get_metadata, get_param
+from mbo_utilities.lazy_array import LazyArray, register_array_class
+from mbo_utilities.metadata import (
+    METADATA_PARAMS,
+    extract_roi_slices,
+    get_metadata,
+    get_metadata_single,
+    get_param,
+    is_raw_scanimage,
+)
 from mbo_utilities.metadata.scanimage import (
     StackType,
     detect_stack_type,
-    get_frames_per_slice,
     get_log_average_factor,
+    layout_metadata,
+    scan_layout,
 )
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
@@ -200,25 +207,6 @@ def _ome_layout(meta: dict) -> tuple[int, int, int] | None:
         return None
     frames, slices, channels = (int(c or 1) for c in counts)
     return (frames, slices, channels) if frames * slices * channels > 1 else None
-
-
-def _plane_color_layout(meta: dict, pages: int) -> tuple[int, int]:
-    """``(z-planes, color channels)`` for ``pages`` interleaved pages per
-    frame (``pages == planes * colors``). With neither count in ``meta``,
-    the interleave is z only for LBM-shaped data - a 1-2 page interleave on
-    anything else is PMT color channels, not depth.
-    """
-    planes = meta.get("num_planes") or meta.get("num_zplanes")
-    colors = meta.get("num_color_channels")
-    if planes is None and colors is None:
-        stack = meta.get("stack_type", "")
-        as_z = stack in ("lbm", "pollen") or (not stack and pages > 2)
-        planes, colors = (pages, 1) if as_z else (1, pages)
-    elif planes is None:
-        planes = max(pages // max(int(colors), 1), 1)
-    elif colors is None:
-        colors = max(pages // max(int(planes), 1), 1)
-    return int(planes), int(colors)
 
 
 def _shape_layout(meta: dict) -> tuple[int, ...] | None:
@@ -605,9 +593,8 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
             {
                 "shape": self.shape,
                 "dtype": str(self._dtype),
-                "nframes": self._nframes,
-                "num_frames": self._nframes,
-                "num_planes": self._nz,
+                "num_timepoints": self._nframes,
+                "num_zplanes": self._nz,
                 "file_paths": [str(p) for p in self.filenames],
             }
         )
@@ -629,8 +616,7 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
             {
                 "shape": self.shape,
                 "dtype": str(self._dtype),
-                "nframes": self._nframes,
-                "num_frames": self._nframes,
+                "num_timepoints": self._nframes,
                 "file_paths": [str(p) for p in files],
                 "num_files": len(files),
             }
@@ -668,9 +654,8 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
             {
                 "shape": self.shape,
                 "dtype": str(self._dtype),
-                "nframes": self._nframes,
-                "num_frames": self._nframes,
-                "num_planes": self._nz,
+                "num_timepoints": self._nframes,
+                "num_zplanes": self._nz,
                 "num_color_channels": self._nc,
                 "file_path": str(path),
             }
@@ -743,74 +728,36 @@ class TiffArray(TiffReaderMixin, ReductionMixin, Shape5DMixin):
 
 
 class ScanImageArray(
-    TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, Shape5DMixin
+    TiffReaderMixin, RoiFeatureMixin, ReductionMixin, PhaseCorrectionMixin, LazyArray
 ):
-    """A raw ScanImage tiff as (T, C, Z, Y, X), with mROI stitching or selection and bidirectional scan-phase correction.
+    """A raw ScanImage acquisition as (T, C, Z, Y, X), with mROI stitching or selection and bidirectional scan-phase correction.
 
-    ``roi`` None stitches every ROI, 0 splits them, n picks one (1-based), a
-    list picks several. ``open_scanimage`` picks the subclass for the stack
-    type (``LBMArray``, ``PiezoArray``, ``LBMPiezoArray``, ``SinglePlaneArray``).
+    ``metadata.scanimage.ScanLayout`` places every (t, c, z) among the pages:
+    T is frames, volumes or piezo slices, C the PMT colors, Z the beamlets or
+    slices. ``roi`` None stitches the mROIs side by side, 0 splits them, n picks
+    one (1-based), a list picks several. ``average_frames`` averages the repeats
+    of each stack slice into one float32 frame instead of keeping them on T.
+    ``open_scanimage`` picks the subclass for the stack type.
     """
 
-    @classmethod
-    def can_open(cls, file: Path | str) -> bool:
-        """True for a tiff with ScanImage metadata and no shaped metadata (a processed file has that)."""
-        if not file or not isinstance(file, (str, Path)):
-            return False
-        path = Path(file)
-        if path.suffix.lower() not in (".tif", ".tiff"):
-            return False
-        try:
-            with TiffFile(file) as tf:
-                if tf.shaped_metadata:
-                    return False
-                return tf.scanimage_metadata is not None
-        except Exception:
-            return False
-
-    METADATA_CONTEXT: dict[
-        str, str
-    ] = {  # the gui's tooltips; a subclass overrides per stack type
+    STACK_TYPES: tuple[StackType, ...] = ("lbm", "piezo", "pollen", "single_plane")
+    METADATA_CONTEXT: dict[str, str] = {  # the gui's tooltips; a subclass overrides per stack type
         "Ly": "Raw TIFF page height in pixels.",
         "Lx": "Raw TIFF page width in pixels.",
         "num_zplanes": "Number of z-planes in the stack.",
         "dz": "Z-step size in micrometers.",
     }
-    REQUIRED_METADATA: list[
-        str
-    ] = []  # canonical keys the file cannot supply; the user fills them in
+    REQUIRED_METADATA: list[str] = []  # canonical keys the file cannot supply; the user fills them in
 
-    def get_required_metadata(self) -> list[dict]:
-        """One record per ``REQUIRED_METADATA`` key: canonical, description, label, unit, dtype and the current value."""
-        from mbo_utilities.metadata import METADATA_PARAMS, get_param
-
-        fields = []
-        for param in self.REQUIRED_METADATA:
-            value = get_param(self._metadata, param, default=None)
-            mp = METADATA_PARAMS.get(param)
-            desc = self.get_param_description(param)
-            fields.append(
-                {
-                    "canonical": param,
-                    "description": desc,
-                    "label": mp.label if mp else param,
-                    "unit": mp.unit if mp else "",
-                    "dtype": mp.dtype if mp else float,
-                    "value": value,
-                }
-            )
-        return fields
-
-    def get_param_description(self, param: str) -> str:
-        """The nearest class's ``METADATA_CONTEXT`` entry for ``param``, else the registry's description."""
-        for cls in type(self).__mro__:
-            ctx = getattr(cls, "METADATA_CONTEXT", None)
-            if ctx and param in ctx:
-                return ctx[param]
-        from mbo_utilities.metadata import METADATA_PARAMS
-
-        mp = METADATA_PARAMS.get(param)
-        return mp.description if mp else ""
+    @classmethod
+    def can_open(cls, file: Path | str) -> bool:
+        """True for a raw ScanImage tiff whose stack type is one of ``STACK_TYPES``."""
+        if not is_raw_scanimage(file):
+            return False
+        try:
+            return detect_stack_type(get_metadata_single(Path(file))) in cls.STACK_TYPES
+        except Exception:
+            return False
 
     def __init__(
         self,
@@ -821,40 +768,52 @@ class ScanImageArray(
         border: int | tuple[int, int, int, int] = 3,
         max_offset: int = 4,
         use_fft: bool = True,
+        average_frames: bool = False,
         metadata: dict | None = None,
         dims: str | Sequence[str] | None = None,
     ):
         self.filenames = [files] if isinstance(files, (str, Path)) else list(files)
         self.tiff_files = [TiffFile(f) for f in self.filenames]
         self._tiff_lock = threading.Lock()
+        self._metadata = metadata if metadata is not None else get_metadata(self.filenames)
+        if dims is not None:
+            logger.warning(f"dims={dims!r} ignored: a ScanImage header says what each page is")
 
-        if metadata is not None:
-            self._metadata = metadata
-        else:
-            self._metadata = get_metadata(self.filenames)
+        page_shape = (self._metadata["page_height"], self._metadata["page_width"])
+        for f, tf in zip(self.filenames, self.tiff_files, strict=True):
+            if tf.pages.first.shape != page_shape:
+                raise ValueError(
+                    f"{Path(f).name} holds {tf.pages.first.shape} pages, not {page_shape}: "
+                    "another acquisition is mixed in"
+                )
 
-        # interleaved pages per frame: beamlets on an LBM scan, PMT colors on a single plane
-        self.num_channels = self._metadata.get("nchannels") or get_param(
-            self._metadata, "nplanes", default=1
-        )
-        self._num_zplanes, self._num_color_channels = _plane_color_layout(
-            self._metadata, self.num_channels
-        )
-        self.num_frames = get_param(self._metadata, "nframes")
-        self._source_dtype = get_param(self._metadata, "dtype", default="int16")
+        pages_per_frame = int(self._metadata.get("nchannels", 1))
+        self._pages_per_file = [
+            n * pages_per_frame for n in self._metadata["frames_per_file"]
+        ]
+        self.layout = scan_layout(self._metadata, sum(self._pages_per_file))
+        if self.layout.pages_per_frame != pages_per_frame:
+            raise ValueError(
+                f"{self.filenames[0]}: {pages_per_frame} saved channels per frame, but "
+                f"{self.layout.colors} colors x {self.layout.beamlets} beamlets"
+            )
+        if self.layout.volumes == 0:
+            raise ValueError(
+                f"{self.filenames[0]}: fewer frames than one volume "
+                f"({self.layout.frames_per_volume})"
+            )
+        self._source_dtype = np.dtype(self._metadata.get("dtype", "int16"))
         self._target_dtype = None
-        self._ndim = self._metadata.get("ndim", 3)
-        self._frames_per_file = self._metadata.get("frames_per_file", None)
-        self._offset_cache: dict[tuple[int, int, int], float] = {}
+        self._offset_cache: dict[int, float] = {}
 
-        self._rois = self._extract_roi_info()
+        self._rois = extract_roi_slices(self._metadata)
         self._roi = None
         if roi is not None:
             self.roi = roi  # the mixin's setter validates it
 
         self._mean_subtraction = False
-        self.pbar = None
-        self.logger = logger
+        self._average_frames = False
+        self.average_frames = average_frames
 
         self.phase_correction = PhaseCorrectionFeature(
             enabled=fix_phase,
@@ -869,56 +828,105 @@ class ScanImageArray(
         for tf in self.tiff_files:
             tf.close()
 
-    def _extract_roi_info(self):
-        rois = extract_roi_slices(self._metadata)
-        if rois:
-            logger.debug(
-                f"ROI structure: {[(r['y_start'], r['y_end'], r['height']) for r in rois]}"
+    def get_required_metadata(self) -> list[dict]:
+        """One record per ``REQUIRED_METADATA`` key: canonical, description, label, unit, dtype and the current value."""
+        fields = []
+        for param in self.REQUIRED_METADATA:
+            mp = METADATA_PARAMS.get(param)
+            fields.append(
+                {
+                    "canonical": param,
+                    "description": self.get_param_description(param),
+                    "label": mp.label if mp else param,
+                    "unit": mp.unit if mp else "",
+                    "dtype": mp.dtype if mp else float,
+                    "value": get_param(self._metadata, param, default=None),
+                }
             )
-        return rois
+        return fields
+
+    def get_param_description(self, param: str) -> str:
+        """The nearest class's ``METADATA_CONTEXT`` entry for ``param``, else the registry's description."""
+        for cls in type(self).__mro__:
+            ctx = getattr(cls, "METADATA_CONTEXT", None)
+            if ctx and param in ctx:
+                return ctx[param]
+        mp = METADATA_PARAMS.get(param)
+        return mp.description if mp else ""
 
     @property
     def stack_type(self) -> StackType:
-        return detect_stack_type(self._metadata)
+        return self.layout.stack_type
+
+    @property
+    def num_channels(self) -> int:
+        """Pages saved per frame: colors times beamlets."""
+        return self.layout.pages_per_frame
+
+    @property
+    def num_color_channels(self) -> int:
+        return self.layout.colors
+
+    @property
+    def num_slices(self) -> int:
+        return self.layout.slices
+
+    @property
+    def num_volumes(self) -> int:
+        return self.layout.volumes
+
+    @property
+    def frames_per_slice(self) -> int:
+        """Pages saved at each slice, after ScanImage's own averaging."""
+        return self.layout.reps
+
+    @property
+    def log_average_factor(self) -> int:
+        """ScanImage's acquisition-time averaging; above 1 every page is already that many frames averaged."""
+        return get_log_average_factor(self._metadata)
+
+    @property
+    def can_average(self) -> bool:
+        return self.frames_per_slice > 1
+
+    @property
+    def average_frames(self) -> bool:
+        return self._average_frames
+
+    @average_frames.setter
+    def average_frames(self, value: bool):
+        if not isinstance(value, bool):
+            raise ValueError("average_frames must be a boolean value.")
+        if value and not self.can_average:
+            logger.warning("Frame averaging disabled: one saved frame per slice.")
+            value = False
+        self._average_frames = value
+        md = layout_metadata(self._metadata, self.layout, value)
+        md.pop("dz", None)  # the header's step, or the user's; averaging leaves it alone
+        self._metadata.pop("fs", None)
+        self._metadata.update(md)
+        self._offset_cache.clear()
+        self.invalidate_dimension_specs()
+
+    @property
+    def reader_kwargs(self) -> dict:
+        """``average_frames`` when on, so a worker re-opening the files reads the T on screen."""
+        return {"average_frames": True} if self._average_frames else {}
 
     @property
     def dtype(self):
-        return (
-            self._target_dtype if self._target_dtype is not None else self._source_dtype
-        )
+        if self._target_dtype is not None:
+            return self._target_dtype
+        return np.dtype(np.float32) if self._average_frames else self._source_dtype
 
     @property
     def metadata(self) -> dict:
-        if self._metadata is None:
-            self._metadata = {}
-        fs = get_param(self._metadata, "fs")
-        if fs is not None:
-            self._metadata["fs"] = fs
-            self._metadata["frame_rate"] = fs
-
-        self._metadata.update(
-            {
-                "dtype": self.dtype,
-                "fix_phase": self.fix_phase,
-                "phasecorr_method": self.phasecorr_method,
-                "offset": self.offset,
-                "border": self.border,
-                "max_offset": self.max_offset,
-                "nframes": self.num_frames,
-                "num_frames": self.num_frames,
-                "use_fft": self.use_fft,
-                "mean_subtraction": self.mean_subtraction,
-            }
-        )
-        # never auto-fill Ly/Lx here: it clobbers the padded dims a caller set
         return self._metadata
 
     @metadata.setter
     def metadata(self, value: dict):
         if not isinstance(value, dict):
             raise TypeError(f"metadata must be a dict, got {type(value)}")
-        if self._metadata is None:
-            self._metadata = {}
         self._metadata.update(value)
 
     @property
@@ -935,256 +943,106 @@ class ScanImageArray(
             raise ValueError("mean_subtraction must be a boolean value.")
         self._mean_subtraction = value
 
-    @property
-    def output_xslices(self):
-        x_offset = 0
-        slices = []
-        for roi in self._rois:
-            slices.append(slice(x_offset, x_offset + roi["width"]))
-            x_offset += roi["width"]
-        return slices
-
-    @property
-    def output_yslices(self):
-        return [slice(0, roi["height"]) for roi in self._rois]
-
-    @property
-    def yslices(self):
-        return [roi["slice"] for roi in self._rois]
-
-    @property
-    def xslices(self):
-        return [slice(0, roi["width"]) for roi in self._rois]
-
-    def _read_pages(self, frames, chans, yslice=slice(None), xslice=slice(None), **_):
-        pages = [f * self.num_channels + z for f in frames for z in chans]
-        tiff_width_px = index_length(xslice, self._page_width)
-        tiff_height_px = index_length(yslice, self._page_height)
-        buf = np.empty((len(pages), tiff_height_px, tiff_width_px), dtype=self.dtype)
-
-        start = 0
-        tiff_iterator = (
-            zip(
-                self.tiff_files,
-                (f * self.num_channels for f in self._frames_per_file),
-                strict=False,
-            )
-            if self._frames_per_file is not None
-            else ((tf, len(tf.pages)) for tf in self.tiff_files)
-        )
-
-        for tf, num_pages in tiff_iterator:
-            end = start + num_pages
-            idxs = [i for i, p in enumerate(pages) if start <= p < end]
-            if not idxs:
-                start = end
-                continue
-
-            frame_idx = [pages[i] - start for i in idxs]
-
-            if len(frame_idx) <= 4:
-                with self._tiff_lock:
-                    chunk = tf.asarray(key=frame_idx)
-            else:
-                chunks = []
-                for fi in frame_idx:
-                    with self._tiff_lock:
-                        c = tf.asarray(key=fi)
-                    chunks.append(c if c.ndim == 3 else c[np.newaxis, ...])
-                chunk = np.concatenate(chunks, axis=0)
-
-            if chunk.ndim == 2:
-                chunk = chunk[np.newaxis, ...]
-            chunk = chunk[..., yslice, xslice]
-
-            if self.fix_phase:
-                _t0 = time.perf_counter()
-                shift = self.phase_correction.effective_shift
-                if shift is not None:
-                    corrected = _apply_offset(chunk, shift, use_fft=self.use_fft)
-                    offset = shift
-                else:
-                    corrected, offset = bidir_phasecorr(
-                        chunk,
-                        method=self.phasecorr_method,
-                        max_offset=self.max_offset,
-                        border=self.border,
-                        use_fft=self.use_fft,
-                    )
-
-                buf[idxs] = corrected
-                self._last_offset = offset
-                self._record_offset_for_pages([pages[i] for i in idxs], float(offset))
-                logger.debug(
-                    f"phase_corr: offset={offset:.2f}, method={self.phasecorr_method}, "
-                    f"fft={self.use_fft}, chunk={chunk.shape}, took {(time.perf_counter() - _t0) * 1000:.1f}ms"
-                )
-            else:
-                buf[idxs] = chunk
-                self._last_offset = 0.0
-                self._record_offset_for_pages([pages[i] for i in idxs], 0.0)
-            start = end
-
-        logger.debug(
-            f"_read_pages: {len(frames)} frames, {len(chans)} chans -> {buf.shape}"
-        )
-        return buf.reshape(len(frames), len(chans), tiff_height_px, tiff_width_px)
+    def _shape5d(self) -> tuple[int, int, int, int, int]:
+        t, c, z = self.layout.shape(self._average_frames)
+        if isinstance(self.roi, int) and self.roi > 0:
+            roi = self._rois[self.roi - 1]
+            return t, c, z, roi["height"], roi["width"]
+        height = max(r["height"] for r in self._rois)
+        width = sum(r["width"] for r in self._rois)
+        return t, c, z, height, width
 
     def __getitem__(self, key):
-        t0 = time.perf_counter()
         key = _normalize_key(key, 5)
-        key = tuple(_convert_range_to_slice(k) for k in key) + (slice(None),) * (
-            5 - len(key)
-        )
-
+        key = tuple(_convert_range_to_slice(k) for k in key) + (slice(None),) * (5 - len(key))
         t_key, c_key, z_key, y_key, x_key = key
-        frames = listify_index(t_key, self.num_frames)
-        colors = listify_index(c_key, self._num_color_channels)
-        zplanes = listify_index(z_key, self._num_zplanes)
-        if not frames or not colors or not zplanes:
-            return np.empty(0)
-        chans = [
-            c * self._num_zplanes + z for c in colors for z in zplanes
-        ]  # page channel index
+        nt, nc, nz = self.layout.shape(self._average_frames)
+        t, c, z = listify_index(t_key, nt), listify_index(c_key, nc), listify_index(z_key, nz)
+        if not t or not c or not z:
+            return np.empty((len(t), len(c), len(z), *self.shape[3:]), dtype=self.dtype)
 
-        out = self.process_rois(frames, chans)
-        t1 = time.perf_counter()
-        self.logger.debug(f"__getitem__ took {(t1 - t0) * 1000:.1f}ms")
-
-        nc, nz = len(colors), len(zplanes)  # (T, C*Z, Y, X) -> (T, C, Z, Y, X)
-        if nc == 1:
-            if isinstance(out, tuple):
-                out = tuple(np.expand_dims(x, axis=1) for x in out)
-            else:
-                out = np.expand_dims(out, axis=1)
+        pages = self.layout.pages(t, c, z, self._average_frames)  ## (T, R, C, Z)
+        out = self._read_rois(pages.ravel())
+        if isinstance(out, tuple):
+            out = tuple(self._finish(x, pages.shape, key, y_key, x_key) for x in out)
         else:
-            if isinstance(out, tuple):
-                out = tuple(
-                    x.reshape(len(frames), nc, nz, x.shape[-2], x.shape[-1])
-                    for x in out
-                )
-            else:
-                out = out.reshape(len(frames), nc, nz, out.shape[-2], out.shape[-1])
-
-        # process_rois stitches whole frames, so y and x are cropped here
-        if not (_is_full_slice(y_key) and _is_full_slice(x_key)):
-            if isinstance(out, tuple):
-                out = tuple(x[:, :, :, y_key, x_key] for x in out)
-            else:
-                out = out[:, :, :, y_key, x_key]
-
-        # np.integer too: np.linspace(dtype=int) hands back np.int64 keys
-        squeeze = [i for i in range(3) if isinstance(key[i], (int, np.integer))]
-        if squeeze:
-            if isinstance(out, tuple):
-                out = tuple(np.squeeze(x, axis=tuple(squeeze)) for x in out)
-            else:
-                out = np.squeeze(out, axis=tuple(squeeze))
-
-        if self._target_dtype is not None:
-            if isinstance(out, tuple):
-                out = tuple(x.astype(self._target_dtype) for x in out)
-            else:
-                out = out.astype(self._target_dtype)
-
+            out = self._finish(out, pages.shape, key, y_key, x_key)
         return out
 
-    def _record_offset_for_pages(self, page_indices, offset_value: float) -> None:
-        """Cache the offset per (t, c, z), inverting ``_read_pages``'s page formula ``f * num_channels + c * nz + z``."""
-        nch = self.num_channels
-        nz = max(1, self._num_zplanes)
-        for p in page_indices:
-            t, chan = divmod(int(p), nch)
-            c, z = divmod(chan, nz)
-            self._offset_cache[(t, c, z)] = float(offset_value)
+    def _finish(self, frames, pages_shape, key, y_key, x_key):
+        """(T*R*C*Z, Y, X) stitched frames -> the averaged, cropped, squeezed and cast result."""
+        frames = frames.reshape(*pages_shape, *frames.shape[-2:])
+        frames = frames.mean(axis=1, dtype=np.float32) if self._average_frames else frames[:, 0]
+        # whole frames are read and stitched, so y and x are cropped here
+        if not (_is_full_slice(y_key) and _is_full_slice(x_key)):
+            frames = frames[..., y_key, x_key]
+        # np.integer too: np.linspace(dtype=int) hands back np.int64 keys
+        squeeze = tuple(i for i in range(3) if isinstance(key[i], (int, np.integer)))
+        if squeeze:
+            frames = frames.squeeze(axis=squeeze)
+        return frames.astype(self.dtype, copy=False)
+
+    def _read_rois(self, pages: np.ndarray):
+        """The ``pages`` with the mROI selection applied: one stitched (N, Y, X), one ROI, or a tuple per listed ROI."""
+        if isinstance(self.roi, int) and self.roi > 0:
+            return self._read_pages(pages, yslice=self._rois[self.roi - 1]["slice"])
+        full = self._read_pages(pages)
+        if isinstance(self.roi, (list, tuple)):
+            return tuple(full[:, self._rois[r - 1]["slice"], :] for r in self.roi)
+        height = max(r["height"] for r in self._rois)
+        out = np.zeros((len(pages), height, sum(r["width"] for r in self._rois)), dtype=full.dtype)
+        x = 0
+        for r in self._rois:
+            out[:, : r["height"], x : x + r["width"]] = full[:, r["slice"], :]
+            x += r["width"]
+        return out
+
+    def _read_pages(self, pages: np.ndarray, yslice=slice(None)) -> np.ndarray:
+        """Raw pages as (N, Y, X) in the order given, scan-phase corrected per file when ``fix_phase`` is on."""
+        width = self._metadata["page_width"]
+        height = index_length(yslice, self._metadata["page_height"])
+        buf = np.empty((len(pages), height, width), dtype=self._source_dtype)
+        start = 0
+        for tf, num_pages in zip(self.tiff_files, self._pages_per_file, strict=True):
+            in_file = np.flatnonzero((pages >= start) & (pages < start + num_pages))
+            if len(in_file):
+                local = pages[in_file] - start
+                unique, inverse = np.unique(local, return_inverse=True)
+                with self._tiff_lock:
+                    chunk = tf.asarray(key=unique.tolist()).reshape(len(unique), -1, width)
+                chunk = chunk[:, yslice, :]
+                if self.fix_phase:
+                    chunk = self._correct_phase(chunk, unique + start)
+                else:
+                    self._offset_cache.update(dict.fromkeys((unique + start).tolist(), 0.0))
+                buf[in_file] = chunk[inverse]
+            start += num_pages
+        return buf
+
+    def _correct_phase(self, chunk: np.ndarray, pages: np.ndarray) -> np.ndarray:
+        shift = self.phase_correction.effective_shift
+        if shift is not None:
+            corrected, offset = _apply_offset(chunk, shift, use_fft=self.use_fft), shift
+        else:
+            corrected, offset = bidir_phasecorr(
+                chunk,
+                method=self.phasecorr_method,
+                max_offset=self.max_offset,
+                border=self.border,
+                use_fft=self.use_fft,
+            )
+        offsets = np.broadcast_to(np.asarray(offset, dtype=float), pages.shape)
+        self._offset_cache.update(zip(pages.tolist(), offsets.tolist(), strict=True))
+        return corrected
 
     def get_offset_at(self, t: int, c: int = 0, z: int = 0):
-        """The scan-phase offset of one frame, or None before it is read; ``_last_offset`` is whatever any background read did last."""
-        return self._offset_cache.get((int(t), int(c), int(z)))
+        """The scan-phase offset applied to (t, c, z), the mean over averaged repeats; None before it is read."""
+        pages = self.layout.pages([t], [c], [z], self._average_frames).ravel()
+        offsets = [self._offset_cache.get(int(p)) for p in pages]
+        return None if None in offsets else float(np.mean(offsets))
 
     def _invalidate_offset_cache(self) -> None:
         self._offset_cache.clear()
-
-    def process_rois(self, frames, chans):
-        if self.roi is not None and isinstance(self.roi, int) and self.roi != 0:
-            return self._read_pages(
-                frames,
-                chans,
-                yslice=self._rois[self.roi - 1]["slice"],
-                xslice=slice(None),
-            )
-
-        full_data = self._read_pages(
-            frames, chans, yslice=slice(None), xslice=slice(None)
-        )
-
-        if isinstance(self.roi, list):
-            return tuple(
-                full_data[:, :, self._rois[r - 1]["slice"], :] for r in self.roi
-            )
-
-        total_width = sum(roi["width"] for roi in self._rois)
-        max_height = max(roi["height"] for roi in self._rois)
-        out = np.zeros(
-            (len(frames), len(chans), max_height, total_width), dtype=self.dtype
-        )
-
-        for roi_idx in range(self.num_rois):
-            yslice = self._rois[roi_idx]["slice"]
-            oys = self.output_yslices[roi_idx]
-            oxs = self.output_xslices[roi_idx]
-            out[:, :, oys, oxs] = full_data[:, :, yslice, :]
-
-        return out
-
-    @property
-    def num_planes(self):
-        return self._num_zplanes
-
-    @property
-    def num_color_channels(self):
-        return self._num_color_channels
-
-    @property
-    def shape(self) -> tuple[int, int, int, int, int]:
-        return self._shape5d()
-
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
-        if self.roi is not None and not isinstance(self.roi, (list, tuple)):
-            if self.roi > 0:
-                roi = self._rois[self.roi - 1]
-                return (
-                    self.num_frames,
-                    self._num_color_channels,
-                    self._num_zplanes,
-                    roi["height"],
-                    roi["width"],
-                )
-        total_width = sum(roi["width"] for roi in self._rois)
-        max_height = max(roi["height"] for roi in self._rois)
-        return (
-            self.num_frames,
-            self._num_color_channels,
-            self._num_zplanes,
-            max_height,
-            total_width,
-        )
-
-    @property
-    def size(self):
-        s = self.shape
-        result = 1
-        for dim in s:
-            result *= dim
-        return result
-
-    @property
-    def _page_height(self):
-        return self._metadata.get("page_height")
-
-    @property
-    def _page_width(self):
-        return self._metadata.get("page_width")
 
     def imshow(self, **kwargs):
         arrays = []
@@ -1196,40 +1054,27 @@ class ScanImageArray(
             arrays.append(arr)
             names.append(f"ROI {roi}" if roi else "Stitched mROIs")
 
-        figure_shape = (1, len(arrays))
-        histogram_widget = kwargs.get("histogram_widget", True)
-        figure_kwargs = kwargs.get("figure_kwargs", {"size": (600, 600)})
-        window_funcs = kwargs.get("window_funcs")
-
-        sample_frame = arrays[0][0]
-        vmin, vmax = float(sample_frame.min()), float(sample_frame.max())
-
+        sample_frame = arrays[0][0, 0, 0]
         from mbo_utilities.gui._ndviewer import MboNDViewer
 
         return MboNDViewer(
             data=arrays,
             names=names,
-            histogram_widget=histogram_widget,
-            figure_kwargs=figure_kwargs,
-            figure_shape=figure_shape,
-            graphic_kwargs={"vmin": vmin, "vmax": vmax},
-            window_funcs=window_funcs,
+            histogram_widget=kwargs.get("histogram_widget", True),
+            figure_kwargs=kwargs.get("figure_kwargs", {"size": (600, 600)}),
+            figure_shape=(1, len(arrays)),
+            graphic_kwargs={
+                "vmin": float(sample_frame.min()),
+                "vmax": float(sample_frame.max()),
+            },
+            window_funcs=kwargs.get("window_funcs"),
         )
 
 
 class LBMArray(ScanImageArray):
     """A Light Beads Microscopy scan: the beamlets ScanImage saved as channels are the z-planes."""
 
-    @classmethod
-    def can_open(cls, file: Path | str) -> bool:
-        if not ScanImageArray.can_open(file):
-            return False
-        try:
-            meta = get_metadata(file)
-            return detect_stack_type(meta) == "lbm"
-        except Exception:
-            return False
-
+    STACK_TYPES = ("lbm",)
     METADATA_CONTEXT: dict[str, str] = {
         "Ly": (
             "For LBM with multi-ROIs, this is the total vertical height of all ROI strips "
@@ -1238,239 +1083,34 @@ class LBMArray(ScanImageArray):
         "Lx": "ROI width in pixels (same for all mROIs in the scan).",
         "num_zplanes": "Number of z-planes encoded as ScanImage channels for LBM.",
         "dz": "Z-step size (µm). Must be user-supplied for LBM - not in ScanImage metadata.",
-        "fs": "Volume rate in Hz (frame rate / num_zplanes for LBM).",
+        "fs": "Volume rate in Hz: every beamlet records each frame.",
     }
-    REQUIRED_METADATA: list[str] = [
-        "dz"
-    ]  # ScanImage does not record the beamlet spacing
-
-    def __init__(
-        self, files: str | Path | list, metadata: dict | None = None, **kwargs
-    ):
-        super().__init__(files, metadata=metadata, **kwargs)
-        if self.stack_type != "lbm":
-            raise ValueError(
-                f"LBMArray requires LBM stack data, but detected '{self.stack_type}'. "
-                f"Use open_scanimage() for automatic detection or ScanImageArray directly."
-            )
-
-    @property
-    def dims(self) -> tuple[str, ...]:
-        from mbo_utilities.arrays._base import DIMS
-
-        return DIMS
+    REQUIRED_METADATA: list[str] = ["dz"]  # ScanImage does not record the beamlet spacing
 
 
 class PiezoArray(ScanImageArray):
-    """A piezo z-stack: volumes on T, slices on Z.
+    """A piezo or fast-z stack: volumes on T, slices on Z.
 
-    The raw pages run ``num_volumes * num_slices * frames_per_slice /
-    log_average_factor``. ``average_frames`` averages the frames of each slice
-    when the acquisition did not (``log_average_factor == 1``); otherwise Z
-    exposes every raw frame.
+    Each slice saves ``framesPerSlice / logAverageFactor`` frames (one for
+    fast-z); with more than one they follow their slice on T unless
+    ``average_frames`` averages them. Fast-z flyback frames are dropped.
     """
 
-    @classmethod
-    def can_open(cls, file: Path | str) -> bool:
-        if not ScanImageArray.can_open(file):
-            return False
-        try:
-            meta = get_metadata(file)
-            return detect_stack_type(meta) == "piezo"
-        except Exception:
-            return False
-
+    STACK_TYPES = ("piezo",)
     METADATA_CONTEXT: dict[str, str] = {
         "Ly": "Frame height in pixels.",
         "Lx": "Frame width in pixels.",
-        "num_slices": "Number of z-slices per volume (from hStackManager.numSlices).",
-        "num_volumes": "Number of volumes (from hStackManager.numVolumes).",
-        "dz": "Z-step size in µm (from hStackManager.stackZStepSize).",
-        "frames_per_slice": "Frames acquired at each z-position before piezo moves.",
-        "log_average_factor": "If >1, frames were averaged during acquisition.",
-        "fs": "Frame rate in Hz.",
+        "num_zplanes": "Slices per volume (hStackManager.numSlices).",
+        "num_timepoints": "Volumes saved, counted from the pages (times frames per slice unless averaged).",
+        "dz": "Z-step size in µm (hStackManager.actualStackZStepSize).",
+        "fs": "Volume rate in Hz (hRoiManager.scanVolumeRate).",
     }
-
-    def __init__(
-        self,
-        files: str | Path | list,
-        average_frames: bool = False,
-        metadata: dict | None = None,
-        **kwargs,
-    ):
-        # super().__init__ reads the shape, which depends on these
-        self._average_frames = False
-        self._frames_per_slice = 1
-        self._log_average_factor = 1
-        self._num_slices = 1
-        self._num_volumes = 1
-        self._raw_tiff_frames = 0
-
-        super().__init__(files, metadata=metadata, **kwargs)
-        if self.stack_type != "piezo":
-            raise ValueError(
-                f"PiezoArray requires piezo stack data, but detected '{self.stack_type}'. "
-                f"Use open_scanimage() for automatic detection or ScanImageArray directly."
-            )
-
-        from mbo_utilities.metadata.scanimage import (
-            get_num_slices,
-            get_num_volumes,
-        )
-
-        self._frames_per_slice = get_frames_per_slice(self._metadata)
-        self._log_average_factor = get_log_average_factor(self._metadata)
-        self._raw_tiff_frames = self.num_frames
-        self._num_slices = get_num_slices(self._metadata) or 1
-        num_volumes = get_num_volumes(self._metadata)
-        if num_volumes:
-            self._num_volumes = num_volumes
-        else:
-            # a pre-averaged acquisition already folded frames_per_slice into the page count
-            if self._log_average_factor > 1:
-                frames_per_volume = self._num_slices
-            else:
-                frames_per_volume = self._num_slices * self._frames_per_slice
-            self._num_volumes = max(self._raw_tiff_frames // frames_per_volume, 1)
-
-        self._average_frames = average_frames and self.can_average
-
-    @property
-    def num_slices(self) -> int:
-        return self._num_slices
-
-    @property
-    def num_volumes(self) -> int:
-        return self._num_volumes
-
-    @property
-    def frames_per_slice(self) -> int:
-        return self._frames_per_slice
-
-    @property
-    def log_average_factor(self) -> int:
-        """ScanImage's acquisition-time averaging factor; above 1 the pages are already averaged."""
-        return self._log_average_factor
-
-    @property
-    def can_average(self) -> bool:
-        return self.log_average_factor == 1 and self.frames_per_slice > 1
-
-    @property
-    def average_frames(self) -> bool:
-        return self._average_frames
-
-    @average_frames.setter
-    def average_frames(self, value: bool):
-        if not isinstance(value, bool):
-            raise ValueError("average_frames must be a boolean value.")
-        if value and not self.can_average:
-            if self.log_average_factor > 1:
-                logger.warning(
-                    f"Frame averaging disabled: data was pre-averaged at acquisition "
-                    f"(logAverageFactor={self.log_average_factor})."
-                )
-            elif self.frames_per_slice <= 1:
-                logger.warning(
-                    f"Frame averaging disabled: only 1 frame per slice "
-                    f"(framesPerSlice={self.frames_per_slice})."
-                )
-            value = False
-        self._average_frames = value
-
-    def _shape5d(self) -> tuple[int, int, int, int, int]:
-        total_width = sum(r["width"] for r in self._rois)
-        max_height = max(r["height"] for r in self._rois)
-
-        if self._average_frames or self._log_average_factor > 1:
-            frames_dim = self._num_slices
-        else:
-            frames_dim = self._num_slices * self._frames_per_slice
-
-        return (self._num_volumes, 1, frames_dim, max_height, total_width)
-
-    @property
-    def dims(self) -> tuple[str, ...]:
-        from mbo_utilities.arrays._base import DIMS
-
-        return DIMS
-
-    def _volume_slice_to_raw_frame(self, vol_idx: int, slice_idx: int) -> int:
-        """The raw page index of the first frame of ``slice_idx`` in volume ``vol_idx``."""
-        if self._log_average_factor > 1:
-            return vol_idx * self._num_slices + slice_idx
-        frames_per_volume = self._num_slices * self._frames_per_slice
-        return vol_idx * frames_per_volume + slice_idx * self._frames_per_slice
-
-    def __getitem__(self, key):
-        """Z indexes slices when averaging (or pre-averaged), else the raw frames ``z * frames_per_slice + f``."""
-        key = _normalize_key(key, 5)
-        key = key + (slice(None),) * (5 - len(key))
-        vol_key, c_key, frame_key, y_key, x_key = key
-
-        if self._average_frames or self._log_average_factor > 1:
-            frame_dim_size = self._num_slices
-        else:
-            frame_dim_size = self._num_slices * self._frames_per_slice
-
-        vol_indices = listify_index(vol_key, self._num_volumes)
-        frame_indices = listify_index(frame_key, frame_dim_size)
-
-        if not vol_indices or not frame_indices:
-            return np.empty((0, 1, 0, *self.shape[3:]), dtype=self.dtype)
-
-        needs_averaging = self._average_frames and self.can_average
-
-        results = []
-        for vol_idx in vol_indices:
-            vol_frames = []
-            for f_idx in frame_indices:
-                if needs_averaging:
-                    raw_frame = self._volume_slice_to_raw_frame(vol_idx, f_idx)
-                    frame_data = []
-                    for f in range(self._frames_per_slice):
-                        data = super().__getitem__((raw_frame + f, 0, 0, y_key, x_key))
-                        frame_data.append(data)
-                    averaged = np.mean(frame_data, axis=0)
-                    vol_frames.append(averaged)
-                elif self._log_average_factor > 1:
-                    raw_frame = self._volume_slice_to_raw_frame(vol_idx, f_idx)
-                    data = super().__getitem__((raw_frame, 0, 0, y_key, x_key))
-                    vol_frames.append(data)
-                else:
-                    frames_per_volume = self._num_slices * self._frames_per_slice
-                    raw_frame = vol_idx * frames_per_volume + f_idx
-                    data = super().__getitem__((raw_frame, 0, 0, y_key, x_key))
-                    vol_frames.append(data)
-
-            results.append(np.stack(vol_frames, axis=0))
-
-        out = np.stack(results, axis=0)[:, np.newaxis]  # (T, 1, Z, Y, X)
-        squeeze = [i for i in range(3) if isinstance(key[i], (int, np.integer))]
-        for ax in sorted(squeeze, reverse=True):
-            out = np.squeeze(out, axis=ax)
-        return out
-
-    def __array__(self, dtype=None):
-        data = self[:]
-        if dtype is not None:
-            return data.astype(dtype)
-        return data
 
 
 class SinglePlaneArray(ScanImageArray):
-    """A single-plane time series."""
+    """A single-plane time series: frames on T, PMT colors on C."""
 
-    @classmethod
-    def can_open(cls, file: Path | str) -> bool:
-        if not ScanImageArray.can_open(file):
-            return False
-        try:
-            meta = get_metadata(file)
-            return detect_stack_type(meta) == "single_plane"
-        except Exception:
-            return False
-
+    STACK_TYPES = ("single_plane",)
     METADATA_CONTEXT: dict[str, str] = {
         "Ly": "Frame height in pixels.",
         "Lx": "Frame width in pixels.",
@@ -1478,92 +1118,48 @@ class SinglePlaneArray(ScanImageArray):
         "fs": "Frame rate in Hz.",
     }
 
-    def __init__(
-        self, files: str | Path | list, metadata: dict | None = None, **kwargs
-    ):
-        super().__init__(files, metadata=metadata, **kwargs)
-        if self.stack_type != "single_plane":
-            raise ValueError(
-                f"SinglePlaneArray requires single-plane data, but detected '{self.stack_type}'. "
-                f"Use open_scanimage() for automatic detection or ScanImageArray directly."
-            )
-
-    @property
-    def dims(self) -> tuple[str, ...]:
-        from mbo_utilities.arrays._base import DIMS
-
-        return DIMS
-
 
 class LBMPiezoArray(ScanImageArray):
-    """A pollen calibration stack: the piezo steps through focal planes while every LBM beamlet records.
+    """A pollen calibration stack: the piezo steps through depth while every LBM beamlet records.
 
-    The parent's native layout stays: piezo positions on T, beamlets on Z,
-    which is what ``pollen_calibration.py`` and the stats pipeline unpack
-    positionally after the viewer's singleton squeeze.
+    Piezo positions go on T (they are not time, so ``fs`` is unset) and beamlets
+    on Z, which is what ``pollen_calibration_mbo.py`` and the calibration viewer
+    unpack after dropping C. Open it with ``average_frames=True`` to get one
+    frame per position when each slice saved several.
     """
 
-    @classmethod
-    def can_open(cls, file: Path | str) -> bool:
-        if not ScanImageArray.can_open(file):
-            return False
-        try:
-            meta = get_metadata(file)
-            return detect_stack_type(meta) == "pollen"
-        except Exception:
-            return False
-
+    STACK_TYPES = ("pollen",)
     METADATA_CONTEXT: dict[str, str] = {
         "Ly": "Frame height in pixels.",
         "Lx": "Frame width in pixels.",
-        "num_zplanes": "Number of z-slices (piezo positions).",
-        "num_beamlets": "Number of LBM beamlet channels.",
-        "dz": "Z-step size in µm (from hStackManager.stackZStepSize).",
-        "fs": "Frame rate in Hz.",
+        "num_timepoints": "Piezo positions (times frames per slice unless averaged).",
+        "num_zplanes": "LBM beamlets.",
+        "dz": "Beamlet spacing in µm; not in the header. The piezo step is hStackManager.stackZStepSize.",
     }
-
-    def __init__(
-        self, files: str | Path | list, metadata: dict | None = None, **kwargs
-    ):
-        super().__init__(files, metadata=metadata, **kwargs)
-        if self.stack_type != "pollen":
-            raise ValueError(
-                f"LBMPiezoArray requires pollen calibration data, but detected '{self.stack_type}'. "
-                f"Use open_scanimage() for automatic detection or ScanImageArray directly."
-            )
-
-    @property
-    def dims(self) -> tuple[str, ...]:
-        from mbo_utilities.arrays._base import DIMS
-
-        return DIMS
-
-    @property
-    def num_zplanes(self) -> int:
-        """The piezo positions."""
-        return self.num_frames
+    REQUIRED_METADATA: list[str] = ["dz"]
 
     @property
     def num_beamlets(self) -> int:
-        return self.num_channels
+        return self.layout.beamlets
 
 
 def open_scanimage(files: str | Path | list, **kwargs) -> ScanImageArray:
-    """Open ScanImage tiffs as the subclass for their stack type; ``average_frames`` reaches only ``PiezoArray``."""
+    """Open ScanImage tiffs as the subclass for their stack type."""
     file_list = [files] if isinstance(files, (str, Path)) else list(files)
     metadata = get_metadata(file_list)
-    stack_type = detect_stack_type(metadata)
-    logger.debug(f"open_scanimage: detected stack_type='{stack_type}'")
-    if stack_type == "piezo":
-        return PiezoArray(files, metadata=metadata, **kwargs)
-    kwargs.pop("average_frames", None)
-    cls = {"lbm": LBMArray, "pollen": LBMPiezoArray}.get(stack_type, SinglePlaneArray)
-    return cls(files, metadata=metadata, **kwargs)
+    cls = {
+        "lbm": LBMArray,
+        "piezo": PiezoArray,
+        "pollen": LBMPiezoArray,
+        "single_plane": SinglePlaneArray,
+    }[detect_stack_type(metadata)]
+    return cls(file_list, metadata=metadata, **kwargs)
 
 
-register_array_class(LBMArray, priority=90)
-register_array_class(LBMPiezoArray, priority=90)
-register_array_class(PiezoArray, priority=80)
-register_array_class(SinglePlaneArray, priority=80)
-register_array_class(ScanImageArray, priority=70)
+# NOTE: ScanImage files are pieces of one acquisition, so they stay at the suffix-level 50: above it imread treats every file as a whole recording and opens only the first
+register_array_class(LBMArray, priority=50)
+register_array_class(LBMPiezoArray, priority=50)
+register_array_class(PiezoArray, priority=50)
+register_array_class(SinglePlaneArray, priority=50)
+register_array_class(ScanImageArray, priority=40)
 register_array_class(TiffArray, priority=30)

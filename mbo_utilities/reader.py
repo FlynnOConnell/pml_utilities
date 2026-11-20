@@ -307,7 +307,7 @@ def _imread_impl(
         elif p.is_dir():
             logger.debug(f"Input is a directory, searching for supported files in {p}")
 
-            zarrs = list(p.glob("*.zarr"))
+            zarrs = sorted(p.glob("*.zarr"))
             if zarrs:
                 logger.debug(
                     f"Found {len(zarrs)} zarr stores in {p}, loading as ZarrArray."
@@ -334,7 +334,7 @@ def _imread_impl(
                 if opened is not None:
                     return opened
 
-                paths = [Path(f) for f in p.glob("*") if f.is_file()]
+                paths = sorted(f for f in p.iterdir() if f.is_file())
                 logger.debug(f"Found {len(paths)} files in {p}")
         else:
             paths = [p]
@@ -465,7 +465,7 @@ def _imread_impl(
         return MP4Array(first, **_filter_kwargs(MP4Array, kwargs))
 
     if first.suffix == ".zarr":
-        sub_zarrs = list(first.glob("*.zarr"))
+        sub_zarrs = sorted(first.glob("*.zarr"))
         if sub_zarrs:
             logger.info("Detected nested zarr stores, loading as ZarrArray.")
             return ZarrArray(sub_zarrs, **_filter_kwargs(ZarrArray, kwargs))

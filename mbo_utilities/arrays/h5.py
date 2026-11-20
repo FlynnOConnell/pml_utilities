@@ -354,6 +354,8 @@ class H5Array(ReductionMixin, Shape5DMixin):
         ]
         md["h5_raw_dims"] = "".join(self._raw_dims)
         md.update(self._metadata_overlay)
+        nt, nc, nz, ny, nx = self._shape5d()
+        md.update(num_timepoints=nt, num_color_channels=nc, num_zplanes=nz, Ly=ny, Lx=nx)
         return md
 
     @metadata.setter
