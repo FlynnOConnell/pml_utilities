@@ -10,9 +10,11 @@ from fastplotlib.utils import global_config
 FRAME_SPACING = {
     "x0": 1,
     "sides": 2,
-    "title_flanks": 2,
+    # NOTE: under 6 the image covers the title, which fastplotlib draws 4 px down
+    "title_flanks": 6,
     "resize_handle_space": 0,
-    "bottom": 2,
+    # the image ends bottom - title_flanks above the frame's edge
+    "bottom": 6,
 }
 TITLE_FONT_SIZE = 12
 

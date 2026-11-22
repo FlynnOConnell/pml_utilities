@@ -3,8 +3,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/MillerBrainObservatory/mbo_utilities.git
-cd mbo_utilities
+git clone git@gitlab.com:losonczylab/pml_utilities.git
+cd pml_utilities
 uv sync --all-extras
 ```
 
@@ -57,10 +57,7 @@ uv run make clean
 uv run make html
 ```
 
-The site at <https://millerbrainobservatory.github.io/mbo_utilities/> is rebuilt
-and published automatically on every merge to `main` (`.github/workflows/deploy_docs.yml`).
-Pull requests build the docs as a check but do not publish. To republish without a
-merge, run the *Deploy Docs* workflow manually from the Actions tab.
+The docs are not published; open `docs/_build/html/index.html` after the build.
 
 ---
 

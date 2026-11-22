@@ -43,6 +43,7 @@ HAS_TORCH: bool = _get_cached_flag("torch", lambda: _check_import("torch"))
 HAS_RASTERMAP: bool = _get_cached_flag("rastermap", lambda: _check_import("rastermap"))
 HAS_MASKNMF: bool = _get_cached_flag("masknmf", lambda: _check_import("masknmf"))
 HAS_VNOISER: bool = _get_cached_flag("vnoiser", lambda: _check_import("vnoiser"))
+HAS_SKAN: bool = _get_cached_flag("skan", lambda: _check_import("skan"))
 HAS_IMGUI: bool = _get_cached_flag(
     "imgui_bundle", lambda: _check_import("imgui_bundle")
 )
@@ -115,10 +116,16 @@ class InstallStatus:
         return next((f for f in self.features if f.name == name), None)
 
 
+GUI_HINT = 'uv pip install "pml_utilities[gui]"'
+DASK_HINT = 'uv pip install "pml_utilities[dask]"'
 _TORCH_INDEX = "https://download.pytorch.org/whl/"
-_SUITE2P_HINT = "uv pip install lbm-suite2p-python suite2p rastermap --no-deps"
-_MASKNMF_HINT = "uv pip install git+https://github.com/apasarkar/masknmf-toolbox.git"
-VNOISER_HINT = "uv pip install -e <path to the vnoiser checkout>"
+# lbm-suite2p-python asks for the PyPI mbo_utilities, which pml_utilities replaces
+SUITE2P_HINT = (
+    'uv pip install "pml_utilities[suite2p] @ git+https://github.com/FlynnOConnell/pml_utilities.git" '
+    "&& uv pip install --no-deps lbm-suite2p-python"
+)
+MASKNMF_HINT = 'uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"'
+VNOISER_HINT = 'uv pip install "vnoiser @ git+https://github.com/FlynnOConnell/vnoiser.git"'
 # system libraries qt's xcb platform plugin loads at startup (README, Linux system libraries)
 LINUX_QT_APT_PACKAGES = (
     "libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 "
@@ -381,12 +388,12 @@ def check_installation(callback=None) -> InstallStatus:
                 "lbm-suite2p-python",
                 "LBM-Suite2p-Python",
                 "suite2p pipeline; registration on the PyTorch device",
-                _SUITE2P_HINT,
+                SUITE2P_HINT,
             ),
             torch,
         ),
         _check_pkg(
-            "suite2p", "suite2p", "Suite2p", "core of LBM-Suite2p-Python", _SUITE2P_HINT
+            "suite2p", "suite2p", "Suite2p", "core of LBM-Suite2p-Python", SUITE2P_HINT
         ),
         _on_torch(
             _check_pkg(
@@ -404,12 +411,12 @@ def check_installation(callback=None) -> InstallStatus:
                 "masknmf",
                 "MaskNMF",
                 "masknmf pipeline and curation GUI, on the PyTorch device",
-                _MASKNMF_HINT,
+                MASKNMF_HINT,
             ),
             torch,
         ),
         _check_pkg(
-            "rastermap", "rastermap", "Rastermap", "sorts suite2p traces", _SUITE2P_HINT
+            "rastermap", "rastermap", "Rastermap", "sorts suite2p traces", SUITE2P_HINT
         ),
         _check_pkg(
             "vnoiser",

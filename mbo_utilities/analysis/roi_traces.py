@@ -1,4 +1,4 @@
-"""Domain traces from a recording: pixel choice, background, reference channel and polarity.
+"""Domain traces from a recording: which pixels, what is subtracted, which way up.
 
 A domain is the pixels of one or more ROIs averaged into one trace: the lines
 of a soma, a chessboard patch, the part of a patch the cell covers. An ROI is
@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field, fields
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 
-from mbo_utilities.roi_workflow import as_movie
+from mbo_utilities.arrays.plane import as_movie
 
 __all__ = [
     "BACKGROUNDS",
@@ -35,11 +35,16 @@ __all__ = [
     "roi_geometry",
 ]
 
-# pixels per ROI: every pixel, or the top fraction by mean, by high-passed SD or by correlation with the ROI's mean; "mask" is a given set
+# how a domain picks pixels inside each of its ROIs: every pixel, the top
+# fraction by mean brightness, by fast fluctuation (SD after a high-pass) or by
+# correlation of that fluctuation with the ROI's mean; "mask" is a given set
 PIXEL_RULES = ("all", "bright", "active", "correlated", "mask")
-# subtracted from F: nothing, a per-frame percentile of the ROI's pixels, the mean of its pixels outside the domain, or another domain's F (the archive's "bg")
+# what is subtracted from a domain's F: nothing, the dimmest pixels of its ROIs
+# per frame (a percentile), the mean of its ROIs' pixels outside its mask, or
+# the F of another domain (the archive's "bg")
 BACKGROUNDS = ("none", "dim", "outside", "domain")
-# a channel recorded beside the indicator (mScarlet beside ASAP7): F is divided by it, or the part of F it explains is removed
+# a second channel recorded beside the indicator (mScarlet beside ASAP7): F is
+# divided by it, or the part of F it explains is removed
 REFERENCES = ("none", "ratio", "regress")
 
 
@@ -100,8 +105,8 @@ class Domain:
         ``geometry`` is :func:`roi_geometry`'s. Raises when nothing of the mask
         falls on the ROI.
         """
-        y0, h, w = geometry[int(roi)]
-        local = np.asarray(mask, bool)[y0 : y0 + h, :w]
+        h, w = geometry[int(roi)]
+        local = np.asarray(mask, bool)[:h, :w]
         pixels = np.flatnonzero(local)
         if pixels.size == 0:
             raise ValueError(f"{name}: the mask has no pixel on ROI {roi}")
@@ -128,7 +133,7 @@ def domains_from_json(spec) -> list[Domain]:
 
 @dataclass
 class TraceSettings:
-    """The steps from a domain's pixel mean to the trace dF/F is taken of.
+    """What happens to a domain's pixel mean before dF/F.
 
     ``convert`` applies the file's linear conversion (MESc's
     ``raw * scale + offset``) so zero means no photons; the archive worked
@@ -183,14 +188,13 @@ class ExtractedTraces:
 
     ``pixel_mean`` is the domain's pixel mean (converted); ``measured`` that
     after the background and the reference, the trace in the recording's
-    units; ``F`` the trace dF/F is taken of: ``measured``, inverted when the
-    settings say so. ``background`` and ``reference`` are the terms
-    subtracted or divided by, per domain, when there was one. ``roi_mean``
-    holds every ROI read, whole, converted (the members' raw traces).
-    ``masks`` gives each domain's flat ROI-local pixels per ROI, ``shapes``
-    each ROI's height and width, ``images`` its mean, SD and correlation
-    images over the scoring window (only for ROIs a scored rule or the
-    preview asked for).
+    units; ``F`` what dF/F is taken of: ``measured``, inverted when the
+    settings say so. ``background`` and ``reference`` are what was
+    subtracted or divided by, per domain, when there was one. ``roi_mean`` holds every ROI
+    read, whole, converted (the members' raw traces). ``masks`` gives each
+    domain's flat ROI-local pixels per ROI, ``shapes`` each ROI's height and
+    width, ``images`` its mean, SD and correlation images over the scoring
+    window (only for ROIs a scored rule or the preview asked for).
     """
 
     names: list[str]
@@ -211,27 +215,18 @@ class ExtractedTraces:
         return self.names.index(name)
 
 
-def roi_geometry(arr) -> dict[int, tuple[int, int, int]]:
-    """``{roi: (y0, height, width)}``, the rows and width of each ROI's valid pixels in the array's frame.
-
-    A MESc AOD unit's lines, patches or boxes come from ``mesc_roi_extents``
-    (a ragged ROI is padded to the shared frame and, on a Y-flipped layout,
-    lands at the bottom); any other array's ROIs are its Z planes, each the
-    whole frame.
+def roi_geometry(arr) -> dict[int, tuple[int, int]]:
+    """``{roi: (height, width)}``: each ROI's valid pixels, from the array
+    frame's top left corner. A MESc AOD unit's lines, patches or boxes come
+    from ``mesc_roi_extents`` (a ragged ROI is padded to the shared frame);
+    any other array's ROIs are its Z planes, each the whole frame.
     """
     md = getattr(arr, "metadata", None) or {}
     extents = md.get("mesc_roi_extents") or []
     if extents and md.get("mesc_z_axis_meaning") == "roi_index":
-        return {
-            int(e["index"]): (
-                int(e.get("y_start", 0)),
-                int(e["height"]),
-                int(e["width"]),
-            )
-            for e in extents
-        }
+        return {int(e["index"]): (int(e["height"]), int(e["width"])) for e in extents}
     _, _, nz, ny, nx = (int(s) for s in arr.shape)
-    return {z: (0, ny, nx) for z in range(nz)}
+    return {z: (ny, nx) for z in range(nz)}
 
 
 def invert(F: np.ndarray) -> np.ndarray:
@@ -345,7 +340,7 @@ def extract_traces(
     fs = float(fs) if fs else None
     n_frames = t1 - t0
     rois = sorted({r for d in domains for r in d.rois})
-    shapes = {r: (geometry[r][1], geometry[r][2]) for r in rois}
+    shapes = {r: geometry[r] for r in rois}
 
     # each domain sums its pixels in every ROI it has; count is its pixel total
     num = np.zeros((len(domains), n_frames))
@@ -356,8 +351,8 @@ def extract_traces(
     roi_mean, masks, imgs = {}, {d.name: {} for d in domains}, {}
     started = time.time()
     for i, r in enumerate(rois):
-        y0, h, w = geometry[r]
-        rows = slice(y0, y0 + h)
+        h, w = geometry[r]
+        rows = slice(0, h)
         movie = as_movie(arr, z=r, c=channel)
         users = [k for k, d in enumerate(domains) if r in d.rois]
         scored = images or any(
@@ -365,7 +360,7 @@ def extract_traces(
         )
         if scored:
             imgs[r] = _score_images(
-                movie.crop(y0, y0 + h, 0, w), (t0, t1), h, w, fs, settings
+                movie.crop(0, h, 0, w), (t0, t1), h, w, fs, settings
             )
         weights = np.zeros((h * w, len(users) + 1))
         outside = np.zeros((h * w, len(users)))

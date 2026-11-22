@@ -13,7 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from mbo_utilities.metadata.base import METADATA_PARAMS, VoxelSize
+from mbo_utilities.metadata.base import AXIS_KEYS, METADATA_PARAMS, VoxelSize
+from mbo_utilities.metadata.io import OME_LAYOUT_KEYS
 from mbo_utilities.metadata.params import get_param
 
 # lowercase spellings of every registered rate key, used to keep all rate
@@ -22,6 +23,21 @@ _FS_ALIASES_LOWER = frozenset(a.lower() for a in ("fs", *METADATA_PARAMS["fs"].a
 _FINTERVAL_ALIASES_LOWER = frozenset(
     a.lower() for a in ("finterval", *METADATA_PARAMS["finterval"].aliases)
 )
+
+
+def select_axis_values(
+    md: dict, sizes: dict[str, int], selections: dict[str, list[int]]
+) -> dict:
+    """``md`` with every per-index list (``AXIS_KEYS``) cut to the 0-based
+    ``selections``; a list whose length is not its axis's size is left alone.
+    """
+    out = dict(md)
+    for dim, selected in selections.items():
+        for key in AXIS_KEYS.get(dim, ()):
+            values = out.get(key)
+            if isinstance(values, (list, tuple)) and len(values) == sizes.get(dim):
+                out[key] = [values[i] for i in selected]
+    return out
 
 
 @dataclass
@@ -71,6 +87,7 @@ class OutputMetadata:
     _is_contiguous: bool = field(default=True, init=False)
     _frame_step: int = field(default=1, init=False)
     _z_step_factor: int = field(default=1, init=False)
+    _z_uniform: bool = field(default=True, init=False)
     _output_shape: tuple[int, ...] = field(default_factory=tuple, init=False)
 
     def __post_init__(self):
@@ -132,17 +149,9 @@ class OutputMetadata:
             self._z_step_factor = 1
             return
 
-        unique_steps = set(steps)
-        if len(unique_steps) == 1:
-            self._z_step_factor = steps[0]
-        else:
-            import logging
-
-            logging.getLogger("mbo_utilities").warning(
-                f"Non-uniform z-plane spacing detected (steps: {steps[:5]}...). "
-                f"Using first step ({steps[0]}) for dz calculation."
-            )
-            self._z_step_factor = steps[0]
+        # planes 1, 7, 14 have no one spacing, so dz is left unset like fs for a gapped T
+        self._z_step_factor = steps[0]
+        self._z_uniform = len(set(steps)) == 1
 
     def _compute_output_shape(self):
         """Compute output shape based on selections."""
@@ -286,7 +295,7 @@ class OutputMetadata:
     def dz(self) -> float | None:
         """Adjusted z-step for output planes."""
         base, prior = self._field_base_and_prior_stride("dz")
-        if base is None:
+        if base is None or not self._z_uniform:
             return None
         return float(base) * prior * self._z_step_factor
 
@@ -329,7 +338,7 @@ class OutputMetadata:
         prov = self._provenance()
         dz_base, dz_prior = self._field_base_and_prior_stride("dz")
         fs_base, fs_prior = self._field_base_and_prior_stride("fs")
-        if dz_base is not None:
+        if dz_base is not None and self._z_uniform:
             prov["dz"] = {
                 "base": float(dz_base),
                 "stride": int(dz_prior * self._z_step_factor),
@@ -473,7 +482,7 @@ class OutputMetadata:
         dict
             metadata dictionary with adjusted values
         """
-        result = dict(self.source)
+        result = {k: v for k, v in self.source.items() if k not in OME_LAYOUT_KEYS}
 
         result["shape"] = self.output_shape
 
@@ -558,6 +567,12 @@ class OutputMetadata:
         result["num_channels"] = self.num_zplanes
         # lbm: z-planes as channels
         result["num_color_channels"] = self.num_color_channels
+
+        result = select_axis_values(
+            result,
+            dict(zip(self.source_dims, self.source_shape, strict=False)),
+            self.selections,
+        )
 
         if self._z_step_factor > 1:
             result["z_step_factor"] = self._z_step_factor

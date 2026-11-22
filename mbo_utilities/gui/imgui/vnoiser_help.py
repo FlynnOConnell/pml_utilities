@@ -1,8 +1,9 @@
 """The vnoiser guide (h): the vnoiser pipeline from a scan's lines to curated events.
 
 The steps, what each stage does to a trace, the vnoiser window and its domain
-table, the curation window and its four rules, and the files, as diagrams and
-tables, with the curation window's keybinds behind a button.
+table, the curation window, its four rules and its second method (slow +
+fast), and the files, as diagrams and tables, with the curation window's
+keybinds behind a button.
 ``python -m mbo_utilities.gui.imgui.vnoiser_help`` opens it in a window of its own.
 """
 
@@ -18,6 +19,7 @@ import numpy as np
 from imgui_bundle import hello_imgui, imgui, immapp
 from imgui_bundle import icons_fontawesome_6 as fa
 
+from mbo_utilities.analysis.slow_fast import SlowFastSettings
 from mbo_utilities.gui._theme import close_button, popup
 from mbo_utilities.gui.imgui.panels import draw_keybinds_popup
 from mbo_utilities.preferences import get_mbo_dirs
@@ -40,7 +42,6 @@ THRESHOLD = imgui.ImVec4(0.84, 0.15, 0.24, 1.0)
 AUTO_PASS = imgui.ImVec4(0.16, 0.62, 0.56, 1.0)
 PC1 = imgui.ImVec4(0.62, 0.45, 0.90, 1.0)
 COSINE = imgui.ImVec4(0.95, 0.68, 0.25, 1.0)
-SNIPPET = imgui.ImVec4(0.30, 0.47, 0.66, 1.0)
 # a candidate's colour by its label, as vnoiser's curation draws them
 LABELS = {
     "yes": imgui.ImVec4(0.106, 0.600, 0.545, 1.0),
@@ -59,10 +60,6 @@ WIDTH_EM = 44
 WINDOW_SIZE = (760, 1000)
 
 TITLE = "vnoiser"
-TOOLTIP = (
-    "the steps, what each stage does to a trace, the vnoiser window and its domains, the curation "
-    "window and its rules, the files, the keybinds"
-)
 # the curation window's keys; its handler and its popup read this table
 KEYBINDS = (
     ("y", "label the focused candidate yes"),
@@ -70,18 +67,20 @@ KEYBINDS = (
     ("backspace", "clear its label"),
     ("← / →", "previous / next candidate in view"),
     ("↑ / ↓", "previous / next recording"),
-    ("click", "focus a candidate on the trace or the PCA plot"),
+    ("click", "focus a candidate on the trace"),
     (
         "Box accept / reject",
-        "box mode: right-drag a box on the trace or the PCA, then drag its edges",
+        "box mode: right-drag a box on the trace, then drag its edges",
     ),
     ("enter", "apply the box"),
     ("esc", "leave box mode"),
     (
         "drag line",
-        "move the threshold (red) / auto-pass (teal) line on the trace, or the PC1 (purple) line on the PCA",
+        "move the threshold (red) / auto-pass (teal) line on the trace",
     ),
     ("scroll", "zoom (shift: x only, alt: y only); drag pans; double-click fits"),
+    ("m", "switch method: vnoiser / slow + fast, on the same trace"),
+    ("c", "compare: the other method's events as faint lines over the trace"),
     ("h", "the vnoiser guide"),
     ("k", "this list"),
 )
@@ -120,7 +119,7 @@ STAGES = (
         "domain",
         "the chosen pixels averaged into one trace, every pixel weighing the same; then the background "
         "(the dimmest pixels, the rest of the ROI, or a background domain) and the reference channel "
-        "(divided by, or regressed out) when the Trace block asks for them",
+        "(divided by, or regressed out) when the Parameters popup's Trace column asks for them",
     ),
     (
         "dF/F",
@@ -193,28 +192,28 @@ WINDOW = (
         (
             "the scan on screen is ticked to start",
             "On screen only and All set the ticks",
-            "New environment: the first scan after the animal changed arena or track; a note for later "
-            "analysis, the pipeline does not use it",
+            "New block: the first scan after a condition changed; later analysis cuts scans into blocks "
+            "here",
+            "Change: names what changed at a block's first scan (New env, Reward switch, or your own words "
+            "under Labels)",
         ),
     ),
     (
         "Domains",
-        "which ROIs and pixels make each trace, and which this run takes (below)",
+        "which ROIs and pixels make each trace, and which this run takes (below); Edit domains opens "
+        "the table",
     ),
     (
-        "Trace",
-        "channel, photon counts, polarity, background, reference channel, the dF/F baseline and the "
-        "z-score, times in seconds; Archive defaults and Recommended set them all",
+        "Parameters",
+        "a column per stage. Trace and dF/F: photon counts, polarity, background, reference channel, "
+        "the dF/F baseline and the z-score, times in seconds. Wavelet denoiser and Peaks: every number "
+        "of those stages. A changed value turns orange and is listed under Modified parameters; "
+        "Defaults puts the archive's back, Recommended sets what new recordings want",
     ),
     (
         "Preview",
-        "the domain the dot picks, on the scan on screen: its pixels in red over the ROI's mean image, "
+        "in the domain table and the Parameters popup, the domain the dot picks, on the scan on screen: its pixels in red over the ROI's mean image, "
         "then F with its baseline, dF/F and z over the first seconds; it follows every change",
-    ),
-    (
-        "Denoiser and peaks",
-        "every number of the wavelet and peak stages; a changed one turns orange and is listed under "
-        "Modified parameters, Defaults puts them back",
     ),
     (
         "Run vnoiser",
@@ -251,8 +250,8 @@ DOMAIN_RULES = (
     ("to start", "one domain per ROI of the scan on screen: roi0, roi1, ..."),
     (
         "presets",
-        "One per ROI, All in one, Groups of N (right-click for N), From comment (when the unit's comment "
-        "names every ROI), Drawn ROIs (each ROI drawn in the ROI tool, exactly its pixels)",
+        "One per ROI, All in one, Groups of N (the box beside it), From comment (when a unit's comment "
+        "maps every ROI), Drawn ROIs (each ROI drawn in the ROI tool, exactly its pixels)",
     ),
     (
         "another scan",
@@ -270,7 +269,7 @@ DOMAIN_RULES = (
     ("Add, x", "a new row; remove a row"),
     (
         "Load, Save",
-        "domains.json beside the file: the domains, the ticked scans and the new-environment ticks; "
+        "domains.json beside the file: the domains, the ticked scans, the block ticks and labels; "
         "mbo vnoiser reads the same file",
     ),
 )
@@ -282,8 +281,10 @@ PANELS = (
         "one to focus it, the arrows above flip to the next trace",
         (
             "the red line is A1, the teal line A2: drag either",
-            "MC puts the scan's motion correction over the trace, on the same time axis",
+            "MC puts the scan's motion correction over the trace, on the same time axis, and "
+            "their coherence by frequency under it: a line above the grey band follows the motion there",
             "scroll zooms (shift: time only, alt: height only), drag pans, double-click fits",
+            "the title line has d' and the share of the trace the motion explains: hover either for what it measures",
         ),
     ),
     (
@@ -291,23 +292,9 @@ PANELS = (
         "the four rules as sliders, each with how many candidates it passes; they apply on release",
     ),
     (
-        "B. template",
-        "the average shape of the events it is built from, their snippets faint behind it",
-    ),
-    (
-        "C. candidate",
-        "the focused candidate over the template; the title carries how alike they are (cosine, 1 = the "
-        "same shape)",
-    ),
-    (
-        "D. PCA",
-        "every candidate's 400 ms snippet as one dot on its two main axes of variation: alike shapes sit "
-        "together; the purple line is A3",
-    ),
-    (
         "Decision",
         "Yes (y), No (n), Clear (backspace); Box accept and Box reject label everything inside a box "
-        "right-dragged on the trace or the PCA; Clear all",
+        "right-dragged on the trace; Clear all",
     ),
     (
         "Recordings",
@@ -327,7 +314,7 @@ RULES = (
     ),
     (
         "A3 PC1",
-        "every candidate on the passing side of the purple line on the PCA passes; the arrow flips the side",
+        "every candidate on the passing side of this value along the snippets' first principal component passes; the arrow flips the side",
     ),
     (
         "A4 cos",
@@ -355,6 +342,41 @@ MODES = (
         "manual",
         "no seed template and no rules: only your Yes events build the template",
     ),
+    (
+        "slow + fast",
+        "the other method (m): the fast peaks inside slow events of the raw dF/F, no template and no "
+        "rules; the next table",
+    ),
+)
+_SF = SlowFastSettings()
+SLOW_FAST = (
+    ("slow + fast", "decides"),
+    (
+        "A1 slow ms",
+        f"the slow trace: a {_SF.slow_sigma_ms:g} ms Gaussian of the dF/F after subtracting a "
+        f"{_SF.base_window_s:g} s moving median of its {_SF.base_sigma_ms:g} ms Gaussian; about a 10 Hz "
+        "low-pass",
+    ),
+    (
+        "A2 edge SD",
+        f"a slow event starts and ends where the slow trace crosses {_SF.edge_sd:g} robust SD (the teal "
+        f"line); stretches closer than {_SF.merge_ms:g} ms merge",
+    ),
+    (
+        "A3 peak SD",
+        f"a slow event is kept when it reaches {_SF.slow_sd:g} robust SD (the red line), unless it touches "
+        f"the first or last {_SF.skip_s:g} s",
+    ),
+    (
+        "candidates",
+        f"the peaks of a {_SF.fast_sigma_ms:g} ms Gaussian inside slow events with prominence at least "
+        f"{_SF.k_prom:g} x the noise; yes or no each, by you only",
+    ),
+    (
+        "saved",
+        "settings, labels by peak sample and exclude trace, per trace: a label stays on every peak "
+        "found again after a change",
+    ),
 )
 FILES = (
     ("in the run", "holds"),
@@ -374,7 +396,8 @@ FILES = (
     ),
     (
         ".curation/",
-        "<mode>_template_curation.json: your labels and sliders, keyed scan=<n>/domain=<name>",
+        "<mode>_template_curation.json: your labels and sliders, keyed scan=<n>/domain=<name>; "
+        "slow_fast_curation.json the same for slow + fast; export tables adds slow_fast_*.csv",
     ),
     (
         "pkl",
@@ -479,28 +502,12 @@ OWNER = tuple(
 )
 
 CALLS = ("yes", "auto_yes", "yes", "auto_no", "auto_yes", "no")
-# the curation sketch: each spike is a candidate with a label, a likeness to the template, a spot on
-# the PCA and a snippet as wide as given; the lines sit at these heights of the trace
+# the curation sketch: each spike is a candidate with a label and a likeness to the template; the
+# lines sit at these heights of the trace
 COSINES = (0.97, 0.88, 0.95, 0.41, 0.98, 0.52)
-PCA = (
-    (0.78, 0.60),
-    (0.55, 0.30),
-    (0.70, 0.42),
-    (0.18, 0.70),
-    (0.84, 0.35),
-    (0.30, 0.25),
-)
-SNIPPET_WIDTHS = (0.20, 0.24, 0.21, 0.60, 0.19, 0.50)
 THRESHOLD_AT = 0.2
 AUTO_PASS_AT = 0.74
 PC1_AT = 0.42
-SNIPPETS = tuple(
-    tuple(0.1 + 0.8 * h * math.exp(-(((u - 20) / 20 / width) ** 2)) for u in range(41))
-    for (_s, h), width in zip(SPIKES, SNIPPET_WIDTHS, strict=True)
-)
-TEMPLATE_SOURCE = (0, 1, 2, 4)
-# the template: the mean snippet of the events it is built from
-TEMPLATE = tuple(np.mean([SNIPPETS[k] for k in TEMPLATE_SOURCE], axis=0).tolist())
 SLIDERS = (
     # the A1 to A4 sliders as (name, colour, where the grab sits, the count under it)
     ("thr", THRESHOLD, THRESHOLD_AT, "6 found"),
@@ -933,77 +940,7 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
                 text,
             )
     y = p.y + 1.2 * em + ah + gap
-    # the candidate row: the template, the focused candidate over it, every candidate on the PCA
-    bw, bh = (w - 2 * gap) / 3, 6.2 * em
-    top = card(dl, p.x, y, bw, 1.2 * em + bh, "B. Current template")
-    for k in TEMPLATE_SOURCE:
-        polyline(
-            dl,
-            p.x + 0.5 * em,
-            top + 0.4 * em,
-            bw - em,
-            bh - 0.8 * em,
-            SNIPPETS[k],
-            u32(SNIPPET, 0.5),
-            1.0,
-        )
-    polyline(
-        dl,
-        p.x + 0.5 * em,
-        top + 0.4 * em,
-        bw - em,
-        bh - 0.8 * em,
-        TEMPLATE,
-        u32(TEXT),
-        2.5,
-    )
-    x = p.x + bw + gap
-    top = card(
-        dl,
-        x,
-        y,
-        bw,
-        1.2 * em + bh,
-        f"C. Focused candidate (cosine {COSINES[focus]:.2f})",
-    )
-    polyline(
-        dl,
-        x + 0.5 * em,
-        top + 0.4 * em,
-        bw - em,
-        bh - 0.8 * em,
-        SNIPPETS[focus],
-        u32(SNIPPET),
-        1.5,
-    )
-    polyline(
-        dl,
-        x + 0.5 * em,
-        top + 0.4 * em,
-        bw - em,
-        bh - 0.8 * em,
-        TEMPLATE,
-        u32(TEXT),
-        2.0,
-    )
-    for dash in range(0, int(bh - 0.8 * em), 6):
-        dl.add_line(
-            imgui.ImVec2(x + bw / 2, top + 0.4 * em + dash),
-            imgui.ImVec2(x + bw / 2, top + 0.4 * em + dash + 3),
-            u32(DIM),
-            1.0,
-        )
-    x += bw + gap
-    top = card(dl, x, y, bw, 1.2 * em + bh, "D. Candidate PCA (400 ms)")
-    lx = x + PC1_AT * bw
-    dl.add_line(imgui.ImVec2(lx, top), imgui.ImVec2(lx, top + bh), u32(PC1), 1.5)
-    dl.add_text(imgui.ImVec2(lx + 0.4 * em, top + 0.2 * em), u32(PC1), "pass >")
-    for k, ((u, v), call) in enumerate(zip(PCA, CALLS, strict=True)):
-        at = imgui.ImVec2(x + u * bw, top + v * bh)
-        dl.add_circle_filled(at, 0.34 * em, u32(LABELS[call]))
-        if k == focus:
-            dl.add_circle(at, 0.58 * em, u32(TEXT), 0, 1.5)
-    imgui.dummy(imgui.ImVec2(w, y + 1.2 * em + bh - p.y))
+    imgui.dummy(imgui.ImVec2(w, y - p.y))
     p = imgui.get_cursor_screen_pos()
     # the label colours, as the dots carry them
     x = p.x
@@ -1025,6 +962,8 @@ def draw_vnoiser_help(is_open: bool, keys_open: bool) -> tuple[bool, bool]:
     table("rules", RULES)
     imgui.dummy(imgui.ImVec2(0, 0.3 * em))
     table("modes", MODES)
+    imgui.dummy(imgui.ImVec2(0, 0.3 * em))
+    table("slow_fast", SLOW_FAST)
 
     heading(fa.ICON_FA_FLOPPY_DISK, "Files")
     p = imgui.get_cursor_screen_pos()
@@ -1064,8 +1003,6 @@ def draw_window(state: dict) -> None:
     imgui.same_line(0, 12)
     if imgui.small_button(f"{fa.ICON_FA_CIRCLE_QUESTION} vnoiser guide"):
         state["open"] = True
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(TOOLTIP)
     state["open"], state["keys"] = draw_vnoiser_help(state["open"], state["keys"])
     state["keys"] = draw_keybinds_popup(KEYBINDS, state["keys"], "Curation keybinds")
 

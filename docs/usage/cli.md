@@ -14,6 +14,7 @@ The `mbo` command provides tools for viewing, converting, and analyzing imaging 
 | `mbo shortcut` | Create a desktop icon |
 | `mbo gpu` | Show render/compute GPU and memory |
 | `mbo serve` | Serve the GUI to a browser from a remote machine |
+| `mbo stack-annotate` | Annotate structures through a Z-stack in 3D |
 
 ## GUI Mode
 
@@ -22,13 +23,10 @@ mbo                          # file dialog
 mbo /path/to/data            # open specific file
 mbo /path/to/data --metadata # show only metadata
 mbo /path/to/stack.tif --dims ZYX   # a plain TIFF whose pages are z-planes (CYX: channels)
-mbo /path/to/<time>_masknmf_zplane01 --qc   # a MaskNMF run in Registration-Denoising Quality Control
 ```
 
 A MaskNMF run folder opens in the Studio, or in masknmf's demixing viewer when
-the run demixed; `--qc` opens raw | registered over both as PMD, with the RTMC
-curves, the masknmf shifts, each movie's frame mean and its mean inside a box
-you drag.
+the run demixed.
 
 ::::{grid} 1 1 2 2
 :gutter: 3
@@ -52,7 +50,7 @@ you drag.
 
 Run the GUI on a server, where the GPU and the data are, and use it from a
 browser on your own machine. Needs the `server` extra
-(`uv pip install "pml_utilities[server]"`).
+(`uv pip install "pml_utilities[server] @ git+https://github.com/FlynnOConnell/pml_utilities.git"`).
 
 ```bash
 mbo serve --host tailscale                    # launcher on the tailnet address, port 8800
@@ -112,8 +110,8 @@ a systemd user service (`Restart=on-failure`), as the results page is.
 
 What does not work in a browser yet:
 
-- Windows the GUI opens beside the viewer (spike average, Registration QC, the
-  curation dashboard) start on the server, which has no display.
+- Windows the GUI opens beside the viewer (spike average, the masknmf viewer,
+  the curation dashboard) start on the server, which has no display.
 - The browse buttons in the GUI's own dialogs; type the path.
 - Copy and paste stay inside the GUI; nothing reaches your clipboard.
 
@@ -262,14 +260,12 @@ Results
 
 ## Init
 
-Create starter notebooks: the mbo and LBM-Suite2p user guides, and for a `.mesc` the ASAP7 spine pipeline.
+Create starter notebooks: the mbo and LBM-Suite2p user guides.
 
 ```bash
 mbo init                       # notebooks in current directory
 mbo init /path/to/raw          # notebooks in /path/to/scripts, data path filled in
 mbo init /path/to/raw -o ./nb  # custom destination directory
-mbo init /path/to/scan.mesc    # the guides and the ASAP7 spine pipeline, path filled in
-mbo init /path/to/scan.mesc --unit MSession_0/MUnit_3   # and the unit
 ```
 
 | Option | Description |
@@ -372,7 +368,7 @@ same baseline durations. One run takes scans of one frame rate.
 
 `--recommended` sets what new recordings want (the conversion offset and the
 robust z-score); without it every default is the archive's. Without a
-`domains.json` every ROI is its own domain.
+domain file every ROI is its own domain.
 
 Until 2026-10-09 this pipeline was called `voltage` (`mbo voltage`, the
 **Voltage** tab, `*.voltage.zarr`). `python scripts/convert_vnoiser_results.py
@@ -383,18 +379,26 @@ that still say so, and `--write` renames them.
 mbo vnoiser scan.mesc --recommended --unit MUnit_5         # one single-patch chessboard, every ROI its own domain
 mbo vnoiser scan.mesc --recommended --pixels correlated --fraction 0.2 --background outside
 mbo vnoiser scan.mesc --polarity invert_f --reference regress --dfof percentile --no-denoise
-mbo vnoiser stan112_expt12.mesc --init                      # domains.json template beside the file
-mbo vnoiser stan112_expt12.mesc                             # every scan in domains.json
+mbo vnoiser stan112_expt12.mesc --init                      # stan112_expt12.domains.json template in the ROI folder
+mbo vnoiser stan112_expt12.mesc                             # every scan in the domain file's one layout
 mbo vnoiser stan112_expt12.mesc --unit MUnit_35 -o PF_new   # one scan, elsewhere
 mbo vnoiser stan112_expt12.mesc --domains PF/scanIDs_ROIs.pkl --overwrite
 mbo vnoiser stan112_expt12.mesc -p 1 -p 2 -p 3              # only ROIs 1-3 (the unit's Z axis); domains are cut down to them
 mbo curate X:/data/asako/stan112/stan112_expt12             # then curate it
 ```
 
-`domains.json` names the domains and their 0-based ROI indices (lines or
-patches, in drawing order), the scans in order and the first scan of each
-environment. `--init` writes one domain per ROI (`roi0: [0]`, ...); merge
-the lines of a soma or branch by hand, as the archive's layout below does:
+The domain file, `<stem>.domains.json` in the ROI folder (beside the file
+unless a root is set in the ROI tool), is the table the vnoiser tab, `mbo
+vnoiser`, the dashboard and the curation window all read; a `domains.json`
+beside the file still reads. It holds one table per layout (the scans whose
+ROI numbers mean the same lines), and `--unit` picks the layout when there
+are several. A table names the domains and their 0-based ROI indices (lines
+or patches, in drawing order), optionally the domains to run (`"run"`; all
+when absent) and the scans it covers; beside the tables sit the first scan of
+each block and, optionally, what changed there (`"scan_labels": {"38":
+["Reward switch"]}`). `--init` writes one domain per ROI (`roi0: [0]`, ...);
+merge the lines of a soma or branch by hand, as the archive's layout below
+does (one table, the form `--init` writes):
 
 ```json
 {"domains": {"soma1": [0, 1, 2], "basal1": [3, 4, 5]}, "scans": ["35", "38"], "first_env": ["35"]}
@@ -481,8 +485,8 @@ The same pipeline is the **vnoiser** entry of the viewer's Process tab (`mbo
 scan.mesc`, or `mbo <expt>/PF` to run it again on a folder's source scan): the dataset block, output folder, slice popup
 (a frame window and the channel; every line is used), a Scans block ticking
 which units become scans, a Domains table naming which lines make each domain
-(loaded from or saved to `domains.json`, seeded from a `PF` folder beside the
-file when one exists), the settings popup with the archive's values as
+(loaded from or saved to the domain file, which Run also writes, seeded from
+it, else from the newest run or a `PF` folder beside the file), the settings popup with the archive's values as
 defaults, and Run, which spawns a worker the process console tracks: its
 progress follows each ROI read and each domain denoised, and its log lists
 every step with its time and memory. **Curate** opens the curation window
@@ -491,6 +495,79 @@ that on the file's raw lines. The curation window only reads results: every
 scan of the PF folder is listed, and a scan that went through motion
 correction (the AOD's RTMC) shows it over the candidate trace on the same time
 axis behind the `MC` checkbox. `mbo scan.mesc` opens on the first scan the folder holds.
+
+## Dashboard
+
+```bash
+mbo dashboard path/to/file.mesc                  # pick a unit with ROIs
+mbo dashboard path/to/file.mesc --unit MUnit_28  # open one unit
+mbo dashboard path/to/file.mesc --unit MUnit_28 --channel 1
+```
+
+Opens the trace dashboard (see the GUI guide's MESc section): each line's or
+patch's mean and every ROI drawn on the unit, as raw, dF/F or z-score through a
+filter, over windows you mark, exported as PNG, SVG, PDF, CSV and JSON.
+
+## Stack annotation
+
+```bash
+uv pip install "pml_utilities[annotate]"
+mbo stack-annotate stack.mesc                           # lists the Z-stacks, or opens the only one
+mbo stack-annotate stack.mesc --unit MUnit_1
+mbo stack-annotate stack.zarr --voxel 2 0.5 0.5         # dz dy dx in µm, for a file that stores none
+```
+
+Annotates dendrites, spines and other structures through a Z-stack, in 3D. The
+window is The Studio's viewer and ROI tool (polygons, labels, table, undo,
+saving) with XZ, YZ and 3D views of the same stack, a brush that paints on XY,
+XZ and YZ, and an automatic trace of one channel to edit. The `annotate` extra
+adds [skan](https://skeleton-analysis.org) to the `gui` extra.
+
+In The Studio, show a Z-stack from the MESc tab and click **Annotate in 3D**: the
+annotator opens on that unit in its own window. Its ROIs are the unit's rois
+zarr, the same file The Studio's ROI tool reads and writes, so ROIs drawn in
+either open in the other. Both write the whole file, so edit them in one window
+at a time.
+
+![XY, YZ, XZ and 3D views with the ROI panel](../_images/stack_annotate.png)
+
+| Action | How |
+|---|---|
+| Draw a polygon | `a`, click points, click the first to close, `r` adds it |
+| Paint | `b` or **Brush**, drag on XY; the stroke joins the selected ROI on this plane or starts a new one |
+| Paint in depth | brush on, drag on XZ or YZ; every plane the stroke crosses gets it, in the selected ROI's class. A closed loop is filled. The stroke is one brush diameter thick around the crosshair |
+| Erase | brush on, shift + drag takes the stroke out of the selected ROI; on XZ or YZ, out of every ROI of its class |
+| Label | add a label under LABELS in the Curation tab; `1` to `9` or its button labels the selection or the whole group. There are no labels to start with |
+| Merge | pick ROIs (ctrl / shift + click in the image or the ROIs table), **Merge**; the ones that share a plane become one ROI |
+| Delete several | pick ROIs, **Delete** |
+| Group ROIs | ctrl + click toggles an ROI in the group, shift + click adds one; works with the brush on |
+| Undo | ctrl + z, pointer over the image or the panel; one history for ROIs and trace |
+| Fill between planes | ctrl + click two ROIs on different planes, **Fill between planes** |
+| Show, hide or fade a class in 3D | its row under LABELS: checkbox and opacity slider; the stack has its own at the top of the panel |
+| Recolour a class | the colour square in its row under LABELS; XY, XZ, YZ and 3D follow. Lasts for the session |
+| Move through the stack | z slider, or click in XZ or YZ |
+| Move the crosshair | click in XY, or the y and x sliders; ctrl + click with the brush on |
+| Show or hide the crosshair | `g` or **crosshair**: the lines where XZ and YZ cut XY, and the slice's line in XZ and YZ |
+| Show or hide the 3D slices | **slices**: the XY, XZ and YZ planes through the crosshair inside the 3D view, outlined in their guide colours |
+| Trace | **Trace channel N** under Trace traces the channel on screen in about 8 s: paths (cyan) that meet at junctions, and dashed link proposals (orange) across gaps. XY shows the paths through the plane on screen, 3D shows all. A new trace replaces the old one; ctrl + z brings it back |
+| Pick paths and links | click a line in XY or 3D; shift + click picks more. Not while the brush or the polygon tool is on |
+| Edit the trace | **Delete paths**, **Accept links** (each becomes a path joining the two ends), **Reject links** |
+| Everything else | the ROI panel; `k` lists its keys |
+
+Saving writes `<stem>.rois.zarr` beside the stack, label image included (for a
+`.mesc`, `<stem>_<unit>.rois.zarr`). **Save trace** writes the trace zarr beside it,
+named the same way with `.trace.zarr`, and the stack opens with it next time. It
+is a zarr v3 group: `paths/offsets` and `paths/points` (path k is
+`points[offsets[k]:offsets[k+1]]`, z y x in voxels), `links` (the two ends of each
+proposal), `labels/paths`, an OME-NGFF label image of the paths that napari
+opens, and the voxel size, channel and source stack in its attrs.
+`mbo_utilities.annotation.neurite_trace.read_trace(path)` reads it back; plain
+`zarr` reads it too.
+
+The trace (`mbo_utilities/analysis/neurite_tracing.py`) is a ridge filter on
+each plane (Sato et al. 1998), a two-level threshold in 3D (Canny 1986),
+thinning, and skan to cut the skeleton into paths. Its parameters are an untuned
+first guess.
 
 ## Formats
 
@@ -504,5 +581,5 @@ mbo formats
 ## Upgrade
 
 ```bash
-uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+uv pip install --reinstall-package pml-utilities "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```

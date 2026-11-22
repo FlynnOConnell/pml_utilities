@@ -48,6 +48,7 @@ def test_every_section_draws_and_the_page_stays_open(monkeypatch):
         "##panels",
         "##rules",
         "##modes",
+        "##slow_fast",
         "##files",
     }
 
@@ -65,10 +66,6 @@ def test_the_sketches_agree_with_their_own_counts():
     n = len(peaks)
     assert counts["thr"] == f"{sum(v > vnoiser_help.THRESHOLD_AT for v in peaks)} found"
     assert counts["peak"] == f"{sum(v >= vnoiser_help.AUTO_PASS_AT for v in peaks)}/{n}"
-    assert (
-        counts["PC1"]
-        == f"{sum(u >= vnoiser_help.PC1_AT for u, _v in vnoiser_help.PCA)}/{n}"
-    )
     assert counts["cos"] == f"{sum(c >= 0.8 for c in vnoiser_help.COSINES)}/{n}"
     # a rule-made call is pale, and a candidate under the cosine line is never an auto yes
     for call, cosine in zip(vnoiser_help.CALLS, vnoiser_help.COSINES, strict=True):
@@ -120,7 +117,6 @@ def test_the_numbers_are_the_pipelines_defaults():
         (vnoiser_help.AUTO_PASS, event_curation.AUTO_PASS_COLOR),
         (vnoiser_help.PC1, event_curation.PC1_COLOR),
         (vnoiser_help.COSINE, event_curation.COSINE_COLOR),
-        (vnoiser_help.SNIPPET, event_curation.SNIPPET_COLOR),
     ):
         assert (mine.x, mine.y, mine.z) == pytest.approx(theirs[:3], abs=2e-3)
     assert set(vnoiser_help.LABELS) == set(LABEL_RGBA)
@@ -131,3 +127,29 @@ def test_the_numbers_are_the_pipelines_defaults():
     # the curation window reads the guide's keybinds table and lists the guide in it
     assert event_curation.KEYBINDS is vnoiser_help.KEYBINDS
     assert ("h", "the vnoiser guide") in vnoiser_help.KEYBINDS
+
+
+def test_the_slow_fast_numbers_are_the_detectors_defaults():
+    """The slow + fast table quotes ``SlowFastSettings`` and needs no vnoiser."""
+    from mbo_utilities.analysis.slow_fast import SlowFastSettings
+
+    settings = SlowFastSettings()
+    text = " ".join(str(part) for row in vnoiser_help.SLOW_FAST for part in row)
+    for want in (
+        "a 12.7 ms Gaussian",
+        "10 s moving median of its 4 ms Gaussian",
+        "1.5 robust SD",
+        "closer than 100 ms",
+        "reaches 3 robust SD",
+        "last 2 s",
+        "2 ms Gaussian",
+        "at least 5 x the noise",
+    ):
+        assert want in text, want
+    assert (settings.slow_sigma_ms, settings.edge_sd, settings.slow_sd) == (
+        12.7,
+        1.5,
+        3.0,
+    )
+    keys = dict(vnoiser_help.KEYBINDS)
+    assert "m" in keys and "c" in keys

@@ -27,7 +27,7 @@ LENGTHS = (4000, 6000)
 N_ROIS = 7
 
 
-def write_pf(pf_dir, source=None, units=None):
+def write_pf(pf_dir, source=None, units=None, first_env=SCANS[:1], scan_labels=None):
     """A PF folder: two scans of different lengths, two domains each (the
     archive's ``soma1`` -> ``soma`` rename included), peaks, thresholds and
     provenance naming ``source`` when given.
@@ -43,7 +43,7 @@ def write_pf(pf_dir, source=None, units=None):
         "fs_scans.pkl": {s: int(FS) for s in SCANS},
         "scanIDs_ROIs.pkl": {
             "scanID_spatial": np.array([int(s) for s in SCANS]),
-            "scanID_1st_env": [SCANS[0]],
+            "scanID_1st_env": list(first_env),
             "domain_ROInumber": {
                 "soma1": [0, 1, 2],
                 "basal1": [3, 4, 5],
@@ -61,6 +61,8 @@ def write_pf(pf_dir, source=None, units=None):
         with (pf_dir / name).open("wb") as handle:
             pickle.dump(payload, handle)
     provenance = {"settings": {"dfof": {"sigma_dfof": 1500}}}
+    if scan_labels is not None:
+        provenance["scan_labels"] = scan_labels
     if source is not None:
         provenance["source"] = {"mesc": str(source), "units": dict(units or {})}
     (pf_dir / "pipeline.json").write_text(json.dumps(provenance))
@@ -123,6 +125,23 @@ def test_results_dir_of_finds_the_folder(tmp_path):
     assert not ResultsArray.can_open(tmp_path) and not ResultsArray.can_open(None)
     # a PF folder of pickles keeps its own files; a results file holds them in its own folder
     assert pipeline_files(pf) == pf
+
+
+def test_a_scans_block_counts_the_ticks_and_old_runs_have_no_labels(tmp_path):
+    labelled = write_pf(
+        tmp_path / "new" / "PF",
+        first_env=SCANS,
+        scan_labels={"38": ["Reward switch"]},
+    )
+    units = Results.from_pf(labelled).units
+    assert [u.attrs["block"] for u in units.values()] == [0, 1]
+    assert [u.attrs["labels"] for u in units.values()] == [[], ["Reward switch"]]
+    units = Results.from_pf(write_pf(tmp_path / "old" / "PF")).units
+    assert [u.attrs["block"] for u in units.values()] == [0, 0]
+    assert [u.attrs["labels"] for u in units.values()] == [[], []]
+    # a list that skips the first scan: the scans before its first entry are block 0
+    units = Results.from_pf(write_pf(tmp_path / "skip" / "PF", first_env=["38"])).units
+    assert [u.attrs["block"] for u in units.values()] == [0, 1]
 
 
 def test_imread_opens_a_pf_folder_as_a_trace_raster(tmp_path):

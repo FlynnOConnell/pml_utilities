@@ -1,4 +1,4 @@
-"""``arrays.mesc_geometry``: placing AOD line-scan lines inside a Z-stack.
+"""``arrays.mesc_geometry``: AOD lines and patches in microns and on images.
 
 Fixture: a Z-stack whose FOV corner sits at (100, 200, -50) um, 40 x 32 um,
 11 slices from z = -10 to +10 um relative to that origin (2 um steps), and a
@@ -16,18 +16,15 @@ import numpy as np
 import pytest
 from mbo_utilities.arrays.mesc_geometry import (
     image_overlays,
-    linescan_endpoints_um,
-    neighbour_slices,
+    line_positions,
     roi_outlines_um,
-    roi_placements,
-    roi_slice_indices,
-    slice_depths_um,
-    slices_with_rois,
     um_to_pixels,
+    um_to_voxels,
     viewport_geometry,
-    zstack_contents,
+    voxels_to_um,
     zstack_depth_info,
 )
+from scipy.spatial.transform import Rotation
 
 TRANSL = (100.0, 200.0, -50.0)
 # the snapshot the lines were drawn on: same field, focused 4 um below the stack origin
@@ -186,115 +183,198 @@ def depth(mesc_path):
 
 @pytest.fixture(scope="module")
 def lines(mesc_path):
-    return linescan_endpoints_um(mesc_path, "MSession_0/MUnit_1")
+    return roi_outlines_um(mesc_path, "MSession_0/MUnit_1")
 
 
 def test_readers(mesc_path, depth, lines):
     assert len(lines) == 4 and lines[0].shape == (3, 2)
     vp = viewport_geometry(mesc_path, "MSession_0/MUnit_0")
+    assert np.array_equal(vp.pop("rotation"), np.eye(3))
     assert vp == {"transl": TRANSL, "width": 40.0, "height": 32.0}
-    assert depth == {"transl_z": -50.0, "min_z": -10.0, "max_z": 10.0, "zdim": 11}
+    assert depth == {
+        "min_z": -10.0,
+        "max_z": 10.0,
+        "zdim": 11,
+        "rtmc_um": (0.0, 0.0, 0.0),
+    }
 
 
 def test_readers_return_none_without_attrs(mesc_path):
     key = "MSession_0/MUnit_2"
-    assert linescan_endpoints_um(mesc_path, key) is None
+    assert roi_outlines_um(mesc_path, key) is None
     assert viewport_geometry(mesc_path, key) is None
     assert zstack_depth_info(mesc_path, key) is None
     # a unit with a viewport but no MinZ/MaxZ/ZDim is not a usable stack
     assert zstack_depth_info(mesc_path, "MSession_0/MUnit_1") is None
 
 
-def test_slice_depths(depth):
-    assert np.allclose(slice_depths_um(depth), np.arange(-10, 11, 2))
-
-
-def test_placements(depth, lines):
-    p = roi_placements(lines, depth, sample_counts=[20, 24, 10, 6])
-    assert [q["slice"] for q in p] == [3, 7, 3, 0]
-    assert [q["in_range"] for q in p] == [True, True, True, False]
-    assert np.allclose([q["z_um"] for q in p], [-4.0, 4.0, -3.9, -20.0])
-    assert np.allclose([q["slice_z_um"] for q in p], [-4.0, 4.0, -4.0, -10.0])
-    # 'off' is the true distance from the slice the line is drawn on
-    assert np.allclose([q["dz_um"] for q in p], [0.0, 0.0, 0.1, -10.0])
-    assert np.allclose([q["length_um"] for q in p], [20.0, 24.0, np.hypot(30, 10), 6.0])
+def test_line_positions_measure_each_roi(mesc_path):
+    rows = line_positions(mesc_path, "MSession_0/MUnit_1", [20, 24, 10, 6])
+    assert [r["index"] for r in rows] == [0, 1, 2, 3]
+    assert rows[0]["start_um"] == [110.0, 210.0, -54.0]
+    assert rows[0]["end_um"] == [130.0, 210.0, -54.0]
+    assert np.allclose([r["length_um"] for r in rows], [20, 24, np.hypot(30, 10), 6])
     assert np.allclose(
-        [q["sample_um"] for q in p], [1.0, 1.0, np.hypot(30, 10) / 10, 1.0]
+        [r["sample_um"] for r in rows], [1.0, 1.0, np.hypot(30, 10) / 10, 1.0]
     )
-    assert not any(q["tilted"] for q in p)
-    assert np.array_equal(roi_slice_indices(lines, depth), [3, 7, 3, 0])
+    assert all(
+        r["sample_um"] is None for r in line_positions(mesc_path, "MSession_0/MUnit_1")
+    )
 
 
-def test_placements_without_sample_counts(depth, lines):
-    assert all(q["sample_um"] is None for q in roi_placements(lines, depth))
-
-
-def test_tilted_line_uses_mean_depth(depth):
-    seg = np.array([[0, 1], [0, 0], [-56, -52]], dtype=float)  # z -6..-2 -> mean -4
-    (p,) = roi_placements([seg], depth)
-    assert p["tilted"] and p["slice"] == 3 and p["z_um"] == -4.0
-
-
-def test_slices_with_rois_and_neighbours(depth, lines):
-    occ = slices_with_rois(roi_placements(lines, depth))
-    assert occ == {0: [3], 3: [0, 2], 7: [1]}
-    assert neighbour_slices(3, occ) == (0, 7)
-    assert neighbour_slices(0, occ) == (None, 3)
-    assert neighbour_slices(7, occ) == (3, None)
-    assert neighbour_slices(5, occ) == (3, 7)  # a slice with no lines
-
-
-def test_chessboard_patches_place_like_lines(mesc_path, depth):
+def test_a_patch_measures_its_first_side(mesc_path):
     patches = roi_outlines_um(mesc_path, "MSession_0/MUnit_3")
     assert len(patches) == 2 and patches[0].shape == (3, 4)
-    # the line-scan name reads the same attribute and gives the same outlines
-    assert all(
-        np.array_equal(a, b)
-        for a, b in zip(linescan_endpoints_um(mesc_path, "MSession_0/MUnit_3"), patches)
-    )
-    p = roi_placements(patches, depth, sample_counts=[20, 20])
-    assert [q["slice"] for q in p] == [7, 0]
-    assert [q["in_range"] for q in p] == [True, False]
-    assert np.allclose([q["z_um"] for q in p], [4.0, -20.0])
-    assert np.allclose([q["length_um"] for q in p], [20.0, 20.0])
-    assert np.allclose([q["sample_um"] for q in p], [1.0, 1.0])
-    assert not any(q["tilted"] for q in p)
+    rows = line_positions(mesc_path, "MSession_0/MUnit_3", [20, 20])
+    assert np.allclose([r["length_um"] for r in rows], [20.0, 20.0])
+    assert np.allclose([r["sample_um"] for r in rows], [1.0, 1.0])
     vp = viewport_geometry(mesc_path, "MSession_0/MUnit_0")
-    corners = um_to_pixels(patches[0][:2].T, vp, 64, 80)
-    assert np.allclose(corners, [[20, 20], [60, 20], [60, 60], [20, 60]])
+    corners = um_to_pixels(patches[0].T, vp, 64, 80)
+    assert np.allclose(corners[:, :2], [[20, 20], [60, 20], [60, 60], [20, 60]])
+    assert np.allclose(corners[:, 2], 4.0)
 
 
 def test_um_to_pixels(mesc_path, lines):
     vp = viewport_geometry(mesc_path, "MSession_0/MUnit_0")
     ny, nx = 64, 80  # 0.5 um/px in both axes
-    px = um_to_pixels(lines[0][:2].T, vp, ny, nx)
-    assert np.allclose(px, [[20, 20], [60, 20]])
-    flipped = um_to_pixels(lines[0][:2].T, vp, ny, nx, flip_y=True)
-    assert np.allclose(flipped, [[20, 44], [60, 44]])
+    px = um_to_pixels(lines[0].T, vp, ny, nx)
+    assert np.allclose(px, [[20, 20, -4], [60, 20, -4]])
     # non-square pixels: 40 um over 20 px wide, 32 um over 64 px tall
-    px = um_to_pixels(lines[0][:2].T, vp, 64, 20)
-    assert np.allclose(px, [[5, 20], [15, 20]])
+    px = um_to_pixels(lines[0].T, vp, 64, 20)
+    assert np.allclose(px, [[5, 20, -4], [15, 20, -4]])
 
 
-def test_three_point_lines_measure_start_to_end(depth):
-    # MESc 4.6.2 writes start, midpoint, end; the length is the whole segment
-    seg = np.array([[110, 120, 130], [210, 210, 210], [-54, -54, -54]], dtype=float)
-    (p,) = roi_placements([seg], depth, sample_counts=[20])
-    assert p["length_um"] == 20.0 and p["sample_um"] == 1.0 and p["slice"] == 3
+def test_a_rotated_viewport_turns_points_back_onto_its_pixels():
+    """A 45 degree rig: ``geomTransRot`` is ``[x, y, z, w]``, and a point one
+    pixel along the image's x axis sits at ``transl + R(+45) [1, 0]``.
+    """
+    half = np.pi / 8
+    with_rotation = {
+        "transl": (10.0, 20.0, 0.0),
+        "width": 8.0,
+        "height": 8.0,
+        "rotation": Rotation.from_euler("z", 2 * half).as_matrix(),
+    }
+    along_x = np.array([[10.0 + np.cos(2 * half), 20.0 + np.sin(2 * half), 0.0]])
+    assert np.allclose(um_to_pixels(along_x, with_rotation, 8, 8), [[1.0, 0.0, 0.0]])
+    along_y = np.array([[10.0 - np.sin(2 * half), 20.0 + np.cos(2 * half), 0.0]])
+    assert np.allclose(um_to_pixels(along_y, with_rotation, 8, 8), [[0.0, 1.0, 0.0]])
+
+
+def test_the_viewport_reads_its_rotation(mesc_path, tmp_path):
+    path = tmp_path / "turned.mesc"
+    shutil.copy(mesc_path, path)
+    with h5py.File(path, "a") as f:
+        unit = f["MSession_0/MUnit_0"]
+        viewports = json.loads(unit.attrs["ReferenceViewportJSON"])
+        viewports["viewports"][0]["geomTransRot"] = [0.0, 0.0, 0.3827, 0.9239]
+        unit.attrs["ReferenceViewportJSON"] = json.dumps(viewports)
+    vp = viewport_geometry(path, "MSession_0/MUnit_0")
+    assert np.allclose(
+        vp["rotation"], Rotation.from_euler("z", np.pi / 4).as_matrix(), atol=1e-3
+    )
+
+
+def with_stack_attrs(mesc_path, path, quaternion=None, mode=None, rtmc=None):
+    """A copy of the fixture whose Z-stack has this rotation, z mode and RTMC."""
+    shutil.copy(mesc_path, path)
+    with h5py.File(path, "a") as f:
+        unit = f["MSession_0/MUnit_0"]
+        if quaternion is not None:
+            viewports = json.loads(unit.attrs["ReferenceViewportJSON"])
+            viewports["viewports"][0]["geomTransRot"] = quaternion
+            unit.attrs["ReferenceViewportJSON"] = json.dumps(viewports)
+        if mode is not None:
+            unit.attrs["ZModeDebugString"] = mode
+        for i, (axis, value) in enumerate(zip("XYZ", rtmc or ())):
+            # two layers per axis, as a stack stores them
+            for layer in (0, 1):
+                curve = unit.create_group(f"Curve_{2 * i + layer}")
+                curve.attrs["Name"] = f"RTMC {axis} correction (total) layer {layer}"
+                curve.attrs["CurveDataXRawDelta"] = 1.0
+                curve.create_dataset("CurveDataYIdxNextSample", data=np.arange(1, 5))
+                curve.create_dataset(
+                    "CurveDataYRawData", data=np.full(4, value + layer - 0.5)
+                )
+    return path
+
+
+TILT_QUATERNION = [0.0, np.sin(np.pi / 12), 0.0, np.cos(np.pi / 12)]
+
+
+def test_a_tilted_stack_steps_its_slices_along_its_own_normal(mesc_path, tmp_path):
+    """A viewport tilted 30 degrees about y, as stan60_expt3's: image x dips
+    into the tissue and slices step along the tilted normal.
+    """
+    path = with_stack_attrs(mesc_path, tmp_path / "tilted.mesc", TILT_QUATERNION)
+    vp = viewport_geometry(path, "MSession_0/MUnit_0")
+    depth = zstack_depth_info(path, "MSession_0/MUnit_0")
+    cos, sin = np.cos(np.pi / 6), np.sin(np.pi / 6)
+    assert np.allclose(vp["rotation"], [[cos, 0, sin], [0, 1, 0], [-sin, 0, cos]])
+    # 10 um along image x, then 4 um along the normal: slice 7 of the 2 um stack
+    point = np.array(TRANSL) + 10 * vp["rotation"][:, 0] + 4 * vp["rotation"][:, 2]
+    assert np.allclose(point, [100 + 10 * cos + 4 * sin, 200, -50 - 10 * sin + 4 * cos])
+    voxels = um_to_voxels(point[None], vp, depth, 64, 80)
+    assert np.allclose(voxels, [[20.0, 0.0, 7.0]])
+    assert np.allclose(voxels_to_um(voxels, vp, depth, 64, 80), point[None])
+    # read flat, the same point lands elsewhere
+    flat = vp | {"rotation": np.eye(3)}
+    assert not np.allclose(um_to_voxels(point[None], flat, depth, 64, 80), voxels)
+
+
+def test_a_fast_stack_takes_its_rtmc_off_a_stored_point(mesc_path, tmp_path):
+    """The tissue under a fast stack's coordinate P sits at P + mean RTMC, so a
+    point stored at P is found at P - RTMC; a slow stack is right as stored
+    and a tilted fast stack is left alone.
+    """
+    rtmc = (4.0, -2.0, 6.0)
+    key = "MSession_0/MUnit_0"
+    fast = with_stack_attrs(mesc_path, tmp_path / "fast.mesc", mode="fast", rtmc=rtmc)
+    slow = with_stack_attrs(mesc_path, tmp_path / "slow.mesc", mode="slow", rtmc=rtmc)
+    tilted = with_stack_attrs(
+        mesc_path, tmp_path / "tilted.mesc", TILT_QUATERNION, mode="fast", rtmc=rtmc
+    )
+    vp, depth = viewport_geometry(fast, key), zstack_depth_info(fast, key)
+    assert depth["rtmc_um"] == pytest.approx(rtmc)
+    assert zstack_depth_info(slow, key)["rtmc_um"] == (0.0, 0.0, 0.0)
+    assert zstack_depth_info(tilted, key)["rtmc_um"] == (0.0, 0.0, 0.0)
+    point = np.array([[110.0, 210.0, -54.0]])
+    assert np.allclose(um_to_voxels(point, vp, depth, 64, 80), [[12.0, 24.0, 0.0]])
+    assert np.allclose(
+        voxels_to_um(um_to_voxels(point, vp, depth, 64, 80), vp, depth, 64, 80), point
+    )
+    # the line at z -54 was slice 3 of a stack without RTMC; 6 um of z RTMC puts it on slice 0
+    recs = image_overlays(fast, "MSession_0/MUnit_1", key)
+    assert recs[0]["slice"] == 0
+    assert np.allclose(recs[0]["pixels"], [[12, 24], [52, 24]])
+
+
+def test_three_point_lines_measure_start_to_end(mesc_path, tmp_path):
+    """MESc 4.6.2 writes start, midpoint, end; the length is the whole segment."""
+    path = tmp_path / "midpoint.mesc"
+    shutil.copy(mesc_path, path)
+    with h5py.File(path, "a") as f:
+        unit = f["MSession_0/MUnit_1"]
+        maps = json.loads(unit.attrs["CoordinateMapJSON"])
+        maps["maps"][0]["driftEndPoints"][0] = [
+            [110, 120, 130],
+            [210, 210, 210],
+            [-54, -54, -54],
+        ]
+        unit.attrs["CoordinateMapJSON"] = json.dumps(maps)
+    (row, *_) = line_positions(path, "MSession_0/MUnit_1", [20, 24, 10, 6])
+    assert row["length_um"] == 20.0 and row["sample_um"] == 1.0
 
 
 def test_snapshot_overlay_is_every_line_drawn_on_it(mesc_path):
-    recs = image_overlays(mesc_path, "MSession_0/MUnit_4")
-    assert [r["unit"] for r in recs] == ["MSession_0/MUnit_1"] * 4
+    recs = image_overlays(mesc_path, "MSession_0/MUnit_1", "MSession_0/MUnit_4")
     assert [r["roi"] for r in recs] == [0, 1, 2, 3]
     assert all(r["kind"] == "line" and r["slice"] is None for r in recs)
-    # the snapshot plane is z -54: lines 0 and 2 are on it, 1 and 3 are not
-    assert [r["on_plane"] for r in recs] == [True, False, True, False]
-    assert np.allclose([r["dz_um"] for r in recs], [0.0, 8.0, 0.1, -16.0])
     assert np.allclose(recs[0]["pixels"], [[20, 20], [60, 20]])
     assert recs[0]["color"] == (1.0, 0.0, 0.0) and recs[3]["color"] == (1.0, 1.0, 1.0)
-    # the snapshot's own field and other images stay out
-    assert image_overlays(mesc_path, "MSession_0/MUnit_2") == []
+    # an image without a position, or a unit without ROIs, carries nothing
+    assert image_overlays(mesc_path, "MSession_0/MUnit_1", "MSession_0/MUnit_2") == []
+    assert image_overlays(mesc_path, "MSession_0/MUnit_2", "MSession_0/MUnit_4") == []
 
 
 def test_zstack_overlay_places_lines_and_patches_on_slices(mesc_path):
@@ -302,20 +382,38 @@ def test_zstack_overlay_places_lines_and_patches_on_slices(mesc_path):
     20 um below the stack are left out: the stack holds no picture of them, and
     drawing them on slice 0 would put an outline on tissue they never touched.
     """
-    recs = image_overlays(mesc_path, "MSession_0/MUnit_0")
-    assert [(r["munit"], r["roi"]) for r in recs] == [
-        ("MUnit_1", 0),
-        ("MUnit_1", 1),
-        ("MUnit_1", 2),
-        ("MUnit_3", 0),
-    ]
-    assert [r["slice"] for r in recs] == [3, 7, 3, 7]
-    assert all(r["on_plane"] for r in recs)
-    assert np.allclose([r["dz_um"] for r in recs], [0.0, 0.0, 0.1, 0.0])
-    patch = recs[3]
+    recs = image_overlays(mesc_path, "MSession_0/MUnit_1", "MSession_0/MUnit_0")
+    assert [r["roi"] for r in recs] == [0, 1, 2]
+    assert [r["slice"] for r in recs] == [3, 7, 3]
+    (patch,) = image_overlays(mesc_path, "MSession_0/MUnit_3", "MSession_0/MUnit_0")
     assert patch["kind"] == "patch" and patch["color"] is None
     assert np.allclose(
         patch["pixels"], [[20, 20], [60, 20], [60, 60], [20, 60], [20, 20]]
+    )
+
+
+def test_a_shift_moves_rois_in_and_out_of_a_stack(mesc_path):
+    """A measured shift decides the slice and the pixels; a line moved past
+    the stack's depth or field is left out, one moved into it is kept.
+    """
+    recs = image_overlays(
+        mesc_path,
+        "MSession_0/MUnit_1",
+        "MSession_0/MUnit_0",
+        shift_um=(2.0, 1.0, 4.0),
+    )
+    assert [r["roi"] for r in recs] == [0, 1, 2]
+    assert [r["slice"] for r in recs] == [5, 9, 5]
+    assert np.allclose(recs[0]["pixels"], [[24, 22], [64, 22]])
+    recs = image_overlays(
+        mesc_path, "MSession_0/MUnit_1", "MSession_0/MUnit_0", shift_um=(0, 0, 16.0)
+    )
+    assert [r["roi"] for r in recs] == [3]
+    assert (
+        image_overlays(
+            mesc_path, "MSession_0/MUnit_1", "MSession_0/MUnit_0", shift_um=(500, 0, 0)
+        )
+        == []
     )
 
 
@@ -341,38 +439,6 @@ def test_list_mesc_units_reports_outlines_and_links(mesc_path):
     assert all(u["rtmc_of"] == [] for u in units.values())
 
 
-def test_zstack_contents_lists_the_scans_inside_each_stack(mesc_path):
-    assert zstack_contents(mesc_path) == {
-        "MSession_0/MUnit_0": ["MSession_0/MUnit_1", "MSession_0/MUnit_3"]
-    }
-
-
-def test_a_scan_recorded_outside_every_stack_is_in_none_of_them(mesc_path, tmp_path):
-    """A scan whose ROIs were all recorded above or below the stack is not
-    listed as inside it, however well their x and y line up: the file's one
-    chessboard box sits 720 um under the stack on the 2026-09-14 rig, and
-    drawing it on an edge slice put it on unrelated tissue.
-    """
-    import shutil
-
-    path = tmp_path / "far.mesc"
-    shutil.copy(mesc_path, path)
-    with h5py.File(path, "a") as f:
-        unit = f["MSession_0/MUnit_3"]
-        maps = json.loads(unit.attrs["CoordinateMapJSON"])
-        for patch in maps["maps"][0]["contours"]:
-            patch[2] = [-770.0] * len(patch[2])
-        unit.attrs["CoordinateMapJSON"] = json.dumps(maps)
-    assert zstack_contents(path) == {"MSession_0/MUnit_0": ["MSession_0/MUnit_1"]}
-    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_0")} == {
-        "MUnit_1"
-    }
-    # it is still drawn on the picture it was drawn on, whatever its depth
-    assert {r["munit"] for r in image_overlays(path, "MSession_0/MUnit_4")} == {
-        "MUnit_1"
-    }
-
-
 def test_a_ribbon_outline_is_a_closed_patch(mesc_path, tmp_path):
     """A ribbon's contour is one long side then the other walked back, many
     points each; it closes like a four-corner patch, so both short edges draw,
@@ -391,29 +457,12 @@ def test_a_ribbon_outline_is_a_closed_patch(mesc_path, tmp_path):
         maps = json.loads(unit.attrs["CoordinateMapJSON"])
         maps["maps"][0]["contours"][0] = ribbon
         unit.attrs["CoordinateMapJSON"] = json.dumps(maps)
-    (p, _) = roi_placements(
-        roi_outlines_um(path, "MSession_0/MUnit_3"),
-        zstack_depth_info(path, "MSession_0/MUnit_0"),
-    )
-    assert p["length_um"] == 20.0
-    (rec,) = [
-        r for r in image_overlays(path, "MSession_0/MUnit_0") if r["munit"] == "MUnit_3"
-    ]
+    assert line_positions(path, "MSession_0/MUnit_3")[0]["length_um"] == 20.0
+    (rec, _) = image_overlays(path, "MSession_0/MUnit_3", "MSession_0/MUnit_4")
     assert rec["kind"] == "patch"
     assert rec["pixels"].shape == (11, 2)
     assert np.allclose(rec["pixels"][0], rec["pixels"][-1])
     assert np.allclose(rec["pixels"][-2:], [[20, 40], [20, 20]])
-
-
-def test_overlay_skips_a_unit_whose_outlines_do_not_pair_with_its_rois(mesc_path):
-    from mbo_utilities.arrays.mesc import list_mesc_units
-
-    units = list_mesc_units(mesc_path)
-    for u in units:
-        if u["munit"] == "MUnit_1":
-            u["nrois"] = 3
-    recs = image_overlays(mesc_path, "MSession_0/MUnit_0", units)
-    assert {r["munit"] for r in recs} == {"MUnit_3"}
 
 
 def test_a_reference_units_placeholder_viewport_is_no_position(tmp_path):
@@ -437,4 +486,4 @@ def test_a_reference_units_placeholder_viewport_is_no_position(tmp_path):
         )
         u.create_dataset("Channel_0", data=np.zeros((3, 20, 20), np.uint16))
     assert viewport_geometry(path, "MSession_1/MUnit_0") is None
-    assert image_overlays(path, "MSession_1/MUnit_0") == []
+    assert image_overlays(path, "MSession_1/MUnit_0", "MSession_1/MUnit_0") == []

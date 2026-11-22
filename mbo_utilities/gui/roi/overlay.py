@@ -20,9 +20,7 @@ from mbo_utilities.gui.roi_runs import (
     component_color,
     outline_data,
 )
-from mbo_utilities.roi_workflow import (
-    feather_mask,
-)
+from mbo_utilities.annotation.measure import feather_mask
 
 
 class OverlayMixin:
@@ -184,17 +182,6 @@ class OverlayMixin:
             self.status = "centering on the selection; labeling advances"
         else:
             self.status = f"{self.n_rois} ROIs"
-
-    def open_full_fov(self):
-        """Masknmf's summary-image popup over the frame on screen and the labels."""
-        frame = np.asarray(self.image.data.value, np.float32)
-        if frame.ndim == 3:
-            frame = frame[..., :3].mean(axis=-1)
-        images = {"current frame": frame}
-        if self.n_rois:
-            images["ROI labels"] = self.labels.astype(np.float32)
-        self.summary.set_images(images, selected="current frame")
-        self.summary.open()
 
     def _drawing(self) -> bool:
         """The region has the pointer: its vertices are being placed or dragged."""

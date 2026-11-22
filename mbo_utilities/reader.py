@@ -80,13 +80,19 @@ def source_reader_kwargs(arr) -> dict:
 
 
 def widget_reader_kwargs(image_widget) -> dict:
-    """`source_reader_kwargs` for the array an ImageWidget is displaying.
+    """`source_reader_kwargs` for the array an ImageWidget is displaying, with every ROI when it shows one subplot per ROI.
 
     Returns ``{}`` for a missing or empty widget, so a task's argument dict can
     always ask without guarding.
     """
     data = getattr(image_widget, "data", None) or []
-    return source_reader_kwargs(data[0]) if len(data) else {}
+    if not len(data):
+        return {}
+    kwargs = source_reader_kwargs(data[0])
+    rois = [getattr(arr, "roi", None) for arr in data]
+    if len(rois) > 1 and all(isinstance(r, int) and r > 0 for r in rois):
+        kwargs["roi"] = rois  ## one subplot per ROI of the same source
+    return kwargs
 
 
 @lru_cache(maxsize=32)
@@ -210,21 +216,28 @@ def imread(
     return arr
 
 
-def _open_first_recording(files, where, kwargs):
-    """Of ``files``, in the order given, the ones a format-specific class
-    (``PRIORITY`` above 50) claims are whole recordings each (a Bruker h5, a
-    MESc): the first opens through its class and the rest are logged by name;
-    None when no file is one. A suffix reader would guess such a file's axes,
-    and several never concatenate: they are separate sessions the user picks
-    by file.
+def _recordings(files) -> list:
+    """``(file, cls)`` for each of ``files``, in the order given, that a
+    format-specific class (``PRIORITY`` above 50) claims.
     """
-    recordings = [
+    return [
         (f, cls)
         for f in files
         if f.is_file()
         for cls in [_dispatch(f)]
         if cls is not None and cls.PRIORITY > 50
     ]
+
+
+def _open_first_recording(files, where, kwargs):
+    """Of ``files``, in the order given, the ones a format-specific class
+    claims (``_recordings``) are whole recordings each (a Bruker h5, a MESc):
+    the first opens through its class and the rest are logged by name; None
+    when no file is one. A suffix reader would guess such a file's axes, and
+    several never concatenate: they are separate sessions the user picks by
+    file.
+    """
+    recordings = _recordings(files)
     if not recordings:
         return None
     first, cls = recordings[0]
@@ -300,7 +313,7 @@ def _imread_impl(
         elif p.is_dir():
             logger.debug(f"Input is a directory, searching for supported files in {p}")
 
-            zarrs = list(p.glob("*.zarr"))
+            zarrs = sorted(p.glob("*.zarr"))
             if zarrs:
                 logger.debug(
                     f"Found {len(zarrs)} zarr stores in {p}, loading as ZarrArray."
@@ -315,11 +328,19 @@ def _imread_impl(
                     return TiffArray(p)
 
                 # a folder of whole recordings (a Bruker h5, a MESc each): the first by name opens
-                opened = _open_first_recording(sorted(p.iterdir()), p, kwargs)
+                entries = sorted(p.iterdir())
+                opened = _open_first_recording(entries, p, kwargs)
+                if opened is None and not any(
+                    f.is_file() and f.suffix.lower() in MBO_READABLE_FTYPES
+                    for f in entries
+                ):
+                    # a dataset folder with its recordings one level down
+                    nested = [f for d in entries if d.is_dir() for f in sorted(d.iterdir())]
+                    opened = _open_first_recording(nested, p, kwargs)
                 if opened is not None:
                     return opened
 
-                paths = [Path(f) for f in p.glob("*") if f.is_file()]
+                paths = sorted(f for f in p.iterdir() if f.is_file())
                 logger.debug(f"Found {len(paths)} files in {p}")
         else:
             paths = [p]
@@ -450,7 +471,7 @@ def _imread_impl(
         return MP4Array(first, **_filter_kwargs(MP4Array, kwargs))
 
     if first.suffix == ".zarr":
-        sub_zarrs = list(first.glob("*.zarr"))
+        sub_zarrs = sorted(first.glob("*.zarr"))
         if sub_zarrs:
             logger.info("Detected nested zarr stores, loading as ZarrArray.")
             return ZarrArray(sub_zarrs, **_filter_kwargs(ZarrArray, kwargs))

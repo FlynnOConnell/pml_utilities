@@ -452,6 +452,9 @@ def _figure_kwargs_for_here(
         # a chosen backend is left to rendercanvas.auto, which honors the variable
         RenderCanvas = None
     else:
+        from mbo_utilities.gui._setup import _use_xwayland_for_pyqt6
+
+        _use_xwayland_for_pyqt6()
         try:
             from rendercanvas.pyqt6 import RenderCanvas
         except (ImportError, RuntimeError):
@@ -593,7 +596,7 @@ def _create_image_widget(
 
     # the roi tool is a Widgets-menu toggle the preview widget builds from; it goes on for this
     # session (never persisted) when asked for or when rois or a pipeline's rois sit beside the data
-    manual_roi = signal_quality = False
+    manual_roi = signal_quality = traces_at_open = False
     if widget != "none":
         from mbo_utilities.gui.manual_roi import labels_path
         from mbo_utilities.gui.roi_runs import run_dir_complete
@@ -621,6 +624,11 @@ def _create_image_widget(
             )
         )
         signal_quality = widget_enabled("signal_quality")
+        # a results file or saved rois load traces at once; otherwise the Traces tab stays empty and takes no room
+        traces_at_open = results is not None or (
+            src is not None
+            and (labels_path(src).exists() or labels_path(src, root=root).exists())
+        )
 
     from mbo_utilities.arrays.features import get_slider_dims
 
@@ -639,17 +647,17 @@ def _create_image_widget(
     }
     graphic_kwargs = {"vmin": 0, "vmax": 1000} if is_isoview else {}
 
+    base_name = None
+    if getattr(data_array, "filenames", None):
+        first_file = Path(data_array.filenames[0])
+        base_name = first_file.stem
+        if base_name in ("data", "data_raw"):
+            base_name = first_file.parent.name
+        if len(base_name) > 24:
+            base_name = base_name[:21] + "..."
     if hasattr(data_array, "roi_mode") and hasattr(data_array, "iter_rois"):
         arrays = []
         names = []
-        base_name = None
-        if getattr(data_array, "filenames", None):
-            first_file = Path(data_array.filenames[0])
-            base_name = first_file.stem
-            if base_name in ("data", "data_raw"):
-                base_name = first_file.parent.name
-            if len(base_name) > 24:
-                base_name = base_name[:21] + "..."
         for r in data_array.iter_rois():
             arr = copy.copy(data_array)
             arr.fix_phase = False
@@ -658,7 +666,7 @@ def _create_image_widget(
             names.append(f"ROI {r}" if r else (base_name or "Full Image"))
     else:
         arrays = [_squeeze_for_viewer(data_array)]
-        names = None
+        names = [base_name] if base_name else None
 
     from mbo_utilities.gui._ndviewer import MboNDViewer, sliders_height
 
@@ -667,12 +675,13 @@ def _create_image_widget(
     else:
         from fastplotlib.utils import calculate_figure_shape
 
+        from mbo_utilities.behavior import behavior_for
         from mbo_utilities.gui._top_strip import (
             MENU_HEIGHT,
             MENU_MIN_WIDTH,
             strip_height,
         )
-        from mbo_utilities.gui.manual_roi import PANEL_HEIGHT
+        from mbo_utilities.gui.roi._shared import traces_panel_height
         from mbo_utilities.gui.widgets.preview_data import ZSTATS_PANEL_HEIGHT
 
         rgb = bool(getattr(arrays[0], "rgb", False))
@@ -681,8 +690,15 @@ def _create_image_widget(
         if widget != "none":
             top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
         # the strip is as tall as the tab that opens first: the Traces panel, else the Signal Quality plot
-        if manual_roi:
-            top = strip_height(PANEL_HEIGHT)
+        if manual_roi and traces_at_open:
+            base = base_array(data_array)
+            top = strip_height(
+                traces_panel_height(
+                    motion=getattr(base, "motion_correction", None) is not None,
+                    vnoiser=results is not None and results.pipeline == "vnoiser",
+                    behavior=behavior_for(base) is not None,
+                )
+            )
         elif signal_quality:
             top = strip_height(ZSTATS_PANEL_HEIGHT)
         figure_kwargs = _figure_kwargs_for_here(
@@ -747,7 +763,6 @@ def _run_gui_impl(
     vis: str = "demixing",
     raw_path: str | Path | None = None,
     motion_correction_path: str | Path | None = None,
-    qc: bool = False,
 ):
     """``run_gui`` after the heavy imports."""
     from mbo_utilities.gui import _gpu_cache
@@ -798,55 +813,23 @@ def _run_gui_impl(
         # the file dialog hands back a list even for one file
         if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
             data_in = data_in[0]
-        from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_demixing
-        from mbo_utilities.masknmf.reg_denoise import is_reg_denoise
+        from mbo_utilities.arrays.masknmf_run import run_demixing
 
+        if mode == "Dashboard (.mesc ROI traces)":
+            from mbo_utilities.gui.dashboard_app import open_dashboard
+
+            return open_dashboard(data_in, unit=unit if isinstance(unit, str) else None)
         if mode == "Spike-triggered average (run with results)":
             from mbo_utilities.gui.spike_average_viewer import (
                 open_spike_average_viewer,
             )
 
             return open_spike_average_viewer(data_in)
-        qc = qc or mode == "Registration QC (MaskNMF run)"
-        if (
-            qc
-            and isinstance(data_in, (str, Path))
-            and not (
-                is_reg_denoise(data_in)
-                or is_masknmf_run(data_in)
-                or is_masknmf_run(Path(data_in).parent)
-            )
-        ):
-            raise click.ClickException(
-                f"{Path(data_in).name} is not a MaskNMF run folder, its results.hdf5 or a "
-                "reg-denoise result; Registration QC (--qc) opens only those"
-            )
-        if (
-            not metadata_only
-            and isinstance(data_in, (str, Path))
-            and (qc or is_reg_denoise(data_in))
-        ):
-            from mbo_utilities.gui.reg_denoise_viewer import RegDenoiseViewer
-
-            viewer = RegDenoiseViewer(data_in, raw_path=raw_path)
-            output = viewer.show()
-            if in_notebook():
-                display_widget(output)
-                return viewer
-            import fastplotlib as fpl
-
-            fpl.loop.run()
-            return None
         # a masknmf demixing result, or a run folder that demixed, opens in masknmf's own viewers
         from mbo_utilities.arrays.demixing import has_demixing_results
 
         if isinstance(data_in, (str, Path)):
             data_in = run_demixing(data_in) or data_in
-            from mbo_utilities.masknmf.asap7 import is_asap7_run
-            from mbo_utilities.masknmf.params import ASAP7_RESULTS_FILE
-
-            if is_asap7_run(data_in):
-                data_in = Path(data_in) / ASAP7_RESULTS_FILE
 
         if (
             not metadata_only
@@ -855,7 +838,7 @@ def _run_gui_impl(
         ):
             import importlib.util
 
-            from mbo_utilities.install import _MASKNMF_HINT
+            from mbo_utilities.install import MASKNMF_HINT
 
             if (
                 importlib.util.find_spec("masknmf") is None
@@ -863,7 +846,7 @@ def _run_gui_impl(
             ):
                 raise click.ClickException(
                     f"{Path(data_in).name} is a masknmf demixing result and opens in masknmf's "
-                    f"viewers, but masknmf (with torch) is not installed here: {_MASKNMF_HINT}"
+                    f"viewers, but masknmf (with torch) is not installed here: {MASKNMF_HINT}"
                 )
             from mbo_utilities.gui.masknmf_vis import MasknmfViewers
 
@@ -881,6 +864,7 @@ def _run_gui_impl(
             fpl.loop.run()
             return None
         # a .mesc holding AOD ROI units opens on the first one
+        data_in = _folder_mesc(data_in) or data_in
         if _is_mesc(data_in):
             if unit is None:
                 unit = _first_linescan_unit(data_in)
@@ -926,6 +910,27 @@ def _is_mesc(path) -> bool:
     if not isinstance(path, (str, Path)):
         return False
     return Path(path).is_file() and Path(path).suffix.lower() == ".mesc"
+
+
+def _folder_mesc(path) -> Path | None:
+    """The ``.mesc`` a folder opens as, or None.
+
+    ``imread`` opens a folder no class claims as its first recording by name
+    (``reader._open_first_recording``); when that is a ``.mesc`` the viewer
+    opens the file itself, so its unit is picked the same way.
+    """
+    if not isinstance(path, (str, Path)) or not Path(path).is_dir():
+        return None
+    from mbo_utilities.lazy_array import _dispatch
+    from mbo_utilities.reader import _recordings
+
+    path = Path(path)
+    if _dispatch(path) is not None:
+        return None
+    recordings = _recordings(sorted(path.iterdir()))
+    if not recordings or not _is_mesc(recordings[0][0]):
+        return None
+    return recordings[0][0]
 
 
 def _first_linescan_unit(path) -> str | None:
@@ -981,6 +986,8 @@ def _load_for_viewer(data_in, roi=None, unit=None, dims=None):
         mesc_kwargs["dims"] = dims
     t0 = time.perf_counter()
     data_array = imread(data_in, roi=roi, **mesc_kwargs)
+    if roi is None and hasattr(data_array, "viewer_roi"):
+        data_array.roi = data_array.viewer_roi
     t_imread = time.perf_counter() - t0
     logger.debug(
         f"[boot] imread: {t_imread * 1000:.0f} ms  "
@@ -1159,6 +1166,8 @@ def _launch_napari(data_in, roi=None, unit=None, dims=None):
     if dims:
         mesc_kwargs["dims"] = dims
     arr = imread(data_in, roi=normalize_roi(roi), **mesc_kwargs)
+    if normalize_roi(roi) is None and hasattr(arr, "viewer_roi"):
+        arr.roi = arr.viewer_roi
     arr_dims = list(get_dims(arr))
     nz = int(arr.shape[arr_dims.index("Z")]) if "Z" in arr_dims else 1
     viewer = napari.Viewer(ndisplay=3 if nz > 1 else 2)
@@ -1249,7 +1258,6 @@ def run_gui(
     vis: str = "demixing",
     raw_path: str | Path | None = None,
     motion_correction_path: str | Path | None = None,
-    qc: bool = False,
 ):
     """
     Open a GUI to preview data of any supported type.
@@ -1257,10 +1265,8 @@ def run_gui(
     ``dims`` names a plain TIFF's page axis (``"ZYX"`` for a z-stack,
     ``"CYX"`` for channels) the way ``imread(..., dims=...)`` does.
 
-    ``qc`` opens Registration-Denoising Quality Control on a MaskNMF run
-    folder (or its ``results.hdf5``) or a ``mbo reg-denoise`` result, which
-    opens there without it. A run folder whose run demixed opens in masknmf's
-    demixing viewer; one that did not opens in the Studio.
+    A run folder whose run demixed opens in masknmf's demixing viewer; one
+    that did not opens in the Studio.
 
     A masknmf demixing result opens in masknmf's own viewer instead:
     ``vis`` picks ``demixing`` (default) or ``classification`` before launch;
@@ -1348,7 +1354,6 @@ def run_gui(
         vis=vis,
         raw_path=raw_path,
         motion_correction_path=motion_correction_path,
-        qc=qc,
     )
 
 

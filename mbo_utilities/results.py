@@ -65,6 +65,7 @@ from mbo_utilities.metadata.base import strip_for_export
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 __all__ = [
+    "detection_algo",
     "IMAGE_KINDS",
     "MEMBER_KINDS",
     "RESULTS_ATTR",
@@ -490,6 +491,7 @@ class Results:
             }
         scan_ids = [str(s) for s in rois.get("scanID_spatial", list(traces))]
         first_env = {str(s) for s in rois.get("scanID_1st_env", [])}
+        scan_labels = provenance.get("scan_labels") or {}
         roi_list = {
             str(s): [int(r) for r in v] for s, v in (rois.get("roi_list") or {}).items()
         }
@@ -517,7 +519,9 @@ class Results:
             str(k): float(v) for k, v in (provenance.get("fs_hz") or {}).items()
         }
         units = []
+        block = -1 if scan_ids and scan_ids[0] in first_env else 0
         for scan in scan_ids:
+            block += scan in first_env
             if traces:
                 rows = [d for d in names if d in traces.get(scan, {})]
                 kinds = {
@@ -563,6 +567,8 @@ class Results:
                         "scan_id": scan,
                         "source_unit": source_units.get(scan) or f"MUnit_{scan}",
                         "first_env": scan in first_env,
+                        "block": block,
+                        "labels": list(scan_labels.get(scan, [])),
                         "member_ids": roi_list.get(scan, []),
                     },
                 )
@@ -856,6 +862,23 @@ def newest_results(folder, pipeline: str | None = None, source=None) -> Path | N
     return max(found, key=lambda p: (results_stamp(p) or datetime.min, p.name))
 
 
+def detection_algo(ops: dict) -> str:
+    """The detector that produced a run dir's ROIs: the engine, or for suite2p the algorithm its ops configured (``s2p-sourcery``, ``s2p-sparsery``, ``s2p-cellpose``)."""
+    wf = ops.get("roi_workflow") or {}
+    engine = str(
+        wf.get("engine")
+        or ("masknmf" if ops.get("pipeline") == "masknmf" else "suite2p")
+    )
+    if engine != "suite2p":
+        return engine
+    # lbm_suite2p_python's db_settings derivation
+    if ops.get("algorithm"):
+        return f"s2p-{ops['algorithm']}"
+    if ops.get("anatomical_only"):
+        return "s2p-cellpose"
+    return "s2p-sparsery" if ops.get("sparse_mode", True) else "s2p-sourcery"
+
+
 def results_pipeline(path) -> str | None:
     """The ``pipeline`` attr of a results file, or None when ``path`` is not one.
 
@@ -983,6 +1006,17 @@ def vnoiser_run_for_mesc(mesc_path) -> Path | None:
     return None
 
 
+def unit_frames(results: Results, unit: ResultUnit) -> tuple[int, int] | None:
+    """The half-open window of the recording's frames ``unit``'s traces cover:
+    its scan's own (``scan_frames``, a run of trimmed scans), else the run's
+    (``frames``), else None for the whole recording.
+    """
+    source = results.source or {}
+    scan = str(unit.attrs.get("scan_id", ""))
+    window = (source.get("scan_frames") or {}).get(scan) or source.get("frames")
+    return None if not window else (int(window[0]), int(window[1]))
+
+
 def unit_for_source(results: Results, source_unit: str) -> str | None:
     """The unit of ``results`` that processed recording unit ``source_unit``
     (``MSession_0/MUnit_30``, or just ``MUnit_30``), or None.
@@ -1023,6 +1057,11 @@ register_pipeline(
 )
 
 
+def trace_label(unit: ResultUnit, roi: str) -> str:
+    """How one ROI trace of a unit reads in the curation window."""
+    return f"scan {unit.attrs.get('scan_id', unit.index)} / {roi}"
+
+
 def recording_id(unit: ResultUnit, roi: str) -> str:
     """The curation's id of one ROI trace, ``scan=<id>/domain=<name>``, which
     keys its labels under ``<run>/.curation``.
@@ -1031,6 +1070,76 @@ def recording_id(unit: ResultUnit, roi: str) -> str:
     unit, so a trace curated before the run was a results file still matches.
     """
     return f"scan={unit.attrs.get('scan_id', unit.index)}/domain={roi}"
+
+
+def carry_curation(run, previous) -> list[str]:
+    """Copy ``previous``'s curation into ``run``'s (both results files, under
+    :data:`CURATION_DIR`) for every recording whose scan and domain (name,
+    ROIs, pixel rule) are the same in both, read on the same channel, frames
+    and planes; returns the recording ids carried. Labels sit on samples, so
+    one whose peak a changed setting moved matches nothing.
+    """
+    run, previous = Path(run), Path(previous)
+    old_dir, new_dir = previous / CURATION_DIR, run / CURATION_DIR
+    if not old_dir.is_dir():
+        return []
+    was = (
+        json.loads((previous / "zarr.json").read_text())["attributes"].get("source")
+        or {}
+    )
+    now = json.loads((run / "zarr.json").read_text())["attributes"].get("source") or {}
+    if any(
+        was.get(k) != now.get(k) for k in ("channel", "frames", "scan_frames", "planes")
+    ):
+        return []
+    old_domains = was.get("domains") or {}
+    same = [
+        n
+        for n, entry in (now.get("domains") or {}).items()
+        if old_domains.get(n) == entry
+    ]
+    scans = [s for s in now.get("units") or {} if s in (was.get("units") or {})]
+    rids = {f"scan={s}/domain={d}" for s in scans for d in same}
+    carried = set()
+    for file in sorted(old_dir.glob("*.json")):
+        doc = json.loads(file.read_text())
+        target = new_dir / file.name
+        out = json.loads(target.read_text()) if target.is_file() else {}
+        if isinstance(doc.get("recordings"), dict):
+            # slow / fast: one entry per recording
+            taken = {k: v for k, v in doc["recordings"].items() if k in rids}
+            out = {**doc, **out, "recordings": taken | out.get("recordings", {})}
+        elif isinstance(doc.get("events"), dict):
+            # vnoiser's: events keyed "<rid>|sample=<n>", detection settings keyed by rid
+            taken = {
+                k: v
+                for k, v in doc["events"].items()
+                if v.get("recording", k.split("|sample=")[0]) in rids
+            }
+            detection = {
+                key: {r: x for r, x in value.items() if r in rids}
+                if isinstance(value, dict)
+                else value
+                for key, value in (doc.get("candidate_detection") or {}).items()
+            }
+            out = {
+                **doc,
+                **out,
+                "data_path": str(run),
+                "candidate_detection": detection | out.get("candidate_detection", {}),
+                "events": taken | out.get("events", {}),
+            }
+            taken = {
+                v.get("recording", k.split("|sample=")[0]) for k, v in taken.items()
+            }
+        else:
+            continue
+        if not taken:
+            continue
+        carried |= set(taken)
+        new_dir.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(out, indent=2))
+    return sorted(carried)
 
 
 def _read_pickle(path):

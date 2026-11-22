@@ -201,5 +201,41 @@
     "first_frame_s": 0.249
    }
   ]
+ },
+ {
+  "label": "desktop via relay, h264",
+  "link": "tailnet relay",
+  "client": "fo-w1",
+  "gateway": "pml-w1.tail0ea452.ts.net/studio",
+  "file": "u005a04_20260915_FamfDay1_FOV1-002.h5",
+  "size": [
+   1400,
+   900
+  ],
+  "codec": "h264",
+  "date": "2026-10-31T10:47:54",
+  "trials": [
+   {
+    "frames": 283,
+    "distinct": 283,
+    "bytes": 10055287,
+    "seconds": 10.0,
+    "first_frame_s": 0.038
+   },
+   {
+    "frames": 286,
+    "distinct": 286,
+    "bytes": 9518723,
+    "seconds": 10.0,
+    "first_frame_s": 0.027
+   },
+   {
+    "frames": 282,
+    "distinct": 282,
+    "bytes": 9480971,
+    "seconds": 10.0,
+    "first_frame_s": 0.026
+   }
+  ]
  }
 ]

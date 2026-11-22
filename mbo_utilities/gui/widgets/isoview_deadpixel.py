@@ -468,7 +468,6 @@ def _apply_button_style():
 
 
 def draw_window(parent: Any) -> None:
-
     was_open = parent._iso_dp_window_open
     if parent._show_iso_dp_window:
         parent._iso_dp_window_open = True

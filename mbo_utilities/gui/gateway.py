@@ -246,8 +246,8 @@ class Gateway:
             raise ValueError(f"widget must be one of {', '.join(WIDGETS)}")
         if len(self.live()) >= self.max_sessions:
             raise SessionLimitError(
-                f"{len(self.live())} session(s) running, the limit is "
-                f"{self.max_sessions}: stop one first"
+                f"Maximum number of users ({self.max_sessions}) reached. "
+                "Please contact admin."
             )
         sid = secrets.token_hex(4)
         port = _free_port()
@@ -482,7 +482,11 @@ class Gateway:
         if session is None:
             try:
                 session = self.open(path, widget)
-            except (SessionLimitError, ValueError, OSError) as e:
+            except SessionLimitError as e:
+                body = _limit_page(str(e), "./")
+                await _respond(send, 409, body, "text/html; charset=utf-8")
+                return
+            except (ValueError, OSError) as e:
                 body = _status_page(f"Could not open {path}", str(e), "", "./")
                 await _respond(send, 409, body, "text/html; charset=utf-8")
                 return
@@ -644,6 +648,12 @@ _STYLE = """
     a { color: var(--accent); }
     pre { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px;
           white-space: pre-wrap; word-break: break-all; color: #aaa; font-size: 12px; }
+    dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+             border-radius: 8px; padding: 20px 24px; max-width: 420px; }
+    dialog::backdrop { background: rgba(0, 0, 0, .6); }
+    dialog p { margin: 0 0 16px; }
+    dialog a { display: inline-block; background: var(--accent); color: #fff; border-radius: 4px;
+               padding: 4px 10px; text-decoration: none; }
 """
 
 
@@ -658,6 +668,17 @@ def _status_page(
         f"<h1>{html.escape(heading)}</h1><p>{html.escape(message)} <a href='{home}'>sessions</a></p>"
         + (f"<pre>{html.escape(log_text)}</pre>" if log_text else "")
         + "</main></body></html>"
+    )
+
+
+def _limit_page(message: str, home: str) -> str:
+    """Returns a page whose only content is a popup with ``message``; OK goes to ``home``."""
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>The Studio</title>"
+        f"<style>{_STYLE}</style></head><body>"
+        f"<dialog><p>{html.escape(message)}</p><a href='{home}'>OK</a></dialog>"
+        "<script>document.querySelector('dialog').showModal();</script>"
+        "</body></html>"
     )
 
 
@@ -741,6 +762,10 @@ _LAUNCHER = Template(
         <div id='recent' class='mono'></div>
     </section>
 </main>
+<dialog id='popup'>
+    <p id='popup-text'></p>
+    <form method='dialog'><button class='primary'>OK</button></form>
+</dialog>
 <script>
 // every link here is relative: /studio must become /studio/ under a proxy's prefix
 if (!location.pathname.endsWith('/')) location.replace(location.pathname + '/' + location.search);
@@ -750,7 +775,11 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&l
 async function api(path, options) {
     const r = await fetch(path, options);
     const body = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(body.error || r.statusText);
+    if (!r.ok) {
+        const e = new Error(body.error || r.statusText);
+        e.status = r.status;
+        throw e;
+    }
     return body;
 }
 
@@ -803,7 +832,13 @@ async function openPath(path) {
         });
         location.href = s.url;
     } catch (e) {
-        el('error').textContent = e.message;
+        // 409 is the session limit
+        if (e.status === 409) {
+            el('popup-text').textContent = e.message;
+            el('popup').showModal();
+        } else {
+            el('error').textContent = e.message;
+        }
         refresh();
     }
 }

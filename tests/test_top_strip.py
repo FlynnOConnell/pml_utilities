@@ -21,10 +21,20 @@ def figure():
     iw.close()
 
 
-def panel(key, label="P", height=100, priority=100, min_width=0.0):
-    from mbo_utilities.gui._top_strip import TopPanel
+def panel(key, label="P", height=100, priority=100, min_width=0.0, occupied=None):
+    from mbo_utilities.gui._top_strip import TopPanel, always_occupied
 
-    return TopPanel(key, label, lambda: None, height, priority, min_width)
+    return TopPanel(key, label, lambda: None, height, priority, min_width, occupied or always_occupied)
+
+
+class Contents:
+    """A panel's ``occupied`` check that a test fills and empties."""
+
+    def __init__(self, full=False):
+        self.full = full
+
+    def __call__(self) -> bool:
+        return self.full
 
 
 class TestTopStrip:
@@ -123,6 +133,77 @@ class TestTopStrip:
         strip.remove_hook(hook)
         figure.canvas.draw()
         assert calls == [1, 1]
+
+
+class TestEmptyPanels:
+    """A panel with nothing to show takes no room: no tab, no height, no bar."""
+
+    def test_an_empty_panel_leaves_the_menu_row_alone(self, figure):
+        from imgui_bundle import imgui
+        from mbo_utilities.gui._top_strip import MENU_HEIGHT, TopStrip
+
+        strip = TopStrip(figure)
+        strip.register(panel("traces", height=200, occupied=Contents()))
+        assert strip.size == MENU_HEIGHT
+        bars = []
+        real = imgui.begin_tab_bar
+        imgui.begin_tab_bar = lambda *a, **k: bars.append(1) or real(*a, **k)
+        try:
+            figure.canvas.draw()
+        finally:
+            imgui.begin_tab_bar = real
+        assert bars == [] and strip.active is None
+        assert strip.size == MENU_HEIGHT
+
+    def test_the_first_trace_opens_the_strip_and_the_last_one_shuts_it(self, figure):
+        from mbo_utilities.gui._top_strip import MENU_HEIGHT, TopStrip, strip_height
+
+        strip = TopStrip(figure)
+        contents = Contents()
+        strip.register(panel("traces", height=200, occupied=contents))
+        contents.full = True
+        figure.canvas.draw()
+        assert strip.active == "traces" and strip.size == strip_height(200)
+        contents.full = False
+        figure.canvas.draw()
+        assert strip.active is None and strip.size == MENU_HEIGHT
+
+    def test_an_emptied_tab_hands_the_strip_to_one_with_something(self, figure):
+        from mbo_utilities.gui._top_strip import TopStrip, strip_height
+
+        strip = TopStrip(figure)
+        traces, curation = Contents(True), Contents(True)
+        strip.register(panel("traces", label="Traces", height=200, priority=11, occupied=traces))
+        strip.register(panel("curation", label="Curation", height=300, priority=12, occupied=curation))
+        figure.canvas.draw()
+        assert strip.active == "traces"
+        traces.full = False
+        figure.canvas.draw()
+        assert [p.key for p in strip.shown] == ["curation"]
+        assert strip.active == "curation" and strip.size == strip_height(300)
+
+    def test_a_shut_strip_stays_shut_when_a_panel_fills(self, figure):
+        from mbo_utilities.gui._top_strip import MENU_HEIGHT, TopStrip
+
+        strip = TopStrip(figure)
+        contents = Contents(True)
+        strip.register(panel("traces", height=200, occupied=contents))
+        strip.toggle_collapsed()
+        contents.full = False
+        figure.canvas.draw()
+        assert strip.size == MENU_HEIGHT
+        contents.full = True
+        figure.canvas.draw()
+        assert strip.collapsed and strip.size == strip.shut_size
+
+    def test_an_empty_panel_never_widens_the_window(self, figure):
+        from mbo_utilities.gui._top_strip import TopStrip
+
+        strip = TopStrip(figure)
+        width, _ = figure.canvas.get_logical_size()
+        strip.register(panel("a", min_width=width + 300, occupied=Contents()))
+        figure.canvas.draw()
+        assert figure.canvas.get_logical_size()[0] == width
 
 
 class TestSignalQualitySplit:
@@ -275,13 +356,13 @@ class TestTopStripResize:
         strip.reset_size()
         assert strip.size != 320
 
-    def test_resize_never_goes_under_the_shut_height(self, figure):
-        from mbo_utilities.gui._top_strip import TopStrip
+    def test_a_drag_never_goes_under_the_controls_row(self, figure):
+        from mbo_utilities.gui._top_strip import ROW_HEIGHT, TopStrip, strip_height
 
         strip = TopStrip(figure)
         strip.register(panel("a", height=180))
         strip.resize_to(10)
-        assert strip.size == strip.shut_size
+        assert strip.size == strip_height(ROW_HEIGHT) > strip.shut_size
 
     def test_collapse_remembers_a_pinned_height(self, figure):
         from mbo_utilities.gui._top_strip import TopStrip
@@ -312,19 +393,17 @@ class TestTopStripResize:
         strip = TopStrip(figure)
         assert strip.size == MENU_HEIGHT
 
-    def test_shut_keeps_the_tabs_and_the_controls_row(self, figure):
-        """The tabs and the panel's first row of controls stay visible, so
-        a double click on the bar never hides a panel's checkboxes.
-        """
+    def test_shut_keeps_only_the_tabs(self, figure):
+        """Shut, the strip is the menu row, the tab row and the bar: no sliver of the panel's body."""
         from imgui_bundle import imgui
-        from mbo_utilities.gui._top_strip import ROW_HEIGHT, TopStrip, strip_height
+        from mbo_utilities.gui._top_strip import TopStrip, strip_height
 
         strip = TopStrip(figure)
         drawn = []
         strip.register(panel("a", height=180))
         strip.panels[0].draw = lambda: drawn.append(1)
         strip.toggle_collapsed()
-        assert strip.size == strip_height(ROW_HEIGHT)
+        assert strip.size == strip_height(0)
         bars = []
         real = imgui.begin_tab_bar
         imgui.begin_tab_bar = lambda *a, **k: bars.append(1) or real(*a, **k)
@@ -333,7 +412,7 @@ class TestTopStripResize:
         finally:
             imgui.begin_tab_bar = real
         assert bars == [1]
-        assert drawn == [1], "a shut strip still draws the panel's controls row"
+        assert drawn == [], "a shut strip draws no panel body"
 
     def test_clicking_a_tab_opens_a_shut_strip(self, figure, monkeypatch):
         from imgui_bundle import imgui
@@ -348,6 +427,49 @@ class TestTopStripResize:
         assert not strip.collapsed
         strip._resize()
         assert strip.size == tall
+
+    def test_double_clicking_the_bar_shuts_and_opens_without_dragging(self, figure, monkeypatch):
+        """The press that ends a double click often moves a few pixels; it
+        must not drag the strip to a new height, nor undo the shut.
+        """
+        from imgui_bundle import imgui
+        from mbo_utilities.gui import _top_strip
+        from mbo_utilities.gui._top_strip import TopStrip
+
+        strip = TopStrip(figure)
+        strip.register(panel("a", height=180))
+        figure.canvas.draw()
+        tall = strip.size
+        mouse = {"double": False, "down": False}
+        monkeypatch.setattr(strip, "_render_height", lambda: 10_000.0)
+        monkeypatch.setattr(imgui, "is_item_hovered", lambda *a, **k: True)
+        monkeypatch.setattr(imgui, "is_item_active", lambda *a, **k: mouse["down"])
+        monkeypatch.setattr(imgui, "is_mouse_double_clicked", lambda *a, **k: mouse["double"])
+        monkeypatch.setattr(imgui, "is_mouse_down", lambda *a, **k: mouse["down"])
+        monkeypatch.setattr(imgui, "is_mouse_dragging", lambda *a, **k: mouse["down"])
+        monkeypatch.setattr(imgui, "get_mouse_drag_delta", lambda *a, **k: imgui.ImVec2(0, 40))
+        monkeypatch.setattr(_top_strip.imgui, "reset_mouse_drag_delta", lambda *a, **k: None)
+
+        def press(double):
+            mouse.update(double=double, down=True)
+            figure.canvas.draw()
+            mouse.update(double=False)
+
+        def release():
+            mouse.update(down=False)
+            figure.canvas.draw()
+
+        press(double=True)
+        figure.canvas.draw()  # the button still held, the mouse still moving
+        assert strip.collapsed and strip.size == strip.shut_size
+        release()
+        press(double=True)
+        figure.canvas.draw()
+        assert not strip.collapsed and strip.size == tall
+        release()
+        # a plain drag still resizes
+        press(double=False)
+        assert strip.size == tall + 40
 
     def test_a_panel_that_needs_more_width_widens_the_window_once(self, figure):
         from mbo_utilities.gui._top_strip import TopStrip

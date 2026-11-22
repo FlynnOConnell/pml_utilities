@@ -321,7 +321,7 @@ class TestInstallStatus:
         assert status.feature("PyTorch").gpu_ok is True
         assert status.feature("Cellpose").gpu_ok is True
         assert status.feature("CuPy").status is Status.MISSING
-        assert status.feature("MaskNMF").hint.startswith("uv pip install git+")
+        assert status.feature("MaskNMF").hint == install.MASKNMF_HINT
         assert status.feature("napari-ome-zarr") is None, (
             "plugins only matter with napari"
         )

@@ -29,11 +29,6 @@ the imgui/pygfx shell; everything here imports numpy/zarr only.
 - `model.py` — `RoiModel`: the store, the trace table and the slider position in
   one observable object; `targets(indices, z=, c=)` says where a run reads each
   ROI, `traced(index, ...)` what it has been measured with.
-- `imagej.py` — the exchange with Fiji and plain files: `export_roiset` /
-  `import_roiset` (`RoiSet.zip` via `roifile`, polygons on their plane),
-  `export_label_tiff` (ImageJ hyperstack), `export_traces` (CSV, one column
-  per `RoiTrace.name`), `export_footprints_npz` (masknmf's
-  `spatial_footprints`).
 - `ngff.py` — `RoiFile`: the rois zarr, `<stem>.rois.zarr`, one zarr v3
   group written whole (`.tmp` sibling swapped into place). `rois/` is the
   truth: ragged membership (`offsets`, `member`, `weight`) plus a column per
@@ -46,6 +41,13 @@ the imgui/pygfx shell; everything here imports numpy/zarr only.
   block and the `runs` list (loaded runs with their curation).
   `write_label_image` is the one NGFF label writer in the package;
   `arrays/suite2p.py::_add_suite2p_labels` uses it too.
+- `neurite_trace.py` — `Trace`, `write_trace`, `read_trace`: the trace zarr,
+  `<stem>.trace.zarr` beside the rois zarr, that `mbo stack-annotate` saves.
+  `paths/` holds the paths in the rois zarr's ragged encoding (`offsets`,
+  `points` as z y x voxels), `links` the proposals across gaps, and
+  `labels/paths` a derived NGFF label image (path k is k + 1). Written whole
+  like the rois zarr; reading needs only zarr and numpy, so masknmf-toolbox can
+  read the layout without importing this package.
 
 ## Abstraction seam with masknmf-toolbox
 
@@ -66,7 +68,7 @@ shared package is a file move, not a refactor:
   imgui label-button row in `gui/roi/curation.py` (`_draw_labels`) are
   the pieces both packages would import; keep them free of mbo/masknmf
   imports. Third-party imports the package makes today: `cmap` (`model.py`,
-  color by), `scipy.ndimage` (`display.py`, the dF/F baseline), `roifile`,
-  `tifffile` and `cv2` (`imagej.py`), `zarr` (`ngff.py`, function-local); the GUI draws the
+  color by), `scipy.ndimage` (`display.py`, the dF/F baseline),
+  `zarr` (`ngff.py`, function-local); the GUI draws the
   ROI tool with masknmf's imgui widgets (`TracePlot`, `draw_roi_table`), which
   this package never imports.

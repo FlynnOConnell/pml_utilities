@@ -1,6 +1,4 @@
-"""Widgets > ImGui Debugger: a floating window of imgui's own debug tools and
-imgui_debugger's inspector; Widgets > Style Editor beside it. No tab, no submenus.
-"""
+"""Widgets > ImGui Debugger: a floating window of imgui's own debug tools. No tab, no submenus."""
 
 from imgui_bundle import imgui
 from mbo_utilities.gui import widgets
@@ -9,7 +7,7 @@ from mbo_utilities.gui.widgets.widget_toggles import WIDGET_REGISTRY, draw_widge
 
 
 class Host:
-    """What the menu and the inspector are handed: a bag of attributes."""
+    """What the menu is handed: a bag of attributes."""
 
     def __init__(self):
         self.fpath = "session1.tif"
@@ -31,7 +29,7 @@ def draw_frames(parent, n=2, menu=False):
                 draw_widgets_menu(parent)
                 imgui.end_menu_bar()
                 imgui.end()
-            imgui_debug.draw_imgui_debug_windows(parent)
+            imgui_debug.draw_imgui_debug_windows()
             imgui.end_frame()
     finally:
         imgui.destroy_context(ctx)
@@ -55,15 +53,11 @@ def test_every_menu_entry_is_one_toggle():
 
 def test_the_window_and_every_tool_draw(monkeypatch):
     monkeypatch.delenv("MBO_DEBUG", raising=False)
-    host = Host()
     for key in imgui_debug._open:
         monkeypatch.setitem(imgui_debug._open, key, True)
-    monkeypatch.setattr(imgui_debug, "_inspector", None)
-    imgui_debug.get_inspector(host).visible = True
-    draw_frames(host)
-    # nothing closed itself, and the inspector looks at the host
+    draw_frames(Host())
+    # nothing closed itself
     assert all(imgui_debug._open.values())
-    assert imgui_debug.get_inspector(host).config.target is host
 
 
 def test_opening_needs_no_debug_flag(monkeypatch):

@@ -11,6 +11,7 @@ pipelines need it) and ``dims=`` names the axis the pages are on: ``"TYX"``,
 import numpy as np
 import pytest
 import tifffile
+from mbo_utilities.metadata import get_param
 from mbo_utilities.arrays import FrameAveragedView
 from mbo_utilities.reader import imread, source_reader_kwargs
 
@@ -44,7 +45,7 @@ def z_hyperstack(tmp_path, frames):
 def test_plain_stack_reads_as_time(plain_stack, frames):
     arr = imread(plain_stack)
     assert arr._shape5d() == (12, 1, 1, 8, 9)
-    assert arr.metadata["num_frames"] == 12
+    assert get_param(arr.metadata, "num_timepoints") == 12
     np.testing.assert_array_equal(np.asarray(arr[3, 0, 0]), frames[3])
 
 
@@ -79,7 +80,7 @@ def plain_2d(tmp_path, frames):
 
 @pytest.fixture
 def plain_3d(tmp_path, frames):
-    """tifffile's default for a 3D array: a shaped TIFF, no ImageJ tags."""
+    """Tifffile's default for a 3D array: a shaped TIFF, no ImageJ tags."""
     path = tmp_path / "pages.tif"
     tifffile.imwrite(path, frames)
     return path

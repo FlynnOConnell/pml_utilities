@@ -1,191 +1,84 @@
-> **A fork of [mbo_utilities](https://github.com/MillerBrainObservatory/mbo_utilities) for Program in Memory Longevity (PML)**
+> [!NOTE]
+> Install `pml_utilities` in a virtual environment with [uv](https://docs.astral.sh/uv/):
+>
+> ```bash
+> uv venv --python 3.12.9
+> .venv\Scripts\activate.ps1        # Windows PowerShell
+> source .venv/bin/activate         # Linux, macOS
+> uv pip install "pml_utilities[gui]"
+> ```
 
 <p align="center">
-<img src="mbo_utilities/assets/static/logo_utilities.png" height="110" alt="MBO Utilities logo">
+<img src="https://raw.githubusercontent.com/FlynnOConnell/pml_utilities/main/mbo_utilities/assets/static/logo_utilities.png" height="110" alt="MBO Utilities logo">
 </p>
 
-<p align="center">
-<a href="https://github.com/FlynnOConnell/pml_utilities/actions/workflows/install-check.yml"><img src="https://github.com/FlynnOConnell/pml_utilities/actions/workflows/install-check.yml/badge.svg" alt="Install from git URL beside masknmf"></a>
-<a href="https://millerbrainobservatory.github.io/mbo_utilities/"><img src="https://img.shields.io/badge/docs-online-green" alt="Documentation"></a>
-</p>
+# pml_utilities
 
-<p align="center">
-<a href="#installation"><b>Installation</b></a> ·
-<a href="https://millerbrainobservatory.github.io/mbo_utilities/"><b>Documentation</b></a> ·
-<a href="https://millerbrainobservatory.github.io/mbo_utilities/user_guide.html"><b>User Guide</b></a> ·
-<a href="https://millerbrainobservatory.github.io/mbo_utilities/file_formats.html"><b>Supported Formats</b></a> ·
-<a href="https://github.com/MillerBrainObservatory/mbo_utilities/issues"><b>Issues</b></a>
-</p>
+Readers, pipelines and viewers for imaging data, for the Program in Memory Longevity
+(PML). It installs the `mbo_utilities` Python package and the `mbo` command.
 
-Image processing utilities for the [Miller Brain Observatory](https://github.com/MillerBrainObservatory) (MBO).
+> **Beta channel.** `pml_utilities` is
+> [mbo_utilities](https://github.com/MillerBrainObservatory/mbo_utilities) plus
+> features that are still in beta. A feature lands here first and moves into the core
+> `mbo_utilities` once it settles, so expect changes between releases. The
+> documentation is [mbo_utilities'](https://millerbrainobservatory.github.io/mbo_utilities/).
 
-- **Modern Image Reader/Writer**: Fast, lazy I/O for ScanImage/generic TIFFs, Suite2p `.bin`, Zarr, HDF5, and Numpy (in memeory or saved to `.npy`)
-- **Run processing pipelines** for calcium imaging - motion correction, cell extraction, and signal analysis
-- Operates on **3D timeseries** natively and is extendable to ND-arrays
-- **Visualize data interactively** with **The Studio**, a GPU-accelerated GUI for exploring large datasets with [fastplotlib](https://fastplotlib.org/user_guide/guide.html#what-is-fastplotlib)
+- **Lazy reading and writing** of ScanImage and other TIFFs, Femtonics MESc, Bruker
+  and lab4 HDF5, Zarr, suite2p folders, NumPy and IsoView trees, each as one
+  `(T, C, Z, Y, X)` array
+- **The Studio**, a GPU viewer built on [fastplotlib](https://fastplotlib.org):
+  hand-drawn ROIs, traces, motion correction and behavior on one time axis
+- **Pipelines** from the Studio or the command line: suite2p and, installed
+  separately, MaskNMF and the voltage imaging pipelines, each writing one results zarr
+- **MESc line-scan tools**: named ROIs, trace figures (`mbo dashboard`) and event
+  curation (`mbo curate`)
 
-<p align="center">
-  <img src="docs/_images/gui/readme/01_step_file_dialog.png" height="280" alt="File Selection" />
-  <img src="docs/_images/gui/readme/02_step_data_view.png" height="280" alt="Data Viewer" />
-  <img src="docs/_images/gui/readme/03_metadata_viewer.png" height="280" alt="Metadata Viewer" />
-  <br/>
-  <em>Select data, visualize, and inspect metadata</em>
-</p>
+## Extras
 
-> **Note:**
-> `mbo_utilities` is in **late-beta** stage of active development. There will be bugs that can be addressed quickly, file an [issue](https://github.com/MillerBrainObservatory/mbo_utilities/issues) or reach out on slack.
-
-## Installation
-
-Python 3.12.7 to 3.13. The distribution is `pml_utilities`; it installs the
-`mbo_utilities` package and the `mbo` command, so it cannot share an environment
-with the PyPI `mbo_utilities`.
+Python 3.12.7 to 3.13. The base install reads and writes every format and has no
+window. `pml_utilities` and the PyPI `mbo_utilities` install the same package, so they
+cannot share an environment.
 
 ```bash
-uv venv --python 3.12
-uv pip install "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+uv pip install "pml_utilities[gui]"    # The Studio
+uv pip install "pml_utilities[all]"    # every extra
 ```
 
-With MaskNMF, install both in one command so the shared pins resolve together:
+| Extra | Adds |
+|-------|------|
+| `gui` | The Studio and the ROI, trace and curation tools; the ROI tool also needs masknmf, installed separately |
+| `suite2p` | suite2p and rastermap; then `uv pip install --no-deps lbm-suite2p-python` |
+| `server` | `mbo serve`, The Studio in a browser |
+| `hpc` | submitit, to run suite2p on SLURM |
+| `napari` | the napari viewer mode |
+| `notebooks` | JupyterLab, for the notebooks `mbo init` writes |
+| `video` | ffmpeg, for mp4 export |
+| `codecs` | imagecodecs, for compressed TIFFs |
+| `pyramid` | numba, for mode-downsampled zarr pyramids |
+| `dask` | `files_to_dask` |
+| `qt` | PyQt6 window backend; glfw is the default |
+
+`mbo --check-install` lists every package, the GPU, and the install command for
+anything missing, including Qt's system libraries on a minimal Linux install.
+
+## Use
 
 ```bash
-uv pip install "masknmf @ git+https://github.com/apasarkar/masknmf-toolbox" "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
+mbo                        # open The Studio
+mbo /path/to/data          # open a file or folder
+mbo info /path/to/data     # shape and metadata
+mbo convert IN OUT         # convert between formats
+mbo dashboard scan.mesc    # trace figures of a .mesc unit's ROIs
+mbo curate scan.mesc       # event curation of a line scan
+mbo --help                 # every command
 ```
-
-With suite2p (`lbm-suite2p-python` depends on the PyPI `mbo_utilities`, so `--no-deps`):
-
-```bash
-uv pip install --no-deps lbm-suite2p-python
-uv pip install suite2p rastermap torch torchvision
-```
-
-Quick viewer without installing:
-
-```bash
-uvx --from "git+https://github.com/FlynnOConnell/pml_utilities.git" mbo /path/to/data
-```
-
-Upgrade:
-
-```bash
-uv pip install --refresh -U "pml_utilities @ git+https://github.com/FlynnOConnell/pml_utilities.git"
-```
-
-On a minimal Ubuntu/Debian install the viewer's window needs Qt's system libraries:
-
-```bash
-sudo apt install --no-install-recommends libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-render0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 libxkbcommon0 libx11-xcb1 libegl1 libgl1 libfontconfig1 libdbus-1-3 ffmpeg
-```
-
-Suite2p on a GPU needs the CUDA build of pytorch; see the pytorch
-[Get Started](https://pytorch.org/get-started/locally/) page for your CUDA version:
-
-```bash
-uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-```
-
-`mbo --check-install` reports every package, GPU availability and the install
-command for anything missing.
-
-## Usage
-
-### Supported Formats
-
-| Format | Read | Write | Description |
-|--------|:----:|:-----:|-------------|
-| ScanImage TIFF | ✓ | ✓ | Native LBM acquisition format |
-| Generic TIFF | ✓ | ✓ | Standard TIFF stacks |
-| Zarr | ✓ | ✓ | Chunked cloud-ready arrays |
-| HDF5 | ✓ | ✓ | Hierarchical data format |
-| Suite2p | ✓ | ✓ | Binary and ops.npy files |
-| NumPy | ✓ | ✓ | In-memory arrays or `.npy` files |
-
-→ [Formats Guide](https://millerbrainobservatory.github.io/mbo_utilities/file_formats.html)
-
-To get started quickly, `mbo init path/to/data` will download the starter notebooks and auto-fill your data path.
-
-The [user-guide](https://millerbrainobservatory.github.io/mbo_utilities/user_guide.html) covers usage in a jupyter notebook.
-The [CLI Guide](https://millerbrainobservatory.github.io/mbo_utilities/cli.html) provides a more in-depth overview of the CLI commands.
-The [GUI Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/gui_guide.html) provides a more in-depth overview of the GUI.
-The [ScanPhase Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/cli.html#scan-phase-analysis) describes the bi-directional scan-phase analysis tool with output figures and figure descriptions.
-
-| Command | Description |
-|---------|-------------|
-| `mbo init` | Create starter notebooks (mbo + LBM-Suite2p user guides) |
-| `mbo /path/to/data.tiff` | View a supported file/folder |
-| `mbo info /path/to/data.tiff` | Show file info and metadata |
-| `mbo convert input.tiff output.zarr` | Convert between formats |
-| `mbo scanphase /path/to/data.tiff` | Run scan-phase analysis |
-| `mbo formats` | List supported formats |
-| `mbo shortcut` | Create a desktop shortcut for a local installation |
-| `mbo pollen` | Pollen calibration tool (WIP) |
-| `mbo pollen path/to/data` | Pollen calibration - Skip data collection |
-
-→ [CLI Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/cli.html)
-
-### The Studio
-
-Launch an interactive GPU-accelerated viewer for exploring large imaging datasets. Supports all MBO file formats with real-time visualization.
-
-```bash
-mbo                    # launch GUI
-mbo /path/to/data      # open file directly
-mbo --check-install    # verify GPU configuration
-mbo shortcut           # add a desktop icon (Windows/Linux)
-```
-
-→ [GUI Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/gui_guide.html)
-
-### Scan-Phase Analysis
-
-Measure and correct bidirectional scan-phase offset in resonant scanning microscopy data. Generates diagnostic figures showing temporal stability, spatial variation, and recommended corrections.
-
-```bash
-mbo scanphase /path/to/data.tiff -o ./output
-```
-
-→ [Scan-Phase Guide](https://millerbrainobservatory.github.io/mbo_utilities/usage/cli.html#scan-phase-analysis)
-
-### Axial (Z-plane) Registration
-
-Compute per-plane rigid shifts that align z-planes to each other. Shifts are
-stored in metadata, **not** baked into the saved pixels, so they can be applied
-or removed non-destructively at read time.
 
 ```python
 import mbo_utilities as mbo
 
-# compute shifts on save; they are written to metadata["plane_shifts"]
-mbo.imwrite(arr, "registered.zarr", ext=".zarr", register_z=True)
-
-# apply them on read (reversible, source never modified)
-data = mbo.imread("registered.zarr")
-aligned = mbo.with_axial_shifts(data)  # reads metadata["plane_shifts"]
-aligned.enabled = False  # back to the raw frames
-
-# or supply your own shifts (one (dy, dx) row per z-plane)
-shifts = [[0, 0], [2, -1], [3, -2]]  # len must equal the Z size
-aligned = mbo.with_axial_shifts(data, plane_shifts=shifts)
+arr = mbo.imread("scan.mesc", unit="MUnit_3")   # lazy, (T, C, Z, Y, X)
+mbo.imwrite(arr, "out", ext=".zarr")
 ```
-
-In The Studio, datasets that carry valid `plane_shifts` are aligned
-automatically on load. Saving the aligned view bakes the shifts into the output
-pixels.
-
-## ScanImage Acquisition Modes
-
-`mbo_utilities` automatically detects and parses metadata from these ScanImage acquisition modes:
-
-| Configuration | Detection | Result |
-|---------------|-----------|--------|
-| LBM single channel | `channelSave=[1..N]`, AI0 only | `lbm=True`, `colors=1` |
-| LBM dual channel | `channelSave=[1..N]`, AI0+AI1 | `lbm=True`, `colors=2` |
-| Piezo (single frame/slice) | `hStackManager.enable=False`, `framesPerSlice=1` | `piezo=True` |
-| Piezo multi-frame (with avg) | `hStackManager.enable=False`, `logAvgFactor>1` | `piezo=True`, averaged frames |
-| Piezo multi-frame (no avg) | `hStackManager.enable=False`, `framesPerSlice>1`, `logAvg=1` | `piezo=True`, raw frames |
-| Single plane | `hStackManager.enable=False` | `zplanes=1` |
-
-> **Note:** Frame-averaging (`logAverageFactor > 1`) is only available for non-LBM acquisitions.
 
 ## Uninstall
 
@@ -194,84 +87,6 @@ uv pip uninstall pml_utilities
 rm -rf ~/.mbo          # settings, logs and caches
 ```
 
-## Troubleshooting
+## Issues
 
-<details>
-<summary><b>Error: "Failed to auto-detect CUDA root directory"</b></summary>
-
-This occurs when using GPU-accelerated features and CuPy cannot find your CUDA Toolkit.
-
-**Check if CUDA is installed:**
-
-```powershell
-# Windows
-dir "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA" -ErrorAction SilentlyContinue
-$env:CUDA_PATH
-```
-
-```bash
-# Linux/macOS
-nvcc --version
-echo $CUDA_PATH
-```
-
-**Set CUDA_PATH:**
-
-```powershell
-# Windows (replace v12.6 with your version)
-$env:CUDA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
-[System.Environment]::SetEnvironmentVariable('CUDA_PATH', $env:CUDA_PATH, 'User')
-```
-
-```bash
-# Linux/macOS (add to ~/.bashrc or ~/.zshrc)
-export CUDA_PATH=/usr/local/cuda-12.6
-```
-
-If CUDA is not installed, download from [NVIDIA CUDA Downloads](https://developer.nvidia.com/cuda-downloads).
-
-</details>
-
-<details>
-<summary><b>Error: "libcudnn.so.9: cannot open shared object file"</b></summary>
-
-PyTorch can't load a CUDA library that `pip list` still reports as installed — its files were removed, usually when a conflicting CUDA build was uninstalled. Reinstall the environment:
-
-```bash
-cd my_env
-uv sync --reinstall --no-cache --all-extras
-```
-
-</details>
-
-<details>
-<summary><b>Git LFS Download Errors</b></summary>
-
-There is a [bug in fastplotlib](https://github.com/fastplotlib/fastplotlib/issues/861) causing `git lfs` errors when installed from a git branch.
-
-Set `GIT_LFS_SKIP_SMUDGE=1` and restart your terminal:
-
-```powershell
-# Windows
-[System.Environment]::SetEnvironmentVariable('GIT_LFS_SKIP_SMUDGE', '1', 'User')
-```
-
-```bash
-# Linux/macOS
-echo 'export GIT_LFS_SKIP_SMUDGE=1' >> ~/.bashrc
-source ~/.bashrc
-```
-
-</details>
-
-## Built With
-
-- **[Suite2p](https://github.com/MouseLand/suite2p)** - Integration support
-- **[Rastermap](https://github.com/MouseLand/rastermap)** - Visualization
-- **[Suite3D](https://github.com/alihaydaroglu/suite3d)** - Volumetric processing
-
-## Issues & Support
-
-- **Bug reports:** [GitHub Issues](https://github.com/MillerBrainObservatory/mbo_utilities/issues)
-- **Questions:** See [documentation](https://millerbrainobservatory.github.io/mbo_utilities/) or open a discussion
-
+Report problems on [GitLab](https://gitlab.com/losonczylab/pml_utilities/-/issues).

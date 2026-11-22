@@ -4,6 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 
+from mbo_utilities.annotation.domains import (
+    DomainFile,
+    find_domains,
+    line_label,
+    scan_of,
+)
+from mbo_utilities.preferences import get_roi_folder
+
 ON_THICKNESS = 2.5
 SELECTED_THICKNESS = 4.5
 
@@ -64,7 +72,7 @@ def saved_roi_traces(ref_arr, channel: int = 0) -> tuple[np.ndarray, str] | None
 
 class TraceJob:
     """``(K, T)`` per-ROI traces for the Traces tab: the recording's vnoiser run
-    when it has them, else the raw reduction (``roi_workflow.linescan_roi_means``)
+    when it has them, else the raw reduction (``analysis.linescan.linescan_roi_means``)
     on a daemon thread so the window opens at once. The reads and means release the GIL, so the
     render loop stays responsive; ``result`` is set when done, ``error`` on
     failure, and ``progress`` is ``(rois done, rois total)`` meanwhile.
@@ -124,27 +132,12 @@ class TraceJob:
         print(f"  traces: ROI {i + 1}/{k} done ({seconds:.1f}s)")
 
     def _run(self) -> None:
-        from mbo_utilities.analysis.roi_traces import (
-            TraceSettings,
-            extract_traces,
-            roi_geometry,
-        )
-        from mbo_utilities.roi_workflow import linescan_roi_means
+        from mbo_utilities.analysis.linescan import unit_roi_means
 
         try:
-            if self.ref_arr.metadata.get("mesc_roi_extents"):
-                self.result = linescan_roi_means(
-                    self.ref_arr, channel=self.channel, progress=self._on_roi
-                )
-            else:
-                found = extract_traces(
-                    self.ref_arr,
-                    {f"roi{k}": [k] for k in roi_geometry(self.ref_arr)},
-                    TraceSettings(convert=True),
-                    channel=self.channel,
-                    progress=self._on_roi,
-                )
-                self.result = found.F.astype(np.float32)
+            self.result = unit_roi_means(
+                self.ref_arr, channel=self.channel, progress=self._on_roi
+            )
             self.source = f"computed from channel {self.channel}"
         except BaseException as e:
             self.error = e
@@ -267,7 +260,6 @@ class StandardTraces:
         self.roi.traces.drop_source(self.name)
         for k in range(traces.shape[0]):
             extra = {"line": k, "from": str(self.job.source), "unit": "photons"}
-            label = f"ROI {k}"
             if positions is not None and k < len(positions):
                 extra.update(positions[k])
             self.roi.traces.add(
@@ -275,7 +267,6 @@ class StandardTraces:
                     uid=0,
                     member=k,
                     source=self.name,
-                    label=label,
                     fs=fs,
                     z=k,
                     c=int(self.job.channel),
@@ -283,8 +274,20 @@ class StandardTraces:
                     extra=extra,
                 )
             )
+        self.relabel()
         self.roi.pending_traces = None
         self.attached = True
+
+    def relabel(self) -> None:
+        """Name each row after its ROI and the domain the domain file gives it."""
+        found = find_domains(self.arr.filenames[0], get_roi_folder() or None)
+        names = (
+            {}
+            if found is None
+            else DomainFile.read(found).roi_names(scan_of(self.arr.unit_key))
+        )
+        for trace in self.roi.traces.from_source(self.name):
+            trace.label = line_label(trace.member, names)
 
     def close(self) -> None:
         self.strip.remove_hook(self)

@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import time
 from dataclasses import asdict
@@ -60,6 +61,14 @@ from mbo_utilities.analysis.roi_traces import (
     extract_traces,
     roi_geometry,
 )
+from mbo_utilities.annotation.domains import (
+    DomainFile,
+    domains_path,
+    trim_frames,
+    trim_seconds,
+    trimmed_window,
+)
+from mbo_utilities.preferences import get_roi_folder
 from mbo_utilities.vnoiser.params import (
     OUTPUT_FORMATS,
     VnoiserDfofSettings,
@@ -84,6 +93,8 @@ __all__ = [
 DOMAINS_FILE = "domains.json"
 TRACES_DIR = "traces"
 TIMINGS_FILE = "timings.json"
+_ROI_MAP = re.compile(r"((?:\d+(?:-\d+)?,)*\d+(?:-\d+)?):([A-Za-z_]\w*)")
+_EACH_LINES = re.compile(r"((?:[A-Za-z_]\w*,\s*)+)each(\d+)lines?", re.IGNORECASE)
 
 
 def _munit_number(unit_key: str) -> str:
@@ -311,65 +322,104 @@ def scan_traces_from_mesc(
         _munit_number(md.get("mesc_unit", unit_key)),
         float(md["fs"]),
         {r: found.roi_mean[r] for r in rois},
-        {r: float(geometry[r][1] * geometry[r][2]) for r in rois},
+        {r: float(geometry[r][0] * geometry[r][1]) for r in rois},
         comment=str(md.get("comment", "") or ""),
     )
 
 
-def read_domains(path) -> dict:
-    """``{"domains", "scan_ids", "first_env"}`` from a ``domains.json`` or an
-    archive ``scanIDs_ROIs.pkl``.
+def read_domains(path, scans=None) -> dict:
+    """``{"domains", "run", "scan_ids", "first_env", "labels", "scan_labels"}``
+    from a domain file (:class:`~mbo_utilities.annotation.domains.DomainFile`)
+    or an archive ``scanIDs_ROIs.pkl``.
 
-    The JSON holds ``{"domains": {"soma1": [0, 1, 2], "cell": {"rois": [3],
-    "pixels": "correlated", "fraction": 0.3}, ...}, "scans": ["35", "38"],
-    "first_env": ["35"]}``: a domain is an ROI list (every pixel of those
-    ROIs) or a :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json`
-    entry; ``scans`` and ``first_env`` are optional. ``domains`` comes back
-    as given, checked.
+    A domain is an ROI list (every pixel of those ROIs) or a
+    :meth:`~mbo_utilities.analysis.roi_traces.Domain.from_json` entry. The
+    table is the layout holding ``scans`` (MUnit numbers), or the file's only
+    one; ``scan_ids`` are that layout's scans, ``run`` the domains a run takes
+    (None: all), ``labels`` the experiment's list (None when not given) and
+    ``scan_labels`` what changed at a scan.
+
+    Raises
+    ------
+    ValueError
+        When ``scans`` span layouts, or none is given and the file has several.
     """
     path = Path(path)
     if path.suffix.lower() == ".pkl":
         rois = load_scan_rois(path)
         return {
             "domains": rois["domains"],
+            "run": None,
             "scan_ids": rois["scan_ids"],
             "first_env": rois["first_env"],
+            "labels": None,
+            "scan_labels": {},
         }
-    doc = json.loads(path.read_text())
-    found = domains_from_json(doc.get("domains") or {})
-    if not found:
-        raise ValueError(f"{path} defines no domains")
+    found = DomainFile.read(path)
+    scans = [str(s) for s in scans or []]
+    if scans:
+        layouts = [found.layout_of(s) for s in scans]
+        if any(lay is None for lay in layouts):
+            raise ValueError(f"{path.name} has no table for scans {scans}")
+        if any(lay is not layouts[0] for lay in layouts):
+            raise ValueError(
+                f"scans {scans} use different tables in {path.name}; run each layout on its own"
+            )
+        layout = layouts[0]
+    elif len(found.layouts) == 1:
+        layout = found.layouts[0]
+    else:
+        raise ValueError(
+            f"{path.name} holds {len(found.layouts)} layouts "
+            f"({'; '.join(', '.join(lay.scans) for lay in found.layouts)}); name the scans"
+        )
     return {
-        "domains": {d.name: d.to_json() for d in found},
-        "scan_ids": [str(s) for s in doc.get("scans", [])],
-        "first_env": [str(s) for s in doc.get("first_env", [])],
+        "domains": dict(layout.domains),
+        "run": layout.run,
+        "scan_ids": list(layout.scans),
+        "first_env": list(found.first_env),
+        "labels": found.labels,
+        "scan_labels": dict(found.scan_labels),
     }
 
 
-def comment_names(comment: str, n_rois: int) -> list[str] | None:
-    """One name per ROI from a unit comment that lists as many
-    (``"soma, bas1, api1"``), else None: ``"soma,bas1-3,api1-5"`` names
-    groups, not ROIs, and a free comment names nothing.
+def comment_groups(comment: str, n_rois: int) -> dict[str, list[int]] | None:
+    """``{name: rois}`` from a unit comment that maps every ROI exactly once, else None.
+
+    Reads the two forms the rig uses: ``"ROI0,13,14:soma,1-3:bg"`` and
+    ``"soma,bas1,api1,each2lines"`` (consecutive ROIs, as many as the count
+    says). A dropped separator (``151620:api4``, ``ROI01:soma``) leaves an
+    ROI out or names one twice, so that comment names nothing.
     """
-    names = [n.strip() for n in str(comment or "").split(",") if n.strip()]
-    if len(names) != n_rois or len(set(names)) != len(names):
-        return None
-    if any(not n.replace("_", "").replace("-", "").isalnum() for n in names):
-        return None
-    return names
+    text = str(comment or "")
+    groups = {}
+    for spec, name in _ROI_MAP.findall(text.partition("ROI")[2]):
+        bounds = [part.partition("-") for part in spec.split(",")]
+        groups[name] = [
+            r for lo, _, hi in bounds for r in range(int(lo), int(hi or lo) + 1)
+        ]
+    each = _EACH_LINES.search(text)
+    if each and not groups:
+        k = int(each[2])
+        names = [name.strip() for name in each[1].split(",")[:-1]]
+        groups = {n: list(range(i * k, (i + 1) * k)) for i, n in enumerate(names)}
+    named = sorted(r for rois in groups.values() for r in rois)
+    return groups if named == list(range(n_rois)) else None
 
 
 def write_domains_template(
-    mesc_path, path=None, *, units=None, per_domain: int = 1
+    mesc_path, path=None, *, units=None, per_domain: int = 1, root=None
 ) -> Path:
-    """Write a ``domains.json`` to edit: the file's recordings as
+    """Write a domain file to edit (``<stem>.domains.json`` in the ROI folder
+    under ``root``, see :func:`~mbo_utilities.annotation.domains.domains_path`,
+    unless ``path`` is given): the file's recordings as
     ``scans`` and one domain per ROI (``roi0: [0]``, ...; ``per_domain``
     groups consecutive ROIs instead, the archive's three lines per
-    domain), named from the unit comment when it lists as many names
-    (``'soma,bas1-3,api1-5'`` does not). Returns the path.
+    domain), or the named groups of the first scan's comment when it maps
+    every ROI (:func:`comment_groups`). Returns the path.
     """
     mesc_path = Path(mesc_path)
-    path = Path(path) if path is not None else mesc_path.parent / DOMAINS_FILE
+    path = Path(path) if path is not None else domains_path(mesc_path, root)
     scans = scan_units(mesc_path, units)
     if not scans:
         raise ValueError(f"no recording with traces in {mesc_path}")
@@ -378,19 +428,22 @@ def write_domains_template(
         list(range(i, min(i + per_domain, n_rois)))
         for i in range(0, n_rois, per_domain)
     ]
-    names = comment_names(scans[0].get("comment"), len(groups)) or [
-        f"roi{g[0]}" if len(g) == 1 else f"domain{i + 1}" for i, g in enumerate(groups)
-    ]
+    domains = comment_groups(scans[0].get("comment"), n_rois) or {
+        f"roi{g[0]}" if len(g) == 1 else f"domain{i + 1}": g
+        for i, g in enumerate(groups)
+    }
     doc = {
         "mesc": mesc_path.name,
         "scans": [_munit_number(u["key"]) for u in scans],
         "first_env": [_munit_number(scans[0]["key"])],
-        "domains": {name: rois for name, rois in zip(names, groups, strict=True)},
+        "domains": domains,
         "note": "domains: name -> ROI indices (0-based, the order the lines or patches were drawn), "
         'or {"rois": [...], "pixels": "all|bright|active|correlated|mask", "fraction": 0.3, '
         '"mask": {"<roi>": [flat pixel indices]}}; scans: MUnit numbers in order; '
-        "first_env: the first scan of each environment",
+        "first_env: the first scan of each block, a change of condition, in order; "
+        'scan_labels: what changed there, {"<scan>": ["Reward switch"]}',
     }
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2))
     return path
 
@@ -499,7 +552,9 @@ def run_vnoiser_pipeline(
     convert : bool, optional
         Overrides ``settings.traces.convert`` when given.
     frames : (start, stop), optional
-        The half-open window of frames read.
+        The half-open window of frames read, starting no earlier than each
+        scan's trim in the domain file
+        (:func:`~mbo_utilities.annotation.domains.trim_seconds`).
     planes : sequence of int, optional
         The pipeline input contract's 1-based Z selection. On an AOD ROI
         unit Z is the ROI index, so these are the ROIs (lines, patches) to
@@ -651,6 +706,7 @@ def run_vnoiser_pipeline(
     )
     try:
         scans, extracted = [], {}
+        roi_root = get_roi_folder() or None
         for k, u in enumerate(chosen):
             sid = _munit_number(u["key"])
             logger.info(
@@ -658,12 +714,13 @@ def run_vnoiser_pipeline(
             )
             usage.begin("read", scan=sid, unit=u["key"])
             arr = MescArray(mesc_path, unit=u["key"])
+            trim = trim_frames(mesc_path, u["key"], arr.metadata["fs"], roi_root)
             ex = extract_traces(
                 arr,
                 found,
                 settings.traces,
                 channel=channel,
-                frames=frames,
+                frames=trimmed_window(frames, arr.nt, trim),
                 progress=partial(
                     _read_progress, logger, progress_callback, sid, k, len(chosen)
                 ),
@@ -673,7 +730,7 @@ def run_vnoiser_pipeline(
                 sid,
                 float(arr.metadata["fs"]),
                 ex.roi_mean,
-                {r: float(geometry[r][1] * geometry[r][2]) for r in ex.roi_mean},
+                {r: float(geometry[r][0] * geometry[r][1]) for r in ex.roi_mean},
                 comment=str(arr.metadata.get("comment", "") or u.get("comment") or ""),
             )
             scans.append(scan)
@@ -685,6 +742,19 @@ def run_vnoiser_pipeline(
             )
 
         example = denoiser_factory(scans[0].fs_hz)
+        trims = {
+            s.scan_id: trim_seconds(mesc_path, u["key"], roi_root)
+            for s, u in zip(scans, chosen, strict=True)
+        }
+        # only a trimmed run names each scan's window, so untrimmed runs compare equal to earlier ones
+        trim_record = {}
+        if any(trims.values()):
+            trim_record = {
+                "trim_s": trims,
+                "scan_frames": {
+                    sid: [int(v) for v in ex.frames] for sid, ex in extracted.items()
+                },
+            }
         info = {
             "pipeline": "mbo_utilities.vnoiser.pipeline.run_vnoiser_pipeline",
             "versions": versions,
@@ -706,6 +776,7 @@ def run_vnoiser_pipeline(
                 "channel": int(channel),
                 "convert": bool(settings.traces.convert),
                 "frames": None if frames is None else [int(frames[0]), int(frames[1])],
+                **trim_record,
                 "planes": None if planes is None else [int(p) for p in planes],
                 # the table as given; `planes` cuts the one the run works on
                 "domains": given,
@@ -715,6 +786,9 @@ def run_vnoiser_pipeline(
         info.update(provenance or {})
         processed = {s.scan_id for s in scans}
         first_env = [str(s) for s in first_env if str(s) in processed]
+        # analysis cuts blocks at this list by position, so the first scan always starts one
+        if scans and scans[0].scan_id not in first_env:
+            first_env.insert(0, scans[0].scan_id)
         writer = None
         if denoise:
             writer = PfWriter(
@@ -950,11 +1024,17 @@ def run_vnoiser_pipeline(
         )
         prov = _write_timing(pf_dir, usage)
         if as_zarr:
-            from mbo_utilities.results import Results, pipeline_files
+            from mbo_utilities.results import (
+                Results,
+                carry_curation,
+                newest_results,
+                pipeline_files,
+            )
 
             if progress_callback is not None:
                 progress_callback(0.97, "writing the results zarr")
             usage.begin("results")
+            previous = newest_results(results_path.parent, "vnoiser", source=mesc_path)
             results_path = Results.from_pf(pf_dir).write(results_path, overwrite=True)
             usage.end(f"wrote {results_path.name}")
             prov = _write_timing(pf_dir, usage)
@@ -972,6 +1052,12 @@ def run_vnoiser_pipeline(
                     paths[f"{own.name}/{item.relative_to(own).as_posix()}"] = item
             paths[results_path.name] = results_path
             zarr.open_group(str(results_path), mode="r+").attrs["provenance"] = prov
+            if previous is not None and previous != results_path:
+                carried = carry_curation(results_path, previous)
+                if carried:
+                    logger.info(
+                        f"curation of {len(carried)} recordings carried over from {previous.name}"
+                    )
             timings_at = own / TIMINGS_FILE
         else:
             timings_at = pf_dir / TIMINGS_FILE
@@ -1043,8 +1129,8 @@ def preview_domain(
     (seconds), ``pixel_mean``, ``measured``, ``F`` (what dF/F is taken
     of), ``f0`` (its baseline), ``background``, ``reference``, ``dfof``,
     ``z`` (each ``(T,)`` or None), ``images`` / ``mask`` /
-    ``shape`` per ROI of the domain, ``rois``, ``fs`` and ``info``. The Run
-    tab draws it; it holds no pipeline rule of its own.
+    ``shape`` per ROI of the domain, ``name``, ``rois``, ``fs`` and ``info``.
+    The Run tab draws it; it holds no pipeline rule of its own.
     """
     from mbo_utilities.arrays.mesc import MescArray
 
@@ -1053,6 +1139,9 @@ def preview_domain(
         raise KeyError(f"no domain {name!r}")
     arr = MescArray(mesc_path, unit=unit)
     fs = float(arr.metadata["fs"])
+    frames = trimmed_window(
+        frames, arr.nt, trim_frames(mesc_path, unit, fs, get_roi_folder() or None)
+    )
     settings = (settings or VnoiserSettings()).at_fs(fs)
     wanted = [found[name]]
     if settings.traces.background == "domain":
@@ -1090,6 +1179,7 @@ def preview_domain(
         "reference": None if ex.reference is None else ex.reference[row],
         "dfof": dfof[0],
         "z": z[0],
+        "name": name,
         "rois": list(found[name].rois),
         "images": {r: ex.images[r] for r in found[name].rois},
         "mask": {r: ex.masks[name][r] for r in found[name].rois},

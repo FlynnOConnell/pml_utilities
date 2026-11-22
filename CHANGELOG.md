@@ -40,3 +40,24 @@ smaller internal tweaks are left out.
 - `MP4Array` unifies reading and writing mp4s; `to_video` now streams frame by frame.
 - GPU toggle via the `MBO_GPU` environment variable, the `mbo gpu` CLI command, or the Options panel. Warns if you select Cellpose without a GPU build of PyTorch.
 - Python 3.13 is now supported.
+
+## v4.0.0 — 2026-11-18
+
+- First release on PyPI as `pml_utilities`, the beta channel of `mbo_utilities`: features land here first and move into `mbo_utilities` once they settle.
+- MESc line-scan tools: named ROIs and domains, `mbo dashboard` trace figures, slow / fast event curation.
+- The vnoiser Parameters popup is grouped as Trace, dF/F and z-score, Wavelet denoiser and Peaks, with a live preview of one domain's trace.
+- The results zarr: one output format for suite2p, MaskNMF, vnoiser and hand-drawn ROI runs.
+- `mbo serve` shows The Studio in a browser.
+- vnoiser is no longer an extra; it installs separately.
+- The online documentation is `mbo_utilities`'; the `docs` extra is gone and `docs/` stays as its source.
+- The base install is the reading and writing core; The Studio is the `gui` extra, and PyQt6, dask, imagecodecs, numba and ffmpeg are extras of their own.
+
+## v4.1.0 — unreleased
+
+- `mbo stack-annotate`: annotate dendrites, spines and other structures through a Z-stack in XY, XZ, YZ and 3D, with a brush on all three planes and an editable automatic trace, saved as `<stem>.trace.zarr` (paths, link proposals and an OME-NGFF label image). A `.mesc` with several Z-stacks lists them; the MESc tab's **Annotate in 3D** opens the one on screen. Install the `annotate` extra.
+- The stack annotator draws a crosshair on XY where XZ and YZ cut it; `g` or the **crosshair** checkbox shows or hides it with the side views' guide lines.
+- The stack annotator shows the XY, XZ and YZ slices through the crosshair inside the 3D view; the **slices** checkbox shows or hides them.
+- The viewers open on Wayland: with PyQt6 they run under XWayland, since rendercanvas cannot present to a Qt Wayland window from PyQt6.
+- **Process > MaskNMF** opens masknmf's own Parameters popup and runs masknmf's own pipeline (two-photon calcium, voltage and the rest) on each z-plane. pml_utilities picks the plane, channel and frames, applies the read features and hands masknmf a `(T, Y, X)` view. Each plane's run folder is masknmf's, under `<output>/zplaneNN/`, with a results zarr beside its `results.hdf5`. **View results** opens the last run in masknmf's viewer.
+- Removed: running drawn ROIs through suite2p or masknmf from the ROI tool (its RUN section, `shift+t` and the `.manual.zarr` run files). The Curation tab's **TRACE** section keeps the mean traces of drawn ROIs.
+- Removed: `mbo asap7`, `mbo reg-denoise`, `mbo --qc`, the Registration QC viewer and the ASAP7 notebook template.

@@ -13,7 +13,6 @@ from imgui_bundle import icons_fontawesome as fa
 from imgui_bundle import imgui, imgui_ctx
 
 from mbo_utilities.gui._dialogs import start_open_prompt
-from mbo_utilities.gui.widgets.notebooks import draw_notebook_menu
 from mbo_utilities.gui.widgets.process_manager import get_process_manager
 from mbo_utilities.gui.widgets.widget_toggles import draw_widgets_menu
 
@@ -42,7 +41,6 @@ def draw_menu_bar(parent: Any):
                     "Open Folder", "Shift+O", p_selected=False, enabled=True
                 )[0]:
                     start_open_prompt(parent, "folder")
-                draw_notebook_menu(parent)
                 imgui.separator()
                 if imgui.menu_item(
                     "Set Metadata", "Shift+M", p_selected=False, enabled=True

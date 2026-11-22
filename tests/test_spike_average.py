@@ -245,26 +245,28 @@ def test_the_window_follows_its_roi_trace_and_spike_choices(run):
 @pytest.mark.slow
 def test_a_masknmf_run_averages_its_registered_and_compressed_movies(tmp_path):
     pytest.importorskip("masknmf")
-    from mbo_utilities.masknmf import run_plane
-    from mbo_utilities.masknmf.params import STAGE_SKIP, MasknmfSettings
+    from mbo_utilities.masknmf import run_planes
 
     rng = np.random.default_rng(0)
     movie = (200 + rng.normal(0, 5, (300, 48, 48))).astype(np.int16)
     flashes = np.arange(20, 280, 20)
     movie[flashes, 20:28, 20:28] += 300
     tifffile.imwrite(tmp_path / "movie.tif", movie)
-    settings = MasknmfSettings()
-    settings.registration.max_shifts = (4, 4)
-    settings.compression.denoise = False
-    settings.compression.block_sizes = (16, 16)
-    settings.demixing.do_demixing = STAGE_SKIP
-    settings.runtime.device = "cpu"
-    run = run_plane(
+    config = {
+        "pipeline": "TwoPhotonCalciumPipeline",
+        "configs": {
+            "motion_correct_config": {"kind": "rigid", "max_shifts": [4, 4]},
+            "compress_config": {"kind": "compress", "block_sizes": [16, 16]},
+        },
+    }
+    (run,) = run_planes(
         str(tmp_path / "movie.tif"),
         tmp_path / "out",
-        settings=settings,
+        config,
+        runtime={"device": "cpu"},
+        run_args={"stop_after": "compression"},
         frame_indices=list(range(10, 290)),
-        replot=False,
+        metadata={"fs": 30.0},
     )
     # masknmf demixes on cuda only: the results file demixing writes is made here
     dff = np.zeros((1, 280), np.float32)

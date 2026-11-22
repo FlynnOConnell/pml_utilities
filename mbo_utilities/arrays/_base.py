@@ -397,6 +397,7 @@ def _imwrite_base(
     num_planes = min(num_planes, s5[2])
 
     from mbo_utilities.metadata import OutputMetadata
+    from mbo_utilities.metadata.output import select_axis_values
 
     frame_indices_0 = None
     plane_indices_0 = None
@@ -463,10 +464,19 @@ def _imwrite_base(
                 # suite2p reads data_raw.bin by exact name, so only the dir carries tags
                 plane_dir = outpath / f"{z_tag.to_string()}_{t_tag.to_string()}"
                 plane_dir.mkdir(parents=True, exist_ok=True)
-                bin_name = "data_chan2.bin" if c_idx > 0 else "data_raw.bin"
+                bin_name = (
+                    "data_raw.bin" if c_idx == channels_0idx[0] else "data_chan2.bin"
+                )
                 target = plane_dir / bin_name
             else:
-                tags = [t_tag, z_tag] if nframes > 1 else [z_tag]
+                tags = [t_tag] if nframes > 1 else []
+                if num_channels > 1:
+                    tags.append(
+                        DimensionTag.from_dim_size(
+                            TAG_REGISTRY["C"], num_channels, [c_idx + 1]
+                        )
+                    )
+                tags.append(z_tag)
                 filename = OutputFilename(tags).build(f".{ext_clean}")
                 target = outpath / filename
 
@@ -474,7 +484,10 @@ def _imwrite_base(
                 logger.warning(f"File {target} already exists. Skipping write.")
                 continue
 
-            plane_md = md.copy()
+            # one file holds one (channel, plane), so its per-index lists hold that entry
+            plane_md = select_axis_values(
+                md, {"C": s5[1], "Z": s5[2]}, {"C": [c_idx], "Z": [plane_idx]}
+            )
             plane_md["plane"] = plane_idx + 1
 
             _write_plane(
@@ -493,7 +506,7 @@ def _imwrite_base(
                 **kwargs,
             )
 
-            if ext_clean == "bin" and c_idx == 0:
+            if ext_clean == "bin" and c_idx == channels_0idx[0]:
                 _write_scanphase_sidecar(
                     target.parent,
                     _scanphase_record(arr, written_frames_0, c_idx, plane_idx),

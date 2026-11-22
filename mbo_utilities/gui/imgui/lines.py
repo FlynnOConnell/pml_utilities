@@ -14,6 +14,7 @@ from imgui_bundle import imgui, implot
 
 __all__ = [
     "X_AXIS_HIDDEN",
+    "bands",
     "decimate_minmax",
     "drag_hline",
     "drag_vline",
@@ -261,6 +262,26 @@ def dotted_vline(
             imgui.ImVec2(px, y), imgui.ImVec2(px, min(y + dash_px, bottom)), col, weight
         )
         y += dash_px + gap_px
+    implot.pop_plot_clip_rect()
+
+
+def bands(starts, stops, color, alpha: float = 0.2) -> None:
+    """Vertical bands from ``starts`` to ``stops`` over the open plot's full
+    height, drawn on its draw list so they never move a fit; call before the
+    items they sit under.
+    """
+    pos, size = implot.get_plot_pos(), implot.get_plot_size()
+    draw = implot.get_plot_draw_list()
+    col = imgui.get_color_u32(vec4(color, alpha))
+    implot.push_plot_clip_rect()
+    for x0, x1 in zip(starts, stops, strict=True):
+        p0 = float(implot.plot_to_pixels(float(x0), 0.0).x)
+        p1 = max(float(implot.plot_to_pixels(float(x1), 0.0).x), p0 + 1.0)
+        if p1 < pos.x or p0 > pos.x + size.x:
+            continue
+        draw.add_rect_filled(
+            imgui.ImVec2(p0, pos.y), imgui.ImVec2(p1, pos.y + size.y), col
+        )
     implot.pop_plot_clip_rect()
 
 

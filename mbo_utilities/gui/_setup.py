@@ -1,18 +1,28 @@
-"""Sets up Qt, the wgpu backend and the imgui assets for the GUI; importing the module runs it once."""
+"""imgui and graphics setup for the mbo_utilities graphics module.
+
+this module handles all initialization for imgui_bundle, hello_imgui,
+wgpu backend configuration, and qt setup. importing this module
+automatically runs setup once.
+"""
 
 import importlib.util
 import os
 import shutil
 import sys
-from importlib import resources
 from pathlib import Path
 
+# track initialization state
 _initialized = False
 
 
 def get_package_assets_path() -> Path:
     """Return path to the bundled assets folder in the installed package."""
-    return Path(str(resources.files("mbo_utilities").joinpath("assets")))
+    try:
+        from importlib import resources
+
+        return Path(str(resources.files("mbo_utilities").joinpath("assets")))
+    except (ImportError, TypeError):
+        return Path(__file__).resolve().parent.parent / "assets"
 
 
 def _copy_assets():
@@ -28,7 +38,7 @@ def _copy_assets():
     if package_assets.is_dir():
         shutil.copytree(package_assets, user_assets, dirs_exist_ok=True)
 
-    # imgui_bundle's fonts fill in whatever the package assets lack
+    # copy imgui_bundle fonts as fallback
     fonts_dst = user_assets / "fonts"
     fonts_dst.mkdir(parents=True, exist_ok=True)
     (user_assets / "static").mkdir(parents=True, exist_ok=True)
@@ -41,7 +51,7 @@ def _copy_assets():
                 d.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(p, d)
 
-    # markdown rendering loads these by name; a missing one gets any roboto face
+    # ensure roboto fonts exist for markdown rendering
     roboto_dir = fonts_dst / "Roboto"
     roboto_dir.mkdir(parents=True, exist_ok=True)
     required = [
@@ -50,18 +60,43 @@ def _copy_assets():
         roboto_dir / "Roboto-RegularItalic.ttf",
         fonts_dst / "fontawesome-webfont.ttf",
     ]
-    fallback = next(roboto_dir.glob("*.ttf"), None)
+    fallback = next((t for t in roboto_dir.glob("*.ttf")), None)
     for need in required:
-        if not need.exists() and fallback is not None:
+        if not need.exists() and fallback and fallback.exists():
+            need.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(fallback, need)
+
+    # copy FontAwesome 6 font for icons
+    fa6_src = fonts_src / "Font_Awesome_6_Free-Solid-900.otf"
+    fa6_dst = fonts_dst / "Font_Awesome_6_Free-Solid-900.otf"
+    if fa6_src.exists() and not fa6_dst.exists():
+        shutil.copy2(fa6_src, fa6_dst)
 
     return user_assets
 
 
-def get_default_ini_path(name: str = "imgui_settings") -> str:
-    """Returns ``~/.mbo/imgui/assets/app_settings/<name>.ini``, creating the folder.
+def _configure_imgui(user_assets: Path):
+    """Configure hello_imgui assets folder."""
+    from imgui_bundle import hello_imgui
 
-    Pass it as ``RunnerParams.ini_filename`` before ``immapp.run()``.
+    # set hello_imgui assets folder
+    hello_imgui.set_assets_folder(str(user_assets))
+
+
+def get_default_ini_path(name: str = "imgui_settings") -> str:
+    """Get path for imgui ini file in the mbo settings directory.
+
+    use this with RunnerParams.ini_filename before calling immapp.run().
+
+    Parameters
+    ----------
+    name : str
+        base name for the ini file (without .ini extension)
+
+    Returns
+    -------
+    str
+        full path to the ini file in ~/.mbo/imgui/assets/app_settings/
     """
     from mbo_utilities.preferences import get_mbo_dirs
 
@@ -70,10 +105,24 @@ def get_default_ini_path(name: str = "imgui_settings") -> str:
     return str(settings_dir / f"{name}.ini")
 
 
-def _configure_qt_backend():
-    """Selects the Qt backend for rendercanvas when PyQt6 is installed.
+def _use_xwayland_for_pyqt6():
+    """Point Qt at XWayland on a Wayland session that has one.
 
-    Must run before fastplotlib is imported, or rendercanvas picks glfw.
+    rendercanvas presents to a Wayland window through the wl_display Qt is connected to, and PyQt6
+    does not expose ``QNativeInterface``, so under Qt's wayland platform the canvas fails with
+    "Method 'screen' is not supported". An X11 window under XWayland presents fine.
+    """
+    if not sys.platform.startswith("linux") or not os.environ.get("DISPLAY"):
+        return
+    platform_default = "wayland" if os.environ.get("WAYLAND_DISPLAY") else "xcb"
+    if os.environ.get("QT_QPA_PLATFORM", platform_default).startswith("wayland"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
+
+def _configure_qt_backend():
+    """Set up qt backend for rendercanvas if pyqt6 is available.
+
+    must happen before importing fastplotlib to avoid glfw selection.
     """
     if os.environ.get("RENDERCANVAS_FORCE_OFFSCREEN"):
         # offscreen/http canvases never touch Qt; importing QtWidgets here
@@ -86,10 +135,12 @@ def _configure_qt_backend():
         return
 
     os.environ.setdefault("RENDERCANVAS_BACKEND", "qt")
+    _use_xwayland_for_pyqt6()
+    import PyQt6  # noqa: F401
 
+    # fix suite2p pyqt6 compatibility
     from PyQt6.QtWidgets import QSlider
 
-    # suite2p's GUI uses the PyQt5 spelling
     if not hasattr(QSlider, "NoTicks"):
         QSlider.NoTicks = QSlider.TickPosition.NoTicks
 
@@ -99,22 +150,32 @@ def _configure_wgpu_backend():
     if sys.platform == "emscripten":
         return
 
-    from wgpu.backends.wgpu_native.extras import set_instance_extras
-
     try:
+        from wgpu.backends.wgpu_native.extras import set_instance_extras
+
         if sys.platform == "win32":
             set_instance_extras(backends=["Vulkan", "DX12"])
         elif sys.platform == "darwin":
             set_instance_extras(backends=["Metal"])
         else:
             set_instance_extras(backends=["Vulkan"])
+    except ImportError:
+        pass
     except RuntimeError:
-        # the wgpu instance already exists, so its backends are fixed
+        # Instance already exists - wgpu was initialized before setup_imgui was called
+        # This is fine, just skip the backend configuration
         pass
 
 
 def setup_imgui():
-    """Configures the Qt and wgpu backends and the imgui assets folder, once per process."""
+    """Initialize all graphics configuration.
+
+    safe to call multiple times - only runs once.
+    configures:
+    - qt backend for rendercanvas
+    - wgpu backend settings
+    - imgui assets and ini file location
+    """
     global _initialized
     if _initialized:
         return
@@ -123,10 +184,8 @@ def setup_imgui():
     _configure_qt_backend()
     _configure_wgpu_backend()
     user_assets = _copy_assets()
-
-    from imgui_bundle import hello_imgui
-
-    hello_imgui.set_assets_folder(str(user_assets))
+    _configure_imgui(user_assets)
 
 
+# run setup on import
 setup_imgui()

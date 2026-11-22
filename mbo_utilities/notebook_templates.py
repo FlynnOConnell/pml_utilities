@@ -1,7 +1,6 @@
 """The starter notebooks shipped in ``demos/``: which apply to a recording, and writing one beside it.
 
-``mbo init`` and the Studio's File > Open Notebook both go through here, so a notebook lands in the
-same place with the same path filled in whichever way it was asked for.
+``mbo init`` goes through here.
 """
 
 from __future__ import annotations
@@ -30,13 +29,6 @@ class Template:
 TEMPLATES = (
     Template("mbo_user_guide.ipynb", "mbo user guide", "D:/demo/raw"),
     Template("lsp_user_guide.ipynb", "LBM-Suite2p user guide", "D:/demo/raw"),
-    Template(
-        "asap7_spine_pipeline.ipynb",
-        "ASAP7 spine pipeline (masknmf)",
-        "D:/demo/scan.mesc",
-        ".mesc",
-        "MSession_0/MUnit_0",
-    ),
 )
 
 

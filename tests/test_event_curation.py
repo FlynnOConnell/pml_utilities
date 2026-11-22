@@ -14,6 +14,7 @@ import logging
 import pickle
 import traceback
 from pathlib import Path
+from unittest.mock import Mock
 
 import h5py
 import numpy as np
@@ -790,11 +791,6 @@ class TestWidget:
         session.set_auto_template_threshold(0.5)
         _each_panel(curation, 3)
         assert session.auto_pass_pc1 == pytest.approx(line)
-        # the drag ends off-frame: the next frame applies the held value
-        curation._pc1_drag = lo + 0.25 * (hi - lo)
-        _each_panel(curation)
-        assert curation._pc1_drag is None
-        assert session.auto_pass_pc1 == pytest.approx(lo + 0.25 * (hi - lo))
         # manual mode shows neither the card nor the line
         curation.set_mode("manual")
         curation.wait(60)
@@ -850,12 +846,29 @@ class TestWidget:
         }
         curation.set_box_mode("yes")
         assert curation.box_mode == "yes" and curation._box_rect is None
-        curation._box = ("pca", np.array([1, 2]))
+        curation._box = ("timeline", np.array([1, 2]))
         assert curation.apply_box() == 2
         assert [session.manual_label(i) for i in range(3)] == ["no", "yes", "yes"]
         curation.exit_box_mode()
         assert curation.box_mode is None
         _each_panel(curation)
+
+    def test_no_tooltip_is_a_paragraph(self, curation, data_root, monkeypatch):
+        from mbo_utilities.gui import event_curation, slow_fast_panels
+
+        spy = Mock()
+        monkeypatch.setattr(event_curation, "set_tooltip", spy)
+        _load(curation, data_root)
+        _each_panel(curation)
+        tips = {call.args[0] for call in spy.call_args_list}
+        tips |= {
+            event_curation.COUPLING_TOOLTIP,
+            *event_curation.METHOD_TOOLTIPS.values(),
+        }
+        tips |= {row[-1] for row in slow_fast_panels.CARD + slow_fast_panels.ADVANCED}
+        assert len(tips) > 15
+        assert max(tip.count("\n") for tip in tips) <= 1
+        assert max(len(row) for tip in tips for row in tip.splitlines()) <= 90
 
     def test_close_gives_the_strip_back(self, curation):
         strip = curation.strip
@@ -1139,34 +1152,6 @@ ASAKO_MESC = next(
     ),
     "X:/data/asako/stan112/stan112_expt12/stan112_expt12/stan112_expt12.mesc",
 )
-
-
-class TestSeparateZstackFile:
-    @pytest.mark.skipif(
-        not __import__("pathlib").Path(ASAKO_MESC).exists(), reason="local data only"
-    )
-    def test_stack_in_a_sibling_file_pairs_with_the_lines(self):
-        from pathlib import Path
-
-        from mbo_utilities.analysis.linescan import (
-            pair_reference_zstack,
-            zstack_candidates,
-        )
-        from mbo_utilities.arrays.mesc import list_mesc_units
-
-        mesc = Path(ASAKO_MESC)
-        zstack = mesc.parent.parent / f"{mesc.stem}_zstack.mesc"
-        units = list_mesc_units(zstack)
-        cands = zstack_candidates(
-            mesc, "MSession_0/MUnit_35", units, zstack_path=zstack
-        )
-        assert [c["munit"] for c in cands] == ["MUnit_3"]
-        assert cands[0]["xy_fraction"] == 1.0 and cands[0]["z_fraction"] == 1.0
-        paired = pair_reference_zstack(
-            mesc, "MSession_0/MUnit_35", units, zstack_path=zstack
-        )
-        assert paired["munit"] == "MUnit_3"
-        assert zstack_candidates(mesc, "MSession_0/MUnit_35") == []
 
 
 def _mesc_beside_pf(tmp_path):
@@ -1728,6 +1713,32 @@ class TestMotion:
         _each_panel(curation)
         assert curation.panel.height == PANEL_HEIGHT
 
+    def test_a_recording_long_enough_gets_its_coherence_under_the_trace(
+        self, curation, data_root, monkeypatch
+    ):
+        from mbo_utilities.analysis import trace_readouts
+        from mbo_utilities.gui.event_curation import (
+            COUPLING_HEIGHT,
+            MOTION_HEIGHT,
+            PANEL_HEIGHT,
+        )
+
+        # the fixture's scan is shorter than a real read-out needs
+        monkeypatch.setattr(trace_readouts, "COUPLING_SKIP_S", 0.0)
+        monkeypatch.setattr(trace_readouts, "COUPLING_MIN_S", 0.0)
+        monkeypatch.setattr(trace_readouts, "COUPLING_WINDOW_S", 0.3)
+        pf_dir = data_root / "expt1" / "PF"
+        mesc = _mesc_with_rtmc(data_root / "src" / "expt.mesc")
+        _name_source(pf_dir, mesc)
+        _load(curation, data_root)
+        coupling = curation.coupling[(curation.session.mode, curation.current)]
+        assert sorted(coupling.axes) == ["X", "Y"] and 0.0 <= coupling.p <= 1.0
+        _each_panel(curation)
+        assert curation.panel.height == PANEL_HEIGHT + MOTION_HEIGHT + COUPLING_HEIGHT
+        curation.show_motion = False
+        _each_panel(curation)
+        assert curation.panel.height == PANEL_HEIGHT
+
     def test_a_scan_without_rtmc_shows_no_motion_plot(self, curation, data_root):
         from mbo_utilities.gui.event_curation import PANEL_HEIGHT
 
@@ -1742,3 +1753,51 @@ class TestMotion:
         assert not curation.motion[(str(mesc), unit)]
         _each_panel(curation)
         assert curation.panel.height == PANEL_HEIGHT
+
+
+def test_the_catalog_carries_blocks_and_orders_by_domain(curation):
+    """Each recording carries its block and what changed at the block's start;
+    the table orders by scan or by domain and keeps to one label's blocks.
+    """
+    from types import SimpleNamespace
+
+    from mbo_utilities.gui.event_curation import _build_catalog
+    from mbo_utilities.results import ResultUnit
+
+    units = {
+        f"scan{s}": ResultUnit(
+            f"scan{s}",
+            "scan",
+            s,
+            fs=100.0,
+            roi_names=["soma", "dend"],
+            traces={"dff": np.zeros((2, 4), np.float32)},
+            attrs={"scan_id": str(s), "block": block, "labels": labels},
+        )
+        for s, block, labels in ((1, 0, []), (2, 1, ["Odor on"]), (3, 1, []))
+    }
+    catalog = _build_catalog(
+        SimpleNamespace(results=SimpleNamespace(units=units), path="run")
+    )
+    assert [(r.unit, r.block, r.labels) for r in catalog[::2]] == [
+        ("scan1", 0, []),
+        ("scan2", 1, ["Odor on"]),
+        ("scan3", 1, ["Odor on"]),
+    ]
+    curation.catalog = catalog
+    assert [r.rid for r in curation.shown][:3] == [
+        "scan=1/domain=soma",
+        "scan=1/domain=dend",
+        "scan=2/domain=soma",
+    ]
+    curation.group_by = "domain"
+    assert [r.rid for r in curation.shown] == [
+        "scan=1/domain=soma",
+        "scan=2/domain=soma",
+        "scan=3/domain=soma",
+        "scan=1/domain=dend",
+        "scan=2/domain=dend",
+        "scan=3/domain=dend",
+    ]
+    curation.label_filter = "Odor on"
+    assert [r.unit for r in curation.shown] == ["scan2", "scan3", "scan2", "scan3"]

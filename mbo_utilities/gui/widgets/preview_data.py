@@ -58,12 +58,7 @@ from mbo_utilities.gui.widgets import draw_all_widgets, get_supported_widgets
 from mbo_utilities.gui.widgets.gui_logger import GuiLogger, GuiLogHandler
 from mbo_utilities.gui.widgets.imgui_debug import draw_imgui_debug_windows
 from mbo_utilities.gui.widgets.menu_bar import draw_keybinds_popup, draw_menu_bar
-from mbo_utilities.gui.widgets.notebooks import draw_notebooks_window
 from mbo_utilities.gui.widgets.progress_bar import start_output_capture
-from mbo_utilities.gui.widgets.style_editor import (
-    apply_saved_style,
-    draw_style_editor_window,
-)
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import get_gpu_index, get_last_dir, get_mbo_dirs
 from mbo_utilities.reader import MBO_AVAILABLE_FTYPES
@@ -215,11 +210,9 @@ class PreviewDataWidget(EdgeWindow):
         if implot.get_current_context() is None:
             implot.create_context()
 
-        # the style editor's saved style wins over the shipped opaque theme
         from mbo_utilities.gui._imgui_helpers import style_imgui_opaque
 
         style_imgui_opaque()
-        apply_saved_style()
         self._init_fonts()
 
         self.kwargs = kwargs
@@ -312,8 +305,7 @@ class PreviewDataWidget(EdgeWindow):
         self._s2p_tp_selection = ""
         self._s2p_tp_error = ""
         self._s2p_tp_parsed = None
-        self._s2p_z_start = self._s2p_z_stop = self._s2p_z_step = 1
-        self._s2p_c_start = self._s2p_c_stop = self._s2p_c_step = 1
+        self._s2p_z_parsed = self._s2p_c_parsed = None
         self._files_popup_sizer = None
         self._data_options_sizer = None
         self._pipe_settings_sizer = None
@@ -1129,9 +1121,7 @@ class PreviewDataWidget(EdgeWindow):
         draw_keybinds_popup(self)
         draw_help_popup(self)
         draw_options_popup(self)
-        draw_imgui_debug_windows(self)
-        draw_style_editor_window(self)
-        draw_notebooks_window(self)
+        draw_imgui_debug_windows()
         try:
             # the isoview windows need immvision, which some imgui_bundle builds leave out
             from mbo_utilities.gui.widgets.isoview_crop import draw_window as draw_crop

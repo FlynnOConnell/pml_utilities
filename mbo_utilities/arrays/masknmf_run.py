@@ -1,10 +1,10 @@
 """A masknmf run folder as its registered movie, rebuilt from the recording.
 
 The MaskNMF pipeline writes one run folder per plane, masknmf's own layout:
-``<yyyymmddTHHMMSS>_masknmf_zplaneNN[_tpAAAAA-BBBBB]/`` with ``results.hdf5``
+``zplaneNN/<yyyymmddTHHMMSS>_<pipeline slug>/`` with ``results.hdf5``
 (one group per stage), ``config.json``, the log and, when registration ran on
 a denoised copy, ``alignment.hdf5``. No movie is written. The raw movie is the
-recording itself, re-opened from ``config.json``'s ``inputs["movie"]`` (path,
+recording itself, re-opened from ``config.json``'s ``inputs["data"]`` (path,
 reader kwargs, read features, plane, channel, frames), and the registered
 movie replays the stored shifts on it with masknmf.
 """
@@ -22,13 +22,14 @@ from mbo_utilities.arrays._base import ReductionMixin, _normalize_key
 from mbo_utilities.arrays.features._frame_average import INVERT_DEFLECTION_KEY
 from mbo_utilities.arrays.features._motion import MotionCorrection
 from mbo_utilities.lazy_array import LazyArray
-from mbo_utilities.masknmf.params import ALIGN_FILE
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 logger = log.get("arrays.masknmf_run")
 
 RUN_CONFIG = "config.json"
 RESULTS_FILE = "results.hdf5"
+# the denoised copy a registration estimated its shifts on, beside results.hdf5
+ALIGN_FILE = "alignment.hdf5"
 # the registration groups masknmf stores, by array class name
 REGISTRATION_GROUPS = (
     "RigidRegistrationArray",
@@ -70,19 +71,25 @@ def run_config(run: Path | str) -> dict:
     return json.loads((Path(run) / RUN_CONFIG).read_text(encoding="utf-8"))
 
 
+def run_movie(config: dict) -> dict:
+    """The recording a run read, as ``config.json`` records it: under ``inputs["data"]``, or ``inputs["movie"]`` for runs before 4.1.0."""
+    inputs = config.get("inputs") or {}
+    return inputs.get("data") or inputs.get("movie") or {}
+
+
 def run_raw_movie(run: Path | str, invert: bool = True):
     """The ``(T, Y, X)`` recording a run read, re-opened from its ``config.json``.
 
-    A ``PlaneMovie`` (``roi_workflow``) over ``imread`` of the recorded path,
+    A ``PlaneMovie`` over ``imread`` of the recorded path,
     with the recorded read features applied (Invert Deflection only when
     ``invert``) and the run's plane, channel and frames selected. None when
     the run was given an in-memory array.
     """
     from mbo_utilities.arrays.features import apply_read_features
     from mbo_utilities.reader import imread
-    from mbo_utilities.roi_workflow import PlaneMovie
+    from mbo_utilities.arrays.plane import PlaneMovie
 
-    movie = run_config(run)["inputs"]["movie"]
+    movie = run_movie(run_config(run))
     if not movie.get("path"):
         return None
     arr = imread(movie["path"], **(movie.get("reader_kwargs") or {}))
@@ -136,7 +143,7 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
             raise ValueError(
                 f"{run} was run on an in-memory array; there is no recording to read"
             )
-        movie = self.config["inputs"]["movie"]
+        movie = run_movie(self.config)
         self._metadata = dict(getattr(self.raw.arr, "metadata", None) or {})
         self._metadata.update(
             {
@@ -176,7 +183,7 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
 
                 from masknmf import OphysArray
 
-                after = self.config["inputs"]["movie"].get(
+                after = run_movie(self.config).get(
                     "registered_before_inversion"
                 )
                 if self.on_alignment_copy:
@@ -205,7 +212,7 @@ class MasknmfRunArray(ReductionMixin, LazyArray):
     @property
     def frames(self) -> np.ndarray:
         """The recording's frame under each of the run's, 0-based."""
-        movie = self.config["inputs"]["movie"]
+        movie = run_movie(self.config)
         if movie.get("frames") is not None:
             return np.arange(*movie["frames"])
         if movie.get("tp_indices") is not None:

@@ -1,25 +1,18 @@
 """The ImGui Debugger window, opened from Widgets > ImGui Debugger.
 
-One floating window of switches: ``imgui_debugger``'s variable inspector
-over the preview window's own state, and Dear ImGui's metrics/debugger,
-debug log, ID stack tool, demo and about windows. Every window here is a
-floating one, drawn from ``PreviewDataWidget.draw`` every frame.
-
-The style editor is its own Widgets-menu entry (``widgets/style_editor.py``).
+One floating window of switches: Dear ImGui's metrics/debugger, debug log,
+ID stack tool, demo and about windows. Every window here is a floating one,
+drawn from ``PreviewDataWidget.draw`` every frame.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from imgui_bundle import imgui
-from imgui_debugger import Debugger, DebuggerConfig
 
 __all__ = [
     "TOOLS",
     "draw_imgui_debug_menu_item",
     "draw_imgui_debug_windows",
-    "get_inspector",
     "open_imgui_debugger",
 ]
 
@@ -54,7 +47,6 @@ TOOLS: tuple[tuple[str, str, str], ...] = (
 )
 
 _open: dict[str, bool] = {"window": False} | {key: False for key, _, _ in TOOLS}
-_inspector: Debugger | None = None
 
 
 def open_imgui_debugger() -> None:
@@ -68,24 +60,7 @@ def draw_imgui_debug_menu_item() -> None:
         _open["window"] = not _open["window"]
 
 
-def get_inspector(parent: Any) -> Debugger:
-    """The variable inspector for this process, pointed at ``parent``."""
-    global _inspector
-    if _inspector is None:
-        _inspector = Debugger(
-            DebuggerConfig(
-                title="Inspector",
-                window_id="mbo_inspector",
-                target=parent,
-                visible=False,
-                window_size=(520, 640),
-                show_frame=False,
-            )
-        )
-    return _inspector
-
-
-def _draw_window(parent: Any) -> None:
+def _draw_window() -> None:
     imgui.set_next_window_size(imgui.ImVec2(300, 0), imgui.Cond_.first_use_ever)
     expanded, _open["window"] = imgui.begin("ImGui Debugger", True)
     if expanded:
@@ -95,15 +70,6 @@ def _draw_window(parent: Any) -> None:
         )
         imgui.separator()
         imgui.spacing()
-        inspector = get_inspector(parent)
-        changed, value = imgui.checkbox("Inspector", inspector.visible)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "imgui_debugger's variable inspector over the viewer: every "
-                "attribute, live, editable in place."
-            )
-        if changed:
-            inspector.visible = value
         for key, label, help_text in TOOLS:
             changed, value = imgui.checkbox(label, _open[key])
             if imgui.is_item_hovered():
@@ -123,12 +89,10 @@ def _draw_window(parent: Any) -> None:
     imgui.end()
 
 
-def draw_imgui_debug_windows(parent: Any) -> None:
+def draw_imgui_debug_windows() -> None:
     """Draw the debugger window and whichever tool windows are on. Call once per frame."""
     if _open["window"]:
-        _draw_window(parent)
-    if _inspector is not None:
-        _inspector.render_window()
+        _draw_window()
     if _open["metrics"]:
         _open["metrics"] = bool(imgui.show_metrics_window(True))
     if _open["debug_log"]:

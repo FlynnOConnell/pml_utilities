@@ -13,6 +13,7 @@ Usage patterns:
   mbo info INPUT                # Show array info (CLI only)
 """
 
+import importlib.util
 import logging
 import sys
 import threading
@@ -119,6 +120,13 @@ def _version_callback(ctx: click.Context, param: click.Parameter, value: bool) -
         return
     click.echo(_get_version_info())
     ctx.exit()
+
+
+def _require_gui():
+    if importlib.util.find_spec("imgui_bundle") is None:
+        from mbo_utilities.install import GUI_HINT
+
+        raise SystemExit(f"The Studio needs the gui extra: {GUI_HINT}")
 
 
 @click.group(cls=PathAwareGroup, invoke_without_command=True)
@@ -257,6 +265,7 @@ def main(
 
         ensure_cache()
 
+    _require_gui()
     spinner = LoadingSpinner("Loading GUI")
     spinner.start()
     try:
@@ -349,14 +358,6 @@ def main(
     "Omitted: the registration in a run folder's results.hdf5, else motion_correction.hdf5 beside the result, if any.",
 )
 @click.option(
-    "--qc",
-    is_flag=True,
-    help="For a MaskNMF run folder (or its results.hdf5): open Registration-Denoising "
-    "Quality Control, raw | registered over both as PMD with RTMC, masknmf shifts, frame "
-    "means and a box you drag. Omitted: a demixed run opens masknmf's demixing viewer, "
-    "any other run the Studio.",
-)
-@click.option(
     "--debug/--no-debug",
     default=None,
     help="Debug logging for this run (sets MBO_DEBUG): verbose logs, the "
@@ -376,7 +377,6 @@ def view(
     vis=None,
     raw_path=None,
     motion_correction_path=None,
-    qc=False,
     debug=None,
 ):
     r"""
@@ -393,7 +393,6 @@ def view(
       mbo view /data/scan.mesc --unit MUnit_35   A line-scan unit opens the line-scan viewer
       mbo view /data/stack.tif --dims ZYX   A plain TIFF whose pages are z-planes
       mbo view run/demixing_results.hdf5 --vis classification   masknmf's classification viewer
-      mbo out/20261008T143623_masknmf_zplane01 --qc   raw, registered, PMD, RTMC and shifts
       mbo view --list-gpus           Show available GPU adapters
       mbo view /data/raw --gpu 0     Force GPU index 0
     """
@@ -435,7 +434,7 @@ def view(
         )
 
     # a masknmf demixing result opens in one of masknmf's viewers: ask which before anything heavy loads
-    if vis is None and data_in and not metadata and not qc:
+    if vis is None and data_in and not metadata:
         from mbo_utilities.arrays.demixing import has_demixing_results
         from mbo_utilities.arrays.masknmf_run import run_demixing
 
@@ -456,6 +455,7 @@ def view(
             "First run detected - initial startup may take longer while caches are built.",
             fg="yellow",
         )
+    _require_gui()
     spinner = LoadingSpinner("Loading GUI")
     spinner.start()
     try:
@@ -475,7 +475,6 @@ def view(
         vis=vis,
         raw_path=raw_path,
         motion_correction_path=motion_correction_path,
-        qc=qc,
     )
 
 
@@ -1510,19 +1509,16 @@ def gpu(watch, show_processes, as_json):
 )
 def init(data_path, output_dir, overwrite, unit):
     r"""
-    Create starter notebooks: the user guides, and the ASAP7 spine pipeline for a .mesc.
+    Create starter notebooks: the mbo and LBM-Suite2p user guides.
 
     With DATA_PATH, notebooks go in <DATA_PATH>/../scripts and the data path
-    is filled in. Without it, notebooks go in the current directory. The
-    Studio's File > Open Notebook writes the same notebooks to the same place.
+    is filled in. Without it, notebooks go in the current directory.
 
     \b
     Examples:
       mbo init                       # notebooks in current directory
       mbo init /data/raw             # notebooks in /data/scripts, path filled in
       mbo init /data/raw -o ./nb     # notebooks in ./nb
-      mbo init /data/scan.mesc       # the guides and the spine pipeline
-      mbo init /data/scan.mesc --unit MSession_0/MUnit_3
     """
     from mbo_utilities.notebook_templates import (
         notebook_path,
@@ -1667,6 +1663,34 @@ def curate(path, serve, host, port, channel):
     from mbo_utilities.gui.curation_viewer import open_curation_viewer
 
     open_curation_viewer(path, channel=channel)
+
+
+@main.command("dashboard")
+@click.argument("path", type=click.Path(exists=True), required=False)
+@click.option(
+    "--unit",
+    default=None,
+    help="The unit to open (MUnit_28 or MSession_0/MUnit_28); without it, a table of the units with ROIs.",
+)
+@click.option(
+    "--channel",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Channel the ROIs are read from.",
+)
+def dashboard(path, unit, channel):
+    r"""Trace figures of a .mesc unit's ROIs, for slides: each line's or
+    patch's mean and every ROI drawn on it, as raw, dF/F or z-score through
+    a filter, over windows you mark, exported as PNG, SVG, PDF and CSV.
+
+    \b
+      mbo dashboard D:/data/stan110/stan110_expt1.mesc
+      mbo dashboard D:/data/stan110/stan110_expt1.mesc --unit MUnit_28
+    """
+    from mbo_utilities.gui.dashboard_app import open_dashboard
+
+    open_dashboard(path, unit=unit, channel=channel)
 
 
 @main.command("serve")
@@ -1880,8 +1904,8 @@ def spike_average(
     "domains_path",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
-    help="domains.json (or an archive scanIDs_ROIs.pkl) naming which ROIs make each domain. "
-    "Default: domains.json beside the file.",
+    help="Domain file (or an archive scanIDs_ROIs.pkl) naming which ROIs make each domain. "
+    "Default: <stem>.domains.json in the ROI folder, else domains.json beside the file.",
 )
 @click.option(
     "--unit",
@@ -1951,7 +1975,7 @@ def spike_average(
     "--init",
     is_flag=True,
     default=False,
-    help="Write a domains.json template beside the file (one domain per ROI) and exit.",
+    help="Write a <stem>.domains.json template in the ROI folder (one domain per ROI) and exit.",
 )
 @click.option(
     "--recommended",
@@ -2115,9 +2139,10 @@ def vnoiser(
 
     if not HAS_VNOISER:
         raise SystemExit(f"vnoiser is not installed: {VNOISER_HINT}")
+    from mbo_utilities.annotation.domains import DomainFile, find_domains
+    from mbo_utilities.preferences import get_roi_folder
     from mbo_utilities.vnoiser.params import VnoiserSettings
     from mbo_utilities.vnoiser.pipeline import (
-        DOMAINS_FILE,
         read_domains,
         run_vnoiser_pipeline,
         scan_units,
@@ -2135,17 +2160,29 @@ def vnoiser(
                 param_hint="MESC_PATH",
             )
         mesc_path = Path(found)
+    root = get_roi_folder() or None
     if init:
-        path = write_domains_template(mesc_path, units=list(units) or None)
+        path = write_domains_template(mesc_path, units=list(units) or None, root=root)
         click.echo(
             f"wrote {path}; name the domains and group the ROIs, then run `mbo vnoiser` again"
         )
         return
-    if domains_path is not None:
-        spec = read_domains(domains_path)
-    elif (mesc_path.parent / DOMAINS_FILE).exists():
-        spec = read_domains(mesc_path.parent / DOMAINS_FILE)
-        click.echo(f"domains: {mesc_path.parent / DOMAINS_FILE}")
+    domains_file = (
+        Path(domains_path)
+        if domains_path is not None
+        else find_domains(mesc_path, root)
+    )
+    if domains_path is None and domains_file is not None:
+        # a file holding only trims has no table to run
+        if not DomainFile.read(domains_file).layouts:
+            domains_file = None
+    if domains_file is not None:
+        try:
+            spec = read_domains(domains_file, [u.rsplit("_", 1)[-1] for u in units])
+        except ValueError as e:
+            raise click.BadParameter(str(e), param_hint="--unit")
+        if domains_path is None:
+            click.echo(f"domains: {domains_file}")
     else:
         try:
             first = scan_units(mesc_path, list(units) or None)
@@ -2158,11 +2195,14 @@ def vnoiser(
         n_rois = int(first[0]["nrois"])
         spec = {
             "domains": {f"roi{r}": [r] for r in range(n_rois)},
+            "run": None,
             "scan_ids": [],
             "first_env": [],
+            "labels": None,
+            "scan_labels": {},
         }
         click.echo(
-            f"no {DOMAINS_FILE}: one domain per ROI ({n_rois}); --init writes one to edit"
+            f"no domain file: one domain per ROI ({n_rois}); --init writes one to edit"
         )
     settings = VnoiserSettings.recommended() if recommended else VnoiserSettings()
     if convert:
@@ -2203,6 +2243,14 @@ def vnoiser(
             )
         frames = (start - 1, stop)
     domains = spec["domains"]
+    if spec["run"] is not None:
+        # the domains the tab had ticked, and the background domain the trace subtracts
+        tr = settings.traces
+        keep = {
+            *spec["run"],
+            tr.background_domain if tr.background == "domain" else None,
+        }
+        domains = {n: v for n, v in domains.items() if n in keep}
     if pixels is not None:
         domains = {
             name: {"rois": list(value), "pixels": pixels, "fraction": fraction}
@@ -2248,7 +2296,11 @@ def vnoiser(
             settings=settings,
             overwrite=overwrite,
             logger=logger,
-            provenance={"settings": settings.to_dict()},
+            provenance={
+                "settings": settings.to_dict(),
+                "labels": spec["labels"],
+                "scan_labels": spec["scan_labels"],
+            },
         )
     except (ValueError, KeyError, FileExistsError) as e:
         click.echo(f"error: {e}", err=True)
@@ -2308,159 +2360,52 @@ def results(path, out, overwrite):
     click.echo(f"wrote {len(found.units)} unit(s) to {written}")
 
 
-@main.command("reg-denoise")
-@click.argument("path", type=click.Path(exists=True))
-@click.option("--unit", default=None, help="The .mesc unit, e.g. MSession_0/MUnit_3.")
-@click.option(
-    "--channel", type=int, default=1, show_default=True, help="Channel, 1-based."
-)
-@click.option(
-    "--first-frame",
-    type=int,
-    default=200,
-    show_default=True,
-    help="0-based frame the run starts at; earlier frames are left out.",
-)
-@click.option(
-    "--max-shift",
-    type=int,
-    default=40,
-    show_default=True,
-    help="Largest rigid shift allowed, px.",
-)
-@click.option(
-    "-o",
-    "--out",
-    type=click.Path(file_okay=False),
-    default=None,
-    help="Folder for results.hdf5. Default: <stem>[_<unit>].reg_denoise beside PATH.",
-)
-@click.option(
-    "--overwrite", is_flag=True, default=False, help="Replace an existing results.hdf5."
-)
-def reg_denoise(path, unit, channel, first_frame, max_shift, out, overwrite):
-    r"""Pre-registration denoising: compress, register to the compression, compress again.
-
-    Writes one results.hdf5 holding the compression of the raw movie, the
-    registration estimated on it and the compression of the registered
-    movie. `mbo <folder>/results.hdf5` opens it in the Registration-Denoising
-    Quality Control viewer.
-
-    \b
-      mbo reg-denoise scan.mesc --unit MSession_0/MUnit_3
-    """
-    from mbo_utilities.masknmf.params import RegDenoiseSettings
-    from mbo_utilities.masknmf.reg_denoise import run_reg_denoise
-
-    settings = RegDenoiseSettings(channel=channel, first_frame=first_frame)
-    settings.registration.max_shifts = (max_shift, max_shift)
-    try:
-        written = run_reg_denoise(path, out, settings, unit=unit, overwrite=overwrite)
-    except (FileExistsError, ValueError) as e:
-        click.echo(f"error: {e}", err=True)
-        raise click.Abort
-    click.echo(f"wrote {written}\nview with: mbo {written}")
-
-
-@main.command("asap7")
+@main.command("stack-annotate")
 @click.argument("path", type=click.Path(exists=True))
 @click.option(
     "--unit",
     default=None,
-    help="The .mesc unit, e.g. MUnit_10 or MSession_0/MUnit_10; left out, the units are listed.",
+    help="The .mesc Z-stack unit, e.g. MUnit_1 or MSession_0/MUnit_1; left out, a file with several lists them.",
 )
 @click.option(
-    "--channel", type=int, default=1, show_default=True, help="Channel, 1-based."
-)
-@click.option(
-    "--first-frame",
-    type=int,
-    default=200,
-    show_default=True,
-    help="0-based frame the run starts at; earlier frames are left out.",
-)
-@click.option(
-    "--max-shift",
-    type=int,
-    default=40,
-    show_default=True,
-    help="Largest rigid shift allowed, px.",
-)
-@click.option(
-    "--detrend-window",
+    "--voxel",
     type=float,
-    default=0.3,
-    show_default=True,
-    help="Maximin spline detrend window, s.",
-)
-@click.option(
-    "--mad-threshold",
-    type=float,
-    default=0.6,
-    show_default=True,
-    help="Superpixel MAD correlation threshold for the spine demixing.",
-)
-@click.option(
-    "--device",
-    type=click.Choice(["cuda", "cpu"]),
-    default="cuda",
-    show_default=True,
-)
-@click.option(
-    "-o",
-    "--out",
-    type=click.Path(file_okay=False),
+    nargs=3,
     default=None,
-    help="Folder the run folder goes in. Default: masknmf_asap7/<unit>_detrend beside PATH.",
+    metavar="DZ DY DX",
+    help="Voxel size in microns, for a file that stores none.",
 )
-def asap7(
-    path,
-    unit,
-    channel,
-    first_frame,
-    max_shift,
-    detrend_window,
-    mad_threshold,
-    device,
-    out,
-):
-    r"""ASAP7 spine run: compress, register to the compression, compress and denoise
-    with a detrender, demix spines and the dendrite.
+def stack_annotate(path, unit, voxel):
+    """Annotate dendrites, spines and other structures through a Z-stack, in 3D.
 
-    The raw movie is inverted (ASAP7 dims on depolarisation), compressed, and
-    registered with shifts estimated on that compression; the registered raw
-    movie is compressed and denoised with a maximin spline detrender and demixed
-    by masknmf's glutamate spine pipeline. Defaults are
-    asap7_spine_pipeline_detrend.ipynb's.
+    XY, XZ, YZ and 3D views of the stack with the ROI tool's panel; a brush
+    that paints on all three planes, filling between two ROIs, one surface
+    per class in 3D, and an automatic trace of one channel to edit. Saves
+    <stem>.rois.zarr and <stem>.trace.zarr beside the stack. Needs the
+    annotate extra.
 
     \b
-      mbo asap7 scan.mesc                      # list the units
-      mbo asap7 scan.mesc --unit MUnit_10
-      masknmf view <run folder>/results.glutamate.hdf5
+      mbo stack-annotate stack.mesc                  # list the Z-stacks, or open the only one
+      mbo stack-annotate stack.mesc --unit MUnit_1
+      mbo stack-annotate stack.zarr --voxel 2 0.5 0.5
     """
-    from mbo_utilities.masknmf.params import Asap7Settings
+    if unit is None and Path(path).suffix.lower() == ".mesc":
+        from mbo_utilities.arrays.mesc import list_mesc_units
 
-    is_mesc = Path(path).suffix.lower() == ".mesc"
-    if is_mesc and unit is None:
-        _echo_mesc_units(path, None)
-        click.echo("\nchoose one with --unit, e.g. --unit MUnit_10", err=True)
-        raise click.Abort
-    from mbo_utilities.masknmf.asap7 import run_asap7
+        stacks = [u for u in list_mesc_units(path) if u["kind"] == "zstack"]
+        if len(stacks) > 1:
+            click.echo(f"{Path(path).name} holds {len(stacks)} Z-stacks (C, Z, Y, X):")
+            for u in stacks:
+                c, z, y, x = u["shape"][1:]
+                click.echo(f"  {u['munit']:<10}{c} x {z} x {y} x {x}   {u['comment']}")
+            click.echo(f"\nchoose one with --unit, e.g. --unit {stacks[-1]['munit']}", err=True)
+            raise click.Abort
+    import fastplotlib as fpl
 
-    settings = Asap7Settings(
-        channel=channel,
-        first_frame=first_frame,
-        detrend_window_seconds=detrend_window,
-        mad_correlation_threshold=mad_threshold,
-    )
-    settings.registration.max_shifts = (max_shift, max_shift)
-    settings.runtime.device = device
-    try:
-        run = run_asap7(path, unit=_parse_unit(unit), save_path=out, settings=settings)
-    except ValueError as e:
-        click.echo(f"error: {e}", err=True)
-        raise click.Abort
-    click.echo(f"wrote {run}\nview with: masknmf view {run / 'results.glutamate.hdf5'}")
+    from mbo_utilities.gui.stack_annotate import build
+
+    build(filepath_stack=path, unit=unit, voxel_um=voxel)
+    fpl.loop.run()
 
 
 if __name__ == "__main__":

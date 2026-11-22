@@ -22,7 +22,6 @@ from imgui_bundle import (
 )
 
 from mbo_utilities.arrays.features import get_dims
-from mbo_utilities.arrays.features._slicing import parse_timepoint_selection
 from mbo_utilities.gui._imgui_helpers import (
     PopupAutoSize,
     _popup_states,
@@ -35,9 +34,11 @@ from mbo_utilities.gui._selection_ui import (
     draw_frame_average_input,
     draw_selection_table,
     resolve_dim_labels,
+    set_selection,
     source_timepoints,
 )
 from mbo_utilities.gui.widgets.pipelines._s2p_schema import is_default as _is_default
+from mbo_utilities.install import SUITE2P_HINT
 from mbo_utilities.metadata import get_param
 from mbo_utilities.preferences import get_last_dir, set_last_dir
 from mbo_utilities.reader import widget_reader_kwargs
@@ -782,32 +783,22 @@ def _init_s2p_selection_state(self):
             self.s2p.fs = float(src_fs)
     if self._s2p_last_max_tp != max_frames:
         self._s2p_last_max_tp = max_frames
-        self._s2p_tp_selection = f"1:{max_frames}"
-        self._s2p_tp_parsed = None
-        self._s2p_tp_error = ""
+        set_selection(self, "_s2p_tp", max_frames)
     if self._s2p_last_num_planes != num_planes:
         self._s2p_last_num_planes = num_planes
-        self._s2p_z_start, self._s2p_z_stop, self._s2p_z_step = 1, num_planes, 1
+        set_selection(self, "_s2p_z", num_planes)
     if self._s2p_last_num_channels != num_channels:
         self._s2p_last_num_channels = num_channels
-        self._s2p_c_start, self._s2p_c_stop, self._s2p_c_step = 1, num_channels, 1
+        set_selection(self, "_s2p_c", num_channels)
 
-    if num_planes > 1:
-        self._selected_planes = set(
-            range(self._s2p_z_start, self._s2p_z_stop + 1, self._s2p_z_step)
-        )
-    else:
-        self._selected_planes = {1}
-
-    if self._s2p_tp_parsed is None and not self._s2p_tp_error:
-        try:
-            self._s2p_tp_parsed = parse_timepoint_selection(
-                self._s2p_tp_selection, max_frames
-            )
-        except ValueError as e:
-            self._s2p_tp_error = str(e)
+    self._selected_planes = set(_s2p_selected(self._s2p_z_parsed))
 
     return max_frames, num_planes, num_channels
+
+
+def _s2p_selected(parsed) -> list[int]:
+    """The 1-based indices a parsed selection row keeps; none when it does not parse."""
+    return [i + 1 for i in parsed.final_indices] if parsed else []
 
 
 def _draw_s2p_selection_preview(self, max_frames, num_planes, num_channels=1):
@@ -819,8 +810,8 @@ def _draw_s2p_selection_preview(self, max_frames, num_planes, num_channels=1):
     else:
         n_frames = max_frames
 
-    n_planes = len(range(self._s2p_z_start, self._s2p_z_stop + 1, self._s2p_z_step))
-    n_channels = len(range(self._s2p_c_start, self._s2p_c_stop + 1, self._s2p_c_step))
+    n_planes = len(_s2p_selected(self._s2p_z_parsed))
+    n_channels = len(_s2p_selected(self._s2p_c_parsed))
 
     imgui.text(f"Frames: {n_frames}")
     if num_planes > 1:
@@ -2686,10 +2677,7 @@ def _draw_section_suite2p_content(self):
             imgui.ImVec4(1.0, 0.7, 0.2, 1.0), "Suite2p is not installed."
         )
         imgui.text("Install with:")
-        imgui.text_colored(
-            imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
-            "uv pip install --no-deps lbm-suite2p-python && uv pip install suite2p rastermap torch torchvision",
-        )
+        imgui.text_colored(imgui.ImVec4(0.6, 0.8, 1.0, 1.0), SUITE2P_HINT)
         return
 
     max_frames, num_planes, num_channels = _init_s2p_selection_state(self)
@@ -2933,7 +2921,7 @@ def _draw_section_suite2p_content(self):
     if self._install_error:
         imgui.text_colored(
             imgui.ImVec4(1.0, 0.0, 0.0, 1.0),
-            "lbm_suite2p_python is not installed: uv pip install lbm_suite2p_python",
+            f"lbm_suite2p_python is not installed: {SUITE2P_HINT}",
         )
 
     rows = [
@@ -3254,11 +3242,12 @@ def _build_channel_dirname(self, channel: int) -> str:
 
     tags = []
     tags.append(DimensionTag(TAG_REGISTRY["C"], start=channel, stop=None, step=1))
-    z_start = self._s2p_z_start
-    z_stop = self._s2p_z_stop
-    z_step = self._s2p_z_step
     tags.append(
-        DimensionTag(TAG_REGISTRY["Z"], start=z_start, stop=z_stop, step=z_step)
+        DimensionTag.from_dim_size(
+            TAG_REGISTRY["Z"],
+            self._s2p_last_num_planes,
+            _s2p_selected(self._s2p_z_parsed),
+        )
     )
     tp = self._s2p_tp_parsed
     if tp and tp.final_indices:
@@ -3280,8 +3269,7 @@ def run_process(self):
     if not _check_lsp_available():
         if not self._lsp_missing_warned:
             self.logger.warning(
-                "lbm_suite2p_python is not installed. Please install it to run the Suite2p pipeline."
-                "`uv pip install lbm_suite2p_python`",
+                f"lbm_suite2p_python is not installed: {SUITE2P_HINT}",
             )
             self._lsp_missing_warned = True
         self._install_error = True
@@ -3306,17 +3294,7 @@ def run_process(self):
 
             s2p_path = self._s2p_outdir or self._saveas_outdir
 
-            num_rois = (
-                len(self.image_widget.graphics)
-                if hasattr(self.image_widget, "graphics")
-                else 1
-            )
-            roi = 1 if num_rois > 1 else None
-
-            c_start = self._s2p_c_start
-            c_stop = self._s2p_c_stop
-            c_step = self._s2p_c_step
-            selected_channels = list(range(c_start, c_stop + 1, c_step))
+            selected_channels = _s2p_selected(self._s2p_c_parsed)
             multi_channel = len(selected_channels) > 1
             has_channels = self._s2p_last_num_channels > 1
 
@@ -3335,7 +3313,6 @@ def run_process(self):
                     "reader_kwargs": widget_reader_kwargs(self.image_widget),
                     "output_dir": output_dir,
                     "planes": plane_list,
-                    "roi": roi,
                     "num_timepoints": self.s2p_extras.target_timepoints,
                     "settings": self.s2p.to_dict(),
                     "db": self.s2p_db.to_dict(),
@@ -3407,10 +3384,7 @@ def run_process(self):
                         f"Failed to start background process for {description}"
                     )
         else:
-            c_start = self._s2p_c_start
-            c_stop = self._s2p_c_stop
-            c_step = self._s2p_c_step
-            selected_channels = list(range(c_start, c_stop + 1, c_step))
+            selected_channels = _s2p_selected(self._s2p_c_parsed)
             multi_channel = len(selected_channels) > 1
             has_channels = self._s2p_last_num_channels > 1
 

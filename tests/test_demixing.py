@@ -247,7 +247,7 @@ def test_numpy_frames_match_masknmf(run_dir):
         arr[5, 0, 0], np.asarray(res.compression_array[5:6])[0], rtol=1e-5
     )
     np.testing.assert_allclose(
-        arr[2, 2, 0], np.asarray(res.residual_array[2:3])[0], rtol=1e-5, atol=1e-6
+        arr[2, 2, 0], np.asarray(res.demixed_residual_array[2:3])[0], rtol=1e-5, atol=1e-6
     )
     assert arr._results is None
     arr.close()

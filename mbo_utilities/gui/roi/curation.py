@@ -28,11 +28,8 @@ from masknmf.visualization.imgui import (
 )
 from masknmf.visualization.rois import MARKED_COLOR
 
-from mbo_utilities.annotation import (
-    ENGINES,
-    UNLABELED,
-)
-from mbo_utilities.annotation.imagej import export_roiset, export_traces, import_roiset
+from mbo_utilities.annotation import UNLABELED
+from mbo_utilities.annotation.traces import export_traces
 from mbo_utilities.gui._theme import THEME, em, label_button, to_vec4
 from mbo_utilities.gui.imgui import (
     UNLABEL_ALL,
@@ -42,31 +39,21 @@ from mbo_utilities.gui.roi._shared import (
     _CAPTIONS,
     COLOR_BY,
     COLORMAPS,
-    DEFAULT_RUN_TAG,
-    ENGINE_HELP,
     ROI_KEYS,
     RUN_WHERE,
 )
-from mbo_utilities.roi_workflow import (
-    roi_folder,
-)
+from mbo_utilities.annotation.paths import roi_folder
+
+OPACITY_WHEEL_STEP = 0.05
 
 
 class CurationMixin:
     """The ROIs tab: labels, on-disk and exchange rows, the Curation and ROIs sub-tabs."""
 
     def draw_rois(self):
-        """The ROIs tab, masknmf's Tools panel: Full FOV, guide and keybinds buttons, then the Curation and ROIs tabs, each scrolling on its own."""
+        """The ROIs tab, masknmf's Tools panel: guide and keybinds buttons, then the Curation and ROIs tabs, each scrolling on its own."""
         self._note_hover()
-        if imgui.button(f"{fa.ICON_FA_IMAGE} Full FOV"):
-            self.open_full_fov()
-        tooltip(
-            "the frame on screen and the ROI labels at full size: zoom, colormap, contrast, pixel values"
-        )
         buttons_w = help_buttons_width("ROI Guide")
-        imgui.same_line()
-        if imgui.get_content_region_avail().x < buttons_w + em(0.6):
-            imgui.new_line()
         imgui.set_cursor_pos_x(
             imgui.get_cursor_pos_x() + imgui.get_content_region_avail().x - buttons_w
         )
@@ -195,11 +182,6 @@ class CurationMixin:
             return THEME.err, self._save_error
         if self._run_error is not None:
             return THEME.err, self._run_error
-        active = self.manager.active
-        if active:
-            verbs = {"extract": "extract", "demix": "masknmf"}
-            names = ", ".join(f"{verbs.get(r.kind, r.kind)} {r.tag}" for r in active)
-            return THEME.warn, f"{len(active)} running: {names}"
         return THEME.text_dim, self.status
 
     def _draw_save_controls(self, g):
@@ -250,37 +232,10 @@ class CurationMixin:
         imgui.end_tooltip()
 
     def _draw_exchange_buttons(self, g):
-        """Fiji and CSV exchange: export the drawn ROIs as a RoiSet.zip, import one, export the trace table's rows as a CSV."""
+        """The trace table's rows as one CSV."""
         g.row("exchange")
         start = str(self.folder if self.fpath is not None else Path.home())
         busy = self._file_dialog is not None
-        imgui.begin_disabled(self.n_rois == 0 or busy)
-        if imgui.button("export RoiSet##roi_export_roiset"):
-            self._file_dialog = (
-                "export_roiset",
-                pfd.save_file(
-                    "Export ROIs for Fiji", f"{start}/RoiSet.zip", ["RoiSet", "*.zip"]
-                ),
-            )
-        tooltip(
-            "Every drawn ROI as a RoiSet.zip Fiji's ROI Manager opens: its "
-            "polygon as drawn, on its z-plane and channel"
-        )
-        imgui.end_disabled()
-        imgui.same_line(0, g.gap)
-        imgui.begin_disabled(busy)
-        if imgui.button("import RoiSet##roi_import_roiset"):
-            self._file_dialog = (
-                "import_roiset",
-                pfd.open_file(
-                    "Import ROIs from Fiji", start, ["RoiSet", "*.zip *.roi"]
-                ),
-            )
-        tooltip(
-            "Add the ROIs of a RoiSet.zip (or one .roi), each on the plane it names"
-        )
-        imgui.end_disabled()
-        imgui.same_line(0, g.gap)
         imgui.begin_disabled(not self.has_traces() or busy)
         if imgui.button("export traces##roi_export_traces"):
             self._file_dialog = (
@@ -310,21 +265,10 @@ class CurationMixin:
             self.exchange(kind, picked)
 
     def exchange(self, kind: str, path) -> None:
-        """Run one exchange action on ``path``: ``export_roiset``, ``import_roiset`` (one undo step) or ``export_traces`` (the listed rows); errors land in the status row."""
+        """Run one exchange action on ``path``: ``export_traces`` (the listed rows); errors land in the status row."""
         path = Path(path)
         try:
-            if kind == "export_roiset":
-                export_roiset(self.store, path)
-                self.status = f"exported {self.n_rois} ROIs to {path}"
-            elif kind == "import_roiset":
-                self._push_undo()
-                added = import_roiset(self.store, path)
-                if not added:
-                    self._undo.pop()
-                self.status = f"imported {len(added)} ROIs from {path.name}"
-                if added:
-                    self.select_roi(added[-1])
-            elif kind == "export_traces":
+            if kind == "export_traces":
                 rows = [self.traces.get(k) for k in self._sorted_trace_rows()]
                 export_traces([t for t in rows if t is not None], path, fs=self.fs())
                 self.status = f"exported {len(rows)} traces to {path}"
@@ -437,6 +381,14 @@ class CurationMixin:
             changed, value = imgui.slider_float(
                 f"##{opacity}", getattr(self, opacity), 0.05, 1.0, "%.2f"
             )
+            if imgui.is_item_hovered():
+                imgui.set_item_key_owner(imgui.Key.mouse_wheel_y)
+                wheel = imgui.get_io().mouse_wheel
+                if wheel != 0.0:
+                    changed = True
+                    value = float(
+                        np.clip(value + OPACITY_WHEEL_STEP * wheel, 0.05, 1.0)
+                    )
             if changed:
                 setattr(self, opacity, value)
                 self.refresh_overlay()
@@ -646,50 +598,19 @@ class CurationMixin:
                 self._autosave()
 
     def _draw_run(self, g):
-        """RUN: the engine and where it reads, the run buttons, the tag."""
-        section("RUN")
-        g.row("engine")
+        """TRACE: where a mean trace reads its pixels, and tracing every listed ROI."""
+        section("TRACE")
+        g.row("reads")
         imgui.set_next_item_width(g.w)
         changed, index = imgui.combo(
-            "##roi_engine", ENGINES.index(self.engine), list(ENGINES)
-        )
-        if changed:
-            self.engine = ENGINES[index]
-        g.cell(1)
-        imgui.set_next_item_width(g.w)
-        where = self.run_where if self.run_where in RUN_WHERE else RUN_WHERE[0]
-        changed, index = imgui.combo(
-            "##roi_where", RUN_WHERE.index(where), ["as drawn", "on screen"]
+            "##roi_where", RUN_WHERE.index(self.run_where), ["as drawn", "on screen"]
         )
         if changed:
             self.run_where = RUN_WHERE[index]
-        help_mark(f"{ENGINE_HELP[self.engine]}\nReads each mask {self._where_label()}.")
-        g.row("run")
-        indices = self.selection_indices()
+        help_mark(f"Each mask's mean is read {self._where_label()}.")
+        g.row("trace")
         listed = self.listed_drawn()
-        no_path = self.fpath is None
         w = imgui.get_frame_height() * 1.6
-        imgui.begin_disabled(no_path or not indices)
-        if imgui.button(f"{fa.ICON_FA_PLAY}##roi_run_sel", imgui.ImVec2(w, 0)):
-            self.run_selection(indices)
-        imgui.end_disabled()
-        tooltip(
-            "no data path to write beside"
-            if no_path
-            else f"Run the {len(indices)} selected ROI(s) through {self.engine} -> "
-            f"<stem>.{self.effective_tag}.<stamp>.manual.zarr (shift+t)"
-            if indices
-            else "select a drawn ROI first"
-        )
-        imgui.same_line(0, g.gap)
-        imgui.begin_disabled(no_path or not listed)
-        if imgui.button(f"{fa.ICON_FA_FORWARD}##roi_run_all", imgui.ImVec2(w, 0)):
-            self.run_in_view()
-        imgui.end_disabled()
-        tooltip(
-            f"Run all {len(listed)} drawn ROIs the table lists through {self.engine}"
-        )
-        imgui.same_line(0, g.gap)
         why = "no drawn ROIs listed" if not listed else self.trace_disabled(listed[0])
         imgui.begin_disabled(why is not None)
         if imgui.button(f"{fa.ICON_FA_CHART_LINE}##roi_trace_all", imgui.ImVec2(w, 0)):
@@ -702,15 +623,6 @@ class CurationMixin:
         imgui.same_line(0, g.gap)
         marked = sum(len(s.discarded) for s in self.derived)
         right_aligned_text(f"{self.n_rois} drawn, {marked} marked")
-        g.row("options")
-        imgui.set_next_item_width(g.w)
-        _changed, self.run_tag = imgui.input_text_with_hint(
-            "##roi_run_tag", DEFAULT_RUN_TAG, self.run_tag
-        )
-        help_mark(
-            "the run's tag: it names the run file, <stem>.<tag>.<stamp>.manual.zarr, "
-            "in the ROI folder"
-        )
 
     def _selection_status(self) -> str:
         """Masknmf's footer names the group or the selection, else the first step."""

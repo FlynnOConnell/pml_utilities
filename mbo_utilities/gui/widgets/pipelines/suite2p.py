@@ -15,6 +15,7 @@ from imgui_bundle import imgui
 from mbo_utilities.gui._availability import HAS_SUITE2P
 from mbo_utilities.gui._imgui_helpers import PopupAutoSize, set_tooltip
 from mbo_utilities.gui.widgets.pipelines._base import PipelineWidget
+from mbo_utilities.install import SUITE2P_HINT
 from mbo_utilities.lazy_array import base_array
 from mbo_utilities.preferences import set_last_dir
 
@@ -46,7 +47,7 @@ class Suite2pPipelineWidget(PipelineWidget):
     """suite2p processing and results widget."""
 
     name = "Suite2p"
-    install_command = "uv pip install --no-deps lbm-suite2p-python && uv pip install suite2p rastermap torch torchvision"
+    install_command = SUITE2P_HINT
     extracts_traces = True
 
     @property

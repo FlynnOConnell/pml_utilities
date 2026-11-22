@@ -665,6 +665,16 @@ def repair_ops_tree(path) -> int:
     return fixed
 
 
+AXIS_KEYS: dict[str, tuple[str, ...]] = {  # one entry per index of the axis; a written subset keeps the selected ones
+    "C": ("channel_names", "mesc_channel_conversion"),
+    "Z": (
+        "mesc_roi_extents",
+        "mesc_centroids",
+        "mesc_rotations",
+        "mesc_slice_z_offsets_um",
+    ),
+}
+
 PROVENANCE_PATH_KEYS: tuple[
     str, ...
 ] = (  # paths a run recorded; stale once its folder is copied elsewhere

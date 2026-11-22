@@ -19,12 +19,12 @@ rm -rf ~/projects/mbo_utilities ~/mbo
 rm -rf ~/Applications/"The Studio.app" ~/Desktop/"The Studio.app"
 ```
 
-## 3. Install from GitHub (master)
+## 3. Install from GitHub (main)
 ```
 uv venv ~/projects/mbo_utilities --python 3.12.9
 cd ~/projects/mbo_utilities
 export GIT_LFS_SKIP_SMUDGE=1
-uv pip install --python ./bin/python "git+https://github.com/MillerBrainObservatory/mbo_utilities"
+uv pip install --python ./bin/python "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```
 
 ## 4. Launch
@@ -68,7 +68,7 @@ cat > "$APP/Contents/Info.plist" << 'EOF'
 </plist>
 EOF
 
-curl -LsSf "https://raw.githubusercontent.com/MillerBrainObservatory/mbo_utilities/master/mbo_utilities/assets/app_settings/icon.png" -o "$APP/Contents/Resources/icon.png" 2>/dev/null || true
+curl -LsSf "https://raw.githubusercontent.com/FlynnOConnell/pml_utilities/main/mbo_utilities/assets/app_settings/icon.png" -o "$APP/Contents/Resources/icon.png" 2>/dev/null || true
 
 ln -sf "$APP" "$HOME/Desktop/The Studio.app"
 echo "Created: $APP  (+ Desktop alias)"
@@ -79,5 +79,5 @@ First double-click may be blocked by macOS — allow it once via **System Settin
 ```
 cd ~/projects/mbo_utilities
 export GIT_LFS_SKIP_SMUDGE=1
-uv pip install --python ./bin/python --reinstall-package mbo_utilities "git+https://github.com/MillerBrainObservatory/mbo_utilities"
+uv pip install --python ./bin/python --reinstall-package pml-utilities "pml_utilities[all] @ git+https://github.com/FlynnOConnell/pml_utilities.git"
 ```
