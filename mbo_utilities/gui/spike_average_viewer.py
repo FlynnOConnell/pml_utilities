@@ -1,6 +1,6 @@
 """Spike-Triggered Average: one ROI of a run, averaged around its spikes.
 
-Laid out like Registration QC: the averaged movies side by side in an
+The averaged movies side by side in an
 ``NDWidget`` whose slider is the lag from the spike, and masknmf's
 ``TracePlot`` docked above them on the same lag (the ROI's trace, each
 movie's mean, every motion correction, each with its standard error). Over

@@ -4,8 +4,9 @@ fastplotlib keeps one imgui window per edge, so the menu row, Manual ROI's
 trace plot, the Signal Quality plot, the line-scan viewer's traces and the
 curation dashboard cannot each own the top. They register a :class:`TopPanel`
 here instead: the strip
-draws the menu row, then a tab bar over whatever is registered, and shrinks
-back to the menu row alone when nothing is. Selecting a panel never selects
+draws the menu row, then a tab bar over the panels that have something to
+show (``TopPanel.occupied``), and shrinks back to the menu row alone when none
+do; the first one to fill opens it again. Selecting a panel never selects
 anything in the right bar, and nothing there selects a panel.
 
 Work a feature needs every frame regardless of which tab is on top — polling
@@ -15,8 +16,9 @@ in a panel body.
 A grab bar along the strip's bottom edge drags it taller or shorter and
 double-clicks shut, the way fastplotlib's right and bottom edge windows work
 (it does not draw one for the top edge, so the strip draws its own). Shut,
-the strip keeps its tab row so the panels stay discoverable; clicking a tab
-opens it again. Dragging pins the height until :meth:`TopStrip.reset_size`;
+the strip keeps only its tab row, no panel body, so the panels stay
+discoverable; clicking a tab or double-clicking the bar opens it again. The press that ends a double click
+never drags. Dragging pins the height until :meth:`TopStrip.reset_size`;
 until then the strip is exactly as tall as the panel showing asked for.
 
 A panel that knows the canvas width it needs to draw on one row says so with
@@ -33,7 +35,7 @@ from dataclasses import dataclass
 from fastplotlib.ui import ImguiWindow
 from imgui_bundle import imgui, imgui_ctx
 
-__all__ = ["MENU_HEIGHT", "MENU_MIN_WIDTH", "TopPanel", "TopStrip", "strip_height"]
+__all__ = ["MENU_HEIGHT", "MENU_MIN_WIDTH", "TopPanel", "TopStrip", "always_occupied", "strip_height"]
 
 # the menu row on its own: the 20 px menu bar inside the window padding
 MENU_HEIGHT = 36
@@ -49,7 +51,7 @@ PANEL_PAD = 8 + 4 + TAB_BAR_HEIGHT + 8
 # the grab bar along the bottom edge
 HANDLE_HEIGHT = 14
 # a panel's first row of controls: a 20 px frame and the spacing under it;
-# the strip never shuts or drags smaller, so a panel's controls stay on screen
+# the strip never drags smaller, so a panel's controls stay on screen
 ROW_HEIGHT = 24
 # never size or drag the strip so far down that the canvas has less than
 # this left to render into, after the other edge windows (the NDWidget's
@@ -57,6 +59,11 @@ ROW_HEIGHT = 24
 MIN_RENDER_AREA = 150
 # and never squeeze a panel under this on its own account
 MIN_PANEL = 60
+
+
+def always_occupied() -> bool:
+    """The default ``TopPanel.occupied``: the panel always has something to show."""
+    return True
 
 
 def strip_height(panel_height: int) -> int:
@@ -83,6 +90,9 @@ class TopPanel:
     min_width : float
         Canvas width the body needs to draw on one row, when it knows; the
         strip widens the window to the widest panel's once.
+    occupied : callable
+        True while the body has something to show; until then the tab is
+        hidden and takes no height. Called every frame, so keep it cheap.
     """
 
     key: str
@@ -91,6 +101,7 @@ class TopPanel:
     height: int = 200
     priority: int = 100
     min_width: float = 0.0
+    occupied: Callable[[], bool] = always_occupied
 
 
 class TopStrip(ImguiWindow):
@@ -111,6 +122,9 @@ class TopStrip(ImguiWindow):
         self._manual: int | None = None
         self._before_collapse: int | None = None
         self._cursor_set = False
+        # set by a double click on the bar until the button is released, so
+        # the press that ends the double click cannot drag the new height
+        self._drag_blocked = False
         # the last width the strip widened the window to, so a window the
         # user made narrower afterwards is left alone
         self._fit_tried = 0
@@ -138,6 +152,19 @@ class TopStrip(ImguiWindow):
 
     def has(self, key: str) -> bool:
         return any(p.key == key for p in self.panels)
+
+    @property
+    def shown(self) -> list[TopPanel]:
+        """The registered panels that have something to show, in tab order."""
+        return [p for p in self.panels if p.occupied()]
+
+    def _sync_active(self) -> None:
+        """Select the first panel with something to show when the selected one has nothing."""
+        shown = self.shown
+        if any(p.key == self.active for p in shown):
+            return
+        self.active = shown[0].key if shown else None
+        self._focus = self.active
 
     def add_hook(self, fn: Callable[[], None]) -> None:
         """Run ``fn`` at the top of every frame, whatever tab is selected."""
@@ -171,10 +198,8 @@ class TopStrip(ImguiWindow):
 
     @property
     def shut_size(self) -> int:
-        """Height of the strip with the panels shut: the menu row, the tab row,
-        the panel's first row of controls and the bar.
-        """
-        return strip_height(ROW_HEIGHT)
+        """Height of the strip with the panels shut: the menu row, the tab row and the bar."""
+        return strip_height(0)
 
     @property
     def collapsed(self) -> bool:
@@ -194,7 +219,7 @@ class TopStrip(ImguiWindow):
     def resize_to(self, size: int) -> None:
         """Hold the strip at ``size`` px instead of sizing it to its panel."""
         self._shut = False
-        self._manual = max(int(size), self.shut_size)
+        self._manual = max(int(size), strip_height(ROW_HEIGHT))
         self._resize()
 
     def reset_size(self) -> None:
@@ -207,22 +232,22 @@ class TopStrip(ImguiWindow):
         """Menu row plus the selected panel, unless the user set a height.
 
         The strip is as tall as what it is *showing*, not as tall as the
-        tallest thing registered. It also leaves the images at least
+        tallest thing registered, and only the menu row while no panel has
+        anything to show. It also leaves the images at least
         ``MIN_RENDER_AREA`` after the other edge windows, so a tall panel
         (the curation dashboard over the line traces) on a short window
         shrinks instead of pushing the viewport negative. A drag on the
         grab bar pins the height until :meth:`reset_size`.
         """
-        if not self.panels:
+        shown = self.shown
+        if not shown:
             return MENU_HEIGHT
         if self._shut:
             return self.shut_size
         if self._manual is not None:
             return self._manual
-        panel = self._panel(self.active)
-        height = (
-            panel.height if panel is not None else max(p.height for p in self.panels)
-        )
+        panel = next((p for p in shown if p.key == self.active), None)
+        height = panel.height if panel is not None else max(p.height for p in shown)
         try:
             canvas_height = float(self.figure.canvas.get_logical_size()[1])
         except Exception:
@@ -251,13 +276,14 @@ class TopStrip(ImguiWindow):
     def update(self) -> None:
         # the selected panel sets the height; resize before drawing so the
         # rect the figure laid out this frame is the one we fill
+        self._sync_active()
         self._resize()
         self._fit_width()
         for hook in list(self.hooks):
             hook()
         if self.draw_menu is not None:
             self.draw_menu()
-        if not self.panels:
+        if not self.shown:
             return
         # the tabs live above the grab bar, never under it; the body clips
         # rather than scrolls, panels size themselves to the room they get
@@ -271,7 +297,7 @@ class TopStrip(ImguiWindow):
         self._draw_handle()
 
     def _fit_width(self) -> None:
-        want = math.ceil(max((p.min_width for p in self.panels), default=0.0))
+        want = math.ceil(max((p.min_width for p in self.shown), default=0.0))
         width, height = self.figure.canvas.get_logical_size()
         if want <= width or want == self._fit_tried:
             return
@@ -298,6 +324,9 @@ class TopStrip(ImguiWindow):
 
         if hovered and imgui.is_mouse_double_clicked(0):
             self.toggle_collapsed()
+            self._drag_blocked = True
+        elif not imgui.is_mouse_down(0):
+            self._drag_blocked = False
 
         if hovered or active:
             if not self._cursor_set:
@@ -307,7 +336,7 @@ class TopStrip(ImguiWindow):
             self._set_cursor("default")
             self._cursor_set = False
 
-        if active and imgui.is_mouse_dragging(0):
+        if active and not self._drag_blocked and imgui.is_mouse_dragging(0):
             # the bar is the strip's bottom edge, so dragging down grows it -
             # but never past leaving the canvas too little to render into
             delta = imgui.get_mouse_drag_delta(0).y
@@ -356,7 +385,7 @@ class TopStrip(ImguiWindow):
         reopen = False
         if imgui.begin_tab_bar("##top_strip_tabs"):
             active = None
-            for panel in self.panels:
+            for panel in self.shown:
                 flags = (
                     imgui.TabItemFlags_.set_selected
                     if focus == panel.key
@@ -368,7 +397,8 @@ class TopStrip(ImguiWindow):
                     reopen = True
                 if selected:
                     active = panel.key
-                    panel.draw()
+                    if not self._shut:
+                        panel.draw()
                     imgui.end_tab_item()
             imgui.end_tab_bar()
             if active is not None:

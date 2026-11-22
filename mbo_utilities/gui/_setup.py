@@ -105,6 +105,20 @@ def get_default_ini_path(name: str = "imgui_settings") -> str:
     return str(settings_dir / f"{name}.ini")
 
 
+def _use_xwayland_for_pyqt6():
+    """Point Qt at XWayland on a Wayland session that has one.
+
+    rendercanvas presents to a Wayland window through the wl_display Qt is connected to, and PyQt6
+    does not expose ``QNativeInterface``, so under Qt's wayland platform the canvas fails with
+    "Method 'screen' is not supported". An X11 window under XWayland presents fine.
+    """
+    if not sys.platform.startswith("linux") or not os.environ.get("DISPLAY"):
+        return
+    platform_default = "wayland" if os.environ.get("WAYLAND_DISPLAY") else "xcb"
+    if os.environ.get("QT_QPA_PLATFORM", platform_default).startswith("wayland"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
+
 def _configure_qt_backend():
     """Set up qt backend for rendercanvas if pyqt6 is available.
 
@@ -121,6 +135,7 @@ def _configure_qt_backend():
         return
 
     os.environ.setdefault("RENDERCANVAS_BACKEND", "qt")
+    _use_xwayland_for_pyqt6()
     import PyQt6  # noqa: F401
 
     # fix suite2p pyqt6 compatibility

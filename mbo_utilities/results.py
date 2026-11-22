@@ -65,6 +65,7 @@ from mbo_utilities.metadata.base import strip_for_export
 from mbo_utilities.pipeline_registry import PipelineInfo, register_pipeline
 
 __all__ = [
+    "detection_algo",
     "IMAGE_KINDS",
     "MEMBER_KINDS",
     "RESULTS_ATTR",
@@ -873,6 +874,23 @@ def newest_results(folder, pipeline: str | None = None, source=None) -> Path | N
     if not found:
         return None
     return max(found, key=lambda p: (results_stamp(p) or datetime.min, p.name))
+
+
+def detection_algo(ops: dict) -> str:
+    """The detector that produced a run dir's ROIs: the engine, or for suite2p the algorithm its ops configured (``s2p-sourcery``, ``s2p-sparsery``, ``s2p-cellpose``)."""
+    wf = ops.get("roi_workflow") or {}
+    engine = str(
+        wf.get("engine")
+        or ("masknmf" if ops.get("pipeline") == "masknmf" else "suite2p")
+    )
+    if engine != "suite2p":
+        return engine
+    # lbm_suite2p_python's db_settings derivation
+    if ops.get("algorithm"):
+        return f"s2p-{ops['algorithm']}"
+    if ops.get("anatomical_only"):
+        return "s2p-cellpose"
+    return "s2p-sparsery" if ops.get("sparse_mode", True) else "s2p-sourcery"
 
 
 def results_pipeline(path) -> str | None:

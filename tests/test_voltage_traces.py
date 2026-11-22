@@ -133,7 +133,7 @@ def test_line_means_read_a_short_box_where_it_sits():
     short box's padding out.
     """
     from mbo_utilities.arrays.numpy import NumpyArray
-    from mbo_utilities.roi_workflow import linescan_roi_means
+    from mbo_utilities.analysis.linescan import linescan_roi_means
 
     data = np.zeros((5, 1, 2, 8, 6), np.float32)
     data[:, 0, 0] = 1.0

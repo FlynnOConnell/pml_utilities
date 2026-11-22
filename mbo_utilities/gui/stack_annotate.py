@@ -38,7 +38,7 @@ from mbo_utilities.gui._imgui_helpers import selected_button_style
 from mbo_utilities.gui._ndviewer import MboNDViewer, _ref_to_index, sliders_height
 from mbo_utilities.gui._theme import em
 from mbo_utilities.gui.manual_roi import ManualRoiWidget
-from mbo_utilities.roi_workflow import ROIS_SUFFIX
+from mbo_utilities.annotation.paths import ROIS_SUFFIX
 
 WINDOW_SIZE = (1700, 1000)
 PANEL_WIDTH_PX = 460

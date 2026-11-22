@@ -328,7 +328,7 @@ def test_planes_pick_the_rois_and_cut_the_domains(tmp_path):
     read, every domain is cut down to them, an emptied domain is dropped.
     """
     from mbo_utilities.arrays.mesc import MescArray
-    from mbo_utilities.roi_workflow import linescan_roi_read
+    from mbo_utilities.analysis.linescan import linescan_roi_read
 
     from vnoiser import read_pf
 

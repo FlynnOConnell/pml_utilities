@@ -509,7 +509,7 @@ def pump(widget, seconds: float = 60.0):
 
 
 def test_sidecars_are_named_after_the_unit(tmp_path):
-    from mbo_utilities.roi_workflow import labels_path, run_path
+    from mbo_utilities.annotation.paths import labels_path
 
     mesc = tmp_path / "scan.mesc"
     assert labels_path(mesc).name == "scan.rois.zarr"
@@ -518,10 +518,6 @@ def test_sidecars_are_named_after_the_unit(tmp_path):
         == "scan_MSession_0_MUnit_3.rois.zarr"
     )
     assert labels_path(mesc, "MSession_0_MUnit_3").parent == tmp_path
-    run = run_path(mesc, "MSession_0_MUnit_3_manual")
-    assert run.parent == tmp_path
-    assert run.name.startswith("scan.MSession_0_MUnit_3_manual.")
-    assert run.name.endswith(".manual.zarr")
 
 
 def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
@@ -557,9 +553,6 @@ def test_switching_units_keeps_rois_and_traces_per_unit(mesc_path, options):
         assert first is not None and first.unit == "MUnit_0"
         assert first.tag == "MSession_0_MUnit_0"
         assert first._save_target().name == "two_units_MSession_0_MUnit_0.rois.zarr"
-        assert first._run_out_path("manual").name.startswith(
-            "two_units.MSession_0_MUnit_0_manual."
-        )
         first.auto_trace = False
         first.add_roi([(2.0, 2.0), (9.0, 2.0), (9.0, 9.0), (2.0, 9.0)])
         first.quick_trace(0)

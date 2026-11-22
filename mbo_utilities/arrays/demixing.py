@@ -298,7 +298,7 @@ class DemixingArray(ReductionMixin, LazyArray):
                 self._factors = (u, v, a, cc, b, k1, k2)
         if self._results is not None:
             res = self._results
-            view = (res.compression_array, res.signals_array, res.residual_array)[c]
+            view = (res.compression_array, res.signals_array, res.demixed_residual_array)[c]
             return np.asarray(view[ts], dtype=np.float32).reshape(len(ts), -1)
         u, v, a, cc, b, k1, k2 = self._factors
         if c == 1:

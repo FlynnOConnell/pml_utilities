@@ -298,8 +298,9 @@ class EventCurationWidget(SlowFastPanelsMixin):
         self._own_strip = strip is None
         self.strip = TopStrip(self.figure) if self._own_strip else strip
         self.strip.add_hook(self._frame)
-        self.panel = TopPanel("curation", "Curation", self.draw_panel, PANEL_HEIGHT, 12)
-        self.strip.register(self.panel)
+        self.panel = TopPanel(
+            "curation", "Curation", self.draw_panel, PANEL_HEIGHT, 12, occupied=self.has_recordings
+        )
 
         self.mode = "fast" if HAS_VNOISER else SLOW_FAST
         self._vnoiser_mode = "fast"
@@ -308,6 +309,7 @@ class EventCurationWidget(SlowFastPanelsMixin):
         self._exporting = False  # slow / fast tables being written
         self.compare = False
         self.catalog: list[Recording] = []
+        self.strip.register(self.panel)
         self.sessions: dict[tuple[str, str], CurationSession | SlowFastSession] = {}
         self.raw_inverted = True
         self._raw_scan: tuple[Path, int] | None = None
@@ -387,6 +389,10 @@ class EventCurationWidget(SlowFastPanelsMixin):
     @property
     def loading(self) -> bool:
         return bool(self._busy)
+
+    def has_recordings(self) -> bool:
+        """True once the catalog holds a recording; until then the Curation tab takes no room."""
+        return bool(self.catalog)
 
     def _ready(self) -> CurationSession | None:
         """The focused session when it can be read: loaded and not mid-load."""

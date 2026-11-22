@@ -452,6 +452,9 @@ def _figure_kwargs_for_here(
         # a chosen backend is left to rendercanvas.auto, which honors the variable
         RenderCanvas = None
     else:
+        from mbo_utilities.gui._setup import _use_xwayland_for_pyqt6
+
+        _use_xwayland_for_pyqt6()
         try:
             from rendercanvas.pyqt6 import RenderCanvas
         except (ImportError, RuntimeError):
@@ -593,7 +596,7 @@ def _create_image_widget(
 
     # the roi tool is a Widgets-menu toggle the preview widget builds from; it goes on for this
     # session (never persisted) when asked for or when rois or a pipeline's rois sit beside the data
-    manual_roi = signal_quality = False
+    manual_roi = signal_quality = traces_at_open = False
     if widget != "none":
         from mbo_utilities.gui.manual_roi import labels_path
         from mbo_utilities.gui.roi_runs import run_dir_complete
@@ -621,6 +624,11 @@ def _create_image_widget(
             )
         )
         signal_quality = widget_enabled("signal_quality")
+        # a results file or saved rois load traces at once; otherwise the Traces tab stays empty and takes no room
+        traces_at_open = results is not None or (
+            src is not None
+            and (labels_path(src).exists() or labels_path(src, root=root).exists())
+        )
 
     from mbo_utilities.arrays.features import get_slider_dims
 
@@ -682,7 +690,7 @@ def _create_image_widget(
         if widget != "none":
             top, right, min_width = MENU_HEIGHT, _PREVIEW_WIDTH, MENU_MIN_WIDTH
         # the strip is as tall as the tab that opens first: the Traces panel, else the Signal Quality plot
-        if manual_roi:
+        if manual_roi and traces_at_open:
             base = base_array(data_array)
             top = strip_height(
                 traces_panel_height(
@@ -755,7 +763,6 @@ def _run_gui_impl(
     vis: str = "demixing",
     raw_path: str | Path | None = None,
     motion_correction_path: str | Path | None = None,
-    qc: bool = False,
 ):
     """``run_gui`` after the heavy imports."""
     from mbo_utilities.gui import _gpu_cache
@@ -806,8 +813,7 @@ def _run_gui_impl(
         # the file dialog hands back a list even for one file
         if isinstance(data_in, (list, tuple)) and len(data_in) == 1:
             data_in = data_in[0]
-        from mbo_utilities.arrays.masknmf_run import is_masknmf_run, run_demixing
-        from mbo_utilities.masknmf.reg_denoise import is_reg_denoise
+        from mbo_utilities.arrays.masknmf_run import run_demixing
 
         if mode == "Dashboard (.mesc ROI traces)":
             from mbo_utilities.gui.dashboard_app import open_dashboard
@@ -819,46 +825,11 @@ def _run_gui_impl(
             )
 
             return open_spike_average_viewer(data_in)
-        qc = qc or mode == "Registration QC (MaskNMF run)"
-        if (
-            qc
-            and isinstance(data_in, (str, Path))
-            and not (
-                is_reg_denoise(data_in)
-                or is_masknmf_run(data_in)
-                or is_masknmf_run(Path(data_in).parent)
-            )
-        ):
-            raise click.ClickException(
-                f"{Path(data_in).name} is not a MaskNMF run folder, its results.hdf5 or a "
-                "reg-denoise result; Registration QC (--qc) opens only those"
-            )
-        if (
-            not metadata_only
-            and isinstance(data_in, (str, Path))
-            and (qc or is_reg_denoise(data_in))
-        ):
-            from mbo_utilities.gui.reg_denoise_viewer import RegDenoiseViewer
-
-            viewer = RegDenoiseViewer(data_in, raw_path=raw_path)
-            output = viewer.show()
-            if in_notebook():
-                display_widget(output)
-                return viewer
-            import fastplotlib as fpl
-
-            fpl.loop.run()
-            return None
         # a masknmf demixing result, or a run folder that demixed, opens in masknmf's own viewers
         from mbo_utilities.arrays.demixing import has_demixing_results
 
         if isinstance(data_in, (str, Path)):
             data_in = run_demixing(data_in) or data_in
-            from mbo_utilities.masknmf.asap7 import is_asap7_run
-            from mbo_utilities.masknmf.params import ASAP7_RESULTS_FILE
-
-            if is_asap7_run(data_in):
-                data_in = Path(data_in) / ASAP7_RESULTS_FILE
 
         if (
             not metadata_only
@@ -1015,6 +986,8 @@ def _load_for_viewer(data_in, roi=None, unit=None, dims=None):
         mesc_kwargs["dims"] = dims
     t0 = time.perf_counter()
     data_array = imread(data_in, roi=roi, **mesc_kwargs)
+    if roi is None and hasattr(data_array, "viewer_roi"):
+        data_array.roi = data_array.viewer_roi
     t_imread = time.perf_counter() - t0
     logger.debug(
         f"[boot] imread: {t_imread * 1000:.0f} ms  "
@@ -1193,6 +1166,8 @@ def _launch_napari(data_in, roi=None, unit=None, dims=None):
     if dims:
         mesc_kwargs["dims"] = dims
     arr = imread(data_in, roi=normalize_roi(roi), **mesc_kwargs)
+    if normalize_roi(roi) is None and hasattr(arr, "viewer_roi"):
+        arr.roi = arr.viewer_roi
     arr_dims = list(get_dims(arr))
     nz = int(arr.shape[arr_dims.index("Z")]) if "Z" in arr_dims else 1
     viewer = napari.Viewer(ndisplay=3 if nz > 1 else 2)
@@ -1283,7 +1258,6 @@ def run_gui(
     vis: str = "demixing",
     raw_path: str | Path | None = None,
     motion_correction_path: str | Path | None = None,
-    qc: bool = False,
 ):
     """
     Open a GUI to preview data of any supported type.
@@ -1291,10 +1265,8 @@ def run_gui(
     ``dims`` names a plain TIFF's page axis (``"ZYX"`` for a z-stack,
     ``"CYX"`` for channels) the way ``imread(..., dims=...)`` does.
 
-    ``qc`` opens Registration-Denoising Quality Control on a MaskNMF run
-    folder (or its ``results.hdf5``) or a ``mbo reg-denoise`` result, which
-    opens there without it. A run folder whose run demixed opens in masknmf's
-    demixing viewer; one that did not opens in the Studio.
+    A run folder whose run demixed opens in masknmf's demixing viewer; one
+    that did not opens in the Studio.
 
     A masknmf demixing result opens in masknmf's own viewer instead:
     ``vis`` picks ``demixing`` (default) or ``classification`` before launch;
@@ -1382,7 +1354,6 @@ def run_gui(
         vis=vis,
         raw_path=raw_path,
         motion_correction_path=motion_correction_path,
-        qc=qc,
     )
 
 

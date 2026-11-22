@@ -3294,13 +3294,6 @@ def run_process(self):
 
             s2p_path = self._s2p_outdir or self._saveas_outdir
 
-            num_rois = (
-                len(self.image_widget.graphics)
-                if hasattr(self.image_widget, "graphics")
-                else 1
-            )
-            roi = 1 if num_rois > 1 else None
-
             selected_channels = _s2p_selected(self._s2p_c_parsed)
             multi_channel = len(selected_channels) > 1
             has_channels = self._s2p_last_num_channels > 1
@@ -3320,7 +3313,6 @@ def run_process(self):
                     "reader_kwargs": widget_reader_kwargs(self.image_widget),
                     "output_dir": output_dir,
                     "planes": plane_list,
-                    "roi": roi,
                     "num_timepoints": self.s2p_extras.target_timepoints,
                     "settings": self.s2p.to_dict(),
                     "db": self.s2p_db.to_dict(),

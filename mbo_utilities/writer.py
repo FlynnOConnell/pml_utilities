@@ -9,6 +9,7 @@ chunked streaming, and format conversion.
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import time
 import warnings
@@ -32,6 +33,14 @@ if TYPE_CHECKING:
 logger = log.get("writer")
 
 
+def _splits_rois(arr) -> bool:
+    """True when ``arr``'s ROI selection fans out into several ROIs (``0`` with more than one, or a list)."""
+    selection = getattr(arr, "roi", None)
+    if isinstance(selection, (list, tuple)):
+        return True
+    return selection == 0 and getattr(arr, "num_rois", 1) > 1
+
+
 def imwrite(
     lazy_array,
     outpath: str | Path,
@@ -42,7 +51,7 @@ def imwrite(
     num_timepoints: int | None = None,
     num_zplanes: int | None = None,
     register_z: bool = False,
-    roi_mode: RoiMode | str = RoiMode.concat_y,
+    roi_mode: RoiMode | str | None = None,
     roi: int | Sequence[int] | None = None,
     metadata: dict | None = None,
     overwrite: bool = False,
@@ -105,15 +114,17 @@ def imwrite(
         - int : Single channel, e.g. `channels=1`
         - list/tuple : Specific channels, e.g. `channels=[1, 2]`
 
-    roi_mode : RoiMode | str, default=RoiMode.concat_y
+    roi_mode : RoiMode | str, optional
         Mode for handling multi-ROI data. Options:
-        - RoiMode.concat_y : Horizontally concatenate ROIs into single FOV (default)
+        - None (default) : Follow ``roi`` and the array's own selection: separate when either picks or splits ROIs
+        - RoiMode.concat_y : Horizontally concatenate ROIs into single FOV, whatever the array's selection
         - RoiMode.separate : Write each ROI to separate files
         String values are accepted (case-insensitive): "concat_y", "separate".
 
     roi : int | Sequence[int] | None, optional
-        Specific ROI(s) to export when roi_mode=RoiMode.separate. Options:
-        - None (default) : Export all ROIs
+        Specific ROI(s) to export when roi_mode is separate. Options:
+        - None (default) : Export the array's selection
+        - 0 : Export every ROI, each into its own ``roiNN`` folder
         - int > 0 : Export specific ROI, e.g. `roi=1` exports only ROI 1
         - list/tuple : Export specific ROIs, e.g. `roi=[1, 3]`
         Note: When roi_mode=RoiMode.concat_y, this parameter is ignored.
@@ -295,6 +306,9 @@ def imwrite(
 
     # handle roi based on roi_mode
     # ROI support detected via duck typing: hasattr(arr, 'roi_mode')
+    if roi_mode is None:
+        picks_rois = roi is not None or _splits_rois(lazy_array)
+        roi_mode = RoiMode.separate if picks_rois else RoiMode.concat_y
     if roi_mode == RoiMode.separate:
         # separate mode: set roi on array if specified
         if roi is not None and hasattr(lazy_array, "roi_mode"):
@@ -307,6 +321,9 @@ def imwrite(
                 f"All ROIs will be concatenated."
             )
         roi = None
+        if _splits_rois(lazy_array):
+            lazy_array = copy.copy(lazy_array)
+            lazy_array.roi = None
 
     if order is not None:
         if len(order) != len(planes):

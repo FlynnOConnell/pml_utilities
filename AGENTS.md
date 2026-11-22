@@ -26,8 +26,9 @@ pml_utilities/
 │   ├── metadata/             # canonical vocabulary, alias resolution, OutputMetadata
 │   ├── pipeline_registry.py  # PipelineInfo + entry-point loading
 │   ├── results.py            # the results zarr every pipeline molds into + ResultsArray (§7.5)
-│   ├── masknmf/  vnoiser/    # pipeline packages: params / runner / outputs / qc
-│   ├── roi_workflow.py       # drawn ROIs -> extract (mean | suite2p) | demix (masknmf)
+│   ├── masknmf/              # plane_view + run_planes: masknmf's own pipelines per plane, then the results zarr
+│   ├── vnoiser/              # pipeline package: params / runner / outputs
+│   ├── annotation/           # drawn ROIs: store, OME-NGFF rois zarr, paths, mean traces (measure.py)
 │   ├── dashboard.py          # a .mesc unit's line and drawn-ROI traces (cached), processed, as stacked figures with scale bars; gui/dashboard_app.py is its hello_imgui window (`mbo dashboard`)
 │   ├── hpc/                  # submitit/SLURM runner for the suite2p pipeline (`mbo hpc`)
 │   ├── gui/                  # The Studio (imgui + fastplotlib)
@@ -78,7 +79,7 @@ hint in its `ImportError`. Entry-point groups: `mbo_utilities.lazy_arrays` (read
 | `arrays/features` | Dims, tags, selection, ROI, phase, frame average, stats; format-agnostic | Know about any one file format |
 | `metadata` | Canonical vocabulary, alias resolution, `OutputMetadata`, ScanImage parsing | Read pixels |
 | `writer` + `_writers` | `imwrite`; emit canonical values under each format's keys; `ops.npy`; provenance | Hand-roll alias fan-out; every emitted key comes from the registry or `OutputMetadata` |
-| `masknmf` `vnoiser` `roi_workflow` `hpc` | Run a pipeline from a settings dataclass; write its outputs (§7.4) | Import `imgui_bundle`, `fastplotlib`, or `mbo_utilities.gui` |
+| `masknmf` `vnoiser` `hpc` | Run a pipeline from a settings dataclass; write its outputs (§7.4) | Import `imgui_bundle`, `fastplotlib`, or `mbo_utilities.gui` |
 | `gui` views | Draw what the array answers (`results`, `motion_correction`, `behavior`) at the position the host's `Slice` and `Playhead` say is on screen (§7.6) | Read `iw.indices` itself; parse a pipeline's files; name a format |
 | `gui/widgets/pipelines` | Draw a pipeline's config; spawn its worker task | Compute inline; hold pipeline math |
 | `gui/tasks` + `gui/_worker` | Re-open the source in a subprocess and call the runner | Depend on GUI state; args are JSON |
@@ -152,7 +153,7 @@ Format-specific labels win over the rank guess:
 | ImageJ / Fiji TIFF | `frames`, `slices`, `channels`. A plain stack (`slices>1`, no `hyperstack`, no `spacing`) is read as **T**; `dims="ZYX"` keeps it as Z. tifffile's `imagej=True` default writes `channels=N`, read as C until `dims` says otherwise. Page order XYCZT. |
 | Plain TIFF (no axis tags) | pages go on **T**; a three-letter `dims` (`"TYX"`, `"ZYX"`, `"CYX"`) puts the one populated axis on the axis named (`tiff._apply_dims_override`, `_declared_layout`). The Studio's Page Axis panel and `mbo view --dims` are the same `dims`. |
 | OME-TIFF | `SizeT`, `SizeZ`, `SizeC`; page order from `DimensionOrder`. |
-| ScanImage TIFF | `stack_type` from `si`: LBM (>2 saved channels) puts beamlets on Z and color ports on C; piezo puts slices on Z and volumes on T; single_plane has Z=1. |
+| ScanImage TIFF | `metadata/scanimage.ScanLayout` from `si`, volumes counted from the pages (never `numVolumes`). LBM (an AI port saves several channels; without virtual channels, more than four saved) puts beamlets on Z and ports on C. Piezo (`hStackManager.enable`, or `hFastZ.enable` with several slices) puts slices on Z and volumes on T; a slow stack's repeats per slice follow their slice on T unless `average_frames`; fast-z flyback frames are dropped. Pollen (LBM + piezo) puts piezo positions on T. single_plane has Z=1 and every saved PMT channel on C. mROI strips are cut where `pixelResolutionXY` and a whole number of fly-to lines fill the page. |
 | Multi-file TIFF | `planeNN` in the filename groups files onto Z; otherwise files concatenate along T; `roiN` yields one array per ROI. |
 | Suite2p dir | `ops.npy` per plane dir, or suite2p 1.0's `settings.npy` + `reg_outputs.npy` + `detect_outputs.npy` read as one ops dict (`file_io.load_plane_ops`; `ops.npy` wins when both exist; raw binary `data_raw.bin` or `raw_data.bin`); plane dirs stack onto Z; T comes from the binary's file size, not `ops["nframes"]`. |
 | MESc | `MethodType`: 1 timeseries `(T, C, 1, Y, X)`; 2 z-stack `(1, C, Z, Y, X)`; 6/7 linescan `(T, C, R, n_lines, width)`; 8 chessboard and 9/10 ribbon `(T, C, R, Y, X)`; 11 multicube has real depth on Z. `metadata["mesc_z_axis_meaning"]` says whether Z is `roi_index`, `depth` or `none`. |
@@ -209,7 +210,9 @@ never branch on rank.
    `register_array_class` calls) is asked `can_open(path)` in descending `PRIORITY`;
    ties keep entry-point order; first `True` wins. Today: `IsoviewArray` 90,
    `MasknmfRunArray` 75, `ResultsArray` 70, `Lab4H5Array` 65, `MescArray` 60,
-   `BrukerArray` 60, everything else 50.
+   `BrukerArray` 60, everything else 50 (the ScanImage subclasses too: a file is
+   part of one acquisition, so a folder concatenates; `ScanImageArray` 40,
+   `TiffArray` 30).
 4. Inputs no class claims (file lists, `.bin`, `.klb`, `.mp4`, `reg_tif/`, mixed
    directories) fall through to the legacy chain in `reader._imread_impl`.
 5. A directory or list of files a class above 50 claims (Bruker h5, MESc: whole
@@ -400,10 +403,10 @@ the left-hand keys; the registry does the rest.
 | Quantity | canonical | ScanImage (`si.*`) | Femtonics MESc | ImageJ / Fiji TIFF | OME (TIFF XML, NGFF) | Suite2p `ops` | IsoView XML | lab4 H5 (`/imaging` attrs) | PrairieView / Bruker |
 |---|---|---|---|---|---|---|---|---|---|
 | pixel size | `dx` `dy` | `objectiveResolution × scanfields.sizeXY / pixelResolutionXY` → `pixel_resolution` tuple | scan pattern `pixelSize` / `pixelSizeL` | `XResolution` `YResolution` (px per unit, needs `unit`) | `PhysicalSizeX/Y` + `*Unit`; NGFF scale[y], scale[x] | `dx` `dy` (`umPerPixX/Y` legacy) | `camera_pixel_pitch_um / magnification` → `pixel_resolution_um` | `pixel_size_um` | `micronsPerPixel` XAxis / YAxis |
-| z-step | `dz` | `hStackManager.actualStackZStepSize` else `stackZStepSize`; never for LBM | multicube `voxelSizeZ`; else `None` (ROI slots are not depths) | `spacing` | `PhysicalSizeZ`; NGFF scale[z] | `dz` (`umPerPixZ`, `z_step`) | `z_step` / `axial_step` | | ZSeries `positionCurrent` ZAxis step |
-| sampling rate | `fs` | `hRoiManager.scanFrameRate`, else `1/scanFramePeriod` | `1000 / TStepInMs ÷ light paths` (`mesc_raw_frame_rate` keeps the scanner rate) | `finterval` (s) | `TimeIncrement` + `TimeIncrementUnit`; NGFF time scale (s) | `fs` | `vps` = `fps / zplanes` (`fps` is the camera rate) | `frame_rate_hz`; `frame_period` (s) | `framePeriod` (s) |
+| z-step | `dz` | piezo: `hStackManager.actualStackZStepSize` else `stackZStepSize`; never for LBM, pollen or a disabled stack | multicube `voxelSizeZ`; else `None` (ROI slots are not depths) | `spacing` | `PhysicalSizeZ`; NGFF scale[z] | `dz` (`umPerPixZ`, `z_step`) | `z_step` / `axial_step` | | ZSeries `positionCurrent` ZAxis step |
+| sampling rate | `fs` | `hRoiManager.scanFrameRate`, else `1/scanFramePeriod`; piezo: `scanVolumeRate` (unset when repeats on T make it uneven); pollen: unset | `1000 / TStepInMs ÷ light paths` (`mesc_raw_frame_rate` keeps the scanner rate) | `finterval` (s) | `TimeIncrement` + `TimeIncrementUnit`; NGFF time scale (s) | `fs` | `vps` = `fps / zplanes` (`fps` is the camera rate) | `frame_rate_hz`; `frame_period` (s) | `framePeriod` (s) |
 | width, height | `Lx` `Ly` | page shape | `Channel_N` shape | page shape | `SizeX` `SizeY` | `Lx` `Ly` | `dimensions` | dataset shape | `pixelsPerLine` `linesPerFrame` |
-| timepoints | `num_timepoints` | pages ÷ `nchannels`, summed over files | axis 0 of `Channel_N` per `MethodType` | `frames` (or `slices` for a plain stack) | `SizeT` | `nframes` (reader trusts file size) | TM folders | dataset shape | TSeries frame count |
+| timepoints | `num_timepoints` | `ScanLayout.shape`: frames, volumes or piezo positions from the page count | axis 0 of `Channel_N` per `MethodType` | `frames` (or `slices` for a plain stack) | `SizeT` | `nframes` (reader trusts file size) | TM folders | dataset shape | TSeries frame count |
 | z-planes | `num_zplanes` | LBM: saved beamlets per color port; piezo: `hStackManager.numSlices` | ROI count / depth per `MethodType` | `slices` | `SizeZ` | `nplanes` / plane dirs | `zplanes` = `dimensions[-1]` | dataset shape | ZSeries frame count |
 | colors | `num_color_channels` | unique `hScan2D.virtualChannelSettings__N.source` ports | count of `Channel_N` | `channels` | `SizeC` | `nchannels` | cameras / views (`num_views`) | `n_channel` | `<File channel=...>` count |
 | dtype | `dtype` | page dtype | `Channel_N.dtype` | page dtype | `Type` | `int16` | volume dtype | dataset dtype | `bitDepth` |
@@ -759,53 +762,36 @@ summary widgets, and `mbo info` load them unchanged:
 Filenames are matched; semantics may differ and the pipeline wins. Pipeline-specific
 files keep their own names (`demixing_results.hdf5`, `PF/`, `norm_traces.npy`).
 
-MaskNMF is the exception: it writes masknmf's own run folder per plane and no movie,
-so `masknmf view`, `masknmf.io.OpenedResults` and the masknmf launcher open its runs
-as masknmf's:
+MaskNMF is the exception: pml_utilities only prepares the data, and masknmf's own
+pipeline class runs it. The widget holds masknmf's Parameters popup
+(`masknmf.visualization.imgui.parameters.Parameters`); the worker calls
+`masknmf.pipeline.run_planes(arr, save_path, config, runtime, run_args, ...)`, which
+for each plane builds `plane_view` (the plane, channel and frames picked, the read
+features applied, a `(T, Y, X)` `PlaneMovie`), records it in `pipeline.inputs`, runs
+`PipelineCls.from_config(...).run(view, frame_rate, ...)`, then writes the results
+zarr with `masknmf.outputs.write_results`:
 
 ```
 <save_path>/
-  20261007T183740_masknmf_zplane01_tp00001-01574/
-    results.hdf5        RigidRegistrationArray + RigidMotionCorrector, CompressionArray,
-                        DemixingResults; each stage group's mbo_provenance attr
-    config.json         masknmf.io.write_run_config: pipeline mbo_utilities.masknmf,
-                        configs (MasknmfSettings), inputs.movie (path, reader_kwargs,
-                        read_features, plane, z, c, frames | tp_indices, fs), run, timings
-    <folder name>.log   masknmf's log
-    alignment.hdf5      the denoised copy registration ran on (Denoise before registration)
-    <stem>.<stamp>.masknmf.zarr   the results file (§7.5) when demixing ran
-    *.png               QC figures
+  masknmf_config.json    the Parameters config the run took
+  zplane01/
+    20261119T183740_two-photon-calcium/   masknmf's run folder
+      results.hdf5        masknmf's stage groups
+      config.json         pipeline, configs, inputs.data (path, reader_kwargs,
+                          read_features, plane, z, c, frames | tp_indices, fs), run, timings
+      <folder name>.log   masknmf's log
+      <stem>.<stamp>.masknmf.zarr   the results file (§7.5) when demixing ran
 ```
 
 - `MasknmfRunArray` (`imread(<run folder>)`) re-opens the recording from
-  `inputs.movie` and replays the stored shifts, so the registered movie is never on
-  disk; its `results` is the zarr, its `motion_correction` the shifts. With Invert
-  Deflection the runner registers the movie as recorded and inverts the registered
-  movie for compression and demixing (`2 * mean - x` holds a still mean against a
-  moving frame, so registering it leaves motion behind);
-  `inputs.movie.registered_before_inversion` makes the reader replay the shifts the
-  same way.
-- **Denoise before registration** (`registration.denoised_reference`) estimates the
-  shifts on a quick PMD copy of the raw movie and applies them to the raw frames. A
-  stage set to Run copies its group from the newest earlier run folder of the same
-  plane when the group's provenance (settings hash and input) matches.
-- **View movies** opens `gui/reg_denoise_viewer` on the newest run folder in its own
-  process; `RegDenoiseRun.open` takes a run folder or its `results.hdf5`
-  (`from_run_folder`: raw and registered from `MasknmfRunArray`, `pmd(raw)` the
-  alignment copy, `pmd(registered)` the compression stage, the recording's RTMC) or a
-  reg-denoise file. A viewer that dies leaves its traceback in
-  `~/.mbo/logs/<stamp>_movies_<run>.log` and its last line in the widget's status.
-  `mbo <run folder> --qc` and the launcher's **Registration QC (MaskNMF run)** open
-  the same viewer; without `--qc` a run folder opens in the Studio
-  (`MasknmfRunArray`), or in masknmf's demixing viewer when its `results.hdf5` holds
-  a `DemixingResults` (`arrays.masknmf_run.run_demixing`).
-- `mbo reg-denoise` (`masknmf/reg_denoise.py`) is pre-registration denoising for one
-  channel: the raw movie's PMD (`raw/CompressionArray`), the rigid registration
-  estimated on it, and the registered movie's PMD (`CompressionArray`) in one
-  `results.hdf5` whose root attrs `mbo_pipeline = "reg_denoise"` and
-  `mbo_provenance` (source, unit, channel, first frame, fs, settings) let `mbo <file>`
-  open it in `RegDenoiseViewer`: the four movies on one time axis under masknmf's
-  `TracePlot` (RTMC, shifts, frame means, a rectangle ROI).
+  `inputs.data` (older runs: `inputs.movie`; `arrays.masknmf_run.run_movie`) and
+  replays the stored shifts, so the registered movie is never on disk. With Invert
+  Deflection `plane_view` hands masknmf the uninverted movie and the run takes
+  `indicator_polarity="negative"` (`2 * mean - x` holds a still mean against a
+  moving frame, so registering it leaves motion behind).
+- **View results** launches `masknmf view` on the newest run that demixed. A run
+  folder opens in the Studio (`MasknmfRunArray`), or in masknmf's demixing viewer when
+  its `results.hdf5` holds a `DemixingResults` (`arrays.masknmf_run.run_demixing`).
 - **Spike-triggered average** (`analysis/spike_average.SpikeSource`): one ROI of any
   run's `results` (§7.5) over the movie it was measured on (the run array's own movie
   at the unit's z, or a line unit's first line, cut to the frames its source block
@@ -813,7 +799,7 @@ as masknmf's:
   events a `.curation` file beside the run accepts for `results.recording_id(unit,
   roi)`, or a threshold on one of its traces; motion is every `motion_correction` the
   movie went through, each on its own clock (`MotionCorrection.at`).
-  `gui/spike_average_viewer` draws it like Registration QC (an `NDWidget` over the
+  `gui/spike_average_viewer` draws it as an `NDWidget` over the
   lag, `TracePlot` linked to it) and only runs in its own process
   (`launch_spike_average`, watched by `gui.launch.LaunchedWindow`): from the Traces
   tab's **Spike average**, the MaskNMF tab (newest run that demixed), the vnoiser tab
@@ -945,13 +931,13 @@ promotion, rois zarr persistence) over one mixin per concern in `gui/roi/`:
 | `keys` | `KeysMixin` | `handle_keys`, `_keys_live`, the per-frame `_frame` hook |
 | `overlay` | `OverlayMixin` | the mask / contour overlay, region drawing, pointer picking, `set_color_by` |
 | `selection` | `SelectionMixin` | selection, the group buffer, labeling, marks, delete, undo |
-| `jobs` | `JobsMixin` | quick and pixel traces (`measure_mean`), `run_rois` / `_run_job`, job polling, run adoption |
+| `jobs` | `JobsMixin` | quick and pixel traces (`measure_mean`) on background threads |
 | `traces_panel` | `TracesPanelMixin` | `draw_traces`, `_sync_plot`, the motion and behavior rows, kind and dF/F settings |
 | `trace_table` | `TraceTableMixin` | `draw_trace_table` and its rows, cells, sorting |
 | `curation` | `CurationMixin` | `draw_rois`, `draw_tab`, the labels, on-disk and exchange rows, the filter, `exchange` |
 
 A mixin has no state of its own and no `__init__`; every attribute is the widget's. A
-test that patches a module global (`measure_mean`, `demix_rois`) patches the mixin's
+test that patches a module global (`measure_mean`) patches the mixin's
 module (`gui.roi.jobs`), where the call lives. Names other modules import
 (`PANEL_HEIGHT`, `KEYBINDS`, `attach_roi_widget`, `labels_path`, ...) are
 re-exported from `gui/manual_roi` and listed in its `__all__`.
@@ -1005,23 +991,13 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   below): one line per row on the viewer's frames (`_on_frames`, interpolated from
   the row's `trace_axis`, NaN outside it, decimated to a min/max band above the
   panel's pixel count), its background set by `_TRACE_MODES`.
-- **Run coordinates.** `RoiModel.targets(indices, z=, c=)` says where each ROI is
+- **Trace coordinates.** `RoiModel.targets(indices, z=, c=)` says where each ROI is
   read: the mask always from the plane it was drawn on, the pixels from `z` / `c`
   when given, else from where it was drawn. The widget's `run_where` is `drawn` or
-  `screen` (the slice on screen when the run starts); `run_tp` cuts T (`PlaneMovie.select`). A run is one results zarr (§7.5), pipeline
-  `manual`, `<stem>.<tag>.<stamp>.manual.zarr` in the ROI folder
-  (`roi_workflow.run_path`; the stamp advances a second while the name is taken):
-  `run_rois` groups targets by `(plane, z, c)`, `extract_rois` or `demix_rois` makes
-  one `ResultUnit` per group named by its slice (`slice_name`: `zplane02`,
-  `ch01_zplane02` when more than one channel was read), and `write_run` writes them
-  with the recording's path, reader kwargs and unit in the source block. Unit `attrs`
-  record `engine`, `plane` (store plane), `z`, `c`, `frames` / `tp_indices`, the
-  `uids` and `store_indices` of its ROIs (`roi<uid>` names); `members` are the
-  store's pixels and weights (masknmf's own footprints after demixing, with
-  `n_components`). `DerivedSet.read_z` / `read_c` / `frames` / `engine` read them
-  back; `roi_runs.unit_trace` turns a row into a trace. masknmf's native files land
-  in the zarr's `manual/` folder (`results.pipeline_files`); a plane dir's PMD cache
-  stays in the plane dir.
+  `screen` (the slice on screen when tracing starts). Mean traces are measured by
+  `annotation/measure.measure_mean` through `arrays/plane.PlaneMovie`. The ROI tool
+  runs no pipeline: pipelines run from the Process tab, and their results files load
+  as derived sets (`roi_runs.DerivedSet`, `roi_runs.unit_trace`).
 - **masknmf's curation viewer.** The ROI tool is laid out, keyed and styled as
   masknmf's `SingleSessionDemixingVis`, drawn with `masknmf.visualization.imgui`
   widgets (`TracePlot`, `draw_roi_table`, `RoiOrder`, `grid`, `section`,
@@ -1037,12 +1013,12 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   toggles a row in the group (`buffer`), shift adds; a group plots one line per
   member in its `GROUP_COLORS` colour, shared by mask and table row. The ROIs tab is
   masknmf's Tools panel (guide `h`, keybinds `k`; a Curation tab with
-  OVERLAY, SELECTION, LABELS, RUN; an ROIs tab with masknmf's filter and table); the
+  OVERLAY, SELECTION, LABELS, TRACE; an ROIs tab with masknmf's filter and table); the
   Traces tab is the trace table in `draw_roi_table`.
-- **Draw -> run.** `ManualRoiWidget(auto_trace=True)` traces every ROI the moment it
-  is added (its mean at the run coordinates); no tab is selected for the user. The
-  RUN section, `shift+t` and the Process tab run ROIs the way the widget is set
-  (`engine`, `run_where`, `run_frames`, `run_tag`).
+- **Draw -> trace.** `ManualRoiWidget(auto_trace=True)` traces every ROI the moment it
+  is added (its mean at the trace coordinates); no tab is selected for the user. The
+  TRACE section traces every drawn or marked ROI the way the widget is set
+  (`run_where`).
 - **CSV export.** `annotation/traces.export_traces` is one CSV, `time_s` or `frame`
   then one column per row named by `RoiTrace.name`. The ROIs tab's exchange row runs
   it through `ManualRoiWidget.exchange(kind, path)`.
@@ -1051,7 +1027,7 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   `resolve_dim_labels` uses), whatever the array labels them (`Timepoint` /
   `Channel` / `ROI` for a MESc AOD unit, `Tile` / `View` for IsoView); the widget
   hands the store `axis_roles = {"z": <slider>, "c": <slider>}` so `roi_z` / `roi_c`
-  and every run decode the right slice. Every `LazyArray` is indexable in y and x
+  and every trace decode the right slice. Every `LazyArray` is indexable in y and x
   (§5.3) and `PlaneMovie` reads only `arr[t, c, z, y, x]`, so no reader needs
   anything more for the ROI tool. Wherever the widget names an axis it uses the
   slider's own word (`ManualRoiWidget.axis_label`): on an AOD unit the Z axis reads
@@ -1172,7 +1148,7 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
 - **Persistence.** Nothing is written beside the data unasked: data is often opened
   where the user cannot or should not write. Everything the widget keeps is one file,
   the rois zarr `<stem>.rois.zarr` (`annotation/ngff.py::RoiFile`,
-  `roi_workflow.labels_path`), written whole on Save, or as anything changes when
+  `annotation.paths.labels_path`), written whole on Save, or as anything changes when
   `roi_autosave` is on (off by default), into a `.tmp` sibling swapped into place. It
   is a zarr v3 group: `rois/` is the truth, ragged membership like the results
   zarr's (`offsets`, `member` as flat `y * X + x`, `weight`) plus one column per ROI
@@ -1191,16 +1167,15 @@ re-exported from `gui/manual_roi` and listed in its `__all__`.
   `labels/suite2p`). A restore reads the ROI folder, then beside the data; a file
   saved for data of another shape is left alone and the data saves as
   `<stem>_<nz>x<ny>x<nx>.rois.zarr` (`_save_suffix`). The ROI folder
-  (`roi_workflow.roi_folder(fpath, root)`) is beside the data, or
+  (`annotation.paths.roi_folder(fpath, root)`) is beside the data, or
   `<root>/<name>_<hash of the path>/` when the user picks a folder (`roi_folder`);
-  both options live in `preferences`, set from the ROIs tab's OVERLAY > on disk row,
-  and every manual run goes there too. Tints live for the session. Ctrl+z is a stack
+  both options live in `preferences`, set from the ROIs tab's OVERLAY > on disk row. Tints live for the session. Ctrl+z is a stack
   of store snapshots (`_push_undo` before every add, delete, mark and deselect;
   `undo` restores the store in place, `RoiLabelStore.restore`, one `restore` event).
   A file holding several recordings (a `.mesc`) keeps all of it per recording:
   `unit_key` (`manual_roi.unit_key`, the base array's) names the files
-  `<stem>_<tag>.rois.zarr` and `<stem>.<tag>_<run>.<stamp>.manual.zarr`
-  (`labels_path(fpath, tag)`, `_run_out_path`, tag `MSession_0_MUnit_3`), and a unit
+  `<stem>_<tag>.rois.zarr`
+  (`labels_path(fpath, tag)`, tag `MSession_0_MUnit_3`), and a unit
   switch (`MescTabWidget._install`) parks the outgoing widget's store and runs under
   its unit and rebuilds the widget for the incoming one.
 

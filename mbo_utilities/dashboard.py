@@ -289,7 +289,7 @@ def _drawn_store(path: Path, arr):
     """
     from mbo_utilities.annotation.ngff import RoiFile
     from mbo_utilities.preferences import get_roi_folder
-    from mbo_utilities.roi_workflow import labels_path
+    from mbo_utilities.annotation.paths import labels_path
 
     tag = str(arr.unit_key).strip("/").replace("/", "_")
     rois = labels_path(path, tag, root=get_roi_folder() or None)
@@ -338,7 +338,9 @@ def load_rows(
     from mbo_utilities.lazy_array import base_array
     from mbo_utilities.preferences import get_roi_folder
     from mbo_utilities.reader import imread
-    from mbo_utilities.roi_workflow import as_movie, measure_mean, unit_roi_means
+    from mbo_utilities.analysis.linescan import unit_roi_means
+    from mbo_utilities.annotation.measure import measure_mean
+    from mbo_utilities.arrays.plane import as_movie
 
     path = Path(path)
     arr = imread(path, unit=unit)

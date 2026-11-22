@@ -144,29 +144,32 @@ print(arr.num_planes) # number of z-planes (= shape[2])
 (piezoarray)=
 #### PiezoArray
 
-Aquisitions using the ScanImage Piezo `hStackManager` produce z-stacks with optional frame averaging.
+A ScanImage stack (`hStackManager`, slow piezo or fast-z): volumes on T, slices on Z.
+Volumes are counted from the pages, so an aborted run opens with what it saved.
+`fs` is the volume rate and `dz` the stack's step.
 
 ```python
-arr = mbo.imread("/path/to/piezo_data.tif")
-print(arr.shape)          # (T, C, Z, Y, X)
-print(arr.frames_per_slice) # frames per z-position
-print(arr.can_average)      # True if averaging possible
-
-arr.average_frames = True   # toggle averaging based on `scanimage.logAverageFactor`
+arr = mbo.imread("/path/to/piezo_folder")  # every file of the acquisition, in name order
+print(arr.shape)             # (volumes, colors, slices, Y, X)
+print(arr.frames_per_slice)  # saved frames per slice (framesPerSlice / logAverageFactor; 1 for fast-z)
+arr.average_frames = True    # several frames per slice: average them (float32) instead of keeping them on T
 ```
+
+Fast-z flyback frames are dropped. With several frames per slice and no
+averaging, T runs volume by volume and repeat by repeat within it.
 
 (lbmpiezoarray)=
 
 #### LBMPiezoArray
 
-Combined LBM + piezo, typically for pollen calibration. Each piezo step
-ends up as a z-plane in the canonical layout, and the LBM beamlets land on
-the channel axis.
+Combined LBM + piezo, typically for pollen calibration. Piezo positions go on
+T (not time, so `fs` is unset) and the LBM beamlets on Z; `dz` is the beamlet
+spacing and must be supplied, the piezo step stays in `si.hStackManager`.
 
 ```python
-arr = mbo.imread("/path/to/pollen_calibration.tif")
+arr = mbo.imread("/path/to/pollen_calibration.tif", average_frames=True)
 print(arr.stack_type)  # 'pollen'
-print(arr.shape)     # (T, C, Z, Y, X) — C = beamlets, Z = piezo positions
+print(arr.shape)       # (piezo positions, colors, beamlets, Y, X)
 ```
 
 (singleplanearray)=
@@ -649,13 +652,14 @@ ScanImage-specific:
 | `.roi`        | ROI selection (None, int, or list)          |
 | `.fix_phase`  | enable/disable phase correction             |
 
-PiezoArray-specific:
+Stacks (PiezoArray, LBMPiezoArray):
 
-| Property            | Description                |
-|---------------------|----------------------------|
-| `.frames_per_slice` | frames per z-position      |
-| `.can_average`      | True if averaging possible |
-| `.average_frames`   | toggle frame averaging     |
+| Property            | Description                                  |
+|---------------------|----------------------------------------------|
+| `.layout`           | the `ScanLayout`: colors, beamlets, slices, repeats, flyback, volumes |
+| `.frames_per_slice` | saved frames per slice                       |
+| `.can_average`      | True with more than one saved frame per slice |
+| `.average_frames`   | average each slice's frames instead of keeping them on T |
 
 ## Writing Data
 

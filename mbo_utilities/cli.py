@@ -358,14 +358,6 @@ def main(
     "Omitted: the registration in a run folder's results.hdf5, else motion_correction.hdf5 beside the result, if any.",
 )
 @click.option(
-    "--qc",
-    is_flag=True,
-    help="For a MaskNMF run folder (or its results.hdf5): open Registration-Denoising "
-    "Quality Control, raw | registered over both as PMD with RTMC, masknmf shifts, frame "
-    "means and a box you drag. Omitted: a demixed run opens masknmf's demixing viewer, "
-    "any other run the Studio.",
-)
-@click.option(
     "--debug/--no-debug",
     default=None,
     help="Debug logging for this run (sets MBO_DEBUG): verbose logs, the "
@@ -385,7 +377,6 @@ def view(
     vis=None,
     raw_path=None,
     motion_correction_path=None,
-    qc=False,
     debug=None,
 ):
     r"""
@@ -402,7 +393,6 @@ def view(
       mbo view /data/scan.mesc --unit MUnit_35   A line-scan unit opens the line-scan viewer
       mbo view /data/stack.tif --dims ZYX   A plain TIFF whose pages are z-planes
       mbo view run/demixing_results.hdf5 --vis classification   masknmf's classification viewer
-      mbo out/20261008T143623_masknmf_zplane01 --qc   raw, registered, PMD, RTMC and shifts
       mbo view --list-gpus           Show available GPU adapters
       mbo view /data/raw --gpu 0     Force GPU index 0
     """
@@ -444,7 +434,7 @@ def view(
         )
 
     # a masknmf demixing result opens in one of masknmf's viewers: ask which before anything heavy loads
-    if vis is None and data_in and not metadata and not qc:
+    if vis is None and data_in and not metadata:
         from mbo_utilities.arrays.demixing import has_demixing_results
         from mbo_utilities.arrays.masknmf_run import run_demixing
 
@@ -485,7 +475,6 @@ def view(
         vis=vis,
         raw_path=raw_path,
         motion_correction_path=motion_correction_path,
-        qc=qc,
     )
 
 
@@ -1520,7 +1509,7 @@ def gpu(watch, show_processes, as_json):
 )
 def init(data_path, output_dir, overwrite, unit):
     r"""
-    Create starter notebooks: the user guides, and the ASAP7 spine pipeline for a .mesc.
+    Create starter notebooks: the mbo and LBM-Suite2p user guides.
 
     With DATA_PATH, notebooks go in <DATA_PATH>/../scripts and the data path
     is filled in. Without it, notebooks go in the current directory.
@@ -1530,8 +1519,6 @@ def init(data_path, output_dir, overwrite, unit):
       mbo init                       # notebooks in current directory
       mbo init /data/raw             # notebooks in /data/scripts, path filled in
       mbo init /data/raw -o ./nb     # notebooks in ./nb
-      mbo init /data/scan.mesc       # the guides and the spine pipeline
-      mbo init /data/scan.mesc --unit MSession_0/MUnit_3
     """
     from mbo_utilities.notebook_templates import (
         notebook_path,
@@ -2366,161 +2353,6 @@ def results(path, out, overwrite):
         click.echo(f"error: {e}", err=True)
         raise click.Abort
     click.echo(f"wrote {len(found.units)} unit(s) to {written}")
-
-
-@main.command("reg-denoise")
-@click.argument("path", type=click.Path(exists=True))
-@click.option("--unit", default=None, help="The .mesc unit, e.g. MSession_0/MUnit_3.")
-@click.option(
-    "--channel", type=int, default=1, show_default=True, help="Channel, 1-based."
-)
-@click.option(
-    "--first-frame",
-    type=int,
-    default=200,
-    show_default=True,
-    help="0-based frame the run starts at; earlier frames are left out.",
-)
-@click.option(
-    "--max-shift",
-    type=int,
-    default=40,
-    show_default=True,
-    help="Largest rigid shift allowed, px.",
-)
-@click.option(
-    "-o",
-    "--out",
-    type=click.Path(file_okay=False),
-    default=None,
-    help="Folder for results.hdf5. Default: <stem>[_<unit>].reg_denoise beside PATH.",
-)
-@click.option(
-    "--overwrite", is_flag=True, default=False, help="Replace an existing results.hdf5."
-)
-def reg_denoise(path, unit, channel, first_frame, max_shift, out, overwrite):
-    r"""Pre-registration denoising: compress, register to the compression, compress again.
-
-    Writes one results.hdf5 holding the compression of the raw movie, the
-    registration estimated on it and the compression of the registered
-    movie. `mbo <folder>/results.hdf5` opens it in the Registration-Denoising
-    Quality Control viewer.
-
-    \b
-      mbo reg-denoise scan.mesc --unit MSession_0/MUnit_3
-    """
-    from mbo_utilities.masknmf.params import RegDenoiseSettings
-    from mbo_utilities.masknmf.reg_denoise import run_reg_denoise
-
-    settings = RegDenoiseSettings(channel=channel, first_frame=first_frame)
-    settings.registration.max_shifts = (max_shift, max_shift)
-    try:
-        written = run_reg_denoise(path, out, settings, unit=unit, overwrite=overwrite)
-    except (FileExistsError, ValueError) as e:
-        click.echo(f"error: {e}", err=True)
-        raise click.Abort
-    click.echo(f"wrote {written}\nview with: mbo {written}")
-
-
-@main.command("asap7")
-@click.argument("path", type=click.Path(exists=True))
-@click.option(
-    "--unit",
-    default=None,
-    help="The .mesc unit, e.g. MUnit_10 or MSession_0/MUnit_10; left out, the units are listed.",
-)
-@click.option(
-    "--channel", type=int, default=1, show_default=True, help="Channel, 1-based."
-)
-@click.option(
-    "--first-frame",
-    type=int,
-    default=200,
-    show_default=True,
-    help="0-based frame the run starts at; earlier frames are left out.",
-)
-@click.option(
-    "--max-shift",
-    type=int,
-    default=40,
-    show_default=True,
-    help="Largest rigid shift allowed, px.",
-)
-@click.option(
-    "--detrend-window",
-    type=float,
-    default=0.3,
-    show_default=True,
-    help="Maximin spline detrend window, s.",
-)
-@click.option(
-    "--mad-threshold",
-    type=float,
-    default=0.6,
-    show_default=True,
-    help="Superpixel MAD correlation threshold for the spine demixing.",
-)
-@click.option(
-    "--device",
-    type=click.Choice(["cuda", "cpu"]),
-    default="cuda",
-    show_default=True,
-)
-@click.option(
-    "-o",
-    "--out",
-    type=click.Path(file_okay=False),
-    default=None,
-    help="Folder the run folder goes in. Default: masknmf_asap7/<unit>_detrend beside PATH.",
-)
-def asap7(
-    path,
-    unit,
-    channel,
-    first_frame,
-    max_shift,
-    detrend_window,
-    mad_threshold,
-    device,
-    out,
-):
-    r"""ASAP7 spine run: compress, register to the compression, compress and denoise
-    with a detrender, demix spines and the dendrite.
-
-    The raw movie is inverted (ASAP7 dims on depolarisation), compressed, and
-    registered with shifts estimated on that compression; the registered raw
-    movie is compressed and denoised with a maximin spline detrender and demixed
-    by masknmf's glutamate spine pipeline. Defaults are
-    asap7_spine_pipeline_detrend.ipynb's.
-
-    \b
-      mbo asap7 scan.mesc                      # list the units
-      mbo asap7 scan.mesc --unit MUnit_10
-      masknmf view <run folder>/results.glutamate.hdf5
-    """
-    from mbo_utilities.masknmf.params import Asap7Settings
-
-    is_mesc = Path(path).suffix.lower() == ".mesc"
-    if is_mesc and unit is None:
-        _echo_mesc_units(path, None)
-        click.echo("\nchoose one with --unit, e.g. --unit MUnit_10", err=True)
-        raise click.Abort
-    from mbo_utilities.masknmf.asap7 import run_asap7
-
-    settings = Asap7Settings(
-        channel=channel,
-        first_frame=first_frame,
-        detrend_window_seconds=detrend_window,
-        mad_correlation_threshold=mad_threshold,
-    )
-    settings.registration.max_shifts = (max_shift, max_shift)
-    settings.runtime.device = device
-    try:
-        run = run_asap7(path, unit=_parse_unit(unit), save_path=out, settings=settings)
-    except ValueError as e:
-        click.echo(f"error: {e}", err=True)
-        raise click.Abort
-    click.echo(f"wrote {run}\nview with: masknmf view {run / 'results.glutamate.hdf5'}")
 
 
 @main.command("stack-annotate")

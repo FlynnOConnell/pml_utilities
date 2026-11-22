@@ -40,13 +40,12 @@ from mbo_utilities.writer import imwrite
 
 
 def _get_array_features(widget: Any) -> dict[str, bool]:
-    """Which options the dialog offers for the array on screen: scan-phase correction, axial registration, mROI splitting, piezo frame averaging, temporal binning."""
+    """Which options the dialog offers for the array on screen: scan-phase correction, axial registration, mROI splitting, temporal binning."""
     data = widget.image_widget.data[0]
     return {
         "phase_correction": hasattr(data, "phase_correction"),
         "z_registration": widget.nz > 1 and widget.is_mbo_scan,
         "multi_roi": getattr(data, "num_rois", 1) > 1,
-        "frame_averaging": getattr(data, "can_average", False),
         # the viewer may already be binned down to one frame, so the source is counted
         "frame_average": source_timepoints(widget) > 1,
     }

@@ -756,7 +756,7 @@ class TestImguiWindows:
         assert not errors, errors[0]
         seen = set(children.seen) | set(texts.seen)
         # masknmf's Curation tab sections, then this tool's
-        assert {"OVERLAY", "SELECTION", "LABELS", "RUN"} <= seen
+        assert {"OVERLAY", "SELECTION", "LABELS", "TRACE"} <= seen
         assert "##roi_curation_tab" in seen
 
     def test_the_roi_keys_are_taken_from_the_viewer(self, widget):
@@ -821,7 +821,7 @@ class TestPersistence:
     def test_a_chosen_folder_holds_the_rois(self, tmp_path, options):
         from mbo_utilities.gui._ndviewer import MboNDViewer
         from mbo_utilities.gui.manual_roi import ManualRoiWidget
-        from mbo_utilities.roi_workflow import roi_folder
+        from mbo_utilities.annotation.paths import roi_folder
 
         data_dir = tmp_path / "rig"
         data_dir.mkdir()
@@ -841,7 +841,6 @@ class TestPersistence:
             assert w.folder.name.startswith("movie.tif_")
             assert (w.folder / "movie.rois.zarr").exists()
             assert list(data_dir.iterdir()) == []
-            assert w._run_out_path("roi01").parent == w.folder
         finally:
             iw.close()
 
@@ -1109,19 +1108,6 @@ class TestTraces:
         assert widget.trace_uid == uid
         assert widget.has_traces()
 
-    def test_a_quick_trace_and_a_mean_run_agree(self, widget, tmp_path):
-        from mbo_utilities.roi_workflow import extract_rois
-
-        widget.add_roi(square(10, 10, 9))
-        widget.add_roi(square(16, 10, 9))  # a neighbour the ring must avoid
-        uid = widget.store.rois[0].uid
-        widget.quick_trace(0)
-        pump(widget)
-        (quick,) = widget.traces.for_roi(uid)
-        unit = extract_rois(widget.iw.data[0], widget.store, [0], z=0, engine="mean")
-        np.testing.assert_allclose(quick.F, unit.traces["raw"][0], rtol=1e-6)
-        np.testing.assert_allclose(quick.Fneu, unit.traces["neuropil"][0], rtol=1e-6)
-
     def test_two_rois_trace_at_once(self, widget):
         widget.add_roi(square(4, 4, 9))
         widget.add_roi(square(30, 4, 9))
@@ -1210,122 +1196,6 @@ class TestTraces:
         assert widget.trace_uid == uids[0]
         widget.select_roi(1)
         assert widget.trace_uid == uids[1]
-
-
-class TestRuns:
-    def test_run_outputs_land_beside_the_data_and_in_traces(self, tmp_path, options):
-        from mbo_utilities.gui._ndviewer import MboNDViewer
-        from mbo_utilities.gui.manual_roi import ManualRoiWidget
-
-        options["roi_autosave"] = True
-        from mbo_utilities.annotation import RoiFile
-        from mbo_utilities.results import Results, newest_results
-
-        data = np.random.default_rng(1).random((6, 64, 64)).astype(np.float32)
-        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
-        iw.show()
-        try:
-            w = ManualRoiWidget(iw, fpath=tmp_path / "movie.tif", auto_trace=False)
-            w.add_roi(square(10, 10, 9))
-            w.add_roi(square(30, 30, 9))
-            uid1 = w.store.rois[1].uid
-            w.run_roi(1)
-            pump(w)
-            assert w._run_error is None
-            assert w.status.startswith("done"), w.status
-            out = newest_results(tmp_path, "manual")
-            assert out.name.startswith("movie.roi02.") and out.name.endswith(
-                ".manual.zarr"
-            )
-            results = Results.read(out)
-            assert results.pipeline == "manual" and results.source["tag"] == "roi02"
-            (unit,) = results.units.values()
-            F = unit.traces["raw"]
-            assert unit.name == "zplane01" and F.shape == (1, 6)
-            np.testing.assert_allclose(
-                F[0], data[:, w.store.mask(1)].mean(axis=1), rtol=1e-5
-            )
-            assert unit.attrs["store_indices"] == [1] and unit.attrs["uids"] == [uid1]
-            (trace,) = w.traces.for_roi(uid1)
-            assert trace.source == w._set_name(out) and trace.engine == "mean"
-            np.testing.assert_allclose(trace.F, F[0])
-            assert trace.Fneu is not None
-            assert w.trace_uid == uid1
-
-            # the same measurement again replaces the rows instead of doubling them
-            w.run_in_view()
-            pump(w)
-            (second,) = tmp_path.glob("movie.manual.*.manual.zarr")
-            assert Results.read(second).units["zplane01"].traces["raw"].shape == (2, 6)
-            assert {t.uid for t in w.traces} == {w.store.rois[0].uid, uid1}
-            assert {t.source for t in w.traces} == {w._set_name(second)}
-            assert len(w.traces) == 2
-            # both runs are remembered with the rois for the next session
-            paths = {e["path"] for e in RoiFile.load(w._save_target()).runs}
-            assert {str(out), str(second)} <= paths
-        finally:
-            iw.close()
-
-    def test_registry_restores_run_traces(self, tmp_path, options):
-        from mbo_utilities.gui._ndviewer import MboNDViewer
-        from mbo_utilities.gui.manual_roi import ManualRoiWidget
-
-        options["roi_autosave"] = True
-
-        data = np.random.default_rng(2).random((6, 64, 64)).astype(np.float32)
-        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
-        iw.show()
-        try:
-            w = ManualRoiWidget(iw, fpath=tmp_path / "movie.tif", auto_trace=False)
-            w.add_roi(square(10, 10, 9))
-            uid = w.store.rois[0].uid
-            w.run_roi(0)
-            pump(w)
-        finally:
-            iw.close()
-
-        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
-        iw.show()
-        try:
-            w2 = ManualRoiWidget(iw, fpath=tmp_path / "movie.tif", auto_trace=False)
-            assert w2.counts == [100]
-            # the run's traces come back keyed by the same persistent uid
-            assert [t.uid for t in w2.traces] == [uid]
-            assert w2.traces.rows[0].source.startswith("movie.roi01.")
-            assert w2.has_traces()
-        finally:
-            iw.close()
-
-    def test_run_without_a_path_is_refused(self, widget):
-        widget.add_roi(square(10, 10, 9))
-        widget.run_roi(0)
-        assert "no data path" in widget.status
-        assert not widget.manager.busy
-
-    def test_a_tag_still_being_written_is_refused(self, widget, tmp_path):
-        from mbo_utilities.gui.roi_runs import RoiRun
-
-        widget.fpath = tmp_path / "movie.tif"
-        widget.add_roi(square(10, 10, 9))
-        gate = threading.Event()
-        run = RoiRun(kind="extract", tag="manual", description="extract rois_manual")
-        widget.manager.submit(run, lambda job: gate.wait(5) and [])
-        widget.run_in_view()
-        assert "still being written" in widget.status
-        gate.set()
-        pump(widget)
-
-    def test_run_errors_reach_the_status_row(self, widget, tmp_path):
-        from mbo_utilities.gui.roi_runs import RoiRun
-
-        widget.fpath = tmp_path / "movie.tif"
-        widget.manager.submit(
-            RoiRun(kind="extract", tag="x", description="extract rois_x"), _raise_boom
-        )
-        pump(widget)
-        assert "failed" in widget._run_error
-        color, text = widget._status_message()
-        assert text == widget._run_error
 
 
 class TestDerived:
@@ -2073,12 +1943,6 @@ class _SecondArgSpy(_Spy):
         self.seen.append(args[1] if len(args) > 1 else kwargs["text"])
 
 
-class _RowSpy(_Spy):
-    def record(self, label, args, kwargs):
-        if "##row" in label:
-            self.seen.append(label)
-
-
 class _SmallButtonSpy(_Spy):
     """Records each label with the cursor x and the width left at the call."""
 
@@ -2110,24 +1974,9 @@ class _Guard:
                 raise
 
 
-class _KwargsSink:
-    """A run function that keeps the kwargs it was called with and returns None."""
-
-    def __init__(self):
-        self.seen = {}
-
-    def __call__(self, *args, **kwargs):
-        self.seen.update(kwargs)
-        return None
-
-
 class _BareHost:
     manual_roi = None
     image_widget = None
-
-
-def _raise_boom(job):
-    raise ValueError("boom")
 
 
 def draw_frames(widget, n=4, tabs=True, foreign=False):
@@ -2915,94 +2764,6 @@ class _StubHost:
             self._pipeline_instances = {"MaskNMF": _StubSettings({}, settings=masknmf)}
 
 
-class TestPipelineParams:
-    """Runs started from the ROIs pipeline use the Process tab's settings."""
-
-    def test_engine_maps_to_its_pipeline(self, widget):
-        widget.engine = "masknmf"
-        assert widget.pipeline_for() == "masknmf"
-        widget.engine = "suite2p"
-        assert widget.pipeline_for() == "suite2p"
-        widget.engine = "mean"
-        assert widget.pipeline_for() is None
-        assert widget.pipeline_for("masknmf") == "masknmf"
-
-    def test_settings_come_from_the_host_or_are_none(self, widget):
-        assert widget.masknmf_settings() is None  # no host in this fixture
-
-        widget.host = _StubHost(masknmf=_StubSettings({"demixing": {"do_demixing": 2}}))
-        assert widget.masknmf_settings() == {"demixing": {"do_demixing": 2}}
-
-    def test_params_button_jumps_to_the_run_tab(self, widget):
-        widget.host = _StubHost()
-        widget.open_pipeline_params("masknmf")
-        assert widget.host._selected_pipeline_name == "MaskNMF"
-        assert widget.host._force_run_tab is True
-
-        widget.host._force_run_tab = False
-        widget.open_pipeline_params("suite2p")
-        assert widget.host._selected_pipeline_name == "Suite2p"
-        assert widget.host._force_run_tab is True
-
-    def test_summary_says_defaults_until_the_run_tab_builds_it(self, widget):
-        label, detail = widget._pipeline_summary("masknmf")
-        assert label == "masknmf: defaults"
-        assert "Process tab" in detail
-        label, detail = widget._pipeline_summary("suite2p")
-        assert label == "suite2p: defaults"
-
-    def test_summary_reports_the_stage_toggles(self, widget):
-        from mbo_utilities.masknmf.params import STAGE_FORCE, MasknmfSettings
-
-        settings = MasknmfSettings()
-        settings.demixing.do_demixing = STAGE_FORCE
-        widget.host = _StubHost(masknmf=settings)
-        _label, detail = widget._pipeline_summary("masknmf")
-        assert "reg:run" in detail
-        assert "demix:force" in detail
-
-    def test_demix_run_carries_the_settings(self, widget, monkeypatch, tmp_path):
-        demix = _KwargsSink()
-        monkeypatch.setattr("mbo_utilities.gui.roi.jobs.demix_rois", demix)
-        widget.fpath = tmp_path / "movie.tif"
-        widget.host = _StubHost(masknmf=_StubSettings({"runtime": {"device": "cpu"}}))
-        widget.engine = "masknmf"
-        widget.add_roi(square(10, 10, 9))
-        widget.run_rois([0], "params")
-        pump(widget)
-        assert demix.seen.get("settings") == {"runtime": {"device": "cpu"}}
-
-    def test_the_selection_row_carries_masknmfs_buttons(self, widget):
-        """Masknmf's SELECTION row: center, draw, add ROI, delete, then this
-        tool's promote, accept and save; the traces row carries trace on draw.
-        """
-        from imgui_bundle import imgui
-        from mbo_utilities.gui.widgets.widget_toggles import set_widget_enabled
-
-        buttons = _Spy(imgui.button)
-        set_widget_enabled("manual_roi", True, persist=False)
-        imgui.button = buttons
-        try:
-            errors = draw_frames(widget, 3)
-        finally:
-            imgui.button = buttons.real
-            set_widget_enabled("manual_roi", False, persist=False)
-        assert not errors, errors[0]
-        seen = buttons.seen
-        ids = [label.split("##")[-1] for label in seen[: len(seen) // 3]]
-        row = [
-            "roi_center",
-            "roi_draw",
-            "roi_add",
-            "roi_delete",
-            "roi_promote",
-            "roi_accept",
-            "roi_save",
-        ]
-        assert [i for i in ids if i in row] == row
-        assert "roi_traces_3" in ids  # trace on draw
-
-
 class TestAutoTrace:
     """Drawing an ROI traces it at once: the elegant draw -> run."""
 
@@ -3028,139 +2789,6 @@ class TestAutoTrace:
             w.auto_trace = False
             w.add_roi(square(30, 30, 9))
             assert not w.traces.for_roi(w.store.rois[1].uid)
-        finally:
-            iw.close()
-
-
-class TestRunCoordinates:
-    """A mask is read where it was drawn unless the run says otherwise: the
-    slice on screen, or a fixed z-plane / channel, over a frame window.
-    """
-
-    def test_a_mask_drawn_on_one_channel_traces_the_other(self, cwidget):
-        cwidget.iw.indices["c"] = 0
-        cwidget.iw.indices["z"] = 2
-        cwidget.add_roi(square(10, 10, 9))
-        uid = cwidget.store.rois[0].uid
-        cwidget.quick_trace(0)
-        cwidget.trace_rois([0], c=1)
-        pump(cwidget)
-        data = np.asarray(cwidget.iw.data[0])
-        mask = cwidget.store.mask(0)
-        rows = {t.key: t for t in cwidget.traces.for_roi(uid)}
-        assert set(rows) == {("roi", uid, 2, 0, "mean"), ("roi", uid, 2, 1, "mean")}
-        np.testing.assert_allclose(
-            rows[("roi", uid, 2, 1, "mean")].F,
-            data[:, 1, 2][:, mask].mean(axis=1),
-            rtol=1e-5,
-        )
-        np.testing.assert_allclose(
-            rows[("roi", uid, 2, 0, "mean")].F,
-            data[:, 0, 2][:, mask].mean(axis=1),
-            rtol=1e-5,
-        )
-        assert cwidget._trace_cells(("roi", uid, 2, 1, "mean"))[1:4] == (
-            "3",
-            "1",
-            "mean",
-        )
-
-    def test_the_slice_on_screen_mode_follows_the_sliders(self, cwidget):
-        cwidget.add_roi(square(10, 10, 9))  # c0 z0
-        uid = cwidget.store.rois[0].uid
-        cwidget.run_where = "screen"
-        cwidget.iw.indices["c"] = 1
-        cwidget.iw.indices["z"] = 1
-        assert cwidget._coords() == (1, 1, None)
-        assert cwidget._where_label().startswith("slice on screen")
-        cwidget.quick_trace(0)
-        pump(cwidget)
-        (trace,) = cwidget.traces.for_roi(uid)
-        assert (trace.z, trace.c) == (1, 1)
-        assert cwidget.model.targets([0]) == cwidget.model.targets([0], z=None)
-        cwidget.run_where = "drawn"
-        assert cwidget._coords() == (None, None, None)
-        assert cwidget._where_label() == "as drawn"
-
-    def test_a_frame_window_is_read_and_stamped(self, widget):
-        widget.add_roi(square(10, 10, 9))
-        widget.run_tp = [1, 2, 3]
-        assert "frames 2-4" in widget._where_label()
-        widget.quick_trace(0)
-        pump(widget)
-        (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
-        assert trace.frames == (1, 4, 1) and trace.n_frames == 3
-        data = np.asarray(widget.iw.data[0])
-        mask = widget.labels == 1
-        np.testing.assert_allclose(trace.F, data[1:4][:, mask].mean(axis=1), rtol=1e-5)
-        assert "t2-4" in widget._trace_label(trace)
-        # a strided selection: one sample per two frames, the axis says so
-        widget.run_tp = [0, 2, 4]
-        assert "frames 1-5-2" in widget._where_label()
-        widget.quick_trace(0)
-        pump(widget)
-        (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
-        assert trace.frames == (0, 5, 2) and trace.n_frames == 3
-        np.testing.assert_allclose(
-            trace.F, data[[0, 2, 4]][:, mask].mean(axis=1), rtol=1e-5
-        )
-        assert widget.trace_axis(trace).per_second == pytest.approx(0.5)
-        assert "t1-5-2" in widget._trace_label(trace)
-        # a gapped selection has no window: the row lists its frames
-        widget.run_tp = [0, 1, 5]
-        assert "3 frames" in widget._where_label()
-        widget.quick_trace(0)
-        pump(widget)
-        (trace,) = widget.traces.for_roi(widget.store.rois[0].uid)
-        assert trace.frames is None and trace.extra == {"tp_indices": [0, 1, 5]}
-
-    def test_run_reads_another_channel_and_records_it(self, tmp_path):
-        from mbo_utilities.gui._ndviewer import MboNDViewer
-        from mbo_utilities.gui.manual_roi import ManualRoiWidget
-
-        data = np.random.default_rng(3).random((6, 2, 1, 64, 64)).astype(np.float32)
-        iw = MboNDViewer(data=data, figure_kwargs={"size": FIGURE_SIZE})
-        iw.show()
-        try:
-            w = ManualRoiWidget(iw, fpath=tmp_path / "movie.tif", auto_trace=False)
-            assert w.store.plane_axes == (("c", 2),)
-            w.add_roi(square(10, 10, 9))  # drawn on c0
-            uid = w.store.rois[0].uid
-            w.run_tp = [0, 1, 2, 3]
-            w.run_rois([0], "roi01", c=1)
-            pump(w)
-            assert w._run_error is None, w._run_error
-            from mbo_utilities.results import Results, newest_results
-
-            out = newest_results(tmp_path, "manual")
-            (unit,) = Results.read(out).units.values()
-            F = unit.traces["raw"]
-            assert F.shape == (1, 4)
-            np.testing.assert_allclose(
-                F[0], data[:4, 1, 0][:, w.store.mask(0)].mean(axis=1), rtol=1e-5
-            )
-            attrs = unit.attrs
-            assert (attrs["z"], attrs["c"], attrs["frames"], attrs["tp_indices"]) == (
-                0,
-                1,
-                [0, 4, 1],
-                [0, 1, 2, 3],
-            )
-            (trace,) = w.traces.for_roi(uid)
-            assert trace.key == ("roi", uid, 0, 1, "mean") and trace.frames == (0, 4, 1)
-            # both channels: one unit per read, named by the filename tags
-            w.run_tp = None
-            w.run_rois([0], "both", c=None)
-            pump(w)
-            (both,) = tmp_path.glob("movie.both.*.manual.zarr")
-            assert Results.read(both).units["zplane01"].attrs["c"] == 0
-            assert {t.key for t in w.traces.for_roi(uid)} == {
-                ("roi", uid, 0, 0, "mean"),
-                ("roi", uid, 0, 1, "mean"),
-            }
-            w.run_rois([0, 0], "each", c=None)
-            w.trace_rois([0], c=1)
-            pump(w)
         finally:
             iw.close()
 
@@ -3205,116 +2833,6 @@ class TestHelpAndKeysAreAppWide:
         rows = _roi_keybinds(parent)
         assert ("ROI Labeling", None) in rows, "a section header, not a button"
         assert rows[-len(KEYBINDS) :] == list(KEYBINDS)
-
-
-class TestAdoptingRunsStartedElsewhere:
-    """A pipeline run launched from the Process tab writes its plane dirs
-    beside the data; the widget picks them up while the session is running
-    instead of only rebuilding them from the registry on the next start.
-    """
-
-    @staticmethod
-    def _run_dir(path, accepted=(True, False)):
-        stat = np.array(
-            [
-                {
-                    "ypix": np.array([40, 41], np.int32),
-                    "xpix": np.array([40, 41], np.int32),
-                    "lam": np.ones(2, np.float32),
-                    "med": (40.0, 40.0),
-                    "npix": 2,
-                }
-            ]
-            * len(accepted),
-            dtype=object,
-        )
-        path.mkdir(parents=True, exist_ok=True)
-        np.save(path / "stat.npy", stat)
-        np.save(path / "F.npy", np.zeros((len(accepted), 6), np.float32))
-        np.save(
-            path / "iscell.npy",
-            np.array([[1.0 if a else 0.0, 0.5] for a in accepted], np.float32),
-        )
-        np.save(path / "ops.npy", {"Ly": 64, "Lx": 64, "plane": 1}, allow_pickle=True)
-        return path
-
-    def test_a_finished_run_is_loaded_with_its_iscell(self, widget, tmp_path):
-        from mbo_utilities.gui.widgets.process_manager import (
-            ProcessInfo,
-            get_process_manager,
-        )
-
-        d = self._run_dir(tmp_path / "zplane01")
-        widget.fpath = tmp_path / "data.bin"
-        info = ProcessInfo(
-            pid=-4242,
-            description="suite2p plane01",
-            start_time=0.0,
-            task_type="suite2p",
-            args={"output_dir": str(tmp_path), "planes": [1]},
-            status="completed",
-        )
-        pm = get_process_manager()
-        pm._processes[info.pid] = info
-        try:
-            widget._adopt_checked = 0.0
-            widget._adopt_finished_runs()
-            assert [s.path for s in widget.derived] == [d]
-            # accepted / rejected come from the run's own iscell, curatable
-            # in the table like any other loaded run
-            assert widget.derived[0].accepted.tolist() == [True, False]
-
-            # and only once: a second pass must not double-load it
-            widget._adopt_checked = 0.0
-            widget._adopt_finished_runs()
-            assert len(widget.derived) == 1
-        finally:
-            pm._processes.pop(info.pid, None)
-
-    def test_another_datasets_run_is_left_alone(self, widget, tmp_path):
-        from mbo_utilities.gui.widgets.process_manager import (
-            ProcessInfo,
-            get_process_manager,
-        )
-
-        other = tmp_path / "elsewhere"
-        self._run_dir(other / "zplane01")
-        widget.fpath = tmp_path / "here" / "data.bin"
-        (tmp_path / "here").mkdir()
-        info = ProcessInfo(
-            pid=-4243,
-            description="suite2p",
-            start_time=0.0,
-            task_type="suite2p",
-            args={"output_dir": str(other), "planes": [1]},
-            status="completed",
-        )
-        pm = get_process_manager()
-        pm._processes[info.pid] = info
-        try:
-            widget._adopt_checked = 0.0
-            widget._adopt_finished_runs()
-            assert widget.derived == []
-        finally:
-            pm._processes.pop(info.pid, None)
-
-    def test_the_trace_table_is_masknmfs_table(self, widget):
-        """One masknmf table row per trace, the id cell in its trace's color."""
-        from imgui_bundle import imgui
-
-        widget._add_derived(*make_result(widget, [disc(40, 40)], with_traces=True))
-        rows = _RowSpy(imgui.selectable)
-        body = _Guard(widget.draw_trace_table)
-        widget.strip._update_calls[:] = [body]
-        imgui.selectable = rows
-        try:
-            for _ in range(2):
-                widget.iw.figure.canvas.draw()
-        finally:
-            imgui.selectable = rows.real
-        assert not body.errors, body.errors[0]
-        assert rows.seen, "no trace rows drawn"
-        assert widget._trace_keys == [("member", "find01", 0)]
 
 
 class TestFollowModeAdvances:
@@ -3820,22 +3338,6 @@ class TestKeys:
         assert widget.show_masks == shown
         press(widget, imgui.Key.m)
         assert widget.show_masks != shown
-
-    def test_shift_t_runs_and_plain_t_follows(self, widget):
-        from imgui_bundle import imgui
-        from mbo_utilities.gui.manual_roi import ROI_KEYS
-
-        # masknmf leaves shift open on t; here shift+t is the run key alone
-        assert ROI_KEYS["trace_follow"].shift is False and ROI_KEYS["run"].shift is True
-        assert all(
-            bind.shift is None
-            for name, bind in ROI_KEYS.items()
-            if name in ("up", "down", "left", "right")
-        )
-        widget.add_roi(square(10, 10, 9))
-        widget.select_roi(0)
-        press(widget, imgui.Key.t, shift=True)
-        assert widget.status == "no data path to write beside"
 
     def test_ctrl_digit_does_not_label(self, widget):
         from imgui_bundle import imgui

@@ -410,25 +410,7 @@ into a `RoiSet.zip` the ROI Manager opens (on its z-plane and channel),
 names, as one undo step, and **export traces** writes the Traces tab's rows as
 one CSV (a time or frame column, then one column per trace).
 
-Running ROIs is the Curation tab's **RUN** section (`shift+t` runs the selection):
-
-- **Which ROIs**: the selected one (or the ctrl / shift click group), or every ROI
-  the ROIs tab lists.
-- **Read from**: **as drawn** reads each mask on the z-plane and channel it was drawn
-  on; **slice on screen** reads it wherever the sliders are when you press Run, so
-  a cell drawn on the structural channel is traced on the functional one by
-  scrolling there and running again. A **frames** window (`start:stop`, 1-based)
-  cuts T.
-- **Engine**: `mean` (raw mask mean plus a neuropil ring, no pipeline), `suite2p`
-  (suite2p's extractor), `masknmf` (seeded demixing). `suite2p` and `masknmf` use
-  the settings of their own tab, including the skip / run / force toggles; **Open**
-  jumps there. The **tag** names the run file.
-- **Run** writes one results zarr, `<stem>.<tag>.<stamp>.manual.zarr`, beside
-  the data (one unit per slice read, each recording `z`, `c`, `frames`,
-  `engine` and the ROIs' uids), and the run's rows land on the Traces tab;
-  **Trace** computes an in-memory mean without writing. Accepting, rejecting
-  and marking a loaded run's ROIs never touches the run: that curation is
-  kept with the ROIs.
+The Curation tab's **TRACE** section computes the mean trace of every drawn ROI (or every marked one) in the background, read **as drawn** (on the z-plane and channel each mask was drawn on) or on the **slice on screen**. To run a pipeline, use the **Process** tab and curate its results in `mbo curate`.
 
 The sliders are the array's axes whatever they are called: a MESc AOD unit's
 **ROI** slider or an IsoView **View** slider keys masks and runs like any z-plane
@@ -566,40 +548,15 @@ The GUI can launch external tools when installed:
 - diagnostics viewer for signal quality analysis
 - grid search viewer for parameter exploration
 
-## Pre-registration denoising
+## MaskNMF
 
-For fast, noisy recordings such as voltage imaging, motion is estimated on a denoised copy.
+**Process > MaskNMF** runs masknmf's own pipeline on the dataset on screen, one z-plane at a time.
 
-Quick start, one MESc unit:
-
-- Open the session: `mbo path\to\session.mesc`, or **File > Open**.
-- In the **MESc** tab, click the MUnit you want to process.
-- **Process > MaskNMF**.
-- Tick **Denoise before registration**.
-- **Set slice**: in **Channel**, pick the first channel only (listed as `1`); optionally narrow **Frames** to try settings on a short window.
-- Set the output folder (**Browse**).
-- **Pipeline Settings > Demixing**: set **Skip** unless you need ROIs; demixing is the slow stage.
-- **Run MaskNMF**; progress is in the Process Console (status button in the menu bar).
-- When it finishes, **View movies** shows raw and registered over the same two as PMD, with the RTMC curves, the masknmf shifts, each movie's frame mean, and each movie's mean inside a box you drag on any of them. If the window does not appear, the status line under the button says why.
-- With demixing on, **Spike average** opens the newest run that demixed in the spike-triggered average window: one component's registered and compressed movies, trace, RTMC and masknmf shifts averaged around its spikes (a threshold you drag on its trace). The Traces tab's **Spike average** button does the same for the ROI selected there, and the vnoiser tab's for the scan and ROI on screen.
-- Later, from a terminal: `mbo path\to\<time>_masknmf_zplane01 --qc` opens the same viewer on a run folder; from the launcher (`mbo` alone), pick **Registration QC (MaskNMF run)** in the viewer dropdown, then **Open Folder** on the run. Without `--qc` a run folder opens in the Studio, or in masknmf's demixing viewer when the run demixed.
-
-From the GUI: **Process > MaskNMF**, tick **Denoise before registration**. The shifts are estimated on a quick PMD copy of the movie (as recorded, not inverted) and applied to the raw frames; the copy is saved as `alignment.hdf5` in the run folder and its block sizes are under **Pipeline Settings > Registration** (the main compression's 20x20 by default; the copy's cost grows with the number of blocks, and the ASAP7 ribbon's 4x4 blocks take a day on a full 2P plane). Turn demixing off under **Pipeline Settings** to stop at the denoised movie. **View movies** opens the last run folder under the output folder in **Registration-Denoising Quality Control** (below), in its own window; `mbo <run folder> --qc` opens it from a terminal.
-
-From the terminal, `mbo reg-denoise` runs the same three steps on one channel:
-
-1. **Reference**: the raw movie is PMD-compressed as recorded (not inverted).
-2. **Registration**: rigid shifts estimated on that compression are applied to the raw frames.
-3. **Compression**: the registered movie is PMD-compressed.
-
-```bash
-mbo reg-denoise scan.mesc --unit MSession_0/MUnit_3
-mbo scan_MSession_0_MUnit_3.reg_denoise/results.hdf5
-```
-
-The second command opens **Registration-Denoising Quality Control**: raw and registered on top, the two compressions below, on one time slider and one camera. The traces above show the recording's RTMC curves (µm), the masknmf shifts (px), each movie's whole-frame mean, and each movie's mean inside the rectangle drawn on any of them.
-
-In the MaskNMF entry, **Invert deflection** (in **Set slice**) flips frames about the mean image so an indicator that dims on activity reads positive. Registration runs on the movie as recorded and the registered movie is inverted for compression and demixing. A run folder is masknmf's: `results.hdf5`, `config.json`, the log and, with Denoise before registration, `alignment.hdf5`; no movie is copied, so `mbo <run folder>` replays the shifts on the recording. A later run on the same output folder with the same registration and compression settings and demixing on copies both stages from the last run and only demixes.
+- **Set slice** picks the frames, z-planes and channels, and the read features: scan-phase fix, **Invert deflection** (flips frames about the mean image so an indicator that dims on activity reads positive; masknmf registers the movie as recorded and takes the polarity as `negative`) and frame averaging.
+- **Pipeline** picks the masknmf pipeline; **Parameters** opens masknmf's Parameters popup, the same one `masknmf launch` shows. The table under it lists the parameters that differ from the defaults.
+- **Run MaskNMF** writes each plane's run folder, masknmf's own (`results.hdf5`, `config.json`, the log), under `<output>/zplaneNN/`, plus a results zarr beside it that `mbo curate` and the Studio read. Progress is in the Process Console.
+- Opening a run folder or the output folder fills the parameters and the output folder from the newest run.
+- **View results** opens the last run that demixed in masknmf's viewer; **Spike average** opens it in the spike-triggered average window.
 
 ## Voltage traces (vnoiser)
 

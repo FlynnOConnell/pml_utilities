@@ -1,39 +1,20 @@
-"""masknmf pipeline integration (optional; requires the `masknmf` package).
+"""masknmf from pml_utilities (optional; requires the `masknmf` package).
 
-Stage-gated registration -> PMD compression -> demixing per z-plane, each
-into a masknmf run folder (``results.hdf5``, ``config.json``, the log) with a
-results zarr for the shared tooling. See `runner.run_plane` / `runner.run_volume`.
+pml_utilities hands each z-plane to masknmf's own pipeline as a ``(T, Y, X)``
+view and writes a results zarr beside masknmf's run folder. See
+`pipeline.run_planes` and `pipeline.plane_view`.
 """
 
 _LAZY = {
-    "MasknmfSettings": ("mbo_utilities.masknmf.params", "MasknmfSettings"),
-    "MasknmfRegistrationSettings": (
-        "mbo_utilities.masknmf.params",
-        "MasknmfRegistrationSettings",
-    ),
-    "MasknmfCompressionSettings": (
-        "mbo_utilities.masknmf.params",
-        "MasknmfCompressionSettings",
-    ),
-    "MasknmfDemixingSettings": (
-        "mbo_utilities.masknmf.params",
-        "MasknmfDemixingSettings",
-    ),
-    "MasknmfRuntimeSettings": (
-        "mbo_utilities.masknmf.params",
-        "MasknmfRuntimeSettings",
-    ),
-    "Asap7Settings": ("mbo_utilities.masknmf.params", "Asap7Settings"),
-    "stage_action": ("mbo_utilities.masknmf.params", "stage_action"),
-    "run_asap7": ("mbo_utilities.masknmf.asap7", "run_asap7"),
-    "run_plane": ("mbo_utilities.masknmf.runner", "run_plane"),
-    "run_volume": ("mbo_utilities.masknmf.runner", "run_volume"),
+    "pipeline_class": ("mbo_utilities.masknmf.pipeline", "pipeline_class"),
+    "plane_view": ("mbo_utilities.masknmf.pipeline", "plane_view"),
+    "run_planes": ("mbo_utilities.masknmf.pipeline", "run_planes"),
 }
 
 __all__ = list(_LAZY)
 
 
-def __getattr__(name: str):
+def __getattr__(name):
     if name in _LAZY:
         import importlib
 
